@@ -32,11 +32,11 @@ pub(crate) mod orderbook_worker;
 pub mod pop_api;
 pub mod por;
 #[cfg(feature = "app_api")]
-pub(crate) mod publisher;
-pub(crate) mod provider_source;
-#[cfg(feature = "app_api")]
 pub mod potr_signing;
+pub(crate) mod provider_source;
 pub(crate) mod public_gateway;
+#[cfg(feature = "app_api")]
+pub(crate) mod publisher;
 #[cfg(all(test, feature = "app_api"))]
 pub mod quota;
 #[cfg(feature = "app_api")]
@@ -55,10 +55,9 @@ pub(crate) mod stream_token_cleanup;
 pub(crate) mod stream_token_runtime;
 pub mod token;
 pub use admission::{
-    AdmissionCheckError, AdmissionRegistry, AdmissionRegistryError, AdmissionRegistryUpdateError,
+    AdmissionRegistry, AdmissionRegistryError, AdmissionRegistryUpdateError,
+    ProviderAdmissionAdvertError,
 };
-#[cfg(feature = "app_api")]
-pub(crate) use alias_cache::evaluate_cache_decision;
 pub use alias_cache::{
     AliasCacheEnforcement, AliasCachePolicy, AliasCachePolicyExt, AliasCachePolicyHttpExt,
     AliasProofError, AliasProofEvaluation, AliasProofEvaluationExt, AliasProofState, CacheDecision,
@@ -99,10 +98,6 @@ pub use potr_signing::{
 };
 #[cfg(all(test, feature = "app_api"))]
 pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};
-#[cfg(feature = "app_api")]
-pub(crate) use registry::{
-    CapacitySnapshot, RegistryDeclaration, RegistryError, RegistryFeeLedgerEntry, collect_snapshot,
-};
 pub use sorafs_manifest::{
     capacity::ReplicationOrderV1,
     provider_advert::{EndpointKind, TransportProtocol},
@@ -120,10 +115,10 @@ pub use stream_token_admission::{
     StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
     StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayQuotaRequestV1,
 };
-#[cfg(test)]
-pub(crate) use token::signer_test_support;
 #[cfg(feature = "test-fixtures")]
 pub use token::native_issuer_test_fixture;
+#[cfg(test)]
+pub(crate) use token::signer_test_support;
 pub(crate) use token::{
     MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
     MAX_TOKEN_FUTURE_SKEW_SECS, StreamTokenQuotaSubject,
@@ -134,6 +129,37 @@ pub use token::{
     StreamTokenSignerClientV1, StreamTokenSignerPinsV1, StreamTokenSignerReceiptV1,
     StreamTokenStateObserverClientV1, TokenOverrides, decode_token_base64, encode_token_base64,
 };
+
+/// Whether local queue or pipeline-cache evidence shows the transaction may still land.
+///
+/// Such evidence blocks every absence-based resubmission decision.
+#[cfg(feature = "app_api")]
+pub(crate) fn pending_evidence_blocks_absence_retry(
+    queue_pending: bool,
+    cache_kind: Option<crate::PipelineStatusKind>,
+) -> bool {
+    queue_pending
+        || matches!(
+            cache_kind,
+            Some(
+                crate::PipelineStatusKind::Queued
+                    | crate::PipelineStatusKind::Approved
+                    | crate::PipelineStatusKind::Committed
+                    | crate::PipelineStatusKind::Applied
+            )
+        )
+}
+/// Return the retained signed-transaction digest only when it binds the retained bytes exactly.
+#[cfg(feature = "app_api")]
+pub(crate) fn retained_transaction_digest(
+    retained_digest: Option<[u8; 32]>,
+    signed_transaction_bytes: Option<&[u8]>,
+) -> Option<[u8; 32]> {
+    let retained_digest = retained_digest.filter(|digest| *digest != [0; 32])?;
+    let signed_transaction_bytes = signed_transaction_bytes?;
+    (*blake3::hash(signed_transaction_bytes).as_bytes() == retained_digest)
+        .then_some(retained_digest)
+}
 
 /// Authenticated chunks for current finalized native repair leases.
 pub(crate) mod repair_source;

@@ -574,19 +574,11 @@ fn initial_permission_capability_root_authority(
                 executor_permission::smart_contract::CanGrantSmartContractCodeManagement.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
-        "CanInvokeContractEntrypoint" => {
-            let token = decode!(executor_permission::smart_contract::CanInvokeContractEntrypoint);
-            if token.entrypoint.is_empty() || token.entrypoint.trim() != token.entrypoint {
-                return Err(ValidationFail::NotPermitted(
-                    "contract entrypoint permission must use a non-empty canonical selector"
-                        .to_owned(),
-                ));
-            }
-            let code_manager: Permission =
-                executor_permission::smart_contract::CanManageSmartContractCode.into();
-            let _ = contract_runtime_context;
-            authority_has_permission(&state_transaction.world, authority, &code_manager)?
-        }
+        "CanInvokeContractEntrypoint" => contract_entrypoint_permission_delegation_allowed(
+            state_transaction,
+            authority,
+            permission,
+        )?,
         "CanExecuteSettlement" => {
             let token = decode!(executor_permission::settlement::CanExecuteSettlement);
             token.debited_asset.account() == authority
@@ -691,6 +683,37 @@ fn initial_permission_capability_root_authority(
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+/// Single native authority rule for exact contract-entrypoint permission mutation.
+fn contract_entrypoint_permission_delegation_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+) -> Result<bool, ValidationFail> {
+    let token =
+        executor_permission::smart_contract::CanInvokeContractEntrypoint::try_from(permission)
+            .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+    if token.entrypoint.is_empty() || token.entrypoint.trim() != token.entrypoint {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint permission must use a non-empty canonical selector".to_owned(),
+        ));
+    }
+    if is_initial_genesis_context(state_transaction)
+        || authority_has_permission(&state_transaction.world, authority, permission)?
+        || authority_has_permission(
+            &state_transaction.world,
+            authority,
+            &executor_permission::smart_contract::CanManageSmartContractCode.into(),
+        )?
+    {
+        return Ok(true);
+    }
+    let lifecycle = code::fetch_contract_lifecycle(&state_transaction.world, &token.contract)
+        .map_err(ValidationFail::NotPermitted)?;
+    Ok(lifecycle.is_some_and(|(_, lifecycle)| {
+        matches!(lifecycle.owner,
+            iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(owner) if owner == *authority)
+    }))
 }
 fn initial_permission_delegation_allowed(
     state_transaction: &StateTransaction<'_, '_>,

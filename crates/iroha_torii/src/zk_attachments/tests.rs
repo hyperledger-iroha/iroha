@@ -2876,7 +2876,7 @@ async fn gc_rechecks_expiry_after_waiting_for_a_repost() {
     before_lock_rx
         .await
         .expect("GC task reaches the shared mutation lock");
-    meta.created_ms = super::now_ms();
+    meta.created_ms = crate::utils::unix_now_ms();
     super::save_meta(&tenant, &meta).expect("refresh attachment metadata during repost");
     drop(mutation_guard);
 

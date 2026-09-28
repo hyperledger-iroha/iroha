@@ -50,6 +50,7 @@ pub(crate) struct ProofManagedFrontierPartsV1 {
     pub(crate) root: PrivacyRootV1,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Owner-wallet material for spending both leaves of a two-note origin tree.
 ///
 /// This is the fixed first-release bootstrap shape used by atomic private
@@ -273,6 +274,7 @@ pub(crate) fn append_proof_managed_commitments_v1(
     Ok(frontier_parts_v1(frontier))
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Plan the canonical two-origin-note bootstrap and one ordered output append.
 ///
 /// The ledger requires genesis commitments to be strictly increasing.  Wallet

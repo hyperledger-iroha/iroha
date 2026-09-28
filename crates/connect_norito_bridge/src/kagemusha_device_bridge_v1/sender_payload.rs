@@ -239,10 +239,8 @@ pub enum SenderRecoverySelectorV1 {
 
 /// Closed terminal receipt selector for native outbox release.
 ///
-/// A redemption projection is public binding material only. It cannot authorize
-/// release without a matching in-process
-/// [`VerifiedKagemushaRedemptionReleaseV1`](iroha_core::zk::kagemusha_v1_state::VerifiedKagemushaRedemptionReleaseV1) constructed by Core from the full
-/// finalized operation status and a caller-pinned trust anchor.
+/// A redemption projection is public binding material only. Core exposes no redemption
+/// outbox release path, so the projection alone never authorizes release.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderTerminalReceiptV1",

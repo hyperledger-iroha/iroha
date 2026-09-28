@@ -14,7 +14,6 @@ use super::{
     direct_rkg_one_publication_scope_v1,
 };
 use crate::vega::zk_ams::mkhe::{
-    ZK_AMS_MKHE_DIRECT_RKG_ONE_LEGACY_RECORD_BYTES_V1,
     ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2,
     ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2, ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2,
     ZkAmsMkheDirectRkgOneLifecycleStoreV2, ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2,
@@ -27,18 +26,14 @@ use crate::vega::zk_ams::mkhe::{
 
 #[path = "direct_rkg_one_lifecycle_record_v2.rs"]
 mod record_v2;
-use record_v2::{
-    DecodedStateV2, LEGACY_RECORD_BYTES_V1, PublishedAxesV2, RECORD_BYTES_V2, RecordV2,
-};
+use record_v2::{DecodedStateV2, PublishedAxesV2, RECORD_BYTES_V2, RecordV2};
 
 const _: () = {
-    assert!(record_v2::LEGACY_RECORD_BYTES_V1 == ZK_AMS_MKHE_DIRECT_RKG_ONE_LEGACY_RECORD_BYTES_V1);
     assert!(record_v2::RECORD_BYTES_V2 == ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2);
 };
 
 /// Durable state classification with no publication, proof, verifier, or retry authority.
 pub(in super::super) enum DirectRkgOneLifecycleObservationV2 {
-    LegacyV1Quarantined,
     FreshQuarantined,
     PublishedUnbound,
     ProofPublishedUnverified,
@@ -323,7 +318,6 @@ where
 )]
 enum LoadedV2 {
     Absent,
-    Legacy,
     Lifecycle(DecodedStateV2),
 }
 
@@ -341,12 +335,6 @@ where
         ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Absent if *record == [0; RECORD_BYTES_V2] => {
             Ok(LoadedV2::Absent)
         }
-        ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Legacy334
-            if record[LEGACY_RECORD_BYTES_V1..]
-                == [0; RECORD_BYTES_V2 - LEGACY_RECORD_BYTES_V1] =>
-        {
-            Ok(LoadedV2::Legacy)
-        }
         ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Lifecycle640 => {
             record_v2::decode_record_v2(scope, storage_key, record).map(LoadedV2::Lifecycle)
         }
@@ -358,7 +346,6 @@ fn observation_v2(
     loaded: LoadedV2,
 ) -> Result<DirectRkgOneLifecycleObservationV2, ZkAmsMkheErrorV1> {
     match loaded {
-        LoadedV2::Legacy => Ok(DirectRkgOneLifecycleObservationV2::LegacyV1Quarantined),
         LoadedV2::Lifecycle(DecodedStateV2::Fresh) => {
             Ok(DirectRkgOneLifecycleObservationV2::FreshQuarantined)
         }

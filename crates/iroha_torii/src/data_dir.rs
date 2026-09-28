@@ -1,10 +1,18 @@
 //! Shared helpers for resolving Torii data directory overrides.
 use iroha_config::parameters::defaults;
+#[cfg(any(test, feature = "test-fixtures"))]
 use std::{
-    path::{Path, PathBuf},
-    sync::{Condvar, Mutex, OnceLock, RwLock},
+    path::Path,
+    sync::{Condvar, Mutex},
     thread::ThreadId,
 };
+use std::{
+    path::PathBuf,
+    sync::{OnceLock, RwLock},
+};
+// Test-only scoped overrides: tests and test fixtures redirect the data directory per
+// task/thread with `OverrideGuard`; production reads only the configured base directory.
+#[cfg(any(test, feature = "test-fixtures"))]
 fn override_slot() -> &'static Mutex<Option<PathBuf>> {
     static OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     OVERRIDE.get_or_init(|| Mutex::new(None))
@@ -13,14 +21,16 @@ fn base_dir_slot() -> &'static RwLock<PathBuf> {
     static BASE_DIR: OnceLock<RwLock<PathBuf>> = OnceLock::new();
     BASE_DIR.get_or_init(|| RwLock::new(defaults::torii::data_dir()))
 }
-fn base_dir_mutation_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+fn base_dir_mutation_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 struct ExclusiveState {
     owner: Option<OverrideOwner>,
     depth: usize,
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 impl ExclusiveState {
     fn new() -> Self {
         Self {
@@ -54,25 +64,30 @@ impl ExclusiveState {
         false
     }
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 fn exclusive_state() -> &'static (Mutex<ExclusiveState>, Condvar) {
     static STATE: OnceLock<(Mutex<ExclusiveState>, Condvar)> = OnceLock::new();
     STATE.get_or_init(|| (Mutex::new(ExclusiveState::new()), Condvar::new()))
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverrideOwner {
     Task(tokio::task::Id),
     Thread(ThreadId),
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 impl OverrideOwner {
     fn current() -> Self {
         tokio::task::try_id().map_or_else(|| Self::Thread(std::thread::current().id()), Self::Task)
     }
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 #[must_use]
 pub struct OverrideGuard {
     previous: Option<PathBuf>,
     owner: OverrideOwner,
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 impl OverrideGuard {
     pub fn new(path: &Path) -> Self {
         let owner = OverrideOwner::current();
@@ -97,6 +112,7 @@ impl OverrideGuard {
         Self { previous, owner }
     }
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 impl Drop for OverrideGuard {
     fn drop(&mut self) {
         let mut guard = override_slot()
@@ -113,6 +129,7 @@ impl Drop for OverrideGuard {
         }
     }
 }
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn current_override() -> Option<PathBuf> {
     override_slot()
         .lock()
@@ -128,6 +145,7 @@ pub fn set_base_dir(path: PathBuf) {
         .expect("failed to acquire base dir lock") = path;
 }
 pub fn base_dir() -> PathBuf {
+    #[cfg(any(test, feature = "test-fixtures"))]
     if let Some(dir) = current_override() {
         return dir;
     }

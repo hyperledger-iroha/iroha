@@ -14,10 +14,7 @@ iroha_model_base = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_primitives.workspace = true
-color-eyre.workspace = true
 path-absolutize.workspace = true
-owo-colors = { workspace = true, features = ["supports-colors"] }
-clap = { workspace = true, features = ["derive"] }
 displaydoc.workspace = true
 pathdiff = "0.2.3"
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -25,5 +22,3 @@ norito = { workspace = true, default-features = false, features = ["node-codec"]
 [dev-dependencies]
 iroha_config.workspace = true
 nonzero_ext.workspace = true
-# Preserve the reviewed lock graph without restoring this retired production edge.
-expect-test.workspace = true

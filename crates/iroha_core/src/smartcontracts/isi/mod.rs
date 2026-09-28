@@ -13,6 +13,8 @@ pub mod domain;
 pub mod escrow;
 /// Generic game custody and proof settlement transitions.
 pub mod game;
+/// Authorization, signature and error-mapping helpers shared by ISI modules.
+pub(crate) mod helpers;
 pub mod identifier;
 /// Kagemusha reserve settlement instruction handlers.
 pub mod kagemusha;

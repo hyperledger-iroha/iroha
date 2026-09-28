@@ -37,7 +37,6 @@ MACRO_CONSUMERS = {
     "crates/iroha_smart_contract_derive/src/lib.rs": (
         "crates/iroha_smart_contract_derive/Cargo.toml"
     ),
-    "crates/iroha_trigger_derive/src/lib.rs": "crates/iroha_trigger_derive/Cargo.toml",
 }
 INTERNAL_IMPORTS = (
     "crates/iroha_data_model_derive/src/event_set.rs",
@@ -46,13 +45,9 @@ INTERNAL_IMPORTS = (
     "crates/iroha_executor_derive/src/default.rs",
 )
 DELETED_COPIES = tuple(path.replace("lib.rs", "emitter_ext.rs") for path in MACRO_CONSUMERS)
-LOCAL_COPIES = (
-    "crates/iroha_ffi/proc_macro/src/emitter_ext.rs",
-    "crates/iroha_telemetry_derive/src/emitter_ext.rs",
-)
+LOCAL_COPIES = ("crates/iroha_telemetry_derive/src/emitter_ext.rs",)
 
 LOCAL_OWNERS = {
-    "crates/iroha_ffi/proc_macro/src/lib.rs": "crates/iroha_ffi/proc_macro/src/emitter_ext.rs",
     "crates/iroha_telemetry_derive/src/lib.rs": (
         "crates/iroha_telemetry_derive/src/emitter_ext.rs"
     ),
@@ -118,11 +113,9 @@ def _local_tests(source: str, owner: str) -> None:
         if name == "finish_token_stream_with_appends_tokens":
             for syntax in ('quote! { initial }', 'token_string.contains("initial")', 'token_string.len() > "initial".len()'):
                 _require(rust.has_literal_syntax(item.raw_body, syntax), f"emitter.appended_tokens_test:{owner}")
-    diagnostic = "ManyhowError" if "iroha_ffi/" in owner else "Error"
     error_case = _active_test(source, "handle_err", owner)
-    _require(f".handle::<{diagnostic},_>(Err(" in error_case.code, f"emitter.diagnostic_type:{owner}")
-    if diagnostic == "Error":
-        _require("usesyn::Error;" in rust.compact(source), f"emitter.diagnostic_type:{owner}")
+    _require(".handle::<Error,_>(Err(" in error_case.code, f"emitter.diagnostic_type:{owner}")
+    _require("usesyn::Error;" in rust.compact(source), f"emitter.diagnostic_type:{owner}")
     module = re.search(r"(?m)^((?:\s*#\[[^\n]*\])+\s*)mod\s+tests\s*\{", source)
     _require(module is not None and rust.compact(module.group(1)) == "#[cfg(test)]", f"emitter.test_module:{owner}")
     _require(not re.search(r"(?m)^#!\[cfg", rust._mask_non_code(source)), f"emitter.module_disabled:{owner}")

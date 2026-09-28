@@ -2137,7 +2137,6 @@ mod model {
             <SignatureOf<QueryRequestWithAuthority> as norito::NoritoSchema>::frame_name()
         }
     }
-    #[cfg(not(feature = "ffi_import"))]
     impl<'a> norito::core::DecodeFromSlice<'a> for QuerySignature {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
             let (signature, used) =
@@ -2148,7 +2147,6 @@ mod model {
         }
     }
 
-    #[cfg(not(feature = "ffi_import"))]
     impl norito::core::SerializePayload for QuerySignature {
         fn encoded_len_hint(&self) -> Option<usize> {
             norito::core::SerializePayload::encoded_len_hint(&self.0)
@@ -2164,7 +2162,6 @@ mod model {
         }
     }
 
-    #[cfg(not(feature = "ffi_import"))]
     impl<'de> norito::core::DeserializePayload<'de> for QuerySignature {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             let as_sig = archived.cast::<SignatureOf<QueryRequestWithAuthority>>();
@@ -2240,7 +2237,6 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Proof context for an entrypoint/result pair ordered through a certified merge sidecar.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::model::CertifiedMergeTransactionInclusion")]
@@ -2276,7 +2272,6 @@ mod model {
         crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Snapshot representing a transaction committed to the ledger.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::model::CommittedTransaction")]
@@ -4732,19 +4727,16 @@ pub mod trigger {
         /// Find all currently active (as in not disabled and/or expired) trigger IDs.
         #[derive(Copy, Display)]
         #[display("Find all trigger ids")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::trigger::model::FindActiveTriggerIds")]
         pub struct FindActiveTriggerIds;
         /// Find all currently active (as in not disabled and/or expired) triggers.
         #[derive(Copy, Display)]
         #[display("Find all triggers")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::trigger::model::FindTriggers")]
         pub struct FindTriggers;
         /// Find a trigger by identifier.
         #[derive(Display)]
         #[display("Find trigger `{id}`")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::trigger::model::FindTriggerById")]
         pub struct FindTriggerById {
             /// Trigger identifier to resolve.
@@ -4794,7 +4786,6 @@ pub mod transaction {
         /// [`FindTransactions`] Iroha Query lists all transactions included in a blockchain
         #[derive(Copy, Display)]
         #[display("Find all transactions")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::transaction::model::FindTransactions")]
         pub struct FindTransactions;
     }
@@ -4814,14 +4805,12 @@ pub mod block {
         /// [`FindBlocks`] Iroha Query lists all blocks sorted by height in descending order
         #[derive(Copy, Display)]
         #[display("Find all blocks")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::block::model::FindBlocks")]
         pub struct FindBlocks;
         /// [`FindBlockHeaders`] Iroha Query lists all block headers
         /// sorted by height in descending order
         #[derive(Copy, Display)]
         #[display("Find all block headers")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::block::model::FindBlockHeaders")]
         pub struct FindBlockHeaders;
     }

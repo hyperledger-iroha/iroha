@@ -817,6 +817,7 @@ pub fn path_components_for_request(raw_path: &str, index_document: &str) -> Opti
     Some(segments)
 }
 /// Decide whether an unknown path should fall back to the SPA entrypoint.
+#[cfg(test)]
 #[must_use]
 pub fn should_use_spa_fallback(raw_path: &str, binding: &SiteBinding) -> bool {
     if !binding.spa_fallback_enabled() {
@@ -829,31 +830,9 @@ pub fn should_use_spa_fallback(raw_path: &str, binding: &SiteBinding) -> bool {
 /// Best-effort content-type lookup for static site assets.
 #[must_use]
 pub fn content_type_for_path(path: &[String]) -> &'static str {
-    let extension = path
-        .last()
-        .and_then(|value| value.rsplit('.').next())
-        .map(|value| value.to_ascii_lowercase());
-    match extension.as_deref() {
-        Some("html") => "text/html; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("js") => "text/javascript; charset=utf-8",
-        Some("json") => "application/json; charset=utf-8",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        Some("ico") => "image/x-icon",
-        Some("txt") => "text/plain; charset=utf-8",
-        Some("map") => "application/json; charset=utf-8",
-        Some("wasm") => "application/wasm",
-        Some("woff2") => "font/woff2",
-        Some("woff") => "font/woff",
-        Some("ttf") => "font/ttf",
-        Some("eot") => "application/vnd.ms-fontobject",
-        Some("xml") => "application/xml; charset=utf-8",
-        _ => "application/octet-stream",
-    }
+    path.last()
+        .and_then(|segment| iroha_torii_shared::content_mime::media_type_for_path(segment))
+        .unwrap_or("application/octet-stream")
 }
 #[cfg(test)]
 mod tests {

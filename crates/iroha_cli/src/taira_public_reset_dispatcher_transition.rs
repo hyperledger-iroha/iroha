@@ -2,24 +2,34 @@
 //!
 //! This root-only owner changes exactly the dispatcher and five guard files. It
 //! does not acquire a new deployment lease, reset state, or interpret old inventories.
+#[cfg(any(target_os = "linux", test))]
 use super::super::{Value, validate_absolute_normal_path, validate_lower_hex};
 use super::*;
 
+// Admission and storage own the root-only Linux transaction; `run` fails closed elsewhere.
+#[cfg(any(target_os = "linux", test))]
 #[path = "taira_public_reset_dispatcher_transition_admission.rs"]
 mod admission;
 #[path = "taira_public_reset_dispatcher_transition_prepare.rs"]
 pub(in super::super) mod prepare;
+#[cfg(any(target_os = "linux", test))]
 #[path = "taira_public_reset_dispatcher_transition_storage.rs"]
 mod storage;
 #[cfg(test)]
 #[path = "taira_public_reset_dispatcher_transition_tests.rs"]
 mod tests;
 
+#[cfg(any(target_os = "linux", test))]
 const CONTROL: &str = "/var/lib/taira/.public-reset-control-v1";
+#[cfg(any(target_os = "linux", test))]
 const RUNTIME: &str = "/private/runtime/taira-public-reset";
+#[cfg(any(target_os = "linux", test))]
 const SCHEMA: &str = "iroha.taira.dispatcher-transition.v1";
+#[cfg(any(target_os = "linux", test))]
 const MAX_PROOF: u64 = 16 * 1024 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const MAX_BINARY: u64 = 512 * 1024 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const SLUGS: [&str; 5] = [
     "taira-validator-1",
     "taira-validator-2",
@@ -45,6 +55,7 @@ enum Action {
     Rollback,
 }
 
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Pin {
@@ -53,6 +64,7 @@ struct Pin {
     size: u64,
     mode: u32,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Candidate {
@@ -69,6 +81,7 @@ struct Candidate {
     binary_transfer: Pin,
     source_transfer: Pin,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct DirectoryIdentity {
@@ -76,6 +89,7 @@ struct DirectoryIdentity {
     device: u64,
     inode: u64,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Selector {
@@ -84,6 +98,7 @@ struct Selector {
     device: u64,
     inode: u64,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct OccupiedRole {
@@ -93,6 +108,7 @@ struct OccupiedRole {
     /// Exact current daemon/configuration/genesis/hash/unit or edge CLI/config/unit files.
     files: Vec<Pin>,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Predecessor {
@@ -110,6 +126,7 @@ struct Predecessor {
     guards: Vec<Pin>,
     occupied: Vec<OccupiedRole>,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Plan {
@@ -121,6 +138,7 @@ struct Plan {
     predecessor: Predecessor,
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn need(value: bool, message: &str) -> Result<()> {
     if value {
         Ok(())
@@ -128,11 +146,13 @@ fn need(value: bool, message: &str) -> Result<()> {
         Err(eyre!("dispatcher transition: {message}"))
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn operation_root(plan: &Plan) -> PathBuf {
     Path::new(RUNTIME)
         .join("dispatcher-transitions")
         .join(&plan.operation_id)
 }
+#[cfg(any(target_os = "linux", test))]
 fn coordination_root(plan: &Plan) -> PathBuf {
     Path::new(CONTROL)
         .join("hosts")

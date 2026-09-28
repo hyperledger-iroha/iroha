@@ -3335,7 +3335,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let mut local_proxy_kaigi_policy_override: Option<String> = None;
     let mut max_peers: Option<usize> = None;
     let mut retry_budget: Option<usize> = None;
-    let mut provider_specs: Vec<GatewayProviderSpec> = Vec::new();
+    let mut provider_inputs: Vec<GatewayProviderInput> = Vec::new();
     let mut scoreboard_out: Option<PathBuf> = None;
     let mut scoreboard_now: Option<u64> = None;
     let mut telemetry_source_label: Option<String> = None;
@@ -3501,7 +3501,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         } else if let Some(rest) = arg.strip_prefix("--retry-budget=") {
             retry_budget = Some(parse_usize(rest, "--retry-budget")?);
         } else if let Some(rest) = arg.strip_prefix("--provider=") {
-            provider_specs.push(parse_gateway_provider_spec(rest)?);
+            provider_inputs.push(GatewayProviderInput::parse_spec(rest, "--provider")?);
         } else {
             return Err(format!(
                 "unrecognised option `{arg}` for `sorafs_cli fetch`"
@@ -3520,7 +3520,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     {
         return Err("`--manifest-cid` must be a 32-byte hex string".to_string());
     }
-    if provider_specs.is_empty() {
+    if provider_inputs.is_empty() {
         return Err("provide at least one `--provider` entry".to_string());
     }
     let manifest_report = if let Some(source) = manifest_report_source.take() {
@@ -3555,17 +3555,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         salt_epoch: None,
         expected_cache_version: expected_cache_version.clone(),
     };
-    let provider_inputs: Vec<GatewayProviderInput> = provider_specs
-        .iter()
-        .map(|spec| GatewayProviderInput {
-            name: spec.name.clone(),
-            provider_id_hex: spec.provider_id_hex.clone(),
-            gateway_public_key_hex: spec.gateway_public_key_hex.clone(),
-            base_url: spec.base_url.clone(),
-            stream_token_b64: spec.stream_token_b64.clone(),
-            privacy_events_url: spec.privacy_events_url.clone(),
-        })
-        .collect();
     let context = GatewayFetchContext::new(gateway_config.clone(), provider_inputs.clone())
         .map_err(|err| format!("failed to construct gateway context: {err}"))?;
     let context_providers = context.providers();
@@ -10726,7 +10715,7 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
     let mut chunker_handle = DEFAULT_CHUNKER_HANDLE.to_string();
     let mut expected_catalog_digest_hex: Option<String> = None;
     let mut honey_digests: Vec<String> = Vec::new();
-    let mut provider_specs: Vec<GatewayProviderSpec> = Vec::new();
+    let mut provider_inputs: Vec<GatewayProviderInput> = Vec::new();
     let mut json_out: Option<PathBuf> = None;
     let mut markdown_out: Option<PathBuf> = None;
     for arg in raw_args {
@@ -10764,7 +10753,7 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             markdown_out = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--provider") {
             if let Some(spec) = rest.strip_prefix('=') {
-                provider_specs.push(parse_gateway_provider_spec(spec)?);
+                provider_inputs.push(GatewayProviderInput::parse_spec(spec, "--provider")?);
             } else {
                 return Err("expected `--provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64`".to_string());
             }
@@ -10781,7 +10770,7 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
     if honey_digests.is_empty() {
         return Err("provide at least one `--honey=HEX` digest to probe".to_string());
     }
-    if provider_specs.is_empty() {
+    if provider_inputs.is_empty() {
         return Err("provide at least one `--provider` entry".to_string());
     }
     let mut specs = Vec::with_capacity(honey_digests.len());
@@ -10812,17 +10801,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         salt_epoch: None,
         expected_cache_version: None,
     };
-    let provider_inputs: Vec<GatewayProviderInput> = provider_specs
-        .iter()
-        .map(|spec| GatewayProviderInput {
-            name: spec.name.clone(),
-            provider_id_hex: spec.provider_id_hex.clone(),
-            gateway_public_key_hex: spec.gateway_public_key_hex.clone(),
-            base_url: spec.base_url.clone(),
-            stream_token_b64: spec.stream_token_b64.clone(),
-            privacy_events_url: spec.privacy_events_url.clone(),
-        })
-        .collect();
     let context = GatewayFetchContext::new(gateway_config, provider_inputs)
         .map_err(|err| format!("failed to construct gateway context: {err}"))?;
     let providers = context.providers();
@@ -13930,15 +13908,6 @@ mod manifest_tests {
 enum InputSummary {
     File { path: PathBuf, bytes: u64 },
     Directory { path: PathBuf, file_count: u64 },
-}
-#[derive(Clone, Debug)]
-struct GatewayProviderSpec {
-    name: String,
-    provider_id_hex: String,
-    gateway_public_key_hex: String,
-    base_url: String,
-    stream_token_b64: String,
-    privacy_events_url: Option<String>,
 }
 struct PlanWithHandle {
     plan: CarBuildPlan,
@@ -21168,79 +21137,6 @@ fn build_fetch_summary(
     insert_value!(root["anonymity_brownout_effective"] = policy_report.should_flag_brownout());
     insert_value!(root["anonymity_uses_classical"] = policy_report.uses_classical());
     Value::Object(root)
-}
-fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
-    let mut name: Option<String> = None;
-    let mut provider_id: Option<String> = None;
-    let mut gateway_public_key: Option<String> = None;
-    let mut base_url: Option<String> = None;
-    let mut stream_token: Option<String> = None;
-    let mut privacy_events_url: Option<String> = None;
-    for pair in value.split(',') {
-        let pair = pair.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        let (key, val) = pair
-            .split_once('=')
-            .ok_or_else(|| "--provider expects comma-separated key=value pairs".to_string())?;
-        let val = val.trim();
-        match key {
-            "name" => {
-                if val.is_empty() {
-                    return Err("--provider name must not be empty".into());
-                }
-                name = Some(val.to_string());
-            }
-            "provider-id" | "provider_id" => {
-                if val.len() != 64 || !val.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err("--provider provider-id must be 32-byte hex".into());
-                }
-                provider_id = Some(val.to_ascii_lowercase());
-            }
-            "gateway-key" | "gateway_key" | "gateway-public-key" | "gateway_public_key" => {
-                if val.len() != 64 || !val.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err("--provider gateway-key must be 32-byte hex".into());
-                }
-                gateway_public_key = Some(val.to_ascii_lowercase());
-            }
-            "base-url" | "base_url" => {
-                if val.is_empty() {
-                    return Err("--provider base-url must not be empty".into());
-                }
-                base_url = Some(val.to_string());
-            }
-            "stream-token" | "stream_token" => {
-                if val.is_empty() {
-                    return Err("--provider stream-token must not be empty".into());
-                }
-                stream_token = Some(val.to_string());
-            }
-            "privacy-url" | "privacy_url" => {
-                if val.is_empty() {
-                    return Err("--provider privacy-url must not be empty".into());
-                }
-                privacy_events_url = Some(val.to_string());
-            }
-            other => return Err(format!("unknown key `{other}` in --provider argument")),
-        }
-    }
-    let name = name.ok_or_else(|| "--provider requires a `name=` entry".to_string())?;
-    let provider_id_hex =
-        provider_id.ok_or_else(|| "--provider requires a `provider-id=` entry".to_string())?;
-    let gateway_public_key_hex = gateway_public_key
-        .ok_or_else(|| "--provider requires a `gateway-key=` entry".to_string())?;
-    let base_url = base_url.ok_or_else(|| "--provider requires a `base-url=` entry".to_string())?;
-    let stream_token_b64 =
-        stream_token.ok_or_else(|| "--provider requires a `stream-token=` entry".to_string())?;
-    Ok(GatewayProviderSpec {
-        name,
-        provider_id_hex,
-        gateway_public_key_hex,
-        base_url,
-        stream_token_b64,
-        privacy_events_url,
-    })
 }
 fn parse_usize(raw: &str, flag: &str) -> Result<usize, String> {
     require_canonical_unsigned_decimal(flag, raw, "sorafs_cli")?;

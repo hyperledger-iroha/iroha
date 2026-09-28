@@ -226,7 +226,9 @@ SHIPPING_ROOT_FEATURE_ALLOWLIST = {
     ),
     "ivm": frozenset(),
     "sorafs_car": frozenset({"cli", "default", "manifest"}),
-    "sorafs_orchestrator": frozenset({"cli-orchestrator", "default"}),
+    "sorafs_orchestrator": frozenset(
+        {"cli-orchestrator", "default", "moderation-grpc"}
+    ),
 }
 REQUIRED_FEATURES = {
     "irohad": (

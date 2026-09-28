@@ -18,6 +18,7 @@ use halo2_proofs::{
     halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
     poly::ipa::commitment::ParamsIPA,
 };
+#[cfg(test)]
 use iroha_data_model::{
     NetworkId,
     kagemusha::{KagemushaHardwarePlatformClassV1, KagemushaReleasePurposeV1},
@@ -41,12 +42,15 @@ use super::{
     },
     native_backend::{verify_ep_succinct_protocol, verify_eq_succinct_protocol},
 };
+#[cfg(test)]
+use crate::zk::kagemusha_v1_state::{
+    CreditStageStatementV1, DurabilityAnchorStatementV1, KagemushaGuardBundleVerifierV1,
+    MintReservationStatementV1, MintStageStatementV1,
+};
 use crate::zk::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
     kagemusha_v1_state::{
-        BootstrapStatementV1, CreditStageStatementV1, DurabilityAnchorStatementV1,
-        HardwareTransitionStatementV1, KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1,
-        KagemushaGuardBundleVerifierV1, MintReservationStatementV1, MintStageStatementV1,
+        BootstrapStatementV1, HardwareTransitionStatementV1, KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1,
         TransitionProofStatementV1,
     },
 };
@@ -82,6 +86,7 @@ pub enum KagemushaGuardVerificationErrorV1 {
     HardwareAssertionFoldUnavailable,
 }
 
+#[cfg(test)]
 fn require_hardware_assertion_fold_v1(
     platform_class: KagemushaHardwarePlatformClassV1,
 ) -> Result<()> {
@@ -100,6 +105,7 @@ fn require_hardware_assertion_fold_v1(
     }
 }
 
+#[cfg(test)]
 fn require_production_guard_release_v1(purpose: KagemushaReleasePurposeV1) -> Result<()> {
     if purpose != KagemushaReleasePurposeV1::Production {
         return Err(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable);
@@ -107,6 +113,7 @@ fn require_production_guard_release_v1(purpose: KagemushaReleasePurposeV1) -> Re
     Ok(())
 }
 
+#[cfg(test)]
 fn require_signed_guard_network_v1(
     release_network: NetworkId,
     statement_network: DigestV1,
@@ -160,27 +167,7 @@ struct GuardProofWire {
     ep_history: HistoryBytes,
 }
 
-/// Borrowed outputs of the real paired GuardBundle prover.
-///
-/// These fields are untrusted proof material. [`KagemushaGuardProofDiagnosticVerifierV1::encode_proof`]
-/// checks the cryptographic relation before emitting a frame; it grants no hardware authority.
-pub struct KagemushaGuardBundleProofPartsV1<'a> {
-    /// Canonical Eq audit shared by both proof parities.
-    pub eq_credential_audit: DigestV1,
-    /// Canonical Ep audit shared by both proof parities.
-    pub ep_credential_audit: DigestV1,
-    /// Exact predecessor/successor credential statement digests exposed by both actual proofs.
-    pub credential_digests: [DigestV1; 2],
-    /// Actual Eq GuardBundle ordinary IPA proof.
-    pub eq_proof: &'a [u8],
-    /// Actual Ep GuardBundle ordinary IPA proof.
-    pub ep_proof: &'a [u8],
-    /// Complete Eq history, including both credential proofs and their SHA histories.
-    pub eq_history: &'a KagemushaEqAccumulatorV1,
-    /// Complete Ep history, including both credential proofs and their SHA histories.
-    pub ep_history: &'a KagemushaEpAccumulatorV1,
-}
-
+#[cfg(test)]
 /// Monetary Guard verifier bound to an explicitly admitted release and its actual paired proofs.
 /// Independent hardware journal transactions additionally require a registered transaction owner.
 #[derive(Clone, Default)]
@@ -192,6 +179,7 @@ pub struct KagemushaAuthenticatedGuardBundleVerifierV1 {
     transactions: Option<super::KagemushaHardwareTransactionVerifierV1>,
 }
 
+#[cfg(test)]
 impl KagemushaAuthenticatedGuardBundleVerifierV1 {
     /// Construct only after the verifier admits the independently authenticated monetary release.
     ///
@@ -209,27 +197,6 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
             )),
             transactions: None,
         })
-    }
-
-    /// Register independent journal evidence under the same already admitted release.
-    /// This consumes the configuration before sharing it with a state machine; it cannot mutate
-    /// another live wallet's authority. Every certificate is still authenticated independently.
-    pub fn with_hardware_transactions(
-        mut self,
-        verifier: super::KagemushaHardwareTransactionVerifierV1,
-    ) -> Result<Self> {
-        let (_, release) = self
-            .authority
-            .as_ref()
-            .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
-        if verifier.release().attestation_digest() != release.attestation_digest()
-            || verifier.release().authority_policy_digest() != release.authority_policy_digest()
-            || self.transactions.is_some()
-        {
-            return Err(KagemushaGuardVerificationErrorV1::Binding);
-        }
-        self.transactions = Some(verifier);
-        Ok(self)
     }
 
     fn verify_transaction(
@@ -330,45 +297,6 @@ impl KagemushaGuardProofDiagnosticVerifierV1 {
     pub fn new(verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>) -> Result<Self> {
         let lengths = GuardProofLengths::from_material(&verifier.guard_verifier_material())?;
         Ok(Self { verifier, lengths })
-    }
-
-    /// Verify genuine prover output and encode its bounded canonical private Guard frame.
-    ///
-    /// This frame contains no secret authority or serialized capability. Successful encoding
-    /// does not qualify provider hardware or authorize a monetary operation.
-    ///
-    /// # Errors
-    /// Rejects incorrect statement/release bindings, malformed proofs or failed decisions.
-    pub fn encode_proof(
-        &self,
-        normalized: &KagemushaNormalizedGuardStatementV1,
-        parts: KagemushaGuardBundleProofPartsV1<'_>,
-    ) -> Result<Vec<u8>> {
-        if parts.eq_proof.len() != self.lengths.eq || parts.ep_proof.len() != self.lengths.ep {
-            return Err(KagemushaGuardVerificationErrorV1::Shape);
-        }
-        let material = self.verifier.guard_verifier_material();
-        let proof = GuardProofWire {
-            version: 1,
-            binding: material.binding.clone(),
-            statement_digest: normalized
-                .canonical_digest()
-                .map_err(|_| KagemushaGuardVerificationErrorV1::Binding)?,
-            eq_credential_audit: parts.eq_credential_audit,
-            ep_credential_audit: parts.ep_credential_audit,
-            credential_digests: parts.credential_digests,
-            eq_proof: parts.eq_proof.to_vec(),
-            ep_proof: parts.ep_proof.to_vec(),
-            eq_history: *parts.eq_history.as_bytes(),
-            ep_history: *parts.ep_history.as_bytes(),
-        };
-        self.verify_wire(normalized, parts.credential_digests, &proof)?;
-        let bytes = norito::encode_canonical(&proof)
-            .map_err(|_| KagemushaGuardVerificationErrorV1::Encoding)?;
-        if bytes.len() > KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1 {
-            return Err(KagemushaGuardVerificationErrorV1::Shape);
-        }
-        Ok(bytes)
     }
 
     /// Check the caller's exact normalized statement, credential pair and complete histories.
@@ -500,6 +428,7 @@ impl KagemushaGuardProofDiagnosticVerifierV1 {
     }
 }
 
+#[cfg(test)]
 impl KagemushaGuardBundleVerifierV1 for KagemushaAuthenticatedGuardBundleVerifierV1 {
     fn verify_bootstrap(
         &self,
@@ -610,6 +539,7 @@ impl KagemushaGuardBundleVerifierV1 for KagemushaAuthenticatedGuardBundleVerifie
     }
 }
 
+#[cfg(test)]
 fn unavailable(operation: &'static str) -> KagemushaGuardVerificationErrorV1 {
     KagemushaGuardVerificationErrorV1::HardwareTransactionUnavailable(operation)
 }

@@ -1,6 +1,7 @@
 //! Chaos drill harness for the SoraGlobal Gateway CDN (SNNet-15F1).
 //! Generates scenario packs, quarterly schedules, and runs dry-run or
 //! execution passes to capture evidence bundles for SRE/GameDay drills.
+use crate::soranet_common::sanitize_label;
 use eyre::{Result, WrapErr, eyre};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
@@ -650,17 +651,6 @@ fn render_report_markdown(report: &ChaosReport) -> String {
         out.push('\n');
     }
     out
-}
-fn sanitize_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_string()
 }
 #[cfg(test)]
 mod tests {

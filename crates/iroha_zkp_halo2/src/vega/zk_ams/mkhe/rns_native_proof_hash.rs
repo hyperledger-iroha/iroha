@@ -6,14 +6,18 @@
 
 #[cfg(test)]
 use fastpq_isi::hash_bytes_384_v1;
+use fastpq_isi::{GOLDILOCKS_DIGEST384_BYTES_V1, GoldilocksDigest384V1};
+#[cfg(test)]
 use fastpq_isi::{
-    GOLDILOCKS_DIGEST384_BYTES_V1, GoldilocksDigest384FrameV1,
-    GoldilocksDigest384LastFieldStreamV1, GoldilocksDigest384V1, GoldilocksDigestDomainV1,
+    GoldilocksDigest384FrameV1, GoldilocksDigest384LastFieldStreamV1, GoldilocksDigestDomainV1,
 };
+#[cfg(test)]
 use iroha_crypto::privacy::PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1;
 
+#[cfg(test)]
 use super::rns_native_qpcs_initial::canonical_parameter_digest_v1;
 
+#[cfg(test)]
 const PROTOCOL_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs";
 
 /// Canonical native proof commitment, transcript state, or challenge seed.
@@ -101,6 +105,7 @@ impl RnsNativeDigestIdentityV1 {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn as_bytes(&self) -> &[u8] {
         match self {
             Self::Public32(bytes) => bytes,
@@ -122,6 +127,7 @@ impl From<RnsNativeProofDigestV1> for RnsNativeDigestIdentityV1 {
 }
 
 /// Exact proof-oracle or Fiat-Shamir role; this is not an algorithm selector.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeProofHashRoleV1 {
     /// Initial authenticated codeword tree.
@@ -138,6 +144,7 @@ pub(super) enum RnsNativeProofHashRoleV1 {
     OraclePayload,
 }
 
+#[cfg(test)]
 impl RnsNativeProofHashRoleV1 {
     const fn label(self) -> &'static [u8] {
         match self {
@@ -152,6 +159,7 @@ impl RnsNativeProofHashRoleV1 {
 }
 
 /// Exact operation within a verifier-owned proof role.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeProofHashPhaseV1 {
     /// Initial transcript state after fixed public context.
@@ -172,6 +180,7 @@ pub(super) enum RnsNativeProofHashPhaseV1 {
     Binding,
 }
 
+#[cfg(test)]
 impl RnsNativeProofHashPhaseV1 {
     const fn label(self) -> &'static [u8] {
         match self {
@@ -188,6 +197,13 @@ impl RnsNativeProofHashPhaseV1 {
 }
 
 /// Invalid exact profile, hash frame, or canonical digest encoding.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "profile and digest rejections come only from test-only hash entry points"
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeProofHashErrorV1 {
     /// The current native parameter owner failed reconstruction.
@@ -211,6 +227,7 @@ pub(super) struct RnsNativeProofHashWorkV1 {
 
 impl RnsNativeProofHashWorkV1 {
     /// Count the exact shared frame, which already includes termination/padding.
+    #[cfg(test)]
     pub(super) fn from_frame(
         frame: &GoldilocksDigest384FrameV1<'_>,
     ) -> Result<Self, RnsNativeProofHashErrorV1> {
@@ -257,6 +274,7 @@ impl RnsNativeProofHashWorkV1 {
 }
 
 /// Exact tree position and monotonic challenge attempt.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct RnsNativeProofHashPositionV1 {
     /// Oracle or Merkle layer, derived by the verifier.
@@ -268,12 +286,14 @@ pub(super) struct RnsNativeProofHashPositionV1 {
 }
 
 /// Reconstructed exact catalog/profile context shared by all proof hash calls.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RnsNativeProofHashContextV1 {
     parameter_digest: [u8; 32],
     catalog: [u8; GOLDILOCKS_DIGEST384_BYTES_V1],
 }
 
+#[cfg(test)]
 impl RnsNativeProofHashContextV1 {
     /// Reconstruct context from the current native owner, without caller overrides.
     pub(super) fn canonical() -> Result<Self, RnsNativeProofHashErrorV1> {
@@ -363,6 +383,7 @@ impl RnsNativeProofHashContextV1 {
 }
 
 /// Decode the only proof digest representation: six canonical little-endian words.
+#[cfg(test)]
 pub(super) fn decode_proof_digest_v1(
     bytes: &[u8],
 ) -> Result<RnsNativeProofDigestV1, RnsNativeProofHashErrorV1> {

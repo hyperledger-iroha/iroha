@@ -7,23 +7,29 @@
 //! back to plaintext execution when an evaluated key or decryption share is absent.
 #[cfg(test)]
 use super::super::sponge::shake256;
+use super::super::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar, sponge::keccak256};
+#[cfg(test)]
 use super::super::{
-    VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1, VegaT256ScalarV1 as Scalar,
-    derive_t256_generators_v1,
-    sponge::{Keccak256, Shake256Reader, keccak256},
+    VegaT256PointV1, derive_t256_generators_v1,
+    sponge::{Keccak256, Shake256Reader},
 };
+#[cfg(test)]
 use super::MaskedRelaxedRandomSourceV1;
 use crate::generalized_bulletproof::try_exact_capacity_vec_v1;
 #[cfg(test)]
 use core::cmp::Ordering;
+#[cfg(test)]
 use core::fmt;
+#[cfg(test)]
 use once_cell::sync::Lazy;
 use thiserror::Error;
 /// Fixed-size entropy owner erased on success, error, and unwind.
 ///
 /// Callers borrow the fixed array during decoding so no unmanaged array copy
 /// is created before this owner is cleared.
+#[cfg(test)]
 struct ZeroizingRandomBytesV1<const N: usize>([u8; N]);
+#[cfg(test)]
 impl<const N: usize> ZeroizingRandomBytesV1<N> {
     const fn zeroed() -> Self {
         Self([0; N])
@@ -35,6 +41,7 @@ impl<const N: usize> ZeroizingRandomBytesV1<N> {
         &self.0
     }
 }
+#[cfg(test)]
 impl<const N: usize> Drop for ZeroizingRandomBytesV1<N> {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -43,9 +50,12 @@ impl<const N: usize> Drop for ZeroizingRandomBytesV1<N> {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
+#[cfg(test)]
 type ZeroizingScalarEntropyV1 = ZeroizingRandomBytesV1<64>;
 /// Move-only owner for one named secret scalar.
+#[cfg(test)]
 struct ZeroizingScalarV1(Scalar);
+#[cfg(test)]
 impl ZeroizingScalarV1 {
     const fn new(value: Scalar) -> Self {
         Self(value)
@@ -57,6 +67,7 @@ impl ZeroizingScalarV1 {
         self.0
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingScalarV1 {
     fn drop(&mut self) {
         let scalar = core::hint::black_box(&mut self.0);
@@ -69,6 +80,7 @@ impl Drop for ZeroizingScalarV1 {
 mod active;
 #[path = "mkhe/active_exact_binding.rs"]
 mod active_exact_binding;
+#[cfg(test)]
 #[path = "mkhe/cks.rs"]
 mod cks;
 #[path = "mkhe/collective.rs"]
@@ -79,12 +91,15 @@ mod collective;
 )]
 #[path = "mkhe/collective_eval_keys.rs"]
 mod collective_eval_keys;
+#[cfg(test)]
 #[path = "mkhe/collective_keys.rs"]
 mod collective_keys;
+#[cfg(test)]
 #[path = "mkhe/cpk_ceremony.rs"]
 mod cpk_ceremony;
 // TODO: Remove all three CPK-membership dead-code allowances when the complete
 // streamed RNS relation and contribution-authentication verifier is connected.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "native CPK relation remains private and fail-closed until the complete streamed RNS/auth verifier is wired"
@@ -101,6 +116,7 @@ mod decryption;
 mod direct_collective_eval_ceremony;
 #[path = "mkhe/direct_object_transport.rs"]
 mod direct_object_transport;
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the RKG-ephemeral opening is retained fail-closed until the exact direct relation prover consumes it"
@@ -133,10 +149,12 @@ mod persistent_membership_evidence;
 mod phase23;
 #[path = "mkhe/phase23_encrypted.rs"]
 mod phase23_encrypted;
+#[cfg(test)]
 #[path = "mkhe/phase23_ingress.rs"]
 mod phase23_ingress;
 #[path = "mkhe/phase23_mask_proof.rs"]
 mod phase23_mask_proof;
+#[cfg(test)]
 #[path = "mkhe/phase23_materialized_wire.rs"]
 mod phase23_materialized_wire;
 #[path = "mkhe/phase23_rns_link.rs"]
@@ -153,6 +171,7 @@ mod release_evidence;
 mod resource;
 #[path = "mkhe/rns_native_centering_subtraction_relation.rs"]
 mod rns_native_centering_subtraction_relation;
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the sealed claimed-successor carrier is inactive until the direct chronology is wired"
@@ -167,6 +186,7 @@ mod rns_native_claimed_successor;
 mod rns_native_comparator_product;
 #[path = "mkhe/rns_native_comparator_range_carry_product.rs"]
 mod rns_native_comparator_range_carry_product;
+#[cfg(test)]
 #[path = "mkhe/rns_native_composite_verifier.rs"]
 mod rns_native_composite_verifier;
 #[allow(
@@ -177,6 +197,7 @@ mod rns_native_composite_verifier;
 mod rns_native_cross_field_inventory;
 #[path = "mkhe/rns_native_cross_field_rlwe_direct.rs"]
 mod rns_native_cross_field_rlwe_direct;
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the private direct/membership handoff remains non-authorizing until authenticated numeric, replay, and mask owners exist"
@@ -185,14 +206,17 @@ mod rns_native_cross_field_rlwe_direct;
 mod rns_native_direct_global_membership_handoff;
 #[path = "mkhe/rns_native_existing_radix_commitment_view.rs"]
 mod rns_native_existing_radix_commitment_view;
+#[cfg(test)]
 #[path = "mkhe/rns_native_global_lookup_z_commitment_view.rs"]
 mod rns_native_global_lookup_z_commitment_view;
 #[path = "mkhe/rns_native_profile.rs"]
 mod rns_native_profile;
 #[path = "mkhe/rns_native_proof_hash.rs"]
 mod rns_native_proof_hash;
+#[cfg(test)]
 #[path = "mkhe/rns_native_proof_sampling.rs"]
 mod rns_native_proof_sampling;
+#[cfg(test)]
 #[path = "mkhe/rns_native_public_polynomial_publisher.rs"]
 mod rns_native_public_polynomial_publisher;
 #[path = "mkhe/rns_native_public_polynomial_reader.rs"]
@@ -205,12 +229,15 @@ mod rns_native_qpcs_field_wire;
 mod rns_native_qpcs_fri_complete;
 #[path = "mkhe/rns_native_qpcs_initial.rs"]
 mod rns_native_qpcs_initial;
+#[cfg(test)]
 #[path = "mkhe/rns_native_qpcs_leaf.rs"]
 mod rns_native_qpcs_leaf;
+#[cfg(test)]
 #[path = "mkhe/rns_native_qpcs_opening_work.rs"]
 mod rns_native_qpcs_opening_work;
 #[path = "mkhe/rns_native_qpcs_prefix.rs"]
 mod rns_native_qpcs_prefix;
+#[cfg(test)]
 #[path = "mkhe/rns_native_resource_budget.rs"]
 mod rns_native_resource_budget;
 // Prototype tree construction is exercised by internal fixtures; production uses the verifier.
@@ -235,14 +262,17 @@ mod rns_native_section_codec;
 mod rns_native_small_sign_disjointness_product;
 #[path = "mkhe/rns_native_source.rs"]
 mod rns_native_source;
+#[cfg(test)]
 #[path = "mkhe/rns_native_source_packing_same_opening.rs"]
 mod rns_native_source_packing_same_opening;
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the private source/terminal prerequisite remains non-authorizing until the cross-field/global-lookup proof verifier consumes it"
 )]
 #[path = "mkhe/rns_native_source_terminal_cross_field.rs"]
 mod rns_native_source_terminal_cross_field;
+#[cfg(test)]
 #[path = "mkhe/rns_native_terminal_cross_basis.rs"]
 mod rns_native_terminal_cross_basis;
 #[allow(
@@ -251,6 +281,7 @@ mod rns_native_terminal_cross_basis;
 )]
 #[path = "mkhe/rns_native_transcript.rs"]
 mod rns_native_transcript;
+#[cfg(test)]
 #[path = "mkhe/rns_native_u15_msm.rs"]
 mod rns_native_u15_msm;
 #[path = "mkhe/rns_native_wire.rs"]
@@ -259,6 +290,7 @@ mod rns_native_wire;
 mod security;
 #[path = "mkhe/terminal.rs"]
 mod terminal;
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
@@ -267,6 +299,7 @@ mod terminal;
 mod terminal_cross_basis_ipa;
 #[path = "mkhe/wire.rs"]
 mod wire;
+#[cfg(test)]
 pub use active::{
     ZkAmsMkheAbortReasonV1, ZkAmsMkheActiveCollectivePublicKeyStatementV1,
     ZkAmsMkheActiveCollectivePublicKeyWitnessV1, ZkAmsMkheActiveContributionV1,
@@ -278,6 +311,7 @@ pub use active::{
     verify_zk_ams_mkhe_active_collective_public_key_v1, zk_ams_mkhe_active_collective_public_a_v1,
     zk_ams_mkhe_active_rkg_linear_proof_security_v1, zk_ams_mkhe_collect_active_round_v1,
 };
+#[cfg(test)]
 pub use cks::{
     ZkAmsMkheCksProofV1, ZkAmsMkheCksResourceEvidenceV1, zk_ams_mkhe_cks_resource_evidence_v1,
 };
@@ -285,14 +319,18 @@ pub use cks::{
 pub use collective::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePublicKeyV1,
 };
+#[cfg(test)]
 pub use collective::{
     ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
+    generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1,
+};
+#[cfg(test)]
+pub use collective::{
     ZkAmsMkhePreparedCollectivePublicAV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
     ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
-    encrypt_zk_ams_mkhe_collective_packed_streaming_v1,
-    generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1,
-    prepare_zk_ams_mkhe_collective_public_a_v1,
+    encrypt_zk_ams_mkhe_collective_packed_streaming_v1, prepare_zk_ams_mkhe_collective_public_a_v1,
 };
+#[cfg(test)]
 pub use collective_eval_keys::{
     ZK_AMS_MKHE_EVIDENCE_CHUNK_BYTES_V1, ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1,
     ZkAmsMkheCollectiveEvaluatedKeyProviderV1, ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1,
@@ -301,50 +339,62 @@ pub use collective_eval_keys::{
     ZkAmsMkheCollectiveEvidenceRecordFooterV1, ZkAmsMkheCollectiveEvidenceRecordHeaderV1,
     ZkAmsMkheCollectiveEvidenceRecordKindV1, ZkAmsMkheCollectiveEvidenceSetFooterV1,
     ZkAmsMkheCollectiveEvidenceSetHeaderV1, ZkAmsMkheCollectiveEvidenceSetKindV1,
-    ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1, ZkAmsMkheSeekableEvaluatedKeyAccountingV1,
-    ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1, ZkAmsMkheTrustedCksContextV1,
-    ZkAmsMkheTrustedSourceContextV1, ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
+    ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1, ZkAmsMkheTrustedCksContextV1,
+    ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
+    zk_ams_mkhe_compact_key_switch_ring_multiplications_v1,
+    zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
+};
+#[cfg(test)]
+pub use collective_eval_keys::{
+    ZkAmsMkheSeekableEvaluatedKeyAccountingV1,
+    ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1, ZkAmsMkheTrustedSourceContextV1,
     ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
     ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
     automorphism_switch_zk_ams_mkhe_collective_streaming_v1,
     verify_zk_ams_mkhe_evaluated_key_evidence_set_v1,
-    zk_ams_mkhe_compact_key_switch_ring_multiplications_v1,
-    zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
     zk_ams_mkhe_streaming_collective_automorphism_accounting_v1,
 };
+#[cfg(test)]
 pub use collective_keys::{
     ZkAmsMkheCollectiveEvaluatedKeyEntryV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
     ZkAmsMkheCollectiveEvaluatedKeyPurposeV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
 };
+#[cfg(test)]
+pub use cpk_ceremony::ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1;
+#[cfg(test)]
 pub use cpk_ceremony::{
-    ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1,
     ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_WIRE_BYTES_V1, ZkAmsMkheAdmittedCpkPartyV1,
     ZkAmsMkheCpkCeremonyResidencyEvidenceV1, ZkAmsMkheCpkCeremonyV1, ZkAmsMkheCpkPartyInputV1,
     ZkAmsMkheCpkRuntimeV1, ZkAmsMkheFinalizedCpkCeremonyV1,
     zk_ams_mkhe_cpk_ceremony_residency_evidence_v1,
 };
+#[cfg(test)]
 pub use decryption::{
     ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1,
     ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1,
     ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
-    ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1,
     ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionResourceEvidenceV1,
     ZkAmsMkheDecryptionStreamingBlockerV1, ZkAmsMkheDecryptionStreamingResidencyEvidenceV1,
-    ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkheDecryptionTransportComponentKindV1,
-    ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheDecryptionTransportPointerV1,
-    ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheIdentifiableDecryptionAbortV1,
-    ZkAmsMkheStagedDecryptionShareV1, ZkAmsMkheStreamingDecryptionStatementV1,
-    ZkAmsMkheStreamingFullRosterDecryptionResultV1, prove_zk_ams_mkhe_decryption_share_staged_v1,
+    ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkheStagedDecryptionShareV1,
+    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
+    prove_zk_ams_mkhe_decryption_share_staged_v1,
     verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
     zk_ams_mkhe_decryption_resource_evidence_v1,
     zk_ams_mkhe_decryption_streaming_residency_evidence_v1,
 };
+#[cfg(test)]
+pub use decryption::{
+    ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1,
+    ZkAmsMkheDecryptionTransportComponentKindV1, ZkAmsMkheDecryptionTransportManifestV1,
+    ZkAmsMkheDecryptionTransportPointerV1, ZkAmsMkheFullRosterDecryptionResultV1,
+    ZkAmsMkheIdentifiableDecryptionAbortV1,
+};
+#[cfg(test)]
 pub use direct_collective_eval_ceremony::{
     ZkAmsMkheDirectAdmittedContributionSetV1, ZkAmsMkheDirectCeremonyContextV1,
-    ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectCoordinatorV1,
-    ZkAmsMkheDirectEvaluatedKeySetAdmissionV1, ZkAmsMkheDirectEvaluatedKeyTargetV1,
-    ZkAmsMkheDirectNoiseCertificateV1, ZkAmsMkheDirectNoiseIntegrationCertificateV1,
-    ZkAmsMkheDirectPolynomialRoleV1, ZkAmsMkheDirectPolynomialStreamReceiptV1,
+    ZkAmsMkheDirectCoordinatorV1, ZkAmsMkheDirectEvaluatedKeySetAdmissionV1,
+    ZkAmsMkheDirectEvaluatedKeyTargetV1, ZkAmsMkheDirectNoiseCertificateV1,
+    ZkAmsMkheDirectNoiseIntegrationCertificateV1, ZkAmsMkheDirectPolynomialStreamReceiptV1,
     ZkAmsMkheDirectPolynomialStreamV1, ZkAmsMkheDirectProofAuditV1,
     ZkAmsMkheDirectResourceCertificateV1, ZkAmsMkheDirectVerifiedContributionProviderV1,
     ZkAmsMkheDirectVerifiedContributionV1, admit_zk_ams_mkhe_direct_contribution_set_v1,
@@ -352,20 +402,28 @@ pub use direct_collective_eval_ceremony::{
     zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1, zk_ams_mkhe_direct_proof_audit_v1,
     zk_ams_mkhe_direct_resource_certificate_v1,
 };
+#[cfg(test)]
+pub use direct_collective_eval_ceremony::{
+    ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectPolynomialRoleV1,
+};
+pub use direct_object_transport::ZkAmsMkheDirectObjectKindV1;
+#[cfg(test)]
 pub use direct_object_transport::{
     ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
-    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
     ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
-    ZkAmsMkheDirectObjectPublicationTransactionV1, ZkAmsMkheDirectObjectPublishedBindingV1,
-    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
-    ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheDirectObjectStagingTokenV1,
-    validate_zk_ams_mkhe_direct_object_v1,
+    ZkAmsMkheDirectObjectPublishedBindingV1, ZkAmsMkheDirectObjectReadReceiptV1,
 };
-/// Frozen width of the legacy direct-RKG1 orphan record occupying the stable storage key.
-pub const ZK_AMS_MKHE_DIRECT_RKG_ONE_LEGACY_RECORD_BYTES_V1: usize = 334;
+#[cfg(test)]
+pub use direct_object_transport::{
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectPublicationTransactionV1,
+    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectSealTokenV1,
+    ZkAmsMkheDirectObjectStagingTokenV1, validate_zk_ams_mkhe_direct_object_v1,
+};
 /// Frozen width of one V2 direct-RKG1 lifecycle record.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2: usize = 640;
 /// Actual atomic value width observed at the stable direct-RKG1 lifecycle key.
+#[cfg(test)]
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "only the test backend constructs outcomes")
@@ -374,12 +432,11 @@ pub const ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2: usize = 640;
 pub enum ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2 {
     /// The stable key has no committed value.
     Absent,
-    /// The key contains one complete legacy 334-byte record.
-    Legacy334,
     /// The key contains one complete V2 640-byte lifecycle record.
     Lifecycle640,
 }
 /// Linearizable result of inserting one V2 lifecycle value at an absent stable key.
+#[cfg(test)]
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "only the test backend constructs outcomes")
@@ -392,6 +449,7 @@ pub enum ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2 {
     AlreadyPresent,
 }
 /// Linearizable result of one exact V2 lifecycle compare-exchange.
+#[cfg(test)]
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "only the test backend constructs outcomes")
@@ -408,15 +466,15 @@ pub enum ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2 {
 /// Raw durable backend for the authority-neutral direct-RKG1 lifecycle journal.
 ///
 /// `load_exact_v2` must bypass caches and obtain the committed value width from backend metadata;
-/// zero padding alone is not a width discriminator. `Absent` zeros all 640 output bytes;
-/// `Legacy334` writes exactly 334 bytes then zeros the remainder; `Lifecycle640` writes all bytes.
-/// The supplied key is the exact legacy V1 transaction hash: both widths must occupy the same
-/// physical address, with no schema-specific namespace or cross-key migration race.
+/// zero padding alone is not a width discriminator. `Absent` zeros all 640 output bytes and
+/// `Lifecycle640` writes all bytes. The supplied key is the stable direct-RKG1 transaction hash,
+/// with no schema-specific namespace.
 /// Mutations are atomic, linearizable, and crash-durable before a successful return. This raw API
 /// additionally requires one protected singleton root plus global same-key fencing and
 /// rollback-resistant absence/CAS state: rollback to `Absent` could otherwise mint a second Fresh
 /// permit. A host-local checkpoint alone does not meet this contract. This raw API carries no
 /// publication permit, proof receipt, verifier result, binding, or release authority.
+#[cfg(test)]
 pub trait ZkAmsMkheDirectRkgOneLifecycleStoreV2 {
     /// Load the exact committed value and its independently observed width.
     fn load_exact_v2(
@@ -444,15 +502,21 @@ pub trait ZkAmsMkheDirectRkgOneLifecycleStoreV2 {
 }
 pub(super) use manifest::require_release_ready_v1;
 pub use manifest::{
-    ZkAmsMkheReadinessV1, ZkAmsMkheReleaseManifestV1, zk_ams_mkhe_manifest_digest_v1,
-    zk_ams_mkhe_noise_certificate_v1, zk_ams_mkhe_readiness_digest_v1, zk_ams_mkhe_readiness_v1,
+    ZkAmsMkheReadinessV1, zk_ams_mkhe_manifest_digest_v1, zk_ams_mkhe_readiness_digest_v1,
+    zk_ams_mkhe_readiness_v1,
+};
+#[cfg(test)]
+pub use manifest::{
+    ZkAmsMkheReleaseManifestV1, zk_ams_mkhe_noise_certificate_v1,
     zk_ams_mkhe_release_kat_evidence_v1, zk_ams_mkhe_release_manifest_v1,
     zk_ams_mkhe_resource_certificate_digest_v1, zk_ams_mkhe_resource_certificate_v1,
     zk_ams_mkhe_resource_evidence_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
     zk_ams_mkhe_security_candidate_v1, zk_ams_mkhe_security_certificate_v1,
     zk_ams_mkhe_wire_evidence_v1,
 };
+#[cfg(test)]
 pub use noise::ZkAmsMkheNoiseCertificateV1;
+#[cfg(test)]
 pub use packing::{
     ZK_AMS_T256_GALOIS_KEY_COUNT_V1, ZK_AMS_T256_GALOIS_KEY_SCHEDULE_DIGEST_V1,
     ZK_AMS_T256_MAX_LOGICAL_VALUES_V1, ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1,
@@ -461,40 +525,54 @@ pub use packing::{
     ZK_AMS_T256_RELEASE_PACKING_NEGATIVE_KAT_DIGEST_V1,
     ZK_AMS_T256_RELEASE_ROTATION_CERTIFICATE_KAT_DIGEST_V1,
     ZK_AMS_T256_RELEASE_TRANSFORMED_RNS_KAT_DIGEST_V1, ZkAmsT256GaloisKeyScheduleEntryV1,
-    ZkAmsT256GaloisKeyScheduleV1, ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
-    ZkAmsT256ReleasePackingCertificateV1, ZkAmsT256RotationCertificateV1,
-    ZkAmsT256RotationDirectionV1, ZkAmsT256RotationV1, decode_zk_ams_t256_packed_plaintext_v1,
-    encode_zk_ams_t256_packed_plaintext_v1, permute_zk_ams_t256_slots_v1,
-    rotate_zk_ams_t256_packed_plaintext_v1, validate_zk_ams_t256_galois_key_exponents_v1,
-    validate_zk_ams_t256_galois_key_schedule_v1, zk_ams_t256_galois_key_schedule_v1,
+    ZkAmsT256GaloisKeyScheduleV1, ZkAmsT256PackingLayoutV1, ZkAmsT256ReleasePackingCertificateV1,
+    ZkAmsT256RotationDirectionV1, ZkAmsT256RotationV1, zk_ams_t256_galois_key_schedule_v1,
     zk_ams_t256_packed_subfield_conjugation_exponent_v1, zk_ams_t256_packing_layout_v1,
-    zk_ams_t256_release_packing_certificate_v1, zk_ams_t256_rotation_certificate_v1,
-    zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
-    zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
+    zk_ams_t256_release_packing_certificate_v1, zk_ams_t256_rotation_exponent_for_direction_v1,
+    zk_ams_t256_rotation_v1,
 };
+#[cfg(test)]
+pub use packing::{
+    ZkAmsT256PackedPlaintextV1, ZkAmsT256RotationCertificateV1,
+    decode_zk_ams_t256_packed_plaintext_v1, encode_zk_ams_t256_packed_plaintext_v1,
+    permute_zk_ams_t256_slots_v1, rotate_zk_ams_t256_packed_plaintext_v1,
+    validate_zk_ams_t256_galois_key_exponents_v1, validate_zk_ams_t256_galois_key_schedule_v1,
+    zk_ams_t256_rotation_certificate_v1, zk_ams_t256_rotation_exponent_v1,
+    zk_ams_t256_rotation_key_plan_v1,
+};
+#[cfg(test)]
 pub use persistent_decryption_equality::{
     ZkAmsMkhePersistentDecryptionPartyUseV1, ZkAmsMkhePersistentDecryptionVerificationContextV1,
     ZkAmsMkheStreamingDecryptionAuthorityV1,
 };
+#[cfg(test)]
 pub use phase23::{
-    ZkAmsPhase23EquationCertificateV1, zk_ams_phase23_cross_term_v1,
-    zk_ams_phase23_equation_certificate_digest_v1, zk_ams_phase23_equation_certificate_v1,
-    zk_ams_phase23_fold_linear_v1, zk_ams_phase23_fold_quadratic_v1,
+    ZkAmsPhase23EquationCertificateV1, zk_ams_phase23_equation_certificate_digest_v1,
+    zk_ams_phase23_equation_certificate_v1,
 };
+#[cfg(test)]
+pub use phase23::{
+    zk_ams_phase23_cross_term_v1, zk_ams_phase23_fold_linear_v1, zk_ams_phase23_fold_quadratic_v1,
+};
+#[cfg(test)]
 pub use phase23_encrypted::{
     ZK_AMS_PHASE23_MAX_CANONICAL_SPARSE_ENTRIES_V1,
-    ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1, ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1,
-    ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
-    ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23AccumulatorShapeV1,
+    ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1, ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
+    ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23EncryptedImplementationV1,
+    zk_ams_phase23_encrypted_implementation_v1,
+};
+#[cfg(test)]
+pub use phase23_encrypted::{
+    ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1, ZkAmsPhase23AccumulatorShapeV1,
     ZkAmsPhase23CommitmentPreimageLayoutV1, ZkAmsPhase23CrossTermCommitmentV1,
-    ZkAmsPhase23EncryptedBindingV1, ZkAmsPhase23EncryptedImplementationV1, ZkAmsPhase23MapKindV1,
-    ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsPhase23PublicAccumulatorV1,
-    ZkAmsPhase23PublicFoldHistoryV1, ZkAmsPhase23PublicFoldRecordV1,
-    ZkAmsPhase23ReleaseMapManifestV1, ZkAmsPhase23SparseMapManifestV1, ZkAmsPhase23SparseMapV1,
-    ZkAmsPhase23StrictPublicInstanceV1, zk_ams_phase23_encrypted_implementation_v1,
+    ZkAmsPhase23EncryptedBindingV1, ZkAmsPhase23MapKindV1, ZkAmsPhase23MaterializedAccumulatorsV1,
+    ZkAmsPhase23PublicAccumulatorV1, ZkAmsPhase23PublicFoldHistoryV1,
+    ZkAmsPhase23PublicFoldRecordV1, ZkAmsPhase23ReleaseMapManifestV1,
+    ZkAmsPhase23SparseMapManifestV1, ZkAmsPhase23SparseMapV1, ZkAmsPhase23StrictPublicInstanceV1,
     zk_ams_phase23_materialize_release_accumulator_chunks_v1,
     zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
 };
+#[cfg(test)]
 pub use phase23_ingress::{
     ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1,
     ZK_AMS_PHASE23_FRESHNESS_COMMIT_WIRE_BYTES_V1, ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1,
@@ -506,21 +584,29 @@ pub use phase23_ingress::{
     commit_zk_ams_phase23_freshness_v1, finalize_zk_ams_phase23_freshness_v1,
     open_zk_ams_phase23_freshness_reveal_v1,
 };
+#[cfg(test)]
 pub use phase23_materialized_wire::{
     read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1,
     write_zk_ams_phase23_materialized_accumulators_canonical_v1,
 };
+#[cfg(test)]
 pub use release_evidence::{
     ZK_AMS_MKHE_RELEASE_KAT_EVIDENCE_BYTES_V1, ZK_AMS_MKHE_RESOURCE_EVIDENCE_BYTES_V1,
-    ZK_AMS_MKHE_WIRE_EVIDENCE_BYTES_V1, ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheResourceEvidenceV1,
-    ZkAmsMkheWireEvidenceV1,
+    ZK_AMS_MKHE_WIRE_EVIDENCE_BYTES_V1,
 };
+#[cfg(test)]
+pub use release_evidence::{
+    ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheResourceEvidenceV1, ZkAmsMkheWireEvidenceV1,
+};
+#[cfg(test)]
 pub use resource::ZkAmsMkheResourceCertificateV1;
+#[cfg(test)]
 pub use rns_native_composite_verifier::{
     ZK_AMS_MKHE_RNS_NATIVE_COMPOSITE_VERIFICATION_VERSION_V1,
     ZkAmsMkheRnsNativeCompositeCandidateReceiptV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
     ZkAmsMkheRnsNativeVerificationStageV1, verify_zk_ams_mkhe_rns_native_composite_v1,
 };
+#[cfg(test)]
 pub use rns_native_profile::{
     ZK_AMS_MKHE_RNS_NATIVE_CENTERED_CAPACITY_BITS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1,
@@ -531,23 +617,31 @@ pub use rns_native_profile::{
     ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULUS_BITS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_PROFILE_MANIFEST_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_QUOTIENT_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_RADIX_LOG2_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_RESIDUAL_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_SPOOL_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_TARGET_SECURITY_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_WIDE_RESPONSE_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_QUOTIENT_BITS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_RADIX_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_RESIDUAL_BITS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_SPOOL_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1, ZK_AMS_MKHE_RNS_NATIVE_TARGET_SECURITY_BITS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
-    ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileManifestV1, ZkAmsMkheRnsNativeProfileV1,
-    ZkAmsMkheRnsNativeTopologyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
+    ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileV1, ZkAmsMkheRnsNativeTopologyV1,
+};
+#[cfg(test)]
+pub use rns_native_profile::{
+    ZK_AMS_MKHE_RNS_NATIVE_PROFILE_MANIFEST_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_WIDE_RESPONSE_BYTES_V1, ZkAmsMkheRnsNativeProfileManifestV1,
+    zk_ams_mkhe_rns_native_profile_manifest_v1,
+};
+pub use rns_native_profile::{
     zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_topology_v1,
 };
 pub use rns_native_proof_hash::RnsNativeProofDigestV1;
+#[cfg(test)]
 pub use rns_native_section_codec::{
     ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,
     ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
     ZkAmsMkheRnsNativeSectionCodecErrorV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
 };
+#[cfg(test)]
 pub use rns_native_source::{
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_BLOCKS_PER_OPENING_V1,
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_FILE_BYTES_V1,
@@ -556,47 +650,68 @@ pub use rns_native_source::{
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_TOTAL_FILE_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1,
+    ZkAmsMkheRnsNativeSourceReceiptV1,
+};
+pub use rns_native_source::{
     ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
     ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
     ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceProviderV1,
-    ZkAmsMkheRnsNativeSourceReceiptV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
-    ZkAmsMkheRnsNativeSourceWriterV1,
+    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
 };
+pub use rns_native_transcript::ZkAmsMkheRnsNativeTerminalRootsV1;
+#[cfg(test)]
 pub use rns_native_transcript::{
     ZK_AMS_MKHE_RNS_NATIVE_QPCS_ROOT_COUNT_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_VERSION_V1, ZkAmsMkheRnsNativeChallengeSeedsV1,
-    ZkAmsMkheRnsNativeCommitmentsBoundTranscriptV1, ZkAmsMkheRnsNativeOpeningCommitmentV1,
-    ZkAmsMkheRnsNativeOpeningCommitmentsV1, ZkAmsMkheRnsNativePublicContextV1,
-    ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, ZkAmsMkheRnsNativeQpcsFriRootV1,
-    ZkAmsMkheRnsNativeQpcsRootsV1, ZkAmsMkheRnsNativeTerminalBoundTranscriptV1,
-    ZkAmsMkheRnsNativeTerminalBridgeV1, ZkAmsMkheRnsNativeTerminalRootsV1,
-    ZkAmsMkheRnsNativeTranscriptErrorV1, ZkAmsMkheRnsNativeTranscriptV1,
+    ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1, ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ZkAmsMkheRnsNativeOpeningCommitmentV1, ZkAmsMkheRnsNativeQpcsFriRootV1,
+    ZkAmsMkheRnsNativeTranscriptErrorV1,
 };
+#[cfg(test)]
+pub use rns_native_transcript::{
+    ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_VERSION_V1, ZkAmsMkheRnsNativeCommitmentsBoundTranscriptV1,
+    ZkAmsMkheRnsNativeOpeningCommitmentsV1, ZkAmsMkheRnsNativePublicContextV1,
+    ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, ZkAmsMkheRnsNativeQpcsRootsV1,
+    ZkAmsMkheRnsNativeTerminalBoundTranscriptV1, ZkAmsMkheRnsNativeTerminalBridgeV1,
+    ZkAmsMkheRnsNativeTranscriptV1,
+};
+#[cfg(test)]
 pub use rns_native_wire::{
     ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_MAX_BYTES_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_VERSION_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1,
     ZK_AMS_MKHE_RNS_NATIVE_RNS_RELATION_QPCS_SECTION_MAX_BYTES_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
-    ZkAmsMkheRnsNativeProofSectionDescriptorV1, ZkAmsMkheRnsNativeProofSectionKindV1,
+    ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1,
+    ZkAmsMkheRnsNativeProofSectionKindV1,
 };
+#[cfg(test)]
+pub use rns_native_wire::{
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_VERSION_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ZkAmsMkheRnsNativeProofSectionDescriptorV1,
+};
+#[cfg(test)]
 pub use security::{
     ZkAmsMkheSecurityAttackRecordV1, ZkAmsMkheSecurityAttackV1, ZkAmsMkheSecurityCandidateV1,
     ZkAmsMkheSecurityCertificateV1, ZkAmsMkheSecurityEstimatorSuiteV1,
 };
+#[cfg(test)]
 pub use terminal::{
-    ZK_AMS_PHASE3_MAX_TERMINAL_PROOF_BYTES_V1, ZkAmsPhase3BatchAnchorV1, ZkAmsPhase3FoldHistoryV1,
-    ZkAmsPhase3GovernedBatchV1, ZkAmsPhase3TerminalContextV1, ZkAmsPhase3TerminalImplementationV1,
-    ZkAmsPhase3TerminalProverOutputV1, ZkAmsPhase3TerminalReceiptV1,
-    prove_zk_ams_phase3_terminal_v1, verify_zk_ams_phase3_terminal_v1,
-    zk_ams_phase3_nifs_verifier_digest_v1, zk_ams_phase3_ordered_public_inputs_digest_v1,
+    ZK_AMS_PHASE3_MAX_TERMINAL_PROOF_BYTES_V1, ZkAmsPhase3TerminalImplementationV1,
     zk_ams_phase3_terminal_implementation_v1,
 };
+#[cfg(test)]
+pub use terminal::{
+    ZkAmsPhase3BatchAnchorV1, ZkAmsPhase3FoldHistoryV1, ZkAmsPhase3GovernedBatchV1,
+    ZkAmsPhase3TerminalContextV1, ZkAmsPhase3TerminalProverOutputV1, ZkAmsPhase3TerminalReceiptV1,
+    prove_zk_ams_phase3_terminal_v1, verify_zk_ams_phase3_terminal_v1,
+    zk_ams_phase3_nifs_verifier_digest_v1, zk_ams_phase3_ordered_public_inputs_digest_v1,
+};
+#[cfg(test)]
+pub use wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1;
+#[cfg(test)]
 pub use wire::{
-    ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCksContributionWireV1,
+    ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCksContributionWireV1,
     ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
     ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1, ZkAmsMkheRnsPolynomialWireV1,
     ZkAmsMkheWireBindingV1, zk_ams_mkhe_cks_statement_digest_v1,
@@ -607,17 +722,24 @@ const MAX_RNS_LIMBS_V1: usize = 64;
 const MAX_RING_DEGREE_V1: usize = 1 << 21;
 const MAX_GADGET_DIGITS_V1: usize = 128;
 const PARTY_ID_BYTES_V1: usize = 32;
+#[cfg(test)]
 const SCHNORR_SIGNATURE_BYTES_V1: usize = 65;
 const MAX_RANDOM_REJECTION_ATTEMPTS_V1: usize = 128;
+#[cfg(test)]
 const MAX_TERNARY_SAMPLE_BYTES_PER_COEFFICIENT_V1: usize = 16;
+#[cfg(test)]
 const AUTH_GENERATOR_LABEL_V1: &[u8] = b"iroha.zk-ams.v1.mkhe-auth-t256";
+#[cfg(test)]
 const AUTHENTICATION_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.schnorr-authentication";
+#[cfg(test)]
 const AUTHENTICATION_CHALLENGE_MAX_FRAME_BYTES_V1: usize =
     AUTHENTICATION_CHALLENGE_DOMAIN_V1.len() + 1 + u8::MAX as usize + 32 + 32 + 33 + 33;
+#[cfg(test)]
 const T256_CENTERED_MAX_BE_V1: [u8; 32] = [
     0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 ];
+#[cfg(test)]
 static MKHE_AUTH_GENERATOR: Lazy<Result<VegaT256PointV1, ZkAmsMkheErrorV1>> = Lazy::new(|| {
     derive_t256_generators_v1(AUTH_GENERATOR_LABEL_V1, 1)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
@@ -684,8 +806,10 @@ pub enum ZkAmsMkheErrorV1 {
     WireTooLarge,
 }
 /// Canonical participant identifier used to order every multi-key component.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ZkAmsMkhePartyIdV1([u8; PARTY_ID_BYTES_V1]);
+#[cfg(test)]
 impl ZkAmsMkhePartyIdV1 {
     /// Construct a nonzero participant identifier.
     pub fn new(bytes: [u8; PARTY_ID_BYTES_V1]) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -706,6 +830,7 @@ impl ZkAmsMkhePartyIdV1 {
         Self::new(hash.finalize())
     }
 }
+#[cfg(test)]
 impl fmt::Debug for ZkAmsMkhePartyIdV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -714,11 +839,13 @@ impl fmt::Debug for ZkAmsMkhePartyIdV1 {
             .finish()
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PartySet {
     parties: Vec<ZkAmsMkhePartyIdV1>,
     digest: [u8; 32],
 }
+#[cfg(test)]
 impl PartySet {
     fn new(parties: Vec<ZkAmsMkhePartyIdV1>) -> Result<Self, ZkAmsMkheErrorV1> {
         if parties.is_empty()
@@ -773,6 +900,7 @@ impl PartySet {
         self.parties.binary_search(&party).ok()
     }
 }
+#[cfg(test)]
 fn party_set_digest(parties: &[ZkAmsMkhePartyIdV1]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let count = u8::try_from(parties.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
     let mut hash = Keccak256::new();
@@ -783,9 +911,11 @@ fn party_set_digest(parties: &[ZkAmsMkhePartyIdV1]) -> Result<[u8; 32], ZkAmsMkh
     }
     Ok(hash.finalize())
 }
+#[cfg(test)]
 struct AuthenticationSecret {
     scalar_be: [u8; 32],
 }
+#[cfg(test)]
 impl AuthenticationSecret {
     fn generate<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
         for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
@@ -814,6 +944,7 @@ impl AuthenticationSecret {
         ZkAmsMkhePartyIdV1::from_authentication_key(&self.public_key()?)
     }
 }
+#[cfg(test)]
 impl Drop for AuthenticationSecret {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.scalar_be);
@@ -822,11 +953,13 @@ impl Drop for AuthenticationSecret {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
+#[cfg(test)]
 impl fmt::Debug for AuthenticationSecret {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("AuthenticationSecret([REDACTED])")
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ArtifactAuthentication {
     version: u8,
@@ -834,6 +967,7 @@ struct ArtifactAuthentication {
     public_key: [u8; 33],
     signature: [u8; SCHNORR_SIGNATURE_BYTES_V1],
 }
+#[cfg(test)]
 impl ArtifactAuthentication {
     fn sign<R: MaskedRelaxedRandomSourceV1>(
         domain: &[u8],
@@ -913,12 +1047,14 @@ impl ArtifactAuthentication {
         Ok(())
     }
 }
+#[cfg(test)]
 fn auth_generator() -> Result<VegaT256PointV1, ZkAmsMkheErrorV1> {
     MKHE_AUTH_GENERATOR
         .as_ref()
         .copied()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
+#[cfg(test)]
 fn authentication_challenge(
     domain: &[u8],
     transcript_digest: [u8; 32],
@@ -948,6 +1084,7 @@ fn authentication_challenge(
     Shake256Reader::new(&frame[..cursor]).read(&mut uniform);
     Ok(Scalar::from_uniform_le_bytes(uniform))
 }
+#[cfg(test)]
 fn random_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<ZeroizingScalarV1, ZkAmsMkheErrorV1> {
@@ -1189,6 +1326,7 @@ struct RnsPolynomial {
     coefficients: Vec<u64>,
 }
 impl RnsPolynomial {
+    #[cfg(test)]
     fn zero(profile: &BgvProfile) -> Self {
         Self {
             coefficients: vec![0; profile.ring_degree * profile.moduli.len()],
@@ -1196,11 +1334,13 @@ impl RnsPolynomial {
     }
     /// Test whether every stored residue is zero without allocating a
     /// release-sized comparison polynomial.
+    #[cfg(test)]
     fn is_zero(&self) -> bool {
         self.coefficients
             .iter()
             .all(|coefficient| *coefficient == 0)
     }
+    #[cfg(test)]
     fn from_flat(profile: &BgvProfile, coefficients: Vec<u64>) -> Result<Self, ZkAmsMkheErrorV1> {
         profile.validate()?;
         if coefficients.len() != profile.ring_degree * profile.moduli.len() {
@@ -1213,6 +1353,7 @@ impl RnsPolynomial {
         }
         Ok(Self { coefficients })
     }
+    #[cfg(test)]
     fn from_signed(profile: &BgvProfile, values: &[i64]) -> Result<Self, ZkAmsMkheErrorV1> {
         if values.len() != profile.ring_degree {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -1239,6 +1380,7 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
+    #[cfg(test)]
     fn from_t256_plaintext_bytes(
         profile: &BgvProfile,
         values: &[[u8; 32]],
@@ -1281,6 +1423,7 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
+    #[cfg(test)]
     fn limb<'a>(&'a self, profile: &BgvProfile, index: usize) -> &'a [u64] {
         let start = index * profile.ring_degree;
         &self.coefficients[start..start + profile.ring_degree]
@@ -1350,6 +1493,7 @@ impl RnsPolynomial {
         }
         Ok(output)
     }
+    #[cfg(test)]
     fn mul(&self, rhs: &Self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         rhs.validate(profile)?;
@@ -1374,6 +1518,7 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
+    #[cfg(test)]
     fn automorphism(
         &self,
         exponent: usize,
@@ -1405,6 +1550,7 @@ impl RnsPolynomial {
         }
         Ok(output)
     }
+    #[cfg(test)]
     fn validate(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         profile.validate()?;
         if self.coefficients.len() != profile.ring_degree * profile.moduli.len() {
@@ -1444,9 +1590,11 @@ impl RnsPolynomial {
         Self::from_flat(profile, output)
     }
 }
+#[cfg(test)]
 struct SecretPolynomial {
     coefficients: Vec<i64>,
 }
+#[cfg(test)]
 impl SecretPolynomial {
     fn sample_ternary<R: MaskedRelaxedRandomSourceV1>(
         profile: &BgvProfile,
@@ -1561,6 +1709,7 @@ impl SecretPolynomial {
         Ok(Self { coefficients })
     }
 }
+#[cfg(test)]
 impl Drop for SecretPolynomial {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.coefficients);
@@ -1569,6 +1718,7 @@ impl Drop for SecretPolynomial {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
+#[cfg(test)]
 impl fmt::Debug for SecretPolynomial {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SecretPolynomial([REDACTED])")
@@ -2733,6 +2883,7 @@ fn derive_rkg_common_a(
     );
     derive_uniform_rns_from_context(profile, b"iroha.zk-ams.v1.mkhe.rkg-common-a", &context)
 }
+#[cfg(test)]
 fn derive_uniform_rns_from_context(
     profile: &BgvProfile,
     domain: &[u8],
@@ -3164,6 +3315,7 @@ fn phase23_rotation_ring_multiplication_count(
         .and_then(|value| value.checked_mul(key_switch_count))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn checked_ring_multiplication_work(
     profile: &BgvProfile,
     multiplication_count: usize,
@@ -3179,6 +3331,7 @@ fn checked_ring_multiplication_work(
     }
     Ok(())
 }
+#[cfg(test)]
 fn checked_coefficient_work(
     profile: &BgvProfile,
     polynomial_passes: usize,
@@ -3194,6 +3347,7 @@ fn checked_coefficient_work(
     }
     Ok(())
 }
+#[cfg(test)]
 fn checked_rng_bytes(profile: &BgvProfile, maximum_bytes: usize) -> Result<(), ZkAmsMkheErrorV1> {
     let work =
         u64::try_from(maximum_bytes).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -3435,6 +3589,7 @@ fn sample_uniform_rns<R: MaskedRelaxedRandomSourceV1>(
     }
     RnsPolynomial::from_flat(profile, coefficients)
 }
+#[cfg(test)]
 fn random_byte<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<u8, ZkAmsMkheErrorV1> {
     let mut byte = ZeroizingRandomBytesV1::<1>::zeroed();
     random
@@ -3442,6 +3597,7 @@ fn random_byte<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<u8, ZkA
         .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
     Ok(byte.as_array()[0])
 }
+#[cfg(test)]
 fn sample_below<R: MaskedRelaxedRandomSourceV1>(
     modulus: u64,
     random: &mut R,
@@ -3465,6 +3621,7 @@ fn sample_below<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
+#[cfg(test)]
 fn signed_mod(value: i64, modulus: u64) -> u64 {
     if value >= 0 {
         value as u64 % modulus
@@ -3483,6 +3640,7 @@ fn mod_add(left: u64, right: u64, modulus: u64) -> u64 {
     let mask = 0_u64.wrapping_sub(u64::from(borrow));
     (reduced & !mask) | (sum & mask)
 }
+#[cfg(test)]
 fn mod_sub(left: u64, right: u64, modulus: u64) -> u64 {
     let (difference, borrow) = left.overflowing_sub(right);
     difference.wrapping_add(modulus & 0_u64.wrapping_sub(u64::from(borrow)))
@@ -3501,6 +3659,7 @@ fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
+#[cfg(test)]
 fn mod_inverse(value: u64, modulus: u64) -> Option<u64> {
     if value == 0 || modulus < 2 {
         return None;
@@ -3544,6 +3703,7 @@ fn is_prime_u64(value: u64) -> bool {
     }
     true
 }
+#[cfg(test)]
 fn bit_reverse_permute(values: &mut [u64]) {
     let mut target = 0_usize;
     for index in 1..values.len() {
@@ -3563,6 +3723,7 @@ fn bit_reverse_permute(values: &mut [u64]) {
 // Metal, or CUDA path passes release-shape output/KAT parity, secret-handling
 // review, and implementation-derived peak-RSS accounting; do not select or
 // claim an accelerated backend before those gates close.
+#[cfg(test)]
 fn cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) {
     bit_reverse_permute(values);
     let mut width = 2;
@@ -3581,6 +3742,7 @@ fn cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) {
         width <<= 1;
     }
 }
+#[cfg(test)]
 fn inverse_cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) -> Result<(), ZkAmsMkheErrorV1> {
     let inverse_root = mod_inverse(root, modulus).ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
     cyclic_ntt(values, inverse_root, modulus);
@@ -3591,6 +3753,7 @@ fn inverse_cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) -> Result<(),
     }
     Ok(())
 }
+#[cfg(test)]
 fn negacyclic_multiply(
     left: &[u64],
     right: &[u64],
@@ -3641,6 +3804,7 @@ fn bytes_mod_u64(bytes: &[u8], modulus: u64) -> u64 {
         )
     })
 }
+#[cfg(test)]
 fn t256_centered_residue_with_modulus_residue(
     value: &[u8; 32],
     modulus: u64,
@@ -3662,6 +3826,7 @@ struct WideUint {
     limbs: [u64; WIDE_LIMBS],
 }
 impl WideUint {
+    #[cfg(test)]
     const fn zero() -> Self {
         Self {
             limbs: [0; WIDE_LIMBS],
@@ -3682,6 +3847,7 @@ impl WideUint {
         }
         (carry == 0).then_some(Self { limbs: output })
     }
+    #[cfg(test)]
     fn checked_add_mul_u64(self, multiplicand: Self, scalar: u64) -> Option<Self> {
         let product = multiplicand.checked_mul_u64(scalar)?;
         let mut output = [0_u64; WIDE_LIMBS];
@@ -3693,6 +3859,7 @@ impl WideUint {
         }
         (carry == 0).then_some(Self { limbs: output })
     }
+    #[cfg(test)]
     fn checked_sub(self, rhs: Self) -> Option<Self> {
         let mut output = [0_u64; WIDE_LIMBS];
         let mut borrow = false;
@@ -3704,6 +3871,7 @@ impl WideUint {
         }
         (!borrow).then_some(Self { limbs: output })
     }
+    #[cfg(test)]
     fn shr_one(self) -> Self {
         let mut output = [0_u64; WIDE_LIMBS];
         let mut carry = 0_u64;
@@ -3713,6 +3881,7 @@ impl WideUint {
         }
         Self { limbs: output }
     }
+    #[cfg(test)]
     fn mod_u64(self, modulus: u64) -> u64 {
         self.limbs.iter().rev().fold(0_u64, |remainder, limb| {
             ((u128::from(remainder) << 64 | u128::from(*limb)) % u128::from(modulus)) as u64
@@ -3726,6 +3895,7 @@ impl WideUint {
                 index * 64 + (64 - self.limbs[index].leading_zeros() as usize)
             })
     }
+    #[cfg(test)]
     #[allow(
         dead_code,
         reason = "used by the private fail-closed seekable evaluated-key runtime"
@@ -3755,6 +3925,7 @@ impl WideUint {
         }
         Ok(value & ((1_u64 << width) - 1))
     }
+    #[cfg(test)]
     fn crt(residues: &[u64], moduli: &[u64]) -> Result<Self, ZkAmsMkheErrorV1> {
         if residues.is_empty() || residues.len() != moduli.len() || residues.len() > WIDE_LIMBS {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);

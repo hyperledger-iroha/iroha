@@ -3,6 +3,8 @@
 mod autoscale_config;
 #[path = "compute_economics.rs"]
 mod compute_economics;
+#[path = "connect_relay_strategy_hard_cut.rs"]
+mod connect_relay_strategy_hard_cut;
 #[path = "da_ingest_compute_limit.rs"]
 mod da_ingest_compute_limit;
 #[path = "fastpq_queue_overrides.rs"]
@@ -19,6 +21,8 @@ mod kaigi_authorization_config_v1;
 mod kura_retention_hard_cut;
 #[path = "minamoto_profile.rs"]
 mod minamoto_profile;
+#[path = "network_scion_hard_cut.rs"]
+mod network_scion_hard_cut;
 #[path = "nexus_staking_bounds.rs"]
 mod nexus_staking_bounds;
 #[path = "nexus_staking_withdraw_grace_hard_cut.rs"]
@@ -29,6 +33,8 @@ mod operator_auth_bootstrap_hard_cut;
 mod p2p_hard_cut;
 #[path = "pipeline_cycle_ceiling.rs"]
 mod pipeline_cycle_ceiling;
+#[path = "pipeline_signature_batch_alias_hard_cut.rs"]
+mod pipeline_signature_batch_alias_hard_cut;
 #[path = "push_provider_credentials.rs"]
 mod push_provider_credentials;
 #[path = "sccp_route_manifest_aliases.rs"]

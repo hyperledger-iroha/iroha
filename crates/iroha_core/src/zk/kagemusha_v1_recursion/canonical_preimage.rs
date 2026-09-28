@@ -12,6 +12,7 @@ use halo2_base::{
     gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
     utils::fe_to_biguint,
 };
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use iroha_data_model::kagemusha::KagemushaCanonicalFramePrefixV1;
 
 use crate::zk::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::PastaSha256ByteV1};
@@ -19,6 +20,7 @@ use crate::zk::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::P
 #[path = "canonical_preimage_stream.rs"]
 pub(super) mod stream;
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use self::stream::KagemushaBoundedByteStreamV1;
 
 const CHECKSUM_RANGE: Range<usize> = 31..39;
@@ -122,6 +124,7 @@ pub(super) fn assemble_canonical_preimage_v1<F: KagemushaPoseidonFieldV1>(
         .collect())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Assemble one bounded canonical Norito frame around an active payload prefix.
 ///
 /// `framing` is the model-owned fixed header followed by any type-specific alignment padding. Its
@@ -142,6 +145,7 @@ pub(super) fn assemble_bounded_canonical_frame_v1<F: KagemushaPoseidonFieldV1>(
     assemble_bounded_canonical_frame_template_v1(ctx, range, framing.bytes(), payload)
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Raw-template implementation kept private so monetary callers cannot bypass the model-owned
 /// framing descriptor.
 fn assemble_bounded_canonical_frame_template_v1<F: KagemushaPoseidonFieldV1>(
@@ -229,6 +233,7 @@ fn assemble_bounded_canonical_frame_template_v1<F: KagemushaPoseidonFieldV1>(
     prefix.concat(ctx, range, payload, output_capacity)
 }
 
+#[cfg(test)]
 /// Encode a V1 canonical compact length in a fixed two-byte stream.
 ///
 /// This helper covers the complete one- and two-byte range `0..=16_383`; that range is an
@@ -270,6 +275,7 @@ pub(super) fn canonical_compact_length_u14_stream_v1<F: KagemushaPoseidonFieldV1
     KagemushaBoundedByteStreamV1::constrain(ctx, range, bytes, actual_len)
 }
 
+#[cfg(test)]
 /// Frame the exact bounded recovery payload with the native model's canonical Norito prefix.
 ///
 /// The caller must supply only already-authenticated semantic bytes. This helper derives the
@@ -355,6 +361,7 @@ fn crc64_xz_bytes_v1<F: KagemushaPoseidonFieldV1>(
     }))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Compute the exact active-prefix CRC64-XZ from a fixed-capacity, zero-padded payload.
 ///
 /// `actual_len` is constrained to `0..=payload.len()`, and every byte at or after that length
@@ -431,9 +438,11 @@ pub(super) fn crc64_xz_prefix_bytes_v1<F: KagemushaPoseidonFieldV1>(
     }))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Columns of a constant GF(2) linear map, indexed by the input bit in little-endian order.
 type Crc64MatrixV1 = [u64; 64];
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Derive, rather than witness, the inverse transition for a single zero byte.
 fn crc64_inverse_zero_byte_matrix_v1() -> Crc64MatrixV1 {
     core::array::from_fn(|bit| {
@@ -450,6 +459,7 @@ fn crc64_inverse_zero_byte_matrix_v1() -> Crc64MatrixV1 {
     })
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Apply a constant matrix natively only to derive other constant matrices.
 fn crc64_apply_matrix_native_v1(matrix: &Crc64MatrixV1, state: u64) -> u64 {
     matrix.iter().enumerate().fold(0, |output, (bit, column)| {
@@ -457,11 +467,13 @@ fn crc64_apply_matrix_native_v1(matrix: &Crc64MatrixV1, state: u64) -> u64 {
     })
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Square the constant map to obtain the next inverse binary power.
 fn crc64_square_matrix_v1(matrix: &Crc64MatrixV1) -> Crc64MatrixV1 {
     core::array::from_fn(|bit| crc64_apply_matrix_native_v1(matrix, matrix[bit]))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Constrain a constant GF(2) map using parity of bounded sums of Boolean inputs.
 fn crc64_apply_matrix_assigned_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,

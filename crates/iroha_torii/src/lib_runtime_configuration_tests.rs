@@ -43,7 +43,6 @@ mod public_dataspace_upstream_config_tests {
 #[cfg(all(test, feature = "app_api"))]
 mod account_capabilities_tests {
     use super::*;
-    use tower::ServiceExt as _;
 
     #[tokio::test]
     async fn account_capabilities_need_no_account_and_bind_current_network() {
@@ -137,7 +136,6 @@ mod universal_kagemusha_readiness_tests {
         http::{Request, StatusCode, header},
     };
     use std::{sync::Arc, time::Duration};
-    use tower::ServiceExt as _;
 
     fn configured_kagemusha_command_runtime() -> Arc<kagemusha_commands::KagemushaCommandRuntime> {
         let key_pair =

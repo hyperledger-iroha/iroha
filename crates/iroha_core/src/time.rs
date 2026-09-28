@@ -418,6 +418,7 @@ impl Service {
         self.outstanding.insert((peer, id), probe);
         true
     }
+    #[cfg(test)]
     fn debug_snapshot(&mut self, now: Instant) -> Vec<(String, i64, u64, usize)> {
         self.with_reconciled_network_membership(now, |service| {
             service.debug_snapshot_reconciled(now)
@@ -1160,6 +1161,7 @@ fn trimmed_median_and_mad(offsets: &mut [i64], trim_percent: u8) -> (i64, u64) {
     let mad = devs[devs.len() / 2];
     (median, mad)
 }
+#[cfg(test)]
 /// Debug snapshot of per-peer samples for diagnostics endpoints.
 pub fn debug_snapshot() -> Vec<(String, i64, u64, usize)> {
     if !is_running() {
@@ -1319,10 +1321,6 @@ pub fn diagnostics_snapshot() -> NetworkTimeDiagnostics {
         enforcement_mode: params.enforcement_mode,
         running: false,
     }
-}
-/// RTT histogram helpers for telemetry (bucket bounds in ms).
-pub fn rtt_bucket_bounds_ms() -> &'static [u64] {
-    RTT_BUCKET_BOUNDS_MS
 }
 /// RTT histogram counts per bucket.
 pub fn rtt_bucket_counts() -> Vec<u64> {

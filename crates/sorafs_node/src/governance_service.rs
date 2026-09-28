@@ -2,25 +2,26 @@
 pub use crate::governance::{
     GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1,
     GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1, GovernanceDagHttpRequestReceiverV1,
+    GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1,
     GovernanceDagRequestAuthenticationErrorV1, GovernanceDagRequestAuthenticationPolicyV1,
     GovernanceDagRequestAuthenticationReplayCacheV1,
     canonicalize_governance_dag_outbound_http_request_v1,
     governance_dag_request_authentication_headers_v1,
     parse_governance_dag_request_authentication_headers_v1,
-    verify_governance_dag_request_authentication_v1,
+};
+#[cfg(test)]
+pub use crate::governance::{
+    GovernanceDagHttpRequestReceiverV1, verify_governance_dag_request_authentication_v1,
 };
 use crate::{
     GovernanceDagAuthenticationScope, GovernanceDagCanonicalRequestV1,
-    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticationReplayStoreV1,
-    GovernanceDagRequestAuthenticator, GovernanceDagRequestIngressBindingV1,
-    GovernanceDagRequestIngressQualificationV1, GovernanceDagRuntimeProviderQualificationV1,
-    GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-    GovernanceDagSealedStateSlot,
+    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticator,
+    GovernanceDagRequestIngressBindingV1, GovernanceDagRequestIngressQualificationV1,
+    GovernanceDagRuntimeProviderQualificationV1, GovernanceDagSealedCheckpointStore,
+    GovernanceDagSealedStateRecord, GovernanceDagSealedStateSlot,
     governance::{
         GOVERNANCE_DAG_LOGICAL_ROOT as RUNTIME_INDEX_LOGICAL_ROOT,
         GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1,
-        GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1,
         GOVERNANCE_DAG_SINK_FILESYSTEM as RUNTIME_INDEX_SOURCE, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
         GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR, GOVERNANCE_RUNTIME_DAG_DIR,
         GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1,
@@ -35,17 +36,24 @@ use crate::{
         verify_governance_dag_request_authentication_without_replay_v1,
     },
     governance_dag_request_ingress_endpoint_binding_v1,
-    governance_dag_sealed_state_payload_max_bytes_v1,
     governance_rooted_fs::{
         FileBinding, FileSnapshot, RetainedFile, TwoSlotSnapshotV1, TwoSlotStoreConfigV1,
         TwoSlotStoreV1,
     },
 };
+#[cfg(test)]
+use crate::{
+    GovernanceDagRequestAuthenticationReplayStoreV1,
+    governance::GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1,
+    governance_dag_sealed_state_payload_max_bytes_v1,
+};
+#[cfg(test)]
+use axum::http::{HeaderName, Request, Version};
 use axum::{
     Router,
     body::Body,
     extract::{Path as AxumPath, State},
-    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, Version, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
     routing::get,
 };
@@ -107,6 +115,7 @@ const CONFIG_MAX_BYTES: u64 = 1024 * 1024;
 pub const GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 const CHECKPOINT_VERSION_V1: u8 = 1;
 const PUBLISH_INTENT_VERSION_V1: u8 = 1;
+#[cfg(test)]
 const REQUEST_AUTH_REPLAY_STATE_VERSION_V1: u8 = 1;
 const BLOCK_PREFIX_ARCHIVE_VERSION_V1: u8 = 1;
 const BLOCK_PREFIX_ARCHIVE_MAX_ENTRIES_V1: usize = 1024;
@@ -671,10 +680,12 @@ impl OpaqueCheckpointStore {
     }
 }
 #[derive(Debug)]
+#[cfg(test)]
 struct SealedRequestAuthReplayStore<'a> {
     store: &'a OpaqueCheckpointStore,
     scope: GovernanceDagAuthenticationScope,
 }
+#[cfg(test)]
 impl GovernanceDagRequestAuthenticationReplayStoreV1 for SealedRequestAuthReplayStore<'_> {
     fn consume_nonce(
         &mut self,
@@ -797,6 +808,7 @@ impl GovernanceDagSealedHttpRequestReceiverV1 {
     /// Returns a payload-free request or sealed-state rejection. Every request failure preceding
     /// replay consumption leaves sealed state unchanged; store conflict, drift, corruption,
     /// rollback, or readback ambiguity fails closed without authorizing backend dispatch.
+    #[cfg(test)]
     pub fn verify_http_request<'h>(
         &self,
         method: &str,
@@ -2948,6 +2960,7 @@ fn current_unix_timestamp_seconds() -> u64 {
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
 }
+#[cfg(test)]
 const fn request_auth_replay_slot(
     scope: GovernanceDagAuthenticationScope,
 ) -> GovernanceDagSealedStateSlot {
@@ -2958,6 +2971,7 @@ const fn request_auth_replay_slot(
         }
     }
 }
+#[cfg(test)]
 fn decode_request_auth_replay_state(
     record: &GovernanceDagSealedStateRecord,
     slot: GovernanceDagSealedStateSlot,
@@ -3010,6 +3024,7 @@ fn decode_request_auth_replay_state(
     }
     Ok(state)
 }
+#[cfg(test)]
 fn consume_sealed_request_auth_nonce(
     store: &OpaqueCheckpointStore,
     slot: GovernanceDagSealedStateSlot,
@@ -3402,6 +3417,7 @@ fn verify_mirror_payload_against_intent(
     }
     Ok(())
 }
+#[cfg(test)]
 fn request_auth_replay_decode_limits(max_bytes: usize) -> DecodeLimits {
     DecodeLimits::new(
         GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,

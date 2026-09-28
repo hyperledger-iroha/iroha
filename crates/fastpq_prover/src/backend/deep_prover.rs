@@ -65,8 +65,11 @@ pub(super) struct ProducerPlan<'a, R: DeepRelation> {
     fri: [CoefficientReplayPlan; 5],
     terminal: CoefficientReplayPlan,
     limits: ConstructionLimits,
+    #[cfg(test)]
     pub(super) payload_bytes: usize,
+    #[cfg(test)]
     pub(super) work_units: usize,
+    #[cfg(test)]
     pub(super) hash_calls: usize,
 }
 
@@ -238,8 +241,11 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             fri,
             terminal,
             limits,
+            #[cfg(test)]
             payload_bytes,
+            #[cfg(test)]
             work_units,
+            #[cfg(test)]
             hash_calls,
         })
     }

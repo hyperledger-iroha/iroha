@@ -32,16 +32,18 @@ use iroha::data_model::{
 };
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::XorQuantity;
-use iroha_storage_client::da::build_car_plan_from_manifest;
+use iroha_storage_client::da::{
+    ProofOrigin, ProofReport, build_car_plan_from_manifest, proof_to_json,
+    validate_manifest_consistency, value_from_usize,
+};
 use norito::{
     decode_from_bytes,
     json::{self, Map, Number, Value},
     to_bytes,
 };
-use sorafs_car::{ChunkStore, FilePayload, PorProof};
+use sorafs_car::{ChunkStore, FilePayload};
 use std::{
     collections::HashSet,
-    convert::{TryFrom, TryInto},
     fmt::Write as _,
     fs,
     num::NonZeroU64,
@@ -1337,44 +1339,6 @@ fn load_manifest(path: &Path) -> Result<DaManifestV1> {
     decode_from_bytes(&bytes)
         .map_err(|err| eyre!("failed to decode manifest `{}`: {err}", path.display()))
 }
-fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> Result<()> {
-    let blob_hash_bytes = manifest.blob_hash.as_ref();
-    if store.payload_digest().as_bytes() != blob_hash_bytes {
-        return Err(eyre!(
-            "payload hash mismatch: manifest={} computed={}",
-            hex::encode(blob_hash_bytes),
-            hex::encode(store.payload_digest().as_bytes())
-        ));
-    }
-    let chunk_root_bytes = manifest.chunk_root.as_ref();
-    if store.por_tree().root() != chunk_root_bytes {
-        return Err(eyre!(
-            "chunk root mismatch: manifest={} computed={}",
-            hex::encode(chunk_root_bytes),
-            hex::encode(store.por_tree().root())
-        ));
-    }
-    Ok(())
-}
-#[derive(Debug)]
-enum ProofOrigin {
-    Sampled,
-    Explicit,
-}
-impl ProofOrigin {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Sampled => "sampled",
-            Self::Explicit => "explicit",
-        }
-    }
-}
-struct ProofReport {
-    origin: ProofOrigin,
-    leaf_index: usize,
-    proof: PorProof,
-    verified: bool,
-}
 #[derive(Clone, Copy)]
 struct ProofSampling {
     sample_count: usize,
@@ -1446,97 +1410,6 @@ fn build_proof_summary(inputs: ProofSummaryInputs<'_>, proofs: &[ProofReport]) -
     map.insert("proof_count".into(), value_from_usize(proofs.len()));
     let proof_values = proofs.iter().map(proof_to_json).collect::<Vec<_>>();
     map.insert("proofs".into(), Value::Array(proof_values));
-    Value::Object(map)
-}
-fn proof_to_json(report: &ProofReport) -> Value {
-    let mut map = Map::new();
-    map.insert("origin".into(), Value::from(report.origin.as_str()));
-    map.insert("leaf_index".into(), value_from_usize(report.leaf_index));
-    map.insert(
-        "chunk_index".into(),
-        value_from_usize(report.proof.chunk_index),
-    );
-    map.insert(
-        "segment_index".into(),
-        value_from_usize(report.proof.segment_index),
-    );
-    map.insert("leaf_offset".into(), Value::from(report.proof.leaf_offset));
-    map.insert(
-        "leaf_length".into(),
-        value_from_u32(report.proof.leaf_length),
-    );
-    map.insert(
-        "segment_offset".into(),
-        Value::from(report.proof.segment_offset),
-    );
-    map.insert(
-        "segment_length".into(),
-        value_from_u32(report.proof.segment_length),
-    );
-    map.insert(
-        "chunk_offset".into(),
-        Value::from(report.proof.chunk_offset),
-    );
-    map.insert(
-        "chunk_length".into(),
-        value_from_u32(report.proof.chunk_length),
-    );
-    map.insert("payload_len".into(), Value::from(report.proof.payload_len));
-    map.insert(
-        "chunk_digest".into(),
-        Value::from(hex::encode(report.proof.chunk_digest)),
-    );
-    map.insert(
-        "chunk_root".into(),
-        Value::from(hex::encode(report.proof.chunk_root)),
-    );
-    map.insert(
-        "segment_digest".into(),
-        Value::from(hex::encode(report.proof.segment_digest)),
-    );
-    map.insert(
-        "leaf_digest".into(),
-        Value::from(hex::encode(report.proof.leaf_digest)),
-    );
-    map.insert(
-        "leaf_bytes_b64".into(),
-        Value::from(Base64Standard.encode(&report.proof.leaf_bytes)),
-    );
-    map.insert(
-        "segment_leaves".into(),
-        Value::Array(
-            report
-                .proof
-                .segment_leaves
-                .iter()
-                .map(|digest| Value::from(hex::encode(digest)))
-                .collect(),
-        ),
-    );
-    map.insert(
-        "chunk_segments".into(),
-        Value::Array(
-            report
-                .proof
-                .chunk_segments
-                .iter()
-                .map(|digest| Value::from(hex::encode(digest)))
-                .collect(),
-        ),
-    );
-    map.insert("chunk_count".into(), Value::from(report.proof.chunk_count));
-    map.insert(
-        "chunk_merkle_path".into(),
-        Value::Array(
-            report
-                .proof
-                .chunk_merkle_path
-                .iter()
-                .map(|digest| Value::from(hex::encode(digest)))
-                .collect(),
-        ),
-    );
-    map.insert("verified".into(), Value::from(report.verified));
     Value::Object(map)
 }
 fn load_rent_policy_from_paths(
@@ -1710,12 +1583,6 @@ fn write_rent_quote_artifact(path: &Path, value: &Value) -> Result<()> {
     fs::write(path, rendered)
         .wrap_err_with(|| format!("failed to write rent quote artifact `{}`", path.display()))
 }
-fn value_from_usize(value: usize) -> Value {
-    Value::from(u64::try_from(value).unwrap_or(u64::MAX))
-}
-fn value_from_u32(value: u32) -> Value {
-    Value::from(u64::from(value))
-}
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -1746,6 +1613,7 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::metadata::Metadata;
     use norito::{json::JsonSerialize, to_bytes};
+    use sorafs_car::PorProof;
     use std::{
         fmt::Display,
         fs,

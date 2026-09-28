@@ -330,10 +330,6 @@ impl KagemushaHardwareTransactionVerifierV1 {
         })
     }
 
-    pub(super) fn release(&self) -> &KagemushaAuthenticatedReleaseV1 {
-        &self.release
-    }
-
     /// Bind durable native storage to the exact authority, artifacts, profile and wallet.
     pub fn storage_binding(&self) -> Result<[u8; 32], String> {
         use sha2::{Digest as _, Sha256};

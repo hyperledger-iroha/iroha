@@ -808,6 +808,7 @@ fn merkle_path_depth_ok(
     }
     true
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Verify a STARK FRI envelope under `zk-stark` with default limits.
 pub fn verify_stark_fri_envelope(bytes: &[u8]) -> bool {
     verify_stark_fri_envelope_with_limits(bytes, &StarkVerifierLimits::default())
@@ -2486,6 +2487,7 @@ fn bfv_full_bootstrap_stark_air_params_match_v1(
         && actual.merkle_arity == expected.merkle_arity
         && actual.domain_tag == expected.domain_tag
 }
+#[cfg(test)]
 fn bfv_full_bootstrap_stark_air_transcript_label_v1(attempt: u32) -> String {
     if attempt == 0 {
         return iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1.to_owned();
@@ -2874,6 +2876,7 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_with
         Some(base_indices),
     )
 }
+#[cfg(test)]
 /// Build a reserved-circuit AIR envelope with an explicit query schedule.
 pub(crate) fn prove_stark_fri_reserved_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
     params: StarkFriParamsV1,
@@ -3154,6 +3157,7 @@ fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
         None,
     )
 }
+#[cfg(test)]
 /// Build a V1 STARK/FRI AIR envelope from caller-validated rows and zero composition values.
 ///
 /// This helper only constructs commitments and transcript-derived openings. Domain-specific AIR
@@ -3184,6 +3188,7 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
         None,
     )
 }
+#[cfg(test)]
 /// Build a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope for Core internals.
 ///
 /// The proof is synthesized from validated
@@ -3249,6 +3254,7 @@ pub(crate) fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
         )
     }
 }
+#[cfg(test)]
 /// Verify a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope.
 ///
 /// This is the default-limit companion to
@@ -3267,6 +3273,7 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
         material,
     )
 }
+#[cfg(test)]
 /// Reject a BFV full-bootstrap proof when only public-padding data is available.
 ///
 /// The V1 proof does not separately establish low degree for the hidden trace columns. Sampled
@@ -3289,6 +3296,7 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
         bound_mode,
     )
 }
+#[cfg(test)]
 /// Reject a BFV full-bootstrap proof when only public-padding data is available, with limits.
 ///
 /// Resource limits do not repair the missing hidden-trace low-degree argument, so this entrypoint
@@ -3424,6 +3432,7 @@ fn bfv_full_bootstrap_air_openings_match_public_opening_material_v1(
                 == Some(opening.next_row.as_slice())
     })
 }
+#[cfg(test)]
 /// Verify a BFV full-bootstrap native proof against concrete governed artifacts.
 ///
 /// The standalone full-material verifier checks the proof against the material it receives.
@@ -3569,6 +3578,7 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     )
     .is_ok()
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
 pub fn prove_stark_fri_composition_envelope_bytes(
     params: StarkFriParamsV1,

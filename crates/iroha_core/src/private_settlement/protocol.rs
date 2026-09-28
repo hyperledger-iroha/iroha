@@ -18,6 +18,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::peer::PeerId;
+#[cfg(test)]
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -61,6 +62,7 @@ pub(crate) fn private_settlement_prepared_bundle_digest_v1(
     .map_err(|_| PrivateSettlementProtocolErrorV1::CanonicalEncoding)
 }
 
+#[cfg(test)]
 /// Construct the canonical, self-digesting complete all-Prepare barrier.
 pub(crate) fn private_settlement_prepare_barrier_v1(
     manifest: AtomicPrivateSettlementV1,
@@ -297,6 +299,7 @@ pub(crate) fn private_settlement_phase_body_v1(
     })
 }
 
+#[cfg(test)]
 /// Aggregate valid votes into an exact-three-of-four phase certificate.
 pub(crate) fn aggregate_private_settlement_phase_votes_v1(
     body: PrivateSettlementPhaseBodyV1,

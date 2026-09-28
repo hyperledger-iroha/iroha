@@ -25,7 +25,6 @@ mod model {
     /// may otherwise contain ASCII alphanumerics plus `.`, `_`, `:`, or `-`.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::id::model::ChainId")]
     pub struct ChainId(Box<str>);

@@ -1,251 +1,16 @@
-#[derive(Clone, Copy)]
-struct CanonicalRequestRawFormPair<'a> {
-    key: &'a [u8],
-    value: &'a [u8],
-}
+use iroha_torii_shared::canonical_request_form::{
+    CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1, CanonicalFormError, CanonicalRequestExactWriter,
+    CanonicalRequestFormPlan, canonical_request_decimal_len, canonical_request_query_pair_count,
+    write_canonical_request_decimal,
+};
 
-struct CanonicalRequestFormPlan<'a> {
-    pairs: [CanonicalRequestRawFormPair<'a>; CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1],
-    pair_count: usize,
-    encoded_bytes: usize,
-}
-
-#[derive(Clone)]
-struct CanonicalRequestFormDecodedBytes<'a> {
-    raw: &'a [u8],
-    index: usize,
-}
-
-impl<'a> CanonicalRequestFormDecodedBytes<'a> {
-    fn new(raw: &'a [u8]) -> Self {
-        Self { raw, index: 0 }
-    }
-}
-
-impl Iterator for CanonicalRequestFormDecodedBytes<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let byte = *self.raw.get(self.index)?;
-        if byte == b'+' {
-            self.index += 1;
-            return Some(b' ');
-        }
-        if byte == b'%'
-            && let (Some(high), Some(low)) = (
-                self.raw
-                    .get(self.index + 1)
-                    .and_then(|byte| canonical_request_hex_nibble(*byte)),
-                self.raw
-                    .get(self.index + 2)
-                    .and_then(|byte| canonical_request_hex_nibble(*byte)),
-            )
-        {
-            self.index += 3;
-            return Some((high << 4) | low);
-        }
-        self.index += 1;
-        Some(byte)
-    }
-}
-
-#[derive(Clone)]
-struct CanonicalRequestFormLossyChars<'a> {
-    bytes: CanonicalRequestFormDecodedBytes<'a>,
-}
-
-impl<'a> CanonicalRequestFormLossyChars<'a> {
-    fn new(raw: &'a [u8]) -> Self {
-        Self {
-            bytes: CanonicalRequestFormDecodedBytes::new(raw),
-        }
-    }
-
-    fn advance(&mut self, bytes: usize) {
-        for _ in 0..bytes {
-            let _ = self.bytes.next();
-        }
-    }
-}
-
-impl Iterator for CanonicalRequestFormLossyChars<'_> {
-    type Item = char;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut probe = self.bytes.clone();
-        let mut encoded = [0_u8; 4];
-        let mut length = 0;
-        while length < encoded.len() {
-            let Some(byte) = probe.next() else {
-                break;
-            };
-            encoded[length] = byte;
-            length += 1;
-        }
-        if length == 0 {
-            return None;
-        }
-        match std::str::from_utf8(&encoded[..length]) {
-            Ok(valid) => {
-                let ch = valid.chars().next().expect("non-empty UTF-8 probe");
-                self.advance(ch.len_utf8());
-                Some(ch)
-            }
-            Err(error) if error.valid_up_to() != 0 => {
-                let valid = std::str::from_utf8(&encoded[..error.valid_up_to()])
-                    .expect("UTF-8 validation guarantees its reported prefix is valid");
-                let ch = valid.chars().next().expect("non-empty valid UTF-8 prefix");
-                self.advance(ch.len_utf8());
-                Some(ch)
-            }
-            Err(error) => {
-                self.advance(error.error_len().unwrap_or(length));
-                Some(char::REPLACEMENT_CHARACTER)
-            }
-        }
-    }
-}
-
-const fn canonical_request_hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-const fn canonical_request_form_byte_len(byte: u8) -> usize {
-    match byte {
-        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' | b' ' => 1,
-        _ => 3,
-    }
-}
-
-fn canonical_request_form_component_len(raw: &[u8]) -> Option<usize> {
-    CanonicalRequestFormLossyChars::new(raw).try_fold(0_usize, |mut length, ch| {
-        let mut encoded = [0_u8; 4];
-        for byte in ch.encode_utf8(&mut encoded).as_bytes() {
-            length = length.checked_add(canonical_request_form_byte_len(*byte))?;
-        }
-        Some(length)
+/// Validate `raw` against the V1 query limits and plan its canonical form.
+fn canonical_request_form_plan(raw: &str) -> Result<CanonicalRequestFormPlan<'_>> {
+    validate_canonical_request_raw_query(raw)?;
+    CanonicalRequestFormPlan::new(raw).map_err(|error| match error {
+        CanonicalFormError::TooManyPairs => canonical_request_pair_limit_error(),
+        CanonicalFormError::Capacity => canonical_request_capacity_error(),
     })
-}
-
-impl<'a> CanonicalRequestFormPlan<'a> {
-    fn new(raw: &'a str) -> Result<Self> {
-        validate_canonical_request_raw_query(raw)?;
-        let mut pairs = [CanonicalRequestRawFormPair {
-            key: &[],
-            value: &[],
-        }; CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1];
-        let mut pair_count = 0;
-        for sequence in raw
-            .as_bytes()
-            .split(|byte| *byte == b'&')
-            .filter(|sequence| !sequence.is_empty())
-        {
-            let separator = sequence
-                .iter()
-                .position(|byte| *byte == b'=')
-                .unwrap_or(sequence.len());
-            pairs[pair_count] = CanonicalRequestRawFormPair {
-                key: &sequence[..separator],
-                value: if separator < sequence.len() {
-                    &sequence[separator + 1..]
-                } else {
-                    &[]
-                },
-            };
-            pair_count += 1;
-        }
-        pairs[..pair_count].sort_unstable_by(|left, right| {
-            CanonicalRequestFormLossyChars::new(left.key)
-                .cmp(CanonicalRequestFormLossyChars::new(right.key))
-                .then_with(|| {
-                    CanonicalRequestFormLossyChars::new(left.value)
-                        .cmp(CanonicalRequestFormLossyChars::new(right.value))
-                })
-        });
-        let encoded_bytes = pairs[..pair_count]
-            .iter()
-            .enumerate()
-            .try_fold(0_usize, |length, (index, pair)| {
-                length
-                    .checked_add(usize::from(index != 0))
-                    .and_then(|length| {
-                        canonical_request_form_component_len(pair.key)
-                            .and_then(|key| length.checked_add(key))
-                    })
-                    .and_then(|length| length.checked_add(1))
-                    .and_then(|length| {
-                        canonical_request_form_component_len(pair.value)
-                            .and_then(|value| length.checked_add(value))
-                    })
-            })
-            .ok_or_else(canonical_request_capacity_error)?;
-        Ok(Self {
-            pairs,
-            pair_count,
-            encoded_bytes,
-        })
-    }
-
-    fn write_to(&self, writer: &mut CanonicalRequestExactWriter<'_>) {
-        for (index, pair) in self.pairs[..self.pair_count].iter().enumerate() {
-            if index != 0 {
-                writer.push(b'&');
-            }
-            write_canonical_request_form_component(pair.key, writer);
-            writer.push(b'=');
-            write_canonical_request_form_component(pair.value, writer);
-        }
-    }
-}
-
-fn write_canonical_request_form_component(
-    raw: &[u8],
-    writer: &mut CanonicalRequestExactWriter<'_>,
-) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for ch in CanonicalRequestFormLossyChars::new(raw) {
-        let mut encoded = [0_u8; 4];
-        for byte in ch.encode_utf8(&mut encoded).as_bytes() {
-            match *byte {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
-                    writer.push(*byte);
-                }
-                b' ' => writer.push(b'+'),
-                byte => {
-                    writer.push(b'%');
-                    writer.push(HEX[usize::from(byte >> 4)]);
-                    writer.push(HEX[usize::from(byte & 0x0f)]);
-                }
-            }
-        }
-    }
-}
-
-struct CanonicalRequestExactWriter<'a> {
-    bytes: &'a mut [u8],
-    offset: usize,
-}
-
-impl<'a> CanonicalRequestExactWriter<'a> {
-    fn new(bytes: &'a mut [u8]) -> Self {
-        Self { bytes, offset: 0 }
-    }
-
-    fn push(&mut self, byte: u8) {
-        self.bytes[self.offset] = byte;
-        self.offset += 1;
-    }
-
-    fn extend(&mut self, bytes: &[u8]) {
-        let end = self.offset + bytes.len();
-        self.bytes[self.offset..end].copy_from_slice(bytes);
-        self.offset = end;
-    }
 }
 
 fn allocate_exact_canonical_request_bytes(length: usize) -> Result<Vec<u8>> {
@@ -259,11 +24,11 @@ fn allocate_exact_canonical_request_bytes(length: usize) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 fn canonical_query_string_v1(raw: Option<&str>) -> Result<String> {
-    let plan = CanonicalRequestFormPlan::new(raw.unwrap_or_default())?;
-    let mut output = allocate_exact_canonical_request_bytes(plan.encoded_bytes)?;
+    let plan = canonical_request_form_plan(raw.unwrap_or_default())?;
+    let mut output = allocate_exact_canonical_request_bytes(plan.encoded_bytes())?;
     let mut writer = CanonicalRequestExactWriter::new(&mut output);
     plan.write_to(&mut writer);
-    debug_assert_eq!(writer.offset, plan.encoded_bytes);
+    debug_assert_eq!(writer.offset(), plan.encoded_bytes());
     String::from_utf8(output).map_err(|_| eyre!("canonical request query is not valid UTF-8"))
 }
 
@@ -273,18 +38,16 @@ fn validate_canonical_request_raw_query(raw: &str) -> Result<()> {
             "canonical request query exceeds the V1 limit of {CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1} raw bytes"
         ));
     }
-    let pair_count = raw
-        .as_bytes()
-        .split(|byte| *byte == b'&')
-        .filter(|pair| !pair.is_empty())
-        .take(CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1.saturating_add(1))
-        .count();
-    if pair_count > CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 {
-        return Err(eyre!(
-            "canonical request query exceeds the V1 limit of {CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1} pairs"
-        ));
+    if canonical_request_query_pair_count(raw) > CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 {
+        return Err(canonical_request_pair_limit_error());
     }
     Ok(())
+}
+
+fn canonical_request_pair_limit_error() -> eyre::Report {
+    eyre!(
+        "canonical request query exceeds the V1 limit of {CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1} pairs"
+    )
 }
 
 fn validate_canonical_request_target(method: &HttpMethod, url: &Url) -> Result<()> {
@@ -303,29 +66,6 @@ fn validate_canonical_request_target(method: &HttpMethod, url: &Url) -> Result<(
 
 fn canonical_request_capacity_error() -> eyre::Report {
     eyre!("canonical request byte length exceeds platform capacity")
-}
-
-fn canonical_request_decimal_len(mut value: u64) -> usize {
-    let mut length = 1;
-    while value >= 10 {
-        value /= 10;
-        length += 1;
-    }
-    length
-}
-
-fn write_canonical_request_decimal(mut value: u64, writer: &mut CanonicalRequestExactWriter<'_>) {
-    let mut digits = [0_u8; 20];
-    let mut start = digits.len();
-    loop {
-        start -= 1;
-        digits[start] = b'0' + u8::try_from(value % 10).expect("decimal digit fits in u8");
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    writer.extend(&digits[start..]);
 }
 
 fn canonical_request_nonce_is_valid(nonce: &str) -> bool {
@@ -349,7 +89,7 @@ fn bounded_network_request_message(
     {
         return Err(eyre!("invalid canonical request nonce"));
     }
-    let query = CanonicalRequestFormPlan::new(url.query().unwrap_or_default())?;
+    let query = canonical_request_form_plan(url.query().unwrap_or_default())?;
     let freshness_bytes = if let Some((timestamp_ms, nonce)) = freshness {
         1_usize
             .checked_add(canonical_request_decimal_len(timestamp_ms))
@@ -366,7 +106,7 @@ fn bounded_network_request_message(
         .and_then(|length| length.checked_add(1))
         .and_then(|length| length.checked_add(url.path().len()))
         .and_then(|length| length.checked_add(1))
-        .and_then(|length| length.checked_add(query.encoded_bytes))
+        .and_then(|length| length.checked_add(query.encoded_bytes()))
         .and_then(|length| length.checked_add(1 + 64))
         .and_then(|length| length.checked_add(freshness_bytes))
         .ok_or_else(canonical_request_capacity_error)?;
@@ -393,7 +133,7 @@ fn bounded_network_request_message(
         writer.push(b'\n');
         writer.extend(nonce.as_bytes());
     }
-    debug_assert_eq!(writer.offset, total_bytes);
+    debug_assert_eq!(writer.offset(), total_bytes);
     Ok(output)
 }
 
@@ -556,7 +296,7 @@ pub fn canonical_request_timestamp_header_value(timestamp_ms: u64) -> Result<Str
     let mut output = allocate_exact_canonical_request_bytes(length)?;
     let mut writer = CanonicalRequestExactWriter::new(&mut output);
     write_canonical_request_decimal(timestamp_ms, &mut writer);
-    debug_assert_eq!(writer.offset, length);
+    debug_assert_eq!(writer.offset(), length);
     String::from_utf8(output).map_err(|_| eyre!("canonical request timestamp is not valid UTF-8"))
 }
 

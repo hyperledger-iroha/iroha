@@ -1951,6 +1951,13 @@ pub(crate) struct ZkX509Rfc5280StatementV1 {
 /// detached from its unique source node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u16)]
+#[cfg_attr(
+    not(any(test, feature = "privacy-release-evidence")),
+    expect(
+        dead_code,
+        reason = "only the test and release-evidence RFC adapters construct every grammar role"
+    )
+)]
 pub(crate) enum ZkX509Rfc5280GrammarRoleV1 {
     Certificate = 1,
     CertificateTbs = 2,

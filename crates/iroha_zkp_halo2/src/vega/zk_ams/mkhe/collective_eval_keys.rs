@@ -6,12 +6,12 @@
 //! retains the full authenticated source topology and compacts every digit with
 //! the native full-roster CKS protocol.  Online evaluation therefore performs
 //! exactly two ring multiplications per digit, independent of roster size.
+#[cfg(test)]
 use super::{
-    ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
-    RnsPolynomial, WideUint, ZkAmsMkheCksContributionWireV1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
-    ZkAmsMkheWireBindingV1,
+    ArtifactAuthentication, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, WideUint,
+    ZkAmsMkheCksContributionWireV1, ZkAmsMkhePartyIdV1, ZkAmsMkheWireBindingV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
-    checked_coefficient_work, checked_ring_multiplication_work, checked_rns_polynomial_bytes,
+    checked_coefficient_work, checked_ring_multiplication_work,
     cks::{
         ZkAmsMkheCksProofV1, derive_cks_sparse_challenge, streaming_cks_auth_domain_v1,
         streaming_cks_binding_v1, streaming_cks_challenge_seed_v1,
@@ -24,14 +24,18 @@ use super::{
         ZkAmsMkheCollectiveEvaluatedKeyPurposeV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
     },
     derive_uniform_rns_from_context,
-    manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
+    manifest::release_profile_v1,
     mod_add, mod_mul, mod_sub, modulus_product,
     packing::{
         ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
         zk_ams_t256_galois_key_schedule_v1,
     },
-    ring_multiplication_work, signed_mod,
+    signed_mod,
     wire::ZkAmsMkheGovernedRosterWireV1,
+};
+use super::{
+    BgvProfile, RnsPolynomial, ZkAmsMkheErrorV1, checked_rns_polynomial_bytes,
+    ring_multiplication_work,
 };
 #[cfg(test)]
 use super::{
@@ -55,53 +59,80 @@ use super::{
         ZkAmsMkheCollectivePublicKeyV1, aggregate_zk_ams_mkhe_collective_public_key_v1,
     },
     derive_rkg_common_a,
+    manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
     wire::ZkAmsMkheRnsPolynomialWireV1,
 };
+#[cfg(test)]
 use crate::vega::sponge::{Keccak256, Shake256Reader, keccak256};
+#[cfg(test)]
 #[path = "collective_eval_keys/cks_stream.rs"]
 mod cks_stream;
+#[cfg(test)]
 #[path = "collective_eval_keys/evidence_set.rs"]
 mod evidence_set;
+#[cfg(test)]
 #[path = "collective_eval_keys/source_stream.rs"]
 mod source_stream;
+#[cfg(test)]
 #[path = "collective_eval_keys/streaming_automorphism.rs"]
 mod streaming_automorphism;
+#[cfg(test)]
 pub use evidence_set::{
     ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1, verify_zk_ams_mkhe_evaluated_key_evidence_set_v1,
 };
+#[cfg(test)]
 pub use source_stream::{
     ZkAmsMkheTrustedSourceContextV1, ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
 };
+#[cfg(test)]
 pub use streaming_automorphism::{
     ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1,
     automorphism_switch_zk_ams_mkhe_collective_streaming_v1,
     zk_ams_mkhe_streaming_collective_automorphism_accounting_v1,
 };
+#[cfg(test)]
 const EVALUATED_KEY_TARGET_A_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-target-a";
+#[cfg(test)]
 const EVALUATED_KEY_TARGET_A_CONTEXT_BYTES_V1: usize = 176;
+#[cfg(test)]
 const EVALUATED_KEY_EVIDENCE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-evidence";
+#[cfg(test)]
 const EVALUATED_KEY_LINEAGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-lineage";
+#[cfg(test)]
 const EVALUATED_KEY_RUNTIME_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-runtime";
+#[cfg(test)]
 const EVALUATED_KEY_PROVIDER_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-provider";
+#[cfg(test)]
 const EVALUATED_KEY_LIMB_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-limb";
+#[cfg(test)]
 const EVALUATED_KEY_LIMB_INDEX_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-limb-index";
+#[cfg(test)]
 const SOURCE_EVIDENCE_RECORD_TAG_V1: [u8; 4] = *b"ZASE";
+#[cfg(test)]
 const CKS_EVIDENCE_RECORD_TAG_V1: [u8; 4] = *b"ZACE";
+#[cfg(test)]
 const CKS_VALIDATED_RECEIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-cks-validated-receipt";
+#[cfg(test)]
 const CKS_TRUSTED_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-cks-trusted-context";
+#[cfg(test)]
 const RNS_NATIVE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial-digest";
+#[cfg(test)]
 const RNS_WIRE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial";
+#[cfg(test)]
 const EVIDENCE_RECORD_DIGEST_BYTES_V1: usize = 32;
+#[cfg(test)]
 const SOURCE_EVIDENCE_COMMON_BODY_BYTES_V1: usize =
     4 + 1 + 1 + 8 + 1 + 4 + 1 + 32 + 32 + 32 + 8 + 32 + 32;
+#[cfg(test)]
 const CKS_EVIDENCE_COMMON_BODY_BYTES_V1: usize = 4 + 1 + 8 + 1 + 1 + 32;
+#[cfg(test)]
 const SEEKABLE_EVALUATED_KEY_TAG_V1: [u8; 4] = *b"ZARK";
 const SEEKABLE_EVALUATED_KEY_BINDING_BYTES_V1: usize = 4 + 1 + 32 + 32 + 8 + 32 + 4 + 1;
 const SEEKABLE_EVALUATED_KEY_HEADER_BYTES_V1: usize =
@@ -115,8 +146,10 @@ const HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1: usize = 5;
 /// Chunk boundaries are transport metadata, not part of the canonical record,
 /// but are deterministic and gap-free so a sink can reject omission, reorder,
 /// duplication, or cross-record splicing before committing durable bytes.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_EVIDENCE_CHUNK_BYTES_V1: usize = 64 * 1024;
 /// One of the two independently hashed evidence sets backing an evaluated key.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ZkAmsMkheCollectiveEvidenceSetKindV1 {
@@ -126,6 +159,7 @@ pub enum ZkAmsMkheCollectiveEvidenceSetKindV1 {
     Cks = 2,
 }
 /// Exact canonical record family inside an evaluated-key evidence set.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ZkAmsMkheCollectiveEvidenceRecordKindV1 {
@@ -138,6 +172,7 @@ pub enum ZkAmsMkheCollectiveEvidenceRecordKindV1 {
     /// One complete eight-party CKS digit.
     CksDigit = 4,
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvidenceRecordKindV1 {
     fn decode(value: u8) -> Result<Self, ZkAmsMkheErrorV1> {
         match value {
@@ -378,6 +413,7 @@ pub(super) fn seekable_evaluated_key_accounting(
         total_key_switch_work_units,
     })
 }
+#[cfg(test)]
 fn seekable_provider_state<P>(
     provider: &mut P,
     expected_pointer: ZkAmsMkheEvaluatedKeySorafsPointerV1,
@@ -400,6 +436,7 @@ where
     }
     Ok(state)
 }
+#[cfg(test)]
 fn ensure_seekable_provider_state<P>(
     provider: &mut P,
     expected: SeekableProviderStateV1,
@@ -412,6 +449,7 @@ where
     }
     Ok(())
 }
+#[cfg(test)]
 fn seekable_provider_seek_exact<P>(
     provider: &mut P,
     expected: SeekableProviderStateV1,
@@ -427,6 +465,7 @@ where
     provider.seek(absolute_offset)?;
     ensure_seekable_provider_state(provider, expected)
 }
+#[cfg(test)]
 fn seekable_provider_read_exact<P>(
     provider: &mut P,
     expected: SeekableProviderStateV1,
@@ -445,6 +484,7 @@ where
     }
     ensure_seekable_provider_state(provider, expected)
 }
+#[cfg(test)]
 fn seekable_header_array<const N: usize>(
     header: &[u8],
     offset: usize,
@@ -460,6 +500,7 @@ fn seekable_header_array<const N: usize>(
         .try_into()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
+#[cfg(test)]
 fn parse_seekable_evaluated_key_header(
     profile: &BgvProfile,
     expected: SeekableEvaluatedKeyExpectedV1,
@@ -488,6 +529,7 @@ fn parse_seekable_evaluated_key_header(
     }
     Ok((a_master_seed, contribution_proof_digest))
 }
+#[cfg(test)]
 fn validate_seekable_expected_layout(
     profile: &BgvProfile,
     expected: SeekableEvaluatedKeyExpectedV1,
@@ -542,6 +584,7 @@ fn validate_seekable_expected_layout(
     }
     Ok(layout)
 }
+#[cfg(test)]
 fn seekable_evaluated_key_limb_hasher(
     digit_index: usize,
     limb_index: usize,
@@ -567,6 +610,7 @@ fn seekable_evaluated_key_limb_hasher(
     hasher.update(&canonical_bytes.to_be_bytes());
     Ok(hasher)
 }
+#[cfg(test)]
 fn seekable_evaluated_key_limb_index_digest(
     entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
     limbs: &[SeekableEvaluatedKeyLimbV1],
@@ -595,6 +639,7 @@ fn seekable_evaluated_key_limb_index_digest(
     }
     Ok(hasher.finalize())
 }
+#[cfg(test)]
 fn validate_seekable_evaluated_key<P>(
     profile: &BgvProfile,
     expected: SeekableEvaluatedKeyExpectedV1,
@@ -802,6 +847,7 @@ where
         limb_index_digest,
     })
 }
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "fixed provider-binding axes remain explicit to preserve digest order"
@@ -840,6 +886,7 @@ fn seekable_provider_binding_digest(
     hash.update(&limb_index_digest);
     hash.finalize()
 }
+#[cfg(test)]
 fn validated_key_provider_state(
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
 ) -> SeekableProviderStateV1 {
@@ -850,6 +897,7 @@ fn validated_key_provider_state(
         payload_len: key.sorafs_pointer.payload_bytes(),
     }
 }
+#[cfg(test)]
 fn validate_bound_seekable_provider_state<P>(
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
     provider: &mut P,
@@ -944,6 +992,7 @@ where
     RnsPolynomial::from_flat(profile, residues)
 }
 /// Context opened once for one independently hashed canonical evidence set.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvidenceSetHeaderV1 {
     kind: ZkAmsMkheCollectiveEvidenceSetKindV1,
@@ -952,6 +1001,7 @@ pub struct ZkAmsMkheCollectiveEvidenceSetHeaderV1 {
     galois_exponent: u32,
     collective_key_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvidenceSetHeaderV1 {
     /// Evidence family.
     #[must_use]
@@ -980,6 +1030,7 @@ impl ZkAmsMkheCollectiveEvidenceSetHeaderV1 {
     }
 }
 /// Exact identity and preflighted length announced before a record stream.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvidenceRecordHeaderV1 {
     set: ZkAmsMkheCollectiveEvidenceSetHeaderV1,
@@ -987,6 +1038,7 @@ pub struct ZkAmsMkheCollectiveEvidenceRecordHeaderV1 {
     record_index: u32,
     canonical_bytes: u64,
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvidenceRecordHeaderV1 {
     /// Parent set identity.
     #[must_use]
@@ -1010,12 +1062,14 @@ impl ZkAmsMkheCollectiveEvidenceRecordHeaderV1 {
     }
 }
 /// Record commitment announced only after every bounded chunk was accepted.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvidenceRecordFooterV1 {
     header: ZkAmsMkheCollectiveEvidenceRecordHeaderV1,
     chunk_count: u32,
     canonical_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvidenceRecordFooterV1 {
     /// Exact opening header.
     #[must_use]
@@ -1034,12 +1088,14 @@ impl ZkAmsMkheCollectiveEvidenceRecordFooterV1 {
     }
 }
 /// Final set commitment after its exact gap-free record count was hashed.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvidenceSetFooterV1 {
     header: ZkAmsMkheCollectiveEvidenceSetHeaderV1,
     record_count: u32,
     canonical_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvidenceSetFooterV1 {
     /// Exact opening header.
     #[must_use]
@@ -1058,6 +1114,7 @@ impl ZkAmsMkheCollectiveEvidenceSetFooterV1 {
     }
 }
 /// Exact region reserved for one transactional `ZARK` publication.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1 {
     purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
@@ -1067,6 +1124,7 @@ pub struct ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1 {
     payload_bytes: u64,
     artifact_bytes: u64,
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1 {
     /// Evaluated-key purpose bound to this transaction.
     #[must_use]
@@ -1100,6 +1158,7 @@ impl ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1 {
     }
 }
 /// Authenticated commit request for one completely reread `ZARK` entry.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1 {
     header: ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1,
@@ -1107,6 +1166,7 @@ pub struct ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1 {
     source_proof_set_digest: [u8; 32],
     cks_proof_set_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1 {
     /// Exact opening transaction header.
     #[must_use]
@@ -1136,6 +1196,7 @@ impl ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1 {
 /// disjoint canonical entry while every previously finalized region remains immutable.
 /// Implementations must reject every exact reopen or partial byte-range overlap with a finalized
 /// region and must not expose any staging region through a provider.
+#[cfg(test)]
 pub trait ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1 {
     /// Non-zero identity of this exact publication session.
     fn publication_identity(&self) -> [u8; 32];
@@ -1175,6 +1236,7 @@ pub trait ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1 {
 /// One generated canonical key's immutable publication and evidence identities.
 ///
 /// This result owns no evaluated-key polynomial or encoded payload.
+#[cfg(test)]
 #[derive(PartialEq, Eq)]
 pub(super) struct ZkAmsMkheGeneratedCollectiveEvaluatedKeyV1 {
     purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
@@ -1189,6 +1251,7 @@ pub(super) struct ZkAmsMkheGeneratedCollectiveEvaluatedKeyV1 {
     publication_identity: [u8; 32],
     snapshot_identity: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheGeneratedCollectiveEvaluatedKeyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1219,6 +1282,7 @@ impl core::fmt::Debug for ZkAmsMkheGeneratedCollectiveEvaluatedKeyV1 {
             .finish()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheGeneratedCollectiveEvaluatedKeyV1 {
     /// Evaluated-key purpose.
     #[must_use]
@@ -2063,6 +2127,7 @@ impl ZkAmsMkheCollectiveCksDigitEvidenceV1<'_> {
 /// The context retains only governed identity and polynomial digests. It is privately sealed after
 /// the collective key and all ordered shares have been validated, allowing their bulky polynomial
 /// owners to be dropped before a `ZACE` record is decoded.
+#[cfg(test)]
 pub struct ZkAmsMkheTrustedCksContextV1 {
     roster: ZkAmsMkheGovernedRosterWireV1,
     key_material_digest: [u8; 32],
@@ -2075,6 +2140,7 @@ pub struct ZkAmsMkheTrustedCksContextV1 {
     party_public_b_wire_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     verification_seal: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheTrustedCksContextV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -2110,6 +2176,7 @@ impl core::fmt::Debug for ZkAmsMkheTrustedCksContextV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheTrustedCksContextV1 {
     /// Validate a materialized collective key and ordered shares, then mint the
     /// compact context that remains after those bulky owners are dropped.
@@ -2195,6 +2262,7 @@ impl ZkAmsMkheTrustedCksContextV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn trusted_cks_context_seal(
     roster: ZkAmsMkheGovernedRosterWireV1,
@@ -2233,6 +2301,7 @@ fn trusted_cks_context_seal(
 /// The receipt deliberately retains no polynomial, proof, canonical byte buffer,
 /// reader, path, or provider. Its private seal can only be minted after the
 /// seekable decoder has replayed all eight ordered proofs and the compact output.
+#[cfg(test)]
 pub struct ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
     ordinal: u8,
     digit_index: u8,
@@ -2245,6 +2314,7 @@ pub struct ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
     canonical_digest: [u8; 32],
     verification_seal: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -2268,6 +2338,7 @@ impl core::fmt::Debug for ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
     /// Exact canonical record length accepted from durable storage.
     #[must_use]
@@ -2301,6 +2372,7 @@ impl ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
 /// then adds the compact `{index, kind, bytes, digest}` descriptor to the shared
 /// set recurrence. A sink error fails key generation; there is no advisory
 /// callback path that could silently persist a different representation.
+#[cfg(test)]
 pub trait ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1 {
     /// Open one source or CKS evidence set before its first record.
     fn begin_evidence_set(
@@ -2428,6 +2500,7 @@ fn validate_evidence_collective_context(
     }
     Ok(())
 }
+#[cfg(test)]
 fn expected_rkg_source_record_index(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     left: ZkAmsMkhePartyIdV1,
@@ -2651,6 +2724,7 @@ fn write_canonical_u64(
 ) -> Result<(), ZkAmsMkheErrorV1> {
     writer.write_body(&value.to_be_bytes())
 }
+#[cfg(test)]
 fn canonical_wire_polynomial_bytes() -> Result<usize, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
     profile
@@ -2681,11 +2755,13 @@ fn write_canonical_wire_polynomial(
     }
     Ok(())
 }
+#[cfg(test)]
 struct CanonicalBodyReader<'a, R> {
     reader: &'a mut R,
     hash: Keccak256,
     remaining: u64,
 }
+#[cfg(test)]
 impl<'a, R> CanonicalBodyReader<'a, R>
 where
     R: std::io::Read,
@@ -2709,6 +2785,7 @@ where
         Ok((self.reader, self.hash.finalize()))
     }
 }
+#[cfg(test)]
 impl<R> CanonicalBodyReader<'_, R>
 where
     R: std::io::Read + std::io::Seek,
@@ -2719,6 +2796,7 @@ where
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
 }
+#[cfg(test)]
 impl<R> std::io::Read for CanonicalBodyReader<'_, R>
 where
     R: std::io::Read,
@@ -2738,6 +2816,7 @@ where
         Ok(read)
     }
 }
+#[cfg(test)]
 fn canonical_polynomial_residue_count() -> Result<usize, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
     profile
@@ -2745,6 +2824,7 @@ fn canonical_polynomial_residue_count() -> Result<usize, ZkAmsMkheErrorV1> {
         .checked_mul(profile.moduli.len())
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn maximum_source_evidence_record_bytes() -> Result<usize, ZkAmsMkheErrorV1> {
     SOURCE_EVIDENCE_COMMON_BODY_BYTES_V1
         .checked_add(32 + 32 + 4)
@@ -2760,12 +2840,14 @@ fn maximum_source_evidence_record_bytes() -> Result<usize, ZkAmsMkheErrorV1> {
         .and_then(|value| value.checked_add(EVIDENCE_RECORD_DIGEST_BYTES_V1))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn maximum_cks_contribution_record_bytes() -> Result<usize, ZkAmsMkheErrorV1> {
     canonical_wire_polynomial_bytes()?
         .checked_add(super::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1)
         .and_then(|value| value.checked_add(4_096))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn maximum_cks_evidence_record_bytes() -> Result<usize, ZkAmsMkheErrorV1> {
     let polynomial_bytes = canonical_wire_polynomial_bytes()?;
     let roster_bytes = 4_096;
@@ -2784,6 +2866,7 @@ fn maximum_cks_evidence_record_bytes() -> Result<usize, ZkAmsMkheErrorV1> {
         .and_then(|value| value.checked_add(EVIDENCE_RECORD_DIGEST_BYTES_V1))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn read_canonical_raw_exact(
     reader: &mut impl std::io::Read,
     bytes: &mut [u8],
@@ -2792,6 +2875,7 @@ fn read_canonical_raw_exact(
         .read_exact(bytes)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
+#[cfg(test)]
 fn read_canonical_array<const N: usize>(
     reader: &mut impl std::io::Read,
 ) -> Result<[u8; N], ZkAmsMkheErrorV1> {
@@ -2799,20 +2883,25 @@ fn read_canonical_array<const N: usize>(
     read_canonical_raw_exact(reader, &mut bytes)?;
     Ok(bytes)
 }
+#[cfg(test)]
 fn read_canonical_u8(reader: &mut impl std::io::Read) -> Result<u8, ZkAmsMkheErrorV1> {
     Ok(read_canonical_array::<1>(reader)?[0])
 }
+#[cfg(test)]
 fn read_canonical_u32(reader: &mut impl std::io::Read) -> Result<u32, ZkAmsMkheErrorV1> {
     Ok(u32::from_be_bytes(read_canonical_array(reader)?))
 }
+#[cfg(test)]
 fn read_canonical_u64(reader: &mut impl std::io::Read) -> Result<u64, ZkAmsMkheErrorV1> {
     Ok(u64::from_be_bytes(read_canonical_array(reader)?))
 }
+#[cfg(test)]
 fn read_canonical_party(
     reader: &mut impl std::io::Read,
 ) -> Result<ZkAmsMkhePartyIdV1, ZkAmsMkheErrorV1> {
     ZkAmsMkhePartyIdV1::new(read_canonical_array(reader)?)
 }
+#[cfg(test)]
 fn read_canonical_vec_exact(
     reader: &mut impl std::io::Read,
     length: usize,
@@ -2829,6 +2918,7 @@ fn read_canonical_vec_exact(
     read_canonical_raw_exact(reader, &mut bytes)?;
     Ok(bytes)
 }
+#[cfg(test)]
 fn finish_canonical_body<R: std::io::Read>(
     body: CanonicalBodyReader<'_, R>,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -2839,6 +2929,7 @@ fn finish_canonical_body<R: std::io::Read>(
     }
     Ok(observed)
 }
+#[cfg(test)]
 fn require_canonical_reader_eof(reader: &mut impl std::io::Read) -> Result<(), ZkAmsMkheErrorV1> {
     let mut trailing = [0_u8; 1];
     loop {
@@ -2851,6 +2942,7 @@ fn require_canonical_reader_eof(reader: &mut impl std::io::Read) -> Result<(), Z
     }
 }
 include!("collective_eval_keys/zeroizing_vectors.rs");
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IndexedCksPolynomialV1 {
     residues_offset: u64,
@@ -2858,6 +2950,7 @@ struct IndexedCksPolynomialV1 {
     wire_digest: [u8; 32],
     nonzero: bool,
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IndexedCksStatementV1 {
     roster: ZkAmsMkheGovernedRosterWireV1,
@@ -2874,6 +2967,7 @@ struct IndexedCksStatementV1 {
     party_public_b: [IndexedCksPolynomialV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     compact_constant: IndexedCksPolynomialV1,
 }
+#[cfg(test)]
 fn new_rns_digest_hasher(
     domain: &[u8],
     residue_count: usize,
@@ -2887,6 +2981,7 @@ fn new_rns_digest_hasher(
     );
     Ok(hash)
 }
+#[cfg(test)]
 fn update_rns_digest_hasher(hash: &mut Keccak256, residues: &[u64]) {
     const RESIDUES_PER_BATCH: usize = 512;
     let mut bytes = [0_u8; RESIDUES_PER_BATCH * core::mem::size_of::<u64>()];
@@ -2897,6 +2992,7 @@ fn update_rns_digest_hasher(hash: &mut Keccak256, residues: &[u64]) {
         hash.update(&bytes[..batch.len() * 8]);
     }
 }
+#[cfg(test)]
 fn index_canonical_cks_polynomial<R>(
     body: &mut CanonicalBodyReader<'_, R>,
     profile: &BgvProfile,
@@ -2941,6 +3037,7 @@ where
         nonzero,
     })
 }
+#[cfg(test)]
 fn read_indexed_cks_limb<R>(
     reader: &mut R,
     polynomial: IndexedCksPolynomialV1,
@@ -2983,6 +3080,7 @@ where
     }
     Ok(residues)
 }
+#[cfg(test)]
 fn load_indexed_cks_accumulator<R>(
     reader: &mut R,
     polynomial: IndexedCksPolynomialV1,
@@ -3202,6 +3300,7 @@ fn validated_source_evidence<'a>(
     evidence.verify(context.roster, &context.collective_key, context.shares)?;
     Ok(evidence)
 }
+#[cfg(test)]
 fn evaluated_key_evidence_digest(
     purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
     ordinal: u8,
@@ -3225,6 +3324,7 @@ fn evaluated_key_evidence_digest(
     frame.extend_from_slice(&cks_proof_set_digest);
     Ok(keccak256(&frame))
 }
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "the derivation binds each governed evaluated-key context axis explicitly"
@@ -3277,6 +3377,7 @@ fn evaluated_key_target_a_context(
     }
     Ok(context)
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn derive_target_a(
     profile: &BgvProfile,
@@ -3304,6 +3405,7 @@ fn derive_target_a(
     )?;
     derive_uniform_rns_from_context(profile, EVALUATED_KEY_TARGET_A_DOMAIN_V1, &context)
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn derive_target_a_limb(
     profile: &BgvProfile,
@@ -3514,6 +3616,7 @@ where
         Ok(compact.constant().clone())
     })
 }
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "the canonical header commits each protocol field in a fixed order"
@@ -3566,6 +3669,7 @@ fn seekable_publication_header_bytes(
     }
     Ok(header)
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct SeekablePublicationFinishContextV1<'a> {
     profile: &'a BgvProfile,
@@ -3575,6 +3679,7 @@ struct SeekablePublicationFinishContextV1<'a> {
     transcript_digest: [u8; 32],
     collective_key_digest: [u8; 32],
 }
+#[cfg(test)]
 struct SeekableEvaluatedKeyPublicationTransactionV1<
     'a,
     P: ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1 + ?Sized,
@@ -3587,6 +3692,7 @@ struct SeekableEvaluatedKeyPublicationTransactionV1<
     next_digit: usize,
     finished: bool,
 }
+#[cfg(test)]
 impl<'a, P> SeekableEvaluatedKeyPublicationTransactionV1<'a, P>
 where
     P: ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1 + ?Sized,
@@ -3929,6 +4035,7 @@ where
         })
     }
 }
+#[cfg(test)]
 impl<P> Drop for SeekableEvaluatedKeyPublicationTransactionV1<'_, P>
 where
     P: ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1 + ?Sized,
@@ -4559,6 +4666,7 @@ where
 /// content revision visible through that session and must not incorporate the mutable cursor
 /// position. Both identities are checked before and after validation and every digit loan.
 /// Implementations must fail rather than repair a seek or exact bounded read.
+#[cfg(test)]
 pub trait ZkAmsMkheCollectiveEvaluatedKeyProviderV1 {
     /// Non-zero identity of this exact open provider session.
     fn provider_identity(&self) -> [u8; 32];
@@ -4632,6 +4740,7 @@ pub struct ZkAmsMkheSeekableEvaluatedKeyAccountingV1 {
     pub total_key_switch_work_units: u64,
 }
 /// Return the frozen release accounting for the sole seekable provider path.
+#[cfg(test)]
 pub fn zk_ams_mkhe_seekable_evaluated_key_accounting_v1()
 -> Result<ZkAmsMkheSeekableEvaluatedKeyAccountingV1, ZkAmsMkheErrorV1> {
     seekable_evaluated_key_accounting(&release_profile_v1())
@@ -4655,6 +4764,7 @@ struct SeekableEvaluatedKeyLimbV1 {
     canonical_bytes: u64,
     blake3: [u8; 32],
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SeekableProviderStateV1 {
     provider_identity: [u8; 32],
@@ -4662,6 +4772,7 @@ struct SeekableProviderStateV1 {
     pointer: ZkAmsMkheEvaluatedKeySorafsPointerV1,
     payload_len: u64,
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct SeekableEvaluatedKeyExpectedV1 {
     entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
@@ -4675,6 +4786,7 @@ struct SeekableEvaluatedKeyExpectedV1 {
     contribution_proof_digest: [u8; 32],
     cks_compact_output_set_digest: [u8; 32],
 }
+#[cfg(test)]
 struct SeekableEvaluatedKeyValidationV1 {
     state: SeekableProviderStateV1,
     a_master_seed: [u8; 32],
@@ -4685,6 +4797,7 @@ struct SeekableEvaluatedKeyValidationV1 {
 }
 include!("collective_eval_keys/runtime.rs");
 /// Exact release ring-multiplication count of one compact key switch.
+#[cfg(test)]
 pub fn zk_ams_mkhe_compact_key_switch_ring_multiplications_v1() -> Result<u64, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
     profile.validate()?;

@@ -94,57 +94,6 @@
         "package": "iroha_model_base",
         "target": "all"
       },
-      "model-base-ffi": {
-        "default_features": true,
-        "features": [
-          "ffi_export"
-        ],
-        "forbidden_features": {},
-        "forbidden_layers": [
-          "protocol",
-          "privacy_model",
-          "service_model",
-          "incentives",
-          "node_execution",
-          "node_configuration",
-          "telemetry_runtime",
-          "storage_runtime",
-          "storage_manifest",
-          "service_runtime",
-          "storage_client",
-          "sdk",
-          "proof_primitives",
-          "http_transport"
-        ],
-        "package": "iroha_model_base",
-        "target": "all"
-      },
-      "model-base-ffi-transparent": {
-        "default_features": true,
-        "features": [
-          "ffi_export",
-          "transparent_api"
-        ],
-        "forbidden_features": {},
-        "forbidden_layers": [
-          "protocol",
-          "privacy_model",
-          "service_model",
-          "incentives",
-          "node_execution",
-          "node_configuration",
-          "telemetry_runtime",
-          "storage_runtime",
-          "storage_manifest",
-          "service_runtime",
-          "storage_client",
-          "sdk",
-          "proof_primitives",
-          "http_transport"
-        ],
-        "package": "iroha_model_base",
-        "target": "all"
-      },
       "model-base-transparent": {
         "default_features": true,
         "features": [

@@ -3284,7 +3284,7 @@
       "include_path": "ir/fixtures/v1/i005.ko",
       "newline_count": 4,
       "ordinal": 5,
-      "owner_function": "test_mode_entrypoint_wrapper_checks_override_state_first",
+      "owner_function": "entrypoint_wrapper_uses_only_the_host_argument_record",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "starts_with_lf": true
@@ -3557,7 +3557,7 @@
       "include_path": "ir/fixtures/v1/i026.ko",
       "newline_count": 10,
       "ordinal": 26,
-      "owner_function": "invoke_entrypoint_lowers_to_wrapper_call_with_override_restore",
+      "owner_function": "invoke_entrypoint_lowers_to_current_caller_host_intrinsic",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "starts_with_lf": true
@@ -3570,7 +3570,7 @@
       "include_path": "ir/fixtures/v1/i027.ko",
       "newline_count": 11,
       "ordinal": 27,
-      "owner_function": "invoke_entrypoint_tuple_return_uses_wrapper_callmulti",
+      "owner_function": "invoke_entrypoint_tuple_return_uses_current_caller_host_intrinsic",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "starts_with_lf": true
@@ -3927,7 +3927,7 @@
       "starts_with_lf": true
     }
   ],
-  "fixtures_sha256": "cd65568cc15c7eaad57e231428d5ef383208dd8fe7dffd634cc2d7bfa342b8f1",
+  "fixtures_sha256": "ff28d8b7b5931337005ef5199f7a439643f958a7933b2df23f680ea29d3eac95",
   "format": "iroha.kotodama.test-sources",
   "schema_version": 1,
   "source_files": [
@@ -4067,6 +4067,7 @@
         "inline_submit_ballot_builtin_lowers_to_ir",
         "inline_submit_ballot_requires_a_canonical_governance_selector",
         "noncanonical_inline_submit_ballot_cannot_seed_access_hints",
+        "literal_instruction_bridge_keeps_transitive_access_hints_conservative",
         "inline_submit_ballot_builtin_rejects_invalid_arguments",
         "vendor_bridge_and_subscription_builtins_emit_syscalls",
         "vendor_bridge_and_subscription_builtins_reject_invalid_arguments",
@@ -4179,7 +4180,7 @@
         "state_codegen_rejects_legacy_name_literal_carrier",
         "entry_spills_use_stack_frame",
         "production_mode_rejects_test_functions_instead_of_stripping_them",
-        "test_mode_public_entrypoints_report_the_injected_override_state_read",
+        "test_and_production_public_wrappers_use_the_same_argument_boundary",
         "production_rejects_tests_before_resolving_test_only_helpers",
         "test_mode_helpers_emit_private_scallx_syscalls",
         "implicit_first_release_prelude_helpers_fail_closed",
@@ -4205,7 +4206,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "afbb6d11bc54b739d3970305a7c2a5984560e74ea2de3dec16aaac3a5b0df189"
+      "test_names_sha256": "0f3e22044881713186bede6da31f6503512b02d4a4029cbedb412f77d0e7e08b"
     },
     {
       "external_fixtures": [],
@@ -4477,7 +4478,7 @@
         "named_list_intrinsic_evaluates_source_order_before_abi_slots",
         "named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order",
         "require_lowers_declared_error_code_into_abort_ir",
-        "test_mode_entrypoint_wrapper_checks_override_state_first",
+        "entrypoint_wrapper_uses_only_the_host_argument_record",
         "single_json_entrypoint_uses_the_same_one_shot_argument_record",
         "public_wrapper_decodes_one_complete_norito_argument_record",
         "public_aggregate_arguments_cross_internal_calls_as_flat_words",
@@ -4506,8 +4507,8 @@
         "entrypoint_list_schema_is_recursive_and_capacity_bound",
         "query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views",
         "aggregate_argument_words_over_register_window_fail_during_lowering",
-        "invoke_entrypoint_lowers_to_wrapper_call_with_override_restore",
-        "invoke_entrypoint_tuple_return_uses_wrapper_callmulti",
+        "invoke_entrypoint_lowers_to_current_caller_host_intrinsic",
+        "invoke_entrypoint_tuple_return_uses_current_caller_host_intrinsic",
         "invoke_entrypoint_as_lowers_to_test_host_intrinsics",
         "invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic",
         "actor_helpers_lower_to_test_host_intrinsics",
@@ -4568,8 +4569,8 @@
         "rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction",
         "wrapping_builtins_have_distinct_ir"
       ],
-      "test_names_sha256": "f8ee431f059a24f7b18eeca317d44397dddd2bb677b4faa297365fbd993c2690"
+      "test_names_sha256": "ca9fa8ed2d65e5e043f52fea4d1dc4dd024a7ec76737a8fc69024cd2021d03e2"
     }
   ],
-  "test_inventory_sha256": "494ddba73114c6f2a809de4960f971d6c34d51d7cb059e724356dedfe05b5b8f"
+  "test_inventory_sha256": "08b30c32361b1eb7c28f54a168a2f19d05b37f97c271449aa1557ed75cadb925"
 }

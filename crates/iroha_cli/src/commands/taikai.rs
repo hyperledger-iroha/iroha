@@ -37,9 +37,12 @@ use rand::{
     rand_core::TryCryptoRng,
     rngs::{OsRng, StdRng},
 };
-use sorafs_car::taikai::{
-    BundleRequest, BundleSummary, bundle_segment, load_extra_metadata,
-    validate_distinct_artifact_paths,
+use sorafs_car::{
+    taikai::{
+        BundleRequest, BundleSummary, bundle_segment, load_extra_metadata,
+        validate_distinct_artifact_paths,
+    },
+    taikai_bundle,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -54,8 +57,6 @@ use std::{
 };
 const DEFAULT_LADDER_PRESETS_JSON: &str =
     include_str!("../../../../fixtures/taikai/ladder_presets.json");
-const TAIKAI_BUNDLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taikai.bundle.v1";
-const MAX_TAIKAI_POLICY_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -742,11 +743,11 @@ impl Run for RptAttestArgs {
                 ("distribution bundle input", self.bundle.as_path()),
             ],
         )?;
-        let gar_digest = compute_file_digest(&self.gar)
+        let gar_digest = taikai_bundle::file_digest(&self.gar, "policy input")
             .wrap_err_with(|| format!("failed to hash GAR `{}`", self.gar.display()))?;
         let cek_receipt_digest =
             validate_cek_receipt_binding(&self.cek_receipt, &event_id, &stream_id)?;
-        let bundle_digest = compute_bundle_digest(&self.bundle)
+        let bundle_digest = taikai_bundle::bundle_digest_v1(&self.bundle)
             .wrap_err_with(|| format!("failed to hash bundle `{}`", self.bundle.display()))?;
         let policy_labels = normalize_labels(&self.policy_labels, "policy-label")?;
         let now = current_unix_timestamp()
@@ -1546,117 +1547,6 @@ fn resolve_rpt_validity_window(
     Ok((valid_from, valid_until))
 }
 
-fn open_policy_input(path: &Path, label: &str) -> Result<File> {
-    open_policy_input_with_hook(path, label, || Ok(()))
-}
-
-fn open_policy_input_with_hook<F>(path: &Path, label: &str, before_open: F) -> Result<File>
-where
-    F: FnOnce() -> Result<()>,
-{
-    let path_metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
-    if policy_metadata_is_symlink_or_reparse(&path_metadata) || !path_metadata.is_file() {
-        return Err(eyre!(
-            "{label} `{}` must be a regular file and must not be a symlink",
-            path.display()
-        ));
-    }
-    before_open()?;
-
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_policy_no_follow(&mut options);
-    let file = options
-        .open(path)
-        .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
-    let opened_metadata = file
-        .metadata()
-        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
-    if policy_metadata_is_symlink_or_reparse(&opened_metadata) || !opened_metadata.is_file() {
-        return Err(eyre!(
-            "{label} `{}` changed to a non-regular file while opening it",
-            path.display()
-        ));
-    }
-    ensure_same_policy_input_state(
-        &path_metadata,
-        &opened_metadata,
-        path,
-        label,
-        "while it was being opened",
-    )?;
-    Ok(file)
-}
-
-fn read_policy_document(file: &mut File, path: &Path, label: &str) -> Result<Vec<u8>> {
-    read_policy_document_with_hook(file, path, label, || Ok(()))
-}
-
-fn read_policy_document_with_hook<F>(
-    file: &mut File,
-    path: &Path,
-    label: &str,
-    before_read: F,
-) -> Result<Vec<u8>>
-where
-    F: FnOnce() -> Result<()>,
-{
-    let initial_metadata = file
-        .metadata()
-        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
-    let advertised_len = initial_metadata.len();
-    if advertised_len > MAX_TAIKAI_POLICY_DOCUMENT_BYTES {
-        return Err(eyre!(
-            "{label} `{}` exceeds the {}-byte policy document limit",
-            path.display(),
-            MAX_TAIKAI_POLICY_DOCUMENT_BYTES
-        ));
-    }
-    let capacity = usize::try_from(advertised_len).expect("bounded document length fits usize");
-    let mut bytes = Vec::with_capacity(capacity);
-    before_read()?;
-    {
-        let mut limited = (&mut *file).take(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1);
-        limited
-            .read_to_end(&mut bytes)
-            .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
-    }
-    let bytes_read = u64::try_from(bytes.len()).expect("bounded document length fits u64");
-    if bytes_read > MAX_TAIKAI_POLICY_DOCUMENT_BYTES {
-        return Err(eyre!(
-            "{label} `{}` grew beyond the {}-byte policy document limit while reading",
-            path.display(),
-            MAX_TAIKAI_POLICY_DOCUMENT_BYTES
-        ));
-    }
-    let final_metadata = file.metadata().wrap_err_with(|| {
-        format!(
-            "failed to re-inspect opened {label} `{}` after reading",
-            path.display()
-        )
-    })?;
-    if !final_metadata.is_file()
-        || policy_metadata_is_symlink_or_reparse(&final_metadata)
-        || final_metadata.len() != advertised_len
-        || bytes_read != advertised_len
-    {
-        return Err(eyre!(
-            "{label} `{}` changed length while it was being read (advertised {advertised_len} bytes, read {bytes_read} bytes, final length {} bytes)",
-            path.display(),
-            final_metadata.len()
-        ));
-    }
-    ensure_same_policy_input_state(
-        &initial_metadata,
-        &final_metadata,
-        path,
-        label,
-        "while it was being read",
-    )?;
-    Ok(bytes)
-}
-
 fn ensure_same_policy_input_state(
     expected: &fs::Metadata,
     opened: &fs::Metadata,
@@ -1731,87 +1621,13 @@ fn policy_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     false
 }
 
-fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
-    let mut hasher = Hasher::new();
-    let mut file = open_policy_input(path, "policy input")?;
-    hash_file_contents(&mut file, path, &mut hasher)?;
-    Ok(*hasher.finalize().as_bytes())
-}
-fn hash_file_contents(file: &mut File, path: &Path, hasher: &mut Hasher) -> Result<()> {
-    hash_file_contents_with_hook(file, path, hasher, || Ok(()))
-}
-fn hash_file_contents_with_hook<F>(
-    file: &mut File,
-    path: &Path,
-    hasher: &mut Hasher,
-    before_read: F,
-) -> Result<()>
-where
-    F: FnOnce() -> Result<()>,
-{
-    let initial_metadata = file
-        .metadata()
-        .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?;
-    hash_file_contents_from_state_with_hook(file, path, hasher, &initial_metadata, before_read)
-}
-fn hash_file_contents_from_state_with_hook<F>(
-    file: &mut File,
-    path: &Path,
-    hasher: &mut Hasher,
-    initial_metadata: &fs::Metadata,
-    before_read: F,
-) -> Result<()>
-where
-    F: FnOnce() -> Result<()>,
-{
-    before_read()?;
-    let mut buffer = [0u8; 8192];
-    let mut actual_len = 0_u64;
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        actual_len = actual_len
-            .checked_add(u64::try_from(read).expect("read buffer length fits u64"))
-            .ok_or_else(|| eyre!("file length overflowed while reading `{}`", path.display()))?;
-        hasher.update(&buffer[..read]);
-    }
-    let expected_len = initial_metadata.len();
-    if actual_len != expected_len {
-        return Err(eyre!(
-            "file `{}` changed length while hashing (expected {expected_len}, read {actual_len})",
-            path.display()
-        ));
-    }
-    let final_metadata = file
-        .metadata()
-        .wrap_err_with(|| format!("failed to re-inspect `{}` after hashing", path.display()))?;
-    if !final_metadata.is_file() || final_metadata.len() != expected_len {
-        return Err(eyre!(
-            "file `{}` changed length while hashing (expected {expected_len}, final length {})",
-            path.display(),
-            final_metadata.len()
-        ));
-    }
-    ensure_same_policy_input_state(
-        initial_metadata,
-        &final_metadata,
-        path,
-        "file",
-        "while it was being hashed",
-    )?;
-    Ok(())
-}
 fn validate_cek_receipt_binding(
     path: &Path,
     event_id: &TaikaiEventId,
     stream_id: &TaikaiStreamId,
 ) -> Result<[u8; 32]> {
-    let mut file = open_policy_input(path, "CEK receipt")?;
-    let bytes = read_policy_document(&mut file, path, "CEK receipt")?;
+    let mut file = taikai_bundle::open_regular_input(path, "CEK receipt")?;
+    let bytes = taikai_bundle::read_policy_document(&mut file, path, "CEK receipt")?;
     let receipt = norito::decode_from_bytes::<CekRotationReceiptV1>(&bytes).map_err(|err| {
         eyre!(
             "failed to decode CEK receipt `{}` as canonical framed Norito: {err}",
@@ -1832,143 +1648,6 @@ fn validate_cek_receipt_binding(
         ));
     }
     Ok(*blake3::hash(&bytes).as_bytes())
-}
-fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
-    let mut hasher = Hasher::new();
-    hasher.update(TAIKAI_BUNDLE_DIGEST_DOMAIN_V1);
-    if metadata.is_file() {
-        let relative = path
-            .file_name()
-            .map_or_else(|| PathBuf::from("."), PathBuf::from);
-        hash_file_entry(path, &relative, &mut hasher)?;
-    } else if metadata.is_dir() {
-        hash_directory_entry(path, Path::new(""), &mut hasher)?;
-    } else {
-        return Err(eyre!(
-            "bundle `{}` must be a regular file or directory",
-            path.display()
-        ));
-    }
-    Ok(*hasher.finalize().as_bytes())
-}
-fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
-    update_path_marker(relative, b'F', hasher)?;
-    let mut file = open_policy_input(path, "bundle file")?;
-    let initial_metadata = file
-        .metadata()
-        .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?;
-    let expected_len = initial_metadata.len();
-    hasher.update(&expected_len.to_le_bytes());
-    hash_file_contents_from_state_with_hook(&mut file, path, hasher, &initial_metadata, || Ok(()))
-}
-fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
-    hash_directory_entry_with_hook(path, relative, hasher, || Ok(()))
-}
-fn hash_directory_entry_with_hook<F>(
-    path: &Path,
-    relative: &Path,
-    hasher: &mut Hasher,
-    before_traversal: F,
-) -> Result<()>
-where
-    F: FnOnce() -> Result<()>,
-{
-    let initial_metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to inspect directory `{}`", path.display()))?;
-    if !initial_metadata.is_dir() || policy_metadata_is_symlink_or_reparse(&initial_metadata) {
-        return Err(eyre!(
-            "bundle directory `{}` must be a direct directory",
-            path.display()
-        ));
-    }
-    update_path_marker(relative, b'D', hasher)?;
-    before_traversal()?;
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(path)
-        .wrap_err_with(|| format!("failed to read directory `{}`", path.display()))?
-    {
-        let entry =
-            entry.wrap_err_with(|| format!("failed to iterate directory `{}`", path.display()))?;
-        let child_path = entry.path();
-        let file_name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| eyre!("bundle entry `{}` is not valid UTF-8", child_path.display()))?;
-        entries.push((file_name, child_path));
-    }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
-    for (file_name, child_path) in entries {
-        let mut child_relative = if relative.as_os_str().is_empty() {
-            PathBuf::new()
-        } else {
-            relative.to_path_buf()
-        };
-        child_relative.push(file_name);
-        hash_path_entry(&child_path, &child_relative, hasher)?;
-    }
-    let final_metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to re-inspect directory `{}`", path.display()))?;
-    if !final_metadata.is_dir() || policy_metadata_is_symlink_or_reparse(&final_metadata) {
-        return Err(eyre!(
-            "bundle directory `{}` changed to an indirect or non-directory entry while hashing",
-            path.display()
-        ));
-    }
-    ensure_same_policy_input_state(
-        &initial_metadata,
-        &final_metadata,
-        path,
-        "bundle directory",
-        "while it was being hashed",
-    )?;
-    Ok(())
-}
-fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
-    if metadata.is_file() {
-        hash_file_entry(path, relative, hasher)
-    } else if metadata.is_dir() {
-        hash_directory_entry(path, relative, hasher)
-    } else {
-        Err(eyre!(
-            "unsupported entry type at `{}` (expected file or directory)",
-            path.display()
-        ))
-    }
-}
-fn update_path_marker(relative: &Path, kind: u8, hasher: &mut Hasher) -> Result<()> {
-    let label = canonical_bundle_relative_path(relative)?;
-    let label_len = u64::try_from(label.len())
-        .map_err(|_| eyre!("bundle path is too long to hash canonically"))?;
-    hasher.update(&[kind]);
-    hasher.update(&label_len.to_le_bytes());
-    hasher.update(label.as_bytes());
-    Ok(())
-}
-fn canonical_bundle_relative_path(relative: &Path) -> Result<String> {
-    if relative.as_os_str().is_empty() {
-        return Ok(".".to_string());
-    }
-    let mut label = String::new();
-    for component in relative.components() {
-        let std::path::Component::Normal(component) = component else {
-            return Err(eyre!(
-                "bundle path `{}` is not a canonical relative path",
-                relative.display()
-            ));
-        };
-        let component = component
-            .to_str()
-            .ok_or_else(|| eyre!("bundle path `{}` is not valid UTF-8", relative.display()))?;
-        if !label.is_empty() {
-            label.push('/');
-        }
-        label.push_str(component);
-    }
-    Ok(label)
 }
 fn normalize_labels(values: &[String], field: &str) -> Result<Vec<String>> {
     let mut out = Vec::with_capacity(values.len());
@@ -3377,107 +3056,6 @@ mod tests {
         );
     }
     #[test]
-    fn policy_artifact_digest_is_independent_of_file_name() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let first = tmp.path().join("gar.jws");
-        let second = tmp.path().join("renamed-gar.jws");
-        let payload = b"signed-gar-payload";
-        fs::write(&first, payload).expect("write first payload");
-        fs::write(&second, payload).expect("write renamed payload");
-        let expected = *blake3::hash(payload).as_bytes();
-        assert_eq!(compute_file_digest(&first).expect("first digest"), expected);
-        assert_eq!(
-            compute_file_digest(&second).expect("second digest"),
-            expected
-        );
-    }
-    #[test]
-    fn streamed_hash_rejects_same_length_file_mutation() {
-        const ORIGINAL: &[u8] = b"signed-gar-data";
-        const REPLACEMENT: &[u8] = b"SIGNED-GAR-DATA";
-        assert_eq!(ORIGINAL.len(), REPLACEMENT.len());
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("gar.jws");
-        fs::write(&path, ORIGINAL).expect("write GAR");
-        let mut file = open_policy_input(&path, "policy input").expect("open GAR");
-        let mut hasher = Hasher::new();
-
-        let error = hash_file_contents_with_hook(&mut file, &path, &mut hasher, || {
-            std::thread::sleep(Duration::from_millis(20));
-            let mut replacement = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&path)
-                .wrap_err("open replacement GAR")?;
-            replacement.write_all(REPLACEMENT).wrap_err("replace GAR")?;
-            replacement.sync_all().wrap_err("sync replacement GAR")?;
-            Ok(())
-        })
-        .expect_err("same-length mutation during hashing must fail closed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("changed while it was being hashed")
-        );
-    }
-    #[test]
-    fn bundle_digest_length_frames_file_contents() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let forged = tmp.path().join("forged");
-        let structured = tmp.path().join("structured");
-        fs::create_dir_all(&forged).expect("create forged bundle");
-        fs::create_dir_all(&structured).expect("create structured bundle");
-        let mut forged_contents = b"b".to_vec();
-        forged_contents.extend_from_slice(b"c");
-        forged_contents.extend_from_slice(&[0xFF, b'F']);
-        forged_contents.extend_from_slice(b"d");
-        fs::write(forged.join("a"), forged_contents).expect("write forged entry");
-        fs::write(structured.join("a"), b"b").expect("write structured first entry");
-        fs::write(structured.join("c"), b"d").expect("write structured second entry");
-
-        assert_ne!(
-            compute_bundle_digest(&forged).expect("forged digest"),
-            compute_bundle_digest(&structured).expect("structured digest"),
-            "file length framing must distinguish bytes that imitate a second entry"
-        );
-    }
-    #[test]
-    fn bundle_digest_matches_canonical_v1_test_vector() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let bundle = tmp.path().join("bundle");
-        fs::create_dir_all(bundle.join("nested")).expect("create nested bundle");
-        fs::write(bundle.join("nested/beta"), b"BC").expect("write nested entry");
-        fs::write(bundle.join("alpha"), b"A").expect("write root entry");
-
-        assert_eq!(
-            hex::encode(compute_bundle_digest(&bundle).expect("bundle digest")),
-            "32b42aff6303e492d041c7620f8b98f3dc1ee1f613de002a35c51b428d940846"
-        );
-    }
-    #[test]
-    fn bundle_hash_rejects_directory_membership_change() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let bundle = tmp.path().join("bundle");
-        fs::create_dir(&bundle).expect("create bundle");
-        fs::write(bundle.join("original"), b"entry").expect("write original entry");
-        let mut hasher = Hasher::new();
-
-        let error = hash_directory_entry_with_hook(&bundle, Path::new(""), &mut hasher, || {
-            std::thread::sleep(Duration::from_millis(20));
-            fs::write(bundle.join("added"), b"late entry")
-                .wrap_err("add bundle member during traversal")?;
-            Ok(())
-        })
-        .expect_err("bundle membership changes must fail closed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("changed while it was being hashed")
-        );
-    }
-    #[test]
     fn rpt_outputs_must_not_alias_or_nest_inside_inputs() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let bundle = tmp.path().join("bundle");
@@ -3957,7 +3535,7 @@ mod tests {
         let receipt_path = tmp.path().join("oversized-cek.to");
         File::create(&receipt_path)
             .expect("create oversized receipt")
-            .set_len(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1)
+            .set_len(taikai_bundle::MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1)
             .expect("size oversized receipt");
         let event = TaikaiEventId::new(Name::from_str("expected-event").expect("event"));
         let stream = TaikaiStreamId::new(Name::from_str("stream").expect("stream"));
@@ -3966,97 +3544,6 @@ mod tests {
             .expect_err("oversized CEK receipt must fail before decoding");
 
         assert!(error.to_string().contains("policy document limit"));
-    }
-    #[test]
-    fn policy_reader_rejects_document_truncated_after_size_check() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("changing.to");
-        fs::write(&path, b"policy-document").expect("write policy document");
-        let mut file = open_policy_input(&path, "test policy document").expect("open document");
-
-        let error =
-            read_policy_document_with_hook(&mut file, &path, "test policy document", || {
-                OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .open(&path)
-                    .wrap_err("truncate policy document")?;
-                Ok(())
-            })
-            .expect_err("a document truncated after its size check must fail closed");
-
-        assert!(error.to_string().contains("changed length"));
-    }
-    #[test]
-    fn policy_reader_rejects_same_length_document_mutation() {
-        const ORIGINAL: &[u8] = b"policy-document";
-        const REPLACEMENT: &[u8] = b"POLICY-DOCUMENT";
-        assert_eq!(ORIGINAL.len(), REPLACEMENT.len());
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("changing.to");
-        fs::write(&path, ORIGINAL).expect("write policy document");
-        let mut file = open_policy_input(&path, "test policy document").expect("open document");
-
-        let error =
-            read_policy_document_with_hook(&mut file, &path, "test policy document", || {
-                std::thread::sleep(Duration::from_millis(20));
-                let mut replacement = OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .open(&path)
-                    .wrap_err("open replacement policy document")?;
-                replacement
-                    .write_all(REPLACEMENT)
-                    .wrap_err("replace policy document")?;
-                replacement
-                    .sync_all()
-                    .wrap_err("sync replacement policy document")?;
-                Ok(())
-            })
-            .expect_err("same-length in-place mutation must fail closed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("changed while it was being read")
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn policy_open_rejects_regular_to_fifo_swap_without_blocking() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("changing.to");
-        fs::write(&path, b"policy-document").expect("write policy document");
-        let writer_path = path.clone();
-        let unblocker = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(1));
-            let mut options = OpenOptions::new();
-            options.write(true);
-            set_policy_no_follow(&mut options);
-            let _ = options.open(writer_path);
-        });
-
-        let started = std::time::Instant::now();
-        let error = open_policy_input_with_hook(&path, "test policy document", || {
-            fs::remove_file(&path).wrap_err("remove original policy document")?;
-            let status = std::process::Command::new("mkfifo")
-                .arg(&path)
-                .status()
-                .wrap_err("run mkfifo")?;
-            if !status.success() {
-                return Err(eyre!("mkfifo failed with {status}"));
-            }
-            Ok(())
-        })
-        .expect_err("a FIFO substituted during open must fail closed");
-        let elapsed = started.elapsed();
-        unblocker.join().expect("join FIFO unblocker");
-
-        assert!(error.to_string().contains("non-regular file"));
-        assert!(
-            elapsed < Duration::from_millis(900),
-            "FIFO substitution blocked for {elapsed:?}"
-        );
     }
     #[test]
     fn storage_ticket_derivation_length_prefixes_names() {

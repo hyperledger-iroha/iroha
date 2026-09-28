@@ -93,6 +93,9 @@ use network::{NetworkCommandArgs, run_network};
 #[path = "command_deploy.rs"]
 mod deploy;
 use deploy::{DeployArgs, ViewArgs, run_deploy, run_view};
+#[path = "command_call.rs"]
+mod call;
+use call::{CallArgs, run_call};
 #[path = "command_wallet.rs"]
 mod wallet;
 use wallet::{WalletArgs, run_wallet};
@@ -146,6 +149,8 @@ enum Command {
     Wallet(WalletArgs),
     /// Build and deploy one contract through a recoverable native transaction plan.
     Deploy(DeployArgs),
+    /// Invoke a mutable contract entrypoint with exact local signing and recoverable finality.
+    Call(CallArgs),
     /// Query a deployed contract view using the selected package network binding.
     View(ViewArgs),
     /// Configure a named deployment network using a native client configuration.
@@ -198,6 +203,7 @@ impl Command {
         match self {
             Self::Wallet(_) => "wallet",
             Self::Deploy(_) => "deploy",
+            Self::Call(_) => "call",
             Self::View(_) => "view",
             Self::Network(_) => "network",
             Self::New(_) => "new",
@@ -705,6 +711,7 @@ fn dispatch(
     match command {
         Command::Wallet(args) => run_wallet(manifest_path, args, progress),
         Command::Deploy(args) => run_deploy(manifest_path, args, progress),
+        Command::Call(args) => run_call(manifest_path, args, progress),
         Command::View(args) => run_view(manifest_path, args),
         Command::Network(args) => run_network(manifest_path, args),
         Command::New(args) => run_new(args),

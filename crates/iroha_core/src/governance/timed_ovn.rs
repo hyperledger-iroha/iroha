@@ -2030,31 +2030,6 @@ impl TimedOvnLifecycleStateV1 {
         Ok(())
     }
 
-    /// Rebuild the canonical roster and return its ordered participant hashes.
-    ///
-    /// Registration-open state may still be empty. Every nonempty corpus is
-    /// fully reparsed and proof-validated before hashes are returned.
-    ///
-    /// # Errors
-    /// Returns [`TimedOvnEvidenceError`] for malformed, reordered, duplicate,
-    /// oversized, or cross-session registration evidence.
-    pub fn validated_registration_participant_hashes(
-        &self,
-        tle_key_session: &ValidatedTleKeySessionV1,
-    ) -> Result<Vec<[u8; 32]>, TimedOvnEvidenceError> {
-        self.validate(tle_key_session)?;
-        if self.registration_records().is_empty() {
-            return Ok(Vec::new());
-        }
-        let (_, roster) =
-            rebuild_roster(self.session(), self.registration_records(), tle_key_session)?;
-        Ok(roster
-            .registrations()
-            .iter()
-            .map(|record| *record.participant_hash())
-            .collect())
-    }
-
     /// Borrow the exact canonical registration corpus in every phase.
     #[must_use]
     pub fn registration_records(&self) -> &[Vec<u8>] {

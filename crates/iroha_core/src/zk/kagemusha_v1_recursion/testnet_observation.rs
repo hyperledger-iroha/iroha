@@ -413,6 +413,7 @@ impl KagemushaTestnetValueAdmissionV1 {
     }
 }
 
+#[cfg(test)]
 /// Process-local, non-spendable testnet intake of one verified Applied top-up and MintFold.
 ///
 /// The only public intake requires an opaque result produced by the release-bound native proof
@@ -425,6 +426,7 @@ pub struct KagemushaTestnetExperimentalMintTrialV1 {
     credit_owners: BTreeMap<DigestV1, DigestV1>,
 }
 
+#[cfg(test)]
 /// Opaque record of one verified testnet mint trial, without monetary or hardware authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaTestnetExperimentalMintAdmissionV1 {
@@ -436,6 +438,7 @@ pub struct KagemushaTestnetExperimentalMintAdmissionV1 {
     successor_state_commitment: DigestV1,
 }
 
+#[cfg(test)]
 impl KagemushaTestnetExperimentalMintAdmissionV1 {
     /// Return the exact signed-release testnet scope observed for this trial.
     #[must_use]
@@ -480,6 +483,7 @@ impl KagemushaTestnetExperimentalMintAdmissionV1 {
     }
 }
 
+#[cfg(test)]
 impl KagemushaTestnetExperimentalMintTrialV1 {
     /// Start an empty, process-local trial for one pinned testnet release, asset, and reserve.
     #[must_use]
@@ -491,6 +495,7 @@ impl KagemushaTestnetExperimentalMintTrialV1 {
         }
     }
 
+    #[cfg(test)]
     /// Intake only a completed Applied top-up paired with its verified MintFold proof.
     ///
     /// An exact retry returns the same record. Reusing an operation with changed evidence,
@@ -1478,6 +1483,7 @@ impl KagemushaTestnetLineageTrialV1 {
         self.scope
     }
 
+    #[cfg(test)]
     /// Return the last proven State commitment, if any.
     #[must_use]
     pub fn head_commitment(&self) -> Option<DigestV1> {

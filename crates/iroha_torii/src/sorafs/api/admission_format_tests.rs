@@ -8,7 +8,7 @@ fn formats_admission_error_reasons() {
     assert_eq!(
         admission_error_reason(&AdvertError::AdmissionFailed {
             provider_id,
-            error: crate::sorafs::AdmissionCheckError::NetworkMismatch {
+            error: crate::sorafs::ProviderAdmissionAdvertError::NetworkMismatch {
                 expected: [0xA1; 32],
                 provided: [0xB2; 32],
             },

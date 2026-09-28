@@ -80,8 +80,6 @@ fn canonical_output_contract_has_one_details_owner_and_header_without_result_roo
     );
 }
 
-const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
-    "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
 const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
 const GOVERNANCE_EXACT_TOKEN_PATTERN: &str = r"^[^\s\u0000-\u001F\u007F-\u009F]+$";
 const GOVERNANCE_SELECTOR_V1_PATTERN: &str =
@@ -97,28 +95,6 @@ const GOVERNANCE_U64_DECIMAL_PATTERN: &str = concat!(
     "18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|",
     "1844674407370955161[0-4]|18446744073709551615)$"
 );
-const KAGEMUSHA_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
-    "idempotency_key_invalid",
-    "idempotency_key_missing",
-    "operation_id_invalid",
-    "kagemusha_asset_not_found",
-    "kagemusha_asset_scale_invalid",
-    "kagemusha_asset_scale_mismatch",
-    "kagemusha_authorization_invalid",
-    "kagemusha_hardware_authorization_invalid",
-    "kagemusha_wrong_network",
-];
-const KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
-    "kagemusha_top_up_invalid",
-    "kagemusha_confidential_state_unavailable",
-    "kagemusha_topup_shield_verifier_unavailable",
-    "kagemusha_topup_shield_verifier_mismatch",
-    "kagemusha_confidential_state_invalid",
-    "kagemusha_topup_tree_full",
-    "kagemusha_topup_state_conflict",
-    "kagemusha_topup_snapshot_stale",
-];
-const KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES: &[&str] = &["kagemusha_redeem_invalid"];
 const TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES: &[&str] = &[
     "transaction_rejected",
     "PRTRY:NTS_UNHEALTHY",
@@ -176,40 +152,6 @@ const KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
     "PRTRY:QUEUE_LATENCY",
     "PRTRY:QUEUE_RATE",
 ];
-const KAGEMUSHA_COMMAND_UNAVAILABLE_REJECT_CODES: &[&str] = &[
-    "kagemusha_service_unavailable",
-    "kagemusha_not_ready",
-    "kagemusha_command_authority_not_ready",
-    "kagemusha_command_fee_asset_not_ready",
-    "kagemusha_command_authority_unfunded",
-    "kagemusha_command_body_admission_saturated",
-    "kagemusha_command_memory_admission_saturated",
-    "kagemusha_command_admission_configuration_invalid",
-    "kagemusha_operation_capacity_exhausted",
-    "kagemusha_operation_admission_inconsistent",
-    "kagemusha_operation_pending_unavailable",
-    "kagemusha_operation_history_unavailable",
-    "kagemusha_operation_evidence_inconsistent",
-    "kagemusha_recursive_release_invalid",
-    "kagemusha_recursive_release_outside_issuance_window",
-];
-const KAGEMUSHA_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
-    "kagemusha_service_unavailable",
-    "kagemusha_operation_pending_unavailable",
-    "kagemusha_operation_history_unavailable",
-    "kagemusha_operation_evidence_inconsistent",
-    "kagemusha_topup_finality_proof_unavailable",
-];
-fn kagemusha_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
-    let mut codes = KAGEMUSHA_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
-    match operation_id {
-        "kagemushaTopUp" => codes.extend_from_slice(KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES),
-        "kagemushaRedeem" => codes.extend_from_slice(KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES),
-        _ => panic!("unexpected KAGEMUSHA command operation id"),
-    }
-    codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
-    codes
-}
 fn transaction_submission_bad_request_reject_codes() -> Vec<&'static str> {
     let mut codes = vec!["invalid_transaction_payload"];
     codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
@@ -699,48 +641,6 @@ fn property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("{owner}.{property} schema reference"))
 }
-fn property_integer_bounds(schemas: &Map, owner: &str, property: &str) -> (u64, u64) {
-    let schema = component_properties(schemas, owner)
-        .get(property)
-        .and_then(Value::as_object)
-        .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
-    assert_eq!(
-        schema.get("type").and_then(Value::as_str),
-        Some("integer"),
-        "{owner}.{property} must be an integer"
-    );
-    (
-        schema
-            .get("minimum")
-            .and_then(Value::as_u64)
-            .unwrap_or_else(|| panic!("{owner}.{property} minimum")),
-        schema
-            .get("maximum")
-            .and_then(Value::as_u64)
-            .unwrap_or_else(|| panic!("{owner}.{property} maximum")),
-    )
-}
-fn property_array_bounds(schemas: &Map, owner: &str, property: &str) -> (u64, u64) {
-    let schema = component_properties(schemas, owner)
-        .get(property)
-        .and_then(Value::as_object)
-        .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
-    assert_eq!(
-        schema.get("type").and_then(Value::as_str),
-        Some("array"),
-        "{owner}.{property} must be an array"
-    );
-    (
-        schema
-            .get("minItems")
-            .and_then(Value::as_u64)
-            .unwrap_or_else(|| panic!("{owner}.{property} minItems")),
-        schema
-            .get("maxItems")
-            .and_then(Value::as_u64)
-            .unwrap_or_else(|| panic!("{owner}.{property} maxItems")),
-    )
-}
 fn nullable_property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
     let schema = component_properties(schemas, owner)
         .get(property)
@@ -796,33 +696,6 @@ fn collect_component_refs(value: &Value, refs: &mut BTreeSet<String>) {
         }
         _ => {}
     }
-}
-fn reachable_component_graph(schemas: &Map, roots: &[&str]) -> BTreeSet<String> {
-    let mut pending = roots
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect::<VecDeque<_>>();
-    let mut reachable = BTreeSet::new();
-    while let Some(name) = pending.pop_front() {
-        if !reachable.insert(name.clone()) {
-            continue;
-        }
-        let schema = schemas
-            .get(&name)
-            .unwrap_or_else(|| panic!("component reference does not resolve: {name}"));
-        let mut refs = BTreeSet::new();
-        collect_component_refs(schema, &mut refs);
-        for referenced in refs {
-            assert!(
-                schemas.contains_key(&referenced),
-                "component {name} references missing component {referenced}"
-            );
-            if !reachable.contains(&referenced) {
-                pending.push_back(referenced);
-            }
-        }
-    }
-    reachable
 }
 #[test]
 fn openapi_authorities_have_only_resolvable_component_refs() {

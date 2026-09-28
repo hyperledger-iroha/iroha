@@ -204,18 +204,6 @@ impl CircuitRegistry {
         };
         guard.entries.len()
     }
-    /// Returns the number of active constant-rate circuits.
-    #[must_use]
-    pub fn constant_rate_active_len(&self) -> u64 {
-        let guard = match self.inner.read() {
-            Ok(guard) => guard,
-            Err(error) => {
-                self.mark_unavailable();
-                error.into_inner()
-            }
-        };
-        guard.constant_rate_active
-    }
     /// Returns the list of active constant-rate neighbors sorted deterministically.
     #[must_use]
     pub fn constant_rate_neighbors(&self) -> Vec<SocketAddr> {

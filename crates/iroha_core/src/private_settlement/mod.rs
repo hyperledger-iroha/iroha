@@ -29,30 +29,30 @@ pub mod sidecar_store;
 /// Validator-derived pool transitions and durable verified-leg tokens.
 pub(crate) mod state;
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use audit::seal_private_settlement_audit_capsule_v1_with_rng;
 pub use audit::{
     PrivateSettlementAuditCryptoErrorV1, open_private_settlement_audit_capsule_v1,
-    private_settlement_audit_plaintext_commitment_v1, seal_private_settlement_audit_capsule_v1,
-    seal_private_settlement_audit_capsule_v1_with_rng,
+    private_settlement_audit_plaintext_commitment_v1,
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use auditor::approve_private_settlement_leg_v1;
 pub use auditor::{
     PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
     PrivateSettlementAuditorApprovalErrorV1, PrivateSettlementAuditorCredentialErrorV1,
     PrivateSettlementAuditorCredentialProviderV1, SoftwarePrivateSettlementAuditorCredentialsV1,
-    SoftwarePrivateSettlementAuditorKeyringCredentialsV1, approve_private_settlement_leg_v1,
+    SoftwarePrivateSettlementAuditorKeyringCredentialsV1,
     approve_private_settlement_leg_with_provider_v1,
 };
+#[cfg(test)]
+pub use availability::aggregate_private_settlement_availability_shares_v1;
 pub use availability::{
     PrivateSettlementAvailabilityErrorV1, PrivateSettlementAvailabilitySignerV1,
-    aggregate_private_settlement_availability_shares_v1,
     verify_private_settlement_audit_approval_acknowledgement_attestation_v1,
     verify_private_settlement_auditor_view_attestation_v1,
     verify_private_settlement_availability_share_v1,
 };
-pub use phase::{
-    PrivateSettlementPhaseErrorV1, PrivateSettlementPhaseSignerV1,
-    aggregate_private_settlement_phase_votes, build_private_settlement_prepare_barrier,
-    verify_private_settlement_phase_certificate,
-};
+pub use phase::{PrivateSettlementPhaseErrorV1, PrivateSettlementPhaseSignerV1};
 pub use protocol::{
     PrivateSettlementCommitteeAuthorityErrorV1, validate_private_settlement_committee_authority_v1,
 };
@@ -62,16 +62,15 @@ pub use sidecar_store::{
     PRIVATE_SETTLEMENT_SIDECAR_DEFAULT_MAX_TOTAL_BYTES_V1,
     PRIVATE_SETTLEMENT_SIDECAR_HARD_MAX_RECORDS_V1,
     PRIVATE_SETTLEMENT_SIDECAR_HARD_MAX_TOTAL_BYTES_V1,
-    PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1,
-    PRIVATE_SETTLEMENT_SIDECAR_STORE_PROFILE_DESCRIPTOR_V1,
-    PrivateSettlementAuditCollectionOutcomeV1, PrivateSettlementAuditorSidecarViewV1,
-    PrivateSettlementAuthenticatedAuditorViewV1, PrivateSettlementCommitteeSidecarViewV1,
-    PrivateSettlementFileSidecarStoreV1, PrivateSettlementPublicBundleStatusV1,
-    PrivateSettlementPublicSidecarStatusV1, PrivateSettlementReconciliationCandidateV1,
-    PrivateSettlementReconciliationOutcomeV1, PrivateSettlementReconciliationPageV1,
-    PrivateSettlementRestrictedSidecarV1, PrivateSettlementSidecarLifecycleV1,
-    PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1,
-    PrivateSettlementSidecarStoreOutcomeV1, PrivateSettlementSponsorPhaseCertificatesV1,
+    PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1, PrivateSettlementAuditCollectionOutcomeV1,
+    PrivateSettlementAuditorSidecarViewV1, PrivateSettlementAuthenticatedAuditorViewV1,
+    PrivateSettlementCommitteeSidecarViewV1, PrivateSettlementFileSidecarStoreV1,
+    PrivateSettlementPublicBundleStatusV1, PrivateSettlementPublicSidecarStatusV1,
+    PrivateSettlementReconciliationCandidateV1, PrivateSettlementReconciliationOutcomeV1,
+    PrivateSettlementReconciliationPageV1, PrivateSettlementRestrictedSidecarV1,
+    PrivateSettlementSidecarLifecycleV1, PrivateSettlementSidecarStoreConfigV1,
+    PrivateSettlementSidecarStoreErrorV1, PrivateSettlementSidecarStoreOutcomeV1,
+    PrivateSettlementSponsorPhaseCertificatesV1,
 };
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
 pub use sidecar_store::{

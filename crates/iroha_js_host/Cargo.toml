@@ -25,10 +25,8 @@ iroha_crypto = { workspace = true, features = ["node-crypto", "sm", "gost", "pqc
 iroha_core = { workspace = true, features = ["node"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model", "transparent_api", "gost", "sm", "bls"], default-features = false }
 iroha_primitives = { workspace = true }
-iroha_schema = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
-iroha_zkp_halo2 = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 base64 = { workspace = true }
 hex = { workspace = true }
@@ -37,16 +35,13 @@ zeroize = { workspace = true }
 sorafs_manifest = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 blake3 = { workspace = true }
-sorafs_chunker = { workspace = true }
 sorafs_orchestrator = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 iroha = { workspace = true }
 iroha_storage_client = { workspace = true }
 kotodama_lang = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk" }
-zk_ace_prover = { path = "../zk_ace_prover" }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
-bs58 = "0.5.1"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
@@ -62,4 +57,5 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+sorafs_chunker = { workspace = true }
 tempfile = { workspace = true }

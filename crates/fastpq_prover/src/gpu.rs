@@ -1,7 +1,10 @@
 #![allow(clippy::elidable_lifetime_names, clippy::redundant_pub_crate)]
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use crate::metal;
-use crate::{backend::GpuBackend, fastpq_cuda, trace::PoseidonColumnBatch};
+#[cfg(test)]
+use crate::trace::PoseidonColumnBatch;
+use crate::{backend::GpuBackend, fastpq_cuda};
+#[cfg(test)]
 use fastpq_isi::poseidon::STATE_WIDTH;
 use std::fmt;
 /// GPU execution failure.
@@ -203,6 +206,7 @@ impl LdeDispatch {
     }
 }
 /// Execute an in-place FFT across the provided columns.
+#[cfg(any(test, feature = "bench"))]
 pub fn fft_columns(
     columns: &mut [Vec<u64>],
     log_size: u32,
@@ -261,6 +265,7 @@ pub fn ifft_columns_async<'a>(
     }
 }
 /// Evaluate the low-degree extension columns on the GPU backend.
+#[cfg(any(test, feature = "bench"))]
 pub fn lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
@@ -475,6 +480,11 @@ fn restore(columns: &mut [Vec<u64>], buffer: &[u64], extent: usize) {
         column.copy_from_slice(chunk);
     }
 }
+/// Hash a flattened Poseidon column batch on the selected backend.
+///
+/// Column batches are built only by parity tests; production trace hashing
+/// stays on the canonical CPU sponge.
+#[cfg(test)]
 pub fn poseidon_hash_columns(
     batch: &PoseidonColumnBatch,
     backend: GpuBackend,
@@ -489,6 +499,7 @@ pub fn poseidon_hash_columns(
         other => Err(GpuError::Unsupported(other)),
     }
 }
+#[cfg(test)]
 fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, GpuError> {
     if batch.is_empty() {
         return Ok(Vec::new());

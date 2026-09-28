@@ -468,7 +468,7 @@ mod supported {
     pub(crate) mod load_receipt {
         include!("output/load_receipt.rs");
     }
-    /// Retained originals and exact native transport publication.
+    /// Raw file identities for retained load outputs.
     pub(crate) mod canonical_inputs {
         include!("output/canonical_inputs.rs");
     }
@@ -485,81 +485,12 @@ mod unsupported {
     use std::{fs::File, path::Path};
     // TODO: implement retained parent handles and atomic no-replace publication on Windows/other targets.
     // No pathname reopen, overwrite, hard-link fallback or unsafe compatibility route is accepted.
-    /// Fail closed where retained no-follow and no-replace owners are unavailable.
+    /// Raw file identities carried by the fail-closed retained load outputs.
     pub(crate) mod canonical_inputs {
-        use super::*;
-        use iroha_core::kura::CanonicalKuraEvidenceComplete;
-        use iroha_data_model::{bridge::BridgeFinalityProof, query::CommittedTransaction};
-        use std::path::PathBuf;
-        pub(crate) struct OriginalInputBinding {
-            pub(crate) path: PathBuf,
-            pub(crate) raw_sha256: [u8; 32],
-            pub(crate) max_bytes: u64,
-        }
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub(crate) struct RawFileIdentity {
             pub(crate) raw_sha256: [u8; 32],
             pub(crate) byte_length: u64,
-        }
-        #[derive(Clone, Copy, Debug)]
-        pub(crate) struct CanonicalInputCaps {
-            pub(crate) finality_bytes: u64,
-            pub(crate) query_bytes: u64,
-            pub(crate) total_bytes: u64,
-        }
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub(crate) struct CanonicalInputsIdentity {
-            pub(crate) context: RawFileIdentity,
-            pub(crate) finality: RawFileIdentity,
-            pub(crate) queries: RawFileIdentity,
-        }
-        pub(crate) struct RetainedOriginalInput {
-            _unavailable: (),
-        }
-        pub(crate) struct CanonicalInputPair {
-            _unavailable: (),
-        }
-        pub(crate) struct PublishedCanonicalInputs {
-            _unavailable: (),
-        }
-        fn unsupported<T>() -> Result<T> {
-            Err(eyre!(
-                "retained canonical inputs are unsupported on this platform"
-            ))
-        }
-        impl RetainedOriginalInput {
-            pub(crate) fn open(_: OriginalInputBinding) -> Result<Self> {
-                unsupported()
-            }
-            pub(crate) fn with_bytes<T>(&self, _: impl FnOnce(&[u8]) -> Result<T>) -> Result<T> {
-                unsupported()
-            }
-            pub(crate) fn require_descriptor(&self, _: u32) -> Result<()> {
-                unsupported()
-            }
-            pub(crate) fn identity(&self) -> Result<RawFileIdentity> {
-                unsupported()
-            }
-        }
-        impl CanonicalInputPair {
-            pub(crate) fn admit(_: &Path, _: &Path, _: CanonicalInputCaps) -> Result<Self> {
-                unsupported()
-            }
-            pub(crate) fn publish(
-                self,
-                _: RetainedOriginalInput,
-                _: CanonicalKuraEvidenceComplete,
-                _: &Vec<BridgeFinalityProof>,
-                _: &Vec<CommittedTransaction>,
-                _: &impl Fn() -> Result<()>,
-            ) -> Result<PublishedCanonicalInputs> {
-                unsupported()
-            }
-        }
-        impl PublishedCanonicalInputs {
-            pub(crate) fn identity(&self) -> Result<CanonicalInputsIdentity> {
-                unsupported()
-            }
         }
     }
     pub(crate) struct JournalOutput;

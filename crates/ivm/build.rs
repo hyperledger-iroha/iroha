@@ -482,7 +482,12 @@ fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
             .to_string_lossy()
             .into_owned();
         let bundled = cuda_dir.join(format!("{stem}.ptx"));
-        println!("cargo:rerun-if-changed={}", bundled.display());
+        // A missing watched file keeps the script permanently stale (nvcc and
+        // the whole downstream graph would rerun every build); the directory
+        // watch above already notices a PTX file being added.
+        if bundled.is_file() {
+            println!("cargo:rerun-if-changed={}", bundled.display());
+        }
         artifacts.push((path, bundled, out_dir.join(format!("{stem}.ptx")), stem));
     }
     if mode != CudaPtxMode::Generate {

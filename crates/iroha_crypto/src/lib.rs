@@ -1,5 +1,4 @@
 //! This module contains structures and implementations related to the cryptographic parts of the Iroha.
-#![allow(unexpected_cfgs)]
 mod algorithm;
 #[cfg(feature = "bls")]
 mod bls_decode_cache;
@@ -145,7 +144,6 @@ pub use hybrid::{
     HybridPublicKey, HybridSecretKey, HybridSuite, decapsulate as hybrid_decapsulate,
     encapsulate as hybrid_encapsulate,
 };
-use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
@@ -354,17 +352,14 @@ impl<K> fmt::Debug for KeyGenOption<K> {
         }
     }
 }
-ffi::ffi_item! {
-    /// Pair of Public and Private keys.
-    #[derive(Clone, PartialEq, Eq, Getters)]
-    #[derive(Debug)]
-    #[getset(get = "pub")]
-    pub struct KeyPair {
-        /// Public key.
-        public_key: PublicKey,
-        /// Private key.
-        private_key: PrivateKey,
-    }
+/// Pair of Public and Private keys.
+#[derive(Clone, PartialEq, Eq, Getters, Debug)]
+#[getset(get = "pub")]
+pub struct KeyPair {
+    /// Public key.
+    public_key: PublicKey,
+    /// Private key.
+    private_key: PrivateKey,
 }
 #[cfg(feature = "rand")]
 impl KeyPair {
@@ -449,7 +444,6 @@ impl KeyPair {
             .expect("random key generation should succeed for supported algorithms")
     }
 }
-#[ffi_impl_opaque]
 impl KeyPair {
     /// Fallibly derive a key pair from seed material.
     ///
@@ -2113,40 +2107,35 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PublicKeyCompact {
         ))
     }
 }
-ffi::ffi_item! {
-    /// Public key used in signatures.
-    ///
-    /// Its serialized form (via serde `Serialize`/`Deserialize`, plus [`Display`] and [`FromStr`]) is
-    /// represented as a [multihash](https://www.multiformats.io/multihash/) string.
-    /// [`FromStr`] also accepts an algorithm-prefixed form like
-    /// `"ed25519:<multihash-hex>"` for clarity in JSON. [`Display`] returns
-    /// the bare multihash hex. Multihash hex is canonical: varint bytes are
-    /// lowercase hex and payload bytes are uppercase hex; parsing rejects
-    /// non-canonical casing and `0x` prefixes.
-    /// For example:
-    ///
-    /// ```
-    /// use iroha_crypto::{PublicKey, Algorithm};
-    ///
-    /// let key = PublicKey::from_hex(
-    ///     Algorithm::Ed25519,
-    ///     "1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-    /// )
-    /// .unwrap();
-    ///
-    /// assert_eq!(
-    ///     format!("{key}"),
-    ///     "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
-    /// );
-    /// ```
-    #[derive(Clone, PartialEq, Eq, TypeId)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_crypto::PublicKey")]
-    #[repr(transparent)]
-    #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
-    pub struct PublicKey(PublicKeyCompact);
-}
-#[ffi_impl_opaque]
+/// Public key used in signatures.
+///
+/// Its serialized form (via serde `Serialize`/`Deserialize`, plus [`Display`] and [`FromStr`]) is
+/// represented as a [multihash](https://www.multiformats.io/multihash/) string.
+/// [`FromStr`] also accepts an algorithm-prefixed form like
+/// `"ed25519:<multihash-hex>"` for clarity in JSON. [`Display`] returns
+/// the bare multihash hex. Multihash hex is canonical: varint bytes are
+/// lowercase hex and payload bytes are uppercase hex; parsing rejects
+/// non-canonical casing and `0x` prefixes.
+/// For example:
+///
+/// ```
+/// use iroha_crypto::{PublicKey, Algorithm};
+///
+/// let key = PublicKey::from_hex(
+///     Algorithm::Ed25519,
+///     "1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+/// )
+/// .unwrap();
+///
+/// assert_eq!(
+///     format!("{key}"),
+///     "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+/// );
+/// ```
+#[derive(Clone, PartialEq, Eq, TypeId, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::PublicKey")]
+#[repr(transparent)]
+pub struct PublicKey(PublicKeyCompact);
 impl PublicKey {
     fn new(inner: PublicKeyFull) -> Self {
         Self(inner.into())
@@ -2848,13 +2837,10 @@ enum PrivateKeyInner {
     #[cfg(feature = "bls")]
     BlsSmall(bls::BlsSmallPrivateKey),
 }
-ffi::ffi_item! {
-    /// Private Key used in signatures.
-    #[derive(Clone)]
-    #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
-    #[allow(variant_size_differences)]
-    pub struct PrivateKey(Box<Secret<PrivateKeyInner>>);
-}
+/// Private Key used in signatures.
+#[derive(Clone)]
+#[allow(variant_size_differences)]
+pub struct PrivateKey(Box<Secret<PrivateKeyInner>>);
 #[allow(unsafe_code)]
 unsafe impl Send for PrivateKey {}
 #[allow(unsafe_code)]
@@ -3373,13 +3359,6 @@ pub mod error {
     #[display("{_0}")]
     pub struct ParseError(pub(crate) String);
     impl std::error::Error for ParseError {}
-    #[cfg(feature = "ffi_export")]
-    impl iroha_ffi::IntoFfiReturn for ParseError {
-        fn into_ffi_return(self) -> iroha_ffi::FfiReturn {
-            let _ = self;
-            iroha_ffi::FfiReturn::ExecutionFail
-        }
-    }
     /// Error when dealing with cryptographic functions
     #[derive(Debug, Display, PartialEq, Eq)]
     pub enum Error {
@@ -3407,54 +3386,11 @@ pub mod error {
             Self::NoSuchAlgorithm(source.to_string())
         }
     }
-    #[cfg(feature = "ffi_export")]
-    impl iroha_ffi::IntoFfiReturn for Error {
-        fn into_ffi_return(self) -> iroha_ffi::FfiReturn {
-            let _ = self;
-            iroha_ffi::FfiReturn::ExecutionFail
-        }
-    }
     impl From<ParseError> for Error {
         fn from(source: ParseError) -> Self {
             Self::Parse(source)
         }
     }
     impl std::error::Error for Error {}
-}
-mod ffi {
-    //! Definitions and implementations of FFI related functionalities
-    #[cfg(feature = "ffi_export")]
-    use super::*;
-    macro_rules! ffi_item {
-        ($it: item $($attr: meta)?) => {
-            #[cfg(not(feature = "ffi_export"))]
-            $it
-            #[cfg(feature = "ffi_export")]
-            #[derive(iroha_ffi::FfiType)]
-            #[iroha_ffi::ffi_export]
-            $(#[$attr])?
-            $it
-        };
-    }
-    #[cfg(feature = "ffi_export")]
-    iroha_ffi::handles! {
-        PublicKey,
-        PrivateKey,
-        KeyPair,
-        Signature,
-    }
-    #[cfg(feature = "ffi_export")]
-    iroha_ffi::def_ffi_fns! { link_prefix="iroha_crypto"
-        Drop: { PublicKey, PrivateKey, KeyPair, Signature },
-        Clone: { PublicKey, PrivateKey, KeyPair, Signature },
-        Eq: { PublicKey, PrivateKey, KeyPair, Signature },
-        Ord: { PublicKey, Signature },
-    }
-    // NOTE: Makes sure that only one `dealloc` is exported per generated dynamic library
-    #[cfg(feature = "ffi_export")]
-    mod dylib {
-        iroha_ffi::def_ffi_fns! {dealloc}
-    }
-    pub(crate) use ffi_item;
 }
 include!("lib_tests.rs");

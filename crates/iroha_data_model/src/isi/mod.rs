@@ -2135,7 +2135,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum InstructionExecutionError {
             /// Instruction does not adhere to Iroha DSL specification
             Evaluate(#[source] InstructionEvaluationError),
@@ -2182,7 +2181,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AssetTransferAdmissionError {
             /// `HoldingLimitExceeded`: {0}
             HoldingLimitExceeded(Box<str>),
@@ -2215,7 +2213,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AccountAdmissionQuotaScope {
             /// Transaction-scoped quota.
             Transaction,
@@ -2240,7 +2237,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AccountAdmissionError {
             /// Implicit account creation is disabled.
             ImplicitAccountCreationDisabled,
@@ -2276,7 +2272,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionInvalidPolicy {
             /// Human-readable reason describing the invalid payload.
             pub reason: String,
@@ -2298,7 +2293,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionDefaultRoleError {
             /// Role that could not be assigned.
             pub role: crate::role::RoleId,
@@ -2322,7 +2316,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionQuotaExceeded {
             /// Scope of the quota that was exceeded.
             pub scope: AccountAdmissionQuotaScope,
@@ -2348,7 +2341,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionFeeUnsatisfied {
             /// Asset definition used to charge the fee.
             pub asset_definition: crate::asset::AssetDefinitionId,
@@ -2374,7 +2366,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionMinInitialAmountUnsatisfied {
             /// Asset definition subject to the minimum requirement.
             pub asset_definition: crate::asset::AssetDefinitionId,
@@ -2401,7 +2392,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum InstructionEvaluationError {
             /// Unsupported parameter type for instruction of type `{0}`
             Unsupported(InstructionType),
@@ -2425,7 +2415,6 @@ pub mod error {
             thiserror::Error,
         )]
         #[display("Expected {expected:?}, actual {actual:?}")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = "iroha_data_model::isi::error::model::Mismatch")]
         pub struct Mismatch<T>
@@ -2524,7 +2513,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum TypeError {
             /// Asset definition numeric spec mismatch (asset can't hold provided numeric value)
             AssetNumericSpec(#[source] Mismatch<NumericSpec>),
@@ -2548,7 +2536,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum MathError {
             /// Overflow error occurred inside instruction
             Overflow,
@@ -2585,7 +2572,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[repr(u8)]
         pub enum MintabilityError {
             /// This asset cannot be minted more than once and it was already minted
@@ -2613,7 +2599,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
         #[repr(u8)]
         pub enum InvalidParameterError {
             /// Invalid smart contract: {0}
@@ -2638,7 +2623,6 @@ pub mod error {
             crate :: DeriveJsonDeserialize,
             thiserror::Error,
         )]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct RepetitionError {
             /// Instruction type
             #[getset(get = "pub")]

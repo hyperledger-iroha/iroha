@@ -53,7 +53,7 @@ use iroha_torii::{
     SorafsNativeTransactionSignerProviderV1, SorafsNativeTransactionSignerQualificationV1,
     SorafsNativeTransactionSignerRoleV1, Torii, ToriiRuntimeDeps,
     sorafs::{
-        AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
+        AdmissionRegistry, AliasCachePolicyExt, ProviderAdmissionAdvertError,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             ReplayCheckpointError,
@@ -2631,13 +2631,30 @@ async fn sorafs_discovery_without_local_trust_starts_with_no_admitted_providers(
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     cfg.torii.sorafs_discovery.admission = None;
     let harness = build_torii_harness(&cfg);
-    let response = harness.app.clone().oneshot(Request::builder()
-        .uri("/v1/sorafs/providers").body(axum::body::Body::empty()).unwrap())
-        .await.expect("native discovery responds before any governed admission");
+    let response = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sorafs/providers")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("native discovery responds before any governed admission");
     assert_eq!(response.status(), StatusCode::OK);
-    let body = BodyExt::collect(response.into_body()).await.unwrap().to_bytes();
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
     let body: json::Value = norito::json::from_slice(&body).unwrap();
-    assert_eq!(body.get("providers").and_then(json::Value::as_array).unwrap().len(), 0);
+    assert_eq!(
+        body.get("providers")
+            .and_then(json::Value::as_array)
+            .unwrap()
+            .len(),
+        0
+    );
     harness.shutdown().await;
 }
 #[tokio::test]
@@ -3690,8 +3707,7 @@ async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor
 async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config());
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3825,8 +3841,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection
 async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config());
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3893,8 +3908,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
 async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config());
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3956,8 +3970,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
 async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config());
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -4014,8 +4027,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
 async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_projection() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config());
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -4087,8 +4099,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_project
 async fn sorafs_alias_listing_reports_successor_refusal() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config());
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -4187,8 +4198,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
 async fn sorafs_alias_listing_reports_governance_revocation() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config());
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;

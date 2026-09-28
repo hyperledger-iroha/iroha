@@ -16,32 +16,37 @@
         reason = "the production source ingress is intentionally uninhabited"
     )
 )]
-use super::super::super::super::super::super::{
-    ZkAmsMkheErrorV1, global_lookup_statement_v1::global_lookup_topology_digest_v1,
-};
-use super::super::super::{
-    PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1,
-};
-use super::{
-    AUTHENTICATION_TAG_BYTES_V1, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1, TOTAL_REPLAY_IO_BYTES_V1,
-    map_leaf_error_v1, validate_canonical_source_block_v1,
-};
+#[cfg(test)]
+use super::super::super::super::super::super::ZkAmsMkheErrorV1;
+#[cfg(test)]
+use super::super::super::super::super::super::global_lookup_statement_v1::global_lookup_topology_digest_v1;
+#[cfg(test)]
+use super::super::super::PHASE23_MAIN_BLOCK_BYTES_V1;
+use super::super::super::{PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_RECORD_COUNT_V1};
+use super::{AUTHENTICATION_TAG_BYTES_V1, TOTAL_REPLAY_IO_BYTES_V1};
+#[cfg(test)]
+use super::{GLOBAL_LOOKUP_TOPOLOGY_KAT_V1, map_leaf_error_v1, validate_canonical_source_block_v1};
+#[cfg(test)]
+use crate::vega::bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1;
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, SecretPoint},
     vega::{
         VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
         bulletproof_t256::{
-            SecretT256PointEncodingV1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
-            ZeroizingT256ScalarCopyV1, ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1,
-            zk_ams_t256_bulletproof_generator_basis_digest_v1,
+            SecretT256PointEncodingV1, ZeroizingT256ScalarCopyV1, ZeroizingT256ScalarVecV1,
+            ZkAmsT256BulletproofSuiteV1, zk_ams_t256_bulletproof_generator_basis_digest_v1,
         },
         sponge::Keccak256,
     },
 };
+#[cfg(test)]
 use iroha_crypto::confidential_spool::{
     ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
+#[cfg(test)]
 use std::path::PathBuf;
+#[cfg(test)]
 const SOURCE_OPENING_VERSION_V1: u8 = 1;
 const SOURCE_OPENING_GROUPS_PER_RECORD_V1: usize = 8;
 const SOURCE_OPENING_BLOCKS_PER_GROUP_V1: usize = 64;
@@ -62,22 +67,32 @@ const SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1: u64 =
 const SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1: u64 =
     TOTAL_REPLAY_IO_BYTES_V1 + SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1;
 const SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1: u64 = 0;
+#[cfg(test)]
 const SOURCE_OPENING_MAPPING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.mapping\0";
+#[cfg(test)]
 const SOURCE_OPENING_CONTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.context\0";
+#[cfg(test)]
 const SOURCE_OPENING_BLINDING_CONTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.blinding-spool-context\0";
+#[cfg(test)]
 const SOURCE_OPENING_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.commitments\0";
+#[cfg(test)]
 const SOURCE_OPENING_RECORD_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.record\0";
+#[cfg(test)]
 const SOURCE_OPENING_BLINDING_ORDER_V1: &[u8] =
     b"slot=commitment-ordinal=record*8+group;scalar=canonical-T256-big-endian";
+#[cfg(test)]
 const SOURCE_GROUP_ORDER_V1: &[u8] = b"record-major:43-records*8-groups";
+#[cfg(test)]
 const SOURCE_TO_PACKING_MAP_V1: &[u8] = b"group-local:b=0..64;i=0..256;j=256*b+i;k=64*i+b";
+#[cfg(test)]
 const SOURCE_SNAPSHOT_BINDING_RULE_V1: &[u8] =
     b"source-publication-receipt-transitively-binds-provider,snapshot-identity,main-snapshot-digest,nonce-snapshot-digest";
+#[cfg(test)]
 const SOURCE_OPENING_BASIS_V1: &[u8] = b"ZkAmsT256BulletproofSuiteV1:G_bold[0..16384)+h";
 const SOURCE_OPENING_MATERIALIZED_V1: bool = true;
 const SOURCE_SAME_OPENING_PROVED_V1: bool = false;
@@ -116,11 +131,13 @@ const _: () = {
     assert!(!RELEASE_READY_V1);
     assert!(!RELEASE_COMPLETE_V1);
 };
+#[cfg(test)]
 struct SourceOpeningGroupCoordinateV1 {
     ordinal: u16,
     record: u16,
     group: u8,
 }
+#[cfg(test)]
 fn source_opening_group_coordinate_v1(
     ordinal: usize,
 ) -> Result<SourceOpeningGroupCoordinateV1, ZkAmsMkheErrorV1> {
@@ -135,6 +152,7 @@ fn source_opening_group_coordinate_v1(
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
     })
 }
+#[cfg(test)]
 fn source_to_packing_coordinate_v1(source_j: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if source_j >= SOURCE_OPENING_SCALARS_PER_GROUP_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -143,6 +161,7 @@ fn source_to_packing_coordinate_v1(source_j: usize) -> Result<usize, ZkAmsMkheEr
     let coefficient = source_j % SOURCE_OPENING_SCALARS_PER_BLOCK_V1;
     Ok(SOURCE_OPENING_BLOCKS_PER_GROUP_V1 * coefficient + block)
 }
+#[cfg(test)]
 fn source_opening_mapping_digest_for_orders_v1(
     group_order: &[u16],
     source_order: &[u16],
@@ -216,6 +235,7 @@ fn source_opening_mapping_digest_for_orders_v1(
     }
     require_nonzero_opening_digest_v1(hash.finalize())
 }
+#[cfg(test)]
 fn exact_source_opening_mapping_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     // This digest depends only on this binary's fixed topology and canonical
     // coordinate orders. Cache the computed result, including failure, rather
@@ -231,11 +251,13 @@ fn exact_source_opening_mapping_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1
         source_opening_mapping_digest_for_orders_v1(&group_order, &source_order)
     })
 }
+#[cfg(test)]
 struct SourceOpeningContextAxesV1 {
     source_receipt_digest: [u8; 32],
     prerequisite_record_digest: [u8; 32],
     replay_spool_context_digest: [u8; 32],
 }
+#[cfg(test)]
 fn source_opening_context_digest_v1(
     axes: &SourceOpeningContextAxesV1,
     topology_digest: [u8; 32],
@@ -266,6 +288,7 @@ fn source_opening_context_digest_v1(
     }
     require_nonzero_opening_digest_v1(hash.finalize())
 }
+#[cfg(test)]
 fn source_opening_blinding_context_digest_v1(
     opening_context_digest: [u8; 32],
     mapping_digest: [u8; 32],
@@ -288,19 +311,23 @@ fn source_opening_blinding_context_digest_v1(
 }
 #[path = "source_openings_v1/commitment_session_v1.rs"]
 mod commitment_session_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use commitment_session_v1::PreparedPlaneOpeningTailV1;
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use commitment_session_v1::{
-    QMaskComplementOpeningsV1,QMaskSBlockAdmissionV1, CompleteQMaskSOpeningsV1, QMaskSOpeningStreamV1, QMaskSErrorV1, QMaskFirstBlockMemoryV1, SampledQMaskSBlockV1};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use commitment_session_v1::QMaskComplementOpeningsV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use commitment_session_v1::{QMaskSBlockAdmissionV1, CompleteQMaskSOpeningsV1, QMaskSOpeningStreamV1};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use commitment_session_v1::{QMaskSErrorV1, QMaskFirstBlockMemoryV1, SampledQMaskSBlockV1};
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::GlobalLookupProofSessionEntropySealV1;
+#[cfg(test)]
 #[allow(
     unused_imports,
     reason = "the source-only existing-radix owner awaits the live Phase-23 bridge"
 )]
-pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::{
-    RnsNativeExistingRadixCandidateAppendReceiptV1, RnsNativeExistingRadixCandidateAssemblyV1,
-    RnsNativeExistingRadixCandidateBlindingV1, RnsNativeExistingRadixCandidateOwnerV1,
-    RnsNativeExistingRadixCandidateRoleV1,
-};
+pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::{RnsNativeExistingRadixCandidateAppendReceiptV1, RnsNativeExistingRadixCandidateAssemblyV1, RnsNativeExistingRadixCandidateBlindingV1, RnsNativeExistingRadixCandidateOwnerV1, RnsNativeExistingRadixCandidateRoleV1};
+#[cfg(test)]
 struct SourceOpeningLiveV1<R> {
     proof_session: GlobalLookupProofSessionEntropySealV1<R>,
     group_scalars: ZeroizingT256ScalarVecV1,
@@ -318,9 +345,11 @@ struct SourceOpeningLiveV1<R> {
     next_block: u16,
     next_group: u16,
 }
+#[cfg(test)]
 pub(super) struct SourceOpeningAssemblyV1<R> {
     live: Option<SourceOpeningLiveV1<R>>,
 }
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1> SourceOpeningAssemblyV1<R> {
     pub(super) fn begin_v1(
         source_receipt_digest: [u8; 32],
@@ -569,6 +598,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> SourceOpeningAssemblyV1<R> {
         panic!("intentional source-opening assembly unwind");
     }
 }
+#[cfg(test)]
 fn append_canonical_block_scalars_v1(
     destination: &mut ZeroizingT256ScalarVecV1,
     bytes: &[u8],
@@ -589,6 +619,7 @@ fn append_canonical_block_scalars_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn source_opening_commitment_for_suite_v1<
     S,
 >(
@@ -626,6 +657,7 @@ where
     }
     Ok(commitment)
 }
+#[cfg(test)]
 struct SourceOpeningRecordV1 {
     source_receipt_digest: [u8; 32],
     prerequisite_record_digest: [u8; 32],
@@ -659,6 +691,7 @@ struct SourceOpeningRecordV1 {
     release_complete: bool,
     record_digest: [u8; 32],
 }
+#[cfg(test)]
 fn source_opening_record_digest_v1(
     record: &SourceOpeningRecordV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -703,6 +736,7 @@ fn source_opening_record_digest_v1(
     ]);
     require_nonzero_opening_digest_v1(hash.finalize())
 }
+#[cfg(test)]
 fn validate_source_opening_record_v1(
     record: &SourceOpeningRecordV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -749,6 +783,7 @@ fn validate_source_opening_record_v1(
     Ok(())
 }
 /// Opaque move-only source-opening material.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1<R> {
     blinding_snapshot: ConfidentialSpoolSnapshotV1,
     commitments: Vec<Point>,
@@ -760,6 +795,7 @@ pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1<R> 
 /// the complete original opening inventory stay alive while qPCS uses its
 /// original resource budget. No production constructor exists until their
 /// common encryption lifecycle is authenticated.
+#[cfg(test)]
 #[must_use = "dropping this owner closes its source, openings and resource ledger"]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source) struct RnsNativeSourceWithOriginalOpeningsV1<
     R,
@@ -770,6 +806,7 @@ pub(in crate::vega::zk_ams::mkhe::collective::incremental_source) struct RnsNati
     poisoned: core::cell::Cell<bool>,
 }
 
+#[cfg(test)]
 impl<R, S> crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1
     for RnsNativeSourceWithOriginalOpeningsV1<R, S>
 where
@@ -830,6 +867,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<R, S>
     crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1
     for RnsNativeSourceWithOriginalOpeningsV1<R, S>
@@ -839,6 +877,7 @@ where
 {
 }
 
+#[cfg(test)]
 impl<R, S>
     crate::vega::zk_ams::mkhe::collective::incremental_source::RnsNativeOriginalBudgetedSourceV1
     for RnsNativeSourceWithOriginalOpeningsV1<R, S>
@@ -859,6 +898,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMaterialV1<R> {
     /// Borrow the original ledger only after the source-opening record and
     /// final Q-mask phase validate. The material remains owned for later
@@ -1094,6 +1134,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMater
         Ok(())
     }
 }
+#[cfg(test)]
 fn commitments_root_v1(
     context_digest: [u8; 32],
     commitments: &[Point],
@@ -1121,11 +1162,13 @@ fn commitments_root_v1(
     }
     require_nonzero_opening_digest_v1(hash.finalize())
 }
+#[cfg(test)]
 fn map_bulletproof_error_v1(
     _: crate::generalized_bulletproof::GeneralizedBulletproofErrorV1,
 ) -> ZkAmsMkheErrorV1 {
     ZkAmsMkheErrorV1::InvalidPhase23Fold
 }
+#[cfg(test)]
 fn require_nonzero_opening_digest_v1(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     (digest != [0; 32])
         .then_some(digest)

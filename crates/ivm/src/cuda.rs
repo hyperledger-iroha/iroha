@@ -5,6 +5,7 @@ fn ed25519_public_key_bytes_are_invalid(pk: &[u8; 32]) -> bool {
 #[cfg(feature = "cuda")]
 mod imp {
     use crate::bn254_vec::FieldElem;
+    use crate::sha256_ref::sha256_compress_scalar_ref as sha256_scalar_ref;
     use cust::{
         context::CurrentContext,
         memory::{AsyncCopyDestination, CopyDestination, DeviceCopy, LockedBuffer},
@@ -500,68 +501,6 @@ mod imp {
         let mut flat_out = vec![0u64; lhs.len() * BN254_LIMBS];
         bn254_launch_kernel_words(kernel_name, &flat_lhs, &flat_rhs, &mut flat_out, lhs.len())?;
         collect_bn254_outputs(&flat_out, lhs.len())
-    }
-    fn sha256_scalar_ref(state: &mut [u32; 8], block: &[u8; 64]) {
-        const K: [u32; 64] = [
-            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-            0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-            0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-            0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-            0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-            0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-            0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-            0xc67178f2,
-        ];
-        let mut w = [0u32; 64];
-        for (t, chunk) in block.chunks(4).enumerate().take(16) {
-            w[t] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        }
-        for t in 16..64 {
-            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3);
-            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10);
-            w[t] = w[t - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[t - 7])
-                .wrapping_add(s1);
-        }
-        let mut a = state[0];
-        let mut b = state[1];
-        let mut c = state[2];
-        let mut d = state[3];
-        let mut e = state[4];
-        let mut f = state[5];
-        let mut g = state[6];
-        let mut h = state[7];
-        for t in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = h
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[t])
-                .wrapping_add(w[t]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
-        state[5] = state[5].wrapping_add(f);
-        state[6] = state[6].wrapping_add(g);
-        state[7] = state[7].wrapping_add(h);
     }
     fn sha256_pairs_reduce_device_buffer(
         function: &Function,
@@ -2248,136 +2187,6 @@ mod imp {
             Some(vec_out)
         })
     }
-    fn aesenc_rounds_batch_cpu(states: &[[u8; 16]], round_keys: &[[u8; 16]]) -> Vec<[u8; 16]> {
-        let mut current = states.to_vec();
-        for &round_key in round_keys {
-            for block in &mut current {
-                *block = crate::aes::aesenc_impl(*block, round_key);
-            }
-        }
-        current
-    }
-    /// Fused N-round AESENC for many blocks with a single launch.
-    pub fn aesenc_rounds_batch_cuda(
-        states: &[[u8; 16]],
-        round_keys: &[[u8; 16]],
-    ) -> Option<Vec<[u8; 16]>> {
-        if states.is_empty() {
-            return Some(Vec::new());
-        }
-        if round_keys.is_empty() {
-            return Some(states.to_vec());
-        }
-        let count = states.len() as u32;
-        let nrounds = round_keys.len() as u32;
-        let task_id = cuda_task_id(TASK_AES_FUSED, &[count as u64, nrounds as u64, 0]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return Some(aesenc_rounds_batch_cpu(states, round_keys));
-            }
-            let mgr = crate::GpuManager::shared()?;
-            let flat_states: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let flat_rks: Vec<u8> = round_keys.iter().flat_map(|b| b.iter()).copied().collect();
-            let mut out = vec![0u8; states.len() * 16];
-            let ok = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
-                    let function = module.get_function("aesenc_rounds_batch").ok()?;
-                    let d_states = cuda_buffer_from_slice(&flat_states)?;
-                    let d_rks = cuda_buffer_from_slice(&flat_rks)?;
-                    let d_out = device_buffer_uninitialized::<u8>(out.len())?;
-                    let threads: u32 = 256;
-                    let grid: u32 = count.div_ceil(threads).max(1);
-                    unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_states.as_device_ptr(),
-                            d_rks.as_device_ptr(),
-                            nrounds,
-                            d_out.as_device_ptr(),
-                            count
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(())
-                })
-            });
-            ok??;
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    }
-    fn aesdec_rounds_batch_cpu(states: &[[u8; 16]], round_keys: &[[u8; 16]]) -> Vec<[u8; 16]> {
-        let mut current = states.to_vec();
-        for &round_key in round_keys {
-            for block in &mut current {
-                *block = crate::aes::aesdec_impl(*block, round_key);
-            }
-        }
-        current
-    }
-    /// Fused N-round AESDEC for many blocks with a single launch.
-    pub fn aesdec_rounds_batch_cuda(
-        states: &[[u8; 16]],
-        round_keys: &[[u8; 16]],
-    ) -> Option<Vec<[u8; 16]>> {
-        if states.is_empty() {
-            return Some(Vec::new());
-        }
-        if round_keys.is_empty() {
-            return Some(states.to_vec());
-        }
-        let count = states.len() as u32;
-        let nrounds = round_keys.len() as u32;
-        let task_id = cuda_task_id(TASK_AES_FUSED, &[count as u64, nrounds as u64, 1]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return Some(aesdec_rounds_batch_cpu(states, round_keys));
-            }
-            let mgr = crate::GpuManager::shared()?;
-            let flat_states: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let flat_rks: Vec<u8> = round_keys.iter().flat_map(|b| b.iter()).copied().collect();
-            let mut out = vec![0u8; states.len() * 16];
-            let ok = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
-                    let function = module.get_function("aesdec_rounds_batch").ok()?;
-                    let d_states = cuda_buffer_from_slice(&flat_states)?;
-                    let d_rks = cuda_buffer_from_slice(&flat_rks)?;
-                    let d_out = device_buffer_uninitialized::<u8>(out.len())?;
-                    let threads: u32 = 256;
-                    let grid: u32 = count.div_ceil(threads).max(1);
-                    unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_states.as_device_ptr(),
-                            d_rks.as_device_ptr(),
-                            nrounds,
-                            d_out.as_device_ptr(),
-                            count
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(())
-                })
-            });
-            ok??;
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    }
     /// Batch BN254 add: process many field-element pairs with one CUDA launch.
     ///
     /// Returns `None` when CUDA is unavailable, disabled, or the input slices differ in length.
@@ -3228,65 +3037,6 @@ mod imp {
             assert_eq!(aesdec_batch_cuda(&states, rk), Some(expected_dec));
         }
         #[test]
-        fn public_aes_rounds_batch_matches_scalar_when_cuda_available() {
-            if !ensure_cuda_selftest() {
-                eprintln!("CUDA unavailable; skipping public AES rounds batch regression");
-                return;
-            }
-            let states = [
-                [
-                    0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
-                    0xdd, 0xee, 0xff,
-                ],
-                [
-                    0xffu8, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
-                    0x22, 0x11, 0x00,
-                ],
-            ];
-            let round_keys = [
-                [
-                    0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf,
-                    0x7f, 0x67, 0x98,
-                ],
-                [
-                    0xa5, 0x40, 0x76, 0x28, 0x10, 0x4f, 0xdc, 0xe6, 0x43, 0xdd, 0x27, 0x0f, 0x6c,
-                    0xa7, 0x63, 0x6f,
-                ],
-                [
-                    0x2c, 0x5e, 0x2f, 0x88, 0x6a, 0x84, 0xd2, 0x57, 0x8b, 0x3f, 0x8c, 0x9c, 0x4f,
-                    0x11, 0x64, 0x15,
-                ],
-            ];
-            let expected_enc: Vec<[u8; 16]> = states
-                .iter()
-                .copied()
-                .map(|state| {
-                    round_keys
-                        .iter()
-                        .copied()
-                        .fold(state, crate::aes::aesenc_impl)
-                })
-                .collect();
-            let expected_dec: Vec<[u8; 16]> = states
-                .iter()
-                .copied()
-                .map(|state| {
-                    round_keys
-                        .iter()
-                        .copied()
-                        .fold(state, crate::aes::aesdec_impl)
-                })
-                .collect();
-            assert_eq!(
-                aesenc_rounds_batch_cuda(&states, &round_keys),
-                Some(expected_enc)
-            );
-            assert_eq!(
-                aesdec_rounds_batch_cuda(&states, &round_keys),
-                Some(expected_dec)
-            );
-        }
-        #[test]
         fn public_bn254_helpers_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public BN254 parity regression");
@@ -3737,20 +3487,6 @@ pub fn aesenc_batch_cuda(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8;
 }
 #[cfg(not(feature = "cuda"))]
 pub fn aesdec_batch_cuda(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-    None
-}
-#[cfg(not(feature = "cuda"))]
-pub fn aesenc_rounds_batch_cuda(
-    _states: &[[u8; 16]],
-    _round_keys: &[[u8; 16]],
-) -> Option<Vec<[u8; 16]>> {
-    None
-}
-#[cfg(not(feature = "cuda"))]
-pub fn aesdec_rounds_batch_cuda(
-    _states: &[[u8; 16]],
-    _round_keys: &[[u8; 16]],
-) -> Option<Vec<[u8; 16]>> {
     None
 }
 #[cfg(not(feature = "cuda"))]

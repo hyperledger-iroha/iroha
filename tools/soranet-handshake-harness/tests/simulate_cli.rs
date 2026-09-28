@@ -162,8 +162,12 @@ fn inspect_rejects_pre_release_only_suite_lists() {
     ]);
     let assert = cmd.assert().failure();
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    // `iroha_crypto` rejects retired identifiers before the harness parses
+    // the capability list itself.
     assert!(
-        stderr.contains("pre-release handshake suite identifiers are not accepted"),
+        stderr.contains("unsupported first-release handshake suite identifiers")
+            && stderr.contains("0x02 (retired pre-release)")
+            && stderr.contains("0x03 (retired pre-release)"),
         "unexpected stderr: {stderr}"
     );
 }

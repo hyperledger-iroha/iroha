@@ -8,12 +8,15 @@
 //! audit, so the release gate cannot be opened by stale coarse booleans.
 #[cfg(test)]
 use super::shake256;
+#[cfg(test)]
+use super::{Scalar, ZkAmsMkheErrorV1};
 use super::{
-    Scalar, ZkAmsMkheErrorV1, keccak256, manifest::release_profile_v1,
+    keccak256, manifest::release_profile_v1,
     phase23_encrypted::zk_ams_phase23_encrypted_implementation_v1,
     phase23_mask_proof::zk_ams_phase23_mask_proof_audit_v1,
     terminal::zk_ams_phase3_terminal_implementation_v1,
 };
+#[cfg(test)]
 const MAX_PHASE23_VECTOR_ELEMENTS_V1: usize = 1_048_576;
 const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
 const PHASE23_ASSIGNMENT_COLUMNS_V1: u32 = 524_378;
@@ -193,6 +196,7 @@ pub fn zk_ams_phase23_equation_certificate_digest_v1() -> [u8; 32] {
     keccak256(&frame)
 }
 /// Evaluate the exact Equation (6) cross term component-wise.
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "Equation (6) has four explicit accumulated and incoming operands"
@@ -226,6 +230,7 @@ pub fn zk_ams_phase23_cross_term_v1(
     Ok(cross_term)
 }
 /// Fold a level-zero vector as `accumulated + challenge * incoming`.
+#[cfg(test)]
 pub fn zk_ams_phase23_fold_linear_v1(
     accumulated: &[Scalar],
     incoming: &[Scalar],
@@ -242,6 +247,7 @@ pub fn zk_ams_phase23_fold_linear_v1(
 }
 /// Fold a level-one vector as
 /// `accumulated + challenge * cross_term + challenge^2 * incoming`.
+#[cfg(test)]
 pub fn zk_ams_phase23_fold_quadratic_v1(
     accumulated: &[Scalar],
     cross_term: &[Scalar],
@@ -300,6 +306,7 @@ pub fn zk_ams_phase23_challenge_v1(
     require_nondegenerate_challenge(challenge)?;
     Ok(challenge)
 }
+#[cfg(test)]
 fn require_same_nonzero_length(vectors: &[&[Scalar]]) -> Result<usize, ZkAmsMkheErrorV1> {
     let Some(first) = vectors.first() else {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -313,6 +320,7 @@ fn require_same_nonzero_length(vectors: &[&[Scalar]]) -> Result<usize, ZkAmsMkhe
     }
     Ok(length)
 }
+#[cfg(test)]
 fn require_nondegenerate_challenge(challenge: Scalar) -> Result<(), ZkAmsMkheErrorV1> {
     if challenge.is_zero() {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);

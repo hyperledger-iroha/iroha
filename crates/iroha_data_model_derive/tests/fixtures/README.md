@@ -22,19 +22,3 @@ The temporary capture writer was removed. The permanent
 `production_event_sets_preserve_captured_frames` test only reads this fixture,
 compares every byte and JSON value, and roundtrips every frame. The enclosing
 data-event enums have a separate 12-type captured-identity test.
-
-## Direct FFI declarations
-
-`direct_ffi_exports.txt` names each direct FfiType declaration by source and
-inline module scope. The syntax-based audit requires one export-only derive
-predicate and verifies every helper has that same predicate. Comparing names
-also detects a removed declaration replaced by an unrelated one with the same
-total count.
-
-The earlier numerical expectation came from commit `b9d551feb3`, which had
-102 declarations. Reviewing that source against the current declarations found
-five removed settlement records (`SettlementFailureRecord`, `SettlementLedger`,
-`SettlementLedgerEntry`, `SettlementOutcomeRecord`, `SettlementSuccessRecord`)
-and the canonical `SettlementReceipt` replacement introduced in `8fb9097270`.
-The current inventory contains 98 declarations. This source contract covers
-direct declarations; it does not claim expanded or rebuilt native-FFI coverage.

@@ -12,7 +12,6 @@ use base64::engine::general_purpose::STANDARD;
 use derive_more::{Constructor, Display, FromStr};
 use getset::Getters;
 use iroha_data_model_derive::{IdEqOrdHash, model};
-use iroha_macro::ffi_impl_opaque;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -46,7 +45,6 @@ mod model {
     #[display("{name}")]
     #[getset(get = "pub")]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::trigger::model::model::TriggerId")]
     pub struct TriggerId {
@@ -56,7 +54,6 @@ mod model {
     /// Represents a trigger, binding an identifier to its action.
     #[derive(Debug, Display, Clone, IdEqOrdHash, IntoSchema)]
     #[display("{id}")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::trigger::model::model::Trigger")]
     pub struct Trigger {
@@ -67,7 +64,6 @@ mod model {
     }
 }
 string_id!(TriggerId);
-#[ffi_impl_opaque]
 impl Trigger {
     // we can derive this with `derive_more::Constructor`, but RustRover freaks out and thinks it's signature is (TriggerId, TriggerId, Action, Action), giving bogus errors
     /// Construct a trigger given `id` and `action`.
@@ -342,9 +338,7 @@ pub mod action {
     mod model {
         use super::*;
         /// Core definition of a trigger action, including the executable, firing policy, and persistent storage.
-        #[derive(Debug, Clone, PartialEq, Eq, IntoSchema)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[derive(norito::NoritoSchema)]
+        #[derive(Debug, Clone, PartialEq, Eq, IntoSchema, norito::NoritoSchema)]
         #[norito_schema(name = "iroha_data_model::trigger::model::action::model::Action")]
         pub struct Action {
             /// The executable linked to this trigger.
@@ -371,10 +365,18 @@ pub mod action {
         /// delayed by [`retry_after_ms`](Self::retry_after_ms), and when the
         /// budget is exhausted the trigger is unregistered.
         #[derive(
-            Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+            Debug,
+            Copy,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            IntoSchema,
+            norito::NoritoSchema,
         )]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[derive(norito::NoritoSchema)]
         #[norito_schema(
             name = "iroha_data_model::trigger::model::action::model::TimeTriggerRetryPolicy"
         )]
@@ -385,9 +387,9 @@ pub mod action {
             pub retry_after_ms: NonZeroU64,
         }
         /// Repetition policy for a trigger action.
-        #[derive(Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[derive(norito::NoritoSchema)]
+        #[derive(
+            Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema,
+        )]
         #[norito_schema(name = "iroha_data_model::trigger::model::action::model::Repeats")]
         pub enum Repeats {
             /// Repeat the trigger indefinitely until it is unregistered.
@@ -401,7 +403,6 @@ pub mod action {
             &self.metadata
         }
     }
-    #[ffi_impl_opaque]
     impl Action {
         /// The executable linked to this action
         pub fn executable(&self) -> &Executable {

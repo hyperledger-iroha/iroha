@@ -107,6 +107,7 @@ impl<T: Copy + Zeroize> Drop for RangeSecretCopyValueV1<T> {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static RANGE_SECRET_COPY_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -950,12 +951,16 @@ impl Drop for BorrowedSecretMultiexpTermSlotsV1<'_> {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static RANGE_SECRET_MSM_CALLEE_SCALAR_CLEARS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    #[cfg(test)]
     static RANGE_SECRET_MSM_CALLEE_POINT_CLEARS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    #[cfg(test)]
     static RANGE_SECRET_MSM_TERM_SCALAR_CLEARS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    #[cfg(test)]
     static RANGE_SECRET_MSM_TERM_POINT_CLEARS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -1687,6 +1692,7 @@ fn prove_range_once(
         r,
     )
 }
+#[cfg(test)]
 fn preflight_fcmp_range_v1(
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<Vec<FcmpOutputTupleV1>, FcmpNativeErrorV1> {
@@ -1711,6 +1717,7 @@ fn preflight_fcmp_range_v1(
     }
     Ok(outputs)
 }
+#[cfg(test)]
 /// Produce the sole aggregate strict-positive `u64` output range proof.
 pub fn prove_fcmp_range_v1(
     rng: &mut (impl RngCore + CryptoRng),

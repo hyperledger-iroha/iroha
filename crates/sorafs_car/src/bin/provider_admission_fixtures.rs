@@ -40,20 +40,6 @@ const COUNCIL_KEY_BYTES: [u8; 32] = [0x45; 32];
 const PROVIDER_SIGNING_KEY_BYTES: [u8; 32] = [0x21; 32];
 // Synthetic fixture identity only; production tools require the exact genesis hash as input.
 const FIXTURE_NETWORK_ID: [u8; 32] = [0xA1; 32];
-const RETIRED_FIXTURE_NAMES: &[&str] = &[
-    "proposal_legacy_v1.json",
-    "proposal_legacy_v1.to",
-    "advert_legacy_v1.json",
-    "advert_legacy_v1.to",
-    "envelope_legacy_v1.json",
-    "envelope_legacy_v1.to",
-    "proposal_v2.json",
-    "proposal_v2.to",
-    "advert_v2.json",
-    "advert_v2.to",
-    "envelope_v2.json",
-    "envelope_v2.to",
-];
 #[derive(Debug)]
 struct Options {
     out_dir: PathBuf,
@@ -96,7 +82,6 @@ where
     Ok(Options { out_dir })
 }
 fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
-    remove_retired_fixtures(out_dir)?;
     let descriptor = chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0").ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -818,38 +803,6 @@ Do not edit manually; rerun the generator if data changes.\n",
     file.write_all(content.as_bytes())?;
     Ok(())
 }
-fn remove_retired_fixtures(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    for name in RETIRED_FIXTURE_NAMES {
-        let path = out_dir.join(name);
-        validate_output_path(&path)?;
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
-                    return Err(format!(
-                        "retired fixture `{}` must be a regular file",
-                        path.display()
-                    )
-                    .into());
-                }
-                fs::remove_file(&path).map_err(|err| {
-                    format!(
-                        "failed to remove retired fixture `{}`: {err}",
-                        path.display()
-                    )
-                })?;
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(format!(
-                    "failed to inspect retired fixture `{}`: {err}",
-                    path.display()
-                )
-                .into());
-            }
-        }
-    }
-    Ok(())
-}
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File, Box<dyn std::error::Error>> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -1069,9 +1022,6 @@ mod tests {
     #[test]
     fn generate_fixtures_produces_expected_artifacts() {
         let (_dir, dir_path) = canonical_tempdir();
-        for name in RETIRED_FIXTURE_NAMES {
-            fs::write(dir_path.join(name), b"retired").expect("seed retired fixture");
-        }
         let summary = generate_fixtures(&dir_path).expect("fixtures");
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
@@ -1117,12 +1067,6 @@ mod tests {
             assert_eq!(
                 generated, committed,
                 "committed fixture {name} is stale; rerun provider_admission_fixtures"
-            );
-        }
-        for name in RETIRED_FIXTURE_NAMES {
-            assert!(
-                !dir_path.join(name).exists(),
-                "retired fixture {name} emitted"
             );
         }
     }
@@ -1174,20 +1118,20 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn generate_fixtures_rejects_retired_symlink_without_touching_target() {
+    fn generate_fixtures_rejects_output_symlink_without_touching_target() {
         let (_temp, temp_path) = canonical_tempdir();
         let target_path = temp_path.join("outside.to");
         fs::write(&target_path, b"unchanged").expect("write target");
-        std::os::unix::fs::symlink(&target_path, temp_path.join("proposal_v2.to"))
-            .expect("create retired fixture symlink");
-        let err = generate_fixtures(&temp_path).expect_err("reject retired fixture symlink");
+        std::os::unix::fs::symlink(&target_path, temp_path.join("proposal_v1.to"))
+            .expect("create fixture output symlink");
+        let err = generate_fixtures(&temp_path).expect_err("reject fixture output symlink");
         assert!(
             err.to_string().contains("must not be a symlink"),
             "unexpected error: {err}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged");
         assert!(
-            temp_path.join("proposal_v2.to").is_symlink(),
+            temp_path.join("proposal_v1.to").is_symlink(),
             "rejected symlink must not be removed"
         );
     }

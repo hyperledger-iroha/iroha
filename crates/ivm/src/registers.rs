@@ -21,8 +21,6 @@ pub struct Registers {
     /// Privacy tags associated with each register. `false` denotes public data
     /// and `true` denotes private (secret) data.
     tags: [bool; 256],
-    /// Execution-scope usage bookkeeping for register-telemetry sampling.
-    usage: Mutex<RegisterUsage>,
     /// Merkle tree commitment to the register contents and tags (canonical type).
     tree: Mutex<MerkleTree<[u8; 32]>>,
     /// Dirty flag to defer rebuilds until root/path are requested.
@@ -32,7 +30,6 @@ impl Clone for Registers {
     fn clone(&self) -> Self {
         let gpr = self.gpr;
         let tags = self.tags;
-        let usage = *self.usage.lock();
         let tree = if self.dirty.load(Ordering::Acquire) {
             MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&gpr, &tags))
         } else {
@@ -41,7 +38,6 @@ impl Clone for Registers {
         Registers {
             gpr,
             tags,
-            usage: Mutex::new(usage),
             tree: Mutex::new(tree),
             dirty: AtomicBool::new(false),
         }
@@ -49,23 +45,9 @@ impl Clone for Registers {
 }
 impl Registers {
     #[inline]
-    fn record_usage(&self, idx: usize) {
-        #[cfg(any(feature = "telemetry", test))]
-        {
-            debug_assert!(idx < 256);
-            let mut usage = self.usage.lock();
-            usage.mark(idx);
-        }
-        #[cfg(not(any(feature = "telemetry", test)))]
-        {
-            let _ = idx;
-        }
-    }
-    #[inline]
     pub fn new() -> Self {
         let gpr = [0u64; 256];
         let tags = [false; 256];
-        let usage = Mutex::new(RegisterUsage::new());
         let zero_leaf: [u8; 32] = {
             let b = [0u8; 9];
             Sha256::digest(b).into()
@@ -74,33 +56,14 @@ impl Registers {
         Registers {
             gpr,
             tags,
-            usage,
             tree: Mutex::new(tree),
             dirty: AtomicBool::new(false),
         }
-    }
-    /// Snapshot of unique register usage since the last reset.
-    #[inline]
-    pub fn usage_summary(&self) -> RegisterUsageSummary {
-        #[cfg(any(feature = "telemetry", test))]
-        {
-            (*self.usage.lock()).summary()
-        }
-        #[cfg(not(any(feature = "telemetry", test)))]
-        {
-            RegisterUsageSummary::default()
-        }
-    }
-    /// Clear the execution-scope usage accounting without touching register contents.
-    #[inline]
-    pub fn clear_usage(&self) {
-        *self.usage.lock() = RegisterUsage::new();
     }
     /// Get the value of register `idx`.
     #[inline]
     pub fn get(&self, idx: usize) -> u64 {
         debug_assert!(idx < 256);
-        self.record_usage(idx);
         let val = self.gpr[idx];
         with_reg_logger(|log| {
             let (root, path) = self
@@ -121,7 +84,6 @@ impl Registers {
     pub fn set(&mut self, idx: usize, value: u64) {
         debug_assert!(idx < 256);
         if idx != 0 {
-            self.record_usage(idx);
             self.gpr[idx] = value;
             let was_dirty = self.dirty.swap(true, Ordering::AcqRel);
             with_reg_logger(|log| {
@@ -149,7 +111,6 @@ impl Registers {
     #[inline]
     pub fn tag(&self, idx: usize) -> bool {
         debug_assert!(idx < 256);
-        self.record_usage(idx);
         self.tags[idx]
     }
     /// Set the privacy tag of register `idx`. Writing to `r0` has no effect.
@@ -157,7 +118,6 @@ impl Registers {
     pub fn set_tag(&mut self, idx: usize, value: bool) {
         debug_assert!(idx < 256);
         if idx != 0 {
-            self.record_usage(idx);
             self.tags[idx] = value;
             let was_dirty = self.dirty.swap(true, Ordering::AcqRel);
             with_reg_logger(|log| {
@@ -325,63 +285,6 @@ impl Default for Registers {
         Self::new()
     }
 }
-#[cfg(any(feature = "telemetry", test))]
-#[derive(Clone, Copy)]
-struct RegisterUsage {
-    bitmap: [u64; 4],
-    max_index: u16,
-}
-#[cfg(not(any(feature = "telemetry", test)))]
-#[derive(Clone, Copy, Default)]
-struct RegisterUsage;
-#[cfg(any(feature = "telemetry", test))]
-impl RegisterUsage {
-    const fn new() -> Self {
-        Self {
-            bitmap: [0; 4],
-            max_index: 0,
-        }
-    }
-    fn mark(&mut self, idx: usize) {
-        debug_assert!(idx < 256);
-        let word = idx / 64;
-        let bit = idx % 64;
-        self.bitmap[word] |= 1u64 << bit;
-        if idx as u16 > self.max_index {
-            self.max_index = idx as u16;
-        }
-    }
-    fn summary(self) -> RegisterUsageSummary {
-        let unique_registers = self.unique_count();
-        let max_index = if unique_registers == 0 {
-            0
-        } else {
-            self.max_index as usize
-        };
-        RegisterUsageSummary {
-            max_index,
-            unique_registers,
-        }
-    }
-    fn unique_count(&self) -> u16 {
-        self.bitmap
-            .iter()
-            .map(|word| word.count_ones() as u16)
-            .sum()
-    }
-}
-#[cfg(not(any(feature = "telemetry", test)))]
-impl RegisterUsage {
-    const fn new() -> Self {
-        Self
-    }
-}
-/// Summary of register pressure for a single VM execution.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RegisterUsageSummary {
-    pub max_index: usize,
-    pub unique_registers: u16,
-}
 #[inline]
 fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
     #[cfg(test)]
@@ -419,20 +322,6 @@ fn register_leaf_digest_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn usage_tracks_max_index_and_unique_registers() {
-        let mut regs = Registers::new();
-        regs.set(5, 10);
-        regs.set(127, 20);
-        let _ = regs.get(5);
-        let snapshot = regs.usage_summary();
-        assert_eq!(snapshot.max_index, 127);
-        assert_eq!(snapshot.unique_registers, 2);
-        regs.clear_usage();
-        let cleared = regs.usage_summary();
-        assert_eq!(cleared.unique_registers, 0);
-        assert_eq!(cleared.max_index, 0);
-    }
     #[test]
     fn private_scrub_zeros_tagged_registers_and_preserves_public_values() {
         let mut regs = Registers::new();

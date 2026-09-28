@@ -1766,7 +1766,7 @@ fn transport_protocol_name(protocol: TransportProtocol) -> &'static str {
 fn signature_alg_name(alg: SignatureAlgorithm) -> &'static str {
     match alg {
         SignatureAlgorithm::Ed25519 => "ed25519",
-        SignatureAlgorithm::MultiSig => "multisig",
+        SignatureAlgorithm::MultiSig => "multi-sig",
     }
 }
 fn hex(bytes: &[u8]) -> String {

@@ -43,6 +43,7 @@ pub(super) struct PairMaskingLimits {
 pub(super) struct PairMaskingPlan {
     shape: PairMaskingShape,
     extents: [usize; 2],
+    #[cfg(test)]
     degree_bounds: [usize; 2],
     payload_bytes: usize,
     work_units: usize,
@@ -113,6 +114,7 @@ impl PairMaskingPlan {
         Ok(Self {
             shape,
             extents,
+            #[cfg(test)]
             degree_bounds,
             payload_bytes,
             work_units,
@@ -130,6 +132,7 @@ impl PairMaskingPlan {
     }
 
     /// Exclusive degree bounds of the randomized low and high chunks.
+    #[cfg(test)]
     pub(super) const fn degree_bounds(&self) -> [usize; 2] {
         self.degree_bounds
     }

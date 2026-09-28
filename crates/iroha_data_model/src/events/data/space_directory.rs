@@ -19,7 +19,6 @@ mod model {
         Encode,
         iroha_schema::IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[event_set(
         schema_name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryEventSet"
     )]
@@ -37,10 +36,17 @@ mod model {
     }
     /// Payload describing an activation event.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryManifestActivated"
     )]
@@ -59,10 +65,17 @@ mod model {
     }
     /// Payload describing a natural expiry event.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryManifestExpired"
     )]
@@ -78,10 +91,17 @@ mod model {
     }
     /// Payload describing a manifest revocation.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryManifestRevoked"
     )]

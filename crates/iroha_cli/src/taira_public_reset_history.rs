@@ -5,10 +5,13 @@
 //! executor. The opaque payload remains covered by the exact inventory digest; no
 //! field is translated, regenerated, or admitted to the current execution path.
 
+#[cfg(any(target_os = "linux", test))]
 use super::*;
 
+#[cfg(any(target_os = "linux", test))]
 pub(super) type TerminalInventory = InventoryRecordV1<Value>;
 
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn decode(
     bytes: &[u8],
     label: &str,
@@ -31,6 +34,7 @@ pub(super) fn decode(
 /// Authenticate the original historical bytes, not a re-encoded projection.
 /// Its finite signed lease was admitted by its executor. A successor does not
 /// recalculate that lease using a different execution plan or authorize a replay.
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn verify_authorization(
     inventory: &TerminalInventory,
     inventory_sha256: &str,

@@ -127,6 +127,7 @@ impl<F: KagemushaPoseidonFieldV1> Drop for NativePoseidonBlockWitness<F> {
 
 #[cfg(test)]
 thread_local! {
+    #[cfg(test)]
     static BLOCK_WITNESS_CLEARS: std::cell::Cell<(usize, bool)> = const { std::cell::Cell::new((0, true)) };
 }
 

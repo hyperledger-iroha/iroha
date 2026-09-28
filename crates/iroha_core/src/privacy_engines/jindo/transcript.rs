@@ -38,6 +38,7 @@ impl JindoSignedMonomialChallengeV1 {
             None
         }
     }
+    #[cfg(test)]
     /// Return the canonical exponent in `Z / 2048 Z`.
     #[must_use]
     pub const fn canonical_exponent(self) -> u16 {

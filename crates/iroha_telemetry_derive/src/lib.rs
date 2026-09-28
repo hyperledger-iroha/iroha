@@ -153,40 +153,19 @@ impl ToTokens for MetricSpec {
 /// ```rust
 /// use iroha_telemetry_derive::metrics;
 ///
-/// # struct DummyCounter;
-/// # impl DummyCounter {
-/// #     fn with_label_values(&self, _: &[&str]) -> DummyCounterHandle {
-/// #         DummyCounterHandle
-/// #     }
-/// # }
-/// # struct DummyCounterHandle;
-/// # impl DummyCounterHandle {
-/// #     fn inc(&self) {}
-/// # }
-/// # struct DummyHistogram;
-/// # impl DummyHistogram {
-/// #     fn with_label_values(&self, _: &[&str]) -> DummyHistogramHandle {
-/// #         DummyHistogramHandle
-/// #     }
-/// # }
-/// # struct DummyHistogramHandle;
-/// # impl DummyHistogramHandle {
-/// #     fn observe(&self, _: f64) {}
-/// # }
-/// # struct Metrics {
-/// #     isi: DummyCounter,
-/// #     isi_times: DummyHistogram,
-/// # }
-/// # impl Default for Metrics {
-/// #     fn default() -> Self {
-/// #         Self {
-/// #             isi: DummyCounter,
-/// #             isi_times: DummyHistogram,
-/// #         }
-/// #     }
+/// # struct Metrics;
+/// # impl Metrics {
+/// #     fn record_isi_total(&self, _: &str) {}
+/// #     fn record_isi_success(&self, _: &str) {}
+/// #     fn record_isi_time(&self, _: &str, _: std::time::Duration) {}
 /// # }
 /// # struct StateTransaction {
 /// #     metrics: Metrics,
+/// # }
+/// # impl StateTransaction {
+/// #     fn metrics(&self) -> &Metrics {
+/// #         &self.metrics
+/// #     }
 /// # }
 ///
 /// #[metrics(+"test_query", "another_test_query_without_timing")]

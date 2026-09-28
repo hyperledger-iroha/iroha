@@ -149,14 +149,14 @@ fn manifest_signatures_reject_malformed_ed25519_signature_r() {
 fn load_tls_hosts_from_fixture_payload() {
     let temp = tempdir().expect("tempdir");
     let path = temp.path().join("hosts.json");
-    let payload = serde_json::json!({
+    let payload = norito::json!({
         "san_hosts": [
             "Docs.Sora.GW.Sora.Name ",
             "*.GW.SORA.ID",
             "docs.sora.gw.sora.name"
         ]
     });
-    fs::write(&path, serde_json::to_vec(&payload).unwrap()).expect("write fixture");
+    fs::write(&path, norito::json::to_vec(&payload).unwrap()).expect("write fixture");
     let hosts = load_tls_hosts_from_file(&path).expect("loaded hosts");
     assert_eq!(
         hosts,
@@ -270,8 +270,8 @@ fn key_rotate_generates_material() {
         "expected ed-prefixed multihash"
     );
     let public_contents = fs::read_to_string(&public_path).expect("read public key JSON");
-    let public_json: serde_json::Value =
-        serde_json::from_str(&public_contents).expect("public key JSON parses");
+    let public_json: norito::json::Value =
+        norito::json::from_str(&public_contents).expect("public key JSON parses");
     assert_eq!(public_json["algorithm"].as_str(), Some("ed25519"));
     assert_eq!(
         public_json["key_hex"].as_str(),

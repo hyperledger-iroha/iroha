@@ -333,7 +333,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             timeToLiveMs: min(3_600_000, binding.executionExpiresAtUnixMs - creationTimeMs),
             nonce: operation == .onboarding ? 1 : 2,
             feePayment: feePayment,
-            admissionIntent: .queuePlanSynced,
+            admissionIntent: .ordinary,
             metadata: metadata
         )
     }

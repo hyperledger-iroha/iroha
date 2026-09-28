@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// Exact nonzero operation-id pattern the checked-in KAGEMUSHA V1 contract publishes.
+const KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1: &str = "^(?!0{64}$)[0-9a-f]{64}$";
+/// Exact operation `Location` header pattern the checked-in KAGEMUSHA V1 contract publishes.
+const KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1: &str =
+    "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$";
+
 #[test]
 fn static_authority_is_the_complete_catalog_projection_with_exact_effects() {
     fn method_name(method: CatalogHttpMethod) -> &'static str {
@@ -2936,6 +2942,7 @@ fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {
         );
     }
 }
+#[test]
 fn openapi_schemas_include_system_keys() {
     let schemas = openapi_schemas();
     for key in openapi_contract_strings("openapi.openapi_schemas_include_system_keys.strings.1") {

@@ -1,15 +1,12 @@
 #![cfg(feature = "app_api")]
-use crate::{
-    JsonBody, SharedAppState,
-    sorafs::site::{decode_content_cid, encode_content_cid},
-};
+use crate::{JsonBody, SharedAppState, sorafs::site::encode_content_cid};
 use axum::{
     body::Bytes,
     extract::{FromRequestParts, Path, State, connect_info::ConnectInfo},
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use iroha_core::state::WorldReadOnly;
 use iroha_data_model::soracloud::SoraRouteVisibilityV1;
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};

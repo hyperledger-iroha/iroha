@@ -1,7 +1,7 @@
 //! Finalized native provider admission, with isolated offline envelope verification helpers.
 use crate::secure_file_metadata;
 use iroha_logger::{trace, warn};
-pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
+pub use sorafs_manifest::ProviderAdmissionAdvertError;
 use sorafs_manifest::{
     AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeError,
     ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError, ProviderAdmissionRenewalV1,
@@ -66,6 +66,7 @@ impl AdmissionRegistry {
     }
     /// Construct an isolated offline verifier capable of accepting records under `policy`.
     /// Runtime constructors use `from_state` instead.
+    #[cfg(test)]
     #[must_use]
     pub fn with_policy(network_id: [u8; 32], policy: ProviderAdmissionCouncilPolicy) -> Self {
         Self {
@@ -102,6 +103,7 @@ impl AdmissionRegistry {
     ///
     /// Returns a [`SingleEnvelopeError`] when any envelope is invalid or when
     /// multiple envelopes declare the same provider identifier.
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn from_envelopes<I>(
         network_id: [u8; 32],
         policy: ProviderAdmissionCouncilPolicy,
@@ -216,6 +218,7 @@ impl AdmissionRegistry {
     ///
     /// Returns [`AdmissionRegistryError`] on any directory, decoding, canonical-encoding,
     /// signature, trust, quorum, or duplicate-provider failure.
+    #[cfg(test)]
     pub fn reload_from_dir(
         &mut self,
         dir: &Path,
@@ -468,11 +471,11 @@ fn prepare_entry(
 ///
 /// # Errors
 ///
-/// Returns [`AdmissionCheckError`] when the advert metadata does not match the admission record.
+/// Returns [`ProviderAdmissionAdvertError`] when the advert metadata does not match the admission record.
 pub fn verify_advert_against_envelope(
     advert: &ProviderAdvertV1,
     record: &AdmissionRecord,
-) -> Result<(), AdmissionCheckError> {
+) -> Result<(), ProviderAdmissionAdvertError> {
     verify_advert_against_record(advert, record)
 }
 fn decode_envelope(bytes: &[u8]) -> Result<ProviderAdmissionEnvelopeV1, EnvelopeDecodeError> {

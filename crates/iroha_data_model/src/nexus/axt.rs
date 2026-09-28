@@ -12,7 +12,7 @@ use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;
-use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
+use iroha_zkp_poseidon::poseidon::hash_bytes as poseidon_hash_bytes;
 use norito::codec::{Decode, Encode, encode_adaptive};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;

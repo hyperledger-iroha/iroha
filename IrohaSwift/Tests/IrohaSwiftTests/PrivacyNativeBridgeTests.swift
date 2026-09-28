@@ -9,9 +9,6 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     private var typedEnvelopeRows: [[String]] {
         Self.matrix.filter { $0[0] == "typed-envelope" }
     }
-    private var retired: [String] {
-        Self.matrix.filter { $0[0] == "retired" }.map { $0[1] }
-    }
     private var expected: [String] { protocolRows.map { $0[2] } }
 
     func testExactClosedRegistryIsStable() throws {
@@ -109,7 +106,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     func testSharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests() {
         XCTAssertEqual(
             Set(Self.matrix.map { $0[0] }),
-            Set(["matrix-version", "registry-sha256", "protocol", "typed-envelope", "retired"])
+            Set(["matrix-version", "registry-sha256", "protocol", "typed-envelope"])
         )
         XCTAssertEqual(
             Self.matrix.filter { $0[0] == "matrix-version" },
@@ -137,12 +134,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                 XCTAssertNotEqual(digest, String(repeating: "0", count: 64))
             }
         }
-        XCTAssertEqual(Set(retired).count, retired.count)
-        XCTAssertTrue(Set(retired).isDisjoint(with: expected))
     }
 
     func testAliasesAndNonCanonicalSpellingsAreRejected() {
-        for rejected in retired + [
+        for rejected in [
             "iroha-zk-ams-v1 ",
             "Iroha-Zk-Ams-V1",
             "",

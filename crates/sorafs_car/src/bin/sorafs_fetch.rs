@@ -111,7 +111,7 @@ fn run() -> Result<(), String> {
     let mut chunk_receipts_out: Option<PathBuf> = None;
     let mut scoreboard_out: Option<PathBuf> = None;
     let mut provider_specs: Vec<ProviderSpec> = Vec::new();
-    let mut gateway_specs: Vec<GatewayProviderSpec> = Vec::new();
+    let mut gateway_specs: Vec<GatewayProviderInput> = Vec::new();
     let mut provider_advert_paths: HashMap<String, PathBuf> = HashMap::new();
     let mut admission_dir: Option<PathBuf> = None;
     let mut expected_network_id: Option<[u8; 32]> = None;
@@ -160,7 +160,10 @@ fn run() -> Result<(), String> {
         } else if let Some(rest) = arg.strip_prefix("--provider=") {
             provider_specs.push(parse_provider_spec(rest)?);
         } else if let Some(rest) = arg.strip_prefix("--gateway-provider=") {
-            gateway_specs.push(parse_gateway_provider_spec(rest)?);
+            gateway_specs.push(GatewayProviderInput::parse_spec(
+                rest,
+                "--gateway-provider",
+            )?);
         } else if let Some(rest) = arg.strip_prefix("--provider-advert=") {
             let (name, path) = rest
                 .split_once('=')
@@ -575,18 +578,8 @@ fn run() -> Result<(), String> {
             salt_epoch: None,
             expected_cache_version: None,
         };
-        let inputs: Vec<GatewayProviderInput> = gateway_specs
-            .iter()
-            .map(|spec| GatewayProviderInput {
-                name: spec.name.clone(),
-                provider_id_hex: spec.provider_id_hex.clone(),
-                gateway_public_key_hex: spec.gateway_public_key_hex.clone(),
-                base_url: spec.base_url.clone(),
-                stream_token_b64: spec.stream_token_b64.clone(),
-                privacy_events_url: spec.privacy_events_url.clone(),
-            })
-            .collect();
-        let context = GatewayFetchContext::new(config, inputs).map_err(|err| format!("{err}"))?;
+        let context =
+            GatewayFetchContext::new(config, gateway_specs).map_err(|err| format!("{err}"))?;
         gateway_fetch_providers = context.providers();
         gateway_fetcher_opt = Some(context.fetcher());
     }
@@ -1338,84 +1331,6 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
         concurrency_explicit,
         weight_explicit,
         metadata: None,
-    })
-}
-fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
-    let mut name: Option<String> = None;
-    let mut provider_id: Option<String> = None;
-    let mut gateway_public_key: Option<String> = None;
-    let mut base_url: Option<String> = None;
-    let mut stream_token: Option<String> = None;
-    let mut privacy_events_url: Option<String> = None;
-    for pair in value.split(',') {
-        let pair = pair.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        let (key, val) = pair.split_once('=').ok_or_else(|| {
-            "--gateway-provider expects comma-separated key=value pairs".to_string()
-        })?;
-        let val = val.trim();
-        match key {
-            "name" => {
-                if val.is_empty() {
-                    return Err("--gateway-provider name must not be empty".into());
-                }
-                name = Some(val.to_string());
-            }
-            "provider-id" | "provider_id" => {
-                if val.len() != 64 || !val.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err("--gateway-provider provider-id must be 32-byte hex".into());
-                }
-                provider_id = Some(val.to_ascii_lowercase());
-            }
-            "gateway-key" | "gateway_key" | "gateway-public-key" | "gateway_public_key" => {
-                if val.len() != 64 || !val.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err("--gateway-provider gateway-key must be 32-byte hex".into());
-                }
-                gateway_public_key = Some(val.to_ascii_lowercase());
-            }
-            "base-url" | "base_url" => {
-                if val.is_empty() {
-                    return Err("--gateway-provider base-url must not be empty".into());
-                }
-                base_url = Some(val.to_string());
-            }
-            "privacy-url" | "privacy_url" => {
-                if val.is_empty() {
-                    return Err("--gateway-provider privacy-url must not be empty".into());
-                }
-                privacy_events_url = Some(val.to_string());
-            }
-            "stream-token" | "stream_token" => {
-                if val.is_empty() {
-                    return Err("--gateway-provider stream-token must not be empty".into());
-                }
-                stream_token = Some(val.to_string());
-            }
-            other => {
-                return Err(format!(
-                    "unknown --gateway-provider key '{other}'. expected name, provider-id, gateway-key, base-url, stream-token, privacy-url"
-                ));
-            }
-        }
-    }
-    let name = name.ok_or_else(|| "--gateway-provider requires name=<alias>".to_string())?;
-    let provider_id_hex =
-        provider_id.ok_or_else(|| "--gateway-provider requires provider-id=<hex>".to_string())?;
-    let gateway_public_key_hex = gateway_public_key
-        .ok_or_else(|| "--gateway-provider requires gateway-key=<hex>".to_string())?;
-    let base_url =
-        base_url.ok_or_else(|| "--gateway-provider requires base-url=<https://...>".to_string())?;
-    let stream_token_b64 = stream_token
-        .ok_or_else(|| "--gateway-provider requires stream-token=<base64>".to_string())?;
-    Ok(GatewayProviderSpec {
-        name,
-        provider_id_hex,
-        gateway_public_key_hex,
-        base_url,
-        stream_token_b64,
-        privacy_events_url,
     })
 }
 fn parse_usize(input: &str, flag: &str) -> Result<usize, String> {
@@ -2649,15 +2564,6 @@ fn format_multi_source_error(error: MultiSourceError) -> Result<String, String> 
             "orchestrator invariant violated: {reason}. this is a bug in the CLI"
         )),
     }
-}
-#[derive(Debug, Clone)]
-struct GatewayProviderSpec {
-    name: String,
-    provider_id_hex: String,
-    gateway_public_key_hex: String,
-    base_url: String,
-    stream_token_b64: String,
-    privacy_events_url: Option<String>,
 }
 #[derive(Debug)]
 struct ProviderSpec {

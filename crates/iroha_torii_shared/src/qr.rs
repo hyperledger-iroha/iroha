@@ -152,14 +152,6 @@ impl fmt::Display for QrError {
     }
 }
 impl Error for QrError {}
-/// Light or dark QR module color.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Color {
-    /// Light module.
-    Light,
-    /// Dark module.
-    Dark,
-}
 /// Encoded normal QR Code symbol.
 #[derive(Clone, Debug)]
 pub struct QrCode {
@@ -229,14 +221,6 @@ impl QrCode {
     pub fn is_functional(&self, x: usize, y: usize) -> bool {
         self.function_modules[self.index(x, y)]
     }
-    /// Return all modules as color values in row-major order.
-    #[must_use]
-    pub fn to_colors(&self) -> Vec<Color> {
-        self.modules
-            .iter()
-            .map(|&dark| if dark { Color::Dark } else { Color::Light })
-            .collect()
-    }
     /// Render an SVG document with the requested pixel dimensions and palette.
     #[must_use]
     pub fn to_svg(&self, dimension: u32, dark: &str, light: &str) -> String {
@@ -256,31 +240,6 @@ impl QrCode {
         format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{dimension}\" height=\"{dimension}\" viewBox=\"0 0 {total} {total}\" shape-rendering=\"crispEdges\"><rect width=\"100%\" height=\"100%\" fill=\"{light}\"/><path d=\"{path}\" fill=\"{dark}\"/></svg>"
         )
-    }
-    /// Render a grayscale bitmap with dark modules as `0` and light modules as `255`.
-    #[must_use]
-    pub fn to_luma8(&self, dimension: u32) -> (u32, u32, Vec<u8>) {
-        let quiet = self.quiet_zone();
-        let total_modules = self.width() as u32 + quiet * 2;
-        let module_size = (dimension / total_modules).max(1);
-        let side = total_modules * module_size;
-        let mut data = vec![255u8; (side * side) as usize];
-        for y in 0..self.size {
-            for x in 0..self.size {
-                if !self.is_dark(x, y) {
-                    continue;
-                }
-                let start_x = (x as u32 + quiet) * module_size;
-                let start_y = (y as u32 + quiet) * module_size;
-                for py in start_y..start_y + module_size {
-                    let row_start = (py * side) as usize;
-                    for px in start_x..start_x + module_size {
-                        data[row_start + px as usize] = 0;
-                    }
-                }
-            }
-        }
-        (side, side, data)
     }
     fn blank(version: u8) -> Self {
         let size = usize::from(version) * 4 + 17;

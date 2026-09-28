@@ -36,62 +36,59 @@ pub const BLS_SMALL: &str = "bls_small";
 #[cfg(feature = "sm")]
 /// String algorithm representation
 pub const SM2: &str = "sm2";
-crate::ffi::ffi_item! {
-    /// Algorithm for hashing & signing
-    ///
-    /// Discriminants are part of the on-wire format; keep them stable and aligned
-    /// with `Algorithm::try_from` and `PublicKeyCompact` tag mappings.
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        Default,
-        Decode,
-        Encode,
-        TypeId
-    )]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_crypto::algorithm::Algorithm")]
-    #[repr(u8)]
-    pub enum Algorithm {
-        /// Ed25519 digital signature scheme
-        #[default]
-        Ed25519 = 0,
-        /// ECDSA over secp256k1
-        Secp256k1 = 1,
-        #[cfg(feature = "bls")]
-        /// BLS12-381 (normal) scheme
-        BlsNormal = 2,
-        #[cfg(feature = "bls")]
-        /// BLS12-381 (small) scheme
-        BlsSmall = 3,
-        /// ML‑DSA (Dilithium) post-quantum signature scheme
-        MlDsa = 4,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 256-bit curve, TC26 param set A
-        Gost3410_2012_256ParamSetA = 5,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 256-bit curve, TC26 param set B
-        Gost3410_2012_256ParamSetB = 6,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 256-bit curve, TC26 param set C
-        Gost3410_2012_256ParamSetC = 7,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 512-bit curve, TC26 param set A
-        Gost3410_2012_512ParamSetA = 8,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 512-bit curve, TC26 param set B
-        Gost3410_2012_512ParamSetB = 9,
-        #[cfg(feature = "sm")]
-        /// SM2 signature scheme (GM/T 0003-2012)
-        Sm2 = 10,
-    }
-    ffi_type(opaque)
+/// Algorithm for hashing & signing
+///
+/// Discriminants are part of the on-wire format; keep them stable and aligned
+/// with `Algorithm::try_from` and `PublicKeyCompact` tag mappings.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Decode,
+    Encode,
+    TypeId,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::algorithm::Algorithm")]
+#[repr(u8)]
+pub enum Algorithm {
+    /// Ed25519 digital signature scheme
+    #[default]
+    Ed25519 = 0,
+    /// ECDSA over secp256k1
+    Secp256k1 = 1,
+    #[cfg(feature = "bls")]
+    /// BLS12-381 (normal) scheme
+    BlsNormal = 2,
+    #[cfg(feature = "bls")]
+    /// BLS12-381 (small) scheme
+    BlsSmall = 3,
+    /// ML‑DSA (Dilithium) post-quantum signature scheme
+    MlDsa = 4,
+    #[cfg(feature = "gost")]
+    /// GOST R 34.10-2012 256-bit curve, TC26 param set A
+    Gost3410_2012_256ParamSetA = 5,
+    #[cfg(feature = "gost")]
+    /// GOST R 34.10-2012 256-bit curve, TC26 param set B
+    Gost3410_2012_256ParamSetB = 6,
+    #[cfg(feature = "gost")]
+    /// GOST R 34.10-2012 256-bit curve, TC26 param set C
+    Gost3410_2012_256ParamSetC = 7,
+    #[cfg(feature = "gost")]
+    /// GOST R 34.10-2012 512-bit curve, TC26 param set A
+    Gost3410_2012_512ParamSetA = 8,
+    #[cfg(feature = "gost")]
+    /// GOST R 34.10-2012 512-bit curve, TC26 param set B
+    Gost3410_2012_512ParamSetB = 9,
+    #[cfg(feature = "sm")]
+    /// SM2 signature scheme (GM/T 0003-2012)
+    Sm2 = 10,
 }
 impl Algorithm {
     /// Maps the algorithm to its static string representation

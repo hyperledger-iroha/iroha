@@ -349,7 +349,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_canonica
     }
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_accepts_flat_alias_shortcut() {
+async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_dispatches_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
@@ -363,7 +363,7 @@ async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_accepts_flat_alias_shortcu
             "params": {
                 "name": "iroha.aliases.resolve",
                 "arguments": {
-                    "alias": "missing-alias"
+                    "body": { "alias": "missing-alias" }
                 }
             }
         }),
@@ -390,7 +390,7 @@ async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_accepts_flat_alias_shortcu
     }
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_index_accepts_flat_index_shortcut() {
+async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_index_dispatches_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
@@ -404,7 +404,7 @@ async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_index_accepts_flat_index_s
             "params": {
                 "name": "iroha.aliases.resolve_index",
                 "arguments": {
-                    "index": 0
+                    "body": { "index": 0 }
                 }
             }
         }),

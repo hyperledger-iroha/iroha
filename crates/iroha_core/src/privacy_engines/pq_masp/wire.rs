@@ -18,11 +18,13 @@ use iroha_data_model::privacy::{
     PrivacyRecipientIdV1, PrivacyStatementDigestV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
 };
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use soranet_pq::decapsulate_mlkem;
 use soranet_pq::{
-    HedgedRngSeed, HkdfDomain, HkdfSuite, MlDsaSuite, MlKemSuite, decapsulate_mlkem,
-    derive_labeled_hkdf, deterministic_chacha20_rng, encapsulate_mlkem_from_seed,
-    mldsa_public_key_from_secret_key, sign_mldsa, validate_mldsa_public_key,
-    validate_mldsa_signature, validate_mlkem_ciphertext, verify_mldsa,
+    HedgedRngSeed, HkdfDomain, HkdfSuite, MlDsaSuite, MlKemSuite, derive_labeled_hkdf,
+    deterministic_chacha20_rng, encapsulate_mlkem_from_seed, mldsa_public_key_from_secret_key,
+    sign_mldsa, validate_mldsa_public_key, validate_mldsa_signature, validate_mlkem_ciphertext,
+    verify_mldsa,
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -90,12 +92,6 @@ pub(crate) struct PqMaspAuthorizationProofRefV1<'a> {
     pub(crate) signature: &'a [u8],
     /// Inner transparent STARK proof.
     pub(crate) stark_proof: &'a [u8],
-}
-#[derive(Clone, Copy)]
-struct PqMaspEncryptedOutputRefV1<'a> {
-    ml_kem_ciphertext: &'a [u8],
-    nonce: &'a [u8],
-    aead_ciphertext: &'a [u8],
 }
 /// Failure of the fixed PQ-MASP authorization or note-encryption wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -398,12 +394,14 @@ fn note_plaintext_bytes_v1(note: &PqMaspNotePlaintextV1) -> Zeroizing<Vec<u8>> {
     bytes.extend_from_slice(&note.memo_digest);
     bytes
 }
+#[cfg(test)]
 fn take_32_v1(bytes: &[u8], start: usize) -> Result<[u8; 32], PqMaspWireErrorV1> {
     bytes
         .get(start..start + 32)
         .and_then(|value| value.try_into().ok())
         .ok_or(PqMaspWireErrorV1::InvalidLength)
 }
+#[cfg(test)]
 fn decode_note_plaintext_v1(bytes: &[u8]) -> Result<PqMaspNotePlaintextV1, PqMaspWireErrorV1> {
     if bytes.len() != PQ_MASP_NOTE_PLAINTEXT_BYTES_V1 {
         return Err(PqMaspWireErrorV1::InvalidLength);
@@ -502,7 +500,7 @@ fn derive_nonce_v1(
 }
 fn parse_encrypted_output_v1(
     output: &PrivacyEncryptedOutputV1,
-) -> Result<PqMaspEncryptedOutputRefV1<'_>, PqMaspWireErrorV1> {
+) -> Result<(&[u8], &[u8], &[u8]), PqMaspWireErrorV1> {
     if output.recipient.is_zero()
         || output.ephemeral_public_key.is_zero()
         || output.commitment.is_zero()
@@ -526,11 +524,7 @@ fn parse_encrypted_output_v1(
     if expected_digest != output.ephemeral_public_key {
         return Err(PqMaspWireErrorV1::EncryptedOutputBinding);
     }
-    Ok(PqMaspEncryptedOutputRefV1 {
-        ml_kem_ciphertext,
-        nonce,
-        aead_ciphertext,
-    })
+    Ok((ml_kem_ciphertext, nonce, aead_ciphertext))
 }
 /// Validate the exact public ML-KEM/XChaCha encrypted-output shape.
 pub fn validate_pq_masp_encrypted_output_v1(
@@ -604,13 +598,14 @@ pub(crate) fn encrypt_pq_masp_note_v1(
     validate_pq_masp_encrypted_output_v1(&output)?;
     Ok((commitment, output))
 }
+#[cfg(test)]
 /// Decrypt and authenticate one PQ-MASP note with an ML-KEM-768 secret key.
 pub fn decrypt_pq_masp_note_v1(
     statement: &PqMaspStarkStatementV1,
     output: &PrivacyEncryptedOutputV1,
     recipient_secret_key: &[u8],
 ) -> Result<PqMaspNotePlaintextV1, PqMaspWireErrorV1> {
-    let parsed = parse_encrypted_output_v1(output)?;
+    let (ml_kem_ciphertext, nonce, aead_ciphertext) = parse_encrypted_output_v1(output)?;
     let recipient_public_key = MlKemSuite::MlKem768
         .public_key_from_secret_key(recipient_secret_key)
         .map_err(|_| PqMaspWireErrorV1::InvalidRecipientSecretKey)?;
@@ -620,7 +615,7 @@ pub fn decrypt_pq_masp_note_v1(
     let shared_secret = decapsulate_mlkem(
         MlKemSuite::MlKem768,
         recipient_secret_key,
-        parsed.ml_kem_ciphertext,
+        ml_kem_ciphertext,
     )
     .map_err(|_| PqMaspWireErrorV1::InvalidRecipientSecretKey)?;
     let aad = note_aad_v1(
@@ -630,8 +625,7 @@ pub fn decrypt_pq_masp_note_v1(
         output.ephemeral_public_key,
     )?;
     let key_bytes = derive_note_key_v1(shared_secret.as_bytes(), &aad)?;
-    let nonce_bytes: [u8; XCHACHA20_NONCE_BYTES_V1] = parsed
-        .nonce
+    let nonce_bytes: [u8; XCHACHA20_NONCE_BYTES_V1] = nonce
         .try_into()
         .map_err(|_| PqMaspWireErrorV1::InvalidLength)?;
     let key: chacha20poly1305::Key = (*key_bytes).into();
@@ -642,7 +636,7 @@ pub fn decrypt_pq_masp_note_v1(
             .decrypt(
                 &nonce,
                 Payload {
-                    msg: parsed.aead_ciphertext,
+                    msg: aead_ciphertext,
                     aad: &aad,
                 },
             )

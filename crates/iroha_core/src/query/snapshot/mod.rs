@@ -157,6 +157,7 @@ pub fn run_on_snapshot_with_mode(
     }
     Ok(response)
 }
+#[cfg(test)]
 /// Execute a query from an owning state handle.
 ///
 /// Stored cursors retain continuation data derived from the initial query view; they never reopen
@@ -190,8 +191,8 @@ pub fn run_on_snapshot_with_mode_arc(
 /// Execute an Arc-backed snapshot query while carrying the validated client
 /// budget for a stored `Start` request into query projection.
 ///
-/// Unlike [`run_on_snapshot_with_mode_arc`], this entry point treats a missing budget as client
-/// input and rejects it when the configured stored-query minimum is non-zero.
+/// This entry point treats a missing budget as client input and rejects it when the configured
+/// stored-query minimum is non-zero.
 ///
 /// # Errors
 /// Returns a validation error when the supplied budget is below the configured

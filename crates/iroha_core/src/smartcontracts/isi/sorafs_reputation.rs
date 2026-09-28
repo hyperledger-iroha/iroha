@@ -5,6 +5,8 @@
 //! state-root-covered storage path as the other first-release SoraFS ledgers;
 //! no daemon database is authoritative.
 use super::*;
+use crate::smartcontracts::isi::helpers::instruction_error_as_query_failure as query_failure;
+use crate::smartcontracts::isi::helpers::transaction_account_has_permission as has_permission;
 use crate::{
     smartcontracts::ValidSingularQuery,
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
@@ -22,7 +24,6 @@ use iroha_data_model::{
             ResolveSorafsCapacityDispute, SetSorafsReputationJournalAuthorityPolicy,
         },
     },
-    permission::Permission,
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
@@ -48,7 +49,6 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::state_path::StatePath;
-use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use std::{str::FromStr, sync::OnceLock};
@@ -95,12 +95,6 @@ fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
 }
 fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
-}
-fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    match error {
-        InstructionExecutionError::Query(error) => error,
-        error => QueryExecutionFail::Conversion(error.to_string()),
-    }
 }
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
@@ -236,26 +230,6 @@ fn state_prefix_has_any(world: &impl WorldReadOnly, prefix: &str) -> bool {
         .range(start..)
         .next()
         .is_some_and(|(key, _)| key.to_string().starts_with(prefix))
-}
-fn has_permission(
-    state_transaction: &StateTransaction<'_, '_>,
-    authority: &AccountId,
-    permission: &str,
-) -> bool {
-    let required = Permission::new(permission.to_owned(), Json::new(()));
-    if state_transaction
-        .world
-        .account_permissions
-        .get(authority)
-        .is_some_and(|permissions| permissions.iter().any(|candidate| candidate == &required))
-    {
-        return true;
-    }
-    state_transaction
-        .world
-        .account_roles_iter(authority)
-        .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-        .any(|role| role.permissions().any(|candidate| candidate == &required))
 }
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,

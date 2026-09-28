@@ -65,6 +65,7 @@ fn conn_scheme_flags_every_catalogued_websocket_upgrade() {
     }
 }
 
+#[cfg(test)]
 fn complete_websocket_upgrade_request() -> axum::http::Request<()> {
     axum::http::Request::builder()
         .method(axum::http::Method::GET)

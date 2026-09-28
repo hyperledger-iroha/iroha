@@ -207,6 +207,49 @@ def test_default_preserves_cargo_arguments_and_profile_defaults(tmp_path: Path) 
     assert "linker=system-default" in result.stdout
 
 
+def test_node_set_checks_node_leaves_in_one_invocation(tmp_path: Path) -> None:
+    result, _environment, cargo_arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--node-set"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert cargo_arguments == [
+        "check",
+        "-p",
+        "irohad",
+        "-p",
+        "iroha_cli",
+        "-p",
+        "iroha_torii",
+        "-p",
+        "iroha_kagami",
+        "--lib",
+        "--bins",
+    ]
+
+
+def test_node_set_appends_forwarded_cargo_arguments(tmp_path: Path) -> None:
+    result, _environment, cargo_arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--node-set", "--", "--message-format", "short"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert cargo_arguments[:11] == [
+        "check",
+        "-p",
+        "irohad",
+        "-p",
+        "iroha_cli",
+        "-p",
+        "iroha_torii",
+        "-p",
+        "iroha_kagami",
+        "--lib",
+        "--bins",
+    ]
+    assert cargo_arguments[11:] == ["--message-format", "short"]
+
+
 def test_cargo_replaces_wrapper_process_and_preserves_its_exit(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

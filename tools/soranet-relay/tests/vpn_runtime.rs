@@ -2,7 +2,7 @@ use iroha_data_model::soranet::vpn::{
     VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1,
 };
 use soranet_relay::{
-    config::{VpnConfig, VpnCoverTrafficConfig},
+    config::{VPN_MAX_COVER_BURST_CELLS_V1, VpnConfig, VpnCoverTrafficConfig},
     metrics::Metrics,
     vpn::{
         CoverFrameMeta, VpnFrameBuildError, VpnFrameIoError, VpnOverlay, read_frame,
@@ -174,17 +174,23 @@ fn scheduler_rejects_sequence_wrap() {
 
 #[test]
 fn scheduler_clamps_programmatic_cover_bursts_to_a_bounded_prefix() {
-    let overlay = VpnOverlay::from_config(VpnConfig {
+    let full_cover = |max_cover_burst| VpnConfig {
         cover: VpnCoverTrafficConfig {
             enabled: true,
             cover_to_data_per_mille: 1_000,
             heartbeat_ms: 1,
-            max_cover_burst: u16::MAX,
-            max_jitter_millis: 0,
+            max_cover_burst,
+            // Zero jitter is replaced by the default, which must not exceed the heartbeat.
+            max_jitter_millis: 1,
         },
         pacing_millis: 1,
         ..VpnConfig::default()
-    });
+    };
+    assert!(
+        VpnOverlay::try_from_config(full_cover(u16::MAX)).is_err(),
+        "a programmatic burst above the protocol bound must be rejected before scheduling"
+    );
+    let overlay = VpnOverlay::from_config(full_cover(VPN_MAX_COVER_BURST_CELLS_V1));
     let flow_label = VpnFlowLabelV1::from_u32(1).expect("flow");
     let cover_meta = CoverFrameMeta {
         circuit_id: [0x02; 16],

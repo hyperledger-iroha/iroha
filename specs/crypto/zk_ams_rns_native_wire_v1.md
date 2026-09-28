@@ -8,7 +8,9 @@ degree-131,072 ring; duplicated parameter tables are not an alternative
 authority. The [governed profile boundary](../../docs/history/2026-09-24/mkhe-native40-governed-profile-source-boundary.md)
 checks a source's complete profile claim before publication. It does not
 establish live coefficient correspondence or declare the unfinished
-source/prover, composite admission or resource qualification ready.
+source/prover, composite admission or resource qualification ready. Owners
+without a production caller, including the composite verifier, are compiled
+only under `cfg(test)` until one is wired.
 
 ## Commitments, fields and identity
 

@@ -10,16 +10,11 @@ use native_execution::authenticated_native_execution;
 
 #[path = "catalog_recovery.rs"]
 pub(super) mod real_custody;
-use iroha_core::queue::{RoutingDecision, RoutingPlan};
+use iroha_core::queue::RoutingDecision;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
-    block::{
-        BlockHeader,
-        consensus_v2::{ConsensusMode, ExecutionCommitment, ValidatorPower},
-        decode_framed_signed_block,
-    },
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
+    block::{BlockHeader, SignedBlock, decode_framed_signed_block},
     isi::{Grant, Register, Revoke, SetParameter},
     nexus::{
         DataSpaceCatalog, DataSpaceMetadata, LaneConfig, LaneLifecycleStatusV1, LaneVisibility,
@@ -29,6 +24,9 @@ use iroha_data_model::{
     parameter::Parameter,
     permission::Permission,
     role::Role,
+    sumeragi_finality::{
+        FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier, VerifiedSumeragiBlock,
+    },
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::account::{
@@ -58,8 +56,9 @@ struct AppliedEvidence {
 struct FixtureFinality {
     network_id: NetworkId,
     genesis_hash: HashOf<BlockHeader>,
-    roster: Vec<ValidatorPower>,
-    validator_pops: Vec<Vec<u8>>,
+    trusted_genesis: SignedBlock,
+    chain_id: String,
+    validators: Vec<FinalityValidator>,
     peers: BTreeMap<PeerId, Arc<Mutex<VerifiedPeerFinality>>>,
 }
 
@@ -67,31 +66,26 @@ struct VerifiedPeerFinality {
     network_id: NetworkId,
     genesis_hash: HashOf<BlockHeader>,
     peer: PeerId,
-    verifier: Option<BridgeFinalityVerifier>,
-    proofs: BTreeMap<u64, BridgeFinalityProof>,
+    verifier: Option<SumeragiFinalityVerifier>,
+    verified: BTreeMap<u64, VerifiedSumeragiBlock>,
 }
 
 impl FixtureFinality {
-    fn validate_fixture_roster(&self, proof: &BridgeFinalityProof) -> Result<()> {
-        let artifact = &proof.finality_artifact;
+    fn validate_fixture_roster(&self, proof: &SumeragiFinalityProof) -> Result<()> {
         ensure!(
-            artifact.height_context.network_id == self.network_id
-                && artifact.height_context.mode == ConsensusMode::Npos
-                && artifact.height_context.roster == self.roster
-                && artifact.validator_set_pops == self.validator_pops
-                && artifact.height_context.snapshot_bootstrap.is_none(),
-            "finality proof differs from the exact generated fixture validator authority"
+            proof.committee == self.validators,
+            "finality proof differs from the exact signed-genesis fixture committee and PoPs"
         );
         Ok(())
     }
 
-    fn execution_commitment(
+    fn verified_block(
         &self,
         peer: &PeerId,
         client: &iroha::client::Client,
         height: u64,
         expected_block_hash: HashOf<BlockHeader>,
-    ) -> Result<ExecutionCommitment> {
+    ) -> Result<VerifiedSumeragiBlock> {
         ensure!(
             (1..=128).contains(&height),
             "catalog fixture exceeded its bounded finality history"
@@ -100,8 +94,7 @@ impl FixtureFinality {
             .peers
             .get(peer)
             .ok_or_else(|| eyre!("finality reader is not a fixture peer"))?;
-        // This synchronous lock is held only on the peer's dedicated blocking reader. Other
-        // peers have independent caches, and no asynchronous network work holds this lock.
+        // Each dedicated blocking reader owns one peer's bounded authenticated prefix.
         let mut cache = cache
             .lock()
             .map_err(|_| eyre!("fixture finality cache was poisoned"))?;
@@ -113,55 +106,55 @@ impl FixtureFinality {
         );
         if cache.verifier.is_none() {
             ensure!(
-                cache.proofs.is_empty(),
+                cache.verified.is_empty(),
                 "unanchored cache contains finality evidence"
             );
-            let (proof, hash): (BridgeFinalityProof, HashOf<BlockHeader>) =
-                super::v2_bridge_finality_unavailable(client, 1)?;
+            let proof =
+                client.get_sumeragi_finality_proof(NonZeroU64::new(1).expect("genesis height"))?;
             ensure!(
-                hash == self.genesis_hash && proof.block_header.hash() == self.genesis_hash,
+                proof.block_header.hash() == self.genesis_hash,
                 "finality anchor is not the fixture's exact signed genesis"
             );
             self.validate_fixture_roster(&proof)?;
-            // Only the externally known genesis hash and complete fixture roster/PoPs can
-            // authorize this context. A self-consistent proof-controlled roster is insufficient.
-            let mut verifier = BridgeFinalityVerifier::with_context(
-                self.network_id,
-                proof.finality_artifact.context_id(),
-            );
-            verifier.verify(&proof)?;
-            cache.proofs.insert(1, proof);
+            let mut verifier = SumeragiFinalityVerifier::new(
+                &self.trusted_genesis,
+                &self.chain_id,
+                self.validators.clone(),
+            )?;
+            let verified = verifier.verify(&proof)?;
+            cache.verified.insert(1, verified);
             cache.verifier = Some(verifier);
         }
         while cache
-            .proofs
+            .verified
             .last_key_value()
             .map_or(0, |(height, _)| *height)
             < height
         {
             let next = cache
-                .proofs
+                .verified
                 .last_key_value()
                 .expect("anchored proof cache")
                 .0
                 + 1;
-            let mut verifier = cache.verifier.clone().expect("anchored native verifier");
-            let proof: BridgeFinalityProof = super::v2_bridge_finality_unavailable(client, next)?;
-            verifier.verify(&proof)?;
+            let proof = client
+                .get_sumeragi_finality_proof(NonZeroU64::new(next).expect("successor height"))?;
             self.validate_fixture_roster(&proof)?;
-            cache.proofs.insert(next, proof);
+            // A failed successor must not advance the retained authenticated frontier.
+            let mut verifier = cache.verifier.clone().expect("anchored current verifier");
+            let verified = verifier.verify(&proof)?;
+            cache.verified.insert(next, verified);
             cache.verifier = Some(verifier);
         }
-        let proof = cache
-            .proofs
+        let verified = cache
+            .verified
             .get(&height)
             .ok_or_else(|| eyre!("verified finality history has a gap"))?;
         ensure!(
-            proof.block_header.hash() == expected_block_hash
-                && proof.finality_artifact.block_hash == expected_block_hash,
+            verified.header().hash() == expected_block_hash,
             "transaction carrier differs from the independently verified finality chain"
         );
-        Ok(proof.finality_artifact.commit_qc.execution_commitment)
+        Ok(verified.clone())
     }
 }
 

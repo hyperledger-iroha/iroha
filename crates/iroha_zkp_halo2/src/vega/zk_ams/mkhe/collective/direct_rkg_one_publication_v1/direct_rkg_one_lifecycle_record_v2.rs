@@ -27,7 +27,6 @@ const PROOF_PUBLISHED_UNVERIFIED_TAG_V2: u8 = 2;
 const VERIFIED_BOUND_RESERVED_TAG_V2: u8 = 3;
 
 pub(super) const RECORD_BYTES_V2: usize = 640;
-pub(super) const LEGACY_RECORD_BYTES_V1: usize = 334;
 pub(super) const RECORD_PREFIX_BYTES_V2: usize = 608;
 const TRANSACTION_ID_RANGE_V2: core::ops::Range<usize> = 16..48;
 const CONTEXT_DIGEST_RANGE_V2: core::ops::Range<usize> = 48..80;

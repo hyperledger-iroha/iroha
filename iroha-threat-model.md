@@ -49,7 +49,7 @@ Open questions that would materially change risk ranking:
   - Data: Norito binary (`SignedTransaction`, `SignedQuery`), JSON DTOs (app API), WS/SSE subscriptions, headers (including `x-api-token`).
   - Channel: HTTP/1.1 + WebSocket + SSE (axum).
   - Guarantees: optional API token (`torii.require_api_token`), pre-auth connection/rate gating, and explicit JSON/Norito response-media negotiation; many handlers apply per-endpoint rate limiting conditionally (can be bypassed when `enforce=false`). Evidence: `crates/iroha_torii/src/lib.rs` (`enforce_preauth`, `validate_api_token`, `capture_response_format`, `handler_post_transaction`, `handler_signed_query`), `crates/iroha_torii/src/limits.rs` (`allow_conditionally`).
-  - Validation: body limits on some endpoints (e.g., transactions), Norito decoding, request signing for some app endpoints (canonical request headers). Evidence: `crates/iroha_torii/src/lib.rs` (`add_transaction_routes` uses `DefaultBodyLimit::max(...)`), `crates/iroha_torii/src/app_auth.rs` (`verify_canonical_request`).
+  - Validation: body limits on some endpoints (e.g., transactions), Norito decoding, request signing for some app endpoints (canonical request headers). Evidence: `crates/iroha_torii/src/lib.rs` (`add_transaction_routes` uses `DefaultBodyLimit::max(...)`), `crates/iroha_torii/src/app_auth.rs` (`verify_canonical_network_request`).
 
 - Internet client → “Operator” routes (Torii)
   - Data: config updates (`ConfigurationUpdate`) and privileged operator/debug/profile reads (when enabled).

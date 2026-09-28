@@ -164,6 +164,7 @@ impl Guard {
         self.lock.revalidate()
     }
 
+    #[cfg(any(target_os = "linux", test))]
     pub(super) fn revalidate_unowned(&self) -> Result<()> {
         self.revalidate()?;
         match fs::symlink_metadata(Path::new(STATE_ROOT).join(OWNER_FILE)) {
@@ -294,6 +295,7 @@ fn acquire_lock(deadline: Instant, create: bool) -> Result<Guard> {
 }
 
 /// Read-only dispatcher replacement shares the deployment lock and admits no reset owner.
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn acquire_unowned_existing(deadline: Instant) -> Result<Guard> {
     let guard = acquire_lock(deadline, false)?;
     guard.revalidate_unowned()?;

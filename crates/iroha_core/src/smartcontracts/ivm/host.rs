@@ -1340,11 +1340,6 @@ pub trait QueryStateRefOps {
         &self,
         plan_id: &AssetDefinitionId,
     ) -> Result<SubscriptionPlan, ivm::VMError>;
-    /// Load deployed bytecode by its canonical complete-artifact hash.
-    ///
-    /// Nested dispatch calls this only after a prepared-artifact cache miss;
-    /// warm calls therefore avoid cloning the stored byte vector.
-    fn contract_code_bytes(&self, code_hash: &Hash) -> Option<Vec<u8>>;
     /// Enforce manifest entrypoint permission metadata against the current world snapshot.
     ///
     /// # Errors
@@ -2196,22 +2191,6 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
             QueryStateRef::Transaction(tx) => {
                 CoreHostImpl::<NoQueryState>::subscription_plan(tx, plan_id)
-            }
-        }
-    }
-    fn contract_code_bytes(&self, code_hash: &Hash) -> Option<Vec<u8>> {
-        match *self {
-            QueryStateRef::View(view) => {
-                crate::smartcontracts::code::fetch_code_bytes(view, code_hash)
-            }
-            QueryStateRef::QueryView(view) => {
-                crate::smartcontracts::code::fetch_code_bytes(view, code_hash)
-            }
-            QueryStateRef::Block(block) => {
-                crate::smartcontracts::code::fetch_code_bytes(block, code_hash)
-            }
-            QueryStateRef::Transaction(tx) => {
-                crate::smartcontracts::code::fetch_code_bytes(tx, code_hash)
             }
         }
     }
@@ -3582,6 +3561,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         apply_sm_openssl_preview(self.crypto.enable_sm_openssl_preview);
         self.notify_telemetry_crypto_config();
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Override the configured AXT timing (slot length + skew tolerance).
     ///
     /// A successful timing replacement aborts any active AXT envelope. The
@@ -3617,6 +3597,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
         Ok(())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Set the AXT timing configuration and return the updated host (builder style).
     ///
     /// A successful timing replacement aborts any active AXT envelope.
@@ -3632,6 +3613,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.set_axt_timing(timing)?;
         Ok(self)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Install a supplemental restrictive AXT policy hook.
     ///
     /// The mandatory snapshot-derived policy, issuer authentication, and replay
@@ -3645,6 +3627,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.clear_axt_proof_cache();
         self
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Install the mandatory AXT policy from a Space Directory snapshot.
     ///
     /// A successful snapshot replacement aborts any active AXT envelope and
@@ -3756,6 +3739,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn abort_active_axt_envelope_for_policy_change(&mut self) {
         self.axt_state = None;
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Refresh the active AXT policy snapshot without rebuilding the host.
     ///
     /// A successful refresh clears proof caches, aborts any active AXT
@@ -3795,11 +3779,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Take and clear the last recorded AXT rejection (if any).
     pub(crate) fn take_axt_reject(&mut self) -> Option<AxtRejectContext> {
         self.last_axt_reject.take()
-    }
-    /// Expose the last recorded AMX budget violation for tests.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn take_amx_budget_violation_for_tests(&mut self) -> Option<AmxBudgetViolation> {
-        self.take_amx_budget_violation()
     }
     /// Expose the last recorded AXT rejection for tests.
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -4018,6 +3997,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let _ = cache_event;
         snapshot
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     #[doc(hidden)]
     pub fn force_sm_enabled_for_tests(&mut self, enabled: bool) {
         #[cfg(feature = "sm")]
@@ -4335,6 +4315,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         Some(map)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Install validated confidential-tree snapshots for state-read syscalls.
     ///
     /// # Errors
@@ -4497,6 +4478,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.default.set_network_id(network_id);
         self.network_id = Some(network_id);
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Set the current manifest id for namespace binding.
     pub fn set_current_manifest_id(&mut self, manifest: Option<String>) {
         self.current_manifest_id = manifest;
@@ -4902,6 +4884,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         )
         .ok)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Install a validated read-only snapshot of elections for state-read syscalls.
     ///
     /// # Errors
@@ -5146,17 +5129,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Arc::make_mut(&mut self.zk_verified_ballot).push_back(hash);
         Arc::make_mut(&mut self.zk_last_env_hash_ballot).push_back(hash);
     }
-    /// Test helper: seed the tally verification latch with a known envelope hash.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn __test_seed_tally_latch(&mut self, hash: [u8; 32]) {
-        Arc::make_mut(&mut self.zk_verified_tally).push_back(hash);
-        Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(hash);
-    }
-    /// Test-only: replace the pending ballot envelope hash queue with a single entry.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn __test_set_last_env_hash_ballot(&mut self, h: [u8; 32]) {
-        *Arc::make_mut(&mut self.zk_last_env_hash_ballot) = VecDeque::from([h]);
-    }
     /// Test-only: replace the pending tally envelope hash queue with a single entry.
     #[cfg(test)]
     pub fn __test_set_last_env_hash_tally(&mut self, h: [u8; 32]) {
@@ -5267,6 +5239,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_state_authorizations,
         })
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Apply queued ISIs via the executor, returning the executed instructions.
     ///
     /// # Errors
@@ -5278,6 +5251,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
         self.apply_queued_with_contract_runtime_context(tx, authority, None)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Apply queued ISIs via the executor while preserving an optional
     /// contract runtime context for nested contract execution.
     pub(crate) fn apply_queued_with_contract_runtime_context(
@@ -10640,6 +10614,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             commit_height,
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn flush_durable_state(
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
@@ -10669,6 +10644,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.durable_state_authorizations.clear();
         Ok(())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn flush_completed_axt(
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
@@ -10692,6 +10668,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.axt_handle_budget_ledger = Arc::new(BTreeMap::new());
         Ok(())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Execute a closure with a mutable reference to the [`CoreHost`] attached to `vm`.
     ///
     /// Used in tests to access the host state without juggling raw pointers.

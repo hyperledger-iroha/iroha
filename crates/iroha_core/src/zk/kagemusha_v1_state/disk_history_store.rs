@@ -97,6 +97,7 @@ impl KagemushaHistoryDeviceCredentialsV1 {
         })
     }
 
+    #[cfg(test)]
     /// Require the current state's exact profile, epoch, and device-key reference.
     pub(crate) fn require_current_binding(
         &self,

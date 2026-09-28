@@ -494,7 +494,7 @@ async fn prepare_contract_execution(
     );
     assert_eq!(
         builder.payload().admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
     );
     let signing_b64 = response
         .get("signing_message_b64")
@@ -587,7 +587,7 @@ async fn prepare_contract_execution(
     let error: iroha_torii_shared::ErrorEnvelope =
         norito::decode_from_bytes(&bytes).expect("strict ingress Norito error envelope");
     #[cfg(feature = "connect")]
-    let expected_code = "route_unavailable";
+    let expected_code = "queue_plan_journal_unavailable";
     #[cfg(not(feature = "connect"))]
     let expected_code = "queue_plan_synced_transport_unavailable";
     assert_eq!(error.code(), expected_code, "{error:?}");
@@ -602,8 +602,8 @@ async fn prepare_contract_execution(
     }
 }
 /// Execute the unchanged caller-signed payload in an explicit test-only world overlay.
-/// This exercises Core transaction/contract semantics, without synthesizing QP acceptance,
-/// a merge carrier, transaction membership, or a committed block.
+/// This exercises Core transaction/contract semantics without claiming durable admission,
+/// transaction membership, or a committed block.
 fn execute_prepared_contract_in_test_overlay(
     state: &Arc<State>,
     prepared: &PreparedContractExecution,
@@ -616,7 +616,7 @@ fn execute_prepared_contract_in_test_overlay(
         .expect("exact signed fixture");
     assert_eq!(
         prepared.transaction.admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
     );
     let committed_height = state.committed_height();
     let header = iroha_data_model::block::BlockHeader::new(
@@ -722,7 +722,7 @@ async fn run_contract_hajimari_in_test_overlay(
     execute_prepared_contract_in_test_overlay(state, &prepared, block_height);
 }
 #[tokio::test]
-async fn contracts_call_prepares_exact_payload_and_requires_certified_admission() {
+async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() {
     let (creds, state, kura) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_noop_program();

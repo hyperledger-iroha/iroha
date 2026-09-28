@@ -9,11 +9,12 @@ use iroha_data_model::da::{
     types::StorageTicketId,
 };
 use iroha_model_base::topology::LaneId;
-use norito::{decode_from_bytes, to_bytes};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+#[cfg(test)]
+use norito::decode_from_bytes;
+use norito::to_bytes;
+#[cfg(test)]
+use std::path::Path;
+use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 /// Errors encountered while loading DA pin intents from disk.
 #[derive(Debug, Error)]
@@ -101,6 +102,7 @@ pub enum DaPinIntentSpoolError {
         observed: ReplayFingerprint,
     },
 }
+#[cfg(test)]
 /// Load all DA pin intents from the spool directory.
 ///
 /// Files are filtered by filename (`da-pin-intent-*.norito`), checked against their advertised
@@ -173,6 +175,7 @@ pub fn load_pin_intents(
     });
     Ok(Some(intents))
 }
+#[cfg(test)]
 fn open_pin_intent_spool_dir(
     spool_dir: &Path,
 ) -> Result<Option<std::fs::ReadDir>, DaPinIntentSpoolError> {
@@ -202,6 +205,7 @@ fn open_pin_intent_spool_dir(
             source,
         })
 }
+#[cfg(test)]
 fn read_regular_pin_intent_file(path: &Path) -> Result<Vec<u8>, DaPinIntentSpoolError> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|source| DaPinIntentSpoolError::ReadFile {
@@ -224,6 +228,7 @@ fn read_regular_pin_intent_file(path: &Path) -> Result<Vec<u8>, DaPinIntentSpool
     revalidate_regular_pin_intent_file(path, &metadata, bytes.len())?;
     Ok(bytes)
 }
+#[cfg(test)]
 fn revalidate_regular_pin_intent_file(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -256,6 +261,7 @@ fn revalidate_regular_pin_intent_file(
     }
     Ok(())
 }
+#[cfg(test)]
 fn is_da_pin_file(path: &Path) -> Result<bool, DaPinIntentSpoolError> {
     let Some(name) = path.file_name() else {
         return Ok(false);
@@ -268,6 +274,7 @@ fn is_da_pin_file(path: &Path) -> Result<bool, DaPinIntentSpoolError> {
     }
     Ok(false)
 }
+#[cfg(test)]
 #[cfg(unix)]
 fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
@@ -278,6 +285,7 @@ fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix:
 fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
     false
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct PinIntentFileKey {
     lane_id: LaneId,
@@ -286,6 +294,7 @@ struct PinIntentFileKey {
     storage_ticket: StorageTicketId,
     fingerprint: ReplayFingerprint,
 }
+#[cfg(test)]
 fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinIntentSpoolError> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err(malformed_filename(path));
@@ -328,6 +337,7 @@ fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinInten
         fingerprint,
     })
 }
+#[cfg(test)]
 fn parse_fixed_hex_u32(
     value: &str,
     width: usize,
@@ -338,6 +348,7 @@ fn parse_fixed_hex_u32(
     }
     u32::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
+#[cfg(test)]
 fn parse_fixed_hex_u64(
     value: &str,
     width: usize,
@@ -348,6 +359,7 @@ fn parse_fixed_hex_u64(
     }
     u64::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
+#[cfg(test)]
 fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaPinIntentSpoolError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
@@ -356,11 +368,13 @@ fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaPinIntentS
     hex::decode_to_slice(value, &mut bytes).map_err(|_| malformed_filename(path))?;
     Ok(bytes)
 }
+#[cfg(test)]
 fn malformed_filename(path: &Path) -> DaPinIntentSpoolError {
     DaPinIntentSpoolError::MalformedFilename {
         path: path.to_path_buf(),
     }
 }
+#[cfg(test)]
 fn decode_pin_intent(
     data: &[u8],
     path: &Path,

@@ -166,7 +166,8 @@ a per-device CUDA pool, so concurrent callers no longer depend on an outer Rust
 serialization lane while also avoiding fresh allocation churn on every submit.
 The next missing CUDA feature was BN254; that first slice is now live too.
 FASTPQ now ships low-level `fastpq_bn254_fft(...)` / `fastpq_bn254_lde(...)`
-wrappers that stage canonical BN254 twiddles on the host, validate cosets, and
+wrappers (compiled with the `dev-tools` feature for `fastpq_cuda_bench` and the
+parity tests) that stage canonical BN254 twiddles on the host, validate cosets, and
 drive matching CUDA kernels that convert limbs into Montgomery form on-device
 and match the scalar BN254 reference in focused parity tests. The remaining
 BN254 work is therefore higher-level integration and measurement, not basic

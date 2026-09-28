@@ -800,6 +800,7 @@ impl KagemushaMintFinalityLocalAuthorityV1 {
         Ok((keys, proof))
     }
 
+    #[cfg(test)]
     /// Prove readiness of this local peer in an authenticated prepared authority.
     ///
     /// This proves both Pasta keys while retaining the private seed in its custody owner. The

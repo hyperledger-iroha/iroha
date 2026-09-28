@@ -1,5 +1,5 @@
 error: At least one argument must be a `StateTransaction` or `StateReadOnly`.
- --> tests/ui_fail/args_no_wsv.rs:4:12
+ --> tests/ui_fail/args_no_wsv.rs:3:12
   |
-4 | fn execute(_state: &World) -> Result<(), ()> {
+3 | fn execute(_state: &World) -> Result<(), ()> {
   |            ^^^^^^^^^^^^^^

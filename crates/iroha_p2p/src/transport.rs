@@ -1849,7 +1849,7 @@ fn apply_tcp_socket_options_sockref(
     tcp_nodelay: bool,
     tcp_keepalive: Option<std::time::Duration>,
 ) {
-    let _ = sock_ref.set_nodelay(tcp_nodelay);
+    let _ = sock_ref.set_tcp_nodelay(tcp_nodelay);
     if let Some(idle) = tcp_keepalive {
         // Best-effort: keepalive knobs vary across OSes. Socket2 provides a safe wrapper.
         let keepalive = TcpKeepalive::new().with_time(idle);

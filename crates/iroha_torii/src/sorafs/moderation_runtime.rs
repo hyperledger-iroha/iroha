@@ -12,9 +12,10 @@ use iroha_core::{
     },
 };
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
+use iroha_data_model::account::AccountId;
 use iroha_data_model::{
     NetworkId,
-    account::AccountId,
     query::sorafs::prelude::{FindSorafsModerationEvents, FindSorafsModerationSnapshot},
     sorafs::moderation_ledger::{
         MODERATION_FINALIZED_SNAPSHOT_VERSION_V1, MODERATION_QUERY_MAX_CASES_V1,
@@ -27,16 +28,17 @@ use iroha_data_model::{
         TransactionPayload,
     },
 };
-use mv::storage::StorageReadOnly;
+#[cfg(test)]
+use sorafs_node::moderation_orchestrator::ModerationPanelNotificationKindV1;
+#[cfg(test)]
+use sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1;
 use sorafs_node::moderation_orchestrator::{
-    MODERATION_EXTERNAL_WORK_LEASE_MS_V1, MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
-    MODERATION_TRANSACTION_TTL_MS_V1, ModerationFinalizedCursorV1,
-    ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1,
+    MODERATION_EXTERNAL_WORK_LEASE_MS_V1, MODERATION_TRANSACTION_TTL_MS_V1,
+    ModerationFinalizedCursorV1, ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1,
     ModerationOrchestratorDurableHealthV1, ModerationOrchestratorV1,
     ModerationPanelNotificationArchiveHeadV1, ModerationPanelNotificationClaimV1,
     ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1,
-    ModerationPanelNotificationKindV1, ModerationPanelNotificationSinkV1,
-    ModerationPanelNotificationV1, ModerationRuntimeProviderQualificationErrorV1,
+    ModerationPanelNotificationSinkV1, ModerationRuntimeProviderQualificationErrorV1,
     ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1,
     ModerationRuntimeProviderV1, ModerationSignedTransactionV1, ModerationSnapshotReadErrorV1,
     ModerationSubmissionFailureV1, ModerationSubmissionLookupV1, ModerationTerminalHandoffKindV1,
@@ -868,6 +870,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                     Err(ModerationStrictIngressFailureV1::Unavailable)
                 }
                 iroha_core::queue::Error::Expired
+                | iroha_core::queue::Error::UnsupportedTransactionAdmission { .. }
                 | iroha_core::queue::Error::KagemushaV1OperationCarrierRejected { .. }
                 | iroha_core::queue::Error::KagemushaV1OperationIdConflict { .. }
                 | iroha_core::queue::Error::UnregisteredAuthority { .. }
@@ -1051,24 +1054,6 @@ impl ModerationStateSnapshotReaderV1 {
             state,
             event_page_size: DEFAULT_MODERATION_EVENT_PAGE_SIZE_V1,
         }
-    }
-    /// Construct a reader with an explicit native committed-event page size.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModerationSnapshotReadErrorV1::ResourceExhausted`] when the
-    /// page size is zero or exceeds the native query ceiling.
-    pub fn with_event_page_size(
-        state: Arc<State>,
-        event_page_size: u32,
-    ) -> Result<Self, ModerationSnapshotReadErrorV1> {
-        if !(1..=MODERATION_QUERY_MAX_EVENTS_V1).contains(&event_page_size) {
-            return Err(ModerationSnapshotReadErrorV1::ResourceExhausted);
-        }
-        Ok(Self {
-            state,
-            event_page_size,
-        })
     }
 }
 impl ModerationFinalizedSnapshotReaderV1 for ModerationStateSnapshotReaderV1 {

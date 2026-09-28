@@ -10,9 +10,7 @@ pub mod bigint;
 pub mod calendar;
 pub mod chain_id;
 pub mod cmpext;
-#[cfg(not(feature = "ffi_import"))]
 pub mod const_vec;
-#[cfg(not(feature = "ffi_import"))]
 pub mod conststr;
 pub mod erasure;
 #[cfg(any(
@@ -62,27 +60,6 @@ pub use crate::{
     },
     numeric_abi::{DecimalValueV1, IntValueV1, NumericAbiError, QuantityValueV1},
 };
-mod ffi {
-    //! Definitions and implementations of FFI related functionalities
-    macro_rules! ffi_item {
-        ($it: item $($attr: meta)?) => {
-            #[cfg(all(not(feature = "ffi_export"), not(feature = "ffi_import")))]
-            $it
-            #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
-            #[derive(iroha_ffi::FfiType)]
-            #[iroha_ffi::ffi_export]
-            $(#[$attr])?
-            $it
-            #[cfg(feature = "ffi_import")]
-            iroha_ffi::ffi! {
-                #[iroha_ffi::ffi_import]
-                $(#[$attr])?
-                $it
-            }
-        };
-    }
-    pub(crate) use ffi_item;
-}
 
 #[cfg(test)]
 mod schema_identity;
@@ -90,5 +67,5 @@ mod schema_identity;
 #[cfg(test)]
 mod address_schema_identity;
 
-#[cfg(all(test, not(feature = "ffi_import")))]
+#[cfg(test)]
 mod payload_decode_tests;

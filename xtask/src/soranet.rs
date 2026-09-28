@@ -1,4 +1,4 @@
-use serde::Serialize;
+use norito::derive::JsonSerialize;
 use soranet_relay::constant_rate::{self, CONSTANT_RATE_CELL_BYTES, ConstantRateProfileSpec};
 use std::{
     error::Error,
@@ -47,7 +47,7 @@ pub enum ConstantRateProfileError {
     #[error("tick values must be greater than zero")]
     InvalidTick,
 }
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, JsonSerialize, PartialEq)]
 pub struct ConstantRateProfileSummary {
     pub name: &'static str,
     pub description: &'static str,
@@ -63,17 +63,17 @@ pub struct ConstantRateProfileSummary {
     pub neighbor_cap: u16,
     pub auto_disable_threshold_percent: f64,
 }
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, JsonSerialize, PartialEq)]
 pub struct TickBandwidthEntry {
     pub tick_millis: f64,
     pub cells_per_sec: f64,
     pub payload_kib_per_sec: f64,
     pub payload_mbps: f64,
 }
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, JsonSerialize, PartialEq)]
 pub struct ConstantRateProfileReport {
     pub profiles: Vec<ConstantRateProfileSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub tick_bandwidth: Option<Vec<TickBandwidthEntry>>,
 }
 pub fn build_constant_rate_report(

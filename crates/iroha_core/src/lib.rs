@@ -100,6 +100,7 @@ pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
 pub mod jurisdiction;
 /// Qualified-provider encryption for Kagemusha V1 credit openings.
+#[cfg(test)]
 pub mod kagemusha_v1_crypto;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
@@ -210,7 +211,6 @@ pub fn validate_genesis_block(
 ) -> Result<(), block::InvalidGenesisError> {
     block::check_genesis_block(block, genesis_account)
 }
-use core::time::Duration;
 use gossiper::TransactionGossip;
 use iroha_data_model::{events::EventBox, prelude::*};
 use iroha_primitives::unique_vec::UniqueVec;
@@ -231,8 +231,6 @@ use crate::{
 use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
 use iroha_torii_shared::connect as connect_proto;
 use tokio::sync::broadcast;
-/// The interval at which sumeragi checks if there are tx in the `queue`.
-pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
 /// Maximum encoded P2P frame size accepted for one lane-drain vote.
 ///
 /// The cap covers the largest valid embedded lane committee and is enforced by
@@ -1403,7 +1401,7 @@ pub mod prelude {
     //! Re-exports important traits and types. Meant to be glob imported when using `Iroha`.
     #[doc(inline)]
     pub use crate::{
-        oracle::{ObservationAdmission, OracleAggregator, aggregate, validate_connector_request},
+        oracle::{ObservationAdmission, OracleAggregator, aggregate},
         smartcontracts::ValidSingularQuery,
         state::{StateReadOnly, StateView, World, WorldReadOnly},
         tx::AcceptedTransaction,

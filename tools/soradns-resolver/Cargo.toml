@@ -35,8 +35,6 @@ blake3 = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 norito_derive = { workspace = true }
 hex = { workspace = true, features = ["alloc"] }
-url = { workspace = true }
-once_cell = { workspace = true }
 time = { workspace = true }
 thiserror = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }

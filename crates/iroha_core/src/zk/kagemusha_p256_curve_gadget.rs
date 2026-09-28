@@ -74,7 +74,6 @@ pub(crate) fn assert_p256_affine_point<F: BigPrimeField>(
 ///
 /// Input validation is repeated here so a future caller cannot accidentally
 /// use an unchecked or identity point with `divide_unsafe`.
-#[cfg_attr(not(test), expect(dead_code, reason = "bounded point test helper"))]
 pub(crate) fn double_p256_affine_point<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -131,7 +130,6 @@ pub(crate) fn assert_p256_affine_or_identity<F: BigPrimeField>(
 /// This uses the actual P-256 `a = -3` doubling numerator. Denominators are
 /// masked to one in inactive cases before division, so no exceptional case
 /// reaches an undefined nonnative-field division.
-#[cfg_attr(not(test), expect(dead_code, reason = "bounded group test helper"))]
 pub(crate) fn add_p256_affine_complete<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,

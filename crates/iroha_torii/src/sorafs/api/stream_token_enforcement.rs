@@ -15,7 +15,7 @@ use iroha_data_model::sorafs::{
         StreamTokenViolationKindV1,
     },
 };
-use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
+use sorafs_manifest::StreamTokenBodyV1;
 /// An immutable lifetime bound derived from the authenticated accepted record.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RangeFetchLeaseWindow {

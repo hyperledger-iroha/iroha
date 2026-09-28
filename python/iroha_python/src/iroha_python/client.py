@@ -9671,10 +9671,8 @@ class TriggerCompletionRecord:
             payload.get("source"),
             "trigger completion record `source`",
         )
-        if source not in {"block_result", "reconstructed_result"}:
-            raise TypeError(
-                "trigger completion record `source` must be block_result or reconstructed_result"
-            )
+        if source != "execution_output":
+            raise TypeError("trigger completion record `source` must be execution_output")
         return cls(
             block_height=block_height,
             entrypoint_index=entrypoint_index,
@@ -23606,7 +23604,6 @@ class ToriiClient(
         to_height: Optional[int] = None,
         limit: Optional[int] = None,
         scan_limit_blocks: Optional[int] = None,
-        include_reconstructed: Optional[bool] = None,
     ) -> TriggerCompletionList:
         """Read typed, step-indexed trigger completion evidence."""
 
@@ -23649,10 +23646,6 @@ class ToriiClient(
                 if normalized > 0xFFFFFFFFFFFFFFFF:
                     raise ValueError(f"list_trigger_completions.{name} must fit in a u64")
                 params[name] = normalized
-        if include_reconstructed is not None:
-            if not isinstance(include_reconstructed, bool):
-                raise TypeError("list_trigger_completions.include_reconstructed must be a bool")
-            params["include_reconstructed"] = include_reconstructed
 
         payload = self.request_json(
             "GET",

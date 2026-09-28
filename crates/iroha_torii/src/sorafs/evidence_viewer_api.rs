@@ -16,7 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use iroha_core::state::WorldReadOnly;
 use iroha_data_model::role::RoleId;
 use norito::json::{self, Map, Value};
 use sorafs_node::{

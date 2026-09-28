@@ -2,10 +2,7 @@
 
 #![allow(clippy::redundant_pub_crate)]
 use super::{ingest::ManifestArtifacts, persistence::DaReceiptLog, storage_class_label};
-use crate::{
-    routing::MaybeTelemetry,
-    sorafs::{AliasCachePolicy, AliasProofEvaluation},
-};
+use crate::{routing::MaybeTelemetry, sorafs::AliasCachePolicy};
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
@@ -16,14 +13,12 @@ use iroha_data_model::{
     da::prelude::*,
     sorafs::pin_registry::StorageClass,
     taikai::{
-        SegmentDuration, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
-        TAIKAI_ANCHOR_RECEIPT_VERSION_V1, TaikaiAliasBinding, TaikaiAnchorReceiptBodyV1,
-        TaikaiAnchorReceiptV1, TaikaiAudioLayout, TaikaiAvailabilityClass, TaikaiCarPointer,
-        TaikaiCodec, TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiIngestPointer, TaikaiParseError,
-        TaikaiRenditionId, TaikaiRenditionRouteV1, TaikaiResolution, TaikaiRoutingManifestV1,
-        TaikaiSegmentEnvelopeV1, TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1,
-        TaikaiSegmentWindow, TaikaiStreamId, TaikaiTrackKind, TaikaiTrackMetadata,
-        is_canonical_taikai_anchor_base_id,
+        SegmentDuration, SegmentTimestamp, TaikaiAliasBinding, TaikaiAnchorReceiptV1,
+        TaikaiAudioLayout, TaikaiAvailabilityClass, TaikaiCarPointer, TaikaiCodec, TaikaiEventId,
+        TaikaiIngestPointer, TaikaiParseError, TaikaiRenditionId, TaikaiRenditionRouteV1,
+        TaikaiResolution, TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1,
+        TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow,
+        TaikaiStreamId, TaikaiTrackKind, TaikaiTrackMetadata, is_canonical_taikai_anchor_base_id,
     },
 };
 use iroha_futures::supervisor::ShutdownSignal;
@@ -41,9 +36,8 @@ use sorafs_manifest::{ProviderAdmissionCouncilPolicy, canonical_manifest_root_ci
 use std::{
     borrow::Cow,
     fs::{self, OpenOptions},
-    io::{self, ErrorKind},
+    io::ErrorKind,
     path::{Path, PathBuf},
-    str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 pub(crate) const TAIKAI_SPOOL_SUBDIR: &str = "taikai";
@@ -138,7 +132,6 @@ pub(crate) mod taikai_ingest {
         pub stream_id: String,
         pub rendition_id: String,
         pub segment_sequence: u64,
-        pub wallclock_unix_ms: u64,
         pub ingest_latency_ms: Option<u32>,
         pub live_edge_drift_ms: Option<i32>,
     }
@@ -171,10 +164,8 @@ pub(crate) mod taikai_ingest {
     }
     pub(crate) struct TrmLineageGuard {
         manifest_store_dir: PathBuf,
-        base_dir: PathBuf,
         alias_namespace: String,
         alias_name: String,
-        alias_slug: String,
         _lock: TrmAliasLock,
         record_path: PathBuf,
         pending_path: PathBuf,
@@ -238,10 +229,8 @@ pub(crate) mod taikai_ingest {
             }
             Ok(Some(Self {
                 manifest_store_dir: spool_dir.to_path_buf(),
-                base_dir,
                 alias_namespace: alias.namespace.clone(),
                 alias_name: alias.name.clone(),
-                alias_slug,
                 _lock: lock,
                 record_path,
                 pending_path,
@@ -519,6 +508,7 @@ pub(crate) mod taikai_ingest {
             })?;
             Ok(())
         }
+        #[cfg(test)]
         pub fn commit(
             &mut self,
             window: TaikaiSegmentWindow,
@@ -546,6 +536,7 @@ pub(crate) mod taikai_ingest {
                 taikai_artifact_base_id(lane_id, epoch, sequence, storage_ticket, fingerprint);
             self.commit_record(window, manifest_digest_hex, Some(artifact_base_id))
         }
+        #[cfg(test)]
         fn commit_record(
             &mut self,
             window: TaikaiSegmentWindow,
@@ -1548,7 +1539,6 @@ pub(crate) mod taikai_ingest {
             stream_id: stream_label,
             rendition_id: rendition_label,
             segment_sequence,
-            wallclock_unix_ms,
             ingest_latency_ms: envelope.instrumentation.encoder_to_ingest_latency_ms,
             live_edge_drift_ms,
         };
@@ -2463,9 +2453,11 @@ pub(crate) mod taikai_ingest {
         base_id: String,
     }
     impl PendingUpload {
+        #[cfg(test)]
         pub(crate) fn base_id(&self) -> &str {
             &self.base_id
         }
+        #[cfg(test)]
         pub(crate) fn body(&self) -> &str {
             &self.body
         }
@@ -3879,6 +3871,12 @@ pub(crate) mod taikai_ingest {
         }
     }
 }
+#[cfg(test)]
+use iroha_data_model::taikai::TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1;
+#[cfg(test)]
+use iroha_data_model::taikai::TAIKAI_ANCHOR_RECEIPT_VERSION_V1;
+#[cfg(test)]
+use iroha_data_model::taikai::TaikaiAnchorReceiptBodyV1;
 pub(crate) use taikai_ingest::spawn_anchor_worker;
 /// Extract the Taikai stream label from metadata for telemetry tagging.
 pub(crate) fn stream_label_from_metadata(metadata: &ExtraMetadata) -> Option<String> {
@@ -3935,8 +3933,6 @@ pub(crate) struct TaikaiSsmOutcome {
     pub(crate) ssm_digest: BlobDigest,
     /// Alias binding authenticated by the SSM proof.
     pub(crate) alias_binding: TaikaiAliasBinding,
-    /// Alias proof evaluation metadata.
-    pub(crate) evaluation: AliasProofEvaluation,
 }
 /// Validate a Taikai signing manifest payload against ingest artifacts.
 pub(crate) fn validate_taikai_ssm(
@@ -4103,7 +4099,6 @@ pub(crate) fn validate_taikai_ssm(
         publisher_account: signing_manifest.body.publisher_account.clone(),
         alias_label,
         ssm_digest,
-        evaluation,
         alias_binding: alias_binding.clone(),
     })
 }

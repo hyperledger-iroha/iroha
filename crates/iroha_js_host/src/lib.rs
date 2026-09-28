@@ -6516,7 +6516,7 @@ fn configure_transaction_builder(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<TransactionBuilder> {
-    builder = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+    builder = builder.with_admission_intent(TransactionAdmissionIntent::Ordinary);
     if let Some(ms) = creation_time_ms {
         let millis = js_number_to_u64(ms, "creation_time_ms")?;
         builder.set_creation_time(Duration::from_millis(millis));
@@ -7466,10 +7466,10 @@ pub fn finalize_signed_transaction(
         &expected_network_id,
         "JavaScript external transaction finalizer",
     )?;
-    if builder.payload().admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+    if builder.payload().admission_intent() != TransactionAdmissionIntent::Ordinary {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            "JavaScript external transaction finalizer requires QueuePlanSynced admission intent",
+            "JavaScript external transaction finalizer requires Ordinary admission intent",
         ));
     }
     let payload_hash = builder.payload_hash_bytes();
@@ -13040,7 +13040,7 @@ seiyaku Privacy {
             .expect("native payload builder must emit canonical bytes");
         assert_eq!(
             builder.payload().admission_intent(),
-            TransactionAdmissionIntent::QueuePlanSynced
+            TransactionAdmissionIntent::Ordinary
         );
         assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
         assert_eq!(
@@ -13204,6 +13204,20 @@ seiyaku Privacy {
             public_key: Buffer::from(public_key_bytes.to_vec()),
             authority: authority_i105.clone(),
         };
+        let retired_builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
+            .expect("decode baseline payload")
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        let retired_hash = retired_builder.payload_hash_bytes();
+        let retired_signature = Signature::try_new(authority_key.private_key(), &retired_hash)
+            .expect("sign exact retired intent");
+        let mut retired = valid_input();
+        retired.payload_bytes = Buffer::from(retired_builder.encode_payload());
+        retired.payload_hash_hex = Some(hex::encode(retired_hash));
+        retired.signature = Buffer::from(retired_signature.payload().to_vec());
+        let error = finalize_signed_transaction(retired)
+            .err()
+            .expect("retired intent must reject");
+        assert!(error.reason.contains("requires Ordinary admission intent"));
         let mut missing_authority = valid_input();
         missing_authority.authority.clear();
         assert!(finalize_signed_transaction(missing_authority).is_err());

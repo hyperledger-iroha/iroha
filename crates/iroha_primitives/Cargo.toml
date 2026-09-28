@@ -21,12 +21,6 @@ maintenance = { status = "actively-developed" }
 default = ["json", "simd-accel"]
 # Enable JSON helpers backed by Norito.
 json = []
-# Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
-#ffi_import = ["iroha_ffi", "rust_decimal/c-repr"]
-
-# Expose FFI API for dynamic linking (Internal use only)
-ffi_export = ["iroha_ffi", "rust_decimal/c-repr"]
-
 trybuild-tests = ["dep:trybuild"]
 bench = []
 simd-accel = []
@@ -37,8 +31,6 @@ iroha_primitives_derive = { path = "../iroha_primitives_derive" }
 
 iroha_macro = { workspace = true }
 iroha_schema = { workspace = true }
-iroha_ffi = { workspace = true, optional = true }
-rust_decimal = { workspace = true }
 blake3 = { workspace = true }
 
 derive_more = { workspace = true, features = ["display", "debug", "from", "as_ref", "deref", "constructor", "into_iterator"] }

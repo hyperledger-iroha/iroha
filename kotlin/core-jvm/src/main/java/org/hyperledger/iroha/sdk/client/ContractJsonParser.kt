@@ -57,7 +57,7 @@ object ContractJsonParser {
             feePayment = response.operationReceipt.feePayment,
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
-            expectedAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
             context = "contract call response",
         )
         check(

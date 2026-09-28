@@ -19,10 +19,12 @@ use iroha_torii_shared::da::{
     DaListSnapshot, DaQueryValidationError,
 };
 use std::num::NonZeroUsize;
+#[cfg(test)]
 const ENDPOINT_DA_COMMITMENTS: &str = "/v1/da/commitments";
+#[cfg(test)]
 const ENDPOINT_DA_COMMITMENTS_PROVE: &str = "/v1/da/commitments/prove";
+#[cfg(test)]
 const ENDPOINT_DA_COMMITMENTS_VERIFY: &str = "/v1/da/commitments/verify";
-const ENDPOINT_DA_PROOF_POLICIES: &str = "/v1/da/proof-policies";
 /// HTTP handler for `/v1/da/commitments`.
 pub async fn handler_list_commitments(
     State(app): State<SharedAppState>,
@@ -229,6 +231,7 @@ fn request_matches_commitment(
     }
     true
 }
+#[cfg(test)]
 fn build_proof_from_store(
     store: &DaCommitmentStore,
     request: &DaCommitmentProofRequest,

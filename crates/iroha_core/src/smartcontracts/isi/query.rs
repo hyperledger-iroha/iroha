@@ -4,6 +4,7 @@
 mod accounting_tests;
 mod canonical_topk;
 mod fast_iter_decode;
+pub(crate) mod json_predicate;
 mod ordinary_iterable;
 mod ordinary_memory;
 mod ordinary_stored;
@@ -768,316 +769,129 @@ trait ExecuteSingularQuery {
 }
 impl ExecuteSingularQuery for SingularQueryBox {
     fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error> {
-        match self {
-            SingularQueryBox::FindExecutorDataModel(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindParameters(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAccountById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAccountByAlias(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAliasesByAccountId(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAccountRecoveryPolicyByAlias(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAccountRecoveryRequestByAlias(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindProofRecordById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindContractManifestByCodeHash(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAbiVersion(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAssetById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAssetDefinitionById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindNftSaleOfferById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindGameSessionById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindExecutionProofVerificationById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAssetEscrowById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindTriggerById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindTwitterBindingByHash(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindOracleFeedById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindOracleDisputeById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindOracleChangeById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindOracleProviderStatsByKey(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindLatestDefiOracleAttestation(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDomainEndorsements(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDomainEndorsementPolicy(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDomainCommittee(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDaPinIntentByTicket(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDaPinIntentByManifest(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDaPinIntentByAlias(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDaPinIntentByLaneEpochSequence(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindLaneRelayEnvelopeByRef(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindFeeSponsorProgramById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSettlementReceiptById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindFxCorridorPolicyRegistry(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindFxCorridorPolicyById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsProviderOwner(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPinManifest(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPinManifests(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookPolicy(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookOrderById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookReceiptById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookTradeById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookChannelById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookStatus(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookOrders(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookReceipts(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookTrades(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookChannels(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsOrderbookEvents(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReservePolicy(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReserveProviderById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReserveMovementById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReserveAppealById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReserveProviders(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReserveMovements(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReserveAppeals(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReserveEvents(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPopIssuerPolicy(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPopCommitmentRootByVersion(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPopAuditDigestBySequence(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsPopRegistryStatus(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            // These four query schemas are reserved for the native anonymity
-            // ledger. Until that ledger owns an authenticated storage and ZK
-            // admission boundary, fail closed instead of interpreting bytes
-            // from the generic smart-contract state namespace.
-            SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(q) => Err(Error::Find(
-                FindError::SorafsCitizenBond(q.serial_commitment),
-            )),
-            SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {
-                Err(Error::Find(FindError::SorafsCitizenBondSnapshot))
-            }
-            SingularQueryBox::FindSorafsRepairTask(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsRepairTasks(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsRepairStatus(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsRepairEvents(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsProofOutcome(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsProofOutcomeEvents(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReputationJournalEventBySourceId(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsReputationJournalEvents(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationPolicy(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationAppeal(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationJurorEligibility(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationCase(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationCommit(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationReveal(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationChallenge(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationOutcome(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationNoShow(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationStatus(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationSnapshot(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindSorafsModerationEvents(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDataspaceNameOwnerById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiExactPackageV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiExactReleaseV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiProviderBundleAttestationV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiResolverIndexV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiVersionsV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiMaintainersV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiArchiveLocationsV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiArchiveRetentionV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiAliasV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiAliasHistoryV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindMusubiOrderedPrefixV1(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindDomainById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindNftById(q) => Ok(SingularQueryOutputBox::from(q.execute(state)?)),
+        /// Route each uniform singular query to its own `execute` implementation.
+        macro_rules! dispatch_uniform {
+            ($query:expr; $($variant:ident),+ $(,)?) => {
+                match $query {
+                    // These two query schemas are reserved for the native anonymity
+                    // ledger. Until that ledger owns an authenticated storage and ZK
+                    // admission boundary, fail closed instead of interpreting bytes
+                    // from the generic smart-contract state namespace.
+                    SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(q) => Err(
+                        Error::Find(FindError::SorafsCitizenBond(q.serial_commitment)),
+                    ),
+                    SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {
+                        Err(Error::Find(FindError::SorafsCitizenBondSnapshot))
+                    }
+                    $(SingularQueryBox::$variant(q) => {
+                        Ok(SingularQueryOutputBox::from(q.execute(state)?))
+                    })+
+                }
+            };
         }
+        dispatch_uniform!(
+            self;
+            FindExecutorDataModel,
+            FindParameters,
+            FindAccountById,
+            FindAccountByAlias,
+            FindAliasesByAccountId,
+            FindAccountRecoveryPolicyByAlias,
+            FindAccountRecoveryRequestByAlias,
+            FindProofRecordById,
+            FindContractManifestByCodeHash,
+            FindAbiVersion,
+            FindAssetById,
+            FindAssetDefinitionById,
+            FindNftSaleOfferById,
+            FindGameSessionById,
+            FindExecutionProofVerificationById,
+            FindAssetEscrowById,
+            FindTriggerById,
+            FindTwitterBindingByHash,
+            FindOracleFeedById,
+            FindOracleDisputeById,
+            FindOracleChangeById,
+            FindOracleProviderStatsByKey,
+            FindLatestDefiOracleAttestation,
+            FindDomainEndorsements,
+            FindDomainEndorsementPolicy,
+            FindDomainCommittee,
+            FindDaPinIntentByTicket,
+            FindDaPinIntentByManifest,
+            FindDaPinIntentByAlias,
+            FindDaPinIntentByLaneEpochSequence,
+            FindLaneRelayEnvelopeByRef,
+            FindFeeSponsorProgramById,
+            FindSettlementReceiptById,
+            FindFxCorridorPolicyRegistry,
+            FindFxCorridorPolicyById,
+            FindSorafsProviderOwner,
+            FindSorafsPinManifest,
+            FindSorafsPinManifests,
+            FindSorafsOrderbookPolicy,
+            FindSorafsOrderbookOrderById,
+            FindSorafsOrderbookCancellationByOrderId,
+            FindSorafsOrderbookReceiptById,
+            FindSorafsOrderbookTradeById,
+            FindSorafsOrderbookChannelById,
+            FindSorafsOrderbookStatus,
+            FindSorafsOrderbookOrders,
+            FindSorafsOrderbookReceipts,
+            FindSorafsOrderbookTrades,
+            FindSorafsOrderbookChannels,
+            FindSorafsOrderbookEvents,
+            FindSorafsReservePolicy,
+            FindSorafsReserveProviderById,
+            FindSorafsReserveMovementById,
+            FindSorafsReserveAppealById,
+            FindSorafsReserveProviders,
+            FindSorafsReserveMovements,
+            FindSorafsReserveAppeals,
+            FindSorafsReserveEvents,
+            FindSorafsPopIssuerPolicy,
+            FindSorafsPopCredentialCommitmentByDigest,
+            FindSorafsPopCommitmentRootByVersion,
+            FindSorafsPopRevocationPublicationByVersion,
+            FindSorafsPopRevocationByNonceCommitment,
+            FindSorafsPopAuditDigestBySequence,
+            FindSorafsPopRegistryStatus,
+            FindSorafsRepairTask,
+            FindSorafsRepairTasks,
+            FindSorafsRepairStatus,
+            FindSorafsRepairEvents,
+            FindSorafsProofOutcome,
+            FindSorafsProofOutcomeEvents,
+            FindSorafsReputationJournalAuthorityPolicy,
+            FindSorafsReputationJournalEventBySourceId,
+            FindSorafsReputationJournalEvents,
+            FindSorafsModerationPolicy,
+            FindSorafsModerationAppeal,
+            FindSorafsModerationJurorEligibility,
+            FindSorafsModerationCase,
+            FindSorafsModerationCommit,
+            FindSorafsModerationReveal,
+            FindSorafsModerationChallenge,
+            FindSorafsModerationOutcome,
+            FindSorafsModerationNoShow,
+            FindSorafsModerationStatus,
+            FindSorafsModerationSnapshot,
+            FindSorafsModerationEvents,
+            FindDataspaceNameOwnerById,
+            FindMusubiExactPackageV1,
+            FindMusubiExactReleaseV1,
+            FindMusubiProviderBundleAttestationV1,
+            FindMusubiResolverIndexV1,
+            FindMusubiVersionsV1,
+            FindMusubiMaintainersV1,
+            FindMusubiArchiveLocationsV1,
+            FindMusubiArchiveRetentionV1,
+            FindMusubiAliasV1,
+            FindMusubiAliasHistoryV1,
+            FindMusubiOrderedPrefixV1,
+            FindDomainById,
+            FindNftById,
+        )
     }
 }
 /// Execute through a source-specific ordinary adapter when limits are attached.

@@ -949,24 +949,13 @@ fn select_weighted_provider(
     let mut choice: Option<usize> = None;
     let mut max_credit = i64::MIN;
     let mut policy_denied = Vec::new();
+    let mut policy_eligible_exists = false;
+    let now = tokio::time::Instant::now();
     for (idx, state) in states.iter().enumerate() {
-        if state.disabled || !state.is_available() {
+        if state.disabled || provider_can_serve_chunk(&state.config, spec).is_err() {
             continue;
         }
-        let now = tokio::time::Instant::now();
-        if state.rate_window.ready_at(u64::from(spec.length), now) > now {
-            continue;
-        }
-        if provider_can_serve_chunk(&state.config, spec).is_err() {
-            continue;
-        }
-        if let Some(limit) = state.burst_limit {
-            let projected = state.bytes_inflight.saturating_add(u64::from(spec.length));
-            if projected > limit {
-                continue;
-            }
-        }
-        if let Some(policy) = score_policy {
+        let priority_delta = if let Some(policy) = score_policy {
             let stats = state.runtime_stats();
             let decision = policy.score(ProviderScoreContext {
                 provider: &state.config,
@@ -977,12 +966,25 @@ fn select_weighted_provider(
                 policy_denied.push(idx);
                 continue;
             }
-            credits[idx] = credits[idx]
-                .saturating_add(state.config.weight().get() as i64)
-                .saturating_add(decision.priority_delta);
+            decision.priority_delta
         } else {
-            credits[idx] = credits[idx].saturating_add(state.config.weight().get() as i64);
+            0
+        };
+        // A compatible provider remains policy-eligible while its quota or capacity recovers.
+        // Only a policy rejection by every compatible live provider is terminal.
+        policy_eligible_exists = true;
+        if !state.is_available() || state.rate_window.ready_at(u64::from(spec.length), now) > now {
+            continue;
         }
+        if let Some(limit) = state.burst_limit {
+            let projected = state.bytes_inflight.saturating_add(u64::from(spec.length));
+            if projected > limit {
+                continue;
+            }
+        }
+        credits[idx] = credits[idx]
+            .saturating_add(state.config.weight().get() as i64)
+            .saturating_add(priority_delta);
         if credits[idx] > max_credit || choice.is_none() {
             max_credit = credits[idx];
             choice = Some(idx);
@@ -1006,7 +1008,7 @@ fn select_weighted_provider(
             return ProviderSelectionOutcome::Ineligible(reasons);
         }
     }
-    if !policy_denied.is_empty() {
+    if !policy_eligible_exists && !policy_denied.is_empty() {
         return ProviderSelectionOutcome::PolicyDenied(policy_denied);
     }
     ProviderSelectionOutcome::Unavailable

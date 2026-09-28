@@ -463,6 +463,7 @@ impl KagemushaVerifierReleaseLifecycleV1 {
         self.validate()
     }
 
+    #[cfg(test)]
     fn activate(
         &mut self,
         expected_active_release_id: [u8; 32],
@@ -740,36 +741,10 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
         Ok(())
     }
 
-    /// Atomically activate one preloaded standby release while retaining the old verifier.
-    ///
-    /// The expected active identifier makes the transition an exact from/to operation and rejects
-    /// stale control-plane updates. Release authentication occurs at installation; the caller is
-    /// responsible for admitting the corresponding governed release-activation authorization
-    /// before selecting the successor. Repeating an already-applied exact activation is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the expected active release changed, the successor is absent, or an
-    /// obsolete verification-only release is selected.
-    pub fn activate_authenticated_standby_release(
-        &mut self,
-        expected_active_release_id: [u8; 32],
-        successor_release_id: [u8; 32],
-    ) -> Result<(), String> {
-        self.lifecycle
-            .activate(expected_active_release_id, successor_release_id)
-    }
-
     /// Return the unique active authenticated release identifier.
     #[must_use]
     pub fn active_release_id(&self) -> Option<[u8; 32]> {
         self.lifecycle.active_release_id
-    }
-
-    /// Return one installed release's operational lifecycle status.
-    #[must_use]
-    pub fn release_status(&self, release_id: [u8; 32]) -> Option<KagemushaVerifierReleaseStatusV1> {
-        self.lifecycle.status(release_id)
     }
 
     fn runtime_for_new_top_up(

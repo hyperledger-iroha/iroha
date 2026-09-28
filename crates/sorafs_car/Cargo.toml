@@ -15,6 +15,10 @@ manifest = [
     "dep:iroha_data_model",
     "dep:iroha_crypto",
     "dep:ed25519-dalek",
+    "dep:httpdate",
+    "dep:url",
+    "dep:zstd",
+    "dep:toml",
 ]
 da_harness = [
     "manifest",
@@ -54,14 +58,14 @@ iroha_primitives = { workspace = true, optional = true, features = ["simd-accel"
 eyre = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 hex = "0.4.3"
-httpdate = "1.0.3"
+httpdate = { version = "1.0.3", optional = true }
 reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
 base64 = { version = "0.22.1" }
-url = { workspace = true }
+url = { workspace = true, optional = true }
 rand = { workspace = true }
 flate2 = "1.1.5"
-zstd = { workspace = true }
-toml = { version = "0.8.19" }
+zstd = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
@@ -69,9 +73,8 @@ rustix = { version = "1.1.4", features = ["fs"] }
 [dev-dependencies]
 iroha_model_base = { workspace = true }
 assert_cmd = "2.1.1"
-httpmock = "0.8.2"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util"] }
-sorafs_orchestrator = { path = "../sorafs_orchestrator" }
+sorafs_orchestrator = { workspace = true }
 
 [[bin]]
 name = "sorafs_chunk_store"

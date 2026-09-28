@@ -82,6 +82,7 @@ async fn handler_post_transactions_batch(
             // Authenticate the entire batch before any route selection or mutation.
             // Canonical retries check their actual signature but not fresh TTL/limits.
             for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
+                require_current_transaction_admission(transaction.signed().admission_intent())?;
                 let hash = transaction.hash();
                 #[cfg(feature = "connect")]
                 if let Some(authenticated) = AuthenticatedQueuePlanRetry::from_signed(
@@ -348,6 +349,7 @@ async fn handler_proof_retention_status(
     Ok(crate::utils::respond_with_format(status, format))
 }
 /// Debug endpoint exposing the current AXT proof cache state per dataspace.
+#[cfg(test)]
 #[cfg(feature = "telemetry")]
 async fn handler_axt_proof_cache_status(
     State(app): State<SharedAppState>,
@@ -552,7 +554,7 @@ async fn handler_pipeline_recovery_fastpq_proofs(
 }
 const PIPELINE_FASTPQ_RECOVERY_DEFAULT_LIMIT: usize = 16;
 const PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT: usize = 64;
-const PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(test)]
 const PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
 const PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
 const PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES: usize = 24 * 1024 * 1024;

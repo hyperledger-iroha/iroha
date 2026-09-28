@@ -361,7 +361,7 @@ fn write_account_i105_json(
     }
     let canonical_len = canonical.len;
     let canonical = &mut canonical.bytes[..canonical_len];
-    let checksum = musubi_i105_checksum_digits(canonical);
+    let checksum = crate::account::address::i105_checksum_digits(canonical);
     let leading_zeros = canonical.iter().take_while(|&&byte| byte == 0).count();
     // Base 105 needs fewer than two digits per input byte; including canonical leading zeroes,
     // twice the bounded account-address capacity is a strict fixed upper bound.
@@ -396,20 +396,19 @@ fn write_account_i105_json(
         digit_len = 1;
     }
     out.push('"')?;
-    match crate::account::address::chain_discriminant() {
-        0x02f1 => out.push_str("sora")?,
-        0x0171 => out.push_str("test")?,
-        0 => out.push_str("dev")?,
-        discriminant => {
-            out.push('n')?;
-            write_musubi_u16_decimal(discriminant, out)?;
-        }
-    }
-    for &digit in digits[..digit_len].iter().rev() {
-        write_musubi_i105_symbol(digit, out)?;
-    }
-    for digit in checksum {
-        write_musubi_i105_symbol(digit, out)?;
+    let mut numeric_sentinel = [0_u8; 6];
+    out.push_str(
+        core::str::from_utf8(crate::account::address::write_i105_sentinel(
+            crate::account::address::chain_discriminant(),
+            &mut numeric_sentinel,
+        ))
+        .expect("I105 sentinels are ASCII"),
+    )?;
+    for &digit in digits[..digit_len].iter().rev().chain(checksum.iter()) {
+        out.push_str(
+            crate::account::address::i105_symbol(digit)
+                .ok_or(norito::json::BoundedJsonError::Unsupported)?,
+        )?;
     }
     out.push('"')
 }
@@ -441,106 +440,4 @@ fn musubi_curve_id(
     crate::account::curve::CurveId::try_from_algorithm(algorithm)
         .map(crate::account::curve::CurveId::as_u8)
         .map_err(|_| norito::json::BoundedJsonError::Unsupported)
-}
-
-fn write_musubi_u16_decimal(
-    mut value: u16,
-    out: &mut dyn norito::json::JsonWriteSink,
-) -> Result<(), norito::json::BoundedJsonError> {
-    let mut digits = [0_u8; 5];
-    let mut cursor = digits.len();
-    loop {
-        cursor -= 1;
-        digits[cursor] = b'0' + u8::try_from(value % 10).expect("decimal digit fits in one byte");
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    for &digit in &digits[cursor..] {
-        out.push(char::from(digit))?;
-    }
-    Ok(())
-}
-
-fn write_musubi_i105_symbol(
-    digit: u8,
-    out: &mut dyn norito::json::JsonWriteSink,
-) -> Result<(), norito::json::BoundedJsonError> {
-    const ASCII: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    const KANA: [&str; 47] = [
-        "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ",
-        "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ",
-        "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-    ];
-    if let Some(&symbol) = ASCII.get(usize::from(digit)) {
-        out.push(char::from(symbol))
-    } else if let Some(symbol) = digit
-        .checked_sub(58)
-        .and_then(|index| KANA.get(usize::from(index)))
-    {
-        out.push_str(symbol)
-    } else {
-        Err(norito::json::BoundedJsonError::Unsupported)
-    }
-}
-
-fn musubi_i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
-    fn step(mut checksum: u32, value: u8) -> u32 {
-        const GENERATORS: [u32; 5] = [
-            0x3b6a_57b2,
-            0x2650_8e6d,
-            0x1ea1_19fa,
-            0x3d42_33dd,
-            0x2a14_62b3,
-        ];
-        let top = checksum >> 25;
-        checksum = ((checksum & 0x01ff_ffff) << 5) ^ u32::from(value);
-        for (index, generator) in GENERATORS.iter().enumerate() {
-            if (top >> index) & 1 == 1 {
-                checksum ^= generator;
-            }
-        }
-        checksum
-    }
-    let mut checksum = 1_u32;
-    for &byte in b"snx" {
-        checksum = step(checksum, byte >> 5);
-    }
-    checksum = step(checksum, 0);
-    for &byte in b"snx" {
-        checksum = step(checksum, byte & 0x1f);
-    }
-    let mut accumulator = 0_u32;
-    let mut bits = 0_u32;
-    for &byte in canonical {
-        accumulator = (accumulator << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            checksum = step(
-                checksum,
-                u8::try_from((accumulator >> bits) & 0x1f)
-                    .expect("five-bit checksum word fits in one byte"),
-            );
-        }
-    }
-    if bits > 0 {
-        checksum = step(
-            checksum,
-            u8::try_from((accumulator << (5 - bits)) & 0x1f)
-                .expect("five-bit checksum word fits in one byte"),
-        );
-    }
-    for _ in 0..6 {
-        checksum = step(checksum, 0);
-    }
-    checksum ^= 0x2bc8_30a3;
-    let mut result = [0_u8; 6];
-    for (index, slot) in result.iter_mut().enumerate() {
-        let shift = 5 * (5 - index);
-        *slot = u8::try_from((checksum >> shift) & 0x1f)
-            .expect("five-bit checksum word fits in one byte");
-    }
-    result
 }

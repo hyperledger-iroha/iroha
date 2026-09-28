@@ -221,7 +221,6 @@ resolve_criterion_dir() {
     local candidates=(
         "$criterion_dir"
         "crates/iroha_crypto/$criterion_dir"
-        "crates/iroha_crypto/target-codex/criterion"
         "target-codex/criterion"
     )
     for dir in "${candidates[@]}"; do

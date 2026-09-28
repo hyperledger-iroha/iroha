@@ -42,12 +42,6 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 
 /// Stable schema name for the four-field readiness response.
 pub const KAGEMUSHA_READINESS_SCHEMA_NAME_V1: &str = "iroha.torii.v1.kagemusha.readiness.response";
-/// Stable schema name for an operation lookup selector.
-pub const KAGEMUSHA_OPERATION_LOOKUP_SCHEMA_NAME_V1: &str =
-    "iroha.torii.v1.kagemusha.operation.lookup";
-/// Stable schema name for a pollable operation response.
-pub const KAGEMUSHA_OPERATION_STATUS_SCHEMA_NAME_V1: &str =
-    "iroha.torii.v1.kagemusha.operation.status";
 /// Stable schema name for the payer-signed top-up transaction submitted to Torii.
 pub const KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.kagemusha.top_up.signed_transaction";
@@ -75,8 +69,6 @@ pub const KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1: usize = 32 *
 /// This includes one constant-size redemption voucher and request framing. It
 /// is independent of ancestry, receipt count, and proof depth.
 pub const KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1: usize = 8 * 1024;
-/// Maximum canonical operation lookup bytes.
-pub const KAGEMUSHA_OPERATION_LOOKUP_MAX_BYTES_V1: usize = 128;
 /// Maximum canonical operation-status response bytes.
 ///
 /// The bound covers the consensus roster certificate and one fixed-depth
@@ -471,20 +463,6 @@ pub fn decode_kagemusha_redemption_request_v1(
         decode_bounded_canonical(bytes, KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1)?;
     request.validate_shape()?;
     Ok(request)
-}
-
-/// Decode one exact operation lookup selector.
-///
-/// # Errors
-///
-/// Returns an error for an oversized, non-canonical, or invalid V1 selector.
-pub fn decode_kagemusha_operation_lookup_v1(
-    bytes: &[u8],
-) -> Result<KagemushaOperationLookupV1, KagemushaApiErrorV1> {
-    let lookup: KagemushaOperationLookupV1 =
-        decode_bounded_canonical(bytes, KAGEMUSHA_OPERATION_LOOKUP_MAX_BYTES_V1)?;
-    lookup.validate()?;
-    Ok(lookup)
 }
 
 /// Bounded-canonically decode one operation response without trusting its result.

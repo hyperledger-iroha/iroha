@@ -28,12 +28,9 @@ mod preauth_connection_lifetime_tests {
         response::Response,
         routing::{get, post},
     };
-    use futures::StreamExt as _;
-    use http_body_util::BodyExt as _;
     use iroha_crypto::Algorithm;
-    use std::{collections::HashSet, convert::Infallible, sync::Arc};
+    use std::{convert::Infallible, sync::Arc};
     use tokio::sync::{Semaphore, mpsc};
-    use tower::ServiceExt as _;
     fn app_with_scheme_cap(scheme: &str) -> SharedAppState {
         let mut app = crate::mk_app_state_for_tests();
         Arc::get_mut(&mut app)
@@ -1639,14 +1636,10 @@ mod canonical_stream_handshake_tests {
     use axum::extract::FromRequestParts;
     use axum::http::{HeaderMap, HeaderValue, header, request::Parts};
     use axum::{Router, body::Body, routing::get};
-    use std::{
-        collections::HashSet,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
     };
-    use tower::ServiceExt as _;
     fn error_code(error: Error) -> &'static str {
         match error {
             Error::AppQueryValidation { code, .. } => code,

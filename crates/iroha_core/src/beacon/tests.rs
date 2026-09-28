@@ -315,20 +315,6 @@ fn decode_fixed<const N: usize>(encoded: &str) -> [u8; N] {
         .unwrap_or_else(|bytes: Vec<u8>| panic!("expected {N} bytes, got {}", bytes.len()))
 }
 
-fn g2_generator() -> [u8; 96] {
-    decode_fixed(
-        "93e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049\
-             334cf11213945d57e5ac7d055d042b7e024aa2b2f08f0a91260805272dc51051\
-             c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb8",
-    )
-}
-
-fn neg_g2_generator() -> [u8; 96] {
-    let mut encoded = g2_generator();
-    encoded[0] ^= 0x20;
-    encoded
-}
-
 fn wrong_g1_signature() -> [u8; 48] {
     decode_fixed(
         "97f1d3a73197d7942695638c4fa9ac0f\

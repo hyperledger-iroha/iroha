@@ -4,7 +4,6 @@ use crate::{AxResponse, Error, SharedAppState};
 use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, Method, StatusCode, Uri},
-    response::IntoResponse as _,
 };
 use iroha_core::{
     queue::{RoutingDecision, RoutingResolveError},

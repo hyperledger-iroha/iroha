@@ -3,20 +3,19 @@
 //! Aggregate TEU gauges and per-lane/dataspace instruments are updated together for the mandatory
 //! Nexus scheduler so operators can inspect both network-wide and routed scheduler activity.
 mod manifest_status;
-#[cfg(feature = "telemetry")]
+#[cfg(all(test, feature = "telemetry"))]
 use crate::pipeline::access::AccessSetSource;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use crate::smartcontracts::isi::settlement::{SETTLEMENT_KIND_DVP, SETTLEMENT_KIND_PVP};
 use crate::{
-    da::DaShardCursorError,
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
     kura::{DurableV2FinalityTelemetrySummary, Kura},
     nexus::space_directory::SpaceDirectoryManifestSet,
-    queue::{Queue, QueueLimits},
+    queue::Queue,
     state::{State, WorldReadOnly},
-    status::{self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind},
+    status::{self, SettlementOutcomeKind},
 };
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
@@ -35,7 +34,6 @@ use iroha_data_model::soranet::privacy_metrics::{
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::{
     Identifiable,
-    asset::AssetDefinitionId,
     block::BlockHeader,
     nexus::{
         AxtPolicySnapshot, AxtRejectReason, DataSpaceCatalog, LaneCatalog, LaneStorageProfile,
@@ -84,7 +82,7 @@ use iroha_telemetry::privacy::{
 };
 use iroha_torii_shared::status::{
     GovernanceManifestActivation, Halo2Status, NexusDataspaceTeuStatus, NexusLaneTeuBuckets,
-    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, TxGossipCaps, TxGossipStatus,
+    NexusLaneTeuStatus, TxGossipCaps, TxGossipStatus,
 };
 use ivm::host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config};
 use mv::storage::StorageReadOnly;
@@ -101,7 +99,7 @@ use std::collections::btree_map::Entry as BTreeEntry;
 #[cfg(feature = "telemetry")]
 use std::sync::Mutex;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::{NonZeroU64, NonZeroUsize},
@@ -111,7 +109,6 @@ use std::{
     },
 };
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
-const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 fn quantity_metric_parts(amount: &Quantity) -> (u64, u64) {
     let units = amount
         .as_numeric()
@@ -389,6 +386,7 @@ pub struct DataspaceTeuGaugeUpdate {
     /// Latest SFQ virtual-finish tag.
     pub virtual_finish: u64,
 }
+#[cfg(test)]
 /// Summary of per-lane pipeline activity for the latest block.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LanePipelineSummary {
@@ -419,7 +417,7 @@ pub struct LanePipelineSummary {
     /// Scheduler utilization percentage (0..100) for this lane.
     pub scheduler_utilization_pct: u64,
     /// Histogram buckets for scheduler layer widths (le = [1,2,4,8,16,32,64,128]).
-    pub layer_width_buckets: SchedulerLayerWidthBuckets,
+    pub layer_width_buckets: iroha_torii_shared::status::SchedulerLayerWidthBuckets,
     /// Detached overlay executions prepared in the latest block.
     pub detached_prepared: u64,
     /// Detached overlay merges applied in the latest block.
@@ -429,6 +427,7 @@ pub struct LanePipelineSummary {
     /// Quarantine transactions executed for this lane.
     pub quarantine_executed: u64,
 }
+#[cfg(test)]
 /// Per-dataspace pipeline delta for the latest block.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DataspacePipelineSummary {
@@ -627,8 +626,8 @@ pub(crate) fn parliament_lifecycle_metric_projection(
     };
     Some((payload.transition_kind, payload.no_result_kind))
 }
+#[cfg(test)]
 #[cfg(feature = "telemetry")]
-#[allow(dead_code)]
 fn access_set_source_label(source: AccessSetSource) -> &'static str {
     match source {
         AccessSetSource::ManifestHints => "manifest_hints",
@@ -2056,12 +2055,6 @@ impl StateTelemetry {
             self.metrics.musubi.inc_governance_rejection(action, reason);
         }
     }
-    /// Record one Musubi commitment verification failure.
-    pub fn record_musubi_integrity_failure(&self, surface: MusubiIntegritySurfaceV1) {
-        if self.enabled {
-            self.metrics.musubi.inc_integrity_failure(surface);
-        }
-    }
     /// Record one bounded Musubi finalized-query cursor failure.
     pub fn record_musubi_cursor_failure(&self, reason: MusubiCursorFailureReasonV1) {
         if self.enabled {
@@ -2515,6 +2508,7 @@ impl StateTelemetry {
             .with_label_values(&[name])
             .observe(u64_to_f64(elapsed_ms));
     }
+    #[cfg(test)]
     #[cfg(feature = "telemetry")]
     fn lane_label_values(&self, lane_id: LaneId) -> (String, String) {
         let lane_label = lane_id.as_u32().to_string();
@@ -2631,6 +2625,7 @@ impl StateTelemetry {
         );
         Value::Object(payload)
     }
+    #[cfg(test)]
     #[cfg(feature = "telemetry")]
     /// Record per-lane pipeline summary data for the latest block.
     pub fn record_lane_pipeline_summary(&self, lane_id: LaneId, summary: LanePipelineSummary) {
@@ -2665,33 +2660,6 @@ impl StateTelemetry {
             entry.quarantine_executed = summary.quarantine_executed;
         });
     }
-    /// Refresh per-lane finality lag gauges relative to the provided head height.
-    pub fn update_lane_finality_lag(&self, head_height: u64) {
-        if !self.is_enabled() {
-            return;
-        }
-        let mut updates = Vec::new();
-        {
-            let mut guard = self
-                .metrics
-                .nexus_scheduler_lane_teu_status
-                .write()
-                .expect("lane TEU cache poisoned");
-            for entry in guard.values_mut() {
-                let lag = head_height.saturating_sub(entry.block_height);
-                entry.finality_lag_slots = lag;
-                updates.push((entry.lane_id, entry.dataspace_id, entry.block_height, lag));
-            }
-        }
-        for (lane_id, dataspace_id, block_height, lag) in updates {
-            let lane_label = lane_id.to_string();
-            let dataspace_label = dataspace_id.to_string();
-            self.metrics
-                .set_lane_block_height(&lane_label, &dataspace_label, block_height);
-            self.metrics
-                .set_lane_finality_lag(&lane_label, &dataspace_label, lag);
-        }
-    }
     /// Record finality information derived from a lane relay envelope.
     pub fn record_lane_relay_finality(
         &self,
@@ -2720,6 +2688,7 @@ impl StateTelemetry {
             entry.rbc_bytes_total = rbc_bytes_total;
         });
     }
+    #[cfg(test)]
     /// Record use of emergency validator overrides during lane relay validation.
     pub fn record_lane_relay_emergency_override(
         &self,
@@ -2757,6 +2726,7 @@ impl StateTelemetry {
         self.apply_dataspace_metadata(dataspace_id, entry);
         update(entry);
     }
+    #[cfg(test)]
     #[cfg(feature = "telemetry")]
     /// Record per-dataspace pipeline summary delta for the latest block.
     ///
@@ -3174,6 +3144,7 @@ impl StateTelemetry {
                 .inc();
         }
     }
+    #[cfg(test)]
     /// Record that a merge-ledger entry was committed.
     pub fn record_merge_ledger_entry(&self, epoch_id: u64, global_state_root: &Hash) {
         if self.is_enabled() {
@@ -3315,6 +3286,7 @@ impl StateTelemetry {
             });
         }
     }
+    #[cfg(test)]
     /// Increment TEU deferral counters for the provided lane and reason.
     pub fn inc_nexus_scheduler_lane_teu_deferral(
         &self,
@@ -3333,6 +3305,7 @@ impl StateTelemetry {
             });
         }
     }
+    #[cfg(test)]
     /// Increment the must-serve truncation counter for the provided lane.
     pub fn inc_nexus_scheduler_must_serve_truncations(&self, lane_id: LaneId, amount: u64) {
         if self.is_enabled() {
@@ -3459,11 +3432,12 @@ impl StateTelemetry {
                 .observe(proof_bytes_value);
         }
     }
+    #[cfg(test)]
     #[cfg(feature = "telemetry")]
     /// Record snapshot + eviction telemetry for confidential commitment trees.
     pub fn record_confidential_tree_stats(
         &self,
-        asset_id: &AssetDefinitionId,
+        asset_id: &iroha_data_model::asset::AssetDefinitionId,
         stats: ConfidentialTreeStats,
     ) {
         if !self.is_enabled() {
@@ -3577,6 +3551,7 @@ impl StateTelemetry {
     /// Commit an observation of amounts used in transactions
     [observe_tx_amount(value: f64) => .tx_amounts.observe(value);]
     }
+    #[cfg(test)]
     /// Set DAG vertices/edges for the latest validated block.
     pub fn set_pipeline_dag(&self, vertices: u64, edges: u64) {
         if self.is_enabled() {
@@ -3584,24 +3559,16 @@ impl StateTelemetry {
             self.metrics.pipeline_dag_edges.set(edges);
         }
     }
+    #[cfg(test)]
     /// Set DAG conflict rate in basis points for the latest validated block.
     pub fn set_pipeline_conflict_rate_bps(&self, bps: u64) {
         if self.is_enabled() {
             self.metrics.pipeline_conflict_rate_bps.set(bps);
         }
     }
-    /// Set overlay counters for the latest validated block.
-    pub fn set_pipeline_overlays(&self, overlays: u64, total_instructions: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_overlay_count.set(overlays);
-            self.metrics
-                .pipeline_overlay_instructions
-                .set(total_instructions);
-        }
-    }
+    #[cfg(test)]
     /// Increment the access-set source counter by `count`.
     #[cfg(feature = "telemetry")]
-    #[allow(dead_code)]
     pub(crate) fn inc_pipeline_access_set_source(&self, source: AccessSetSource, count: u64) {
         if self.is_enabled() && count > 0 {
             let label = access_set_source_label(source);
@@ -3665,6 +3632,7 @@ impl StateTelemetry {
     /// Set the total citizen count gauge.
     [record_citizens_total(total: u64) => .governance_citizens_total.set(total);]
     }
+    #[cfg(test)]
     /// Seed governance proposal gauges with the provided statuses.
     pub fn seed_governance_proposal_statuses(
         &self,
@@ -3749,83 +3717,28 @@ impl StateTelemetry {
             }
         }
     }
-    /// Set component partitioning stats (component count, max size, histogram buckets by `le`).
-    /// Buckets correspond to `le` in [1,2,4,8,16,32,64,128]. Values are component counts per bucket.
-    pub fn set_pipeline_components(&self, count: u64, max_size: u64, buckets: [u64; 8]) {
-        if self.is_enabled() {
-            self.metrics.pipeline_comp_count.set(count);
-            self.metrics.pipeline_comp_max.set(max_size);
-            // Emit histogram-style buckets with `le` labels
-            for (le, val) in PIPELINE_BUCKET_LABELS.iter().zip(buckets.iter()) {
-                self.metrics
-                    .pipeline_comp_hist_bucket
-                    .with_label_values(&[le])
-                    .set(*val);
-            }
-        }
-    }
-    /// Set peak layer width (max txs in any layer) for the latest validated block.
-    pub fn set_pipeline_peak_layer_width(&self, width: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_peak_layer_width.set(width);
-        }
-    }
-    /// Set average and median layer widths (rounded to integers).
-    pub fn set_pipeline_layer_avg_median(&self, avg: u64, median: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_layer_avg_width.set(avg);
-            self.metrics.pipeline_layer_median_width.set(median);
-        }
-    }
-    /// Set layer-width histogram buckets. Buckets `le` = [1,2,4,8,16,32,64,128]. Values are layer counts per bucket.
-    pub fn set_pipeline_layer_width_hist(&self, buckets: [u64; 8]) {
-        if self.is_enabled() {
-            for (le, val) in PIPELINE_BUCKET_LABELS.iter().zip(buckets.iter()) {
-                self.metrics
-                    .pipeline_layer_width_hist_bucket
-                    .with_label_values(&[le])
-                    .set(*val);
-            }
-        }
-    }
-    /// Set scheduler layer count for the latest validated block.
-    pub fn set_pipeline_layer_count(&self, count: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_layer_count.set(count);
-        }
-    }
-    /// Set scheduler utilization (percent 0..100) for the latest validated block.
-    pub fn set_pipeline_scheduler_utilization_pct(&self, pct: u64) {
-        if self.is_enabled() {
-            self.metrics
-                .pipeline_scheduler_utilization_pct
-                .set(pct.min(100));
-        }
-    }
-    /// Set total Norito-encoded overlay bytes for the latest validated block.
-    pub fn set_pipeline_overlay_bytes(&self, total_bytes: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_overlay_bytes.set(total_bytes);
-        }
-    }
+    #[cfg(test)]
     /// Set detached pipeline counters for the latest validated block.
     pub fn set_pipeline_detached_prepared(&self, count: u64) {
         if self.is_enabled() {
             self.metrics.pipeline_detached_prepared.set(count);
         }
     }
+    #[cfg(test)]
     /// Set detached-merged counter for the latest validated block.
     pub fn set_pipeline_detached_merged(&self, count: u64) {
         if self.is_enabled() {
             self.metrics.pipeline_detached_merged.set(count);
         }
     }
+    #[cfg(test)]
     /// Set detached-fallback counter for the latest validated block.
     pub fn set_pipeline_detached_fallback(&self, count: u64) {
         if self.is_enabled() {
             self.metrics.pipeline_detached_fallback.set(count);
         }
     }
+    #[cfg(test)]
     /// Set detached-fallback count for a specific reason in the latest validated block.
     pub fn set_pipeline_detached_fallback_reason(&self, reason: &'static str, count: u64) {
         if self.is_enabled() {
@@ -3864,6 +3777,7 @@ impl StateTelemetry {
             }
         }
     }
+    #[cfg(test)]
     /// Observe a pipeline stage timing (milliseconds) labeled by `stage`.
     pub fn observe_pipeline_stage_ms(&self, lane_id: LaneId, stage: &'static str, ms: f64) {
         if self.is_enabled() {
@@ -3874,6 +3788,7 @@ impl StateTelemetry {
                 .observe(ms);
         }
     }
+    #[cfg(test)]
     /// Observe AMX prepare latency (milliseconds) for the provided lane.
     pub fn observe_amx_prepare_ms(&self, lane_id: LaneId, ms: f64) {
         if self.is_enabled() {
@@ -3884,6 +3799,7 @@ impl StateTelemetry {
                 .observe(ms);
         }
     }
+    #[cfg(test)]
     /// Observe AMX commit latency (milliseconds) for the provided lane.
     pub fn observe_amx_commit_ms(&self, lane_id: LaneId, ms: f64) {
         if self.is_enabled() {
@@ -3894,6 +3810,7 @@ impl StateTelemetry {
                 .observe(ms);
         }
     }
+    #[cfg(test)]
     /// Observe IVM execution latency (milliseconds) for the provided lane.
     pub fn observe_ivm_exec_ms(&self, lane_id: LaneId, ms: f64) {
         if self.is_enabled() {
@@ -3944,6 +3861,7 @@ impl StateTelemetry {
                 .inc();
         }
     }
+    #[cfg(test)]
     /// Get BLS signature verification counters for the latest validated block.
     /// Returns (`same_message_aggregate`, `multi_message_aggregate`, deterministic).
     pub fn pipeline_sig_bls_counts(&self) -> (u64, u64, u64) {
@@ -3953,6 +3871,7 @@ impl StateTelemetry {
             self.metrics.pipeline_sig_bls_deterministic.get(),
         )
     }
+    #[cfg(test)]
     /// Get cumulative BLS aggregate counters for `lane_id`, broken down by result.
     /// Returns ((`same_success`, `same_failure`), (`multi_success`, `multi_failure`)).
     pub fn pipeline_sig_bls_result_totals(&self, lane_id: LaneId) -> ((u64, u64), (u64, u64)) {
@@ -3982,6 +3901,7 @@ impl StateTelemetry {
             .get();
         ((same_success, same_failure), (multi_success, multi_failure))
     }
+    #[cfg(test)]
     /// Get detached-pipeline counters for the latest validated block.
     /// Returns (prepared, merged, fallback).
     pub fn pipeline_detached_counts(&self) -> (u64, u64, u64) {
@@ -4003,6 +3923,7 @@ impl StateTelemetry {
             self.metrics.confidential_gas_total.inc_by(tx_gas);
         }
     }
+    #[cfg(test)]
     /// Record oracle settlement context (TWAP price/window, haircut, staleness).
     #[cfg(feature = "telemetry")]
     pub fn observe_oracle_settlement_context(
@@ -4132,6 +4053,7 @@ impl StateTelemetry {
         _kind: OraclePenaltyKind,
     ) {
     }
+    #[cfg(test)]
     /// Record oracle settlement context (TWAP price/window, haircut, staleness).
     #[cfg(not(feature = "telemetry"))]
     #[allow(unused_variables)]
@@ -4142,24 +4064,6 @@ impl StateTelemetry {
         epsilon_bps: u16,
         staleness_ms: u64,
     ) {
-    }
-    /// Set number of transactions classified into the quarantine lane for the latest block.
-    pub fn set_pipeline_quarantine_classified(&self, count: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_quarantine_classified.set(count);
-        }
-    }
-    /// Set number of transactions rejected due to quarantine overflow for the latest block.
-    pub fn set_pipeline_quarantine_overflow(&self, count: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_quarantine_overflow.set(count);
-        }
-    }
-    /// Set number of transactions executed in quarantine lane for the latest block.
-    pub fn set_pipeline_quarantine_executed(&self, count: u64) {
-        if self.is_enabled() {
-            self.metrics.pipeline_quarantine_executed.set(count);
-        }
     }
     /// Add to the total fee amount for the current (latest) block.
     pub fn add_block_fee_amount(&self, delta_amount: &Quantity) {
@@ -4353,6 +4257,7 @@ impl StreamingTelemetry {
             self.emit_event("streaming_security", &event);
         }
     }
+    #[cfg(test)]
     /// Record encode telemetry exported by the publisher.
     pub fn record_encode_stats(&self, stats: &TelemetryEncodeStats) {
         if !self.is_enabled() {
@@ -4372,6 +4277,7 @@ impl StreamingTelemetry {
             .set(u64::from(stats.max_audio_jitter_ms));
         self.emit_event("streaming_encode", &TelemetryEvent::Encode(*stats));
     }
+    #[cfg(test)]
     /// Record decoder telemetry exported by viewers.
     pub fn record_decode_stats(&self, stats: &TelemetryDecodeStats) {
         if !self.is_enabled() {
@@ -4394,6 +4300,7 @@ impl StreamingTelemetry {
             .set(u64::from(stats.max_av_drift_ms));
         self.emit_event("streaming_decode", &TelemetryEvent::Decode(*stats));
     }
+    #[cfg(test)]
     /// Record network telemetry emitted by viewers or relays.
     pub fn record_network_stats(&self, stats: &TelemetryNetworkStats) {
         if !self.is_enabled() {
@@ -4447,6 +4354,7 @@ impl StreamingTelemetry {
                 .inc_by(u64::from(diagnostics.violation_count));
         }
     }
+    #[cfg(test)]
     /// Record energy telemetry exported by publishers/viewers.
     pub fn record_energy_stats(&self, stats: &TelemetryEnergyStats) {
         if !self.is_enabled() {
@@ -4755,6 +4663,7 @@ impl Clone for Telemetry {
         }
     }
 }
+#[cfg(test)]
 /// Outcome emitted when planning a missing-block fetch after QC-first arrival.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MissingBlockFetchOutcome {
@@ -4765,6 +4674,7 @@ pub enum MissingBlockFetchOutcome {
     /// A retry backoff window suppressed a fetch attempt.
     Backoff,
 }
+#[cfg(test)]
 impl MissingBlockFetchOutcome {
     fn label(self) -> &'static str {
         match self {
@@ -4774,6 +4684,7 @@ impl MissingBlockFetchOutcome {
         }
     }
 }
+#[cfg(test)]
 /// Target set used when requesting a missing block payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MissingBlockFetchTargetKind {
@@ -4782,6 +4693,7 @@ pub enum MissingBlockFetchTargetKind {
     /// Request targets derived from the full commit topology.
     Topology,
 }
+#[cfg(test)]
 impl MissingBlockFetchTargetKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -4875,6 +4787,7 @@ impl Telemetry {
     /// Record commit-conflict detection (safety recovery).
     [inc_commit_conflict_detected() => .sumeragi_commit_conflict_detected_total.inc();]
     }
+    #[cfg(test)]
     /// Record the outcome of planning a missing-block fetch on QC-first arrival.
     #[allow(clippy::cast_precision_loss)]
     pub fn note_missing_block_fetch(
@@ -4949,6 +4862,7 @@ impl Telemetry {
     [note_qc_validation_error(reason: &'static str) =>
         .sumeragi_qc_validation_errors_total.with_label_values(&[reason]).inc();]
     }
+    #[cfg(test)]
     /// Record a validation-gate reject grouped by reason before voting.
     pub fn note_validation_reject(&self, reason: &'static str, height: u64, view: u64) {
         if !self.enabled {
@@ -4971,6 +4885,7 @@ impl Telemetry {
             .sumeragi_validation_reject_last_timestamp_ms
             .set(timestamp_ms);
     }
+    #[cfg(test)]
     #[inline]
     fn validation_reject_reason_code(reason: &str) -> u64 {
         match reason {
@@ -4987,6 +4902,7 @@ impl Telemetry {
     [note_block_sync_unsolicited_share_blocks_drop() =>
         .sumeragi_block_sync_share_blocks_unsolicited_total.inc();]
     }
+    #[cfg(test)]
     /// Record a view-change trigger grouped by cause.
     pub fn note_view_change_cause(&self, cause: &'static str) {
         if !self.enabled {
@@ -4996,8 +4912,8 @@ impl Telemetry {
             .sumeragi_view_change_cause_total
             .with_label_values(&[cause])
             .inc();
-        let now_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
             .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
             .unwrap_or(0);
         self.metrics
@@ -5005,6 +4921,7 @@ impl Telemetry {
             .with_label_values(&[cause])
             .set(now_ms);
     }
+    #[cfg(test)]
     /// Record the number of QC signers present in the bitmap versus counted for a phase.
     #[allow(clippy::cast_precision_loss)]
     pub fn note_qc_signer_counts(&self, phase: &'static str, present: usize, counted: usize) {
@@ -5116,6 +5033,7 @@ impl Telemetry {
     [set_missing_block_retry_window_ms(retry_window_ms: u64) =>
         .sumeragi_missing_block_retry_window_ms.set(retry_window_ms);]
     }
+    #[cfg(test)]
     /// Update gauges tracking inflight missing-block requests.
     pub fn set_missing_block_inflight(&self, active: usize, oldest_ms: u64) {
         if self.enabled {
@@ -5125,6 +5043,7 @@ impl Telemetry {
             self.metrics.sumeragi_missing_block_oldest_ms.set(oldest_ms);
         }
     }
+    #[cfg(test)]
     /// Record dwell time from first QC arrival until payload observation.
     pub fn observe_missing_block_dwell(&self, dwell: Duration) {
         if self.enabled {
@@ -5136,6 +5055,7 @@ impl Telemetry {
     /// Increment when a Witness-availability QC is assembled (placeholder counter).
     [inc_wa_qc_assembled() => .sumeragi_wa_qc_assembled_total.inc();]
     }
+    #[cfg(test)]
     /// Record a consensus membership mismatch against a peer for the given height/view.
     pub fn note_membership_mismatch(
         &self,
@@ -5161,6 +5081,7 @@ impl Telemetry {
                 .set(1);
         }
     }
+    #[cfg(test)]
     /// Clear the active membership mismatch gauge for a peer when alignment is confirmed.
     pub fn clear_membership_mismatch(&self, peer: &iroha_model_base::peer::PeerId) {
         if self.enabled {
@@ -5171,6 +5092,7 @@ impl Telemetry {
                 .set(0);
         }
     }
+    #[cfg(test)]
     /// Update membership view-hash gauges (height/view/epoch context + truncated hash).
     pub fn set_membership_view_hash(&self, height: u64, view: u64, epoch: u64, hash: [u8; 32]) {
         if self.enabled {
@@ -5193,6 +5115,7 @@ impl Telemetry {
     /// Set locked QC view.
     [set_locked_qc_view(v: u64) => .sumeragi_locked_qc_view.set(v);]
     }
+    #[cfg(test)]
     /// Update gauges that track transaction queue load and saturation as observed by consensus.
     pub fn record_tx_queue_backpressure(
         &self,
@@ -5231,6 +5154,7 @@ impl Telemetry {
                 .set(oldest_queued_age_ms);
         }
     }
+    #[cfg(test)]
     /// Update gauges that track pending block pressure and commit inflight depth.
     pub fn record_pending_block_metrics(
         &self,
@@ -5250,6 +5174,7 @@ impl Telemetry {
                 .set(commit_inflight_queue_depth);
         }
     }
+    #[cfg(test)]
     /// Increment post-to-peer counter labeled by peer id (collector routing/backpressure insight)
     pub fn inc_post_to_peer(&self, peer: &iroha_model_base::peer::PeerId) {
         if self.enabled {
@@ -5295,6 +5220,7 @@ impl Telemetry {
     [inc_torii_sorafs_admission(result: &'static str, reason: &'static str) =>
         .torii_sorafs_admission_total.with_label_values(&[result, reason]).inc();]
     }
+    #[cfg(test)]
     /// Record an SNS registrar outcome grouped by result and suffix.
     pub fn inc_sns_registrar_status(&self, result: &'static str, suffix: &str) {
         self.metrics.inc_sns_registrar_status(result, suffix);
@@ -5328,22 +5254,6 @@ impl Telemetry {
     [prune_da_receipt_lanes(lane_ids: impl IntoIterator<Item = u32>);]
     /// Record a DA shard cursor event with lane/shard labels.
     [record_da_shard_cursor_event(event: &str, lane_id: u32, shard_id: u32, block_height: u64);]
-    }
-    /// Record a DA shard cursor violation derived from the supplied error.
-    pub fn record_da_shard_cursor_violation(
-        &self,
-        err: &DaShardCursorError,
-        lane_id: u32,
-        shard_id: u32,
-        block_height: u64,
-    ) {
-        let reason = match *err {
-            DaShardCursorError::Regression { .. } => "regression",
-            DaShardCursorError::MissingCursor { .. } => "missing_cursor",
-            DaShardCursorError::StaleCursor { .. } => "stale_cursor",
-            DaShardCursorError::UnknownLane { .. } => "unknown_lane",
-        };
-        self.record_da_shard_cursor_event(reason, lane_id, shard_id, block_height);
     }
     telemetry_enabled_metric_methods! {
     /// Record the shard cursor lag measured in blocks.
@@ -5402,6 +5312,7 @@ impl Telemetry {
     /// Increment the `SoraFS` dispute counter for the provided result label.
     [inc_sorafs_disputes(result: &'static str);]
     }
+    #[cfg(test)]
     /// Emit an audit outcome telemetry event for routed-trace checkpoints.
     #[cfg(feature = "telemetry")]
     pub fn record_audit_outcome(
@@ -5415,8 +5326,8 @@ impl Telemetry {
             .nexus_audit_outcome_total
             .with_label_values(&[outcome.trace_id.as_str(), outcome.status.as_str()])
             .inc();
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::from_secs(0))
             .as_secs();
         self.metrics
@@ -5509,28 +5420,6 @@ impl Telemetry {
         window_start_sequence: u64, window_end_sequence: u64, manifest_digest_hex: &str,
     );]
     }
-    /// Observe proof verification metrics (latency/size) for the given backend/status.
-    pub fn observe_zk_verify(
-        &self,
-        backend: &str,
-        status: ProofStatus,
-        proof_bytes: usize,
-        latency_ms: u64,
-    ) {
-        if self.enabled {
-            let status_label = proof_status_label(status);
-            let proof_bytes_value =
-                u64::try_from(proof_bytes).map_or_else(|_| u64_to_f64(u64::MAX), u64_to_f64);
-            self.metrics
-                .zk_verify_latency_ms
-                .with_label_values(&[backend, status_label])
-                .observe(u64_to_f64(latency_ms));
-            self.metrics
-                .zk_verify_proof_bytes
-                .with_label_values(&[backend, status_label])
-                .observe(proof_bytes_value);
-        }
-    }
     telemetry_enabled_metric_methods! {
     /// Increment Torii active connection gauge for the provided scheme label.
     [inc_torii_active_conn(scheme: &'static str) =>
@@ -5539,6 +5428,7 @@ impl Telemetry {
     [dec_torii_active_conn(scheme: &'static str) =>
         .torii_active_connections_total.with_label_values(&[scheme]).dec();]
     }
+    #[cfg(test)]
     /// Increment background-post enqueued counter labeled by kind {Post,Broadcast}
     pub fn inc_bg_post_enqueued(&self, kind: &'static str) {
         if self.enabled {
@@ -5561,44 +5451,12 @@ impl Telemetry {
     [inc_bg_post_drop(kind: &'static str) =>
         .sumeragi_bg_post_drop_total.with_label_values(&[kind]).inc();]
     }
-    /// Increment per-peer background-post queue depth for Post tasks.
-    pub fn inc_bg_post_queue_depth_for_peer(&self, peer: &iroha_model_base::peer::PeerId) {
-        if self.enabled {
-            let label = peer.to_string();
-            let g = self
-                .metrics
-                .sumeragi_bg_post_queue_depth_by_peer
-                .with_label_values(&[label.as_str()]);
-            let cur = g.get();
-            g.set(cur.saturating_add(1));
-        }
-    }
-    /// Decrement background-post queue depth (global) and per-peer when applicable.
-    pub fn dec_bg_post_queue_depth(&self) {
-        if self.enabled {
-            let cur = self.metrics.sumeragi_bg_post_queue_depth.get();
-            self.metrics
-                .sumeragi_bg_post_queue_depth
-                .set(cur.saturating_sub(1));
-        }
-    }
-    /// Decrement per-peer background-post queue depth for Post tasks.
-    pub fn dec_bg_post_queue_depth_for_peer(&self, peer: &iroha_model_base::peer::PeerId) {
-        if self.enabled {
-            let label = peer.to_string();
-            let g = self
-                .metrics
-                .sumeragi_bg_post_queue_depth_by_peer
-                .with_label_values(&[label.as_str()]);
-            let cur = g.get();
-            g.set(cur.saturating_sub(1));
-        }
-    }
     telemetry_enabled_metric_methods! {
     /// Observe background-post age in milliseconds for a given kind {Post,Broadcast}.
     [observe_bg_post_age_ms(kind: &'static str, ms: f64) =>
         .sumeragi_bg_post_age_ms.with_label_values(&[kind]).observe(ms.max(0.0));]
     }
+    #[cfg(test)]
     /// Set `NEW_VIEW` receipts count for a specific (height, view)
     pub fn set_new_view_receipts(&self, height: u64, view: u64, count: u64) {
         if self.enabled {
@@ -5610,25 +5468,12 @@ impl Telemetry {
                 .set(count);
         }
     }
-    /// Observe QC assembly latency in milliseconds for the provided kind (e.g., `availability`).
-    pub fn observe_qc_latency_ms(&self, kind: &'static str, ms: u64) {
-        if self.enabled {
-            let value = u64_to_f64(ms);
-            self.metrics
-                .sumeragi_qc_assembly_latency_ms
-                .with_label_values(&[kind])
-                .observe(value.max(0.0));
-            self.metrics
-                .sumeragi_qc_last_latency_ms
-                .with_label_values(&[kind])
-                .set(ms);
-        }
-    }
     telemetry_enabled_metric_methods! {
     /// Increment kura persistence failure counter labeled by outcome.
     [inc_kura_store_failure(outcome: &'static str) =>
         .sumeragi_kura_store_failures_total.with_label_values(&[outcome]).inc();]
     }
+    #[cfg(test)]
     /// Record the most recent kura persistence retry attempt/backoff.
     pub fn set_kura_store_retry(&self, attempt: u64, backoff_ms: u64) {
         if self.enabled {
@@ -6035,108 +5880,9 @@ impl Telemetry {
         _latency_ms: Option<f64>,
     ) {
     }
-    /// Update per-lane and per-dataspace commitment metrics using the latest queue snapshot.
-    #[cfg(not(feature = "telemetry"))]
-    #[allow(unused_variables)]
-    pub fn record_lane_commitments(
-        &self,
-        lane_entries: &[LaneCommitmentSnapshot],
-        dataspace_entries: &[DataspaceCommitmentSnapshot],
-        limits: &QueueLimits,
-    ) {
-        #[allow(unused_variables)]
-        let _ = (lane_entries, dataspace_entries, limits);
-    }
-    /// Update per-lane and per-dataspace commitment metrics using the latest queue snapshot.
-    #[cfg(feature = "telemetry")]
-    pub fn record_lane_commitments(
-        &self,
-        lane_entries: &[LaneCommitmentSnapshot],
-        dataspace_entries: &[DataspaceCommitmentSnapshot],
-        limits: &QueueLimits,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        self.metrics.nexus_scheduler_lane_teu_capacity.reset();
-        self.metrics.nexus_scheduler_lane_teu_slot_committed.reset();
-        self.metrics.nexus_scheduler_lane_trigger_level.reset();
-        self.metrics.nexus_scheduler_starvation_bound_slots.reset();
-        self.metrics.nexus_scheduler_lane_teu_slot_breakdown.reset();
-        self.metrics.nexus_scheduler_dataspace_teu_backlog.reset();
-        self.metrics.nexus_scheduler_dataspace_age_slots.reset();
-        self.metrics
-            .nexus_scheduler_dataspace_virtual_finish
-            .reset();
-        for entry in lane_entries {
-            let lane_id = LaneId::new(entry.lane_id);
-            let lane_label = entry.lane_id.to_string();
-            let limit = limits.for_lane(lane_id);
-            let buckets = NexusLaneTeuBuckets {
-                floor: entry.teu_total,
-                headroom: limit.teu_capacity.saturating_sub(entry.teu_total),
-                must_serve: 0,
-                circuit_breaker: 0,
-            };
-            self.metrics
-                .nexus_scheduler_lane_teu_capacity
-                .with_label_values(&[lane_label.as_str()])
-                .set(limit.teu_capacity);
-            self.metrics
-                .nexus_scheduler_lane_teu_slot_committed
-                .with_label_values(&[lane_label.as_str()])
-                .set(entry.teu_total);
-            self.metrics
-                .nexus_scheduler_lane_trigger_level
-                .with_label_values(&[lane_label.as_str()])
-                .set(0);
-            self.metrics
-                .nexus_scheduler_starvation_bound_slots
-                .with_label_values(&[lane_label.as_str()])
-                .set(limit.starvation_bound_slots);
-            for (bucket, value) in buckets.iter() {
-                self.metrics
-                    .nexus_scheduler_lane_teu_slot_breakdown
-                    .with_label_values(&[lane_label.as_str(), bucket])
-                    .set(value);
-            }
-        }
-        for entry in dataspace_entries {
-            let lane_label = entry.lane_id.to_string();
-            let dataspace_label = entry.dataspace_id.to_string();
-            self.metrics
-                .nexus_scheduler_dataspace_teu_backlog
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])
-                .set(0);
-            self.metrics
-                .nexus_scheduler_dataspace_age_slots
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])
-                .set(0);
-            self.metrics
-                .nexus_scheduler_dataspace_virtual_finish
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])
-                .set(0);
-        }
-    }
     telemetry_enabled_metric_methods! {
     /// Increase dropped messages metric
     [inc_dropped_messages() => .dropped_messages.inc();]
-    }
-    /// Increase dropped block messages metric (consensus path)
-    pub fn inc_dropped_block_message(&self) {
-        if self.enabled {
-            self.metrics.sumeragi_dropped_block_messages_total.inc();
-            // Keep aggregate counter in sync
-            self.metrics.dropped_messages.inc();
-        }
-    }
-    /// Increase dropped control messages metric (control path)
-    pub fn inc_dropped_control_message(&self) {
-        if self.enabled {
-            self.metrics.sumeragi_dropped_control_messages_total.inc();
-            // Keep aggregate counter in sync
-            self.metrics.dropped_messages.inc();
-        }
     }
     telemetry_enabled_metric_methods! {
     /// Set view changes metrics
@@ -6152,6 +5898,7 @@ impl Telemetry {
     /// Increment counter: view-change rotations after proposal gaps.
     [inc_proposal_gap() => .sumeragi_proposal_gap_total.inc();]
     }
+    #[cfg(test)]
     fn inc_view_change_proof_gauge(&self, outcome: &'static str) {
         if self.enabled {
             self.metrics
@@ -6160,14 +5907,17 @@ impl Telemetry {
                 .inc();
         }
     }
+    #[cfg(test)]
     /// Increment counter: view-change proofs accepted (advanced the chain)
     pub fn inc_view_change_proof_accepted(&self) {
         self.inc_view_change_proof_gauge("accepted");
     }
+    #[cfg(test)]
     /// Increment counter: view-change proofs ignored as stale/outdated
     pub fn inc_view_change_proof_stale(&self) {
         self.inc_view_change_proof_gauge("stale");
     }
+    #[cfg(test)]
     /// Increment counter: view-change proofs rejected due to validation errors
     pub fn inc_view_change_proof_rejected(&self) {
         self.inc_view_change_proof_gauge("rejected");
@@ -6186,18 +5936,7 @@ impl Telemetry {
                         .with_label_values(&[kind, outcome, reason])
                         .inc();]
     }
-    /// Record the active epoch scheduling parameters (length and commit/reveal offsets).
-    pub fn set_epoch_parameters(&self, length_blocks: u64, commit_offset: u64, reveal_offset: u64) {
-        if self.enabled {
-            self.metrics.sumeragi_epoch_length_blocks.set(length_blocks);
-            self.metrics
-                .sumeragi_epoch_commit_deadline_offset
-                .set(commit_offset);
-            self.metrics
-                .sumeragi_epoch_reveal_deadline_offset
-                .set(reveal_offset);
-        }
-    }
+    #[cfg(test)]
     /// Record the current PRF context (epoch seed, height, view) if telemetry is enabled.
     pub fn set_prf_context(&self, seed: Option<[u8; 32]>, height: u64, view: u64) {
         if self.enabled {
@@ -6217,6 +5956,7 @@ impl Telemetry {
     /// Observe certificate size distribution (number of signatures)
     [observe_cert_size(size: u64) => .sumeragi_cert_size.observe(u64_to_f64(size));]
     }
+    #[cfg(test)]
     /// Record the latest commit-signature counts (present vs counted vs set-B vs required).
     pub fn set_commit_signature_totals(
         &self,
@@ -6236,6 +5976,7 @@ impl Telemetry {
                 .set(required);
         }
     }
+    #[cfg(test)]
     /// Report the event of block commit, measuring the block time.
     pub fn report_block_commit_blocking(&self, block_header: &BlockHeader) {
         let report = BlockCommitReport::new(block_header, &self.time_source);
@@ -6300,6 +6041,7 @@ impl Telemetry {
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
     }
+    #[cfg(test)]
     /// Refresh lazy metrics within a bound, falling back when the actor is unavailable.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh(&self) -> &Metrics {

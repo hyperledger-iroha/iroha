@@ -44,6 +44,8 @@ pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
+#[cfg(test)]
+use iroha_data_model::block::consensus::ValidatorIndex;
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, rekey::AccountAlias},
@@ -52,7 +54,6 @@ use iroha_data_model::{
         consensus::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            ValidatorIndex,
         },
         *,
     },
@@ -1157,7 +1158,6 @@ fn validate_native_amx_receipt_against_plan_with_authority(
     }
     Ok(())
 }
-#[cfg_attr(not(test), allow(dead_code))]
 fn validate_native_amx_attestation_qc(
     receipt: &NativeAmxReceipt,
     leg: &NativeAmxLegRecordV2,
@@ -4039,26 +4039,6 @@ mod new {
         pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
             self.npos_consensus_effects.as_ref()
         }
-        #[cfg(test)]
-        #[allow(dead_code)]
-        pub(crate) fn update_header(self, header: &BlockHeader, private_key: &PrivateKey) -> Self {
-            let signature = BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::try_from_hash(private_key, header.hash())
-                    .expect("test block signing should succeed"),
-            );
-            Self {
-                signature,
-                header: *header,
-                transactions: self.transactions,
-                da_commitments: self.da_commitments,
-                da_proof_policies: self.da_proof_policies,
-                da_pin_intents: self.da_pin_intents,
-                npos_consensus_effects: self.npos_consensus_effects,
-                global_beacon_pulse: self.global_beacon_pulse,
-                execution_context: self.execution_context,
-            }
-        }
     }
     impl From<NewBlock> for SignedBlock {
         fn from(block: NewBlock) -> Self {
@@ -6418,6 +6398,7 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
         fn new_unverified(block: SignedBlock) -> Self {
             Self {
                 block,
@@ -6572,6 +6553,7 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+        #[cfg(test)]
         fn verify_signer_set(
             topology: &Topology,
             signers: &BTreeSet<ValidatorIndex>,
@@ -12416,6 +12398,7 @@ pub(crate) mod valid {
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
         }
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         /// Add additional signature for [`Self`]
         ///
         /// # Errors
@@ -12565,6 +12548,7 @@ pub(crate) mod valid {
                 Err(error) => Err((Box::new(self), Box::new(error))),
             })
         }
+        #[cfg(test)]
         /// Commit using a prevalidated signer set (e.g., from a QC).
         ///
         /// The block signatures are still verified to guard against forged aggregates; `signers`

@@ -3,6 +3,8 @@
 //! This is a clean-room native-Rust implementation of the current paper's
 //! univariate coefficient-encoding specialization. The transcript and wire
 //! are Iroha-specific and intentionally have no legacy decoder.
+#[cfg(test)]
+use super::sampling::health_checked_jindo_rng_v1;
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
     JINDO_MAX_BATCH_SIZE_V1, JINDO_MAX_COEFFICIENTS_V1, JINDO_RING_DEGREE_V1,
@@ -28,9 +30,8 @@ use super::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
     sampling::{
-        JindoSamplingErrorV1, accept_aggregation_rejection_v1, health_checked_jindo_rng_v1,
-        sample_gaussian_polynomial_v1, sample_mlwe_polynomial_v1,
-        sample_uniform_encoding_polynomial_v1,
+        JindoSamplingErrorV1, accept_aggregation_rejection_v1, sample_gaussian_polynomial_v1,
+        sample_mlwe_polynomial_v1, sample_uniform_encoding_polynomial_v1,
     },
     transcript::{JindoSignedMonomialChallengeV1, JindoTranscriptErrorV1, JindoTranscriptV1},
     validate_canonical_polynomial_v1,
@@ -336,6 +337,7 @@ pub fn evaluate_polynomial_v1(
         evaluate_polynomial(&polynomial, point).to_canonical_bytes(),
     ))
 }
+#[cfg(test)]
 /// Commits to a canonical Jindo polynomial and returns its secret opening.
 ///
 /// # Errors
@@ -402,6 +404,7 @@ where
         },
     ))
 }
+#[cfg(test)]
 /// Proves the exact batched-evaluation statement with fresh operating-system randomness.
 ///
 /// # Errors

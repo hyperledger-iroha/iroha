@@ -1,9 +1,16 @@
 #![allow(unexpected_cfgs)]
 //! Runs the privileged Sora VPN helper and its authenticated control protocol.
+#[cfg(any(target_os = "linux", test))]
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use hex::FromHexError;
 #[cfg(test)]
 use iroha_crypto::soranet::constant_rate::{ConstantRateReceivePacer, MuxFrame};
+#[cfg(target_os = "linux")]
+use iroha_crypto::soranet::handshake::{
+    RelayAuthenticationVerifierV1, RuntimeParams, SessionSecrets, build_client_hello,
+    client_handle_relay_hello,
+};
+#[cfg(any(target_os = "linux", test))]
 use iroha_crypto::{
     Algorithm, KeyPair, PublicKey,
     soranet::{
@@ -11,33 +18,27 @@ use iroha_crypto::{
             is_public_relay_ip, leaf_certificate_spki_sha256, validate_quic_multiaddr,
             validate_tls_server_name,
         },
-        handshake::{
-            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RelayAuthenticationVerifierV1,
-            RuntimeParams, SORANET_QUIC_ALPN, SessionSecrets, build_client_hello,
-            client_handle_relay_hello,
-        },
+        handshake::{DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, SORANET_QUIC_ALPN},
         record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
     },
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt as _;
 use std::{
     env,
     ffi::OsStr,
     fs,
-    future::Future,
     io::{self, Read as _, Write as _},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::IpAddr,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[cfg(target_os = "linux")]
@@ -47,47 +48,67 @@ use std::{
     os::unix::ffi::OsStrExt as _,
     process::{Child, ExitStatus},
 };
+#[cfg(any(target_os = "linux", test))]
+use std::{
+    future::Future,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+};
 #[cfg(test)]
 use tokio::sync::mpsc;
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
+#[cfg(any(target_os = "linux", test))]
 use iroha_data_model::soranet::vpn::{
-    VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_HELPER_TICKET_LEN, VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1,
-    VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1,
-    VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1, VpnUsageVoucherBodyV1,
-    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1, derive_vpn_session_address_plan_v1,
-    vpn_helper_network_policy_hash_v1,
+    VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellFlagsV1,
+    VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
+    VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+    derive_vpn_session_address_plan_v1, vpn_helper_network_policy_hash_v1,
+};
+use iroha_data_model::soranet::vpn::{
+    VPN_HELPER_TICKET_LEN, VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1, VpnCellError,
 };
 use norito::{
     codec::{Decode, Encode},
     json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue},
 };
+use quinn::{self, ConnectError, ConnectionError, ReadExactError};
+#[cfg(any(target_os = "linux", test))]
 use quinn::{
-    self, ClientConfig, ConnectError, Connection, ConnectionError, Dir, Endpoint, IdleTimeout,
-    ReadExactError, RecvStream, SendStream, Side, StreamId, TransportConfig, VarInt,
+    ClientConfig, IdleTimeout, TransportConfig, VarInt,
     crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
 };
 #[cfg(target_os = "linux")]
+use quinn::{Connection, Dir, Endpoint, RecvStream, SendStream, Side, StreamId};
+#[cfg(target_os = "linux")]
 use rand::RngCore;
+#[cfg(target_os = "linux")]
 use rand::{SeedableRng, rngs::StdRng};
+#[cfg(any(target_os = "linux", test))]
 use rustls::{
     RootCertStore,
     client::WebPkiServerVerifier,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::CertificateDer,
 };
+#[cfg(target_os = "linux")]
 use soranet_record_io::{RecordReader, RecordWriter};
 use thiserror::Error;
+#[cfg(target_os = "linux")]
+use tokio::{io::AsyncRead, net::lookup_host};
+#[cfg(any(target_os = "linux", test))]
 use tokio::{
     io::unix::AsyncFd,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::lookup_host,
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     signal::unix::{Signal, SignalKind, signal},
     sync::Notify,
     time::timeout,
 };
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(target_os = "linux")]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(target_os = "linux")]
 const RELAY_DNS_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(any(target_os = "linux", test))]
 const MAX_RELAY_DNS_ANSWERS_V1: usize = 32;
 const CONNECT_INPUT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -95,13 +116,17 @@ const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 // final readiness publication. Privileged preparation has its own shorter absolute bound below;
 // route count must never multiply that bound by starting a fresh timeout for each command.
 const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+#[cfg(any(target_os = "linux", test))]
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(any(target_os = "linux", test))]
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const STRICT_CONSTANT_RATE_TICK: Duration = Duration::from_millis(5);
 #[cfg(test)]
 const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
+#[cfg(any(target_os = "linux", test))]
 const QUIC_DEPENDENCY_BLOCK_REASON: &str = "Sora VPN helper QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
+#[cfg(target_os = "linux")]
 const VPN_STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
 const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(target_os = "linux")]
@@ -113,28 +138,36 @@ const MAX_SYSTEM_COMMAND_STDERR_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
 const SYSTEM_COMMAND_CGROUP_PATH: &str = "/sys/fs/cgroup/sora-vpn-controller.system-command-v1";
 const CONTROLLER_KIND: &str = "linux-helperd";
+#[cfg(any(target_os = "linux", test))]
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const TUNNEL_LAUNCH_FRAME_MAGIC: &[u8; 8] = b"SVPNTUN1";
 const TUNNEL_LAUNCH_FRAME_BYTES: usize = 64;
+#[cfg(any(target_os = "linux", test))]
 const NETWORK_WORKER_IPC_MAGIC: &[u8; 8] = b"SVPNIPC1";
+#[cfg(any(target_os = "linux", test))]
 const NETWORK_WORKER_IPC_VERSION: u8 = 1;
+#[cfg(any(target_os = "linux", test))]
 const NETWORK_WORKER_IPC_FRAME_BYTES: usize = 64;
 #[cfg(any(target_os = "linux", test))]
 const TRAFFIC_ACCOUNTING_PERSIST_INTERVAL: Duration = Duration::from_secs(1);
 #[cfg(any(target_os = "linux", test))]
 const MAX_TRAFFIC_FRAMES_PER_INTERVAL: u32 = 64;
 const NETWORK_WORKER_PLAN_FRAME_BYTES: usize = 8 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const NETWORK_WORKER_PLAN_MAGIC: &[u8; 8] = b"SVPNPLN1";
+#[cfg(any(target_os = "linux", test))]
 const NETWORK_WORKER_PLAN_VERSION: u8 = 1;
+#[cfg(target_os = "linux")]
 const NETWORK_WORKER_IPC_FD: i32 = 3;
-const STATE_FILE_FRAME_MAGIC_V1: &[u8; 8] = b"SVPNST1\0";
 const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST2\0";
 const STATE_FILE_NAME: &str = "state.norito";
 const CONTROLLER_LOCK_FILE_NAME: &str = "controller.lock";
+#[cfg(any(target_os = "linux", test))]
 const HELPER_TICKET_ISSUER_PUBLIC_KEY_PATH: &str =
     "/etc/sora-vpn-controller/helper-ticket-issuer-public-key.hex";
 #[cfg(target_os = "linux")]
 const PINNED_SELF_EXEC_PATH: &str = "/proc/self/exe";
+#[cfg(any(target_os = "linux", test))]
 const HELPER_TICKET_ISSUER_PUBLIC_KEY_HEX_BYTES: usize = 64;
 // The first-release worker protocol is local-only, but the hidden subcommands can still be
 // invoked with an arbitrary pipe. One MiB leaves room for the complete route policy while
@@ -151,28 +184,46 @@ const MAX_STATE_DECODE_DEPTH_V1: usize = 16;
 const MAX_SESSION_ID_BYTES_V1: usize = 256;
 const MAX_RELAY_ENDPOINT_BYTES_V1: usize = 2_048;
 const MAX_TLS_SERVER_NAME_BYTES_V1: usize = 253;
+#[cfg(any(target_os = "linux", test))]
 const MAX_HELPER_TICKET_HEX_BYTES_V1: usize = 64 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const MAX_NETWORK_POLICY_ENTRIES_V1: usize = 4_096;
+#[cfg(any(target_os = "linux", test))]
 const MAX_NETWORK_POLICY_ENTRY_BYTES_V1: usize = 256;
+#[cfg(any(target_os = "linux", test))]
 const VPN_MAX_ROUTE_ENTRIES_V1: usize = 64;
+#[cfg(any(target_os = "linux", test))]
 const VPN_MAX_ROUTE_BYTES_V1: usize = 128;
+#[cfg(any(target_os = "linux", test))]
 const VPN_MAX_DNS_ENTRIES_V1: usize = 8;
+#[cfg(any(target_os = "linux", test))]
 const VPN_MAX_DNS_BYTES_V1: usize = 64;
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 3] = ["-N", "-o", "route"];
 const EXCLUDED_ROUTE_PROTOCOL_V1: &str = "186";
 const PLANNED_EXCLUDED_ROUTE_PREFIX_V1: &str = "sora-vpn-planned-route-v1 ";
+#[cfg(any(target_os = "linux", test))]
 const USAGE_VOUCHER_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(any(target_os = "linux", test))]
 const USAGE_VOUCHER_BYTE_CREDIT_WINDOW: u64 = 256 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const USAGE_VOUCHER_BYTE_REFRESH_THRESHOLD: u64 = USAGE_VOUCHER_BYTE_CREDIT_WINDOW / 2;
+#[cfg(any(target_os = "linux", test))]
 const USAGE_VOUCHER_ACTIVE_CREDIT_MS: u64 = 2_000;
+#[cfg(any(target_os = "linux", test))]
 const NETWORK_WORKER_READY_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(any(target_os = "linux", test))]
 const PRIVILEGED_PREPARATION_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(any(target_os = "linux", test))]
 const NETWORK_WORKER_TUN_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(target_os = "linux")]
 const NETWORK_WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const PROCESS_KILL_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "linux")]
 const NETWORK_WORKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(target_os = "linux")]
 const NETWORK_WORKER_TOKEN_ENV: &str = "SORA_VPN_WORKER_TOKEN_HEX";
+#[cfg(target_os = "linux")]
 const NETWORK_WORKER_ISSUER_ENV: &str = "SORA_VPN_WORKER_ISSUER_KEY_HEX";
 static ATOMIC_FILE_NONCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(target_os = "linux", test))]
@@ -224,86 +275,6 @@ struct State {
     applied_network: Option<AppliedNetworkState>,
 }
 
-// Decode the original local state layout so an upgrade can still quiesce exact workers and
-// restore a privileged network journal. A legacy active state has no authenticated expiry and is
-// therefore normalized to repair-required before it can be reported or persisted again.
-#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
-#[norito(decode_from_slice)]
-struct StateV1 {
-    installed: bool,
-    active: bool,
-    controller_kind: String,
-    interface_name: Option<String>,
-    network_service: Option<String>,
-    version: String,
-    controller_path: Option<String>,
-    repair_required: bool,
-    bytes_in: u64,
-    bytes_out: u64,
-    message: String,
-    worker_identity: Option<WorkerProcessIdentity>,
-    network_worker_identity: Option<WorkerProcessIdentity>,
-    owner_uid: Option<u32>,
-    session_id: Option<String>,
-    relay_endpoint: Option<String>,
-    relay_id: Option<[u8; 32]>,
-    network_policy_hash: Option<[u8; 32]>,
-    applied_network: Option<AppliedNetworkState>,
-}
-
-impl From<StateV1> for State {
-    fn from(state: StateV1) -> Self {
-        Self {
-            installed: state.installed,
-            active: state.active,
-            controller_kind: state.controller_kind,
-            interface_name: state.interface_name,
-            network_service: state.network_service,
-            version: state.version,
-            controller_path: state.controller_path,
-            repair_required: state.repair_required,
-            bytes_in: state.bytes_in,
-            bytes_out: state.bytes_out,
-            message: state.message,
-            worker_identity: state.worker_identity,
-            network_worker_identity: state.network_worker_identity,
-            owner_uid: state.owner_uid,
-            session_id: state.session_id,
-            relay_endpoint: state.relay_endpoint,
-            relay_id: state.relay_id,
-            network_policy_hash: state.network_policy_hash,
-            ticket_expires_at_ms: None,
-            applied_network: state.applied_network,
-        }
-    }
-}
-
-#[cfg(test)]
-impl From<&State> for StateV1 {
-    fn from(state: &State) -> Self {
-        Self {
-            installed: state.installed,
-            active: state.active,
-            controller_kind: state.controller_kind.clone(),
-            interface_name: state.interface_name.clone(),
-            network_service: state.network_service.clone(),
-            version: state.version.clone(),
-            controller_path: state.controller_path.clone(),
-            repair_required: state.repair_required,
-            bytes_in: state.bytes_in,
-            bytes_out: state.bytes_out,
-            message: state.message.clone(),
-            worker_identity: state.worker_identity.clone(),
-            network_worker_identity: state.network_worker_identity.clone(),
-            owner_uid: state.owner_uid,
-            session_id: state.session_id.clone(),
-            relay_endpoint: state.relay_endpoint.clone(),
-            relay_id: state.relay_id,
-            network_policy_hash: state.network_policy_hash,
-            applied_network: state.applied_network.clone(),
-        }
-    }
-}
 impl Default for State {
     fn default() -> Self {
         Self {
@@ -382,11 +353,13 @@ struct ConnectPayload {
     metering_private_key_seed_hex: String,
 }
 #[cfg_attr(test, derive(Debug))]
+#[cfg(any(target_os = "linux", test))]
 struct AuthenticatedConnectPayload {
     payload: ConnectPayload,
     ticket: VpnHelperTicketV1,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
 struct AuthenticatedPrivilegedNetworkPlan {
     session_id: String,
     relay_endpoint: String,
@@ -406,6 +379,7 @@ struct UnprivilegedNetworkWorkerInput {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[cfg(any(target_os = "linux", test))]
 enum NetworkIpcKind {
     WorkerReady = 1,
     TunReady = 2,
@@ -417,6 +391,7 @@ enum NetworkIpcKind {
     Started = 8,
     Isolated = 9,
 }
+#[cfg(any(target_os = "linux", test))]
 impl TryFrom<u8> for NetworkIpcKind {
     type Error = ControllerError;
 
@@ -438,12 +413,14 @@ impl TryFrom<u8> for NetworkIpcKind {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
 struct NetworkIpcFrame {
     kind: NetworkIpcKind,
     token: [u8; 32],
     value_a: u64,
     value_b: u64,
 }
+#[cfg(any(target_os = "linux", test))]
 impl NetworkIpcFrame {
     fn new(kind: NetworkIpcKind, token: [u8; 32], value_a: u64, value_b: u64) -> Self {
         Self {
@@ -507,18 +484,31 @@ impl NetworkIpcFrame {
         })
     }
 }
+#[cfg(any(target_os = "linux", test))]
 const PLAN_TOKEN_RANGE: std::ops::Range<usize> = 16..48;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_PADDING_OFFSET: usize = 48;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_ROUTE_COUNT_OFFSET: usize = 50;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_EXCLUDED_COUNT_OFFSET: usize = 51;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_DNS_COUNT_OFFSET: usize = 52;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_SESSION_RANGE: std::ops::Range<usize> = 64..80;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_RELAY_ID_RANGE: std::ops::Range<usize> = 80..112;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_DESCRIPTOR_RANGE: std::ops::Range<usize> = 112..144;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_TLS_SPKI_RANGE: std::ops::Range<usize> = 144..176;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_CERTIFICATE_RANGE: std::ops::Range<usize> = 176..208;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_DIRECTORY_RANGE: std::ops::Range<usize> = 208..240;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_RELAY_LENGTH_OFFSET: usize = 240;
+#[cfg(any(target_os = "linux", test))]
 const PLAN_TLS_NAME_LENGTH_OFFSET: usize = 242;
 const PLAN_TICKET_RANGE: std::ops::Range<usize> = 244..244 + VPN_HELPER_TICKET_LEN;
 const PLAN_RELAY_RANGE: std::ops::Range<usize> =
@@ -543,6 +533,7 @@ const _: () = assert!(PLAN_RELAY_MLDSA65_RANGE.end < PLAN_ROUTE_RANGE.start);
 const _: () = assert!(PLAN_ROUTE_RANGE.start.is_multiple_of(64));
 const _: () = assert!(PLAN_DNS_RANGE.end <= NETWORK_WORKER_PLAN_FRAME_BYTES);
 
+#[cfg(any(target_os = "linux", test))]
 fn encode_plan_cidr(slot: &mut [u8], cidr: ParsedCidr) {
     debug_assert_eq!(slot.len(), PLAN_ROUTE_SLOT_BYTES);
     slot[1] = cidr.prefix;
@@ -557,6 +548,7 @@ fn encode_plan_cidr(slot: &mut [u8], cidr: ParsedCidr) {
         }
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn decode_plan_cidr(slot: &[u8], label: &str, index: usize) -> Result<ParsedCidr, ControllerError> {
     if slot.len() != PLAN_ROUTE_SLOT_BYTES {
         return Err(ControllerError::State(format!(
@@ -587,6 +579,7 @@ fn decode_plan_cidr(slot: &[u8], label: &str, index: usize) -> Result<ParsedCidr
     }
     Ok(parsed)
 }
+#[cfg(any(target_os = "linux", test))]
 fn encode_plan_dns(slot: &mut [u8], address: IpAddr) {
     debug_assert_eq!(slot.len(), PLAN_DNS_SLOT_BYTES);
     match address {
@@ -600,6 +593,7 @@ fn encode_plan_dns(slot: &mut [u8], address: IpAddr) {
         }
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn decode_plan_dns(slot: &[u8], index: usize) -> Result<IpAddr, ControllerError> {
     if slot.len() != PLAN_DNS_SLOT_BYTES {
         return Err(ControllerError::State(format!(
@@ -631,11 +625,13 @@ fn decode_plan_dns(slot: &[u8], index: usize) -> Result<IpAddr, ControllerError>
     }
     Ok(address)
 }
+#[cfg(any(target_os = "linux", test))]
 fn copy_plan_hash(bytes: &[u8], range: std::ops::Range<usize>) -> [u8; 32] {
     bytes[range]
         .try_into()
         .expect("fixed network plan hash width")
 }
+#[cfg(any(target_os = "linux", test))]
 fn encode_authenticated_network_plan(
     authenticated: &AuthenticatedConnectPayload,
     token: [u8; 32],
@@ -733,6 +729,7 @@ fn encode_authenticated_network_plan(
     }
     Ok(frame)
 }
+#[cfg(any(target_os = "linux", test))]
 fn decode_authenticated_network_plan(
     frame: &[u8],
     expected_token: &[u8; 32],
@@ -961,6 +958,7 @@ fn decode_authenticated_network_plan(
         mtu_bytes: u64::from(VPN_DEFAULT_TUNNEL_MTU_BYTES),
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn constant_time_bytes_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
@@ -973,6 +971,7 @@ fn constant_time_bytes_eq(left: &[u8], right: &[u8]) -> bool {
         == 0
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
 enum SupervisorIpcPhase {
     AwaitingReady,
     Ready,
@@ -1164,6 +1163,7 @@ fn force_flush_worker_traffic_accounting(
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn validate_supervisor_received_frame(
     phase: SupervisorIpcPhase,
     frame: NetworkIpcFrame,
@@ -1231,6 +1231,7 @@ fn validate_supervisor_received_frame(
     };
     Ok(next)
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_supervisor_sent_frame(
     phase: SupervisorIpcPhase,
     frame: NetworkIpcFrame,
@@ -1264,6 +1265,7 @@ fn validate_supervisor_sent_frame(
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(target_os = "linux")]
 enum WorkerIpcPhase {
     Connecting,
     Ready,
@@ -1274,6 +1276,7 @@ enum WorkerIpcPhase {
     Stopping,
     Exited,
 }
+#[cfg(target_os = "linux")]
 fn validate_worker_sent_frame(
     phase: WorkerIpcPhase,
     frame: NetworkIpcFrame,
@@ -1315,6 +1318,7 @@ fn validate_worker_sent_frame(
         ))),
     }
 }
+#[cfg(target_os = "linux")]
 fn validate_worker_received_frame(
     phase: WorkerIpcPhase,
     frame: NetworkIpcFrame,
@@ -1371,7 +1375,9 @@ fn wipe_secret_vec(secret: &mut Vec<u8>) {
     secret.clear();
     std::hint::black_box(secret);
 }
+#[cfg(any(target_os = "linux", test))]
 struct WipeArray<const N: usize>([u8; N]);
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> WipeArray<N> {
     const fn zeroed() -> Self {
         Self([0; N])
@@ -1382,11 +1388,13 @@ impl<const N: usize> WipeArray<N> {
     }
 }
 #[cfg(test)]
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> Clone for WipeArray<N> {
     fn clone(&self) -> Self {
         Self(self.0)
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> std::ops::Deref for WipeArray<N> {
     type Target = [u8];
 
@@ -1394,26 +1402,31 @@ impl<const N: usize> std::ops::Deref for WipeArray<N> {
         &self.0
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> std::ops::DerefMut for WipeArray<N> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> AsRef<[u8]> for WipeArray<N> {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> AsMut<[u8]> for WipeArray<N> {
     fn as_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> std::fmt::Debug for WipeArray<N> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "WipeArray(<redacted {N}-byte buffer>)")
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl<const N: usize> Drop for WipeArray<N> {
     fn drop(&mut self) {
         self.clear();
@@ -1432,7 +1445,9 @@ impl Drop for WipeBytes {
         wipe_secret_vec(&mut self.0);
     }
 }
+#[cfg(any(target_os = "linux", test))]
 struct SensitiveConnectJson(JsonValue);
+#[cfg(any(target_os = "linux", test))]
 impl Drop for SensitiveConnectJson {
     fn drop(&mut self) {
         let Some(object) = self.0.as_object_mut() else {
@@ -1487,11 +1502,12 @@ struct ExcludedRouteSnapshot {
     /// Durable ownership proof for the helper-installed exclusion.
     ///
     /// Before mutation this stores a versioned canonical route tuple. After mutation it stores the
-    /// exact `ip -o route` readback. Keeping both forms in the existing string field preserves the
-    /// v1 state-frame layout while closing the post-add, pre-fsync recovery gap. `None` is accepted
-    /// only for legacy state and can be cleaned safely only when the exact prefix is absent.
+    /// exact `ip -o route` readback. Keeping both forms in one string field closes the post-add,
+    /// pre-fsync recovery gap. The helper never writes `None`; a snapshot without a proof is never
+    /// deleted and can be cleaned safely only when the exact prefix is absent.
     installed_route: Option<String>,
 }
+#[cfg(any(target_os = "linux", test))]
 type RouteViaDev = (Option<String>, Option<String>);
 #[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
 #[norito(decode_from_slice)]
@@ -1520,6 +1536,7 @@ impl IpFamily {
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
 enum ParsedMultiaddrHost {
     Ip(IpAddr),
     Dns {
@@ -1528,12 +1545,14 @@ enum ParsedMultiaddrHost {
     },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
 enum DnsAddressFamily {
     Any,
     V4,
     V6,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
 struct ParsedMultiaddr {
     host: ParsedMultiaddrHost,
     port: u16,
@@ -1543,6 +1562,7 @@ struct ParsedCidr {
     address: IpAddr,
     prefix: u8,
 }
+#[cfg(any(target_os = "linux", test))]
 impl ParsedCidr {
     const fn family(self) -> IpFamily {
         match self.address {
@@ -1552,10 +1572,14 @@ impl ParsedCidr {
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(target_os = "linux")]
 struct TunnelShutdown {
     repair_required: bool,
     message: String,
 }
+// Off-Linux unit tests construct these values; only the Linux runtime reads their fields.
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct PreparedTunnel<D = Arc<LinuxTunDevice>> {
     device: D,
     interface_name: String,
@@ -1563,10 +1587,12 @@ struct PreparedTunnel<D = Arc<LinuxTunDevice>> {
     applied_network: AppliedNetworkState,
     packet_read_mtu: usize,
 }
+#[cfg(target_os = "linux")]
 struct CleanupGuard<T> {
     value: Option<T>,
     cleanup: fn(T) -> Result<(), ControllerError>,
 }
+#[cfg(target_os = "linux")]
 impl<T> CleanupGuard<T> {
     fn new(value: T, cleanup: fn(T) -> Result<(), ControllerError>) -> Self {
         Self {
@@ -1587,6 +1613,7 @@ impl<T> CleanupGuard<T> {
             .expect("cleanup guard value is present until it is taken")
     }
 }
+#[cfg(target_os = "linux")]
 impl<T> Drop for CleanupGuard<T> {
     fn drop(&mut self) {
         if let Some(value) = self.value.take() {
@@ -1690,17 +1717,21 @@ impl Drop for NetworkWorkerProcess {
     }
 }
 #[derive(Clone, Copy)]
+#[cfg(target_os = "linux")]
 struct TunnelTrafficConfig {
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
     padding_budget_ms: u16,
     packet_read_mtu: usize,
 }
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct LinuxTunDevice {
     file: AsyncFd<fs::File>,
     name: String,
 }
 #[derive(Debug, Clone, Default)]
+#[cfg(any(target_os = "linux", test))]
 struct UsageVoucherCounters {
     ingress_bytes: Arc<AtomicU64>,
     egress_bytes: Arc<AtomicU64>,
@@ -1708,6 +1739,7 @@ struct UsageVoucherCounters {
     authorized_egress_bytes: Arc<AtomicU64>,
     refresh_notify: Arc<Notify>,
 }
+#[cfg(any(target_os = "linux", test))]
 impl UsageVoucherCounters {
     fn add_ingress(&self, bytes: u64) {
         let _ = self
@@ -1760,10 +1792,12 @@ impl UsageVoucherCounters {
         self.remaining_ingress_credit()
             < USAGE_VOUCHER_BYTE_REFRESH_THRESHOLD.saturating_add(packet_bytes)
     }
+    #[cfg(target_os = "linux")]
     async fn refresh_requested(&self) {
         self.refresh_notify.notified().await;
     }
 }
+#[cfg(any(target_os = "linux", test))]
 struct UsageVoucherSigner {
     key_pair: KeyPair,
     ticket: VpnHelperTicketV1,
@@ -1773,12 +1807,15 @@ struct UsageVoucherSigner {
     authorized_active_ms: u64,
 }
 #[derive(Debug)]
+#[cfg(any(target_os = "linux", test))]
 struct PacketStreamDecoder {
     buffer: Vec<u8>,
     expected_len: Option<usize>,
     max_packet_len: usize,
 }
 
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct TunnelShutdownSignals {
     sigterm: Signal,
     sigint: Signal,
@@ -2340,6 +2377,7 @@ enum ControllerError {
     MissingPayload,
     #[error("invalid connect payload: {0}")]
     InvalidPayload(String),
+    #[cfg(any(target_os = "linux", test))]
     #[error("invalid relay multiaddr: {0}")]
     InvalidMultiaddr(String),
     #[error("invalid cidr: {0}")]
@@ -2362,6 +2400,7 @@ enum ControllerError {
     VpnCell(#[from] VpnCellError),
     #[error("usage voucher signing failed: {0}")]
     Signing(#[from] iroha_crypto::Error),
+    #[cfg(any(target_os = "linux", test))]
     #[error("handshake error: {0}")]
     Handshake(String),
     #[error("state error: {0}")]
@@ -2696,6 +2735,7 @@ fn read_and_validate_tunnel_launch_frame(caller: PrivilegedCaller) -> Result<(),
 fn install_check_display_state() -> State {
     State::default()
 }
+#[cfg(any(target_os = "linux", test))]
 fn connect_payload_network_policy_hash(
     payload: &ConnectPayload,
 ) -> Result<[u8; 32], ControllerError> {
@@ -4709,6 +4749,7 @@ async fn network_worker_control_loop(
         }
     }
 }
+#[cfg(target_os = "linux")]
 async fn connect_and_handshake(
     payload: &ConnectPayload,
 ) -> Result<(Endpoint, Connection, Arc<RecordLayer>), ControllerError> {
@@ -4767,15 +4808,19 @@ async fn connect_and_handshake(
     Ok((endpoint, connection, Arc::new(record_layer)))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn validate_shipping_quinn_dependency() -> Result<(), ControllerError> {
     Err(ControllerError::State(
         QUIC_DEPENDENCY_BLOCK_REASON.to_owned(),
     ))
 }
 
+#[cfg(target_os = "linux")]
 type ProtectedVpnSend = RecordWriter<SendStream>;
+#[cfg(target_os = "linux")]
 type ProtectedVpnRecv = RecordReader<RecvStream>;
 
+#[cfg(target_os = "linux")]
 async fn open_record_protected_vpn_stream(
     connection: &Connection,
     record_layer: &RecordLayer,
@@ -4798,6 +4843,7 @@ async fn open_record_protected_vpn_stream(
     ))
 }
 
+#[cfg(target_os = "linux")]
 async fn finish_record_protected_vpn_stream(send: &mut ProtectedVpnSend) {
     if matches!(
         timeout(VPN_STREAM_FINISH_TIMEOUT, send.shutdown()).await,
@@ -4807,6 +4853,7 @@ async fn finish_record_protected_vpn_stream(send: &mut ProtectedVpnSend) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
     let initiator = match stream_id.initiator() {
         Side::Client => RecordEndpoint::Client,
@@ -4860,6 +4907,7 @@ async fn strict_vpn_receive_with_deadline<T>(
         .await
         .map_err(|_| format!("strict VPN receiver observed no cell within {deadline:?}"))?
 }
+#[cfg(target_os = "linux")]
 async fn resolve_multiaddr_socket_addr(
     relay: &ParsedMultiaddr,
 ) -> Result<SocketAddr, ControllerError> {
@@ -4899,6 +4947,7 @@ async fn resolve_multiaddr_socket_addr(
         }
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn select_resolved_relay_addr(
     name: &str,
     address_family: DnsAddressFamily,
@@ -4940,6 +4989,7 @@ fn select_resolved_relay_addr(
             ))
         })
 }
+#[cfg(any(target_os = "linux", test))]
 fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, ControllerError> {
     let tls_config = Arc::new(build_tls_client_config(relay_tls_spki_sha256));
     let crypto = QuinnRustlsClientConfig::try_from(tls_config)
@@ -4963,6 +5013,7 @@ fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, 
     client_config.transport_config(Arc::new(transport));
     Ok(client_config)
 }
+#[cfg(any(target_os = "linux", test))]
 fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientConfig {
     let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedSpkiVerifier {
         relay_tls_spki_sha256,
@@ -4977,6 +5028,7 @@ fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientCon
     tls_config.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
     tls_config
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_soranet_quic_alpn(protocol: Option<&[u8]>) -> Result<(), ControllerError> {
     if protocol != Some(SORANET_QUIC_ALPN) {
         return Err(ControllerError::State(
@@ -4985,6 +5037,7 @@ fn validate_soranet_quic_alpn(protocol: Option<&[u8]>) -> Result<(), ControllerE
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 fn ensure_soranet_quic_alpn(connection: &Connection) -> Result<(), ControllerError> {
     let handshake = connection.handshake_data().ok_or_else(|| {
         ControllerError::State("relay QUIC connection has no TLS handshake data".to_owned())
@@ -4998,6 +5051,7 @@ fn ensure_soranet_quic_alpn(connection: &Connection) -> Result<(), ControllerErr
         })?;
     validate_soranet_quic_alpn(handshake.protocol.as_deref())
 }
+#[cfg(target_os = "linux")]
 async fn perform_helper_handshake(
     connection: &Connection,
     payload: &ConnectPayload,
@@ -5110,6 +5164,7 @@ fn strict_constant_rate_capabilities(base: &[u8]) -> Result<Vec<u8>, ControllerE
     result.extend_from_slice(&base[insertion..]);
     Ok(result)
 }
+#[cfg(any(target_os = "linux", test))]
 fn helper_ticket_handshake_binding(
     payload: &ConnectPayload,
     helper_ticket: &[u8],
@@ -5159,6 +5214,7 @@ fn helper_ticket_handshake_binding(
     }
     Ok(*hasher.finalize().as_bytes())
 }
+#[cfg(target_os = "linux")]
 async fn read_handshake_frame(recv: &mut RecvStream) -> Result<Vec<u8>, ControllerError> {
     let mut len_buf = [0u8; 2];
     recv.read_exact(&mut len_buf).await?;
@@ -5167,6 +5223,7 @@ async fn read_handshake_frame(recv: &mut RecvStream) -> Result<Vec<u8>, Controll
     recv.read_exact(&mut payload).await?;
     Ok(payload)
 }
+#[cfg(target_os = "linux")]
 async fn write_handshake_frame(
     send: &mut SendStream,
     payload: &[u8],
@@ -5553,6 +5610,7 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
         packet_read_mtu: usize::from(mtu),
     })
 }
+#[cfg(target_os = "linux")]
 fn cleanup_tunnel(prepared: PreparedTunnel) -> Result<(), ControllerError> {
     drop(prepared);
     Ok(())
@@ -5610,6 +5668,7 @@ fn finish_prepared_tunnel(
         }
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl TunnelShutdownSignals {
     fn install() -> Result<Self, ControllerError> {
         Ok(Self {
@@ -5618,6 +5677,7 @@ impl TunnelShutdownSignals {
         })
     }
 }
+#[cfg(target_os = "linux")]
 async fn tunnel_packet_loop<W, R, C>(
     device: Arc<LinuxTunDevice>,
     send: &mut W,
@@ -5668,6 +5728,7 @@ where
         },
     }
 }
+#[cfg(target_os = "linux")]
 async fn tun_to_vpn_loop<W>(
     device: Arc<LinuxTunDevice>,
     send: &mut W,
@@ -5769,6 +5830,7 @@ where
         }
     }
 }
+#[cfg(target_os = "linux")]
 async fn read_exact_or_eof<R>(reader: &mut R, buffer: &mut [u8]) -> io::Result<bool>
 where
     R: AsyncRead + Unpin,
@@ -5793,6 +5855,7 @@ where
     }
     Ok(true)
 }
+#[cfg(any(target_os = "linux", test))]
 fn record_relay_packet_after_tun_write(
     voucher_counters: &UsageVoucherCounters,
     packet_len: usize,
@@ -5809,6 +5872,7 @@ fn record_relay_packet_after_tun_write(
     voucher_counters.record_relay_to_client(packet_len);
     Ok(packet_len)
 }
+#[cfg(target_os = "linux")]
 async fn vpn_to_tun_loop<R>(
     device: Arc<LinuxTunDevice>,
     recv: &mut R,
@@ -5842,6 +5906,7 @@ where
         }
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl UsageVoucherSigner {
     fn from_payload(
         payload: &ConnectPayload,
@@ -5925,6 +5990,7 @@ impl UsageVoucherSigner {
         })
     }
 }
+#[cfg(any(target_os = "linux", test))]
 async fn send_usage_voucher_control_cell<W>(
     send: &mut W,
     circuit_id: [u8; 16],
@@ -5970,6 +6036,7 @@ where
     *sequence = (*sequence).saturating_add(1);
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 async fn write_vpn_frame<W>(send: &mut W, frame: &VpnPaddedCellV1) -> Result<(), ControllerError>
 where
     W: AsyncWrite + Unpin,
@@ -5990,6 +6057,7 @@ fn unix_time_ms_at(now: SystemTime) -> Result<u64, ControllerError> {
         .map_err(|_| ControllerError::State("system clock is before the Unix epoch".to_owned()))?;
     Ok(elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
 }
+#[cfg(any(target_os = "linux", test))]
 impl PacketStreamDecoder {
     fn new(max_packet_len: usize) -> Result<Self, ControllerError> {
         if max_packet_len == 0 || max_packet_len > usize::from(u16::MAX) {
@@ -6036,6 +6104,7 @@ impl PacketStreamDecoder {
         Ok(packets)
     }
 }
+#[cfg(any(target_os = "linux", test))]
 impl LinuxTunDevice {
     #[cfg(target_os = "linux")]
     fn create(requested_name: &str) -> Result<Self, ControllerError> {
@@ -6159,15 +6228,11 @@ impl LinuxTunDevice {
             name: kernel_name,
         })
     }
-    #[cfg(not(target_os = "linux"))]
-    fn create(_requested_name: &str) -> Result<Self, ControllerError> {
-        Err(ControllerError::State(
-            "Linux system tunnels can only be created on Linux hosts.".to_owned(),
-        ))
-    }
+    #[cfg(target_os = "linux")]
     fn name(&self) -> &str {
         &self.name
     }
+    #[cfg(target_os = "linux")]
     async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.readable().await?;
@@ -6180,6 +6245,7 @@ impl LinuxTunDevice {
             }
         }
     }
+    #[cfg(target_os = "linux")]
     async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.writable().await?;
@@ -6267,6 +6333,7 @@ fn ensure_exact_tun_interface_name(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, ControllerError> {
     let packet_len = u16::try_from(packet.len()).map_err(|_| {
         ControllerError::State(format!(
@@ -6407,6 +6474,7 @@ fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
     quiesce_system_command_cgroup_until(Instant::now() + PROCESS_KILL_REAP_TIMEOUT)?;
     cleanup_persisted_network_with(state, &mut SystemNetworkCleanupOps)
 }
+#[cfg(target_os = "linux")]
 fn apply_tunnel_link_config_with<F>(
     interface_name: &str,
     mtu: u16,
@@ -6436,6 +6504,7 @@ where
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 fn apply_route_pushes_with<F>(
     interface_name: &str,
     routes: &[String],
@@ -6453,6 +6522,7 @@ where
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn tunnel_address_add_args(interface_name: &str, address: ParsedCidr) -> Vec<String> {
     vec![
         address.family().flag().to_owned(),
@@ -6463,6 +6533,7 @@ fn tunnel_address_add_args(interface_name: &str, address: ParsedCidr) -> Vec<Str
         interface_name.to_owned(),
     ]
 }
+#[cfg(any(target_os = "linux", test))]
 fn tunnel_route_add_args(interface_name: &str, route: ParsedCidr) -> Vec<String> {
     vec![
         route.family().flag().to_owned(),
@@ -6473,6 +6544,7 @@ fn tunnel_route_add_args(interface_name: &str, route: ParsedCidr) -> Vec<String>
         interface_name.to_owned(),
     ]
 }
+#[cfg(any(target_os = "linux", test))]
 fn plan_excluded_route_mutation_with<F>(
     route: &str,
     mut run: F,
@@ -6557,6 +6629,7 @@ where
         command,
     ))
 }
+#[cfg(any(target_os = "linux", test))]
 fn capture_default_route_with<F>(
     family: IpFamily,
     mut run: F,
@@ -6653,6 +6726,7 @@ fn route_destination_matches_cidr(route: &str, cidr: &str) -> bool {
     };
     actual == Some(expected)
 }
+#[cfg(any(target_os = "linux", test))]
 fn route_has_exact_field(route: &str, field: &str, value: &str) -> bool {
     route
         .split_ascii_whitespace()
@@ -6738,6 +6812,7 @@ fn validate_precommitted_excluded_route(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_installed_excluded_route(
     snapshot: &ExcludedRouteSnapshot,
     mutation: &[String],
@@ -6828,12 +6903,14 @@ fn restore_excluded_route(snapshot: &ExcludedRouteSnapshot) -> Result<(), Contro
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 fn plan_dns_backend(
     interface_name: &str,
     dns_servers: &[String],
 ) -> Result<Option<DnsBackendState>, ControllerError> {
     plan_dns_backend_for_availability(interface_name, dns_servers, command_exists("resolvectl"))
 }
+#[cfg(any(target_os = "linux", test))]
 fn plan_dns_backend_for_availability(
     interface_name: &str,
     dns_servers: &[String],
@@ -6852,6 +6929,7 @@ fn plan_dns_backend_for_availability(
         ))
     }
 }
+#[cfg(target_os = "linux")]
 fn apply_dns_plan_with<F>(
     interface_name: &str,
     dns_servers: &[String],
@@ -6933,6 +7011,7 @@ fn cleanup_resolved_dns(interface_name: &str) -> Result<(), ControllerError> {
         Err(error) => Err(error),
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn dns_backend_label(backend: &DnsBackendState) -> String {
     match backend {
         DnsBackendState::Resolved { .. } | DnsBackendState::ResolvedReverted { .. } => {
@@ -6940,6 +7019,7 @@ fn dns_backend_label(backend: &DnsBackendState) -> String {
         }
     }
 }
+#[cfg(target_os = "linux")]
 fn command_exists(program: &str) -> bool {
     resolve_trusted_command(program).is_some()
 }
@@ -7837,6 +7917,7 @@ fn validate_system_executable(path: &Path) -> Result<(), ControllerError> {
     })?;
     validate_directory_custody(parent)
 }
+#[cfg(any(target_os = "linux", test))]
 fn normalize_mtu(value: u64) -> Result<u16, ControllerError> {
     if value == 0 || value > u64::from(u16::MAX) {
         return Err(ControllerError::InvalidPayload(format!(
@@ -7848,6 +7929,7 @@ fn normalize_mtu(value: u64) -> Result<u16, ControllerError> {
         ControllerError::InvalidPayload(format!("mtuBytes {value} does not fit into u16"))
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_tunnel_addresses(values: &[String]) -> Result<Vec<ParsedCidr>, ControllerError> {
     values.iter().map(|value| parse_cidr(value)).collect()
 }
@@ -7871,6 +7953,7 @@ fn parse_cidr(value: &str) -> Result<ParsedCidr, ControllerError> {
     }
     Ok(ParsedCidr { address, prefix })
 }
+#[cfg(any(target_os = "linux", test))]
 fn desired_interface_name(session_id: &str) -> Result<String, ControllerError> {
     let digest = blake3_hash(session_id.as_bytes());
     let name = format!("srvpn{}", hex::encode(&digest.as_bytes()[..5]));
@@ -7897,12 +7980,14 @@ fn parse_canonical_session_id(session_id: &str) -> Result<[u8; 16], ControllerEr
         .expect("canonical session id validation makes decoding infallible");
     Ok(decoded)
 }
+#[cfg(any(target_os = "linux", test))]
 fn vpn_flow_label_from_session_id(session_id: [u8; 16]) -> Result<VpnFlowLabelV1, ControllerError> {
     let value = (u32::from(session_id[0]) << 16)
         | (u32::from(session_id[1]) << 8)
         | u32::from(session_id[2]);
     VpnFlowLabelV1::from_u32(value).map_err(ControllerError::from)
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_route_via_dev(line: &str) -> (Option<String>, Option<String>) {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     let mut via = None;
@@ -8329,16 +8414,6 @@ fn decode_state_frame(bytes: &[u8]) -> Result<State, ControllerError> {
         )
         .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")));
     }
-    if bytes.starts_with(STATE_FILE_FRAME_MAGIC_V1) {
-        return norito::codec::decode_exact_from_slice_with_limits::<StateV1>(
-            &bytes[STATE_FILE_FRAME_MAGIC_V1.len()..],
-            decode_limits(),
-        )
-        .map(State::from)
-        .map_err(|error| {
-            ControllerError::State(format!("failed to decode legacy state: {error}"))
-        });
-    }
     Err(ControllerError::State(
         "state file is not a supported Norito state frame".to_owned(),
     ))
@@ -8536,6 +8611,7 @@ fn default_state_root() -> PathBuf {
     PathBuf::from("/var/lib/sora-vpn-controller")
 }
 #[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn load_helper_ticket_issuer_public_key() -> Result<PublicKey, ControllerError> {
     if effective_uid() != 0 {
         return Err(ControllerError::State(
@@ -10074,6 +10150,7 @@ fn terminate_and_wait_persisted_worker(
 fn sleep_blocking(duration: Duration) {
     std::thread::sleep(duration);
 }
+#[cfg(any(target_os = "linux", test))]
 fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
     let trimmed = value.trim();
     let normalized = trimmed
@@ -10087,6 +10164,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
     }
     Ok(hex::decode(normalized)?)
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
     if value.len() != 64
         || !value
@@ -10109,6 +10187,7 @@ fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], 
     }
     Ok(bytes)
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_relay_mldsa65_public_key_hex(
     value: &str,
     label: &str,
@@ -10136,6 +10215,7 @@ fn parse_relay_mldsa65_public_key_hex(
     }
     Ok(bytes)
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_canonical_secret_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
     if value.len() != 64
         || !value
@@ -10152,6 +10232,7 @@ fn parse_canonical_secret_hex_32(value: &str, label: &str) -> Result<[u8; 32], C
         .map_err(|error| ControllerError::InvalidPayload(format!("{label} is invalid: {error}")))?;
     Ok(bytes)
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, ControllerError> {
     let raw_payload = raw_payload.ok_or(ControllerError::MissingPayload)?;
     let value = SensitiveConnectJson(
@@ -10207,6 +10288,7 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
     };
     validate_connect_payload(payload)
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_connect_payload_keys(object: &JsonMap) -> Result<(), ControllerError> {
     const ALLOWED_KEYS: &[&str] = &[
         "sessionId",
@@ -10237,10 +10319,12 @@ fn validate_connect_payload_keys(object: &JsonMap) -> Result<(), ControllerError
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, ControllerError> {
     validate_connect_payload_ref(&payload)?;
     Ok(payload)
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), ControllerError> {
     validate_text_field(
         payload.session_id.as_str(),
@@ -10365,6 +10449,7 @@ fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), Controll
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn authenticate_connect_payload(
     payload: ConnectPayload,
     issuer_public_key: &PublicKey,
@@ -10405,6 +10490,7 @@ fn authenticate_connect_payload(
     }
     Ok(AuthenticatedConnectPayload { payload, ticket })
 }
+#[cfg(target_os = "linux")]
 fn ensure_authenticated_ticket_unexpired_at(expires_at_ms: u64) -> Result<(), ControllerError> {
     let now_ms = unix_now_ms()?;
     if expires_at_ms <= now_ms {
@@ -10416,6 +10502,7 @@ fn ensure_authenticated_ticket_unexpired_at(expires_at_ms: u64) -> Result<(), Co
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn ensure_authenticated_ticket_unexpired_for_connected_state_at(
     expires_at_ms: u64,
     now_ms: u64,
@@ -10428,12 +10515,14 @@ fn ensure_authenticated_ticket_unexpired_for_connected_state_at(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn ensure_authenticated_ticket_unexpired_for_connected_state(
     expires_at_ms: u64,
 ) -> Result<(), ControllerError> {
     ensure_authenticated_ticket_unexpired_for_connected_state_at(expires_at_ms, unix_now_ms()?)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn ensure_connected_publication_ready_at(
     expires_at_ms: u64,
     now_ms: u64,
@@ -10449,6 +10538,7 @@ fn ensure_connected_publication_ready_at(
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn authenticated_ticket_expiry_remaining_at(
     expires_at_ms: u64,
     now_ms: u64,
@@ -10463,6 +10553,7 @@ fn authenticated_ticket_expiry_remaining_at(
     Ok(Duration::from_millis(remaining_ms))
 }
 
+#[cfg(target_os = "linux")]
 fn authenticated_ticket_expiry_deadline(
     expires_at_ms: u64,
 ) -> Result<tokio::time::Instant, ControllerError> {
@@ -10474,6 +10565,7 @@ fn authenticated_ticket_expiry_deadline(
     authenticated_ticket_expiry_deadline_at(expires_at_ms, wall_now_ms, monotonic_anchor)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn authenticated_ticket_expiry_deadline_at(
     expires_at_ms: u64,
     wall_now_ms: u64,
@@ -10488,6 +10580,7 @@ fn authenticated_ticket_expiry_deadline_at(
             )
         })
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_authenticated_helper_ticket(
     hex_ticket: &str,
     issuer_public_key: &PublicKey,
@@ -10499,6 +10592,7 @@ fn parse_authenticated_helper_ticket(
         ))
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_text_field(value: &str, label: &str, max_bytes: usize) -> Result<(), ControllerError> {
     if value.len() > max_bytes {
         return Err(ControllerError::InvalidPayload(format!(
@@ -10507,6 +10601,7 @@ fn validate_text_field(value: &str, label: &str, max_bytes: usize) -> Result<(),
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_network_policy_entries(entries: &[String], label: &str) -> Result<(), ControllerError> {
     if entries.len() > MAX_NETWORK_POLICY_ENTRIES_V1 {
         return Err(ControllerError::InvalidPayload(format!(
@@ -10522,6 +10617,7 @@ fn validate_network_policy_entries(entries: &[String], label: &str) -> Result<()
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_v1_policy_cardinality(
     entries: &[String],
     label: &str,
@@ -10545,6 +10641,7 @@ fn validate_v1_policy_cardinality(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_canonical_host_cidr_entries(
     entries: &[String],
     label: &str,
@@ -10569,6 +10666,7 @@ fn validate_canonical_host_cidr_entries(
     }
     Ok(parsed_entries)
 }
+#[cfg(any(target_os = "linux", test))]
 fn network_prefix(parsed: ParsedCidr) -> IpAddr {
     match parsed.address {
         IpAddr::V4(address) => {
@@ -10589,6 +10687,7 @@ fn network_prefix(parsed: ParsedCidr) -> IpAddr {
         }
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_canonical_network_cidr_entries(
     entries: &[String],
     label: &str,
@@ -10605,6 +10704,7 @@ fn validate_canonical_network_cidr_entries(
     }
     Ok(parsed_entries)
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_dns_servers(entries: &[String]) -> Result<(), ControllerError> {
     let mut parsed_entries = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
@@ -10738,9 +10838,11 @@ fn read_connect_payload_json_from_stdin_with_deadline() -> Result<WipeBytes, Con
     }
     Ok(raw_payload)
 }
+#[cfg(any(target_os = "linux", test))]
 fn json_field<'a>(object: &'a JsonMap, keys: &[&str]) -> Option<&'a JsonValue> {
     keys.iter().find_map(|key| object.get(*key))
 }
+#[cfg(any(target_os = "linux", test))]
 fn require_json_string(
     object: &JsonMap,
     keys: &[&str],
@@ -10750,6 +10852,7 @@ fn require_json_string(
         ControllerError::InvalidPayload(format!("{label} must be a string and must be present"))
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn optional_json_string(
     object: &JsonMap,
     keys: &[&str],
@@ -10765,16 +10868,19 @@ fn optional_json_string(
         .map(|value| Some(value.to_owned()))
         .ok_or_else(|| ControllerError::InvalidPayload(format!("{} must be a string", keys[0])))
 }
+#[cfg(any(target_os = "linux", test))]
 fn require_json_u16(object: &JsonMap, keys: &[&str], label: &str) -> Result<u16, ControllerError> {
     let value = require_json_u64(object, keys, label)?;
     u16::try_from(value)
         .map_err(|_| ControllerError::InvalidPayload(format!("{label} must fit into a u16")))
 }
+#[cfg(any(target_os = "linux", test))]
 fn require_json_u64(object: &JsonMap, keys: &[&str], label: &str) -> Result<u64, ControllerError> {
     optional_json_u64(object, keys)?.ok_or_else(|| {
         ControllerError::InvalidPayload(format!("{label} must be an unsigned integer and present"))
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn optional_json_u64(object: &JsonMap, keys: &[&str]) -> Result<Option<u64>, ControllerError> {
     let Some(value) = json_field(object, keys) else {
         return Ok(None);
@@ -10798,6 +10904,7 @@ fn optional_json_u64(object: &JsonMap, keys: &[&str]) -> Result<Option<u64>, Con
         keys[0]
     )))
 }
+#[cfg(any(target_os = "linux", test))]
 fn optional_json_string_array(
     object: &JsonMap,
     keys: &[&str],
@@ -10824,6 +10931,7 @@ fn optional_json_string_array(
         })
         .collect()
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
     validate_quic_multiaddr(addr)
         .map_err(|error| ControllerError::InvalidMultiaddr(error.to_string()))?;
@@ -10898,9 +11006,11 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
     Ok(ParsedMultiaddr { host, port })
 }
 #[derive(Debug)]
+#[cfg(any(target_os = "linux", test))]
 struct PinnedSpkiVerifier {
     relay_tls_spki_sha256: [u8; 32],
 }
+#[cfg(any(target_os = "linux", test))]
 impl ServerCertVerifier for PinnedSpkiVerifier {
     fn verify_server_cert(
         &self,
@@ -10945,6 +11055,7 @@ impl ServerCertVerifier for PinnedSpkiVerifier {
         ]
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn verify_relay_tls_spki_pin(
     certificate_der: &[u8],
     expected_spki_sha256: &[u8; 32],
@@ -10959,6 +11070,7 @@ fn verify_relay_tls_spki_pin(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn verifier_for_signature_cert(
     cert: &CertificateDer<'_>,
 ) -> Result<Arc<WebPkiServerVerifier>, rustls::Error> {
@@ -12729,25 +12841,17 @@ mod tests {
         assert_eq!(decode_state_frame(&frame).expect("decode state"), state);
     }
     #[test]
-    fn legacy_state_frame_preserves_recovery_but_cannot_report_active() {
+    fn retired_state_frame_magic_is_rejected() {
         let state = active_runtime_test_state();
-        let legacy = StateV1::from(&state);
-        let mut frame = Vec::with_capacity(STATE_FILE_FRAME_MAGIC_V1.len() + legacy.encoded_len());
-        frame.extend_from_slice(STATE_FILE_FRAME_MAGIC_V1);
-        legacy.encode_to(&mut frame);
-
-        let mut decoded = decode_state_frame(&frame).expect("decode legacy recovery state");
-        assert!(decoded.active);
-        assert!(decoded.ticket_expires_at_ms.is_none());
-        scrub_stale_process_with(&mut decoded, 1_000, |_| Ok(true))
-            .expect("normalize legacy active state without losing process custody");
-        assert!(!decoded.active);
-        assert!(decoded.repair_required);
-        assert!(decoded.worker_identity.is_some());
-        assert!(decoded.network_worker_identity.is_some());
-        assert!(decoded.applied_network.is_some());
-        validate_state_for_persistence_at(&decoded, 1_000)
-            .expect("legacy state remains persistable as repair custody");
+        let mut frame = encode_state_frame(&state).expect("encode state");
+        frame[..STATE_FILE_FRAME_MAGIC.len()].copy_from_slice(b"SVPNST1\0");
+        let error = decode_state_frame(&frame).expect_err("retired frame magic must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("state file is not a supported Norito state frame"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn bounded_reader_accepts_exact_connect_frame_limit() {

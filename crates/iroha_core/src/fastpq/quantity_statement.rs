@@ -87,6 +87,7 @@ pub fn quantity_statement_from_finalized_transcripts(
 
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static MATERIALIZER_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

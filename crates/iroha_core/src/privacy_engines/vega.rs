@@ -1308,30 +1308,6 @@ where
         .map_err(|_| VegaPrivacyActionBuildErrorV1::PreparedPayloadDrift)?;
     Ok(prepared)
 }
-/// Prepare and prove one canonical direct Vega action using operating-system
-/// randomness, without receiving a transaction signing key.
-///
-/// # Errors
-///
-/// Returns the same closed failures as [`prepare_vega_privacy_action_with_rng_v1`].
-pub fn prepare_vega_privacy_action_v1(
-    context: VegaPrivacyActionTransactionContextV1,
-    input: VegaPrivacyActionPublicInputV1,
-    witness_material: VegaPrivacyActionWitnessMaterialV1,
-    device_signing_key: &P256SigningKey,
-    canonical_genesis_hash: [u8; 32],
-    trusted_block_timestamp_ms: u64,
-) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1> {
-    prepare_vega_privacy_action_with_rng_v1(
-        context,
-        input,
-        witness_material,
-        device_signing_key,
-        canonical_genesis_hash,
-        trusted_block_timestamp_ms,
-        &mut OsRng,
-    )
-}
 /// Sign a payload returned by the canonical pure Vega prover.
 ///
 /// The sealed statement, proof, envelope encoding, and intent are recomputed

@@ -4,7 +4,6 @@
 //! keys and authentication policy are supplied by an explicitly qualified deployment runtime
 //! provider and never enter node configuration or response diagnostics.
 use axum::{
-    Router,
     body::{Body, Bytes},
     extract::State,
     http::{
@@ -15,7 +14,6 @@ use axum::{
         },
     },
     response::{IntoResponse, Response},
-    routing::post,
 };
 use base64::{Engine as _, encoded_len, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
@@ -1872,22 +1870,6 @@ pub async fn handle_post_bootle_lantern_issuance_issue(
         Err(error) => error_response_v1(error),
     }
 }
-/// Build the complete canonical issuance router with its own runtime state.
-#[must_use]
-pub fn bootle_lantern_issuance_router_v1(
-    runtime: Arc<BootleLanternIssuanceToriiRuntimeV1>,
-) -> Router {
-    Router::new()
-        .route(
-            BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,
-            post(handle_post_bootle_lantern_issuance_authorize),
-        )
-        .route(
-            BOOTLE_LANTERN_ISSUANCE_ISSUE_PATH_V1,
-            post(handle_post_bootle_lantern_issuance_issue),
-        )
-        .with_state(runtime)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1905,7 +1887,6 @@ mod tests {
         PrivacyParameterIdV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-    use sha2::Digest as _;
     use std::{
         collections::VecDeque,
         sync::{

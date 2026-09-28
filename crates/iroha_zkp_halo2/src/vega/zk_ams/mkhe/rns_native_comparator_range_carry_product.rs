@@ -32,36 +32,44 @@
 //! only in the post-verification prerequisite binding, avoiding a Keccak
 //! fixed-point cycle while preserving the complete predecessor identity.
 
+#[cfg(test)]
 use core::marker::PhantomData;
 
 use super::{
-    rns_native_comparator_product::{
-        RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1,
-        RnsNativeComparatorProductPrerequisiteV1,
-    },
-    rns_native_cross_field_inventory::ComparatorRangeCarryCommitmentsV1,
-    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
+    rns_native_comparator_product::RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
     },
+};
+#[cfg(test)]
+use super::{
+    rns_native_comparator_product::RnsNativeComparatorProductPrerequisiteV1,
+    rns_native_cross_field_inventory::ComparatorRangeCarryCommitmentsV1,
+    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
     rns_native_proof_hash::RnsNativeDigestIdentityV1 as DigestIdentityV1,
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
 };
+use crate::vega::VEGA_T256_SCALAR_MODULUS_BE_V1;
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
         VerifierTranscript,
     },
     vega::{
-        VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+        VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
         bulletproof_t256::{ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, ZkAmsT256BulletproofSuiteV1},
         sponge::Keccak256,
     },
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
+#[cfg(test)]
 const FLAGS_V1: u8 = 0;
+#[cfg(test)]
 const MAGIC_V1: [u8; 4] = *b"ZSP5";
+#[cfg(test)]
 const STATEMENT_V1: u8 = 5;
 const DIGEST_BYTES_V1: usize = 32;
 const POINT_BYTES_V1: usize = 33;
@@ -89,9 +97,13 @@ const FINAL_CONSTRAINTS_PER_COORDINATE_V1: usize = 3 + 3 + 3 + 1;
 const BOOLEAN_CONSTRAINTS_V1: usize = COORDINATES_V1 * BOOLEAN_CONSTRAINTS_PER_COORDINATE_V1;
 const FINAL_CONSTRAINTS_V1: usize = COORDINATES_V1 * FINAL_CONSTRAINTS_PER_COORDINATE_V1;
 const COMMITMENTS_PER_CORE_V1: usize = 4;
+#[cfg(test)]
 const DIFFERENCE_TOP_FINAL_COMMITMENT_V1: usize = 0;
+#[cfg(test)]
 const MIXED_TOP_FINAL_COMMITMENT_V1: usize = 1;
+#[cfg(test)]
 const BORROW_16_FINAL_COMMITMENT_V1: usize = 2;
+#[cfg(test)]
 const BORROW_17_FINAL_COMMITMENT_V1: usize = 3;
 const CARRY_INTEGER_ABSOLUTE_BOUND_V1: u8 = 2;
 const CONDITIONAL_RADIX_ROW_ABSOLUTE_BOUND_V1: u64 = 2 * RADIX_BASE_V1 - 1;
@@ -115,23 +127,35 @@ pub(super) const RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1: usize 
         - RECORD_SET_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const CIRCUIT_LANGUAGE_V1: &[u8] = b"statement=5;groups=344;coordinates=16384;group-chunks=(beta_0..3,beta_4..7,beta_8..11,beta_12..15,(beta_16,beta_17,bD,m));boolean-chunk-gates=4*16384;boolean-constraints-per-coordinate=(aL=beta,aR=aL-1,aO=0)*4;final-chunk-gates=3*16384;final-constraints=(beta16-boolean,beta17-boolean,aLtop=bD,aRtop=beta16,aOtop=m,beta17-beta16+m=0);padded-gates=65536;no-aggregate-residual";
+#[cfg(test)]
 const INTEGER_NO_WRAP_LANGUAGE_V1: &[u8] = b"statement3-fixes-bD-in-{0,1};statement5-fixes-beta_h-in-{0,1};m=bD*beta16-in-{0,1};beta17-beta16+m-has-integer-absolute-value<=2<pT;conditional-D-minus-K-radix-row-absolute-value<=65535<pT-after-digit-lookup;no-unverified-range-is-promoted";
+#[cfg(test)]
 const REMAINING_RANGE_BOUNDARY_V1: &[u8] = b"not-yet-verified:difference-digit-membership-in-[0,32768),D-minus-K-borrow-linear-equations,difference-inverse-lookup,radix-reconstruction,canonical-complement,small-source-product,q-mask,global-lookup";
+#[cfg(test)]
 const TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.transcript";
+#[cfg(test)]
 const TRANSCRIPT_SCHEMA_V1: &[u8] = b"ZSP5/direct-five-chunk/transcript/v1";
+#[cfg(test)]
 const CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.challenge";
+#[cfg(test)]
 const CIRCUIT_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.circuit-manifest";
+#[cfg(test)]
 const PROOF_SET_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.proof-set-root";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.residual";
+#[cfg(test)]
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.codec";
+#[cfg(test)]
 const VERIFIED_TRANSCRIPTS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.verified-transcripts";
+#[cfg(test)]
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-range-carry.prerequisite";
 
@@ -179,6 +203,7 @@ const _: () = {
 };
 
 /// Failure while decoding or verifying comparator product statement 5.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeComparatorRangeCarryErrorV1 {
     ProofCapExceeded,
@@ -192,20 +217,24 @@ pub(super) enum RnsNativeComparatorRangeCarryErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeComparatorRangeCarryErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeComparatorRangeCarryErrorV1 {}
 
+#[cfg(test)]
 impl From<GeneralizedBulletproofErrorV1> for RnsNativeComparatorRangeCarryErrorV1 {
     fn from(_: GeneralizedBulletproofErrorV1) -> Self {
         Self::Algebra
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct UpstreamBindingV1 {
     pub(super) prior_context_digest: [u8; DIGEST_BYTES_V1],
@@ -214,6 +243,7 @@ pub(super) struct UpstreamBindingV1 {
     pub(super) statement3_verified_transcript_root: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl UpstreamBindingV1 {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeComparatorProductPrerequisiteV1<'_, '_, S>,
@@ -237,11 +267,13 @@ impl UpstreamBindingV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct RangeCarryChunkCommitmentsV1 {
     points: [Point; COMMITMENTS_PER_CORE_V1],
 }
 
+#[cfg(test)]
 fn chunk_commitments_v1(
     commitments: ComparatorRangeCarryCommitmentsV1,
     chunk: usize,
@@ -267,6 +299,7 @@ fn chunk_commitments_v1(
     Ok(RangeCarryChunkCommitmentsV1 { points })
 }
 
+#[cfg(test)]
 fn chunk_geometry_v1(
     coordinates: usize,
     chunk: usize,
@@ -292,11 +325,13 @@ fn chunk_geometry_v1(
     ))
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -337,11 +372,13 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ExactCoreViewV1<'a> {
     bytes: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> ExactCoreViewV1<'a> {
     fn parse_v1(bytes: &'a [u8]) -> Result<Self, RnsNativeComparatorRangeCarryErrorV1> {
         if bytes.len() != CORE_BYTES_V1 {
@@ -371,6 +408,7 @@ impl<'a> ExactCoreViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ComparatorRangeCarryProofSetViewV1<'a> {
     records: &'a [u8],
@@ -380,6 +418,7 @@ struct ComparatorRangeCarryProofSetViewV1<'a> {
     codec_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> ComparatorRangeCarryProofSetViewV1<'a> {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeComparatorProductPrerequisiteV1<'_, 'a, S>,
@@ -511,6 +550,7 @@ impl<'a> ComparatorRangeCarryProofSetViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn record_at_v1(
     records: &[u8],
     group: usize,
@@ -549,6 +589,7 @@ fn record_at_v1(
     Ok(&record[RECORD_HEADER_BYTES_V1..])
 }
 
+#[cfg(test)]
 fn encode_point_v1(
     point: Point,
 ) -> Result<[u8; POINT_BYTES_V1], RnsNativeComparatorRangeCarryErrorV1> {
@@ -559,6 +600,7 @@ fn encode_point_v1(
     Ok(encoded)
 }
 
+#[cfg(test)]
 fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     for digest in [
         upstream.prior_context_digest,
@@ -570,6 +612,7 @@ fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     }
 }
 
+#[cfg(test)]
 fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CIRCUIT_MANIFEST_DOMAIN_V1);
@@ -599,6 +642,7 @@ fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn canonical_proof_set_root_v1<F>(
     upstream: UpstreamBindingV1,
     records: &[u8],
@@ -637,6 +681,7 @@ where
     Ok(digest)
 }
 
+#[cfg(test)]
 pub(super) fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     proof_set_root: [u8; DIGEST_BYTES_V1],
@@ -663,6 +708,7 @@ pub(super) fn canonical_residual_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
@@ -671,6 +717,7 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn range_carry_constraints_v1(
     coordinates: usize,
     padded_gates: usize,
@@ -792,6 +839,7 @@ fn range_carry_constraints_v1(
     Ok(constraints)
 }
 
+#[cfg(test)]
 fn build_range_carry_statement_v1<S>(
     coordinates: usize,
     padded_gates: usize,
@@ -809,6 +857,7 @@ where
     )?)
 }
 
+#[cfg(test)]
 fn append_frame_v1(
     state: &mut Vec<u8>,
     value: &[u8],
@@ -822,6 +871,7 @@ fn append_frame_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn initial_transcript_state_v1(
     upstream: UpstreamBindingV1,
     group: usize,
@@ -866,12 +916,14 @@ fn initial_transcript_state_v1(
     Ok(state)
 }
 
+#[cfg(test)]
 fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(bytes);
     hash.finalize()
 }
 
+#[cfg(test)]
 fn derive_challenge_v1(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -904,6 +956,7 @@ fn derive_challenge_v1(
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
 
+#[cfg(test)]
 struct ComparatorRangeCarryVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -915,6 +968,7 @@ where
     suite: PhantomData<S>,
 }
 
+#[cfg(test)]
 impl<'a, S> ComparatorRangeCarryVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -970,6 +1024,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<S> VerifierTranscript<S> for ComparatorRangeCarryVerifierTranscriptV1<'_, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -1003,6 +1058,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeComparatorProductPrerequisiteV1<'_, '_, S>,
     view: ComparatorRangeCarryProofSetViewV1<'_>,
@@ -1058,6 +1114,7 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 ///
 /// The residual is not authenticated as a later proof schema by this token and
 /// confers no receipt, release, or authorization capability.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the statement-3 owner and unverified residual must advance exactly once"
@@ -1075,6 +1132,7 @@ pub(super) struct RnsNativeComparatorRangeCarryPrerequisiteV1<
     _binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeComparatorRangeCarryPrerequisiteV1<'source, 'proof, S>
 {
@@ -1120,6 +1178,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
 /// Consume statement 3 and verify every bounded statement-5 core
 /// sequentially.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the sound private statement-5 entry awaits statement 8, q-mask, and global-lookup consumers"

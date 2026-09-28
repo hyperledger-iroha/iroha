@@ -1,61 +1,88 @@
+#[cfg(test)]
+use super::super::super::direct_object_transport::ZkAmsMkheDirectObjectKindV1;
+#[cfg(test)]
 use super::super::super::{
     ZkAmsMkheErrorV1,
     direct_collective_eval_ceremony::{
         ZkAmsMkheDirectCeremonyContextV1,
         direct_relation_contribution_statement_from_polynomials_v1,
     },
-    direct_object_transport::{ZkAmsMkheDirectObjectKindV1, ZkAmsMkheDirectObjectPointerV1},
+    direct_object_transport::ZkAmsMkheDirectObjectPointerV1,
 };
+#[cfg(test)]
 use super::super::{PersistentDirectRelationV1, VerifiedPersistentWitnessDirectRelationUseV1};
+#[cfg(test)]
 use super::{
     DIRECT_RELATION_CODEC_VERSION_V1, EXACT_POLYNOMIAL_OBJECT_BYTES_V1, FINAL_STATEMENT_DOMAIN_V1,
     MAX_STATEMENT_BYTES_V1, RELATION_CORE_DOMAIN_V1, RELATION_LINEAGE_DOMAIN_V1,
 };
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
+#[cfg(test)]
 use core::marker::PhantomData;
+#[cfg(test)]
 #[path = "statement_v1/galois_b_replay_v1.rs"]
 mod galois_b_replay_v1;
+#[cfg(test)]
 #[allow(
     unused_imports,
     reason = "candidate-only Galois statement replay seam is retained for the pending semantic verifier and cannot mint admission or release authority"
 )]
 pub(in super::super) use galois_b_replay_v1::DirectGaloisBStatementReplayV1;
+#[cfg(test)]
 #[path = "statement_v1/rkg_one_h0_h1_replay_v1.rs"]
 mod rkg_one_h0_h1_replay_v1;
+#[cfg(test)]
 pub(in super::super) use rkg_one_h0_h1_replay_v1::DirectRkgOneH0H1StatementReplayV1;
+#[cfg(test)]
 #[path = "statement_v1/rkg_one_creator_core_v1.rs"]
 mod rkg_one_creator_core_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use rkg_one_creator_core_v1::PreparedDirectRkgOneStatementCoreV1;
+#[cfg(test)]
 use rkg_one_creator_core_v1::build_statement_core_v1;
 pub(in crate::vega::zk_ams::mkhe) mod object_role {
+    #[cfg(test)]
     use super::ZkAmsMkheDirectObjectKindV1;
+    #[cfg(test)]
     pub(in crate::vega::zk_ams::mkhe) trait Sealed {
         const KIND: ZkAmsMkheDirectObjectKindV1;
     }
 }
+#[cfg(test)]
 macro_rules! direct_object_role {
     ($name:ident, $kind:ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub(in crate::vega::zk_ams::mkhe) enum $name {}
+        #[cfg(test)]
         impl object_role::Sealed for $name {
             const KIND: ZkAmsMkheDirectObjectKindV1 = ZkAmsMkheDirectObjectKindV1::$kind;
         }
     };
 }
+#[cfg(test)]
 direct_object_role!(RkgH0ObjectRoleV1, RkgH0);
+#[cfg(test)]
 direct_object_role!(RkgH1ObjectRoleV1, RkgH1);
+#[cfg(test)]
 direct_object_role!(RkgKObjectRoleV1, RkgK);
+#[cfg(test)]
 direct_object_role!(RkgNormalizationObjectRoleV1, RkgNormalization);
+#[cfg(test)]
 direct_object_role!(GaloisBObjectRoleV1, GaloisB);
+#[cfg(test)]
 direct_object_role!(AggregateH0ObjectRoleV1, AggregateH0);
+#[cfg(test)]
 direct_object_role!(AggregateH1ObjectRoleV1, AggregateH1);
 /// A role-typed public polynomial statement and its exact content address.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::vega::zk_ams::mkhe) struct DirectPolynomialObjectV1<R: object_role::Sealed> {
     statement_digest: [u8; 32],
     pointer: ZkAmsMkheDirectObjectPointerV1,
     role: PhantomData<fn() -> R>,
 }
+#[cfg(test)]
 impl<R: object_role::Sealed> DirectPolynomialObjectV1<R> {
     pub(in crate::vega::zk_ams::mkhe) fn new(
         statement_digest: [u8; 32],
@@ -81,12 +108,14 @@ impl<R: object_role::Sealed> DirectPolynomialObjectV1<R> {
         }
     }
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CanonicalObjectEntryV1 {
     statement_digest: [u8; 32],
     pointer: ZkAmsMkheDirectObjectPointerV1,
 }
 /// Exact role-shaped set of separately addressed public polynomials.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::vega::zk_ams::mkhe) enum DirectRelationPublicObjectsV1 {
     RkgRoundOne {
@@ -106,6 +135,7 @@ pub(in crate::vega::zk_ams::mkhe) enum DirectRelationPublicObjectsV1 {
         b: DirectPolynomialObjectV1<GaloisBObjectRoleV1>,
     },
 }
+#[cfg(test)]
 impl DirectRelationPublicObjectsV1 {
     const fn relation(self) -> PersistentDirectRelationV1 {
         match self {
@@ -155,6 +185,7 @@ impl DirectRelationPublicObjectsV1 {
         }
     }
 }
+#[cfg(test)]
 pub(in super::super) struct ExpectedDirectRelationStatementV1 {
     bytes: [u8; MAX_STATEMENT_BYTES_V1],
     bytes_len: usize,
@@ -163,6 +194,7 @@ pub(in super::super) struct ExpectedDirectRelationStatementV1 {
     statement_digest: [u8; 32],
     lineage_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ExpectedDirectRelationStatementV1 {
     #[cfg(test)]
     pub(super) fn layout_fixture(
@@ -284,6 +316,7 @@ impl ExpectedDirectRelationStatementV1 {
         self.lineage_digest
     }
 }
+#[cfg(test)]
 fn validate_object_selector_axes(
     objects: DirectRelationPublicObjectsV1,
     capability: &VerifiedPersistentWitnessDirectRelationUseV1,
@@ -316,6 +349,7 @@ fn validate_object_selector_axes(
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
 }
+#[cfg(test)]
 fn relation_lineage_digest(
     capability: &VerifiedPersistentWitnessDirectRelationUseV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -337,6 +371,7 @@ fn relation_lineage_digest(
     hash.update(&capability.ephemeral_record_index.to_be_bytes());
     Ok(hash.finalize())
 }
+#[cfg(test)]
 fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(domain);
@@ -348,6 +383,7 @@ fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
 pub(super) fn domain_hash_for_test(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     domain_hash(domain, bytes)
 }
+#[cfg(test)]
 fn put<const N: usize>(bytes: &mut [u8], offset: usize, value: &[u8; N]) {
     bytes[offset..offset + N].copy_from_slice(value);
 }

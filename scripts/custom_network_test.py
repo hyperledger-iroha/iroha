@@ -54,14 +54,14 @@ def send_transactions(stop_event):
 
     print(f"Using iroha binary: {iroha_bin}")
 
-    # We use "transaction ping"
+    # We use "tx ping"
     count = 0
     while not stop_event.is_set():
         try:
             cmd = [
                 iroha_bin,
                 "--config", CLIENT_CONFIG,
-                "transaction", "ping",
+                "tx", "ping",
                 "--msg", f"ping-{time.time()}"
             ]
             

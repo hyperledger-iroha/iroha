@@ -8,42 +8,54 @@
 //! construction state only: it is not a proof receipt, readiness evidence, or
 //! release authority, and the composite verifier remains fail-closed.
 
+use super::rns_native_proof_hash::RnsNativeDigestIdentityV1 as DigestIdentityV1;
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1,
         ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1,
-        ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
-        zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
+        ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1, ZkAmsMkheRnsNativeFamilyV1,
     },
-    rns_native_qpcs_fri_complete::{
-        RnsNativeQpcsFriCompleteErrorV1, RnsNativeQpcsFriCompleteStageV1,
-    },
-    rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
     rns_native_section_codec::RNS_QPCS_FIXED_BYTES_V1,
     rns_native_source::{
         ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_BLOCKS_PER_OPENING_V1,
         ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1,
         ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_SLOTS_V1,
         ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1, ZkAmsMkheRnsNativeSecretChunkV1,
-        ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceLayoutV1,
-        ZkAmsMkheRnsNativeSourceReceiptV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
+        ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1,
+    },
+};
+#[cfg(test)]
+use super::{
+    rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, zk_ams_mkhe_rns_native_profile_manifest_v1,
+        zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
+    },
+    rns_native_qpcs_fri_complete::{
+        RnsNativeQpcsFriCompleteErrorV1, RnsNativeQpcsFriCompleteStageV1,
+    },
+    rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
+    rns_native_source::{
+        ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
+        ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1,
+        ZkAmsMkheRnsNativeSourceSnapshotV1,
     },
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
 };
+#[cfg(test)]
 use super::{
     rns_native_proof_hash::{
-        RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
-        RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1,
-        RnsNativeProofHashRoleV1, decode_proof_digest_v1,
+        RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
+        RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+        decode_proof_digest_v1,
     },
     rns_native_proof_sampling::RnsNativeAggregationSamplerV1,
 };
+#[cfg(test)]
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
 
+#[cfg(test)]
 const STATEMENT_VERSION_V1: u8 = 1;
 // Existing public source/artifact identities remain32 bytes.
 const DIGEST_BYTES_V1: usize = 32;
@@ -53,6 +65,7 @@ const EQUATION_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1 a
 const REPETITION_COUNT_V1: usize = 5;
 const ROWS_PER_REPETITION_V1: usize = 2;
 const ROWS_PER_LIMB_V1: usize = REPETITION_COUNT_V1 * ROWS_PER_REPETITION_V1;
+#[cfg(test)]
 const COMPONENT_COUNT_V1: usize = 4;
 const CANONICAL_COEFFICIENT_BYTES_V1: usize = 32;
 const SIGNED_COEFFICIENT_BYTES_V1: usize = 8;
@@ -71,6 +84,7 @@ pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1: usize =
     2 * ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 + 2 * PUBLIC_LIMB_DIGEST_COUNT_V1;
 pub(super) const RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGEST_BYTES_V1: usize =
     RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGESTS_V1 * DIGEST_BYTES_V1;
+#[cfg(test)]
 type RnsNativePreTranscriptRecordFactsV1 = (
     [RnsNativePublicRecordMetadataV1; OPENING_COUNT_V1],
     [u8; DIGEST_BYTES_V1],
@@ -154,30 +168,54 @@ pub(super) const RNS_NATIVE_RLWE_SOURCE_RESIDUAL_MAX_BYTES_V1: usize =
         - super::rns_native_qpcs_fri_complete::MAX_CORRELATED_FRI_AUTHENTICATION_BYTES_V1
         - QPCS_NESTED_HEADER_BYTES_V1
         - QPCS_EVALUATION_BYTES_V1;
+#[cfg(test)]
 const ANCHOR_MAGIC_V1: [u8; 4] = *b"ZRLS";
 const ANCHOR_CORE_DIGESTS_V1: usize = 23;
+#[cfg(test)]
 const CORE_QPCS_PARAMETER_V1: usize = 0;
+#[cfg(test)]
 const CORE_TRANSCRIPT_V1: usize = 1;
+#[cfg(test)]
 const CORE_QUERY_SEED_V1: usize = 2;
+#[cfg(test)]
 const CORE_QPCS_SECTION_V1: usize = 3;
+#[cfg(test)]
 const CORE_FRI_SCHEDULE_V1: usize = 4;
+#[cfg(test)]
 const CORE_PROFILE_V1: usize = 5;
+#[cfg(test)]
 const CORE_TOPOLOGY_V1: usize = 6;
+#[cfg(test)]
 const CORE_RELEASE_CANDIDATE_V1: usize = 7;
+#[cfg(test)]
 const CORE_SOURCE_BINDING_V1: usize = 8;
+#[cfg(test)]
 const CORE_MAIN_SNAPSHOT_V1: usize = 9;
+#[cfg(test)]
 const CORE_NONCE_SNAPSHOT_V1: usize = 10;
+#[cfg(test)]
 const CORE_SOURCE_RECEIPT_V1: usize = 11;
+#[cfg(test)]
 const CORE_STATEMENT_V1: usize = 12;
+#[cfg(test)]
 const CORE_OPERATIONAL_V1: usize = 13;
+#[cfg(test)]
 const CORE_ROSTER_V1: usize = 14;
+#[cfg(test)]
 const CORE_PUBLIC_BUNDLE_V1: usize = 15;
+#[cfg(test)]
 const CORE_OPENING_BUNDLE_V1: usize = 16;
+#[cfg(test)]
 const CORE_FORMULA_V1: usize = 17;
+#[cfg(test)]
 const CORE_MAPPING_V1: usize = 18;
+#[cfg(test)]
 const CORE_EQUATION_BUNDLE_V1: usize = 19;
+#[cfg(test)]
 const CORE_LIMB_BUNDLE_V1: usize = 20;
+#[cfg(test)]
 const CORE_AGGREGATION_SCHEDULE_V1: usize = 21;
+#[cfg(test)]
 const CORE_DOWNSTREAM_V1: usize = 22;
 const ANCHOR_HEADER_BYTES_V1: usize = 4 + 1 + 1 + 5 + 1 + 4 + 3 * 2 + 8 + 4;
 const ANCHOR_PROOF_DIGESTS_V1: usize = 8;
@@ -185,6 +223,7 @@ const ANCHOR_FIXED_BYTES_V1: usize = ANCHOR_HEADER_BYTES_V1
     + (ANCHOR_CORE_DIGESTS_V1 - ANCHOR_PROOF_DIGESTS_V1) * DIGEST_BYTES_V1
     + ANCHOR_PROOF_DIGESTS_V1 * PROOF_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const fn anchor_proof_role_v1(ordinal: usize) -> bool {
     matches!(
         ordinal,
@@ -201,52 +240,80 @@ const fn anchor_proof_role_v1(ordinal: usize) -> bool {
 pub(super) const RNS_NATIVE_RLWE_SOURCE_DOWNSTREAM_MAX_BYTES_V1: usize =
     RNS_NATIVE_RLWE_SOURCE_RESIDUAL_MAX_BYTES_V1 - ANCHOR_FIXED_BYTES_V1;
 
+#[cfg(test)]
 const SOURCE_SEMANTICS_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.semantics";
+#[cfg(test)]
 const RECORD_MAPPING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.record-mapping";
+#[cfg(test)]
 const RLWE_FORMULA_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.formula";
 const PUBLIC_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-key";
 const PUBLIC_RECORD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-record";
 const PUBLIC_BUNDLE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-bundle";
+#[cfg(test)]
 const PUBLIC_STATEMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-statement";
 const NONCE_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.nonce-binding";
+#[cfg(test)]
 const AGGREGATION_SCHEDULE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.aggregation-schedule";
+#[cfg(test)]
 const ANCHOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.residual-anchor";
+#[cfg(test)]
 const DOWNSTREAM_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.downstream";
+#[cfg(test)]
 const OPENING_BUNDLE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.opening-bundle";
+#[cfg(test)]
 const EQUATION_BUNDLE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.equation-bundle";
+#[cfg(test)]
 const LIMB_BUNDLE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.limb-bundle";
+#[cfg(test)]
 const EVALUATION_BYTES_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.qpcs-evaluations";
 
+#[cfg(test)]
 const CANONICAL_SOURCE_SEMANTICS_V1: &[u8] =
     b"M:256x32-byte-big-endian;strictly-less-than-T256-scalar-modulus";
+#[cfg(test)]
 const EPHEMERAL_SOURCE_SEMANTICS_V1: &[u8] =
     b"r:1024xi64-big-endian;coefficients-in{-1,0,1};polynomial-nonzero";
+#[cfg(test)]
 const ERROR_SOURCE_SEMANTICS_V1: &[u8] = b"e0,e1:1024xi64-big-endian;absolute-value-at-most-2";
+#[cfg(test)]
 const NONCE_SOURCE_SEMANTICS_V1: &[u8] = b"nonce:32-byte;nonzero;sample-epoch-roster-bound";
+#[cfg(test)]
 const USED_SLOT_SEMANTICS_V1: &[u8] =
     b"used-slots-apply-after-packing-and-global-lookup;raw-coefficient-tail-not-zero-checked";
 
+#[cfg(test)]
 const ORDINARY_PRODUCT_FORMULA_V1: &[u8] =
     b"T[j,e,l]=ordinary(K[e,l]*r[j,l]);degree(T)<=2N-2;len(T)=2N";
+#[cfg(test)]
 const PLAIN_MODULUS_LIMB_FORMULA_V1: &[u8] = b"p_l=T256_scalar_modulus mod q_l";
+#[cfg(test)]
 const QUOTIENT_FORMULA_V1: &[u8] = b"H[j,e,l][i]=T[j,e,l][N+i];H[N-1]=0";
+#[cfg(test)]
 const RELATION_FORMULA_V1: &[u8] = b"P=T+p_l*E+delta*M-C=(X^N+1)*H mod q_l";
+#[cfg(test)]
 const TOP_ZERO_FORMULA_V1: &[u8] = b"P[2N-1]=H[N-1]=0";
+#[cfg(test)]
 const CENTERING_FORMULA_V1: &[u8] = b"M_l=m_if_m<=(p-1)/2_else_m-p;then_canonical_mod_q_l";
+#[cfg(test)]
 const EQUATION_ZERO_FORMULA_V1: &[u8] = b"e=0:K=B,E=e0,C=C0,delta=1";
+#[cfg(test)]
 const EQUATION_ONE_FORMULA_V1: &[u8] = b"e=1:K=A,E=e1,C=C1,delta=0";
+#[cfg(test)]
 const AGGREGATE_FORMULA_V1: &[u8] = b"sum_j gamma_lk^j*(equation0+beta_lk*equation1)";
+#[cfg(test)]
 const AGGREGATE_EQUIVALENT_FORMULA_V1: &[u8] = b"R=sum_j gamma^j*r_j;K=B+beta*A;E=sum_j gamma^j*(e0_j+beta*e1_j);M=sum_j gamma^j*M_j;C=sum_j gamma^j*(C0_j+beta*C1_j);P=ordinary(K*R)+p_l*E+M-C";
+#[cfg(test)]
 const MASKING_FORMULA_V1: &[u8] =
     b"private-uniform-S:deg<=N-2;H~=H+S;P~=P+(X^N+1)S;commit-before-z";
+#[cfg(test)]
 const EMISSION_ORDER_V1: &[u8] = b"limb->repetition->row(Product,OpeningQuotient);40*5*2=400";
 
 const _: () = {
@@ -302,6 +369,7 @@ const _: () = {
     assert!(QPCS_NESTED_HEADER_BYTES_V1 == 1_414);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeRlweSourceStatementErrorV1 {
     InvalidContext,
@@ -319,14 +387,17 @@ pub(super) enum RnsNativeRlweSourceStatementErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeRlweSourceStatementErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeRlweSourceStatementErrorV1 {}
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum SourceComponentV1 {
@@ -336,6 +407,7 @@ enum SourceComponentV1 {
     ErrorOne = 4,
 }
 
+#[cfg(test)]
 impl SourceComponentV1 {
     const fn first_block(self) -> usize {
         match self {
@@ -354,6 +426,7 @@ impl SourceComponentV1 {
     }
 }
 
+#[cfg(test)]
 const SOURCE_COMPONENT_ORDER_V1: [SourceComponentV1; COMPONENT_COUNT_V1] = [
     SourceComponentV1::CanonicalPlaintext,
     SourceComponentV1::Ephemeral,
@@ -361,6 +434,7 @@ const SOURCE_COMPONENT_ORDER_V1: [SourceComponentV1; COMPONENT_COUNT_V1] = [
     SourceComponentV1::ErrorOne,
 ];
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RecordPositionV1 {
     ordinal: u8,
@@ -369,6 +443,7 @@ struct RecordPositionV1 {
     used_slots: u32,
 }
 
+#[cfg(test)]
 fn record_position_v1(ordinal: usize) -> Option<RecordPositionV1> {
     let ordinal_u8 = u8::try_from(ordinal).ok()?;
     let (family, family_index, used_slots) = match ordinal {
@@ -411,6 +486,7 @@ pub(super) struct RnsNativePublicRecordMetadataV1 {
 }
 
 impl RnsNativePublicRecordMetadataV1 {
+    #[cfg(test)]
     pub(super) const fn new(
         ordinal: u8,
         family: ZkAmsMkheRnsNativeFamilyV1,
@@ -434,6 +510,7 @@ impl RnsNativePublicRecordMetadataV1 {
 ///
 /// Limb digests are canonical artifact identities, not proof commitments.  This
 /// view only freezes the public statement consumed by the later proof builder.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct RnsNativePublicArtifactViewV1<'a> {
     epoch: u64,
@@ -446,6 +523,7 @@ pub(super) struct RnsNativePublicArtifactViewV1<'a> {
     public_bundle_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> RnsNativePublicArtifactViewV1<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) const fn new(
@@ -471,6 +549,7 @@ impl<'a> RnsNativePublicArtifactViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum RlweEquationV1 {
@@ -478,6 +557,7 @@ enum RlweEquationV1 {
     Linear = 1,
 }
 
+#[cfg(test)]
 impl RlweEquationV1 {
     const fn key_role(self) -> u8 {
         match self {
@@ -508,9 +588,11 @@ impl RlweEquationV1 {
     }
 }
 
+#[cfg(test)]
 const RLWE_EQUATIONS_V1: [RlweEquationV1; EQUATION_COUNT_V1] =
     [RlweEquationV1::Constant, RlweEquationV1::Linear];
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum QpcsRowRoleV1 {
@@ -518,15 +600,18 @@ enum QpcsRowRoleV1 {
     OpeningQuotient = 1,
 }
 
+#[cfg(test)]
 const QPCS_ROW_ROLES_V1: [QpcsRowRoleV1; ROWS_PER_REPETITION_V1] =
     [QpcsRowRoleV1::Product, QpcsRowRoleV1::OpeningQuotient];
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AggregationChallengeV1 {
     gamma: u64,
     beta: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResidualAnchorV1<'a> {
     epoch: u64,
@@ -534,11 +619,13 @@ struct ResidualAnchorV1<'a> {
     downstream: &'a [u8],
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -589,10 +676,12 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 struct DigestRegistryV1 {
     digests: Vec<DigestIdentityV1>,
 }
 
+#[cfg(test)]
 impl DigestRegistryV1 {
     fn with_capacity_v1(capacity: usize) -> Result<Self, RnsNativeRlweSourceStatementErrorV1> {
         let mut digests = Vec::new();
@@ -618,6 +707,7 @@ impl DigestRegistryV1 {
     }
 }
 
+#[cfg(test)]
 impl<'a> ResidualAnchorV1<'a> {
     fn from_parts_v1(
         epoch: u64,
@@ -777,6 +867,7 @@ impl<'a> ResidualAnchorV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum SourceProofBindingV1 {
     EquationBundle,
@@ -788,6 +879,7 @@ enum SourceProofBindingV1 {
     Downstream,
 }
 
+#[cfg(test)]
 fn proof_binding_hash_v1(
     role: SourceProofBindingV1,
     fields: &[&[u8]],
@@ -821,6 +913,7 @@ fn proof_binding_hash_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn downstream_digest_v1(
     downstream: &[u8],
 ) -> Result<ProofDigestV1, RnsNativeRlweSourceStatementErrorV1> {
@@ -839,6 +932,7 @@ fn downstream_digest_v1(
     .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidAnchor)
 }
 
+#[cfg(test)]
 fn nonzero_digest_v1(
     digest: [u8; DIGEST_BYTES_V1],
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSourceStatementErrorV1> {
@@ -848,6 +942,7 @@ fn nonzero_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn source_semantics_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSourceStatementErrorV1>
 {
     let mut hash = Keccak256::new();
@@ -900,6 +995,7 @@ fn source_semantics_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSo
     nonzero_digest_v1(hash.finalize())
 }
 
+#[cfg(test)]
 fn rlwe_formula_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSourceStatementErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(RLWE_FORMULA_DOMAIN_V1);
@@ -949,6 +1045,7 @@ fn rlwe_formula_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSource
     nonzero_digest_v1(hash.finalize())
 }
 
+#[cfg(test)]
 fn record_mapping_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSourceStatementErrorV1>
 {
     let mut hash = Keccak256::new();
@@ -1043,6 +1140,7 @@ fn record_mapping_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSour
     nonzero_digest_v1(hash.finalize())
 }
 
+#[cfg(test)]
 fn opening_bundle_digest_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRlweSourceStatementErrorV1> {
@@ -1076,6 +1174,7 @@ fn opening_bundle_digest_v1(
     nonzero_digest_v1(hash.finalize())
 }
 
+#[cfg(test)]
 fn equation_bundle_digest_v1(
     equation_commitment_digests: &[ProofDigestV1],
 ) -> Result<ProofDigestV1, RnsNativeRlweSourceStatementErrorV1> {
@@ -1099,6 +1198,7 @@ fn equation_bundle_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn limb_bundle_digest_v1(
     limb_commitment_digests: &[ProofDigestV1],
 ) -> Result<ProofDigestV1, RnsNativeRlweSourceStatementErrorV1> {
@@ -1123,6 +1223,7 @@ fn limb_bundle_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn evaluation_bytes_digest_v1(
     evaluations: &[u8],
 ) -> Result<ProofDigestV1, RnsNativeRlweSourceStatementErrorV1> {
@@ -1140,6 +1241,7 @@ fn evaluation_bytes_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn public_key_digest_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     epoch: u64,
@@ -1181,6 +1283,7 @@ fn public_key_digest_v1(
         .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn nonce_binding_digest_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -1225,6 +1328,7 @@ fn nonce_binding_digest_v1(
         .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidNonce)
 }
 
+#[cfg(test)]
 fn public_record_digest_v1(
     public_key_digest: [u8; DIGEST_BYTES_V1],
     position: RecordPositionV1,
@@ -1270,6 +1374,7 @@ fn public_record_digest_v1(
         .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
 }
 
+#[cfg(test)]
 fn public_bundle_digest_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     epoch: u64,
@@ -1315,12 +1420,14 @@ fn public_bundle_digest_v1(
         .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ValidatedPublicArtifactV1 {
     public_key_digest: [u8; DIGEST_BYTES_V1],
     public_bundle_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 fn validate_public_artifact_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -1334,6 +1441,7 @@ fn validate_public_artifact_v1(
     validate_public_artifact_without_transcript_v1(layout, public)
 }
 
+#[cfg(test)]
 fn validate_public_artifact_without_transcript_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     public: RnsNativePublicArtifactViewV1<'_>,
@@ -1428,6 +1536,7 @@ fn validate_public_artifact_without_transcript_v1(
 /// Revalidate public facts without constructing a transcript or returning a
 /// reusable borrowed view.  This is a pure hash/facts check; it grants no
 /// source, preflight, verification, readiness, or release authority.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn validate_rns_native_pre_transcript_public_facts_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -1469,6 +1578,7 @@ pub(super) fn validate_rns_native_pre_transcript_public_facts_v1(
 /// must keep the same snapshot and complete artifact inventory by value;
 /// this narrow helper returns no
 /// transcript constructor, public-context authority, or retained borrow.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn derive_rns_native_pre_transcript_record_facts_v1<S>(
     snapshot: &mut S,
@@ -1637,6 +1747,7 @@ where
     Ok((records, public_key_digest, public_bundle_digest))
 }
 
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "source metadata and coordinate are explicit"
@@ -1661,6 +1772,7 @@ fn derive_aggregation_challenge_coordinate_v1(
     .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidChallenge)
 }
 
+#[cfg(test)]
 fn derive_aggregation_challenges_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     parameter_digest: [u8; DIGEST_BYTES_V1],
@@ -1703,6 +1815,7 @@ fn derive_aggregation_challenges_v1(
     Ok(challenges)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn aggregation_schedule_digest_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -1771,6 +1884,7 @@ fn aggregation_schedule_digest_v1(
     )
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct QpcsBindingsV1<'a> {
     relation_schedule_present: bool,
@@ -1785,6 +1899,7 @@ struct QpcsBindingsV1<'a> {
     residual: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> QpcsBindingsV1<'a> {
     fn from_stage_v1(stage: &RnsNativeQpcsFriCompleteStageV1<'a>) -> Self {
         Self {
@@ -1834,6 +1949,7 @@ impl<'a> QpcsBindingsV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn validate_context_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -1872,6 +1988,7 @@ fn validate_context_v1(
     qpcs.validate_v1(transcript)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn validate_global_input_aliases_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -1943,6 +2060,7 @@ fn validate_global_input_aliases_v1(
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct DerivedStatementV1 {
     epoch: u64,
@@ -1958,6 +2076,7 @@ struct DerivedStatementV1 {
     challenges: [[AggregationChallengeV1; REPETITION_COUNT_V1]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
 }
 
+#[cfg(test)]
 fn preflight_statement_digest_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
@@ -1988,6 +2107,7 @@ fn preflight_statement_digest_v1(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn derive_statement_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -2056,6 +2176,7 @@ fn derive_statement_v1(
     })
 }
 
+#[cfg(test)]
 fn expected_anchor_core_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -2093,6 +2214,7 @@ fn expected_anchor_core_v1(
     Ok(anchor.core_digests)
 }
 
+#[cfg(test)]
 fn absolute_main_slot_v1(
     record: usize,
     component: SourceComponentV1,
@@ -2109,6 +2231,7 @@ fn absolute_main_slot_v1(
     u64::try_from(slot).map_err(|_| RnsNativeRlweSourceStatementErrorV1::ArithmeticOverflow)
 }
 
+#[cfg(test)]
 fn validate_canonical_plaintext_chunk_v1(
     bytes: &[u8],
 ) -> Result<(), RnsNativeRlweSourceStatementErrorV1> {
@@ -2127,6 +2250,7 @@ fn validate_canonical_plaintext_chunk_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_signed_chunk_v1(
     bytes: &[u8],
     component: SourceComponentV1,
@@ -2171,6 +2295,7 @@ fn validate_signed_chunk_v1(
 /// original layout and receipt. The guard adds no source-slot read, secret
 /// buffer, retry, or new authority. Backend identity-query implementation work
 /// remains backend-owned; this is not authenticated-repeatability evidence.
+#[cfg(test)]
 fn validate_source_snapshot_identity_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     snapshot: &S,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -2193,6 +2318,7 @@ fn validate_source_snapshot_identity_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_source_snapshot_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     snapshot: &mut S,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -2281,6 +2407,7 @@ fn validate_source_snapshot_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     validate_source_snapshot_identity_v1(snapshot, layout, &receipt)
 }
 
+#[cfg(test)]
 fn statement_anchor_digest_v1(
     qpcs_residual_digest: ProofDigestV1,
     preflight_statement_digest: ProofDigestV1,
@@ -2312,6 +2439,7 @@ fn statement_anchor_digest_v1(
 /// This owner proves neither RLWE equality nor qPCS/source linkage.  It cannot
 /// authorize verification, readiness, or release and must be consumed by a
 /// future concrete relation verifier.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -2332,6 +2460,7 @@ pub(super) struct RnsNativeRlweSourceStatementStageV1<'a, S: ZkAmsMkheRnsNativeS
     challenges: [[AggregationChallengeV1; REPETITION_COUNT_V1]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
 }
 
+#[cfg(test)]
 struct ValidatedPreflightPartsV1<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1> {
     snapshot: S,
     anchor: ResidualAnchorV1<'a>,
@@ -2339,6 +2468,7 @@ struct ValidatedPreflightPartsV1<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1> {
     statement_anchor_digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn validate_preflight_parts_v1<'a, S>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -2396,6 +2526,7 @@ where
     })
 }
 
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "retained construction bindings are consumed by the next private RLWE relation stage"
@@ -2469,6 +2600,7 @@ impl<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeRlweSourceStatementStag
 
 /// Consume the complete qPCS sequencing token and source snapshot into a
 /// non-authorizing RLWE/source-statement prerequisite.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preflight_rns_native_rlwe_source_statement_v1<'a, S>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,

@@ -295,18 +295,6 @@ fn emit_existing_rerun_if_changed(path: &Path) {
         println!("cargo:rerun-if-changed={}", path.display());
     }
 }
-/// Warn if mutually exclusive FFI features are enabled simultaneously.
-pub fn warn_if_ffi_conflict() {
-    let ffi_import = std::env::var_os("CARGO_FEATURE_FFI_IMPORT").is_some();
-    let ffi_export = std::env::var_os("CARGO_FEATURE_FFI_EXPORT").is_some();
-    warn_if_ffi_conflict_with(ffi_import, ffi_export);
-}
-fn warn_if_ffi_conflict_with(ffi_import: bool, ffi_export: bool) {
-    if ffi_import && ffi_export {
-        println!("cargo:warning=Features `ffi_export` and `ffi_import` are mutually exclusive");
-        println!("cargo:warning=When both active, `ffi_import` feature takes precedence");
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,9 +703,5 @@ mod tests {
     #[test]
     fn parse_cfg_features_skips_empty_entries() {
         assert_eq!(parse_cfg_features(" , ,"), Vec::<String>::new());
-    }
-    #[test]
-    fn warn_if_ffi_conflict_emits() {
-        warn_if_ffi_conflict_with(true, true);
     }
 }

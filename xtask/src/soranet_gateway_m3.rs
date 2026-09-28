@@ -1,6 +1,6 @@
 //! SNNet-15M3 GA readiness bundle for the SoraGlobal Gateway CDN. Consumes the M2 summary and emits
 //! GA artefacts (autoscale/worker digests, SLA targets) for governance evidence packets.
-use blake3::Hasher as Blake3;
+use crate::soranet_common::file_blake3_hex;
 use eyre::{Result, WrapErr};
 use norito::json::{self, Map, Value};
 use std::{
@@ -79,12 +79,6 @@ pub fn run_gateway_m3(options: GatewayM3Options) -> Result<GatewayM3Outcome> {
         summary_json,
         summary_markdown,
     })
-}
-fn file_blake3_hex(path: &Path) -> Result<String> {
-    let mut hasher = Blake3::new();
-    let mut file = fs::File::open(path).wrap_err_with(|| format!("open {}", path.display()))?;
-    std::io::copy(&mut file, &mut hasher).wrap_err_with(|| format!("hash {}", path.display()))?;
-    Ok(hasher.finalize().to_hex().to_string())
 }
 fn relative(path: &Path, root: &Path) -> String {
     match path.strip_prefix(root) {

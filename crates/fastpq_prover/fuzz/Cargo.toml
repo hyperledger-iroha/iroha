@@ -35,3 +35,10 @@ path = "fuzz_targets/merkle_paths.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "lookup_grand_product"
+path = "fuzz_targets/lookup_grand_product.rs"
+test = false
+doc = false
+bench = false

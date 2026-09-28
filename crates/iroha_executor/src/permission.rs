@@ -269,6 +269,8 @@ impl AnyPermission {
                 self,
                 Self::CanReadAccountData(_)
                     | Self::CanManageSmartContractCode(_)
+                    // Core checks exact holders together with canonical lifecycle ownership.
+                    | Self::CanInvokeContractEntrypoint(_)
                     | Self::CanResolveAccountAlias(_)
                     | Self::CanIssueSoranetVpnQuote(_)
                     | Self::CanExecuteSettlement(_)
@@ -486,20 +488,14 @@ mod smart_contract {
     }
     fn validate_contract_entrypoint_delegation(
         permission: &CanInvokeContractEntrypoint,
-        authority: &AccountId,
-        context: &Context,
-        host: &Iroha,
+        _authority: &AccountId,
+        _context: &Context,
+        _host: &Iroha,
     ) -> Result {
-        validate_contract_entrypoint_payload(permission)?;
-        if context.curr_block.is_genesis()
-            || CanManageSmartContractCode.is_owned_by(authority, host)
-        {
-            return Ok(());
-        }
-        Err(ValidationFail::NotPermitted(
-            "only genesis, an exact holder, or a smart-contract code manager may delegate an exact contract entrypoint permission"
-                .to_owned(),
-        ))
+        // Core applies the shared exact-holder/code-manager/current-lifecycle-owner rule
+        // before Initial or UserProvided dispatch, including nested IVM and trigger ISIs.
+        // Do not independently infer ownership from addresses, aliases, or host queries.
+        validate_contract_entrypoint_payload(permission)
     }
     impl ValidateGrantRevoke for CanInvokeContractEntrypoint {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {

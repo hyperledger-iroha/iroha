@@ -17,36 +17,42 @@
     reason = "the private source-only rendezvous awaits source-preflight and direct opening owners"
 )]
 
-use core::{convert::Infallible, fmt, mem::size_of};
+use core::mem::size_of;
+#[cfg(test)]
+use core::{convert::Infallible, fmt};
 
 use super::super::super::super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
-    rns_native_cross_field_rlwe_direct::{
-        RnsNativeCrossFieldNumericCursorV1, RnsNativeCrossFieldNumericEvaluationV1,
-        RnsNativeCrossFieldQuotientOpeningCursorV1, RnsNativeCrossFieldQuotientOpeningSignV1,
-        RnsNativeCrossFieldRlweDirectErrorV1,
-    },
+    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldNumericEvaluationV1,
     rns_native_profile::{
-        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_SPOOL_MAX_BYTES_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_SPOOL_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
     },
+    rns_native_proof_hash::{RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashWorkV1},
+    rns_native_public_polynomial_reader::RnsNativePublicPolynomialEvaluationV1,
+    rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
+};
+#[cfg(test)]
+use super::super::super::super::{
+    rns_native_cross_field_rlwe_direct::{
+        RnsNativeCrossFieldNumericCursorV1, RnsNativeCrossFieldQuotientOpeningCursorV1,
+        RnsNativeCrossFieldQuotientOpeningSignV1, RnsNativeCrossFieldRlweDirectErrorV1,
+    },
+    rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
     rns_native_proof_hash::{
-        RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
-        RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
-        RnsNativeProofHashWorkV1,
+        RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1,
+        RnsNativeProofHashRoleV1,
     },
-    rns_native_public_polynomial_reader::{
-        RnsNativePublicPolynomialEvaluationV1, RnsNativePublicPolynomialReadReceiptV1,
-    },
+    rns_native_public_polynomial_reader::RnsNativePublicPolynomialReadReceiptV1,
     rns_native_qpcs_fri_complete::{
         RnsNativeQpcsFriCompleteStageV1, authenticate_rns_native_qpcs_fri_complete_with_schedule_v1,
     },
-    rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
 };
+#[cfg(test)]
 use super::{RnsNativeCompletedQpcsSourceReadV2, RnsNativeWholePublicationOwnersV2};
 use crate::vega::VegaT256ScalarV1 as Scalar;
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
 const RECORDS_V2: usize = 43;
 const EQUATIONS_V2: usize = 2;
@@ -87,10 +93,15 @@ const MODULAR_MULTIPLICATIONS_V2: u64 = RING_POWER_SQUARINGS_V2 + FACTOR_PRODUCT
 const MODULAR_ADDITIONS_V2: u64 = RELATIONS_V2 as u64;
 const POST_AUTHENTICATION_NUMERIC_VALIDATION_WORK_UNITS_V2: u64 =
     CANONICAL_CHECKS_V2 + MODULAR_MULTIPLICATIONS_V2 + MODULAR_ADDITIONS_V2;
+#[cfg(test)]
 const PUBLIC_OBJECTS_V2: u16 = 3_520;
+#[cfg(test)]
 const PUBLIC_CANONICAL_BYTES_V2: u64 = 3_691_001_600;
+#[cfg(test)]
 const PUBLIC_COEFFICIENTS_V2: u64 = 461_373_440;
+#[cfg(test)]
 const PUBLIC_MODULAR_MULTIPLICATIONS_V2: u64 = 2_311_357_600;
+#[cfg(test)]
 const PUBLIC_MODULAR_ADDITIONS_V2: u64 = 2_309_120_000;
 
 const JOINT_BINDING_DOMAIN_V2: &[u8] =
@@ -286,6 +297,7 @@ const _: () = {
     assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RELEASE_AUTHORIZED_V2);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeNumericOpeningHandoffErrorV2 {
     InvalidContext,
@@ -301,17 +313,20 @@ pub(super) enum RnsNativeNumericOpeningHandoffErrorV2 {
     Poisoned,
 }
 
+#[cfg(test)]
 impl fmt::Display for RnsNativeNumericOpeningHandoffErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeNumericOpeningHandoffErrorV2 {}
 
 /// Fixed-shape verifier input consuming the sole transcript owner.  Commitment
 /// arrays and proof bytes are borrowed only for construction; no numeric
 /// evaluation is accepted through this boundary.
+#[cfg(test)]
 pub(super) struct RnsNativeQpcsNumericVerificationInputV2<'digests, 'proof> {
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
     equation_commitment_digests: &'digests [ProofDigestV1; EQUATIONS_V2],
@@ -320,6 +335,7 @@ pub(super) struct RnsNativeQpcsNumericVerificationInputV2<'digests, 'proof> {
     proof: &'proof [u8],
 }
 
+#[cfg(test)]
 impl<'digests, 'proof> RnsNativeQpcsNumericVerificationInputV2<'digests, 'proof> {
     pub(super) const fn new_v2(
         transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -343,6 +359,7 @@ impl<'digests, 'proof> RnsNativeQpcsNumericVerificationInputV2<'digests, 'proof>
 /// particular, each positive/negative owner must move all 16,384 coordinates,
 /// its commitment mask, and its 103-bit quotient owner; no prover opening spool
 /// or replay/mask receipt exists in this tranche.
+#[cfg(test)]
 pub(super) enum RnsNativeDirectOpeningOwnersUnavailableV2 {
     Production {
         pre_direct_inventory_axes: Infallible,
@@ -358,17 +375,20 @@ pub(super) enum RnsNativeDirectOpeningOwnersUnavailableV2 {
     TestOnly,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RnsNativeQpcsAuthenticatedPairV2 {
     product: u64,
     opening_quotient: u64,
 }
 
+#[cfg(test)]
 struct RnsNativeRelationCursorV2 {
     next_relation: usize,
     poisoned: bool,
 }
 
+#[cfg(test)]
 impl RnsNativeRelationCursorV2 {
     const fn new_v2() -> Self {
         Self {
@@ -407,6 +427,7 @@ impl RnsNativeRelationCursorV2 {
 
 /// Private authority boundary for the still-absent 400 secret quotient
 /// openings. No production type implements this trait in this tranche.
+#[cfg(test)]
 trait RnsNativeQuotientOpeningAuthorityV2 {
     fn fill_next_quotient_opening_v2(
         &mut self,
@@ -423,6 +444,7 @@ trait RnsNativeQuotientOpeningAuthorityV2 {
 
 /// Armed borrowed-destination owner. Construction clears all caller slots;
 /// an error or unwind clears them again before the borrow is released.
+#[cfg(test)]
 struct RnsNativeQuotientOpeningDestinationGuardV2<'a> {
     values: &'a mut [Scalar],
     commitment_mask: &'a mut Scalar,
@@ -430,6 +452,7 @@ struct RnsNativeQuotientOpeningDestinationGuardV2<'a> {
     armed: bool,
 }
 
+#[cfg(test)]
 impl<'a> RnsNativeQuotientOpeningDestinationGuardV2<'a> {
     fn new_v2(
         values: &'a mut [Scalar],
@@ -477,6 +500,7 @@ impl<'a> RnsNativeQuotientOpeningDestinationGuardV2<'a> {
     }
 }
 
+#[cfg(test)]
 impl Drop for RnsNativeQuotientOpeningDestinationGuardV2<'_> {
     fn drop(&mut self) {
         if self.armed {
@@ -487,11 +511,13 @@ impl Drop for RnsNativeQuotientOpeningDestinationGuardV2<'_> {
 
 /// Armed authority guard. A provider error or unwind clears every retained
 /// opening before control returns to the poisoned cursor.
+#[cfg(test)]
 struct RnsNativeQuotientOpeningAuthorityGuardV2<'a, A: RnsNativeQuotientOpeningAuthorityV2> {
     authority: &'a mut A,
     armed: bool,
 }
 
+#[cfg(test)]
 impl<'a, A: RnsNativeQuotientOpeningAuthorityV2> RnsNativeQuotientOpeningAuthorityGuardV2<'a, A> {
     fn new_v2(authority: &'a mut A) -> Self {
         Self {
@@ -522,6 +548,7 @@ impl<'a, A: RnsNativeQuotientOpeningAuthorityV2> RnsNativeQuotientOpeningAuthori
     }
 }
 
+#[cfg(test)]
 impl<A: RnsNativeQuotientOpeningAuthorityV2> Drop
     for RnsNativeQuotientOpeningAuthorityGuardV2<'_, A>
 {
@@ -537,6 +564,7 @@ impl<A: RnsNativeQuotientOpeningAuthorityV2> Drop
 /// Its fields are private, its only constructor is test-only, and its
 /// authority trait has no production implementation. The type therefore
 /// settles ordering and zeroization without making direct openings available.
+#[cfg(test)]
 #[must_use = "dropping the cursor clears every retained quotient opening"]
 struct RnsNativeQuotientOpeningCursorV2<A: RnsNativeQuotientOpeningAuthorityV2> {
     authority: A,
@@ -544,6 +572,7 @@ struct RnsNativeQuotientOpeningCursorV2<A: RnsNativeQuotientOpeningAuthorityV2> 
     poisoned: bool,
 }
 
+#[cfg(test)]
 impl<A: RnsNativeQuotientOpeningAuthorityV2> RnsNativeQuotientOpeningCursorV2<A> {
     #[cfg(test)]
     fn test_fixture_v2(authority: A) -> Self {
@@ -555,6 +584,7 @@ impl<A: RnsNativeQuotientOpeningAuthorityV2> RnsNativeQuotientOpeningCursorV2<A>
     }
 }
 
+#[cfg(test)]
 impl<A: RnsNativeQuotientOpeningAuthorityV2> RnsNativeCrossFieldQuotientOpeningCursorV1
     for RnsNativeQuotientOpeningCursorV2<A>
 {
@@ -619,6 +649,7 @@ impl<A: RnsNativeQuotientOpeningAuthorityV2> RnsNativeCrossFieldQuotientOpeningC
     }
 }
 
+#[cfg(test)]
 impl<A: RnsNativeQuotientOpeningAuthorityV2> Drop for RnsNativeQuotientOpeningCursorV2<A> {
     fn drop(&mut self) {
         self.authority.clear_retained_quotient_openings_v2();
@@ -628,6 +659,7 @@ impl<A: RnsNativeQuotientOpeningAuthorityV2> Drop for RnsNativeQuotientOpeningCu
 /// Move-only live cursor retaining every public owner and its FRI-complete
 /// qPCS stage. The schedule remains private and cannot be used as evidence of
 /// a shared sole lineage with the separately constructed claimed relation.
+#[cfg(test)]
 pub(super) struct RnsNativeQpcsNumericOpeningHandoffV2<'proof> {
     owners: RnsNativeWholePublicationOwnersV2,
     evaluations: Box<[RnsNativePublicPolynomialEvaluationV1]>,
@@ -643,6 +675,7 @@ pub(super) struct RnsNativeQpcsNumericOpeningHandoffV2<'proof> {
 /// Completed numeric traversal. The qPCS schedule remains quarantined inside
 /// the retained FRI stage: the current ownership cycle provides no production
 /// source-preflight/direct transition from this owner.
+#[cfg(test)]
 pub(super) struct RnsNativeCompletedQpcsNumericOpeningHandoffV2<'proof> {
     owners: RnsNativeWholePublicationOwnersV2,
     evaluations: Box<[RnsNativePublicPolynomialEvaluationV1]>,
@@ -654,6 +687,7 @@ pub(super) struct RnsNativeCompletedQpcsNumericOpeningHandoffV2<'proof> {
     joint_binding_digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl RnsNativeCompletedQpcsNumericOpeningHandoffV2<'_> {
     pub(super) const fn joint_binding_digest_v2(&self) -> ProofDigestV1 {
         self.joint_binding_digest
@@ -672,6 +706,7 @@ impl RnsNativeCompletedQpcsNumericOpeningHandoffV2<'_> {
     }
 }
 
+#[cfg(test)]
 fn map_direct_numeric_error_v2(
     error: RnsNativeNumericOpeningHandoffErrorV2,
 ) -> RnsNativeCrossFieldRlweDirectErrorV1 {
@@ -706,6 +741,7 @@ fn map_direct_numeric_error_v2(
 /// final-transcript owners. A future top-level carrier must resolve that
 /// chronology before it may borrow this cursor and call `finish_v2` after
 /// direct verification. The cursor itself is not production authority.
+#[cfg(test)]
 impl RnsNativeCrossFieldNumericCursorV1 for RnsNativeQpcsNumericOpeningHandoffV2<'_> {
     fn authoritative_binding_digest_v1(&self) -> [u8; 32] {
         self.transcript.source_binding_digest()
@@ -722,6 +758,7 @@ impl RnsNativeCrossFieldNumericCursorV1 for RnsNativeQpcsNumericOpeningHandoffV2
     }
 }
 
+#[cfg(test)]
 impl<'proof> RnsNativeQpcsNumericOpeningHandoffV2<'proof> {
     /// Fill one complete direct numeric destination.  The destination is reset
     /// before any fallible work and is assigned only after every value and the
@@ -778,6 +815,7 @@ impl<'proof> RnsNativeQpcsNumericOpeningHandoffV2<'proof> {
 
 /// Consume the exact completed public read and authenticate qPCS with its sole
 /// schedule.  Any failure destroys all owners together.
+#[cfg(test)]
 pub(super) fn authenticate_rns_native_qpcs_numeric_opening_handoff_v2<'digests, 'proof>(
     source_read: RnsNativeCompletedQpcsSourceReadV2,
     input: RnsNativeQpcsNumericVerificationInputV2<'digests, 'proof>,
@@ -825,6 +863,7 @@ pub(super) fn authenticate_rns_native_qpcs_numeric_opening_handoff_v2<'digests, 
     })
 }
 
+#[cfg(test)]
 fn validate_completed_read_shape_v2(
     owners: &RnsNativeWholePublicationOwnersV2,
     evaluations: &[RnsNativePublicPolynomialEvaluationV1],
@@ -854,6 +893,7 @@ fn validate_completed_read_shape_v2(
     Ok(())
 }
 
+#[cfg(test)]
 fn joint_binding_digest_v2(
     owners: &RnsNativeWholePublicationOwnersV2,
     receipt: &RnsNativePublicPolynomialReadReceiptV1,
@@ -912,6 +952,7 @@ fn joint_binding_digest_v2(
     )
 }
 
+#[cfg(test)]
 fn hash_joint_binding_v2(
     parameter: [u8; 32],
     fields: &[&[u8]],
@@ -956,6 +997,7 @@ fn hash_joint_binding_v2(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn decode_qpcs_pair_v2(
     bytes: &[u8],
     limb: usize,
@@ -992,6 +1034,7 @@ fn decode_qpcs_pair_v2(
     })
 }
 
+#[cfg(test)]
 fn materialize_numeric_evaluation_v2(
     limb: usize,
     repetition: usize,
@@ -1038,14 +1081,17 @@ fn materialize_numeric_evaluation_v2(
     })
 }
 
+#[cfg(test)]
 fn mod_add_v2(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) + u128::from(right)) % u128::from(modulus)) as u64
 }
 
+#[cfg(test)]
 fn mod_mul_v2(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
 
+#[cfg(test)]
 fn pow_ring_degree_v2(mut value: u64, modulus: u64) -> u64 {
     for _ in 0..RING_POWER_SQUARINGS_PER_RELATION_V2 {
         value = mod_mul_v2(value, value, modulus);

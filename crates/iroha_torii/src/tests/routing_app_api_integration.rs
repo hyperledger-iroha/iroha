@@ -2,14 +2,12 @@
 #[allow(clippy::await_holding_lock)]
 mod app_api_integration_tests {
     use super::*;
-    use crate::tests_runtime_handlers::mk_app_state_for_tests;
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::Execute as _,
         state::{State, World},
         sumeragi::network_topology::Topology,
     };
@@ -1726,7 +1724,7 @@ mod app_api_integration_tests {
     async fn get_parameters_returns_json() {
         let _guard = app_query_limits_guard();
         use axum::routing::get;
-        use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
+        use iroha_core::{kura::Kura, query::store::LiveQueryStore};
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),

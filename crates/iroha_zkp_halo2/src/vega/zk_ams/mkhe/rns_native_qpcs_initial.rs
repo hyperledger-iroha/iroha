@@ -6,21 +6,27 @@
 //! equations remain unavailable.  A successful return therefore never mints
 //! a receipt and cannot grant proof, readiness, or release authority.
 
+use super::rns_native_profile::{
+    ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+};
 #[cfg(test)]
 use super::rns_native_qpcs_leaf::RnsNativeLeafPayloadV1;
+#[cfg(test)]
 use super::rns_native_qpcs_leaf::{RnsNativeLeafCacheV1, RnsNativeOracleV1, oracle_node_hash_v1};
+#[cfg(test)]
 use super::{
     rns_native_profile::{
-        ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1, zk_ams_mkhe_rns_native_profile_manifest_v1,
+        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, zk_ams_mkhe_rns_native_profile_manifest_v1,
         zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
         zk_ams_mkhe_rns_native_topology_v1,
     },
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
 };
 // Keccak is retained only for the public canonical parameter identity.
+use super::rns_native_qpcs_field_wire::RNS_NATIVE_QPCS_FQ2_BYTES_V1;
+#[cfg(test)]
 use super::{
     rns_native_proof_hash::{
         RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
@@ -28,11 +34,14 @@ use super::{
         decode_proof_digest_v1,
     },
     rns_native_proof_sampling::derive_query_indices_v1,
-    rns_native_qpcs_field_wire::{RNS_NATIVE_QPCS_FQ2_BYTES_V1, decode_fq2_v1},
+    rns_native_qpcs_field_wire::decode_fq2_v1,
 };
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
 
+#[cfg(test)]
 const QPCS_BODY_MAGIC_V1: [u8; 4] = *b"ZQPB";
+#[cfg(test)]
 const QPCS_BODY_VERSION_V1: u8 = 1;
 const ROWS_PER_LIMB_V1: usize = 10;
 const FQ2_BYTES_V1: usize = RNS_NATIVE_QPCS_FQ2_BYTES_V1;
@@ -41,6 +50,7 @@ const QUERY_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1 as usize;
 const OPENED_LEAF_COUNT_V1: usize = 2 * QUERY_COUNT_V1;
 const COORDINATE_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * ROWS_PER_LIMB_V1;
 const LEAF_BYTES_V1: usize = COORDINATE_COUNT_V1 * FQ2_BYTES_V1;
+#[cfg(test)]
 const DOMAIN_SIZE_V1: usize = 1 << ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1;
 const MAX_INITIAL_AUTHENTICATION_HASHES_V1: usize = 3_392;
 const MAX_INITIAL_TREE_BYTES_V1: usize =
@@ -49,9 +59,12 @@ pub(super) const MAX_INITIAL_AND_QUOTIENT_BYTES_V1: usize = 2 * MAX_INITIAL_TREE
 pub(super) const QPCS_BODY_HEADER_BYTES_V1: usize =
     4 + 4 + 3 * 2 + 3 * 4 + 32 + 4 * DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const PARAMETER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.parameters";
+#[cfg(test)]
 const QUERY_OPENING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.initial-query-opening";
+#[cfg(test)]
 const CONTINUATION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.unverified-continuation";
 
@@ -75,6 +88,7 @@ const _: () = {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Failure while decoding or authenticating the initial replacement qPCS tree.
+#[cfg(test)]
 pub(super) enum RnsNativeQpcsInitialErrorV1 {
     /// Canonical profile or transcript identities did not match.
     InvalidContext,
@@ -100,14 +114,17 @@ pub(super) enum RnsNativeQpcsInitialErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeQpcsInitialErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeQpcsInitialErrorV1 {}
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct InitialContextV1 {
     parameter_digest: [u8; 32],
@@ -116,6 +133,7 @@ struct InitialContextV1 {
     initial_root: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl InitialContextV1 {
     fn from_transcript_v1(
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -156,23 +174,27 @@ impl InitialContextV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct IndexSetV1 {
     values: [u32; OPENED_LEAF_COUNT_V1],
     len: usize,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct FrontierNodeV1 {
     index: u32,
     digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 const EMPTY_FRONTIER_NODE_V1: FrontierNodeV1 = FrontierNodeV1 {
     index: 0,
     digest: ProofDigestV1::ZERO,
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct InitialProofViewV1<'a> {
     values: &'a [u8],
@@ -185,6 +207,7 @@ struct InitialProofViewV1<'a> {
 /// This is an internal data-flow token only.  It is not a proof receipt and
 /// carries no readiness or release authority; the sole consumer immediately
 /// checks the next qPCS prefix and the composite verifier still fails closed.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "qPCS substages must not be copied or replayed out of order"
@@ -197,6 +220,7 @@ pub(super) struct RnsNativeQpcsInitialStageV1<'a> {
     continuation: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> RnsNativeQpcsInitialStageV1<'a> {
     pub(super) const fn parameter_digest(&self) -> [u8; 32] {
         self.context.parameter_digest
@@ -219,11 +243,13 @@ impl<'a> RnsNativeQpcsInitialStageV1<'a> {
     }
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -291,6 +317,7 @@ pub(super) fn verify_rns_native_qpcs_initial_v1(
 
 /// Authenticate the initial tree and consume its exact borrowed output in the
 /// next private qPCS substage.
+#[cfg(test)]
 pub(super) fn authenticate_rns_native_qpcs_initial_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     expected_query_opening_digests: &[ProofDigestV1],
@@ -310,6 +337,7 @@ fn verify_initial_with_context_v1(
     authenticate_initial_with_context_v1(context, expected_query_opening_digests, proof).map(drop)
 }
 
+#[cfg(test)]
 fn authenticate_initial_with_context_v1<'a>(
     context: InitialContextV1,
     expected_query_opening_digests: &[ProofDigestV1],
@@ -351,6 +379,7 @@ fn authenticate_initial_with_context_v1<'a>(
     })
 }
 
+#[cfg(test)]
 fn preflight_proof_v1(proof: &[u8]) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     if proof.len() > ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1 as usize {
         return Err(RnsNativeQpcsInitialErrorV1::ProofCapExceeded);
@@ -361,6 +390,7 @@ fn preflight_proof_v1(proof: &[u8]) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn canonical_parameter_digest_v1() -> Result<[u8; 32], RnsNativeQpcsInitialErrorV1> {
     let manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()
         .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)?;
@@ -406,6 +436,7 @@ pub(super) fn canonical_parameter_digest_v1() -> Result<[u8; 32], RnsNativeQpcsI
     Ok(digest)
 }
 
+#[cfg(test)]
 fn derive_queries_v1(
     parameter_digest: [u8; 32],
     query_seed: ProofDigestV1,
@@ -415,6 +446,7 @@ fn derive_queries_v1(
         .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidQuerySchedule)
 }
 
+#[cfg(test)]
 fn query_pair_indices_v1(
     queries: &[u32; QUERY_COUNT_V1],
 ) -> Result<IndexSetV1, RnsNativeQpcsInitialErrorV1> {
@@ -442,6 +474,7 @@ fn query_pair_indices_v1(
     Ok(indices)
 }
 
+#[cfg(test)]
 fn exact_authentication_count_v1(
     indices: IndexSetV1,
 ) -> Result<usize, RnsNativeQpcsInitialErrorV1> {
@@ -475,6 +508,7 @@ fn exact_authentication_count_v1(
     Ok(authentication)
 }
 
+#[cfg(test)]
 fn decode_initial_proof_exact_v1<'a>(
     proof: &'a [u8],
     context: InitialContextV1,
@@ -553,6 +587,7 @@ fn decode_initial_proof_exact_v1<'a>(
     })
 }
 
+#[cfg(test)]
 fn validate_leaf_values_v1(values: &[u8]) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     if values.len() != OPENED_LEAF_COUNT_V1 * LEAF_BYTES_V1 {
         return Err(RnsNativeQpcsInitialErrorV1::InvalidCount);
@@ -566,6 +601,7 @@ fn validate_leaf_values_v1(values: &[u8]) -> Result<(), RnsNativeQpcsInitialErro
     Ok(())
 }
 
+#[cfg(test)]
 fn hash_context_v1(
     parameter_digest: [u8; 32],
 ) -> Result<RnsNativeProofHashContextV1, RnsNativeQpcsInitialErrorV1> {
@@ -592,6 +628,7 @@ fn leaf_hash_v1(
     .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
+#[cfg(test)]
 fn node_hash_v1(
     parameter_digest: [u8; 32],
     height: usize,
@@ -615,6 +652,7 @@ fn node_hash_v1(
     .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
+#[cfg(test)]
 fn authenticate_initial_tree_v1(
     values: &[u8],
     authentication: &[u8],
@@ -705,6 +743,7 @@ fn authenticate_initial_tree_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn bind_query_openings_v1(
     context: InitialContextV1,
     queries: &[u32; QUERY_COUNT_V1],
@@ -734,6 +773,7 @@ fn bind_query_openings_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn query_opening_digest_v1(
     context: InitialContextV1,
     ordinal: usize,
@@ -772,6 +812,7 @@ fn query_opening_digest_v1(
         .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
+#[cfg(test)]
 fn leaf_hash_at_index_v1<'a>(
     leaves: &mut RnsNativeLeafCacheV1<'a>,
     indices: IndexSetV1,
@@ -792,6 +833,7 @@ fn leaf_hash_at_index_v1<'a>(
         .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
+#[cfg(test)]
 fn continuation_digest_v1(
     context: InitialContextV1,
     continuation: &[u8],

@@ -4730,7 +4730,7 @@ where
     if !metadata.is_empty() {
         builder = builder.with_metadata(metadata);
     }
-    builder = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+    builder = builder.with_admission_intent(TransactionAdmissionIntent::Ordinary);
     if let Some(ttl) = ttl_duration {
         builder.set_ttl(ttl);
     }
@@ -7238,7 +7238,7 @@ fn account_read_permission_multisig_builder(
     };
     let mut builder = TransactionBuilder::new(network_id, authority, fee_payment)
         .with_instructions([instruction])
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary);
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     builder.set_ttl(Duration::from_millis(120_000));
     Ok(builder)
@@ -9638,6 +9638,7 @@ mod accel_tests {
         }
     }
     include!("connect_approval_ffi_tests.rs");
+    include!("current_admission_bridge_tests.rs");
     fn fixture_signing_key_pair() -> KeyPair {
         let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
             .expect("fixture seed hex");

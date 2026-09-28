@@ -6,7 +6,7 @@ mod app_routed_read_http_admission_tests {
         body::{Body, Bytes},
         http::{HeaderMap, HeaderValue, Request, StatusCode, header},
         middleware::{Next, from_fn, from_fn_with_state},
-        response::{IntoResponse as _, Response},
+        response::Response,
         routing::any,
     };
     use std::{
@@ -17,7 +17,6 @@ mod app_routed_read_http_admission_tests {
         },
         task::Poll,
     };
-    use tower::ServiceExt as _;
     fn pending_body(polls: &Arc<AtomicUsize>) -> Body {
         let polls = Arc::clone(polls);
         Body::from_stream(futures::stream::poll_fn(move |_| {

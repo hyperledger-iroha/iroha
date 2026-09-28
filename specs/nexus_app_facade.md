@@ -8,7 +8,7 @@ V1 covers app-role Connect plus numeric asset transfers:
 
 1. Create a Connect app session and wallet launch URI.
 2. Wait for wallet approval and capture the approved account/signing key.
-3. Build canonical signable transfer payload bytes and a payload hash.
+3. Build canonical signable transfer payload bytes with `Ordinary` admission and a payload hash.
 4. Request a wallet signature.
 5. Finalize the signed transaction, submit it to Torii, and wait for a terminal
    pipeline status.
@@ -34,6 +34,10 @@ Every SDK exposes the same facade methods with native naming conventions:
   transaction, submits it to Torii, and optionally waits for final status.
 - `transferWithWallet(session, input)` runs draft, signature request,
   finalization, submission, and status wait as one call.
+
+The transfer facade requires one authoritative route. Torii rejects a transfer
+that resolves to multiple routes before accepting it; the facade does not claim
+atomic multi-dataspace ownership or silently rewrite an explicit admission intent.
 
 V1 accepts Ed25519 signatures only. SDKs must fail closed with
 `unsupported_signature_algorithm` for other algorithms unless that SDK already
@@ -70,6 +74,12 @@ sequence, and typed error cases. The transfer input declares the exact
 must apply that one context while decoding every authority, destination, source
 owner, approval, and session account into a domainless `AccountId`. Nexus facade
 configs have no implicit/default account-chain fallback.
+
+The maintained generator `cargo xtask nexus-connect-fixture --print` emits only
+the native generated JSON. Capture stdout into an ignored staging file, inspect
+and publish those bytes, then run `cargo xtask nexus-connect-fixture --check
+--output-root "$PWD"`. Explicit `--write` still requires an external non-Git
+staging root; `--print` never opens an output path.
 
 Use this fixture for cross-SDK tests before adding live smoke tests. Live tests
 should stay behind opt-in environment variables such as `NEXUS_CONNECT_LIVE=1`,

@@ -1,6 +1,7 @@
 //! Explicitly closed role-16 topology authority until native storage and finality are connected.
 
 use super::{Execute, INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON};
+use crate::smartcontracts::isi::helpers::world_account_has_permission as has_permission;
 use crate::state::{StateTransaction, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
@@ -15,19 +16,9 @@ use iroha_executor_data_model::permission::sorafs::{
     CanCheckSorafsTopologyApproval, CanManageSorafsTopologyCustody,
     CanOperateSorafsTopologyApproval,
 };
-use mv::storage::StorageReadOnly;
 
 const TOPOLOGY_PERMISSION_REQUIRED_REASON: &str =
     "Exact deployment-scoped topology action permission is required";
-
-fn has_permission(world: &impl WorldReadOnly, account: &AccountId, permission: Permission) -> bool {
-    world.accounts().get(account).is_some()
-        && (world.account_contains_inherent_permission(account, &permission)
-            || world
-                .account_roles_iter(account)
-                .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
-}
 
 /// Read exact registered-account and role grants from the supplied current World view.
 /// The caller must establish the execution or applied-finality cut; this predicate alone grants

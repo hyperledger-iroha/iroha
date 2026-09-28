@@ -20,8 +20,8 @@ final class KagemushaTestnetValueCreditV1Tests: XCTestCase {
 
   func testUnavailableLedgerAndNativeRejectionStayDistinct() {
     for (status, expected) in [
-      (-312, KagemushaTestnetValueCreditErrorV1.ledgerUnavailable),
-      (-311, KagemushaTestnetValueCreditErrorV1.nativeRejected(-311)),
+      (Int32(-312), KagemushaTestnetValueCreditErrorV1.ledgerUnavailable),
+      (Int32(-311), KagemushaTestnetValueCreditErrorV1.nativeRejected(-311)),
     ] {
       let endpoint = Endpoint(status: status, archive: archive())
       XCTAssertThrowsError(try KagemushaTestnetValueCreditBridgeV1.credit(

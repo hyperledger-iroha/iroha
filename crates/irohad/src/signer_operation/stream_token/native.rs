@@ -250,7 +250,8 @@ impl SignerOperationStateSourceV1 for NativeStreamTokenSourceV1 {
         {
             return Err(SignerOperationErrorV1::InvalidOperation);
         }
-        self.checked(
+        // Reaching finalized verification is the proof; the returned snapshot is not reused here.
+        let _ = self.checked(
             *review.reviewed(),
             Phase::Current(request.intent().previous_audit),
         )?;
@@ -265,7 +266,7 @@ impl SignerOperationStateSourceV1 for NativeStreamTokenSourceV1 {
             return Err(SignerOperationErrorV1::StateUnavailable);
         }
         let reservation = row.operation.reservation;
-        self.checked(row.operation.reviewed, Phase::BeforeProvider(row))?;
+        let _ = self.checked(row.operation.reviewed, Phase::BeforeProvider(row))?;
         Ok(reservation)
     }
     fn observe_reserved(

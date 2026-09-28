@@ -28,14 +28,6 @@ use thiserror::Error;
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(unsafe {robust})
-)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::LaneId")]
 pub struct LaneId(u32);
@@ -50,14 +42,6 @@ pub struct LaneId(u32);
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(unsafe {robust})
-)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::ShardId")]
 pub struct ShardId(u32);
@@ -213,14 +197,6 @@ impl norito::json::JsonDeserialize for ShardId {
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(unsafe {robust})
-)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::DataSpaceId")]
 pub struct DataSpaceId(u64);

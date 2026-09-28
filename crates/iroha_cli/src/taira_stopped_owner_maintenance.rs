@@ -4,11 +4,14 @@
 //! its exclusive flock, and its retained public plan delimit routine maintenance.
 
 use super::*;
+#[cfg(any(target_os = "linux", test))]
 use base64::Engine as _;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt as _;
 
+#[cfg(any(target_os = "linux", test))]
 const REQUEST_SCHEMA: &str = "taira.stopped-owner-maintenance.request.v1";
+#[cfg(any(target_os = "linux", test))]
 const RESULT_SCHEMA: &str = "taira.stopped-owner-maintenance.result.v1";
 
 /// Credential-free stopped-owner maintenance for the active routine updater.
@@ -19,6 +22,7 @@ pub(crate) struct StoppedOwnerMaintenance {
     request_fd: u32,
 }
 
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct MaintenanceRequest {
@@ -27,6 +31,7 @@ struct MaintenanceRequest {
     owner: MaintenanceOwner,
 }
 
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct MaintenanceOwner {
@@ -36,6 +41,7 @@ struct MaintenanceOwner {
     lock: MaintenanceLock,
 }
 
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct MaintenanceLock {

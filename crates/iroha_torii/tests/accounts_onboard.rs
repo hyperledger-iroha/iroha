@@ -845,7 +845,7 @@ async fn sponsored_onboarding_submit_rejects_old_and_tampered_envelopes() {
 }
 
 #[tokio::test]
-async fn sponsored_onboarding_prepared_submit_fails_closed_without_quorum() {
+async fn sponsored_onboarding_prepared_submit_fails_closed_without_durable_admission() {
     let context = build_onboarding_test_context();
     let target_key_pair =
         checked_key_pair(0xD3, Algorithm::Ed25519, "derive onboarding target fixture");
@@ -898,7 +898,7 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_quorum() {
     .expect("prepared envelope authenticates its exact signed transaction");
     assert_eq!(
         signed.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
+        TransactionAdmissionIntent::Ordinary
     );
     assert_eq!(
         context.queue.active_len(),
@@ -928,8 +928,13 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_quorum() {
             .as_object()
             .and_then(|body| body.get("outcome"))
             .is_none(),
-        "a peer without an f+1 admission quorum must not claim Pending"
+        "a peer without durable admission must not claim Pending"
     );
+    #[cfg(feature = "connect")]
+    let expected_code = "queue_plan_journal_unavailable";
+    #[cfg(not(feature = "connect"))]
+    let expected_code = "queue_plan_synced_transport_unavailable";
+    assert_eq!(response_field(&submitted.payload, "code"), expected_code);
     assert_eq!(context.queue.active_len(), 0);
 
     let response_loss_replay =
@@ -950,7 +955,7 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_quorum() {
     assert_eq!(
         context.queue.active_len(),
         0,
-        "retry without a quorum must not create local queue custody"
+        "retry without durable admission must not create local queue custody"
     );
     let wrong_scope_replay = send_onboarding_request_with_token(
         &context.app,
@@ -1334,11 +1339,11 @@ async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() 
     assert_ne!(known.transaction_hash_hex, unknown.transaction_hash_hex);
     assert_eq!(
         known_transaction.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
+        TransactionAdmissionIntent::Ordinary
     );
     assert_eq!(
         unknown_transaction.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
+        TransactionAdmissionIntent::Ordinary
     );
     let known = norito::json::to_value(&known).expect("known envelope JSON");
     let unknown = norito::json::to_value(&unknown).expect("unknown envelope JSON");
@@ -1448,7 +1453,7 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     .expect("racing envelope authenticates its exact transaction");
     assert_eq!(
         transaction.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
+        TransactionAdmissionIntent::Ordinary
     );
     install_conflicting_onboarding_state_for_test(&context, alias, &conflicting_target);
     assert!(

@@ -17,15 +17,12 @@ use crate::{
     },
     execution_summary::{EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
     gas,
-    host::{AccessLog, DefaultHost, IVMHost, host_syscall_metering_spec},
+    host::{DefaultHost, IVMHost, host_syscall_metering_spec},
     instruction,
     memory::{Memory, MemoryTemplateMismatch},
     metadata::{
         EmbeddedContractDebugInfoV1, LiteralKindV1, ParsedLiteralSection, ProgramMetadata,
         decode_literal_descriptor,
-    },
-    parallel::{
-        Block, BlockResult, ExecutionContext, Scheduler, State, StateUpdate, Transaction, TxResult,
     },
     pointer_abi::PointerPolicyGuard,
     prepared::PreparedContract,
@@ -48,16 +45,14 @@ use sha2::{Digest, Sha256};
 #[cfg(feature = "beep")]
 use std::time::Duration;
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, HashMap, VecDeque},
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 static SUPPRESS_BANNER: AtomicBool = AtomicBool::new(false);
-static WORKER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
 static HARDWARE_CAPABILITIES: OnceLock<HardwareCapabilities> = OnceLock::new();
 /// Upper bound on logical vector length supported by the VM.
 const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
@@ -458,64 +453,6 @@ impl HardwareCapabilities {
         self.metal_available
     }
 }
-thread_local! {
-    static WORKER_CACHE: RefCell<Option<WorkerCache>> = const { RefCell::new(None) };
-}
-struct WorkerCache {
-    id: u64,
-    resources: WorkerResources,
-}
-struct WorkerResources {
-    vm: IVM,
-    ctx: ExecutionContext,
-    template_memory: Memory,
-    template_private_memory_bytes: PrivateMemoryRanges,
-    template_input_bump: u64,
-}
-impl WorkerResources {
-    fn new(
-        template: &Arc<Mutex<IVM>>,
-        host: Option<&Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>>,
-    ) -> Self {
-        let (mut vm, template_memory, template_private_memory_bytes, template_input_bump) = {
-            let template = template.lock().unwrap_or_else(|err| err.into_inner());
-            (
-                template.clone(),
-                template.memory.clone(),
-                template.private_memory_bytes.clone(),
-                template.input_bump_next,
-            )
-        };
-        if let Some(host_arc) = host {
-            vm.host = Some(Box::new(crate::runtime::SyscallDispatcher::shared(
-                Arc::clone(host_arc),
-            )));
-        }
-        vm.memory.begin_block_transaction_tracking();
-        Self {
-            vm,
-            ctx: ExecutionContext::new(),
-            template_memory,
-            template_private_memory_bytes,
-            template_input_bump,
-        }
-    }
-    fn execute(&mut self, tx: Transaction) -> (TxResult, Vec<StateUpdate>) {
-        self.vm.private_memory_bytes.clear();
-        self.vm
-            .memory
-            .reset_for_block_transaction(&self.template_memory)
-            .expect("transaction worker retains its template memory geometry");
-        self.vm
-            .private_memory_bytes
-            .clone_from(&self.template_private_memory_bytes);
-        self.vm.input_bump_next = self.template_input_bump;
-        self.ctx.init_for_transaction(&tx, &self.vm.state);
-        let result = self.vm.execute_transaction(&tx, &mut self.ctx);
-        let writes = std::mem::take(&mut self.ctx.write_set);
-        (result, writes)
-    }
-}
 /// Control whether the VM prints the ASCII banner and hardware feature summary
 /// at construction time. Benches can call this to disable noisy output.
 #[allow(dead_code)]
@@ -765,11 +702,6 @@ impl IvmConfigBuilder {
             stack_policy: self.stack_policy,
         }
     }
-    /// Convert the builder into a configuration without consuming further state.
-    #[must_use]
-    pub fn into_config(self) -> IvmConfig {
-        self.build()
-    }
 }
 /// Builder for configuring [`IVM`] construction.
 pub struct IvmBuilder {
@@ -785,10 +717,6 @@ impl IvmBuilder {
     /// Builder preset disabling accelerators.
     pub fn deterministic(gas_limit: u64) -> Self {
         Self::from_config(IvmConfig::deterministic(gas_limit))
-    }
-    /// Builder preset using the adaptive accelerator detection.
-    pub fn adaptive(gas_limit: u64) -> Self {
-        Self::from_config(IvmConfig::adaptive(gas_limit))
     }
     /// Builder preset returning both configuration and builder for deterministic runs.
     /// The returned builder does not suppress the startup banner; callers who
@@ -833,11 +761,6 @@ impl IvmBuilder {
     #[must_use]
     pub fn with_config(config: IvmConfig) -> Self {
         Self::from_config(config)
-    }
-    /// Create a new builder using an `IvmConfigBuilder`.
-    #[must_use]
-    pub fn with_config_builder(builder: IvmConfigBuilder) -> Self {
-        Self::from_config_builder(builder)
     }
     /// Override the acceleration policy applied after construction.
     pub fn with_acceleration(mut self, policy: AccelerationPolicy) -> Self {
@@ -891,11 +814,6 @@ impl IvmBuilder {
         self.config = self.config.map_capabilities(f);
         self
     }
-    /// Update the capabilities override without consuming the builder.
-    pub fn set_capabilities(&mut self, capabilities: HardwareCapabilities) -> &mut Self {
-        self.config.capabilities = capabilities;
-        self
-    }
     /// Skip the startup banner regardless of global flags.
     pub fn suppress_startup_banner(mut self) -> Self {
         self.suppress_banner = true;
@@ -905,21 +823,6 @@ impl IvmBuilder {
     #[must_use]
     pub fn config(&self) -> IvmConfig {
         self.config
-    }
-    /// Consume the builder and return its configuration.
-    #[must_use]
-    pub fn into_config(self) -> IvmConfig {
-        self.config
-    }
-    /// Produce a configuration builder seeded from the current builder state.
-    #[must_use]
-    pub fn config_builder(&self) -> IvmConfigBuilder {
-        self.config.builder()
-    }
-    /// Consume the builder and return a configuration builder for further edits.
-    #[must_use]
-    pub fn into_config_builder(self) -> IvmConfigBuilder {
-        self.config.builder()
     }
     /// Retrieve the current configuration without consuming the builder.
     #[must_use]
@@ -933,14 +836,6 @@ impl IvmBuilder {
     {
         self.config = f(self.config);
         self
-    }
-    /// Try to update the configuration, propagating an error from the closure if any.
-    pub fn try_map_config<F, E>(&mut self, mut f: F) -> Result<&mut Self, E>
-    where
-        F: FnMut(IvmConfig) -> Result<IvmConfig, E>,
-    {
-        self.config = f(self.config)?;
-        Ok(self)
     }
     /// Current gas limit that will be applied when building.
     #[must_use]
@@ -1492,9 +1387,6 @@ pub struct IVM {
     private_memory_bytes: PrivateMemoryRanges,
     pub pc: u64,
     host: Option<Box<dyn IVMHost + Send + Sync>>,
-    /// Sticky fail-stop marker set when a transactional host rollback fails.
-    /// A fresh host installation is the only recovery boundary.
-    host_rollback_failed: bool,
     gas_limit: u64,
     pub gas_remaining: u64,
     /// Gas pre-debited for the syscall currently executing.
@@ -1570,11 +1462,7 @@ pub struct IVM {
     program_parse_attempts: u64,
     #[cfg(test)]
     prepared_loads: u64,
-    // Shared world state used for block execution.
-    state: State,
-    // The block scheduler is expensive and most VM instances never execute a
-    // block, so construct it only on first use and share it across VM clones.
-    scheduler: Arc<OnceLock<Scheduler>>,
+    /// Operator-configured scheduler thread limits reported in the startup banner.
     scheduler_limits: (usize, usize),
     /// Is Metal GPU acceleration available?
     use_metal: bool,
@@ -1603,7 +1491,6 @@ impl Clone for IVM {
             private_memory_bytes: self.private_memory_bytes.clone(),
             pc: self.pc,
             host: None,
-            host_rollback_failed: self.host_rollback_failed,
             gas_limit: self.gas_limit,
             gas_remaining: self.remaining_gas(),
             // A clone is an independent VM, not a continuation of an active
@@ -1652,8 +1539,6 @@ impl Clone for IVM {
             program_parse_attempts: 0,
             #[cfg(test)]
             prepared_loads: 0,
-            state: self.state.clone(),
-            scheduler: Arc::clone(&self.scheduler),
             scheduler_limits: self.scheduler_limits,
             use_metal: self.use_metal,
             use_cuda: self.use_cuda,
@@ -1670,19 +1555,6 @@ impl Clone for IVM {
     }
 }
 impl IVM {
-    #[inline]
-    fn assert_host_rollback_healthy(&self) {
-        assert!(
-            !self.host_rollback_failed,
-            "IVM host is poisoned after a failed transactional rollback"
-        );
-    }
-
-    fn poison_sequential_host(&mut self) {
-        self.host_rollback_failed = true;
-        self.host = None;
-    }
-
     /// Construct a builder for configuring VM creation.
     #[must_use]
     pub fn builder(gas_limit: u64) -> IvmBuilder {
@@ -1693,18 +1565,9 @@ impl IVM {
     pub fn deterministic_builder(gas_limit: u64) -> IvmBuilder {
         IvmBuilder::deterministic(gas_limit)
     }
-    /// Construct a builder preset that applies the adaptive acceleration policy.
-    #[must_use]
-    pub fn adaptive_builder(gas_limit: u64) -> IvmBuilder {
-        IvmBuilder::adaptive(gas_limit)
-    }
     /// Construct a new VM directly from a configuration.
     pub fn with_config(config: IvmConfig) -> IvmBuilder {
         IvmBuilder::from_config(config)
-    }
-    /// Construct a builder from an `IvmConfigBuilder`.
-    pub fn with_config_builder(builder: IvmConfigBuilder) -> IvmBuilder {
-        IvmBuilder::from_config_builder(builder)
     }
     /// Create a new VM using the default adaptive acceleration policy.
     pub fn new(gas_limit: u64) -> Self {
@@ -1920,7 +1783,6 @@ impl IVM {
             host: Some(Box::new(crate::runtime::SyscallDispatcher::new(
                 DefaultHost::new(),
             ))),
-            host_rollback_failed: false,
             gas_limit,
             gas_remaining: gas_limit,
             syscall_gas_reserve: 0,
@@ -1967,8 +1829,6 @@ impl IVM {
             program_parse_attempts: 0,
             #[cfg(test)]
             prepared_loads: 0,
-            state: State::new(),
-            scheduler: Arc::new(OnceLock::new()),
             scheduler_limits,
             use_metal: false,
             use_cuda: false,
@@ -1990,49 +1850,8 @@ impl IVM {
         let caps = self.hardware_capabilities;
         self.acceleration_policy = policy;
         vector::set_thread_forced_simd(policy.forced_simd());
-        if let Some(scheduler) = self.scheduler.get() {
-            scheduler.set_forced_simd(policy.forced_simd());
-        }
         self.use_metal = policy.allow_metal() && caps.metal_available();
         self.use_cuda = policy.allow_cuda() && caps.cuda_available();
-    }
-    fn scheduler(&self) -> &Scheduler {
-        let (min_threads, max_threads) = self.scheduler_limits;
-        let forced_simd = self.acceleration_policy.forced_simd();
-        self.scheduler.get_or_init(|| {
-            let scheduler = Scheduler::new_dynamic(min_threads, max_threads);
-            scheduler.set_forced_simd(forced_simd);
-            scheduler
-        })
-    }
-    /// Create a new IVM with custom state and optional core count.
-    pub fn new_with_options(core_count: Option<usize>, state: State, gas_limit: u64) -> Self {
-        let config = IvmConfig::new(gas_limit);
-        IVM::new_with_options_and_config(core_count, state, config)
-    }
-    /// Create a new IVM with custom state using the provided configuration.
-    pub fn new_with_options_and_config(
-        core_count: Option<usize>,
-        state: State,
-        config: IvmConfig,
-    ) -> Self {
-        let mut vm = IVM::new_with_config(config);
-        let (min, max) = match core_count {
-            Some(n) => (n.max(1), n.max(1)),
-            None => crate::parallel::default_scheduler_limits(),
-        };
-        vm.scheduler_limits = (min, max);
-        vm.scheduler = Arc::new(OnceLock::new());
-        vm.state = state;
-        IVM::startup_banner(
-            min,
-            vm.max_vector_lanes,
-            vm.hardware_capabilities(),
-            vm.use_metal,
-            vm.use_cuda,
-            false,
-        );
-        vm
     }
     /// Enable or disable zero-knowledge features.
     ///
@@ -3185,284 +3004,6 @@ impl IVM {
         debug_assert_eq!(self.metadata.abi_version, 1);
         SyscallPolicy::AbiV1
     }
-    /// Execute a full block of transactions using the parallel scheduler.
-    ///
-    /// Each transaction is run on a cloned instance of the VM so worker threads never share mutable
-    /// state. Successful transactions publish their ordered write sets through
-    /// the shared [`State`] lock.
-    ///
-    /// # Panics
-    ///
-    /// Panics and poisons this VM if a sequential host panics while taking a
-    /// checkpoint, cannot supply a checkpoint after a failed transaction, or
-    /// cannot durably restore its checkpoint. Installing a fresh host with
-    /// [`Self::set_host`] explicitly clears that fail-stop state. Block entry
-    /// during an active host syscall is rejected because its detached tracing
-    /// and gas-reservation state cannot be snapshotted independently.
-    pub fn execute_block(&mut self, block: Block) -> BlockResult {
-        self.assert_host_rollback_healthy();
-        let allow_parallel = self
-            .host
-            .as_ref()
-            .is_none_or(|h| h.supports_concurrent_blocks());
-        if !allow_parallel {
-            return self.execute_block_sequential(block);
-        }
-        self.scheduler();
-        let scheduler = Arc::clone(&self.scheduler);
-        // Capture the current host (if any) so worker clones can access it via
-        // a thread-safe wrapper. The original host is restored before returning
-        // to preserve downcast behaviour for the caller.
-        let shared_host = self
-            .host
-            .take()
-            .map(|host| Arc::new(Mutex::new(Some(host))));
-        let host_for_workers = AssertUnwindSafe(shared_host.as_ref().map(Arc::clone));
-        // Clone self once as a template for worker threads. The `State` inside
-        // the clone is an `Arc` so all threads operate on the same underlying
-        // data.
-        let template = Arc::new(Mutex::new(self.clone()));
-        let template_ref = &template;
-        let host_for_workers_ref = &host_for_workers;
-        let state = self.state.clone();
-        let cache_id = WORKER_CACHE_ID.fetch_add(1, Ordering::Relaxed);
-        let scheduled = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            scheduler
-                .get()
-                .expect("scheduler was initialized")
-                .schedule_block_with_ordered_commit(
-                    block,
-                    |tx| {
-                        WORKER_CACHE.with(|slot| {
-                            let mut slot = slot.borrow_mut();
-                            if slot.as_ref().map(|cache| cache.id) != Some(cache_id) {
-                                let resources = WorkerResources::new(
-                                    template_ref,
-                                    host_for_workers_ref.0.as_ref(),
-                                );
-                                *slot = Some(WorkerCache {
-                                    id: cache_id,
-                                    resources,
-                                });
-                            }
-                            let cache = slot.as_mut().expect("worker cache must be initialized");
-                            cache.resources.execute(tx)
-                        })
-                    },
-                    move |_, _, writes| state.apply(writes),
-                )
-        }));
-        if let Some(shared_host) = shared_host {
-            let mut guard = shared_host.lock().unwrap_or_else(|err| err.into_inner());
-            self.host = guard.take();
-        }
-        match scheduled {
-            Ok(result) => result,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    }
-    /// Restore a sequential host checkpoint or poison the VM before failing.
-    fn restore_sequential_host_checkpoint(&mut self, snapshot: &dyn std::any::Any) {
-        let Some(mut host) = self.host.take() else {
-            self.poison_sequential_host();
-            panic!("IVM host disappeared before transactional rollback");
-        };
-        // Poison before entering host code so a panicking restore also leaves
-        // no reusable host or VM execution path behind.
-        self.host_rollback_failed = true;
-        match host.restore(snapshot) {
-            Ok(()) => {
-                self.host = Some(host);
-                self.host_rollback_failed = false;
-            }
-            Err(error) => {
-                panic!("IVM host rollback failed; block execution cannot safely continue: {error}");
-            }
-        }
-    }
-
-    /// Restore the VM-owned half of a sequential block checkpoint.
-    fn restore_sequential_vm_checkpoint(&mut self, mut checkpoint: Self) {
-        // Host rollback is handled separately because host snapshots are
-        // type-erased. Preserve the current host outcome and fail-stop state
-        // while returning every guest-visible VM field to its pre-block value.
-        checkpoint.host = self.host.take();
-        checkpoint.host_rollback_failed = self.host_rollback_failed;
-        *self = checkpoint;
-    }
-
-    /// Sequential block execution path used when the host is not concurrency-safe.
-    fn execute_block_sequential(&mut self, block: Block) -> BlockResult {
-        let vm_checkpoint = self.sequential_block_checkpoint();
-        self.memory.begin_block_transaction_tracking();
-        let execution = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut ctx = ExecutionContext::new();
-            let mut tx_results = Vec::with_capacity(block.transactions.len());
-            for tx in block.transactions {
-                self.private_memory_bytes.clear();
-                self.memory
-                    .reset_for_block_transaction(&vm_checkpoint.memory)
-                    .expect("sequential block execution retains its template memory geometry");
-                self.private_memory_bytes
-                    .clone_from(&vm_checkpoint.private_memory_bytes);
-                self.input_bump_next = vm_checkpoint.input_bump_next;
-                ctx.init_for_transaction(&tx, &self.state);
-                let snapshot = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    self.host.as_ref().and_then(|host| host.checkpoint())
-                })) {
-                    Ok(snapshot) => snapshot,
-                    Err(payload) => {
-                        // A panicking checkpoint may already have mutated
-                        // interior host state, but it produced no snapshot that
-                        // could prove a rollback. Detach it before the outer
-                        // VM checkpoint handler restores guest-visible state.
-                        self.poison_sequential_host();
-                        std::panic::resume_unwind(payload);
-                    }
-                };
-                let transaction = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    self.execute_transaction(&tx, &mut ctx)
-                }));
-                let result = match transaction {
-                    Ok(result) => result,
-                    Err(payload) => {
-                        if let Some(snapshot) = snapshot.as_deref() {
-                            self.restore_sequential_host_checkpoint(snapshot);
-                        } else {
-                            // Without a checkpoint there is no proof that a
-                            // panicking host left its state transactionally clean.
-                            self.poison_sequential_host();
-                        }
-                        std::panic::resume_unwind(payload);
-                    }
-                };
-                if result.success {
-                    self.commit_transaction(&mut ctx);
-                } else if let Some(snapshot) = snapshot.as_deref() {
-                    self.restore_sequential_host_checkpoint(snapshot);
-                } else {
-                    self.poison_sequential_host();
-                    panic!(
-                        "IVM host cannot prove rollback after a failed transaction without a checkpoint"
-                    );
-                }
-                tx_results.push(result);
-            }
-            BlockResult { tx_results }
-        }));
-        self.restore_sequential_vm_checkpoint(vm_checkpoint);
-        match execution {
-            Ok(result) => result,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    }
-
-    /// Capture the exact reusable VM state accepted at sequential block entry.
-    fn sequential_block_checkpoint(&self) -> Self {
-        assert!(
-            self.staged_syscall.is_none()
-                && self.syscall_gas_reserve == 0
-                && !self.host_trace_log_detached
-                && self.host_trace_invocation_log.is_none(),
-            "IVM cannot enter block execution during an active host syscall"
-        );
-        let mut checkpoint = self.clone();
-        checkpoint
-            .memory
-            .preserve_checkpoint_tracking_from(&self.memory);
-        checkpoint.gas_remaining = self.gas_remaining;
-        checkpoint.syscall_gas_reserve = self.syscall_gas_reserve;
-        checkpoint.staged_syscall.clone_from(&self.staged_syscall);
-        checkpoint
-            .last_staged_syscall
-            .clone_from(&self.last_staged_syscall);
-        checkpoint.argument_decode_prepaid_gas = self.argument_decode_prepaid_gas;
-        #[cfg(test)]
-        {
-            checkpoint.decode_trace = self.decode_trace;
-            checkpoint.predecoded_misses = self.predecoded_misses;
-            checkpoint.program_parse_attempts = self.program_parse_attempts;
-            checkpoint.prepared_loads = self.prepared_loads;
-        }
-        checkpoint
-    }
-    /// Execute a single transaction using this VM instance.
-    fn execute_transaction(&mut self, tx: &Transaction, _ctx: &mut ExecutionContext) -> TxResult {
-        let logging_supported = self
-            .host
-            .as_ref()
-            .is_some_and(|h| h.access_logging_supported());
-        if !logging_supported
-            && (!tx.access.read_keys.is_empty()
-                || !tx.access.write_keys.is_empty()
-                || !tx.access.reg_tags.is_empty())
-        {
-            return TxResult {
-                success: false,
-                gas_used: 0,
-            };
-        }
-        if let Some(host) = self.host.as_deref_mut()
-            && host.begin_tx(&tx.access).is_err()
-        {
-            return TxResult {
-                success: false,
-                gas_used: 0,
-            };
-        }
-        if self.load_program(&tx.code).is_err() {
-            if let Some(host) = self.host.as_deref_mut() {
-                let _ = host.finish_tx();
-            }
-            return TxResult {
-                success: false,
-                gas_used: 0,
-            };
-        }
-        self.set_gas_limit(tx.gas_limit);
-        self.reset();
-        let run_result = self.run();
-        let finish_result = if let Some(host) = self.host.as_deref_mut() {
-            host.finish_tx()
-        } else {
-            Ok(AccessLog::default())
-        };
-        let (access_log, finish_ok) = match finish_result {
-            Ok(log) => (log, true),
-            Err(_) => (AccessLog::default(), false),
-        };
-        _ctx.write_set = if finish_ok {
-            access_log.state_writes.clone()
-        } else {
-            Vec::new()
-        };
-        let usage = self.registers.usage_summary();
-        let metrics = iroha_telemetry::metrics::global_or_default();
-        metrics
-            .ivm_register_max_index
-            .observe(usage.max_index as f64);
-        metrics
-            .ivm_register_unique_count
-            .observe(usage.unique_registers as f64);
-        self.registers.clear_usage();
-        let access_ok = access_log.read_keys.is_subset(&tx.access.read_keys)
-            && access_log.write_keys.is_subset(&tx.access.write_keys)
-            && access_log.reg_tags.is_subset(&tx.access.reg_tags);
-        let success = run_result.is_ok() && access_ok && finish_ok;
-        TxResult {
-            success,
-            gas_used: tx.gas_limit.saturating_sub(self.gas_remaining),
-        }
-    }
-    /// Reset an execution context for reuse.
-    #[allow(dead_code)]
-    fn reset_context(&mut self, ctx: &mut ExecutionContext) {
-        ctx.reset();
-    }
-    /// Commit a transaction's state updates to the shared state.
-    fn commit_transaction(&mut self, ctx: &mut ExecutionContext) {
-        self.state.apply(std::mem::take(&mut ctx.write_set));
-    }
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
         let _ = self.scrub_private_state();
@@ -3682,12 +3223,8 @@ impl IVM {
         self.vector_length
     }
     /// Replace the host environment used for syscalls.
-    ///
-    /// Installing a fresh host is the explicit recovery boundary for a VM
-    /// poisoned by a failed transactional rollback.
     pub fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
         self.host = Some(Box::new(crate::runtime::SyscallDispatcher::new(host)));
-        self.host_rollback_failed = false;
     }
     /// Get the remaining gas after execution.
     pub fn remaining_gas(&self) -> u64 {
@@ -4461,16 +3998,6 @@ impl IVM {
             }
         }
     }
-    pub(crate) fn execute_metered_syscall_with_host(
-        &mut self,
-        host: &mut dyn IVMHost,
-        number: u32,
-    ) -> Result<(), VMError> {
-        if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
-            return Err(VMError::UnknownSyscall(number));
-        }
-        self.execute_syscall(host, number)
-    }
     /// Execute the loaded program starting at the current `pc`.
     ///
     /// This is the heart of the VM: a classic fetch‑decode‑execute loop. For each instruction we
@@ -4479,7 +4006,6 @@ impl IVM {
     /// register state is logged on every cycle so that a prover can later reconstruct a trace. The
     /// loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
-        self.assert_host_rollback_healthy();
         let Some(mut host) = self.host.take() else {
             return Err(VMError::HostUnavailable);
         };
@@ -4493,7 +4019,6 @@ impl IVM {
     }
     /// Execute the loaded program using a borrowed host without storing it in the VM.
     pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
-        self.assert_host_rollback_healthy();
         self.run_with_host_ref(host)
     }
     /// Run with the caller's single finite allowance for completed architectural cycles.
@@ -6878,14 +6403,10 @@ impl IVM {
 mod ivm_sched_tests {
     use super::*;
     #[test]
-    fn scheduler_is_lazy_and_respects_global_limits() {
-        // Ordinary VM construction must not allocate worker threads.
+    fn vm_reports_global_scheduler_limits() {
         crate::parallel::set_default_scheduler_limits(Some(2), Some(2));
         let vm = IVM::new(0);
-        assert!(vm.scheduler.get().is_none());
         assert_eq!(vm.scheduler_limits, (2, 2));
-        assert_eq!(vm.scheduler().thread_count(), 2);
-        assert!(vm.scheduler.get().is_some());
         // Reset to auto for other tests
         crate::parallel::set_default_scheduler_limits(None, None);
     }
@@ -8361,61 +7882,6 @@ mod tests {
         vm.consume_prepaid_argument_decode(40)
             .expect("consume matching argument decode escrow");
         assert!(!vm.argument_decode_is_prepaid(40));
-    }
-    struct SequentialCheckpointOnlyHost;
-    impl IVMHost for SequentialCheckpointOnlyHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
-            Ok(0)
-        }
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
-            Ok(0)
-        }
-        fn as_any(&mut self) -> &mut dyn Any {
-            self
-        }
-        fn supports_concurrent_blocks(&self) -> bool {
-            false
-        }
-        fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
-            Some(Box::new(()))
-        }
-        fn restore(&mut self, snapshot: &dyn Any) -> Result<(), VMError> {
-            snapshot
-                .downcast_ref::<()>()
-                .map(|_| ())
-                .ok_or(VMError::HostUnavailable)
-        }
-    }
-    #[test]
-    fn sequential_empty_block_preserves_completed_metering_and_argument_escrow() {
-        let mut vm = quiet_vm(100);
-        let mut completed = StagedSyscallContext::new(0x0102_0001);
-        completed
-            .record_charge(SyscallMeteringPhase::Entry, 7)
-            .expect("record completed staged charge");
-        completed.finish(SyscallCompletion::Success);
-        vm.last_staged_syscall = Some(completed.clone());
-        vm.prepay_argument_decode(11)
-            .expect("escrow argument decode gas before block");
-        let raw_gas = vm.gas_remaining;
-        vm.decode_trace = true;
-        vm.predecoded_misses = 3;
-        vm.program_parse_attempts = 4;
-        vm.prepared_loads = 5;
-        vm.set_host(SequentialCheckpointOnlyHost);
-
-        let result = vm.execute_block(Block {
-            transactions: Vec::new(),
-        });
-
-        assert!(result.tx_results.is_empty());
-        assert_eq!(vm.last_staged_syscall_context(), Some(&completed));
-        assert!(vm.argument_decode_is_prepaid(11));
-        assert_eq!(vm.gas_remaining, raw_gas);
-        assert!(vm.decode_trace);
-        assert_eq!(vm.predecoded_misses, 3);
-        assert_eq!(vm.program_parse_attempts, 4);
-        assert_eq!(vm.prepared_loads, 5);
     }
     #[test]
     fn run_prefers_predecoded_instructions() {

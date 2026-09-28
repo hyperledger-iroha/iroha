@@ -19,10 +19,12 @@ use halo2_proofs::{
 };
 use iroha_crypto::kagemusha::KagemushaRecoverySeedV1;
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use snark_verifier::pcs::AccumulationScheme;
 use snark_verifier::{
     loader::native::NativeLoader,
     pcs::{
-        AccumulationDecider, AccumulationScheme, AccumulationSchemeProver,
+        AccumulationDecider, AccumulationSchemeProver,
         ipa::{
             Bgh19, IpaAccumulator, IpaAs, IpaDecidingKey, IpaProvingKey, IpaSuccinctVerifyingKey,
         },
@@ -549,6 +551,7 @@ where
     hash.finalize().into()
 }
 
+#[cfg(test)]
 /// Verify and terminally decide one exact Eq predecessor/current fold.
 ///
 /// # Errors
@@ -598,6 +601,7 @@ pub fn verify_and_decide_kagemusha_eq_fold_v1(
     Ok(())
 }
 
+#[cfg(test)]
 /// Verify and terminally decide one exact Ep predecessor/current fold.
 ///
 /// # Errors
@@ -916,6 +920,7 @@ fn decide_ep_native(
     })
 }
 
+#[cfg(test)]
 fn ensure_transcript_consumed(
     parity: KagemushaPastaParityV1,
     consumed: u64,

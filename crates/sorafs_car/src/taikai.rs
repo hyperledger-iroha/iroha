@@ -9,8 +9,9 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Map, Value};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use output_fs::{
+    ensure_parent_dir, set_no_follow_flag, validate_output_path, validate_output_writable,
+};
 use std::{
     borrow::Cow,
     fs,
@@ -18,6 +19,8 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
+
+mod output_fs;
 
 static STAGED_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Request describing a Taikai segment bundle operation.
@@ -944,130 +947,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
         ));
     }
     Ok(file)
-}
-fn ensure_parent_dir(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("failed to create output parent `{}`", parent.display()))?;
-    }
-    Ok(())
-}
-fn validate_output_path(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(eyre!("output `{}` must not be a symlink", path.display()));
-            }
-            if !metadata.is_file() {
-                return Err(eyre!("output `{}` must be a regular file", path.display()));
-            }
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(eyre!(
-                "failed to inspect output `{}`: {err}",
-                path.display()
-            ));
-        }
-    }
-    if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
-            }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(eyre!(
-                            "output parent `{}` must not be a symlink",
-                            ancestor.display()
-                        ));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(eyre!(
-                            "output parent `{}` must be a directory",
-                            ancestor.display()
-                        ));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(eyre!(
-                        "failed to inspect output parent `{}`: {err}",
-                        ancestor.display()
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-fn validate_output_writable(path: &Path) -> Result<()> {
-    validate_output_path(path)?;
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => {
-            return Err(eyre!(
-                "failed to inspect output `{}`: {err}",
-                path.display()
-            ));
-        }
-    };
-    if metadata.permissions().readonly() {
-        return Err(eyre!("output `{}` must be writable", path.display()));
-    }
-    let mut options = fs::OpenOptions::new();
-    options.write(true);
-    set_no_follow_flag(&mut options);
-    options
-        .open(path)
-        .wrap_err_with(|| format!("output `{}` must be writable", path.display()))?;
-    Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }
 struct IngestMetadataParams<'a> {
     event_id: &'a TaikaiEventId,

@@ -16007,7 +16007,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     if require_successor_checkpoint(previous.as_ref(), &checkpoint).is_ok() {
                         let report = norito::json!({
                             "schema": "iroha.taira.public-reset.convergence-wave.v1", "wave": (wave as u64),
-                            "height": (checkpoint.0), "block_hash": (checkpoint.1), "evidence": evidence,
+                            "height": (checkpoint.0), "block_hash": (evidence.block_hash()), "evidence": evidence,
                         });
                         if !had_prior_receipt {
                             self.publish_local_receipt(&receipt_name, &report)?;
@@ -18360,11 +18360,14 @@ fn validate_convergence_wave(
         evidence.committed_height().get(),
         evidence.block_hash().to_string(),
     );
-    if object.get("height").and_then(norito::json::Value::as_u64) != Some(checkpoint.0)
-        || object
+    let recorded_hash: HashOf<iroha_data_model::block::BlockHeader> = norito::json::from_value(
+        object
             .get("block_hash")
-            .and_then(norito::json::Value::as_str)
-            != Some(checkpoint.1.as_str())
+            .cloned()
+            .ok_or_else(|| eyre!("missing convergence-wave block hash"))?,
+    )?;
+    if object.get("height").and_then(norito::json::Value::as_u64) != Some(checkpoint.0)
+        || recorded_hash != evidence.block_hash()
     {
         return Err(eyre!(
             "convergence-wave summary differs from authenticated evidence"
@@ -20042,10 +20045,15 @@ mod tests {
             "initial convergence must still have durable evidence"
         );
         assert!(
-            validate_convergence_wave(&norito::json::Value::Null, 2, &inventory, &crate::taira_public_reset::deployment_validated_genesis_fixture())
-                .expect_err("an unselected wave cannot supply core convergence evidence")
-                .to_string()
-                .contains("outside the signed qualification plan")
+            validate_convergence_wave(
+                &norito::json::Value::Null,
+                2,
+                &inventory,
+                &crate::taira_public_reset::deployment_validated_genesis_fixture()
+            )
+            .expect_err("an unselected wave cannot supply core convergence evidence")
+            .to_string()
+            .contains("outside the signed qualification plan")
         );
     }
 
@@ -20605,7 +20613,7 @@ mod tests {
             let mut changed = wave.clone();
             *changed
                 .pointer_mut(&format!("/evidence/peers/0/before/body/{field}"))
-                .unwrap() = norito::json::Value::from(Hash::new(b"foreign identity").to_string());
+                .unwrap() = norito::json::to_value(&Hash::new(b"foreign identity")).unwrap();
             assert!(
                 validate_convergence_wave(&changed, 0, &inventory, &genesis).is_err(),
                 "{field}"
@@ -20651,6 +20659,12 @@ mod tests {
         );
         let checkpoint = validate_convergence_wave(&wave, 0, &inventory, &genesis).unwrap();
         assert_eq!(checkpoint.0, 2);
+        let mut noncanonical = wave;
+        *noncanonical.pointer_mut("/block_hash").unwrap() = norito::json::Value::from(checkpoint.1);
+        assert!(
+            validate_convergence_wave(&noncanonical, 0, &inventory, &genesis).is_err(),
+            "human display hashes are not canonical JSON hash literals"
+        );
     }
 
     #[test]
@@ -20663,7 +20677,7 @@ mod tests {
         ] {
             let mut changed = wave.clone();
             *changed.pointer_mut(path).unwrap() =
-                norito::json::Value::from(Hash::new(b"different decision").to_string());
+                norito::json::to_value(&Hash::new(b"different decision")).unwrap();
             assert!(
                 validate_convergence_wave(&changed, 0, &inventory, &genesis).is_err(),
                 "{path}"

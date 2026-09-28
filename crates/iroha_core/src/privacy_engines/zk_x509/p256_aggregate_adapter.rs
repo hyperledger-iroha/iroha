@@ -1369,25 +1369,6 @@ pub(crate) struct P256ValueExecutionAggregateChallengesV1 {
     /// Direct value-bus/arithmetic cell-copy permutation.
     pub(crate) arithmetic_copy: P256ArithmeticCopyChallengesV1,
 }
-/// Integrated value-execution residues over the opened value-bus source cell.
-#[cfg(test)]
-pub(crate) fn evaluate_p256_value_execution_aggregate_residues_v1(
-    current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
-    next: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
-    current_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
-    next_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
-    fixed: &[F; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1],
-    challenges: P256ValueExecutionAggregateChallengesV1,
-) -> Result<Vec<F>, P256AggregateAdapterErrorV1> {
-    evaluate_p256_value_execution_aggregate_residues_over_field_v1(
-        current,
-        next,
-        current_aux,
-        next_aux,
-        fixed,
-        challenges,
-    )
-}
 /// Complete value execution, writer multiplicity and arithmetic-copy polynomials.
 pub(crate) fn evaluate_p256_value_execution_aggregate_residues_over_field_v1<
     A: PolynomialAirFieldV1,
@@ -2340,31 +2321,6 @@ pub(crate) struct P256WindowAggregateChallengesV1 {
     /// Scalar/window-bit tuple challenges.
     pub(crate) scalar: P256ScalarBitBusChallengesV1,
 }
-/// Integrated numeric residues for the vertical window adapter.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "scalar API retained for independent native regression tests"
-    )
-)]
-pub(crate) fn evaluate_p256_window_aggregate_residues_v1(
-    current: &[F; P256_WINDOW_BASE_WIDTH_V1],
-    next: &[F; P256_WINDOW_BASE_WIDTH_V1],
-    current_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
-    next_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
-    fixed: &[F; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1],
-    challenges: P256WindowAggregateChallengesV1,
-) -> Result<Vec<F>, P256AggregateAdapterErrorV1> {
-    evaluate_p256_window_aggregate_residues_over_field_v1(
-        current,
-        next,
-        current_aux,
-        next_aux,
-        fixed,
-        challenges,
-    )
-}
 /// Complete vertical window AIR and attached cross/scalar products over one field.
 pub(crate) fn evaluate_p256_window_aggregate_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &[A; P256_WINDOW_BASE_WIDTH_V1],
@@ -2733,14 +2689,8 @@ impl Drop for P256ReductionAggregateAuxStreamV1<'_> {
         self.zeroize_private_v1();
     }
 }
+#[cfg(test)]
 /// Integrated numeric reduction residues.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Scalar wrapper retained for differential validation"
-    )
-)]
 pub(crate) fn evaluate_p256_reduction_aggregate_residues_v1(
     current: &[F; P256_REDUCTION_BASE_WIDTH_V1],
     next: &[F; P256_REDUCTION_BASE_WIDTH_V1],
@@ -3075,14 +3025,8 @@ impl Drop for P256LowSAggregateAuxStreamV1<'_> {
         self.zeroize_private_v1();
     }
 }
+#[cfg(test)]
 /// Integrated wallet low-S residues.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Scalar wrapper retained for differential validation"
-    )
-)]
 pub(crate) fn evaluate_p256_low_s_aggregate_residues_v1(
     current: &[F; P256_LOW_S_BASE_WIDTH_V1],
     next: &[F; P256_LOW_S_BASE_WIDTH_V1],

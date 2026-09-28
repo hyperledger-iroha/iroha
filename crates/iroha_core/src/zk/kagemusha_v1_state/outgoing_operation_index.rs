@@ -11,10 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::{
     account::AccountId,
     kagemusha::{
-        KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_ASSET_SCALE_MAX_V1,
-        KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1, KagemushaAcknowledgementV1,
+        KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
         KagemushaLifecycleBindingV1, KagemushaOperationKindV1, KagemushaPaymentRequestV1,
-        KagemushaPaymentV1,
     },
 };
 use norito::codec::{Decode, Encode};
@@ -22,10 +20,13 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use super::{
-    DevicePolicyBindingV1, DigestV1, DurableOutgoingEnvelopeV1, HardwareEpochV1,
-    KAGEMUSHA_STATE_VERSION_V1, KagemushaLaneIdV1, KagemushaOutgoingEnvelopeV1,
-    KagemushaStateContextV1, KagemushaStateV1, PreparedOutgoingCandidateV1,
+    DevicePolicyBindingV1, DigestV1, HardwareEpochV1, KAGEMUSHA_STATE_VERSION_V1,
+    KagemushaLaneIdV1, KagemushaStateContextV1, KagemushaStateV1, PreparedOutgoingCandidateV1,
     PreparedOutgoingRecoveryViewV1,
+};
+#[cfg(test)]
+use super::{
+    DurableOutgoingEnvelopeV1,
     candidate_lifecycle::{CommittedOutgoingCandidateV1, PersistedOutgoingCandidateV1},
 };
 
@@ -37,8 +38,6 @@ pub const KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1: &[u8] =
 pub const KAGEMUSHA_OUTGOING_OPERATION_PAGE_MAX_V1: u16 = 4;
 
 const RECORD_ALLOCATION_SAFETY_BYTES_V1: u64 = 64;
-const ACCEPTED_ACKNOWLEDGEMENT_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:device:v1:accepted-acknowledgement";
 
 /// Fail-closed outgoing operation-index errors.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -560,6 +559,7 @@ impl KagemushaOutgoingOperationRecordV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     /// Recheck the authenticated record before an operation-specific terminal release.
     ///
     /// The payment and redemption release modules must validate their own external receipt, but
@@ -597,66 +597,6 @@ impl KagemushaOutgoingOperationRecordV1 {
             || self.outbox_reservation_id != prepared.outbox_reservation.reservation_id
             || self.outcome_id != outcome_id
             || self.inputs.as_ref().is_some_and(|value| value != &inputs)
-        {
-            return Err(KagemushaOutgoingOperationIndexErrorV1::Conflict);
-        }
-        Ok(())
-    }
-
-    /// Verify an exact peer-payment acknowledgement against the installed Core envelope.
-    ///
-    /// Redemption cannot use this path: it requires a distinct authenticated settlement receipt.
-    /// The returned digest is only a replay anchor for [`KagemushaOutgoingOperationIndexV1`]; the
-    /// caller must still release the exact Core journal envelope in the same atomic successor.
-    pub(super) fn verified_payment_terminal_receipt_digest(
-        &self,
-        durable: &DurableOutgoingEnvelopeV1,
-        acknowledgement_bytes: &[u8],
-    ) -> KagemushaOutgoingOperationIndexResultV1<DigestV1> {
-        self.validate()?;
-        if self.phase != KagemushaOutgoingOperationPhaseV1::Installed
-            || self.preparation_id != durable.committed.candidate.prepared.preparation_id
-            || self.outbox_reservation_id
-                != durable
-                    .committed
-                    .candidate
-                    .prepared
-                    .outbox_reservation
-                    .reservation_id
-            || self.candidate_digest != Some(durable.committed.candidate.candidate_envelope_digest)
-            || self.commit_certificate_digest != Some(durable.committed.commit_certificate_digest)
-            || self.envelope_digest != Some(durable.envelope_digest)
-        {
-            return Err(KagemushaOutgoingOperationIndexErrorV1::Conflict);
-        }
-        let inputs = self
-            .inputs
-            .as_ref()
-            .ok_or(KagemushaOutgoingOperationIndexErrorV1::InvalidStage)?;
-        let request = inputs.decode_send_parts()?;
-        let KagemushaOutgoingEnvelopeV1::Payment(payment) = &durable.envelope else {
-            return Err(KagemushaOutgoingOperationIndexErrorV1::InvalidStage);
-        };
-        if canonical_bytes(payment)? != durable.canonical_envelope_bytes
-            || payment.output.credit_id != self.outcome_id
-        {
-            return Err(KagemushaOutgoingOperationIndexErrorV1::Conflict);
-        }
-        decode_acknowledgement_exact(acknowledgement_bytes, &request, payment)?;
-        Ok(digest_bytes(
-            ACCEPTED_ACKNOWLEDGEMENT_DOMAIN_V1,
-            acknowledgement_bytes,
-        ))
-    }
-
-    pub(super) fn validate_released_acknowledgement_retry(
-        &self,
-        acknowledgement_bytes: &[u8],
-    ) -> KagemushaOutgoingOperationIndexResultV1<()> {
-        self.validate()?;
-        let digest = digest_bytes(ACCEPTED_ACKNOWLEDGEMENT_DOMAIN_V1, acknowledgement_bytes);
-        if self.phase != KagemushaOutgoingOperationPhaseV1::Released
-            || self.terminal_receipt_digest != Some(digest)
         {
             return Err(KagemushaOutgoingOperationIndexErrorV1::Conflict);
         }
@@ -756,6 +696,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         Ok(Some(existing))
     }
 
+    #[cfg(test)]
     /// Bind one caller ID to public inputs derived from the actual preparation.
     ///
     /// This builds a clone-before-install successor. The journal/capacity owner
@@ -855,6 +796,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         Ok((next, KagemushaOutgoingOperationPrepareOutcomeV1::Inserted))
     }
 
+    #[cfg(test)]
     /// Advance the indexed preparation after Core persists its verified candidate.
     pub(super) fn candidate_successor(
         &self,
@@ -882,6 +824,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
+    #[cfg(test)]
     /// Advance the indexed candidate after qualified hardware commits it.
     pub(super) fn commit_successor(
         &self,
@@ -911,6 +854,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
+    #[cfg(test)]
     /// Advance the indexed commit after Core durably installs its final envelope.
     pub(super) fn install_successor(
         &self,
@@ -941,6 +885,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
+    #[cfg(test)]
     /// Retain a terminal tombstone after a separately verified terminal receipt.
     ///
     /// This method does not validate or authorize a receipt. The state machine
@@ -1071,6 +1016,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         self.validate_internal(Some(current))
     }
 
+    #[cfg(test)]
     fn progress_successor(
         &self,
         preparation_id: DigestV1,
@@ -1176,6 +1122,7 @@ fn terminal_record_allocation(
         .ok_or(KagemushaOutgoingOperationIndexErrorV1::CanonicalEncoding)
 }
 
+#[cfg(test)]
 fn next_revision(revision: u128) -> KagemushaOutgoingOperationIndexResultV1<u128> {
     revision
         .checked_add(1)
@@ -1213,18 +1160,6 @@ where
         norito::DecodeLimits::new(maximum, maximum, maximum * 4, maximum * 8, 32),
     )
     .map_err(|_| KagemushaOutgoingOperationIndexErrorV1::CanonicalEncoding)
-}
-
-fn decode_acknowledgement_exact(
-    bytes: &[u8],
-    request: &KagemushaPaymentRequestV1,
-    payment: &KagemushaPaymentV1,
-) -> KagemushaOutgoingOperationIndexResultV1<KagemushaAcknowledgementV1> {
-    if bytes.is_empty() || bytes.len() > KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1 {
-        return Err(KagemushaOutgoingOperationIndexErrorV1::InvalidBinding);
-    }
-    KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(bytes, request, payment)
-        .map_err(|_| KagemushaOutgoingOperationIndexErrorV1::InvalidBinding)
 }
 
 fn digest_bytes(domain: &[u8], bytes: &[u8]) -> DigestV1 {

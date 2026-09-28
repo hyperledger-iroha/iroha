@@ -186,6 +186,11 @@ async fn application_default_budgets_admit_ten_thousand_operations_before_refill
     let operator = "application-operator";
     for (name, rate, burst) in [
         (
+            "content read",
+            Some(defaults::content::MAX_REQUESTS_PER_SECOND),
+            Some(defaults::content::REQUEST_BURST),
+        ),
+        (
             "transaction",
             defaults::torii::TX_RATE_PER_AUTHORITY_PER_SEC,
             defaults::torii::TX_BURST_PER_AUTHORITY,
@@ -234,6 +239,22 @@ async fn application_default_budgets_admit_ten_thousand_operations_before_refill
             .await,
         "10,000 weighted finality reads must fit before any refill"
     );
+}
+#[tokio::test]
+async fn content_default_egress_serves_large_solo_bundle_bursts() {
+    let burst = defaults::content::EGRESS_BURST_BYTES;
+    let limiter = limits::RateLimiter::new_u64(
+        Some(u64::from(defaults::content::MAX_EGRESS_BYTES_PER_SECOND)),
+        Some(burst),
+    );
+    let reader = "solo-content-reader";
+    let bundles = 128_u64;
+    assert!(
+        limiter
+            .allow_cost(reader, bundles * defaults::content::MAX_BUNDLE_BYTES)
+            .await
+    );
+    assert!(!limiter.allow_cost(reader, burst + 1).await);
 }
 #[tokio::test]
 async fn solo_finality_walk_fits_the_proof_egress_budget() {
@@ -2952,3 +2973,5 @@ fn accept_transaction_signature_failure_sets_code_and_header() {
     assert!(envelope.message().contains("failed to accept transaction"));
 }
 include!("part_9b_error_headers.rs");
+
+include!("push_rate_limits.rs");

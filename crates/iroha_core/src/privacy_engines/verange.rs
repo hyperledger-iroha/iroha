@@ -169,6 +169,7 @@ impl VeRangeParametersV1 {
     pub const fn parameter_digest(&self) -> [u8; 32] {
         self.parameter_digest
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return `G` as canonical compressed SEC1.
     #[must_use]
     pub fn value_generator(&self) -> CompressedPointV1 {
@@ -181,6 +182,7 @@ impl VeRangeParametersV1 {
         CompressedPointV1::from_projective(self.q)
             .expect("derived VeRange blinding generator is non-identity")
     }
+    #[cfg(test)]
     /// Return the `H_j` basis as canonical compressed SEC1.
     #[must_use]
     pub fn row_generators(&self) -> Vec<CompressedPointV1> {
@@ -1026,6 +1028,7 @@ pub fn verify(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Decode and verify canonical opaque proof bytes in one bounded operation.
 ///
 /// # Errors

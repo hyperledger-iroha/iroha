@@ -15,6 +15,8 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 [features]
 default = ["cli-orchestrator", "moderation-grpc"]
 dev-tools = []
+# The CLI builds and signs publication transactions, so it needs the data
+# model's constructor surface (`transparent_api`) in standalone builds too.
 cli-orchestrator = [
     "dep:iroha_config",
     "dep:iroha_torii_shared",
@@ -22,6 +24,7 @@ cli-orchestrator = [
     "dep:sorafs_chunker",
     "dep:sorafs_manifest",
     "dep:toml",
+    "iroha_data_model/transparent_api",
 ]
 local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
 # gRPC moderation-runner service hosted by the `sorafs_cli` binary. Library

@@ -668,7 +668,7 @@ def test_list_trigger_completions_returns_typed_step_evidence() -> None:
                         "outcome": "Success",
                         "message": None,
                     },
-                    "source": "block_result",
+                    "source": "execution_output",
                 }
             ],
         }
@@ -682,13 +682,12 @@ def test_list_trigger_completions_returns_typed_step_evidence() -> None:
         to_height=42,
         limit=10,
         scan_limit_blocks=3,
-        include_reconstructed=False,
     )
 
     assert isinstance(result, TriggerCompletionList)
     assert result.latest_height == 42
     assert result.completions[0].completion.step_index == 1
-    assert result.completions[0].source == "block_result"
+    assert result.completions[0].source == "execution_output"
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["url"] == "http://localhost:8080/v1/triggers/completed"
     assert session.calls[0]["params"] == {
@@ -699,7 +698,6 @@ def test_list_trigger_completions_returns_typed_step_evidence() -> None:
         "to_height": 42,
         "limit": 10,
         "scan_limit_blocks": 3,
-        "include_reconstructed": False,
     }
 
 
@@ -714,6 +712,9 @@ def test_list_trigger_completions_validates_filters_before_request() -> None:
         client.list_trigger_completions(from_height=True)
     with pytest.raises(ValueError, match="u64"):
         client.list_trigger_completions(to_height=1 << 64)
+
+    with pytest.raises(TypeError):
+        client.list_trigger_completions(include_reconstructed=False)
 
     assert session.calls == []
 

@@ -29,13 +29,7 @@ pub(crate) enum QuantityCaptureIssue {
     /// A callback did not return through its original capture scope.
     InterruptedScope,
     /// Raw storage owners and mandatory supply admission are not completely integrated.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: require_complete is not yet a production consumer"
-        )
-    )]
+    #[cfg(test)]
     IncompleteCoverage,
 }
 
@@ -108,13 +102,7 @@ impl QuantityCandidateArchive {
     }
     /// Candidate export is explicitly refused until the remaining mutation owners join.
     /// TODO: replace this refusal only with complete, independently owned coverage and quotas.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: export remains closed until complete owner coverage and quota integration"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn require_complete(&self) -> Result<(), QuantityCaptureIssue> {
         Err(self
             .issue

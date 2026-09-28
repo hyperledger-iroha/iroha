@@ -6,8 +6,8 @@ use std::{
     process::Command,
 };
 const INVENTORY: &str = include_str!("../../../scripts/ivm_artifacts.tsv");
-const EXPECTED_ARTIFACTS: usize = 59;
-const EXPECTED_DEPLOYABLE_CONTRACTS: usize = 56;
+const EXPECTED_ARTIFACTS: usize = 60;
+const EXPECTED_DEPLOYABLE_CONTRACTS: usize = 57;
 const EXPECTED_PREDECODER_FIXTURES: usize = 2;
 const EXPECTED_GENERIC_EXECUTORS: usize = 1;
 #[derive(Debug)]

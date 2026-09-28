@@ -263,6 +263,7 @@ impl MultiproofPlan {
     ///
     /// The callback receives only coordinates derived from trusted geometry.
     /// All cached level widths are checked before the first hash invocation.
+    #[cfg(test)]
     pub(super) fn open_with(
         &self,
         levels: &[Vec<Digest>],

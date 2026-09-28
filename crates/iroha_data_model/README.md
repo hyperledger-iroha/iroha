@@ -29,22 +29,11 @@ Custom parameters, admission and consensus policies, and retained service metada
 use canonical Norito JSON. Optional governance, HTTP and cryptographic capability
 features remain independent of this protocol requirement.
 
-## FFI
+## Native bindings
 
-`iroha_data_model` exposes types over a foreign function interface with the
-`ffi_export` feature:
-
-- `ffi_export` – derive `iroha_ffi::FfiType` for exported types and
-  expose helpers for building dynamic libraries.
-
-Use in `Cargo.toml`:
-
-```toml
-iroha_data_model = { path = "path/to/iroha_data_model", features = ["ffi_export"] }
-```
-
-The feature forwards to the foundational type owners. `ffi_import` is not a
-shipping Cargo feature.
+The crate exports no C ABI of its own. Swift, Kotlin/Java, JavaScript and
+Python consumers use the hand-written native bridges (`connect_norito_bridge`,
+`iroha_js_host`, `iroha_python_rs`) with Norito as the wire contract.
 
 ## Trait Objects
 

@@ -19,9 +19,18 @@ mod model {
     ///
     /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes plus a version
     /// byte and checksum. On-chain asset aliases resolve to this identifier only.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, CopyGetters, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        CopyGetters,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::asset::id::model::AssetDefinitionId")]
     pub struct AssetDefinitionId {
         /// Canonical `UUIDv4` bytes.
@@ -46,7 +55,6 @@ mod model {
         crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "kind", content = "content")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::id::model::AssetBalanceScope")]
     pub enum AssetBalanceScope {
@@ -59,7 +67,6 @@ mod model {
     /// Internal balance-bucket identifier for a concrete owner/scope bucket.
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::id::model::AssetId")]
     pub struct AssetId {

@@ -1,8 +1,10 @@
+#[cfg(test)]
 #[derive(Debug)]
 struct ToriiFanoutDecodeBudget {
     retained_bytes: usize,
     max_retained_bytes: usize,
 }
+#[cfg(test)]
 impl ToriiFanoutDecodeBudget {
     fn new(max_retained_bytes: usize) -> Self {
         Self {
@@ -73,6 +75,7 @@ const QUERY_FANOUT_CANDIDATE_CONTAINER_OVERHEAD_BYTES: usize = 4 * 1024;
 /// Query-sized representations simultaneously live while an authoritative
 /// HTTP bridge serializes one attempt: coordinator source, retry template,
 /// attempt value, payload destination, and two nested derived-codec spills.
+#[cfg(test)]
 const QUERY_FANOUT_HTTP_SIGNED_REQUEST_REPRESENTATIONS: usize = 6;
 /// P2P adds the outer `NetworkMessage` derived-codec spill before the exact
 /// actor-wire byte lease takes ownership.
@@ -898,12 +901,14 @@ impl ByteWeightedMemoryPool {
             .checked_mul(self.bytes_per_permit.get())
             .expect("weighted query pool capacity was validated at construction")
     }
+    #[cfg(test)]
     fn available_bytes(&self) -> u64 {
         u64::try_from(self.semaphore.available_permits())
             .ok()
             .and_then(|permits| permits.checked_mul(self.bytes_per_permit.get()))
             .expect("weighted query pool availability cannot exceed validated capacity")
     }
+    #[cfg(test)]
     fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }
@@ -1100,10 +1105,15 @@ async fn acquire_query_ingress_memory(
     .map_err(|_| capacity_response())
 }
 #[derive(Clone)]
-struct ToriiProxyMemoryReservation(Arc<tokio::sync::OwnedSemaphorePermit>);
+struct ToriiProxyMemoryReservation {
+    /// Held only so the memory permit is released when the last clone drops.
+    _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+}
 impl ToriiProxyMemoryReservation {
     fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
-        Self(Arc::new(permit))
+        Self {
+            _permit: Arc::new(permit),
+        }
     }
 }
 fn acquire_torii_proxy_memory(
@@ -1244,20 +1254,28 @@ fn hold_query_fanout_memory_in_response_body(
 /// Cloneable ownership token used to transfer one fanout reservation across
 /// response-body and proxy-snapshot representations without reacquiring it.
 #[derive(Clone)]
-struct QueryFanoutMemoryReservation(Arc<tokio::sync::OwnedSemaphorePermit>);
+struct QueryFanoutMemoryReservation {
+    /// Held only so the fanout permit is released when the last clone drops.
+    _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+}
 impl QueryFanoutMemoryReservation {
     fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
-        Self(Arc::new(permit))
+        Self {
+            _permit: Arc::new(permit),
+        }
     }
 }
 /// Cloneable response-only owner for a move-only ordinary-query lease.
 #[derive(Clone, Debug)]
-struct OrdinaryQueryResponseMemory(
-    Arc<iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease>,
-);
+struct OrdinaryQueryResponseMemory {
+    /// Held only so the query memory lease is released when the last clone drops.
+    _lease: Arc<iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease>,
+}
 impl OrdinaryQueryResponseMemory {
     fn new(lease: iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease) -> Self {
-        Self(Arc::new(lease))
+        Self {
+            _lease: Arc::new(lease),
+        }
     }
 }
 fn hold_ordinary_query_memory_in_response_body(

@@ -159,8 +159,8 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
 }
 /// Hold relay status publication at its actual cache lock for concurrency tests.
 #[cfg(test)]
-pub(crate) fn lane_relay_publication_guard_for_tests()
--> MutexGuard<'static, Vec<LaneRelayEnvelope>> {
+pub(crate) fn lane_relay_publication_guard_for_tests() -> MutexGuard<'static, Vec<LaneRelayEnvelope>>
+{
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot")
 }
 #[cfg(test)]
@@ -177,7 +177,4 @@ pub(crate) fn reset_rbc_backlog_stats_for_tests() {
     lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot").clear();
     *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") =
         PipelineExecutionSnapshot::default();
-    *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") =
-        AccessSetSourceSummary::default();
-    PIPELINE_CONFLICT_RATE_BPS.store(0, Ordering::Relaxed);
 }

@@ -10,13 +10,20 @@ use super::{
     ZkAmsMkheErrorV1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1,
+    },
+};
+#[cfg(test)]
+use super::{
+    rns_native_profile::{
         zk_ams_mkhe_rns_native_profile_manifest_v1, zk_ams_mkhe_rns_native_profile_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1,
     },
     rns_native_source::{ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1},
 };
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
 
+#[cfg(test)]
 const RNS_NATIVE_PROOF_ENVELOPE_TAG_V1: [u8; 4] = *b"ZANP";
 const IDENTITY_DIGEST_COUNT_V1: usize = 6;
 const SECTION_DESCRIPTOR_BYTES_V1: usize = 1 + 4 + 4 + 32;
@@ -26,6 +33,7 @@ const WHOLE_PROOF_DIGEST_BYTES_V1: usize = 32;
 /// Exact number of ordered sections in one replacement composite proof.
 pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1: usize = 3;
 /// Exact composite-proof envelope schema version.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_VERSION_V1: u8 = 1;
 /// Maximum terminal Hyrax/Bulletproof bridge section bytes.
 pub const ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1: u32 = 2 * 1024 * 1024;
@@ -89,6 +97,7 @@ impl ZkAmsMkheRnsNativeProofSectionKindV1 {
         }
     }
 
+    #[cfg(test)]
     const fn index(self) -> usize {
         self as usize - 1
     }
@@ -108,6 +117,7 @@ impl TryFrom<u8> for ZkAmsMkheRnsNativeProofSectionKindV1 {
 }
 
 /// Sole canonical section order.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1: [ZkAmsMkheRnsNativeProofSectionKindV1;
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1] = [
     ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge,
@@ -116,6 +126,7 @@ pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1: [ZkAmsMkheRnsNativeProo
 ];
 
 /// Fixed-width descriptor of one ordered proof section.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeProofSectionDescriptorV1 {
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -124,6 +135,7 @@ pub struct ZkAmsMkheRnsNativeProofSectionDescriptorV1 {
     section_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeProofSectionDescriptorV1 {
     /// Section kind at this canonical position.
     #[must_use]
@@ -150,6 +162,7 @@ impl ZkAmsMkheRnsNativeProofSectionDescriptorV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ReplacementBindingsV1 {
     profile_manifest_digest: [u8; 32],
@@ -157,6 +170,7 @@ struct ReplacementBindingsV1 {
     release_candidate_digest: [u8; 32],
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ValidatedSourceContextV1 {
     bindings: ReplacementBindingsV1,
@@ -169,6 +183,7 @@ struct ValidatedSourceContextV1 {
 ///
 /// Section bytes are intentionally not `Clone`; decoding creates one bounded
 /// owner after all lengths, digests, and contextual bindings pass preflight.
+#[cfg(test)]
 #[derive(PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeProofEnvelopeV1 {
     version: u8,
@@ -185,6 +200,7 @@ pub struct ZkAmsMkheRnsNativeProofEnvelopeV1 {
     sections: [Vec<u8>; ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1],
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheRnsNativeProofEnvelopeV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -216,6 +232,7 @@ impl core::fmt::Debug for ZkAmsMkheRnsNativeProofEnvelopeV1 {
     }
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeProofEnvelopeV1 {
     /// Construct the sole ordered envelope without copying any section owner.
     ///
@@ -482,6 +499,7 @@ impl ZkAmsMkheRnsNativeProofEnvelopeV1 {
     }
 }
 
+#[cfg(test)]
 struct PreflightV1 {
     bindings: ReplacementBindingsV1,
     total_wire_bytes: u32,
@@ -491,6 +509,7 @@ struct PreflightV1 {
     section_offsets: [usize; ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1],
 }
 
+#[cfg(test)]
 fn preflight_v1(
     bytes: &[u8],
     source: ValidatedSourceContextV1,
@@ -611,6 +630,7 @@ fn preflight_v1(
     })
 }
 
+#[cfg(test)]
 fn preflight_outer_length_v1(bytes: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     let envelope_cap = usize::try_from(ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_MAX_BYTES_V1)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -623,6 +643,7 @@ fn preflight_outer_length_v1(bytes: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     Ok(())
 }
 
+#[cfg(test)]
 fn replacement_bindings_v1() -> Result<ReplacementBindingsV1, ZkAmsMkheErrorV1> {
     let profile_manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()?;
     profile_manifest.validate()?;
@@ -644,6 +665,7 @@ fn replacement_bindings_v1() -> Result<ReplacementBindingsV1, ZkAmsMkheErrorV1> 
     Ok(bindings)
 }
 
+#[cfg(test)]
 fn validated_source_context_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
@@ -677,6 +699,7 @@ fn validated_source_context_v1(
     Ok(source)
 }
 
+#[cfg(test)]
 fn validate_identity_digests_v1(
     bindings: ReplacementBindingsV1,
     statement_digest: [u8; 32],
@@ -702,6 +725,7 @@ fn validate_identity_digests_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_section_length_v1(
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
     length: usize,
@@ -718,6 +742,7 @@ fn validate_section_length_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn checked_total_wire_bytes_v1(
     descriptors: &[ZkAmsMkheRnsNativeProofSectionDescriptorV1;
          ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1],
@@ -740,6 +765,7 @@ fn checked_total_wire_bytes_v1(
     u32::try_from(total).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn section_slice_v1(
     bytes: &[u8],
     offset: usize,
@@ -756,6 +782,7 @@ fn section_slice_v1(
 }
 
 // Public transport integrity; native proof roots/state are typed separately in the section owners.
+#[cfg(test)]
 fn section_digest_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1, bytes: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-proof-section");
@@ -767,6 +794,7 @@ fn section_digest_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1, bytes: &[u8]) -
 }
 
 // Public complete-envelope identity, never a native STARK challenge seed or Merkle root.
+#[cfg(test)]
 fn whole_proof_digest_v1(envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1) -> [u8; 32] {
     whole_proof_digest_from_parts_v1(
         ReplacementBindingsV1 {
@@ -787,6 +815,7 @@ fn whole_proof_digest_v1(envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1) -> [u8; 3
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn whole_proof_digest_from_parts_v1(
     bindings: ReplacementBindingsV1,
@@ -822,11 +851,13 @@ fn whole_proof_digest_from_parts_v1(
     hash.finalize()
 }
 
+#[cfg(test)]
 struct RnsNativeProofDecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> RnsNativeProofDecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }

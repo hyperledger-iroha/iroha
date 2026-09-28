@@ -41,7 +41,7 @@ anchor must come from the current authenticated hardware session. A locally save
 old anchor is not a freshness authority. The product coordinator still owns exact
 hardware operation reconciliation and publishing the corresponding private state
 snapshot; a journal by itself cannot reconstruct proof witnesses or approve money.
-New lanes use `create_new` and the opaque `stage_bootstrap` owner. It exposes only
+New lanes use `create_new` and the bootstrap staging owner. It exposes only
 checkpoint material until both initial hardware CAS and fresh selection succeed.
 Missing/corrupt existing history never falls back to a new empty lane.
 Credential provisioning and concrete disk create/restore entry points currently
@@ -145,10 +145,11 @@ Checkpoint responses remain in the hardware terminal slot before appending them
 to the response archive, avoiding a commitment that includes its own signature.
 
 
-Production `stage_bootstrap` derives the immutable retail account/FI/dataspace/asset/lane
-binding and original credential from an opaque verified enrollment certificate. Its
-verification instant must equal the hardware-bound bootstrap time. The only synthetic
-owner entry is compiled for Unix unit tests. Historical restore instead compares the
+No production bootstrap staging entry point is wired yet: the only owner entry is the
+synthetic `stage_bootstrap_for_test`, compiled for Unix unit tests. A production entry must
+derive the immutable retail account/FI/dataspace/asset/lane binding and original credential
+from an opaque verified enrollment certificate whose verification instant equals the
+hardware-bound bootstrap time. Historical restore instead compares the
 exact caller-selected owner with the hardware-selected complete snapshot; it does not
 require current KYC or a renewed enrollment certificate to recover committed work.
 

@@ -42,7 +42,6 @@ macro_rules! derived_items {
 }
 
 use axum::{
-    Json,
     body::Body,
     extract::{State, ws::WebSocket},
     http::{StatusCode, header},
@@ -55,13 +54,11 @@ use core::str::FromStr;
 use eyre::eyre;
 use hex::ToHex;
 use iroha_config::parameters::{
-    actual::{
-        LaneRoutingPolicy as ActualLaneRoutingPolicy, NexusFeeSettlementMode, TelemetryProfile,
-    },
+    actual::{NexusFeeSettlementMode, TelemetryProfile},
     defaults,
 };
 #[cfg(feature = "app_api")]
-use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
+use iroha_version::codec::DecodeVersioned as _;
 use std::{
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -84,21 +81,16 @@ use iroha_core::smartcontracts::isi::sorafs::manifest_pin_policy_constraints_fro
 #[cfg(feature = "app_api")]
 use iroha_core::smartcontracts::triggers::set::SetReadOnly;
 use iroha_core::{
-    alias::{authority_can_manage_account_alias, authority_can_resolve_account_alias},
+    alias::authority_can_resolve_account_alias,
     nexus::{
         portfolio,
         space_directory::{
-            SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord,
-            SpaceDirectoryManifestSet, UaidDataspaceBindings,
+            SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord, UaidDataspaceBindings,
         },
     },
     query::store::LiveQueryStoreHandle,
     queue::{Queue, RoutingDecision, RoutingPlan},
-    sns::{
-        LeaseQuote, SnsNamespace, get_name_record,
-        quote_account_alias_registration_with_configured_fee_asset,
-        quote_account_alias_renewal_with_configured_fee_asset, resolve_active_account_alias,
-    },
+    sns::resolve_active_account_alias,
     state::{
         AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus,
         ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
@@ -108,39 +100,35 @@ use iroha_core::{
     telemetry::Telemetry,
     time,
     torii::zk::proofs::{
-        ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
-        ProofQueryBudget, ProofQueryError,
+        ProofFilters as CoreProofFilters, ProofListParams as CoreProofListParams, ProofQueryBudget,
+        ProofQueryError,
     },
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SIGNATURE_LIMIT_REASON_PREFIX,
         SignatureRejectionCode, SignatureVerificationFail,
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
-use iroha_data_model::sorafs::capacity::ProviderId;
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 #[cfg(feature = "telemetry")]
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
 };
 use iroha_data_model::{
     self,
-    account::AccountAddressErrorCode,
     block::{
         BlockHeader, SignedBlock,
-        consensus::{EvidencePenaltyStatus, EvidenceRecord, LaneBlockCommitment},
+        consensus::{EvidencePenaltyStatus, EvidenceRecord},
     },
     consensus::ConsensusKeyRecord,
     nexus::{
-        Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
-        LaneConfig, LaneLifecycleStatusV1, LaneRelayEnvelope, ManifestEffect, ManifestEntry,
-        ManifestVersion, PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, UniversalAccountId,
+        DataSpaceCatalog, LaneLifecycleStatusV1, PublicLaneRewardRecord, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        UniversalAccountId,
     },
     prelude::*,
     proof::VerifyingKeyId,
     query::{QueryRequestWithAuthority, QueryResponse, SignedQuery, SignedQueryValidationError},
-    repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    repo::{RepoAgreement, RepoAgreementId},
     smart_contract::manifest,
     transaction::{
         executable::Executable,
@@ -184,19 +172,15 @@ use iroha_torii_shared::sumeragi_evidence_api::{
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
-    core::DecodeFromSlice,
     json::{self, Map, Value},
     to_bytes,
 };
-#[cfg(feature = "telemetry")]
-use prometheus::core::Collector;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
-    panic::AssertUnwindSafe,
     sync::OnceLock,
 };
 pub mod debug_match_flag {
@@ -215,20 +199,16 @@ pub mod debug_match_flag {
 use crate::bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache};
 use crate::sorafs::{
     PorCoordinatorError, QuotaExceeded, SorafsAction, SorafsQuotaEnforcer,
-    por::{
-        POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusFilter, PorStatusPageCursor,
-        PorStatusPageLimits,
-    },
+    por::{PorStatusFilter, PorStatusPageCursor, PorStatusPageLimits},
 };
 #[cfg(feature = "app_api")]
 use crate::{
     explorer::{
         ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
     },
-    filter::FieldPath,
     utils::JsonValueBody,
 };
-use crate::{json_array, json_entry, json_object, json_value};
+use crate::{json_entry, json_object, json_value};
 
 /// Current dataspace visibility resolved for one Torii read principal.
 ///
@@ -267,6 +247,7 @@ impl DataspaceReadVisibility {
         self.exact_account.as_ref()
     }
 
+    #[cfg(any(test, feature = "bench"))]
     pub(crate) fn all() -> Self {
         Self {
             visible_dataspaces: BTreeSet::new(),
@@ -524,7 +505,7 @@ use iroha_data_model::{
         consensus_v2::SumeragiV2QcResponse,
     },
     events::{
-        EventBox, SharedDataEvent,
+        EventBox,
         pipeline::{BlockStatus, PipelineEventBox},
     },
     query::error::QueryExecutionFail,
@@ -534,15 +515,12 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use sorafs_manifest::{
-    ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
-    PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
+    ManifestV1, ManifestValidationError, PinPolicyConstraints as ManifestPinPolicyConstraints,
     capacity::{CapacityDeclarationV1, CapacityDeclarationValidationError},
     por::{
-        AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditVerdictV1,
-        POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_PROOF_MAX_CANONICAL_BYTES_V1,
-        PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1, PorReportIsoWeek,
-        PorStatusExportPageV1, PorStatusPageV1, PorWeeklyReportV1, decode_audit_verdict_v1,
-        decode_por_proof_v1,
+        AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditVerdictV1, POR_PROOF_MAX_CANONICAL_BYTES_V1,
+        PorChallengeOutcome, PorProofV1, PorReportIsoWeek, PorStatusExportPageV1, PorStatusPageV1,
+        PorWeeklyReportV1, decode_audit_verdict_v1, decode_por_proof_v1,
     },
     validate_manifest,
 };
@@ -657,7 +635,7 @@ pub(crate) struct PipelinePreflightResponse {
 fn json_string(value: Value) -> String {
     norito::json::to_string(&value).expect("serialize request body")
 }
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, all(feature = "telemetry", feature = "test-fixtures")))]
 fn checked_routing_fixture_keypair(
     seed: u8,
     algorithm: Algorithm,
@@ -727,42 +705,13 @@ mod debug_toggle_override {
     }
     #[cfg(not(test))]
     mod state {
-        pub(super) fn set_torii(_active: bool) -> bool {
-            false
-        }
         pub(super) fn torii_active() -> bool {
-            false
-        }
-        pub(super) fn set_iroha(_active: bool) -> bool {
             false
         }
     }
 }
 fn torii_debug_match_enabled() -> bool {
     debug_match_flag::enabled(debug_toggle_override::torii_override_active())
-}
-/// Compute start/end bounds for paginating a collection of length `len`.
-///
-/// - `offset` values that exceed `usize::MAX` (on the current platform) or the
-///   collection length clamp to the end of the collection, yielding an empty
-///   slice.
-/// - When `cap` is provided, user-supplied limits are clamped to that maximum.
-fn pagination_bounds(
-    len: usize,
-    offset: u64,
-    limit: Option<u64>,
-    cap: Option<u64>,
-) -> (usize, usize) {
-    let start = match usize::try_from(offset) {
-        Ok(off) => off.min(len),
-        Err(_) => len,
-    };
-    let limited = limit.map(|lim| cap.map_or(lim, |cap_lim| lim.min(cap_lim)));
-    let end = limited
-        .and_then(|lim| usize::try_from(lim).ok())
-        .map(|lim| start.saturating_add(lim).min(len))
-        .unwrap_or(len);
-    (start, end)
 }
 /// Optional `from`/`limit` window applied to newest-first histories.
 #[derive(norito::NoritoSchema)]
@@ -785,43 +734,6 @@ pub struct SccpRecentWindowQuery {
     pub after_index: Option<u32>,
     /// Optional result cap.
     pub limit: Option<u64>,
-}
-/// Apply a height window to a newest-first history vector while clamping to a server cap.
-pub fn clamp_history_window<T, F>(
-    items_newest_first: Vec<T>,
-    from: Option<u64>,
-    limit: Option<u64>,
-    cap: u64,
-    height_fn: F,
-) -> Vec<T>
-where
-    T: Clone,
-    F: Fn(&T) -> u64,
-{
-    let capped_limit = limit
-        .map(|lim| lim.min(cap))
-        .unwrap_or(cap)
-        .min(usize::MAX as u64) as usize;
-    let start_from =
-        from.unwrap_or_else(|| items_newest_first.first().map(&height_fn).unwrap_or(0));
-    items_newest_first
-        .into_iter()
-        .filter(|item| height_fn(item) <= start_from)
-        .take(capped_limit)
-        .collect()
-}
-#[cfg(test)]
-mod pagination_tests {
-    use super::{clamp_history_window, pagination_bounds};
-    routing_test! { sync pagination_bounds_limit_zero_returns_empty
-        let (start, end) = pagination_bounds(10, 0, Some(0), Some(5));
-        assert_eq!((start, end), (0, 0));
-    }
-    routing_test! { sync clamp_history_window_limit_zero_returns_empty
-        let items = vec![3u64, 2, 1];
-        let windowed = clamp_history_window(items, None, Some(0), 10, |v| *v);
-        assert!(windowed.is_empty());
-    }
 }
 include!("routing/pagination_ordering.rs");
 app_api_items! {
@@ -1040,6 +952,7 @@ impl QueryProjectionArchiveHotCache {
                 .saturating_sub(query_projection_archive_cache_weight(&evicted));
         }
     }
+    #[cfg(test)]
     fn clear(&mut self) {
         self.entries.clear();
         self.insertion_order.clear();
@@ -1092,13 +1005,6 @@ fn query_projection_archive_from_hot_cache(
             None
         }
     }
-}
-#[cfg(all(feature = "app_api", test))]
-/// Return the cached archive sharing `archive`'s immutable snapshot key.
-pub(crate) fn query_projection_archive_from_hot_cache_for_tests(
-    archive: &QueryProjectionShardArchive,
-) -> Option<QueryProjectionShardArchive> {
-    query_projection_archive_from_hot_cache(&query_projection_archive_cache_key(archive))
 }
 pub(crate) fn cache_query_projection_archive_for_query(archive: QueryProjectionShardArchive) {
     match QUERY_PROJECTION_ARCHIVE_CACHE.write() {
@@ -2783,6 +2689,7 @@ fn kaigi_signal_from_metadata(
         metadata: IrohaJson::from(signal_json),
     })
 }
+#[cfg(test)]
 fn kaigi_signal_from_transaction(
     tx: &iroha_data_model::query::CommittedTransaction,
     reveal_authorities: bool,
@@ -3045,6 +2952,7 @@ pub struct ContractAliasResolveResponseDto {
     pub source: String,
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
+#[cfg(test)]
 pub struct AliasErrorResponseDto {
     pub error: String,
 }
@@ -3588,6 +3496,7 @@ impl MaybeTelemetry {
         Self::from_profile(None, TelemetryProfile::Disabled)
     }
     /// Build a telemetry handle suitable for tests.
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn for_tests() -> Self {
         #[cfg(feature = "telemetry")]
         {
@@ -3598,7 +3507,7 @@ impl MaybeTelemetry {
             MaybeTelemetry::disabled()
         }
     }
-    #[cfg(feature = "telemetry")]
+    #[cfg(all(feature = "telemetry", any(test, feature = "test-fixtures")))]
     fn for_tests_with_nexus(nexus: Option<iroha_config::parameters::actual::Nexus>) -> Self {
         use iroha_core::{
             kura::Kura,
@@ -3716,17 +3625,35 @@ impl MaybeTelemetry {
         MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
     }
 }
+#[cfg(test)]
+use crate::filter::FieldPath;
 #[cfg(feature = "app_api")]
 use crate::filter::{FilterExpr, QueryEnvelope, Selector};
-use crate::{JsonBody, JsonOnly, NoritoJson, NoritoQuery};
+#[cfg(test)]
+use crate::sorafs::por::POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1;
+use crate::{JsonBody, NoritoJson, NoritoQuery};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use core::convert::Infallible;
 use futures::stream;
+#[cfg(test)]
+use iroha_config::parameters::actual::LaneRoutingPolicy as ActualLaneRoutingPolicy;
+#[cfg(test)]
+use iroha_core::nexus::space_directory::SpaceDirectoryManifestSet;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
     EventFilterBox,
     pipeline::{BlockEventFilter, TransactionEventFilter, TransactionStatus},
 };
+#[cfg(test)]
+use iroha_data_model::nexus::PublicLaneRewardRole;
+#[cfg(test)]
+use iroha_data_model::nexus::PublicLaneRewardShare;
+#[cfg(test)]
+use sorafs_manifest::PinPolicy as ManifestPinPolicy;
+#[cfg(test)]
+use sorafs_manifest::StorageClass as ManifestStorageClass;
+#[cfg(test)]
+use sorafs_manifest::por::POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1;
 #[inline]
 fn norito_internal_error(err: json::Error) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -4688,10 +4615,6 @@ fn read_app_query_limits(lock: &RwLock<AppQueryLimits>) -> AppQueryLimits {
     }
 }
 #[cfg(test)]
-pub fn reset_app_query_limits_for_tests() {
-    set_app_query_limits(AppQueryLimits::default());
-}
-#[cfg(test)]
 mod app_query_limits_tests {
     use super::{AppQueryLimits, read_app_query_limits};
     use std::panic::{self, AssertUnwindSafe};
@@ -5037,6 +4960,7 @@ where
 }
 
 /// GET /v1/zk/proofs — list proofs with filters
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn handle_list_proofs(
     state: Arc<CoreState>,
     limits: ProofApiLimits,
@@ -5253,6 +5177,7 @@ async fn handle_list_proofs_with_admission(
     Ok(application_json_response(body))
 }
 /// GET /v1/zk/proofs/count — return count for filters
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn handle_count_proofs(
     state: Arc<CoreState>,
     limits: ProofApiLimits,
@@ -5704,7 +5629,6 @@ fn fill_connect_session_random_bytes<R: rand::rand_core::TryCryptoRng + ?Sized>(
     bytes: &mut [u8],
     rng: &mut R,
 ) -> Result<(), crate::Error> {
-    use rand::rand_core::TryRngCore as _;
     rng.try_fill_bytes(bytes).map_err(|err| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "failed to generate Connect session {label}: {err}"
@@ -6152,6 +6076,7 @@ pub struct ProofFindByIdQueryDto {
     pub signed_query_b64: String,
 }
 /// Decode and constrain a locally signed `FindProofRecordById` query.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn signed_find_proof_by_id(
     dto: &ProofFindByIdQueryDto,
 ) -> Result<iroha_data_model::query::SignedQuery> {
@@ -6446,20 +6371,6 @@ fn map_current_finality_error(err: iroha_core::sumeragi::finality::ProofError) -
         _ => Error::Query(iroha_data_model::ValidationFail::InternalError(
             err.to_string(),
         )),
-    }
-}
-fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
-    match err {
-        iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
-        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactNotFound(_) => {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        }
-        iroha_core::bridge::BridgeFinalityError::FinalityArtifactRead { .. }
-        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. } => Error::Query(
-            iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
-        ),
     }
 }
 /// Expose only exact snapshot-height races as bound progress. All proof, identity,
@@ -6965,6 +6876,7 @@ pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<SccpRecentWind
     Ok(window)
 }
 /// Validate the canonical recent-message query without retaining its values.
+#[cfg(test)]
 pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
     parse_sccp_recent_query(raw_query).map(|_| ())
 }
@@ -10429,6 +10341,7 @@ fn handle_v1_zk_roots_sync(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 /// Execute the roots query on a blocking worker.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn handle_v1_zk_roots(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
@@ -10584,6 +10497,7 @@ fn handle_v1_zk_merkle_path_sync(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 /// Execute confidential-tree integrity checks and path construction on a blocking worker.
+#[cfg(test)]
 pub async fn handle_v1_zk_merkle_path(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
@@ -11388,8 +11302,6 @@ mod zk_roots_selector_tests {
     use super::*;
     use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
     use http_body_util::BodyExt as _;
-    use iroha_primitives::json::Json;
-    use nonzero_ext::nonzero;
     use std::str::FromStr;
     fn selector_state_without_zk() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId)
     {
@@ -12642,6 +12554,7 @@ pub fn accept_transaction_for_ingress(
     #[cfg(feature = "telemetry")]
     let decode_started = std::time::Instant::now();
     let tx = tx.into();
+    super::require_current_transaction_admission(tx.admission_intent())?;
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
         telemetry,
@@ -12776,6 +12689,7 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
     precheck_rejection: Option<AcceptTransactionFail>,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     reject_emergency_fast_transaction_ingress(state.as_ref())?;
+    super::require_current_transaction_admission(tx.signed().admission_intent())?;
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -12974,6 +12888,8 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
     routing_plan: RoutingPlan,
     expected_admission_binding: &iroha_core::torii_proxy::QueuePlanAdmissionBindingV1,
 ) -> Result<queue::QueuePlanDurableAdmissionV1> {
+    super::require_current_transaction_admission(accepted_tx.entrypoint().admission_intent())?;
+    super::require_current_transaction_route(&routing_plan)?;
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -13052,17 +12968,22 @@ fn push_accepted_transaction_for_ingress_with_durability(
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing: IngressRouting,
 ) -> Result<RoutingDecision> {
-    if accepted_tx.entrypoint().admission_intent()
-        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    {
-        return Err(Error::PushIntoQueue {
-            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
-                reason:
-                    "QueuePlanSynced transaction requires the globally certified admission path"
-                        .to_owned(),
-            }),
-            backpressure: queue.current_backpressure(),
-        });
+    super::require_current_transaction_admission(accepted_tx.entrypoint().admission_intent())?;
+    match &routing {
+        IngressRouting::Derived => {
+            let plan = queue
+                .route_plan_with_state(&accepted_tx, state.as_ref())
+                .map_err(|error| Error::PushIntoQueue {
+                    source: Box::new(queue::Error::UnresolvedRoute {
+                        reason: error.to_string(),
+                    }),
+                    backpressure: queue.current_backpressure(),
+                })?;
+            super::require_current_transaction_route(&plan)?;
+        }
+        IngressRouting::Planned(plan) | IngressRouting::StrictDurable(plan) => {
+            super::require_current_transaction_route(plan)?;
+        }
     }
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
@@ -13324,6 +13245,7 @@ mod lane_admission_latency_tests {
     }
 }
 /// Execute a signed query while honoring pagination/cursor overrides and telemetry policies.
+#[cfg(any(test, feature = "test-fixtures", feature = "bench"))]
 #[iroha_futures::telemetry_future]
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub async fn handle_queries_with_opts(
@@ -15633,7 +15555,6 @@ pub async fn handle_get_contract_state(
 #[cfg(all(test, feature = "app_api"))]
 mod contract_state_tests {
     use super::*;
-    use base64::Engine as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use ivm::pointer_abi::PointerType;
     use std::collections::BTreeMap;
@@ -16830,6 +16751,7 @@ fn bound_signed_contract_arguments(
 const ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES: usize = 512;
 const ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES: usize = 64;
 const ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES: usize = 30;
+#[cfg(test)]
 const ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES: usize = 192;
 const ASSET_TRANSFER_MAX_MEMO_BYTES: usize = 256;
 const ASSET_TRANSFER_MAX_TTL_MS: u64 = 10 * 60 * 1_000;
@@ -16918,6 +16840,7 @@ fn exact_asset_transfer_scope(raw: &str) -> Result<iroha_data_model::asset::Asse
         DataSpaceId::new(dataspace),
     ))
 }
+#[cfg(test)]
 fn exact_asset_transfer_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES {
         return Err(conversion_error(format!(
@@ -18246,7 +18169,7 @@ pub(crate) fn prepare_contract_call_request(
     };
     let builder = builder
         .with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
         )
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
@@ -18255,7 +18178,7 @@ pub(crate) fn prepare_contract_call_request(
         let (payload, canonical_bytes) = decode_app_api_transaction_payload_b64(encoded)?;
         if &payload != builder.payload() || canonical_bytes != builder.encode_payload() {
             return Err(conversion_error(
-                "prepared contract call payload does not match the exact requested invocation, metadata, fee payment, and QueuePlanSynced admission".to_owned(),
+                "prepared contract call payload does not match the exact requested invocation, metadata, fee payment, and Ordinary admission".to_owned(),
             ));
         }
         // Keep the retained signed fee limits and payload bytes; admission validates them live.
@@ -18264,6 +18187,9 @@ pub(crate) fn prepare_contract_call_request(
     } else {
         quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), "/v1/contracts/call")?
     };
+    validate_current_prepared_transaction_payload(
+        builder.payload(), queue.as_ref(), state.as_ref(),
+    )?;
     let fee_payment = builder.payload().fee_payment.clone();
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
@@ -18972,7 +18898,6 @@ fn prepare_bridge_proof_submit(
     state: Arc<CoreState>,
     req: BridgeProofSubmitDto,
 ) -> Result<PreparedBridgeProofSubmit> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_primitives::const_vec::ConstVec;
     let BridgeProofSubmitDto {
@@ -19183,7 +19108,6 @@ fn prepare_bridge_message_submit(
     state: Arc<CoreState>,
     req: BridgeMessageSubmitDto,
 ) -> Result<PreparedBridgeMessageSubmit> {
-    use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_primitives::const_vec::ConstVec;
     let BridgeMessageSubmitDto {
@@ -19602,6 +19526,7 @@ fn ensure_contract_entrypoint_kind<'a>(
     }
     Ok(descriptor)
 }
+#[cfg(test)]
 fn ensure_public_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -21390,6 +21315,7 @@ fn multisig_immediate_execution_routing_plan(
         context,
     )
 }
+#[cfg(test)]
 fn derive_multisig_contract_call_trigger_id(
     multisig_account_id: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -21456,6 +21382,7 @@ fn multisig_account_state_contract_key(
     ))
     .expect("multisig account state contract key")
 }
+#[cfg(test)]
 fn multisig_signatory_index_contract_key(
     signatory_account_id: &iroha_data_model::account::AccountId,
 ) -> StatePath {
@@ -24018,33 +23945,6 @@ mod contract_entrypoint_validation_tests {
             other => panic!("expected conversion error, got {other:?}"),
         }
     }
-    fn expect_app_validation(err: Error, expected_code: &str) -> String {
-        match err {
-            Error::AppQueryValidation { code, message } => {
-                assert_eq!(code, expected_code);
-                message
-            }
-            other => panic!("expected app validation error, got {other:?}"),
-        }
-    }
-    fn expect_app_not_found(err: Error, expected_code: &str) -> String {
-        match err {
-            Error::AppNotFound { code, message } => {
-                assert_eq!(code, expected_code);
-                message
-            }
-            other => panic!("expected app not-found error, got {other:?}"),
-        }
-    }
-    fn expect_app_conflict(err: Error, expected_code: &str) -> String {
-        match err {
-            Error::AppConflict { code, message } => {
-                assert_eq!(code, expected_code);
-                message
-            }
-            other => panic!("expected app conflict error, got {other:?}"),
-        }
-    }
     routing_test! { sync ensure_public_contract_entrypoint_rejects_missing_manifest_entrypoints
         let manifest = manifest_with_entrypoints(None);
         let err = ensure_public_contract_entrypoint(&manifest, "main")
@@ -24193,18 +24093,7 @@ mod contract_payload_normalization_tests {
     use iroha_data_model::smart_contract::manifest::{
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor,
     };
-    use iroha_data_model::{
-        ValidationFail,
-        nexus::{LaneCatalog, LaneConfig},
-        query::error::QueryExecutionFail,
-        smart_contract::{
-            ContractAddress,
-            entrypoint::{
-                EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1, EntrypointValueKindV1,
-                EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
-            },
-        },
-    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail, smart_contract::{ContractAddress, entrypoint::{EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1, EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1}}};
     use iroha_model_base::topology::DataSpaceId;
     const SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
     const SIGNED_512_MIN: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
@@ -24621,7 +24510,6 @@ seiyaku ZkIvmPayloadNormalizeTest {
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_selector_tests {
     use super::*;
-    use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_core::{
         kura::Kura,
@@ -24631,7 +24519,6 @@ mod multisig_selector_tests {
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{State, World},
     };
-    use iroha_crypto::Algorithm;
     use iroha_data_model::{
         ValidationFail,
         account::{MultisigMember, MultisigPolicy},
@@ -24746,39 +24633,6 @@ mod multisig_selector_tests {
     }
     fn install_paynet_routing_state(state: &State) {
         let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
-        let mut nexus = state.nexus.write();
-        nexus.routing_policy = paynet_routing_policy();
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-        nexus.lane_catalog = lane_catalog;
-        nexus.dataspace_catalog = dataspace_catalog;
-    }
-    fn install_sbp_routing_state(state: &State) {
-        let sbp_dataspace_id = DataSpaceId::new(10);
-        let sbp_lane_id = LaneId::new(1);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: sbp_dataspace_id,
-                alias: "sbp".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("valid SBP dataspace catalog");
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("lane count"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: sbp_lane_id,
-                    dataspace_id: sbp_dataspace_id,
-                    alias: "sbp".to_owned(),
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("valid SBP lane catalog");
         let mut nexus = state.nexus.write();
         nexus.routing_policy = paynet_routing_policy();
         nexus.lane_config =
@@ -25234,12 +25088,6 @@ mod multisig_selector_tests {
         block
             .commit_world_overlay_for_testing()
             .expect("commit block");
-    }
-    fn expect_not_found(err: Error) {
-        match err {
-            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {}
-            other => panic!("expected not found error, got {other:?}"),
-        }
     }
     fn expect_conversion(err: Error) -> String {
         match err {
@@ -25735,7 +25583,7 @@ mod multisig_selector_tests {
         ).expect("decode payload");
         let builder = dm::TransactionBuilder::decode_payload(&draft).expect("decode transaction");
         assert_eq!(builder.payload().admission_intent(),
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
     }
     fn public_contract_call_fixture() -> (Arc<State>, Arc<Queue>, KeyPair, ContractCallDto) {
         let key = checked_multisig_selector_keypair(0x6c, "derive public contract-call key");
@@ -25779,7 +25627,7 @@ mod multisig_selector_tests {
         request.transaction_payload_b64 = Some(encoded);
         (request, builder)
     }
-    routing_test! { sync contract_call_detached_submission_retains_exact_queue_plan_payload
+    routing_test! { sync contract_call_detached_submission_retains_exact_current_payload
         let (state, queue, key, request) = public_contract_call_fixture();
         let (request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
         let prepared = prepare_contract_call_request(queue.clone(), state, request)
@@ -25787,7 +25635,7 @@ mod multisig_selector_tests {
         let transaction = prepared.transaction.expect("detached transaction");
         transaction.verify_signature().expect("retained signature verifies");
         assert_eq!(transaction, builder.clone().try_sign(key.private_key()).expect("exact expected signature"));
-        assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+        assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
         assert_eq!(transaction.creation_time(), Duration::from_millis(prepared.response.creation_time_ms));
         assert_eq!(builder.payload().creation_time_ms, prepared.response.creation_time_ms);
         assert!(!prepared.response.submitted, "preparation cannot claim public admission");
@@ -25819,15 +25667,15 @@ mod multisig_selector_tests {
     routing_test! { sync contract_call_detached_submission_rejects_changed_or_noncanonical_payload
         let (state, queue, key, request) = public_contract_call_fixture();
         let (exact, builder) = detached_public_contract_call(&state, &queue, &key, &request);
-        let ordinary = builder.clone().with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+        let retired = builder.clone().with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
         );
-        let signature = Signature::try_new(key.private_key(), &ordinary.payload_hash_bytes()).expect("sign other intent");
+        let signature = Signature::try_new(key.private_key(), &retired.payload_hash_bytes()).expect("sign other intent");
         let mut changed = exact.clone();
-        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(ordinary.encode_payload()));
+        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(retired.encode_payload()));
         changed.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
         let error = prepare_contract_call_request(queue.clone(), state.clone(), changed)
-            .expect_err("even a valid Ordinary signature cannot enter the public contract surface");
+            .expect_err("even a valid retired-admission signature cannot enter the public contract surface");
         assert!(expect_conversion(error).contains("exact requested invocation"));
         let mut bytes = builder.encode_payload();
         bytes.push(0);
@@ -25837,11 +25685,11 @@ mod multisig_selector_tests {
         let mut replaced_signature = exact;
         replaced_signature.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
         let error = prepare_contract_call_request(queue.clone(), state, replaced_signature)
-            .expect_err("a signature over another intent cannot authenticate retained QP bytes");
+            .expect_err("a signature over another intent cannot authenticate retained current bytes");
         assert!(expect_conversion(error).contains("detached signature verification failed"));
         assert_eq!(queue.active_len(), 0);
     }
-    routing_test! { async contract_call_detached_handler_requires_certified_public_admission
+    routing_test! { async contract_call_detached_handler_requires_durable_public_admission
         let (state, queue, key, request) = public_contract_call_fixture();
         let (request, _) = detached_public_contract_call(&state, &queue, &key, &request);
         let mut app = crate::mk_app_state_for_tests();
@@ -25858,7 +25706,7 @@ mod multisig_selector_tests {
         let bytes = response.into_body().collect().await.expect("response body").to_bytes();
         let error: iroha_torii_shared::ErrorEnvelope = norito::decode_from_bytes(&bytes).expect("public error envelope");
         #[cfg(feature = "connect")]
-        assert_eq!(error.code(), "route_unavailable");
+        assert_eq!(error.code(), "queue_plan_journal_unavailable");
         #[cfg(not(feature = "connect"))]
         assert_eq!(error.code(), "queue_plan_synced_transport_unavailable");
         assert_eq!(queue.active_len(), 0, "no local enqueue can mask absent public admission authority");
@@ -25966,7 +25814,7 @@ mod multisig_selector_tests {
         assert_eq!(builder.encode_payload(), bytes);
         assert_eq!(builder.payload().creation_time_ms, response.creation_time_ms);
         assert_eq!(builder.payload().admission_intent(),
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
         let signing_message = base64::engine::general_purpose::STANDARD.decode(
             response.signing_message_b64.as_deref().expect("signing message"),
         ).expect("canonical signing message base64");
@@ -28123,9 +27971,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     NoritoJson(req): NoritoJson<MultisigContractCallProposeDto>,
 ) -> Result<Response> {
     use iroha_data_model::prelude as dm;
-    use iroha_executor_data_model::isi::multisig::{
-        MultisigApprove, MultisigCancel, MultisigPropose,
-    };
+    use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
     let MultisigContractCallProposeDto {
         selector,
         signer_account_id,
@@ -30018,6 +29864,7 @@ pub async fn handle_post_asset_transfer_control_get(
 }
 }
 /// Fetch proof verification record by proof id.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_proof_record(
     state: Arc<CoreState>,
@@ -33652,6 +33499,7 @@ fn validate_sorafs_pin_alias_binding(
     Ok(())
 }
 }
+#[cfg(test)]
 fn convert_manifest_policy(
     policy: &ManifestPinPolicy,
 ) -> iroha_data_model::sorafs::pin_registry::PinPolicy {
@@ -33957,14 +33805,6 @@ mod sorafs_pin_tests {
         #[cfg(not(feature = "telemetry"))]
         let telemetry = MaybeTelemetry::disabled();
         (queue, state, telemetry)
-    }
-    fn conversion_message(err: Error) -> String {
-        match err {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        }
     }
     fn app_validation_error(err: Error) -> (&'static str, String) {
         match err {
@@ -34358,7 +34198,6 @@ mod sorafs_pin_tests {
 #[cfg(all(test, feature = "app_api"))]
 mod sorafs_capacity_tests {
     use super::*;
-    use base64::Engine as _;
     use iroha_data_model::{
         prelude as dm,
         sorafs::capacity::{CapacityDeclarationRecord, CapacityTelemetryRecord, ProviderId},
@@ -34370,7 +34209,7 @@ mod sorafs_capacity_tests {
         capacity::{CapacityDeclarationV1, ChunkerCommitmentV1, PricingScheduleV1},
         por::{
             AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
-            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
+            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1,
             derive_challenge_id, derive_challenge_seed,
         },
     };
@@ -38051,7 +37890,7 @@ fn validate_tx_filter_adapter_for_endpoint(
     const MAX_SET: usize = 256;
     use FilterExpr as F;
     use iroha_crypto::HashOf;
-    use iroha_data_model::{prelude as dm, query::error::QueryExecutionFail, transaction::signed};
+    use iroha_data_model::{prelude as dm, transaction::signed};
     fn invalid_field_path(field: &str, endpoint: &'static str) -> Error {
         Error::AppQueryValidation {
             code: "invalid_field_path",
@@ -38788,8 +38627,11 @@ pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE: &str = "/v1/contracts/call/m
 pub const ENDPOINT_MULTISIG_PROPOSE: &str = "/v1/multisig/propose";
 pub const ENDPOINT_MULTISIG_APPROVE: &str = "/v1/multisig/approve";
 pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
+#[cfg(test)]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
+#[cfg(test)]
 pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
+#[cfg(test)]
 pub const ENDPOINT_MULTISIG_PROPOSALS_RESOLVE: &str = "/v1/multisig/proposals/resolve";
 pub const ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET: &str = "/v1/accounts/recovery/policy/set";
 pub const ENDPOINT_ACCOUNT_RECOVERY_PROPOSE: &str = "/v1/accounts/recovery/propose";
@@ -38890,6 +38732,7 @@ pub struct NexusDataspacesAccountSummaryQueryParams {
     pub reserved: Option<String>,
 }
 }
+#[cfg(test)]
 pub fn parse_account_path_segment(
     literal: &str,
     telemetry: &MaybeTelemetry,
@@ -39054,6 +38897,7 @@ fn canonicalize_filter_account_literals(
         }
     }
 }
+#[cfg(test)]
 fn canonicalize_accounts_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
@@ -39457,6 +39301,7 @@ fn committed_transaction_is_visible(
         *transaction.entrypoint_hash(),
     )
 }
+#[cfg(test)]
 fn committed_transaction_is_visible_in_block(
     visibility: &DataspaceReadVisibility,
     transaction: &iroha_data_model::query::CommittedTransaction,
@@ -39482,6 +39327,7 @@ app_api_items! {
 ///
 /// Supported filter fields: `authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`,
 /// `metadata.<key>`, and `asset_id` (matches asset ids referenced by instruction payloads).
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions(
     state: Arc<CoreState>,
@@ -39499,6 +39345,7 @@ pub async fn handle_v1_account_transactions(
     .await
 }
 /// POST /v1/accounts/{account_id}/transactions/query` with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions_with_policy(
     state: Arc<CoreState>,
@@ -39873,6 +39720,7 @@ pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
 /// Returns committed transactions without requiring clients to first discover
 /// and fan out over every account. Supported filter fields match the account
 /// transaction query endpoint.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_transactions_query(
     state: Arc<CoreState>,
@@ -39882,6 +39730,7 @@ pub async fn handle_v1_transactions_query(
     handle_v1_transactions_query_with_policy(state, NoritoJson(envelope), telemetry, None).await
 }
 /// POST `/v1/transactions/query` with configurable asset enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_transactions_query_with_policy(
     state: Arc<CoreState>,
@@ -40182,6 +40031,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     response
 }
 /// GET /v1/accounts/{account_id}/transactions — Convenience JSON endpoint.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions_get(
     state: Arc<CoreState>,
@@ -40199,6 +40049,7 @@ pub async fn handle_v1_account_transactions_get(
     .await
 }
 /// GET `/v1/accounts/{account_id}/transactions` with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions_get_with_policy(
     state: Arc<CoreState>,
@@ -40601,6 +40452,15 @@ pub async fn handle_v1_transactions_history_get(
     visibility_owner.finish()?;
     response
 }
+/// Bench entry point for `/v1/contracts/activity` with unrestricted dataspace visibility.
+#[cfg(all(feature = "app_api", feature = "bench"))]
+pub async fn handle_v1_contracts_activity_get_for_bench(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractActivityGetParams>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_activity_get(state, DataspaceReadVisibility::all(), query, telemetry).await
+}
 /// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_contracts_activity_get(
@@ -40776,14 +40636,7 @@ pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResp
 mod sse_filter_tests {
     use super::*;
     use iroha_crypto::Hash;
-    use iroha_data_model::{
-        block::BlockHeader,
-        events::{
-            EventBox, SharedDataEvent,
-            data::prelude::DataEvent,
-            pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
-        },
-    };
+    use iroha_data_model::{block::BlockHeader, events::{EventBox, pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus}}};
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use nonzero_ext::nonzero;
     routing_test! { sync tx_status_eq_builds_matching_filter
@@ -42077,7 +41930,6 @@ mod tx_query_filter_tests {
         assert!(!filter_tx(&expr, &tx_b));
     }
     routing_test! { sync tx_predicate_from_filter_applies_without_feature
-        use iroha_data_model::query::dsl::EvaluatePredicate;
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, true);
@@ -45123,14 +44975,7 @@ include!("tests/routing_app_api_integration.rs");
 #[cfg(test)]
 mod query_endpoint_tests {
     use axum::http::StatusCode;
-    use iroha_core::{
-        block::BlockBuilder,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Execute as _,
-        state::{State, World},
-        sumeragi::network_topology::Topology,
-    };
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     // prelude already imported via super::*
     use super::*;
     use tower::ServiceExt; // Router::oneshot
@@ -45343,12 +45188,7 @@ mod query_endpoint_tests {
     }
     routing_test! { async proofs_roundtrip_and_query_via_torii
         use axum::extract::Path as AxumPath;
-        use iroha_core::{
-            kura::Kura,
-            query::store::LiveQueryStore,
-            smartcontracts::Execute as _,
-            state::{State, World},
-        };
+        use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute as _, state::World};
         use iroha_data_model::prelude as dm;
         // Minimal in-memory state
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -45813,6 +45653,7 @@ pub(crate) fn handle_v1_events_sse(
 ///
 /// Production routes must use the scoped handler so that every event is
 /// filtered against the caller's current dataspace visibility.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn handle_v1_events_sse_for_tests(
     events: EventsSender,
@@ -46922,24 +46763,6 @@ pub async fn handle_v1_kaigi_relays(
         items,
     };
     Ok(respond_kaigi_json_document_with_format(&payload, format))
-}
-#[cfg(all(feature = "app_api", feature = "telemetry"))]
-/// GET `/v1/kaigi/relays/{relay_id}` — detailed metadata and metrics for a relay.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_kaigi_relay_detail(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    axum::extract::Path(relay_id_str): axum::extract::Path<String>,
-    crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
-) -> Result<impl IntoResponse> {
-    handle_v1_kaigi_relay_detail_with_policy(
-        state,
-        telemetry,
-        axum::extract::Path(relay_id_str),
-        crate::NoritoQuery(params),
-        crate::utils::ResponseFormat::Json,
-    )
-    .await
 }
 /// GET `/v1/kaigi/relays/{relay_id}` with configurable address enforcement.
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -48605,7 +48428,6 @@ mod sse_stream_tests {
         atomic::{AtomicBool, Ordering},
     };
     use axum::body::Body;
-    use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -48922,7 +48744,6 @@ mod cursor_mode_tests {
         smartcontracts::isi::query::QueryLimits,
         state::{State, World},
     };
-    use iroha_data_model::prelude::*;
     use iroha_data_model::query::{
         QueryItemKind, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, SelectorTuple},
@@ -49128,7 +48949,6 @@ mod validation_fee_torii_ingress_tests {
             time::{ExecutionTime, TimeEventFilter},
         },
         isi::Transfer,
-        prelude::*,
         smart_contract::{
             ContractAddress,
             manifest::{TriggerCallback, TriggerDescriptor},
@@ -49156,7 +48976,7 @@ mod validation_fee_torii_ingress_tests {
         json::Json,
         numeric::{NumericSpec, Quantity},
     };
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
     use std::{
         collections::BTreeMap,
         num::{NonZeroU16, NonZeroU64, NonZeroUsize},
@@ -50803,13 +50623,7 @@ mod validation_fee_torii_ingress_tests {
 #[cfg(all(test, feature = "telemetry"))]
 mod lane_admission_metrics_tests {
     use super::*;
-    use iroha_core::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        queue::Queue,
-        state::{State, World},
-    };
-    use iroha_data_model::prelude::*;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::World};
     use iroha_logger::Level;
     use std::sync::Arc;
     routing_test! { async transaction_ingress_records_latency_histogram
@@ -50869,12 +50683,9 @@ mod hot_path_load_profile_tests {
         telemetry::{StateTelemetry, Telemetry},
     };
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{
-        prelude::*,
-        query::{
-            QueryRequest, SingularQueryBox, executor::prelude::FindParameters,
-            runtime::prelude::FindAbiVersion,
-        },
+    use iroha_data_model::query::{
+        QueryRequest, SingularQueryBox, executor::prelude::FindParameters,
+        runtime::prelude::FindAbiVersion,
     };
     use iroha_logger::Level;
     use iroha_telemetry::metrics::Metrics;
@@ -51405,6 +51216,9 @@ pub struct ContractRollupSwapsFillsParams {
     #[norito(default)]
     pub scan_limit: Option<u64>,
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    // TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
+    // once these projections report exact totals.
+    #[allow(dead_code)]
     #[norito(default)]
     pub count_mode: Option<String>,
 }
@@ -51430,6 +51244,9 @@ pub struct ContractRollupSwapsCandlesParams {
     #[norito(default)]
     pub bucket_ms: Option<u64>,
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    // TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
+    // once these projections report exact totals.
+    #[allow(dead_code)]
     #[norito(default)]
     pub count_mode: Option<String>,
 }
@@ -56016,6 +55833,7 @@ struct AccountPermissionListItem {
     payload: norito::json::Value,
 }
 /// List permissions with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_permissions_with_policy(
     state: Arc<CoreState>,
@@ -56107,6 +55925,7 @@ pub(crate) async fn handle_v1_account_permissions_with_visibility(
     })
 }
 /// List assets for an account with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets(
     state: Arc<CoreState>,
@@ -56123,6 +55942,7 @@ pub async fn handle_v1_account_assets(
     .await
 }
 /// List assets with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets_with_policy(
     state: Arc<CoreState>,
@@ -56928,6 +56748,7 @@ fn domain_projection_retained_bytes(domain: &DomainProj) -> usize {
     retained_json_text_bytes(&domain.id)
 }
 /// GET /v1/domains — List domains with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_domains(
     state: Arc<CoreState>,
@@ -57018,6 +56839,7 @@ fn domain_sort_key(id: &str, selectors: &[DomainSortSelector]) -> MultiSortKey {
 /// POST /v1/domains/query — JSON envelope with optional pagination/sort.
 ///
 /// Phase 1: ignores `filter`/`select` and applies deterministic sorting by id if requested.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_domains_query(
     state: Arc<CoreState>,
@@ -59067,7 +58889,7 @@ mod prepared_transaction_signature_fixture_tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary)
         .with_metadata(metadata)
         .with_instructions(instructions);
         builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
@@ -59586,18 +59408,6 @@ fn faucet_invalid_request(reason: &str) -> Error {
 }
 const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
-fn leading_zero_bits(bytes: &[u8]) -> u32 {
-    let mut total = 0u32;
-    for byte in bytes {
-        if *byte == 0 {
-            total += 8;
-            continue;
-        }
-        total += byte.leading_zeros();
-        break;
-    }
-    total
-}
 fn adaptive_faucet_pow_extra_bits(
     recent_claims: u64,
     claims_per_extra_bit: u64,
@@ -59871,7 +59681,7 @@ fn verify_faucet_pow(
     );
     let scrypt_params = faucet_pow_scrypt_params(faucet)?;
     let digest = faucet_pow_digest(&challenge, &scrypt_params, &nonce_bytes)?;
-    if leading_zero_bits(&digest) < u32::from(effective_difficulty_bits) {
+    if crate::utils::leading_zero_bits(&digest) < u32::from(effective_difficulty_bits) {
         return Err(faucet_invalid_request("invalid faucet pow solution"));
     }
     Ok(())
@@ -60670,10 +60480,36 @@ fn revalidate_onboarding_prepared_work(
     })
 }
 
-fn prepared_submit_outcome(
+pub(crate) fn validate_current_prepared_transaction_payload(
+    payload: &iroha_data_model::transaction::TransactionPayload,
+    queue: &Queue,
+    state: &CoreState,
+) -> Result<()> {
+    if payload.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+    {
+        return Err(prepared_transaction_invalid("prepared transaction requires Ordinary admission"));
+    }
+    let plan = queue.route_payload_plan_with_state(payload, state)
+        .map_err(|error| conversion_error(format!("prepared transaction route is unavailable: {error}")))?;
+    if !matches!(plan, RoutingPlan::Single(_)) {
+        return Err(Error::AppQueryValidation {
+            code: "prepared_transaction_route_unsupported",
+            message: "current prepared transactions require one authoritative route".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn prepared_submit_outcome(
     app: &crate::SharedAppState,
     transaction: &SignedTransaction,
 ) -> Result<Option<&'static str>> {
+    if transaction.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+    {
+        return Err(prepared_transaction_invalid("prepared transaction requires Ordinary admission"));
+    }
     let transaction_hash = transaction.hash();
     let entrypoint_hash =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
@@ -60686,15 +60522,7 @@ fn prepared_submit_outcome(
             })?;
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
-    // A local Queue entry or cached Queued event is only one authority's claim.
-    // It cannot acknowledge a QueuePlanSynced prepared mutation before the
-    // global f+1 certificate has been durably persisted. Its replay must enter
-    // the same strict public admission path as a fresh submission.
-    if transaction.admission_intent()
-        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    {
-        return Ok(None);
-    }
+    // A queue/cache observation reports Pending only; it never proves application.
     if let Some(status) = app.pipeline_status_cache.lookup(&transaction_hash) {
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
@@ -60707,14 +60535,16 @@ fn prepared_submit_outcome(
     Ok(None)
 }
 
-/// Admit one exact prepared transaction through the public QueuePlan quorum owner.
-/// An accepted response means the complete certificate crossed its durable
-/// publication boundary; local Queue custody alone is not a public success.
-async fn submit_prepared_queue_plan_transaction(
+/// Admit an exact single-route prepared transaction through ordinary durable ingress.
+/// Accepted means pending local custody; only authenticated execution proves application.
+pub(crate) async fn submit_current_prepared_transaction(
     app: &crate::SharedAppState,
     transaction: SignedTransaction,
     telemetry: &MaybeTelemetry,
 ) -> Result<Response> {
+    validate_current_prepared_transaction_payload(
+        transaction.payload(), app.queue.as_ref(), app.state.as_ref(),
+    )?;
     let compute_permit = crate::try_acquire_transaction_ingress_compute(
         &app.transaction_ingress_compute_inflight,
     )?;
@@ -60737,66 +60567,8 @@ async fn submit_prepared_queue_plan_transaction(
     .await
 }
 
-#[cfg(feature = "connect")]
-pub(crate) async fn certified_prepared_queue_plan_response(
-    app: &crate::SharedAppState,
-    transaction: &SignedTransaction,
-) -> Result<Option<Response>> {
-    let compute_permit = crate::try_acquire_transaction_ingress_compute(
-        &app.transaction_ingress_compute_inflight,
-    )?;
-    let app = app.clone();
-    let transaction = transaction.clone();
-    let (response, compute_permit) = crate::run_transaction_ingress_compute_job(
-        compute_permit,
-        "prepared_transaction_retry_worker_failed",
-        move || {
-            let Some(authenticated) = crate::AuthenticatedQueuePlanRetry::from_signed(
-                app.state.network_id_ref(),
-                &transaction,
-            )? else {
-                return Ok(None);
-            };
-            if let Some(response) = crate::canonical_queue_plan_submission_response(
-                app.as_ref(),
-                &authenticated,
-                true,
-                crate::utils::ResponseFormat::Json,
-            ) {
-                return Ok(Some(response));
-            }
-            let entrypoint_hash = authenticated.entrypoint_hash();
-            let signed_transaction_hash = authenticated.signed_transaction_hash();
-            match app.state.pending_queue_plan_admission_for_transaction(
-                entrypoint_hash,
-                signed_transaction_hash,
-            ) {
-                Ok(false) => Ok(crate::canonical_queue_plan_submission_response(
-                    app.as_ref(),
-                    &authenticated,
-                    true,
-                    crate::utils::ResponseFormat::Json,
-                )),
-                Ok(true) => Ok(Some(crate::transaction_submission_receipt_response(
-                    app.as_ref(),
-                    entrypoint_hash,
-                    Some(signed_transaction_hash),
-                    true,
-                    crate::utils::ResponseFormat::Json,
-                ))),
-                Err(error) => Ok(Some(crate::queue_plan_admission_registry_conflict_response(
-                    entrypoint_hash,
-                    format!("pending QueuePlan admission cannot be authenticated: {error}"),
-                ))),
-            }
-        },
-    )
-    .await?;
-    drop(compute_permit);
-    Ok(response)
-}
 
-fn prepared_queue_plan_submit_response(
+fn prepared_transaction_submit_response(
     submission: Response,
     binding: PreparedOperationBindingV1,
     operation: &str,
@@ -60816,7 +60588,7 @@ fn prepared_queue_plan_submit_response(
 }
 
 #[cfg(all(test, feature = "app_api"))]
-routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptance
+routing_test! { async prepared_transaction_submit_response_requires_real_acceptance
     let binding = PreparedOperationBindingV1 {
         schema: PreparedOperationBindingV1::SCHEMA.to_owned(),
         semantic_hash_hex: "11".repeat(32),
@@ -60828,9 +60600,9 @@ routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptan
     *accepted.status_mut() = StatusCode::ACCEPTED;
     accepted.headers_mut().insert(
         axum::http::HeaderName::from_static("x-iroha-entrypoint-hash"),
-        axum::http::HeaderValue::from_static("certified-entrypoint"),
+        axum::http::HeaderValue::from_static("admitted-entrypoint"),
     );
-    let accepted = prepared_queue_plan_submit_response(
+    let accepted = prepared_transaction_submit_response(
         accepted,
         binding.clone(),
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -60842,7 +60614,7 @@ routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptan
             .headers()
             .get("x-iroha-entrypoint-hash")
             .and_then(|value| value.to_str().ok()),
-        Some("certified-entrypoint")
+        Some("admitted-entrypoint")
     );
     let body = axum::body::to_bytes(accepted.into_body(), usize::MAX)
         .await
@@ -60854,7 +60626,7 @@ routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptan
 
     let mut unavailable = Response::new(Body::from("quorum unavailable"));
     *unavailable.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-    let unavailable = prepared_queue_plan_submit_response(
+    let unavailable = prepared_transaction_submit_response(
         unavailable,
         binding,
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -60979,7 +60751,7 @@ pub async fn handle_v1_accounts_onboard_prepare(
         request.fee_payment.clone(),
     )
     .with_admission_intent(
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
     )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
@@ -60992,6 +60764,9 @@ pub async fn handle_v1_accounts_onboard_prepare(
         app.queue.as_ref(),
         app.state.as_ref(),
         ENDPOINT_ACCOUNTS_ONBOARD_PREPARE,
+    )?;
+    validate_current_prepared_transaction_payload(
+        transaction.payload(), app.queue.as_ref(), app.state.as_ref(),
     )?;
     let (transaction_hash_hex, signed_transaction_wire_hex, signed_transaction_wire_sha256) =
         canonical_prepared_transaction_wire(&transaction)?;
@@ -61069,10 +60844,10 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         &prepared.signed_transaction_wire_sha256,
     )?;
     if transaction.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
     {
         return Err(prepared_transaction_invalid(
-            "prepared onboarding transaction requires QueuePlanSynced admission",
+            "prepared onboarding transaction requires Ordinary admission",
         ));
     }
     // A known hash is still scoped to the credential that prepared its signed receipt. Only the
@@ -61093,18 +60868,7 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
             ),
         ));
     }
-    // A certified retry has already crossed the durable f+1 boundary. Serve it before
-    // the live expiry and state checks, which apply only to fresh admission.
-    #[cfg(feature = "connect")]
-    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
-        let response = prepared_queue_plan_submit_response(
-            submission,
-            prepared.binding,
-            AccountOnboardingPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-        );
-        return Ok((response.status(), response));
-    }
+
     validate_prepared_mutation_binding(
         &prepared.binding,
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -61139,8 +60903,8 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
             "prepared onboarding transaction no longer matches its receipt, binding, result identity, or exact fee intent",
         ));
     }
-    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
-    let response = prepared_queue_plan_submit_response(
+    let submission = submit_current_prepared_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_transaction_submit_response(
         submission,
         prepared.binding,
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -61421,7 +61185,7 @@ pub async fn handle_v1_accounts_faucet_prepare(
         request.fee_payment.clone(),
     )
     .with_admission_intent(
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
     )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
@@ -61434,6 +61198,9 @@ pub async fn handle_v1_accounts_faucet_prepare(
         app.queue.as_ref(),
         app.state.as_ref(),
         ENDPOINT_ACCOUNTS_FAUCET_PREPARE,
+    )?;
+    validate_current_prepared_transaction_payload(
+        transaction.payload(), app.queue.as_ref(), app.state.as_ref(),
     )?;
     let (transaction_hash_hex, signed_transaction_wire_hex, signed_transaction_wire_sha256) =
         canonical_prepared_transaction_wire(&transaction)?;
@@ -61513,10 +61280,10 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
         &prepared.signed_transaction_wire_sha256,
     )?;
     if transaction.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
     {
         return Err(prepared_transaction_invalid(
-            "prepared faucet transaction requires QueuePlanSynced admission",
+            "prepared faucet transaction requires Ordinary admission",
         ));
     }
     if let Some(outcome) = prepared_submit_outcome(&app, &transaction)? {
@@ -61530,16 +61297,7 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
             ),
         ));
     }
-    #[cfg(feature = "connect")]
-    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
-        let response = prepared_queue_plan_submit_response(
-            submission,
-            prepared.binding,
-            AccountFaucetPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-        );
-        return Ok((response.status(), response));
-    }
+
     validate_prepared_mutation_binding(
         &prepared.binding,
         AccountFaucetPreparedTransactionDto::OPERATION,
@@ -61577,8 +61335,8 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
             "prepared faucet transaction no longer matches its claim, binding, result identity, or exact fee intent",
         ));
     }
-    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
-    let response = prepared_queue_plan_submit_response(
+    let submission = submit_current_prepared_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_transaction_submit_response(
         submission,
         prepared.binding,
         AccountFaucetPreparedTransactionDto::OPERATION,
@@ -61671,6 +61429,7 @@ pub async fn handle_v1_account_aliases(
     Ok(infallible_pretty_json_response(&payload, "{}"))
 }
 /// GET /v1/accounts — List accounts with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts(
     state: Arc<CoreState>,
@@ -61758,6 +61517,7 @@ pub(crate) async fn handle_v1_accounts_with_visibility(
     })
 }
 /// POST /v1/accounts/query — JSON envelope with optional pagination/sort.
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts_query(
     state: Arc<CoreState>,
@@ -62591,6 +62351,7 @@ impl DataspaceAliasLookup {
 }
 app_api_items! {
 /// GET /v1/space-directory/uaids/{uaid} — UAID dataspace bindings snapshot.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_space_directory_bindings(
     state: Arc<CoreState>,
@@ -62626,6 +62387,7 @@ pub async fn handle_v1_space_directory_bindings(
     pretty_json_response(&Value::Object(root))
 }
 /// GET /v1/space-directory/uaids/{uaid}/manifests — UAID manifest inventory.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_space_directory_manifests(
     state: Arc<CoreState>,
@@ -63823,7 +63585,7 @@ mod asset_definitions_query_tests {
         state::{State, World},
     };
     use iroha_crypto::Algorithm;
-    use iroha_data_model::{Registrable as _, prelude as dm};
+    use iroha_data_model::prelude as dm;
     use std::sync::Arc;
     fn checked_asset_definition_authority(seed: u8, context: &'static str) -> dm::AccountId {
         dm::AccountId::new(
@@ -64229,6 +63991,7 @@ fn explorer_circulating_quantity(
         ))
     })
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -64408,6 +64171,7 @@ fn handle_v1_explorer_rwas_sync(
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -64974,6 +64738,7 @@ fn instruction_history_filter_digest(
     )
 }
 app_api_items! {
+#[cfg(test)]
 pub async fn handle_v1_explorer_transactions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -65133,6 +64898,7 @@ pub struct ExplorerInstructionQuery {
     pub kind: Option<ExplorerInstructionKind>,
     pub asset_id: Option<iroha_data_model::asset::AssetId>,
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_instructions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -65924,6 +65690,7 @@ pub async fn handle_v1_explorer_domain_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_asset_definition_detail(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -66304,10 +66071,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         false,
         "explorer asset econometrics",
     )?;
-    use iroha_data_model::{
-        isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
-        transaction::executable::Executable,
-    };
+    use iroha_data_model::isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox};
     use iroha_primitives::numeric::Quantity;
     const HOUR_MS: u64 = 60 * 60 * 1000;
     const DAY_MS: u64 = 24 * HOUR_MS;
@@ -66330,7 +66094,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     #[derive(Clone)]
     struct VelocityAcc {
         key: &'static str,
-        window_ms: u64,
         start_ms: u64,
         transfers: u64,
         unique_senders: u64,
@@ -66340,7 +66103,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     #[derive(Clone)]
     struct IssuanceAcc {
         key: &'static str,
-        window_ms: u64,
         start_ms: u64,
         mint_count: u64,
         burn_count: u64,
@@ -66357,7 +66119,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         .iter()
         .map(|(key, window_ms)| VelocityAcc {
             key: *key,
-            window_ms: *window_ms,
             start_ms: now_ms.saturating_sub(*window_ms),
             transfers: 0,
             unique_senders: 0,
@@ -66372,7 +66133,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         .iter()
         .map(|(key, window_ms)| IssuanceAcc {
             key: *key,
-            window_ms: *window_ms,
             start_ms: now_ms.saturating_sub(*window_ms),
             mint_count: 0,
             burn_count: 0,
@@ -67028,18 +66788,10 @@ mod explorer_asset_definition_snapshot_tests {
     use super::*;
     use axum::http::StatusCode;
     use http_body_util::BodyExt;
-    use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Execute as _,
-        state::{State, World},
-        sumeragi::network_topology::Topology,
-        tx::AcceptedTransaction,
-    };
+    use iroha_core::{block::BlockBuilder, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute as _, state::{State, World}, sumeragi::network_topology::Topology};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude as dm;
-    use std::{borrow::Cow, sync::Arc};
+    use std::sync::Arc;
     fn checked_snapshot_keypair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
     }
@@ -68118,6 +67870,7 @@ fn asset_definition_alias_binding_for(
         .map(|binding| asset_alias_binding_dto(binding, now_ms))
 }
 /// GET /v1/assets/definitions — List asset definitions as full objects.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_assets_definitions(
     state: Arc<CoreState>,
@@ -68187,6 +67940,7 @@ pub(crate) async fn handle_v1_assets_definitions_with_visibility(
 }
 /// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort and
 /// full asset-definition objects in the response.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_assets_definitions_query(
     state: Arc<CoreState>,
@@ -69456,6 +69210,7 @@ fn nfts_for_filter<'a>(
     )
 }
 /// GET /v1/nfts — List NFTs with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_nfts(
     state: Arc<CoreState>,
@@ -69520,6 +69275,7 @@ pub(crate) async fn handle_v1_nfts_with_visibility(
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
 /// POST /v1/nfts/query — JSON envelope with optional pagination/sort.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_nfts_query(
     state: Arc<CoreState>,
@@ -69724,6 +69480,7 @@ fn rwas_for_filter<'a>(
     )
 }
 /// GET /v1/rwas — List RWA lots with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_rwas(
     state: Arc<CoreState>,
@@ -71051,6 +70808,7 @@ mod subscription_api_tests {
 include!("routing/adapter_filter_tests.rs");
 app_api_items! {
 /// POST /v1/accounts/{account_id}/assets/query — JSON envelope with pagination/sort
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets_query(
     state: Arc<CoreState>,
@@ -71067,6 +70825,7 @@ pub async fn handle_v1_account_assets_query(
     .await
 }
 /// POST assets query with configurable address enforcement.
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets_query_with_policy(
     state: Arc<CoreState>,
@@ -71312,6 +71071,7 @@ fn asset_holder_projection_retained_bytes(item: &AssetHolderListItem) -> usize {
     }
     retained.saturating_add(512)
 }
+#[cfg(test)]
 fn accumulate_asset_holder_quantity(
     map: &mut BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
@@ -71564,6 +71324,7 @@ pub(crate) fn asset_balance_scope_literal(
         }
     }
 }
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_asset_holders(
     state: Arc<CoreState>,
@@ -71671,6 +71432,7 @@ pub(crate) async fn handle_v1_asset_holders_with_visibility(
 }
 /// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
 /// Supports filter fields: `account_id`, `asset`, `asset_alias`, `scope`, and `quantity`.
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_asset_holders_query(
     state: Arc<CoreState>,
@@ -71687,6 +71449,7 @@ pub async fn handle_v1_asset_holders_query(
     )
     .await
 }
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_asset_holders_query_with_app(
     app: Option<crate::SharedAppState>,
@@ -72337,6 +72100,7 @@ async fn asset_holder_projection_query_rows(
         query_source,
     )))
 }
+#[cfg(test)]
 pub(crate) fn query_projection_archive_storage_artifacts(
     archive: &QueryProjectionShardArchive,
 ) -> Result<
@@ -72904,6 +72668,7 @@ pub mod event {
     }
     /// Subscribes `stream` for `events` filtered by filter that is
     /// received through the `stream`
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[iroha_futures::telemetry_future]
     pub async fn handle_events_stream(events: EventsSender, stream: WebSocket) -> eyre::Result<()> {
         handle_events_stream_with_receiver(
@@ -72915,6 +72680,7 @@ pub mod event {
     }
     /// Subscribe a pre-registered receiver to the event stream, ensuring buffered events
     /// emitted during the WebSocket upgrade are not dropped.
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[iroha_futures::telemetry_future]
     pub async fn handle_events_stream_with_receiver(
         mut events_rx: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,

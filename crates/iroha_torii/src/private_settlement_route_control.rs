@@ -166,7 +166,16 @@ pub(crate) enum ControlError {
     UnsafeRoot,
     RootChanged,
     Io(std::io::Error),
-    InvalidCommand(&'static str),
+    InvalidCommand(
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "names the rejected command field for test assertions"
+            )
+        )]
+        &'static str,
+    ),
     NonCanonicalCommand,
     StaleRevision,
     EvidenceCapacity,

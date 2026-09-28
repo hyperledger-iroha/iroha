@@ -3,9 +3,9 @@
     not(all(feature = "fastpq-gpu", target_os = "macos")),
     allow(dead_code)
 )]
+use std::sync::OnceLock;
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
-use std::{env, sync::OnceLock};
 use tracing::{debug, warn};
 const FFT_LANES_ENV: &str = "FASTPQ_METAL_FFT_LANES";
 const FFT_TILE_ENV: &str = "FASTPQ_METAL_FFT_TILE_STAGES";
@@ -127,11 +127,17 @@ pub fn fft_tuning(log_len: u32, exec_width: u32, max_threads: u32) -> FftTuning 
         tile_stage_limit,
     }
 }
+/// Read a Metal tuning override through the debug-only, config-frozen override path.
+///
+/// Release builds never consult the environment; lane and tile tuning affects only
+/// throughput, never proof output.
+fn tuning_env_override(name: &str) -> Option<String> {
+    crate::overrides::guard_env_override(|| crate::overrides::debug_env_string(name))
+}
 fn fft_lane_override() -> Option<u32> {
     *FFT_LANE_OVERRIDE.get_or_init(|| {
-        env::var(FFT_LANES_ENV)
-            .ok()
-            .and_then(|raw| match parse_fft_lane_override(raw.trim()) {
+        tuning_env_override(FFT_LANES_ENV).and_then(|raw| {
+            match parse_fft_lane_override(raw.trim()) {
                 Ok(value) => {
                     debug!(
                         target: "fastpq::metal",
@@ -150,14 +156,14 @@ fn fft_lane_override() -> Option<u32> {
                     );
                     None
                 }
-            })
+            }
+        })
     })
 }
 fn fft_tile_override() -> Option<u32> {
     *FFT_TILE_OVERRIDE.get_or_init(|| {
-        env::var(FFT_TILE_ENV)
-            .ok()
-            .and_then(|raw| match parse_fft_tile_override(raw.trim()) {
+        tuning_env_override(FFT_TILE_ENV).and_then(|raw| {
+            match parse_fft_tile_override(raw.trim()) {
                 Ok(value) => {
                     debug!(
                         target: "fastpq::metal",
@@ -176,7 +182,8 @@ fn fft_tile_override() -> Option<u32> {
                     );
                     None
                 }
-            })
+            }
+        })
     })
 }
 /// Combine heuristics, hardware limits, and env overrides for Poseidon dispatches.
@@ -202,7 +209,7 @@ pub fn poseidon_tuning(exec_width: u32, max_threads: u32) -> PoseidonTuning {
 }
 fn poseidon_lane_override() -> Option<u32> {
     *POSEIDON_LANE_OVERRIDE.get_or_init(|| {
-        env::var(POSEIDON_LANES_ENV).ok().and_then(|raw| {
+        tuning_env_override(POSEIDON_LANES_ENV).and_then(|raw| {
             match parse_poseidon_lane_override(raw.trim()) {
                 Ok(value) => {
                     debug!(

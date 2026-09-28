@@ -1279,7 +1279,6 @@ fn record_taikai_ingest_metrics_updates_histograms() {
         stream_id: "stream-main".into(),
         rendition_id: "1080p".into(),
         segment_sequence: 5,
-        wallclock_unix_ms: 1_702_560_000_000,
         ingest_latency_ms: Some(150),
         live_edge_drift_ms: Some(-37),
     };

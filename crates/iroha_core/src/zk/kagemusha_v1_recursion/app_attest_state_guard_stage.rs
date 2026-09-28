@@ -42,10 +42,6 @@ pub(super) struct AppleAssertionSignatureCellsV1<'a, F: KagemushaPoseidonFieldV1
 /// Copy-bind one original assertion to the same signed subject, policy, State
 /// and Guard cells in a single parity. Invoke identically in Eq and Ep only
 /// after the remaining terminal and issuer relations have been completed.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged monetary assertion fold remains closed")
-)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn constrain_apple_state_guard_assertion_stage_v1<
     F: KagemushaPoseidonFieldV1,

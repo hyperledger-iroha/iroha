@@ -2,6 +2,9 @@
 mod interop_parity;
 #[path = "perf_gate.rs"]
 mod perf_gate;
+// These tests drive the `dev-tools` binary, which Cargo builds only when the
+// feature is enabled.
+#[cfg(feature = "dev-tools")]
 #[path = "simulate_cli.rs"]
 mod simulate_cli;
 use soranet_handshake_harness::verify_fixtures;

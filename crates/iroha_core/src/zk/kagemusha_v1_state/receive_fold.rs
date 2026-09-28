@@ -1,5 +1,6 @@
 //! Canonical host preparation for one KAGEMUSHA `ReceiveFold` credit.
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -7,6 +8,7 @@ use super::{CreditIdV1, DigestV1};
 
 /// Domain separating the canonical KAGEMUSHA V1 receive-credit transcript.
 pub const KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:receive-fold\0";
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Exact byte length of one canonical receive-credit transcript.
 pub const KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1: usize = 16 + 32 + 32 + 32 + 32 + 32 + 32;
 
@@ -63,6 +65,7 @@ impl ReceiveFoldCreditV1 {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     /// Encode the exact canonical receive-credit transcript.
     #[must_use]
     pub fn canonical_transcript_bytes(self) -> [u8; KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1] {
@@ -78,6 +81,7 @@ impl ReceiveFoldCreditV1 {
     }
 }
 
+#[cfg(test)]
 /// Exact input for the singular consumed-credit replay-root update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReceiveFoldReplayRootUpdateInputV1 {
@@ -87,12 +91,14 @@ pub struct ReceiveFoldReplayRootUpdateInputV1 {
     pub envelope_digest: DigestV1,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Validated fixed-shape input for one `ReceiveFold` transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReceiveFoldV1 {
     credit: ReceiveFoldCreditV1,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl ReceiveFoldV1 {
     /// Validate and construct one singular receive fold.
     pub fn try_new(credit: ReceiveFoldCreditV1) -> Result<Self, ReceiveFoldErrorV1> {
@@ -112,12 +118,14 @@ impl ReceiveFoldV1 {
         self.credit.amount
     }
 
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     /// Encode the fixed receive-credit transcript.
     #[must_use]
     pub fn canonical_body_bytes(&self) -> [u8; KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1] {
         self.credit.canonical_transcript_bytes()
     }
 
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     /// Hash the domain and singular credit transcript.
     #[must_use]
     pub fn canonical_transcript_digest(&self) -> DigestV1 {
@@ -127,6 +135,7 @@ impl ReceiveFoldV1 {
         hasher.finalize().into()
     }
 
+    #[cfg(test)]
     /// Return the only replay-root update consumed by this operation.
     #[must_use]
     pub const fn replay_root_update_input(&self) -> ReceiveFoldReplayRootUpdateInputV1 {

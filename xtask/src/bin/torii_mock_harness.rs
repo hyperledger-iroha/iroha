@@ -1,7 +1,6 @@
 #![allow(clippy::print_stdout)]
 use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -308,8 +307,8 @@ impl ScenarioSet {
     fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let file: ScenarioFile =
-            toml::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))?;
+        let file = ScenarioFile::parse(&raw)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
         let mut entries = HashMap::new();
         for (index, record) in file.scenario.into_iter().enumerate() {
             let key = record.name.trim().to_string();
@@ -329,26 +328,82 @@ impl ScenarioSet {
             .ok_or_else(|| eyre!("scenario '{}' not found in config", name))
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct ScenarioFile {
-    #[serde(default)]
     scenario: Vec<ScenarioRecord>,
 }
-#[derive(Debug, Deserialize)]
+impl ScenarioFile {
+    /// Parse `[[scenario]]` tables; unknown keys are ignored and omitted keys take defaults.
+    fn parse(raw: &str) -> Result<Self> {
+        let table: toml::Table = toml::from_str(raw)?;
+        let scenario = match table.get("scenario") {
+            None => Vec::new(),
+            Some(toml::Value::Array(records)) => records
+                .iter()
+                .map(ScenarioRecord::parse)
+                .collect::<Result<_>>()?,
+            Some(_) => bail!("`scenario` must be an array of tables"),
+        };
+        Ok(Self { scenario })
+    }
+}
+#[derive(Debug)]
 struct ScenarioRecord {
     name: String,
-    #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
     tests: Vec<String>,
-    #[serde(default)]
     runner: Option<String>,
-    #[serde(default)]
     fixture: Option<String>,
-    #[serde(default)]
     env: HashMap<String, String>,
 }
 impl ScenarioRecord {
+    fn parse(value: &toml::Value) -> Result<Self> {
+        let record = value
+            .as_table()
+            .ok_or_else(|| eyre!("scenario entries must be tables"))?;
+        let optional_string = |key: &str| -> Result<Option<String>> {
+            match record.get(key) {
+                None => Ok(None),
+                Some(toml::Value::String(text)) => Ok(Some(text.clone())),
+                Some(_) => bail!("scenario `{key}` must be a string"),
+            }
+        };
+        let name = optional_string("name")?.ok_or_else(|| eyre!("scenario entry lacks `name`"))?;
+        let tests = match record.get("tests") {
+            None => Vec::new(),
+            Some(toml::Value::Array(items)) => items
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| eyre!("scenario `tests` entries must be strings"))
+                })
+                .collect::<Result<_>>()?,
+            Some(_) => bail!("scenario `tests` must be an array of strings"),
+        };
+        let env = match record.get("env") {
+            None => HashMap::new(),
+            Some(toml::Value::Table(vars)) => vars
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|text| (key.clone(), text.to_owned()))
+                        .ok_or_else(|| eyre!("scenario `env.{key}` must be a string"))
+                })
+                .collect::<Result<_>>()?,
+            Some(_) => bail!("scenario `env` must be a table of strings"),
+        };
+        Ok(Self {
+            name,
+            description: optional_string("description")?,
+            tests,
+            runner: optional_string("runner")?,
+            fixture: optional_string("fixture")?,
+            env,
+        })
+    }
+
     fn into_entry(self) -> ScenarioEntry {
         let tests = sanitize_tests(self.tests);
         let runner =
@@ -408,7 +463,7 @@ tests = ["FooTest", " BarTest "]
 [[scenario]]
 name = "fallback"
 "#;
-        let file: ScenarioFile = toml::from_str(toml).expect("parse");
+        let file = ScenarioFile::parse(toml).expect("parse");
         let entries: Vec<_> = file
             .scenario
             .into_iter()
@@ -431,7 +486,7 @@ name = "custom"
 runner = "bin/run.sh"
 fixture = "/tmp/fixture.json"
 "#;
-        let file: ScenarioFile = toml::from_str(toml).expect("parse");
+        let file = ScenarioFile::parse(toml).expect("parse");
         let entries: Vec<_> = file
             .scenario
             .into_iter()

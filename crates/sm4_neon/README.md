@@ -18,7 +18,8 @@ Overview
 - Key schedule and round functions are implemented with NEON table lookups that
   mirror the SM4 S‑Box and rotation flow from GM/T 0002‑2012.
 - A scalar parity test runs when the crate is compiled for `aarch64` to ensure
-  deterministic behaviour against `sm4`’s pure Rust implementation.
+  deterministic behaviour against the crate's own portable GM/T 0002‑2012
+  reference rounds.
 
 Safety
 ------

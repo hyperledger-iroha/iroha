@@ -51,6 +51,8 @@ use crate::privacy_engines::prover_randomness::{
     HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use crate::privacy_engines::transparent_stark::GOLDILOCKS_GENERATOR_V1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
     goldilocks_evaluate_coset_v1, grind_nonce_v1, masked_trace_lde_column_v1,
 };
@@ -58,11 +60,11 @@ use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},
     prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
-        PolynomialAirFieldV1, PrivacyOuterDigestV1, TransparentStarkErrorV1,
-        TransparentTranscriptV1, append_u16_v1, append_u32_v1, append_u64_v1, goldilocks_ifft_v1,
-        goldilocks_primitive_root_v1, privacy_outer_digest_frame_v1,
-        transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
+        GoldilocksFieldV1 as F, GoldilocksFp4V1 as E, PolynomialAirFieldV1, PrivacyOuterDigestV1,
+        TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1, append_u32_v1,
+        append_u64_v1, goldilocks_ifft_v1, goldilocks_primitive_root_v1,
+        privacy_outer_digest_frame_v1, transparent_stark_zk_mask_geometry_v1,
+        verify_grinding_nonce_v1,
     },
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]

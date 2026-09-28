@@ -97,16 +97,11 @@ pub(super) fn exact_pinned_context_descendant_tree_v1(
     external_spool: &str,
     cross_field: &str,
 ) -> bool {
-    const ROOT_CHILDREN: &[(&str, &str)] = &[
-        (
-            "context_authority_v1",
-            "phase23_rns_link_context_authority_v1.rs",
-        ),
-        ("external_source", "phase23_rns_link_external_source.rs"),
-        ("cross_field_v2", "phase23_rns_link_cross_field_v2.rs"),
-    ];
-    const EXTERNAL_CHILDREN: &[(&str, &str)] =
-        &[("confidential_spool", "phase23_rns_link_external_spool.rs")];
+    // The context authority, the cross-field prerequisite and the confidential spool
+    // have no production consumer yet; their `cfg(test)` declarations are skipped.
+    const ROOT_CHILDREN: &[(&str, &str)] =
+        &[("external_source", "phase23_rns_link_external_source.rs")];
+    const EXTERNAL_CHILDREN: &[(&str, &str)] = &[];
     // These pins bind the reviewed source closure; the independent structural
     // checks below still reject newly introduced production mint/expansion paths.
     let authority_pin = (
@@ -121,11 +116,11 @@ pub(super) fn exact_pinned_context_descendant_tree_v1(
         (
             external_source,
             (
-                41_016,
+                41_770,
                 [
-                    0xa9, 0x35, 0x9a, 0xe6, 0x5f, 0xb1, 0xca, 0x65, 0x10, 0xb7, 0x59, 0x6c, 0xbd,
-                    0x55, 0xcf, 0x70, 0xa9, 0x1b, 0xe6, 0xe1, 0x60, 0x35, 0x81, 0xac, 0x05, 0xff,
-                    0x4a, 0xf1, 0x90, 0x56, 0x8b, 0xd8,
+                    0x62, 0x1e, 0xa7, 0x23, 0x26, 0xbd, 0x60, 0xf9, 0xaf, 0xcc, 0x1a, 0x6c, 0xd8,
+                    0x3d, 0x84, 0xd1, 0x0d, 0xc5, 0x48, 0x85, 0xa2, 0x72, 0x6b, 0x7c, 0x10, 0x2d,
+                    0xd4, 0x1e, 0xe3, 0x9e, 0x3b, 0x19,
                 ],
             ),
             EXTERNAL_CHILDREN,
@@ -249,37 +244,47 @@ fn inspect(ready: bool) -> bool {
         assert!(!current_context_leaf_is_private_v1(&mutant));
     }
     for mutant in [
+        // The context authority and every import of it are test-only; a mutant must
+        // both drop the gate and widen or alias the import to become a production mint.
         root.replace(
-            "pub(super) use context_authority_v1::",
+            "#[cfg(test)]\npub(super) use context_authority_v1::",
             "pub(crate) use context_authority_v1::",
         ),
         root.replace(
-            "use context_authority_v1::ZkAmsPhase23RnsLinkContextV1;",
-            "use context_authority_v1::ZkAmsPhase23RnsLinkContextV1 as MintAlias;",
+            "#[cfg(test)]\npub(super) use context_authority_v1::ZkAmsPhase23RnsLinkContextV1;",
+            "pub(super) use context_authority_v1::ZkAmsPhase23RnsLinkContextV1 as MintAlias;",
         ),
         external.replace(
-            "ZkAmsPhase23RnsLinkContextV1,",
-            "ZkAmsPhase23RnsLinkContextV1 as MintAlias,",
+            "#[cfg(test)]\nuse super::ZkAmsPhase23RnsLinkContextV1;",
+            "use super::ZkAmsPhase23RnsLinkContextV1 as MintAlias;",
         ),
     ] {
+        assert!(mutant != root && mutant != external);
         assert!(!descendant_module_has_no_context_mint_v1(&mutant));
     }
-    let external_children = [("confidential_spool", "phase23_rns_link_external_spool.rs")];
+    // The confidential spool child is test-only until the external writer is wired.
+    let external_children: [(&str, &str); 0] = [];
     assert!(exact_production_child_modules_v1(
         external,
         &external_children
     ));
     assert!(exact_production_child_modules_v1(spool, &[]));
+    // Dropping the spool's test gate (with or without other edits) must be rejected.
+    let gated_spool = "#[cfg(test)]\n#[path = \"phase23_rns_link_external_spool.rs\"]\n";
     for mutant in [
         external.replace(
-            "mod confidential_spool;",
-            "pub(super) mod confidential_spool;",
+            gated_spool,
+            "#[path = \"phase23_rns_link_external_spool.rs\"]\n",
         ),
         external.replace(
-            "mod confidential_spool;",
-            "#[cfg(any())] mod confidential_spool;",
+            gated_spool,
+            "#[path = \"phase23_rns_link_external_spool.rs\"]\npub(super) ",
         ),
-        external.replace("phase23_rns_link_external_spool.rs", "unowned_spool.rs"),
+        external.replace(
+            gated_spool,
+            "#[cfg(any())]\n#[path = \"phase23_rns_link_external_spool.rs\"]\n",
+        ),
+        external.replace(gated_spool, "#[path = \"unowned_spool.rs\"]\n"),
         format!("{external}\n#[path = \"unowned.rs\"] mod unowned;"),
     ] {
         assert!(mutant != external);

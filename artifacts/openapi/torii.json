@@ -6695,7 +6695,7 @@
             ]
           }
         ],
-        "description": "Prepare an exact QueuePlanSynced contract transaction or submit its complete detached signature envelope. Both operations require canonical account HTTP authentication. Preparation quotes once after fixing admission intent; submission preserves and validates the retained payload and quoted fee without re-quoting.",
+        "description": "Prepare an exact single-route Ordinary contract transaction or submit its complete detached signature envelope. Both operations require canonical account HTTP authentication. Preparation resolves the actual route and quotes once after fixing admission intent; submission preserves and validates the retained payload and quoted fee without re-quoting.",
         "properties": {
           "authority": {
             "description": "Canonical transaction authority.",
@@ -6794,7 +6794,7 @@
           },
           "transaction_payload_b64": {
             "contentEncoding": "base64",
-            "description": "Exact canonical TransactionPayload bytes returned by preparation. Required with both signature fields; QueuePlanSynced intent, invocation, network, authority, timestamp, TTL, metadata and exact quoted fee must remain unchanged.",
+            "description": "Exact canonical TransactionPayload bytes returned by preparation. Required with both signature fields; Ordinary intent, invocation, network, authority, timestamp, TTL, metadata and exact quoted fee must remain unchanged.",
             "minLength": 1,
             "pattern": "^[A-Za-z0-9+/]+={0,2}$",
             "type": [
@@ -64722,7 +64722,7 @@
     },
     "/v1/contracts/call": {
       "post": {
-        "description": "Prepare or submit a deployed contract call through canonical account HTTP authentication. Preparation fixes QueuePlanSynced admission before quoting and returns the exact payload plus signing message. For detached submit, retain the prepared transaction_payload_b64, creation_time_ms, optional TTL selection, original target, payload, metadata and quoted fee_payment; send public_key_hex and signature_b64 together. Signed submissions are checked byte-for-byte and never re-quoted. HTTP 200 with submitted=true is returned only after strict durable certified admission; it does not prove local queue presence or Applied finality. Missing committee/P2P authority fails without local enqueue. Omitted/null TTL selects a 100000ms payload TTL while the response echoes null.",
+        "description": "Prepare or submit a deployed contract call through canonical account HTTP authentication. Preparation fixes Ordinary admission, requires one actual resolved route before quoting, and returns the exact payload plus signing message. For detached submit, retain the prepared transaction_payload_b64, creation_time_ms, optional TTL selection, original target, payload, metadata and quoted fee_payment; send public_key_hex and signature_b64 together. Signed submissions are checked byte-for-byte and never re-quoted. HTTP 200 with submitted=true is returned only after durable single-route queue admission; Applied finality must be observed separately. Unsupported admission intent or multi-route work is rejected before any durable pending promise. Omitted/null TTL selects a 100000ms payload TTL while the response echoes null.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -64742,7 +64742,7 @@
                 }
               }
             },
-            "description": "Exact unsigned preparation or durable certified-admission receipt; pipeline_status is explicitly null.",
+            "description": "Exact unsigned preparation or durable single-route admission receipt; pipeline_status is explicitly null.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64755,7 +64755,7 @@
             }
           },
           "400": {
-            "description": "Malformed request, partial detached envelope, reserved metadata, invalid signature, or retained payload mismatch."
+            "description": "Malformed request, partial detached envelope, reserved metadata, invalid signature, retained payload mismatch, or unsupported transaction admission or multi-route work."
           },
           "401": {
             "description": "Missing or invalid canonical account HTTP authentication."
@@ -64764,13 +64764,13 @@
             "description": "Authenticated authority lacks the required permission."
           },
           "409": {
-            "description": "Contract lifecycle or certified admission conflict."
+            "description": "Contract lifecycle or transaction admission conflict."
           },
           "429": {
             "description": "Contract request rate limit exceeded."
           },
           "503": {
-            "description": "Durable certified admission is unavailable; no local enqueue or submitted success is asserted."
+            "description": "Durable single-route admission is unavailable; no submitted success is asserted."
           }
         },
         "security": [

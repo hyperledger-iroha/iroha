@@ -543,35 +543,30 @@ fn build_object_body_or_default_rejects_non_object_body() {
     assert!(err.contains("`body` must be an object"));
 }
 #[test]
-fn build_object_body_or_flat_shortcuts_collects_top_level_fields() {
+fn build_required_object_body_ignores_top_level_fields() {
     let args = norito::json!({
         "authority": TEST_ACCOUNT_I105,
         "namespace": "nexus",
         "headers": { "x-test": "1" }
     });
-    let body = build_object_body_or_flat_shortcuts(
-        args.as_object().expect("object"),
-        &["body", "headers", "accept"],
-    )
-    .expect("body");
-    let body = materialize_borrowed_body(&body);
-    let body = body.as_object().expect("object");
-    assert_eq!(
-        body.get("authority").and_then(Value::as_str),
-        Some(TEST_ACCOUNT_I105)
-    );
-    assert_eq!(body.get("namespace").and_then(Value::as_str), Some("nexus"));
-    assert!(body.get("headers").is_none());
+    let err = build_required_object_body(args.as_object().expect("object"))
+        .expect_err("top-level fields never form a request body");
+    assert!(err.contains("`body` is required"));
 }
 #[test]
-fn build_object_body_or_flat_shortcuts_rejects_missing_body_and_shortcuts() {
+fn build_required_object_body_borrows_the_body_object() {
     let args = norito::json!({
+        "body": { "namespace": "nexus" },
         "headers": { "x-test": "1" }
     });
-    let err = build_object_body_or_flat_shortcuts(
-        args.as_object().expect("object"),
-        &["body", "headers", "accept"],
-    )
-    .expect_err("should reject empty payload");
-    assert!(err.contains("`body` is required"));
+    let body = build_required_object_body(args.as_object().expect("object")).expect("body");
+    let body = materialize_borrowed_body(&body);
+    assert_eq!(body, norito::json!({ "namespace": "nexus" }));
+}
+#[test]
+fn build_required_object_body_rejects_non_object_body() {
+    let args = norito::json!({ "body": [1, 2, 3] });
+    let err = build_required_object_body(args.as_object().expect("object"))
+        .expect_err("array body is rejected");
+    assert!(err.contains("`body` must be an object"));
 }

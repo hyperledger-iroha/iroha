@@ -7,11 +7,14 @@
 //! unavailable until that separate theorem and its concrete loss are pinned.
 use super::{
     JINDO_RING_DEGREE_V1,
-    parameters::JINDO_PARALLEL_REPETITIONS_V1,
     ring::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, is_prime_modulus_v1,
     },
-    transcript::{JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1, JindoSignedMonomialChallengeV1},
+    transcript::JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1,
+};
+#[cfg(test)]
+use super::{
+    parameters::JINDO_PARALLEL_REPETITIONS_V1, transcript::JindoSignedMonomialChallengeV1,
 };
 use sha3::{
     Shake256,
@@ -239,6 +242,7 @@ fn pow_mod_v1(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     result
 }
 
+#[cfg(test)]
 /// Sealed evidence that the complete Jindo construction, including its exact
 /// qROM Fiat--Shamir transform, reaches the release security target.
 ///
@@ -249,6 +253,7 @@ pub struct JindoSecurityCertificateV1 {
     _sealed: (),
 }
 
+#[cfg(test)]
 /// Reason the compiled Jindo profile cannot issue a production certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum JindoSecurityCertificateErrorV1 {
@@ -270,12 +275,14 @@ pub enum JindoSecurityCertificateErrorV1 {
     },
 }
 
+#[cfg(test)]
 impl From<JindoUnitDifferenceCertificateErrorV1> for JindoSecurityCertificateErrorV1 {
     fn from(value: JindoUnitDifferenceCertificateErrorV1) -> Self {
         Self::UnitDifference(value)
     }
 }
 
+#[cfg(test)]
 /// Request the complete theorem-backed security certificate.
 ///
 /// This first checks the exact algebraic unit certificate, then fails closed
@@ -299,6 +306,7 @@ pub fn jindo_security_certificate_v1()
     )
 }
 
+#[cfg(test)]
 /// Pairwise diagnostic failure for signed-monomial challenges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum JindoChallengePairErrorV1 {
@@ -307,6 +315,7 @@ pub enum JindoChallengePairErrorV1 {
     Identical,
 }
 
+#[cfg(test)]
 /// Check a distinct signed-monomial pair against all compiled ring factors.
 ///
 /// The production unit certificate checks the entire set more efficiently by

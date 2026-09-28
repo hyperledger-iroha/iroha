@@ -11,7 +11,10 @@
 //! - The address of a key is `keccak256(X ‖ Y)[12..32]`; verifiers mask a recovered address
 //!   word to its low 160 bits before any comparison.
 
-use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
+use iroha_crypto::EcdsaSecp256k1Sha256;
+#[cfg(test)]
+use iroha_crypto::KeyGenOption;
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 
 use super::constants::{SECP256K1_HALF_N, SECP256K1_N, SIGNATURE_BYTES};
@@ -63,6 +66,7 @@ unit_error! {
 // 256-bit big-endian helpers
 // ---------------------------------------------------------------------------------------------
 
+#[cfg(test)]
 fn be_sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
     let mut out = [0_u8; 32];
     let mut borrow = 0_i16;
@@ -172,7 +176,10 @@ fn split_rs(signature: &[u8; 65]) -> ([u8; 32], [u8; 32]) {
 /// # Errors
 ///
 /// Returns a form error, [`SignatureError::RecoveryFailed`] or [`SignatureError::ZeroAddress`].
-pub fn recover_address(digest: &[u8; 32], signature: &[u8; 65]) -> Result<[u8; 20], SignatureError> {
+pub fn recover_address(
+    digest: &[u8; 32],
+    signature: &[u8; 65],
+) -> Result<[u8; 20], SignatureError> {
     check_signature_form(signature)?;
     let key = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(digest, signature)
         .map_err(|_| SignatureError::RecoveryFailed)?;
@@ -207,6 +214,7 @@ pub fn verify_signature(
 /// Normalize a signature to low-S: if `s > HALF_N`, replace it with `N − s` and flip the
 /// y-parity bit of `v`. Other components are returned unchanged.
 #[must_use]
+#[cfg(test)]
 pub fn normalize_low_s(signature: &[u8; 65]) -> [u8; 65] {
     let (_, s) = split_rs(signature);
     if s <= SECP256K1_HALF_N || s >= SECP256K1_N {
@@ -242,10 +250,8 @@ impl SignatureSetV1 {
     ///
     /// Returns [`SignatureError::BadSignerIndex`] for a repeated index or one `≥ n`, and
     /// [`SignatureError::RosterTooLarge`] for `n > 32`.
-    pub fn from_signers(
-        n: usize,
-        signers: &[(usize, [u8; 65])],
-    ) -> Result<Self, SignatureError> {
+    #[cfg(test)]
+    pub fn from_signers(n: usize, signers: &[(usize, [u8; 65])]) -> Result<Self, SignatureError> {
         if n > 32 {
             return Err(SignatureError::RosterTooLarge);
         }
@@ -346,6 +352,7 @@ pub fn verify_signature_set(
 ///
 /// Returns [`SignatureError::InvalidSecret`], [`SignatureError::SigningFailed`],
 /// [`SignatureError::EntropyUnavailable`] or [`SignatureError::SigningExhausted`].
+#[cfg(test)]
 pub fn sign_digest(secret: &[u8; 32], digest: &[u8; 32]) -> Result<[u8; 65], SignatureError> {
     sign_digest_with(secret, digest, rfc6979_sign, fresh_entropy)
 }
@@ -358,6 +365,7 @@ pub fn sign_digest(secret: &[u8; 32], digest: &[u8; 32]) -> Result<[u8; 65], Sig
 /// # Errors
 ///
 /// See [`sign_digest`]; errors of the hooks are propagated.
+#[cfg(test)]
 pub fn sign_digest_with<A, E>(
     secret: &[u8; 32],
     digest: &[u8; 32],
@@ -396,6 +404,7 @@ where
 /// # Errors
 ///
 /// Returns [`SignatureError::InvalidSecret`] or [`SignatureError::SigningFailed`].
+#[cfg(test)]
 pub fn rfc6979_sign(
     secret: &[u8; 32],
     digest: &[u8; 32],
@@ -417,6 +426,7 @@ pub fn rfc6979_sign(
 /// # Errors
 ///
 /// Returns [`SignatureError::EntropyUnavailable`] when the OS RNG fails.
+#[cfg(test)]
 pub fn fresh_entropy() -> Result<[u8; 32], SignatureError> {
     let (_, key) = EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::Random)
         .map_err(|_| SignatureError::EntropyUnavailable)?;
@@ -427,6 +437,7 @@ pub fn fresh_entropy() -> Result<[u8; 32], SignatureError> {
 }
 
 /// HMAC-SHA256 with a 32-byte key.
+#[cfg(test)]
 fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
     let mut inner_pad = [0x36_u8; 64];
     let mut outer_pad = [0x5c_u8; 64];
@@ -451,11 +462,13 @@ fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
 /// RFC 6979 HMAC-DRBG over SHA-256, seeded like the `rfc6979` crate that k256 uses:
 /// entropy input `x` (the secret), nonce `h` (the unreduced 32-byte prehash) and additional
 /// data `k'`.
+#[cfg(test)]
 struct HmacDrbg {
     k: [u8; 32],
     v: [u8; 32],
 }
 
+#[cfg(test)]
 impl HmacDrbg {
     fn new(secret: &[u8; 32], digest: &[u8; 32], additional: &[u8]) -> Self {
         let mut drbg = Self {
@@ -478,6 +491,7 @@ impl HmacDrbg {
     }
 }
 
+#[cfg(test)]
 impl Drop for HmacDrbg {
     fn drop(&mut self) {
         wipe(&mut self.k);
@@ -488,6 +502,7 @@ impl Drop for HmacDrbg {
 /// ECDSA over secp256k1 with an RFC 6979 nonce that includes `additional` data (§3.6 of the
 /// RFC), producing the same `r ‖ s ‖ 27 + recovery_id` form (low-S) as
 /// `EcdsaSecp256k1Sha256::sign_prehash_recoverable`, which it equals for empty additional data.
+#[cfg(test)]
 fn sign_with_additional_data(
     secret: &[u8; 32],
     digest: &[u8; 32],
@@ -517,7 +532,11 @@ fn sign_with_additional_data(
         let mut x = [0_u8; 32];
         x.copy_from_slice(&point[1..33]);
         let x_reduced = x >= SECP256K1_N;
-        let r = if x_reduced { be_sub(&x, &SECP256K1_N) } else { x };
+        let r = if x_reduced {
+            be_sub(&x, &SECP256K1_N)
+        } else {
+            x
+        };
         if is_zero(&r) {
             continue;
         }
@@ -704,7 +723,10 @@ mod tests {
         let mut bad_v = good;
         for v in [0_u8, 1, 26, 29, 30, 255] {
             bad_v[64] = v;
-            assert_eq!(check_signature_form(&bad_v), Err(SignatureError::BadRecoveryByte));
+            assert_eq!(
+                check_signature_form(&bad_v),
+                Err(SignatureError::BadRecoveryByte)
+            );
         }
         let mut zero_r = good;
         zero_r[..32].copy_from_slice(&[0; 32]);
@@ -734,8 +756,10 @@ mod tests {
     fn signature_sets() {
         let message = digest(7);
         let keys: Vec<[u8; 32]> = (10..14).map(secret).collect();
-        let mut members: Vec<[u8; 20]> =
-            keys.iter().map(|key| address_of_secret(key).unwrap()).collect();
+        let mut members: Vec<[u8; 20]> = keys
+            .iter()
+            .map(|key| address_of_secret(key).unwrap())
+            .collect();
         members.sort_unstable();
         members[0] = [0; 20];
         let key_of = |address: &[u8; 20]| {
@@ -746,7 +770,12 @@ mod tests {
         };
         let signers: Vec<(usize, [u8; 65])> = [3_usize, 1, 2]
             .iter()
-            .map(|index| (*index, sign_digest(&key_of(&members[*index]), &message).unwrap()))
+            .map(|index| {
+                (
+                    *index,
+                    sign_digest(&key_of(&members[*index]), &message).unwrap(),
+                )
+            })
             .collect();
         let set = SignatureSetV1::from_signers(4, &signers).unwrap();
         assert_eq!(set.signer_bitmap, 0b1110);
@@ -761,12 +790,22 @@ mod tests {
         );
         // Bit >= n.
         assert_eq!(
-            verify_signature_set(&message, &members, set.signer_bitmap | 0b1_0000, &set.signatures),
+            verify_signature_set(
+                &message,
+                &members,
+                set.signer_bitmap | 0b1_0000,
+                &set.signatures
+            ),
             Err(SignatureError::BitmapOutOfRange)
         );
         // Wrong length.
         assert_eq!(
-            verify_signature_set(&message, &members, set.signer_bitmap, &set.signatures[..130]),
+            verify_signature_set(
+                &message,
+                &members,
+                set.signer_bitmap,
+                &set.signatures[..130]
+            ),
             Err(SignatureError::BadLength)
         );
         // A bit addressing the zero member.

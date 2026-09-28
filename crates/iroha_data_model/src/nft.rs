@@ -48,7 +48,6 @@ mod model {
     #[display("{name}${domain}")]
     #[debug("{name}${domain}")]
     #[getset(get = "pub")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::nft::model::NftId")]
     pub struct NftId {
@@ -73,7 +72,6 @@ mod model {
     #[registrable_builder(schema_name = "iroha_data_model::nft::model::NewNft")]
     #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
     #[display("{id}")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::nft::model::Nft")]
     pub struct Nft {

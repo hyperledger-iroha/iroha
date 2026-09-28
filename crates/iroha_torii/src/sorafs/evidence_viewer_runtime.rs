@@ -1,7 +1,7 @@
 //! Finalized-state adapter for the production SFM-4b3 evidence viewer.
 use iroha_core::{
     smartcontracts::ValidSingularQuery,
-    state::{State, StateReadOnly, WorldReadOnly, WorldStateSnapshot},
+    state::{State, StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::{
     account::AccountId, query::sorafs::prelude::FindSorafsModerationCase, role::RoleId,

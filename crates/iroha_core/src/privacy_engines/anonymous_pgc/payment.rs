@@ -410,11 +410,6 @@ impl VerifiedAnonymousPgcPaymentEffectV1 {
     pub fn next_balance_ciphertexts(&self) -> &[TwistedElGamalCiphertextV1] {
         &self.next_balance_ciphertexts
     }
-    /// Consume the verified effect.
-    #[must_use]
-    pub fn into_next_balance_ciphertexts(self) -> Vec<TwistedElGamalCiphertextV1> {
-        self.next_balance_ciphertexts
-    }
 }
 impl AnonymousPgcPaymentProofV1 {
     /// Encode this proof as canonical Norito.

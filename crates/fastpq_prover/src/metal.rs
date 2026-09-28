@@ -38,9 +38,10 @@
 #[path = "metal_digest384.rs"]
 pub(crate) mod digest384;
 
+#[cfg(test)]
+use crate::bn254;
 use crate::{
     backend::GpuBackend,
-    bn254,
     bn254_poseidon::Bn254PoseidonBatchSlice,
     bn254_poseidon_params::{
         BN254_LIMBS, BN254_POSEIDON_WIDTH, Bn254PoseidonWidth3Params, bn254_limbs_to_bytes,
@@ -55,7 +56,9 @@ use crate::{
 };
 use block::{Block, ConcreteBlock};
 use fastpq_isi::poseidon::STATE_WIDTH;
+#[cfg(test)]
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
+#[cfg(test)]
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 use metal::{
     Buffer, CommandBuffer, CommandBufferRef, CommandQueue, CommandQueueRef, CompileOptions,
@@ -95,7 +98,9 @@ const POSEIDON_HASH_ROWS_KERNEL: &str = "poseidon_hash_rows";
 const FFT_KERNEL: &str = "fastpq_fft_columns";
 const LDE_KERNEL: &str = "fastpq_lde_columns";
 const POST_TILE_KERNEL: &str = "fastpq_fft_post_tiling";
+#[cfg(test)]
 const BN254_FFT_KERNEL: &str = "bn254_fft_columns";
+#[cfg(test)]
 const BN254_LDE_KERNEL: &str = "bn254_lde_columns";
 const BN254_POSEIDON_HASH_KERNEL: &str = "bn254_poseidon_hash_words";
 #[cfg(test)]
@@ -129,6 +134,7 @@ const MAX_BUFFER_POOL_PAGES_PER_BUFFER: usize = 1_024;
 const MAX_BUFFER_POOL_CACHED_PAGES: usize = 4_096;
 const MAX_RETAINED_DISPATCH_TICKETS: usize = 16;
 const MAX_RETAINED_TELEMETRY_SAMPLES: usize = 4_096;
+#[cfg(test)]
 const BN254_TWIDDLE_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const GOLDILOCKS_TWIDDLE_CACHE_MAX_ENTRIES: usize = 64;
 // Metal's bytes-no-copy API requires both ends of the wrapped region to be
@@ -182,6 +188,7 @@ static LAST_LDE_TILE_LIMIT: AtomicU32 = AtomicU32::new(0);
 static MAX_IN_FLIGHT_ENV_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
 static THREADGROUP_ENV_OVERRIDE: OnceLock<Option<u64>> = OnceLock::new();
 static DISPATCH_TRACE_ENV: OnceLock<bool> = OnceLock::new();
+#[cfg(test)]
 /// Return `GpuError::Unsupported` when Metal is unavailable; otherwise load
 /// the BN254 Poseidon word-batch pipeline used by FASTPQ transcript hashing.
 pub(crate) fn bn254_status() -> MetalResult<()> {
@@ -192,6 +199,7 @@ pub(crate) fn bn254_status() -> MetalResult<()> {
     let _ = &ctx.bn254_poseidon_hash;
     Ok(())
 }
+#[cfg(test)]
 /// Pending BN254 Metal FFT dispatch.
 ///
 /// WP2-C will replace this with a real kernel-backed guard when the Metal
@@ -199,6 +207,7 @@ pub(crate) fn bn254_status() -> MetalResult<()> {
 pub(crate) struct PendingBn254Fft<'a> {
     pending: Option<PendingColumns<'a>>,
 }
+#[cfg(test)]
 impl<'a> PendingBn254Fft<'a> {
     fn empty() -> Self {
         Self { pending: None }
@@ -216,6 +225,7 @@ impl<'a> PendingBn254Fft<'a> {
         Ok(())
     }
 }
+#[cfg(test)]
 pub fn bn254_fft_columns(columns: &mut [Vec<u64>], log_size: u32) -> MetalResult<()> {
     bn254_validate_log(log_size)?;
     if columns.is_empty() {
@@ -223,6 +233,7 @@ pub fn bn254_fft_columns(columns: &mut [Vec<u64>], log_size: u32) -> MetalResult
     }
     bn254_fft_columns_async(columns, log_size)?.wait()
 }
+#[cfg(test)]
 /// Enqueue a BN254 FFT on the Metal backend.
 pub(crate) fn bn254_fft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
@@ -235,12 +246,14 @@ pub(crate) fn bn254_fft_columns_async<'a>(
     let pending = dispatch_bn254_fft_columns(columns, log_size)?;
     Ok(PendingBn254Fft::new(pending))
 }
+#[cfg(test)]
 /// Pending BN254 Metal LDE dispatch.
 ///
 /// Replaced by real pipeline once BN254 kernels ship.
 pub(crate) struct PendingBn254Lde {
     pending: Option<PendingLde>,
 }
+#[cfg(test)]
 impl PendingBn254Lde {
     fn empty() -> Self {
         Self { pending: None }
@@ -259,6 +272,7 @@ impl PendingBn254Lde {
         }
     }
 }
+#[cfg(test)]
 pub fn bn254_lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
@@ -271,6 +285,7 @@ pub fn bn254_lde_columns(
     }
     bn254_lde_columns_async(coeffs, trace_log, blowup_log, coset)?.wait()
 }
+#[cfg(test)]
 fn bn254_smoke_test() -> MetalResult<()> {
     // Minimal FFT check to prove BN254 kernels are reachable.
     const FFT_LOG: u32 = 3;
@@ -295,6 +310,7 @@ fn bn254_smoke_test() -> MetalResult<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 /// Enqueue a BN254 LDE on the Metal backend.
 pub(crate) fn bn254_lde_columns_async(
     coeffs: &[Vec<u64>],
@@ -309,6 +325,7 @@ pub(crate) fn bn254_lde_columns_async(
     let pending = dispatch_bn254_lde_columns(coeffs, trace_log, blowup_log, coset)?;
     Ok(PendingBn254Lde::new(pending))
 }
+#[cfg(test)]
 fn dispatch_bn254_fft_columns<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
@@ -413,6 +430,7 @@ fn dispatch_bn254_fft_columns<'a>(
         rollback,
     ))
 }
+#[cfg(test)]
 fn dispatch_bn254_lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
@@ -2388,10 +2406,12 @@ impl TwiddleCache {
         Ok(buffer)
     }
 }
+#[cfg(test)]
 struct Bn254TwiddleCache {
     buffers: HashMap<u32, (Buffer, u64)>,
     bytes: u64,
 }
+#[cfg(test)]
 impl Bn254TwiddleCache {
     fn new() -> Self {
         Self {
@@ -2426,10 +2446,12 @@ struct MetalPipelines {
     fft: ComputePipelineState,
     lde: ComputePipelineState,
     post_tile: ComputePipelineState,
+    #[cfg(test)]
     bn254_fft: ComputePipelineState,
+    #[cfg(test)]
     bn254_lde: ComputePipelineState,
-    bn254_poseidon_hash: ComputePipelineState,
     twiddle_cache: Mutex<TwiddleCache>,
+    #[cfg(test)]
     bn254_twiddles: Mutex<Bn254TwiddleCache>,
 }
 
@@ -2632,12 +2654,14 @@ impl MetalPipelines {
             .expect("Metal twiddle cache poisoned");
         cache.resolve(&self.device, log_len, root, inverse)
     }
+    #[cfg(test)]
     fn bn254_fft_twiddle_buffer(&self, log_size: u32) -> MetalResult<Buffer> {
         self.bn254_twiddles
             .lock()
             .expect("BN254 twiddle cache poisoned")
             .resolve(&self.device, log_size)
     }
+    #[cfg(test)]
     fn bn254_lde_twiddle_buffer(&self, trace_log: u32, blowup_log: u32) -> MetalResult<Buffer> {
         let eval_log = trace_log
             .checked_add(blowup_log)
@@ -2680,6 +2704,7 @@ pub(crate) fn upload_bn254_twiddles(device: &Device, twiddles: &[u64]) -> MetalR
     )?;
     Ok(buffer)
 }
+#[cfg(test)]
 fn upload_bn254_twiddle_values(
     device: &Device,
     twiddles: &[[u64; BN254_LIMBS]],
@@ -2718,6 +2743,7 @@ pub(crate) fn flatten_bn254_twiddles(twiddles: &[[u64; 4]]) -> MetalResult<Vec<u
     }
     Ok(flat)
 }
+#[cfg(test)]
 /// Convenience: derive stage-major BN254 twiddles on CPU then upload to Metal.
 pub(crate) fn stage_bn254_twiddles(device: &Device, log_size: u32) -> MetalResult<Buffer> {
     bn254::validate_staged_twiddle_resources(log_size).map_err(GpuError::InvalidInput)?;
@@ -2727,6 +2753,7 @@ pub(crate) fn stage_bn254_twiddles(device: &Device, log_size: u32) -> MetalResul
     validate_bn254_twiddles_shape(log_size, &twiddles)?;
     upload_bn254_twiddle_values(device, &twiddles)
 }
+#[cfg(test)]
 /// Validate BN254 twiddle layout against the expected packed stage-major shape.
 ///
 /// For `log_size`, the twiddle count must equal `n - 1` where `n = 1 << log_size`.
@@ -2742,10 +2769,12 @@ pub(crate) fn validate_bn254_twiddles_shape(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Expected twiddle count for BN254 FFT (radix-2) given `log_size`.
 pub(crate) fn bn254_fft_twiddle_len(log_size: u32) -> MetalResult<usize> {
     bn254::fft_twiddle_len(log_size).map_err(GpuError::InvalidInput)
 }
+#[cfg(test)]
 /// Expected twiddle count for BN254 LDE (radix-2) given trace/eval logs.
 pub(crate) fn bn254_lde_twiddle_len(trace_log: u32, blowup_log: u32) -> MetalResult<usize> {
     if blowup_log == 0 {
@@ -2761,6 +2790,7 @@ pub(crate) fn bn254_lde_twiddle_len(trace_log: u32, blowup_log: u32) -> MetalRes
         ))?;
     bn254::fft_twiddle_len(eval_log).map_err(GpuError::InvalidInput)
 }
+#[cfg(test)]
 /// Upload a BN254 coset element (4 canonical limbs) for LDE kernels.
 pub(crate) fn upload_bn254_coset(device: &Device, coset: &[u64]) -> MetalResult<Buffer> {
     if coset.len() != 4 {
@@ -2920,11 +2950,12 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     let fft = load_pipeline(&device, &library, FFT_KERNEL)?;
     let lde = load_pipeline(&device, &library, LDE_KERNEL)?;
     let post_tile = load_pipeline(&device, &library, POST_TILE_KERNEL)?;
-    // BN254 kernels are loaded to ensure the metallib stays in sync with the host,
-    // but remain gated behind parity checks before use.
+    // The BN254 FFT/LDE kernels have no production dispatcher yet; only the
+    // parity tests load them. BN254 Poseidon uses its own narrow context.
+    #[cfg(test)]
     let bn254_fft = load_pipeline(&device, &library, BN254_FFT_KERNEL)?;
+    #[cfg(test)]
     let bn254_lde = load_pipeline(&device, &library, BN254_LDE_KERNEL)?;
-    let bn254_poseidon_hash = load_pipeline(&device, &library, BN254_POSEIDON_HASH_KERNEL)?;
     let queue_policy = resolve_queue_policy(&device);
     let queues = QueuePool::new(&device, queue_policy)?;
     let manifest_sha = poseidon_manifest().sha256_hex();
@@ -2934,12 +2965,16 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         "loaded Poseidon manifest for GPU parity checks"
     );
     // Pre-stage minimal BN254 twiddle buffers from the CPU domain builder to ensure
-    // the GPU layout stays aligned with host fixtures before runtime dispatches.
-    let mut bn254_twiddles = Bn254TwiddleCache::new();
-    let fft_min_log = 1u32;
-    let lde_eval_log = 2u32; // smallest valid trace/log combination is (1, 1)
-    let _ = bn254_twiddles.resolve(&device, fft_min_log)?;
-    let _ = bn254_twiddles.resolve(&device, lde_eval_log)?;
+    // the GPU layout stays aligned with host fixtures before test dispatches.
+    #[cfg(test)]
+    let bn254_twiddles = {
+        let mut cache = Bn254TwiddleCache::new();
+        let fft_min_log = 1u32;
+        let lde_eval_log = 2u32; // smallest valid trace/log combination is (1, 1)
+        let _ = cache.resolve(&device, fft_min_log)?;
+        let _ = cache.resolve(&device, lde_eval_log)?;
+        cache
+    };
     Ok(MetalPipelines {
         device,
         queues,
@@ -2949,10 +2984,12 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         fft,
         lde,
         post_tile,
+        #[cfg(test)]
         bn254_fft,
+        #[cfg(test)]
         bn254_lde,
-        bn254_poseidon_hash,
         twiddle_cache: Mutex::new(TwiddleCache::new()),
+        #[cfg(test)]
         bn254_twiddles: Mutex::new(bn254_twiddles),
     })
 }
@@ -4558,6 +4595,7 @@ fn dispatch_sizes(pipeline: &ComputePipelineState, threads: u64) -> (MTLSize, MT
     let groups = threads.div_ceil(threadgroup.width.max(1)).max(1);
     (MTLSize::new(groups, 1, 1), threadgroup)
 }
+#[cfg(test)]
 fn bn254_threadgroup_geometry(
     pipeline: &ComputePipelineState,
     elements: u64,
@@ -5685,9 +5723,11 @@ fn restore_range(
         buffer.copy_range_to_slice(batch_offset * extent, column);
     }
 }
+#[cfg(test)]
 fn bn254_two_adicity() -> u32 {
     Bn254Fr::S
 }
+#[cfg(test)]
 fn bn254_validate_log(log_size: u32) -> MetalResult<()> {
     if log_size == 0 {
         return Err(GpuError::InvalidInput(
@@ -5701,12 +5741,14 @@ fn bn254_validate_log(log_size: u32) -> MetalResult<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 fn bn254_domain_len(log_size: u32) -> MetalResult<usize> {
     bn254_validate_log(log_size)?;
     1usize.checked_shl(log_size).ok_or(GpuError::InvalidInput(
         "BN254 domain length exceeds platform limits",
     ))
 }
+#[cfg(test)]
 fn bn254_lde_domain_lengths(trace_log: u32, blowup_log: u32) -> MetalResult<(usize, u32, usize)> {
     if blowup_log == 0 {
         return Err(GpuError::InvalidInput(
@@ -5750,6 +5792,7 @@ fn goldilocks_lde_domain_lengths(
     let eval_len = goldilocks_domain_len(eval_log)?;
     Ok((trace_len, eval_log, eval_len))
 }
+#[cfg(test)]
 fn bn254_scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     let bytes = value.to_bytes();
     let mut limbs = [0u64; BN254_LIMBS];
@@ -5760,6 +5803,7 @@ fn bn254_scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     }
     limbs
 }
+#[cfg(test)]
 fn bn254_scalar_from_canonical_limbs(limbs: &[u64; BN254_LIMBS]) -> MetalResult<Bn254Scalar> {
     let mut bytes = [0u8; 32];
     for (index, limb) in limbs.iter().enumerate() {
@@ -5769,18 +5813,22 @@ fn bn254_scalar_from_canonical_limbs(limbs: &[u64; BN254_LIMBS]) -> MetalResult<
         GpuError::InvalidInput("BN254 canonical limbs decode produced invalid field element")
     })
 }
+#[cfg(test)]
 fn bn254_limbs_slice_to_scalar(slice: &[u64]) -> MetalResult<Bn254Scalar> {
     let limbs: [u64; BN254_LIMBS] = slice
         .try_into()
         .expect("slice length should equal BN254 limb count");
     bn254_scalar_from_canonical_limbs(&limbs)
 }
+#[cfg(test)]
 fn bn254_stage_twiddles_scalars(log_size: u32) -> MetalResult<Vec<Bn254Scalar>> {
     bn254::stage_twiddles_scalars(log_size).map_err(GpuError::InvalidInput)
 }
+#[cfg(test)]
 fn bn254_stage_twiddles_limbs(log_size: u32) -> MetalResult<Vec<[u64; BN254_LIMBS]>> {
     bn254::stage_twiddles_limbs(log_size).map_err(GpuError::InvalidInput)
 }
+#[cfg(test)]
 fn sample_bn254_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
     let len = 1usize << log_size;
     let mut columns = Vec::with_capacity(column_count);
@@ -5794,9 +5842,11 @@ fn sample_bn254_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
     }
     columns
 }
+#[cfg(test)]
 fn sample_bn254_coset() -> [u64; BN254_LIMBS] {
     bn254_scalar_to_canonical_limbs(&Bn254Scalar::from(5u64))
 }
+#[cfg(test)]
 fn bn254_column_extent(columns: &[Vec<u64>]) -> MetalResult<usize> {
     if columns.is_empty() {
         return Ok(0);

@@ -573,7 +573,7 @@ fn digests_are_pinned() {
     );
     assert_eq!(
         profile.policy_digest().unwrap().to_string(),
-        "5f41b7610b1b2f68c03f9080e8181f20f7661dbfb7db69ba42bb85cb4b10b50b"
+        "8c4ccda4944019c394c4439feb06516aaf16f3dfb1cffdb07c0dd2b850f9d023"
     );
 }
 

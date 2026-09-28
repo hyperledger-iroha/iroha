@@ -106,7 +106,7 @@ def check_source(source: str) -> None:
     }"""
     if quiet_helper not in source:
         raise GuardError("quiet IVM fixture changed")
-    if source.count("quiet_vm(") != 15:
+    if source.count("quiet_vm(") != 22:
         raise GuardError("quiet IVM fixture call inventory changed")
 
     code_hash_contracts = (

@@ -859,21 +859,27 @@ fn render_cli_error_marks_cli_argument_failures_as_input() {
     );
 }
 #[test]
-fn signed_transaction_size_cli_parses_canonical_and_short_paths() {
-    let canonical = Args::try_parse_from(["iroha", "ledger", "transaction", "signed-size"])
+fn account_transaction_and_trigger_trees_have_one_top_level_mount() {
+    let tx = Args::try_parse_from(["iroha", "tx", "signed-size"])
         .expect("canonical signed-size command should parse");
     assert!(matches!(
-        canonical.command,
-        Command::Ledger(ledger::Command::Transaction(
-            transaction::Command::SignedSize(_)
-        ))
-    ));
-    let short = Args::try_parse_from(["iroha", "tx", "signed-size"])
-        .expect("short signed-size command should parse");
-    assert!(matches!(
-        short.command,
+        tx.command,
         Command::Tx(transaction::Command::SignedSize(_))
     ));
+    for retired in [
+        &["iroha", "transaction", "signed-size"][..],
+        &["iroha", "ledger", "transaction", "signed-size"][..],
+        &["iroha", "ledger", "account", "--help"][..],
+        &["iroha", "ledger", "trigger", "--help"][..],
+    ] {
+        let error = Args::try_parse_from(retired)
+            .expect_err("retired duplicate command mounts must not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::InvalidSubcommand,
+            "unexpected parse result for {retired:?}: {error}"
+        );
+    }
 }
 #[test]
 fn printjsoncontext_routes_text_to_stderr_in_json_mode() {
@@ -3014,17 +3020,10 @@ fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
             .unwrap();
         let (mut context, transport) = canonical_read_context(vec![capabilities, response]);
         let hash_literal = hash.to_string();
-        let outcome = Args::try_parse_from([
-            "iroha",
-            "ledger",
-            "transaction",
-            "get",
-            "--hash",
-            &hash_literal,
-        ])
-        .unwrap()
-        .command
-        .run(&mut context);
+        let outcome = Args::try_parse_from(["iroha", "tx", "get", "--hash", &hash_literal])
+            .unwrap()
+            .command
+            .run(&mut context);
         let requests = transport.requests.lock().unwrap();
         assert_eq!(requests.len(), 2, "one capability read and one exact query");
         assert_eq!(requests[1].method, iroha::http::Method::POST);

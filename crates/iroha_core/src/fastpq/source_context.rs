@@ -194,6 +194,7 @@ impl FastpqSourceCaptureAccumulator {
         Ok(())
     }
 
+    #[cfg(test)]
     /// Transfer an exact set of captures with their transcripts before inventory sealing.
     /// A missing source, sealed scope or sticky failure leaves the accumulator unchanged.
     pub(crate) fn take_unsealed_sources(

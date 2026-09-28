@@ -29,7 +29,10 @@ Metal helper:
    buffer, then copies them back to pinned host memory after a bounded event
    wait.
 5. The shared zstd frame encoder assembles literals, Huffman/FSE data, block
-   headers, and the frame header.
+   headers, and the frame header. `gpuzstd_cuda` links it from the
+   `gpuzstd_metal` library (`zstd_frame`, with `default-features = false` so
+   the Metal crate's `c-abi` exports are not linked) instead of compiling a
+   second copy.
 
 The CUDA kernels do not use atomics or scheduling-dependent reductions for
 output bytes. Each chunk owns its hash table and sequence range, so launch order

@@ -495,23 +495,32 @@ fn gateway_scoreboard_metadata_records_telemetry_source() {
 fn gateway_provider_spec_requires_and_normalizes_public_key() {
     let provider_id = "AB".repeat(32);
     let gateway_key = "CD".repeat(32);
-    let spec = parse_gateway_provider_spec(&format!(
-        "name=alpha,provider-id={provider_id},gateway-key={gateway_key},base-url=https://alpha.example/,stream-token=dG9rZW4="
-    ))
+    let spec = GatewayProviderInput::parse_spec(
+        &format!(
+            "name=alpha,provider-id={provider_id},gateway-key={gateway_key},base-url=https://alpha.example/,stream-token=dG9rZW4="
+        ),
+        "--provider",
+    )
     .expect("valid gateway provider specification");
     assert_eq!(spec.provider_id_hex, provider_id.to_ascii_lowercase());
     assert_eq!(
         spec.gateway_public_key_hex,
         gateway_key.to_ascii_lowercase()
     );
-    let missing_key = parse_gateway_provider_spec(&format!(
-        "name=alpha,provider-id={provider_id},base-url=https://alpha.example/,stream-token=dG9rZW4="
-    ))
+    let missing_key = GatewayProviderInput::parse_spec(
+        &format!(
+            "name=alpha,provider-id={provider_id},base-url=https://alpha.example/,stream-token=dG9rZW4="
+        ),
+        "--provider",
+    )
     .expect_err("gateway public key is required");
-    assert!(missing_key.contains("requires a `gateway-key=` entry"));
-    let invalid_key = parse_gateway_provider_spec(&format!(
-        "name=alpha,provider-id={provider_id},gateway-key=not-hex,base-url=https://alpha.example/,stream-token=dG9rZW4="
-    ))
+    assert!(missing_key.contains("--provider requires gateway-key=<hex>"));
+    let invalid_key = GatewayProviderInput::parse_spec(
+        &format!(
+            "name=alpha,provider-id={provider_id},gateway-key=not-hex,base-url=https://alpha.example/,stream-token=dG9rZW4="
+        ),
+        "--provider",
+    )
     .expect_err("gateway public key must be canonical hex");
     assert!(invalid_key.contains("gateway-key must be 32-byte hex"));
 }

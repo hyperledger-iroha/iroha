@@ -11,10 +11,12 @@
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use norito::NoritoSerialize;
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
+use super::compact_v1::PreparedHashFrame;
 use super::{
     compact_protocol::FixedAir,
     compact_public_columns::{COMMITTED_COLUMN_COUNT, LAYOUT_ID},
-    compact_v1::{BodyFields, Context as FramingContext, Frame, PreparedHashFrame},
+    compact_v1::{BodyFields, Context as FramingContext, Frame},
     deep_geometry::{
         CONSTRAINTS, COSET_OFFSET, FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, LDE_ROOT, LDE_ROWS,
         QUERY_CANDIDATES, QUERY_COUNT, TRACE_ROWS,
@@ -282,6 +284,7 @@ impl Context {
     }
 
     /// Prepare a complete shape-checked leaf under the unchanged canonical owner.
+    #[cfg(any(test, feature = "fastpq-gpu"))]
     pub(super) fn prepare_leaf(
         &self,
         oracle: Oracle,
@@ -325,6 +328,7 @@ impl Context {
     }
 
     /// Prepare a complete parent; use the same strict shape checks as verification.
+    #[cfg(test)]
     pub(super) fn prepare_parent(
         &self,
         oracle: Oracle,

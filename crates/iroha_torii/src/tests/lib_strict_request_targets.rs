@@ -5,12 +5,10 @@ use axum::{
     http::{Request, StatusCode, header},
     routing::{delete, get},
 };
-use http_body_util::BodyExt as _;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use tower::ServiceExt as _;
 fn test_router(counter: Arc<AtomicUsize>) -> Router {
     Router::new()
         .route(

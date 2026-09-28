@@ -15,19 +15,18 @@ use iroha_core::iso_bridge::{
 };
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey, Signature};
+#[cfg(test)]
+use iroha_data_model::alias::AliasIndex;
 use iroha_data_model::{
     ValidationFail,
     account::address::AccountAddress,
-    alias::AliasIndex,
     asset::AssetDefinitionAlias,
     prelude::{
         AccountId, AssetDefinitionId, AssetId, InstructionBox, TransactionBuilder, Transfer,
     },
-    transaction::error::TransactionRejectionReason,
-    transaction::{SignedTransaction, TransactionPayload},
+    transaction::{SignedTransaction, TransactionPayload, error::TransactionRejectionReason},
 };
 use iroha_model_base::chain::ChainId;
-use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -77,7 +76,9 @@ pub struct Iso20022BridgeRuntime {
     participants_by_financial_id: Arc<HashMap<String, String>>,
     audit_admin_keys: Arc<BTreeSet<PublicKey>>,
     account_aliases: Arc<HashMap<String, AccountId>>,
+    #[cfg(test)]
     alias_indices: Arc<HashMap<String, AliasIndex>>,
+    #[cfg(test)]
     index_aliases: Arc<BTreeMap<AliasIndex, (String, AccountId)>>,
     currency_assets: Arc<HashMap<String, IsoCurrencyBinding>>,
     reference_data: Arc<ReferenceDataSnapshots>,
@@ -274,78 +275,6 @@ impl IsoMessageContext {
     /// Settlement currency carried by the ISO payment or securities instruction.
     pub fn settlement_currency(&self) -> Option<&str> {
         self.settlement_currency.as_deref()
-    }
-    /// Requested or confirmed settlement date.
-    pub fn settlement_date(&self) -> Option<&str> {
-        self.settlement_date.as_deref()
-    }
-    /// Securities quantity carried by a securities settlement instruction.
-    pub fn settlement_quantity(&self) -> Option<&str> {
-        self.settlement_quantity.as_deref()
-    }
-    /// Securities movement type carried by a securities settlement instruction.
-    pub fn settlement_movement_type(&self) -> Option<&str> {
-        self.settlement_movement_type.as_deref()
-    }
-    /// Payment type carried by a securities settlement instruction.
-    pub fn settlement_payment_type(&self) -> Option<&str> {
-        self.settlement_payment_type.as_deref()
-    }
-    /// Financial instrument identifier carried by a securities settlement instruction.
-    pub fn security_instrument_id(&self) -> Option<&str> {
-        self.security_instrument_id.as_deref()
-    }
-    /// Repo or collateral obligation identifier carried by a collateral message.
-    pub fn collateral_obligation_id(&self) -> Option<&str> {
-        self.collateral_obligation_id.as_deref()
-    }
-    /// Original collateral amount carried by a substitution message.
-    pub fn collateral_original_amount(&self) -> Option<&str> {
-        self.collateral_original_amount.as_deref()
-    }
-    /// Original collateral currency carried by a substitution message.
-    pub fn collateral_original_currency(&self) -> Option<&str> {
-        self.collateral_original_currency.as_deref()
-    }
-    /// Original collateral instrument identifier carried by a substitution message.
-    pub fn collateral_original_instrument_id(&self) -> Option<&str> {
-        self.collateral_original_instrument_id.as_deref()
-    }
-    /// Substitute collateral amount carried by a substitution message.
-    pub fn collateral_substitute_amount(&self) -> Option<&str> {
-        self.collateral_substitute_amount.as_deref()
-    }
-    /// Substitute collateral currency carried by a substitution message.
-    pub fn collateral_substitute_currency(&self) -> Option<&str> {
-        self.collateral_substitute_currency.as_deref()
-    }
-    /// Substitute collateral instrument identifier carried by a substitution message.
-    pub fn collateral_substitute_instrument_id(&self) -> Option<&str> {
-        self.collateral_substitute_instrument_id.as_deref()
-    }
-    /// Effective date carried by a collateral substitution message.
-    pub fn collateral_effective_date(&self) -> Option<&str> {
-        self.collateral_effective_date.as_deref()
-    }
-    /// Substitution type carried by a collateral substitution message.
-    pub fn collateral_substitution_type(&self) -> Option<&str> {
-        self.collateral_substitution_type.as_deref()
-    }
-    /// Haircut value carried by a collateral substitution message.
-    pub fn collateral_haircut(&self) -> Option<&str> {
-        self.collateral_haircut.as_deref()
-    }
-    /// Reason code carried by a collateral substitution message.
-    pub fn collateral_reason_code(&self) -> Option<&str> {
-        self.collateral_reason_code.as_deref()
-    }
-    /// Durable execution-order plan captured from supplementary settlement data.
-    pub fn plan_execution_order(&self) -> Option<&str> {
-        self.plan_execution_order.as_deref()
-    }
-    /// Durable atomicity plan captured from supplementary settlement data.
-    pub fn plan_atomicity(&self) -> Option<&str> {
-        self.plan_atomicity.as_deref()
     }
 }
 /// Profile and idempotency metadata captured for an inbound ISO message.
@@ -637,6 +566,7 @@ impl IsoMessageStatus {
         &self.parties.pinned_signature_policy
     }
     /// SHA-256 digest of the complete immutable rail-profile policy snapshot.
+    #[cfg(test)]
     pub fn pinned_profile_policy_sha256(&self) -> &str {
         &self.parties.pinned_profile_policy_sha256
     }
@@ -825,10 +755,6 @@ impl IsoMessageRecordV2 {
     fn clear_hold(&mut self) {
         self.hold_reason_code = None;
     }
-    fn replace_change_reason_codes(&mut self, mut codes: Vec<String>) {
-        dedup_codes(&mut codes);
-        self.change_reason_codes = codes;
-    }
     fn add_change_reason_code(&mut self, code: String) {
         if !self
             .change_reason_codes
@@ -852,11 +778,6 @@ impl IsoMessageRecordV2 {
     }
     fn is_terminal(&self) -> bool {
         self.is_rejected() || self.is_settled()
-    }
-    fn queue_outcome_unknown(&self) -> bool {
-        self.state == IsoMessageState::Pending
-            && self.transaction_hash.is_some()
-            && !self.ledger_tx_queued
     }
     fn retention_protected(&self) -> bool {
         self.state == IsoMessageState::Pending
@@ -1948,9 +1869,7 @@ impl Iso20022BridgeRuntime {
             .public_key()
             .clone();
         let mut aliases = HashMap::new();
-        let mut alias_indices = HashMap::new();
-        let mut index_aliases = BTreeMap::new();
-        for (position, alias) in config.account_aliases.iter().enumerate() {
+        for alias in &config.account_aliases {
             let iban = normalise_iban(&alias.iban);
             if !ivm::iso20022::validate_identifier(IdentifierKind::Iban, &iban) {
                 eyre::bail!(
@@ -1962,11 +1881,20 @@ impl Iso20022BridgeRuntime {
                 &alias.account_id,
                 &format!("iso_bridge account alias `{iban}` account_id"),
             )?;
-            let index = AliasIndex(position as u64);
-            alias_indices.insert(iban.clone(), index);
-            index_aliases.insert(index, (iban.clone(), account_id.clone()));
             aliases.insert(iban, account_id);
         }
+        #[cfg(test)]
+        let (alias_indices, index_aliases) = {
+            let mut alias_indices = HashMap::new();
+            let mut index_aliases = BTreeMap::new();
+            for (position, alias) in config.account_aliases.iter().enumerate() {
+                let iban = normalise_iban(&alias.iban);
+                let index = AliasIndex(position as u64);
+                alias_indices.insert(iban.clone(), index);
+                index_aliases.insert(index, (iban.clone(), aliases[&iban].clone()));
+            }
+            (alias_indices, index_aliases)
+        };
         let mut currencies = HashMap::new();
         for binding in &config.currency_assets {
             let currency = normalise_currency(&binding.currency);
@@ -2017,7 +1945,9 @@ impl Iso20022BridgeRuntime {
             participants_by_financial_id: Arc::new(participants_by_financial_id),
             audit_admin_keys: Arc::new(audit_admin_keys),
             account_aliases: Arc::new(aliases),
+            #[cfg(test)]
             alias_indices: Arc::new(alias_indices),
+            #[cfg(test)]
             index_aliases: Arc::new(index_aliases),
             currency_assets: Arc::new(currencies),
             reference_data,
@@ -2051,11 +1981,13 @@ impl Iso20022BridgeRuntime {
         self.account_aliases.get(&iban).cloned()
     }
     /// Look up the canonical index assigned to an alias (IBAN) if present.
+    #[cfg(test)]
     pub fn resolve_alias_index(&self, alias: &str) -> Option<AliasIndex> {
         let alias = normalise_iban(alias);
         self.alias_indices.get(&alias).copied()
     }
     /// Resolve an alias index back into the normalized alias and account identifier.
+    #[cfg(test)]
     pub fn resolve_account_by_index(&self, index: AliasIndex) -> Option<(String, AccountId)> {
         self.index_aliases.get(&index).cloned()
     }
@@ -2143,6 +2075,7 @@ impl Iso20022BridgeRuntime {
         Ok(amount)
     }
     /// Access the cached ISO reference datasets.
+    #[cfg(test)]
     pub fn reference_data(&self) -> &ReferenceDataSnapshots {
         &self.reference_data
     }
@@ -2164,6 +2097,7 @@ impl Iso20022BridgeRuntime {
     ///
     /// A false value means a committed or indeterminate journal must be recovered before
     /// ordinary message transitions can resume.
+    #[cfg(test)]
     pub(crate) fn lifecycle_persistence_is_healthy(&self) -> bool {
         self.lifecycle_mutations_available()
     }
@@ -2216,6 +2150,7 @@ impl Iso20022BridgeRuntime {
         })
     }
     /// Return the configured default rail profile.
+    #[cfg(test)]
     pub fn default_profile(&self) -> &TradfiRailProfile {
         self.profiles
             .get(&self.default_profile_id)
@@ -2816,6 +2751,7 @@ impl Iso20022BridgeRuntime {
     ///
     /// Returns `false` without changing or persisting the record when the exact
     /// append-only status history has reached a V1 capacity bound.
+    #[cfg(test)]
     pub fn mark_hold(&self, message_id: &str, reason_code: Option<&str>) -> bool {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
@@ -2839,57 +2775,10 @@ impl Iso20022BridgeRuntime {
             .map(|_| candidate);
         self.finish_status_transition(message_id, previous, transition)
     }
-    /// Clear any previously-set hold indicator for the message.
-    ///
-    /// Returns `false` when the message is unknown or its exact history is exhausted.
-    pub fn clear_hold(&self, message_id: &str) -> bool {
-        let _state_guard = self.state_lock.lock();
-        let Some(previous) = self.records.get(message_id).map(|record| record.clone()) else {
-            return false;
-        };
-        let mut candidate = previous.clone();
-        let transition = candidate
-            .try_transition(|record| {
-                record.last_seen = Instant::now();
-                record.updated_at = SystemTime::now();
-                record.clear_hold();
-            })
-            .map(|_| candidate);
-        self.finish_status_transition(message_id, Some(previous), transition)
-    }
-    /// Replace the change-reason codes recorded for the message.
-    ///
-    /// Returns `false` when the exact history is exhausted.
-    pub fn replace_change_reason_codes<I, S>(&self, message_id: &str, codes: I) -> bool
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let _state_guard = self.state_lock.lock();
-        let now = Instant::now();
-        let codes_vec = match collect_change_reason_codes_bounded(codes) {
-            Ok(codes) => codes,
-            Err(error) => {
-                self.report_status_history_limit(message_id, error);
-                return false;
-            }
-        };
-        let previous = self.records.get(message_id).map(|record| record.clone());
-        let mut candidate = previous
-            .clone()
-            .unwrap_or_else(|| IsoMessageRecordV2::pending(now));
-        let transition = candidate
-            .try_transition(|record| {
-                record.last_seen = now;
-                record.updated_at = SystemTime::now();
-                record.replace_change_reason_codes(codes_vec);
-            })
-            .map(|_| candidate);
-        self.finish_status_transition(message_id, previous, transition)
-    }
     /// Append a change-reason code for the message (deduplicated).
     ///
     /// Returns `false` when the exact history is exhausted.
+    #[cfg(test)]
     pub fn add_change_reason_code(&self, message_id: &str, code: &str) -> bool {
         let _state_guard = self.state_lock.lock();
         let now = Instant::now();
@@ -3875,10 +3764,6 @@ impl Iso20022BridgeRuntime {
             .map_err(|_| MsgError::ValidationFailed)?;
         Ok((payload, context))
     }
-    /// Access signer account identifier.
-    pub fn signer_account(&self) -> &AccountId {
-        &self.signer_account
-    }
     /// Sign the exact payload after Torii has inserted its fixed-point fee quote.
     pub(crate) fn sign_transaction_payload(
         &self,
@@ -4110,6 +3995,7 @@ impl Iso20022BridgeRuntime {
             candidate,
         })
     }
+    #[cfg(test)]
     fn try_transition_existing(
         &self,
         message_id: &str,
@@ -6521,6 +6407,7 @@ fn audit_export_anchor_value(index: &JsonValue, store_dir: Option<&Path>) -> Jso
     );
     JsonValue::Object(root)
 }
+#[cfg(test)]
 fn audit_export_anchor_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD)
 }
@@ -7337,40 +7224,6 @@ fn change_reason_codes_encoded_len(codes: &[String]) -> Option<usize> {
                 })
         })
 }
-fn collect_change_reason_codes_bounded<I, S>(
-    codes: I,
-) -> Result<Vec<String>, IsoStatusHistoryLimitError>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
-    let mut retained = Vec::new();
-    for code in codes {
-        let code = code.into();
-        if retained.iter().any(|existing| existing == &code) {
-            continue;
-        }
-        if retained.len() >= ISO_CHANGE_REASON_MAX_ENTRIES_V1 {
-            return Err(IsoStatusHistoryLimitError::ChangeReasonCount);
-        }
-        let current_encoded_bytes = change_reason_codes_encoded_len(&retained)
-            .ok_or(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)?;
-        let code_encoded_bytes = json_string_encoded_len(&code)
-            .ok_or(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)?;
-        let prospective_encoded_bytes = current_encoded_bytes
-            .checked_add(usize::from(!retained.is_empty()))
-            .and_then(|bytes| bytes.checked_add(code_encoded_bytes))
-            .ok_or(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)?;
-        if prospective_encoded_bytes > ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1 {
-            return Err(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes);
-        }
-        retained
-            .try_reserve(1)
-            .map_err(|_| IsoStatusHistoryLimitError::Allocation)?;
-        retained.push(code);
-    }
-    Ok(retained)
-}
 fn status_history_entry_encoded_len(
     status: IsoMessageState,
     pacs002_code: Pacs002Status,
@@ -8013,7 +7866,6 @@ const X509_EKU_DOCUMENT_SIGNING_OID: &str = "1.3.6.1.5.5.7.3.36";
 const X509_ANY_POLICY_OID: &str = "2.5.29.32.0";
 const XMLDSIG_MAX_X509_CERTIFICATES: usize = 8;
 const XML_SIGNATURE_MAX_X509_CERTIFICATES: usize = XMLDSIG_MAX_X509_CERTIFICATES;
-const XMLDSIG_MAX_X509_CERTIFICATE_BYTES: usize = 16 * 1024;
 const XMLDSIG_MAX_X509_CRLS: usize = 8;
 const XMLDSIG_MAX_X509_CRL_BYTES: usize = 1024 * 1024;
 const XMLDSIG_MAX_X509_OCSP_RESPONSES: usize = 8;
@@ -8229,6 +8081,7 @@ struct XmlSignatureDirectChildSpans {
     signature_value: XmlElementSpan,
     key_info: XmlElementSpan,
 }
+#[cfg(test)]
 fn xml_signature_direct_child_spans(
     signature_xml: &str,
 ) -> Result<XmlSignatureDirectChildSpans, MsgError> {
@@ -8293,11 +8146,6 @@ fn xml_signature_direct_child_spans_with_namespaces(
 struct XmlSignedInfoDirectChildSpans {
     canonicalization_method: XmlElementSpan,
     signature_method: XmlElementSpan,
-}
-fn xml_signed_info_direct_child_spans(
-    signed_info_xml: &str,
-) -> Result<XmlSignedInfoDirectChildSpans, MsgError> {
-    xml_signed_info_direct_child_spans_with_namespaces(signed_info_xml, &[])
 }
 fn xml_signed_info_direct_child_spans_with_namespaces(
     signed_info_xml: &str,
@@ -8547,16 +8395,6 @@ fn verify_xml_signature_signed_properties_reference<'a>(
         inherited_namespaces: signed_properties_namespaces,
     })
 }
-fn verify_xml_signature_reference_digest(
-    reference_xml: &str,
-    canonical_referenced_xml: &str,
-) -> Result<(), MsgError> {
-    verify_xml_signature_reference_digest_with_namespaces(
-        reference_xml,
-        canonical_referenced_xml,
-        &[],
-    )
-}
 fn verify_xml_signature_reference_digest_with_namespaces(
     reference_xml: &str,
     canonical_referenced_xml: &str,
@@ -8593,11 +8431,6 @@ fn verify_xml_signature_reference_digest_with_namespaces(
     }
     Ok(())
 }
-fn supported_xml_signature_reference_c14n_mode(
-    reference_xml: &str,
-) -> Result<CanonicalXmlMode, MsgError> {
-    supported_xml_signature_reference_c14n_mode_with_namespaces(reference_xml, &[])
-}
 fn supported_xml_signature_reference_c14n_mode_with_namespaces(
     reference_xml: &str,
     inherited_namespaces: &[CanonicalXmlNamespaceBinding],
@@ -8618,11 +8451,6 @@ fn supported_xml_signature_reference_c14n_mode_with_namespaces(
         }
         _ => Err(MsgError::ValidationFailed),
     }
-}
-fn signed_properties_reference_c14n_mode(
-    reference_xml: &str,
-) -> Result<CanonicalXmlMode, MsgError> {
-    signed_properties_reference_c14n_mode_with_namespaces(reference_xml, &[])
 }
 fn signed_properties_reference_c14n_mode_with_namespaces(
     reference_xml: &str,
@@ -8869,6 +8697,7 @@ fn ensure_xades_qualifying_properties_target(signature_xml: &str) -> Result<(), 
         Err(MsgError::ValidationFailed)
     }
 }
+#[cfg(test)]
 fn verify_xades_signing_certificate_v2_binding(
     signed_properties_xml: &str,
     key_material: &XmlSignatureKeyMaterial,
@@ -8942,6 +8771,7 @@ fn ensure_xades_signing_certificate_v2_chain_prefix(
     }
     Ok(())
 }
+#[cfg(test)]
 fn xades_signed_signature_properties_xml(signed_properties_xml: &str) -> Result<&str, MsgError> {
     Ok(xades_signed_signature_properties_with_namespaces(signed_properties_xml, &[])?.xml)
 }
@@ -9021,6 +8851,7 @@ fn xades_signed_signature_properties_with_namespaces<'a>(
         namespaces: signed_signature_properties_namespaces,
     })
 }
+#[cfg(test)]
 fn xades_signing_certificate_v2_digests(
     signing_certificate_xml: &str,
 ) -> Result<Vec<String>, MsgError> {
@@ -9076,6 +8907,7 @@ fn xades_signing_certificate_v2_digests_with_namespaces(
     }
     Ok(digests)
 }
+#[cfg(test)]
 fn xades_cert_digest_sha256(cert_xml: &str) -> Result<String, MsgError> {
     xades_cert_digest_sha256_with_namespaces(cert_xml, &[])
 }
@@ -9318,12 +9150,7 @@ struct XmlSignatureEmbeddedRevocationValues {
     crls: Vec<String>,
     ocsp_responses: Vec<String>,
 }
-fn xml_signature_key_material(
-    signature_xml: &str,
-    evaluation_time: Option<ASN1Time>,
-) -> Result<XmlSignatureKeyMaterial, MsgError> {
-    xml_signature_key_material_with_namespaces(signature_xml, evaluation_time, &[])
-}
+#[cfg(test)]
 fn xml_signature_key_material_with_namespaces(
     signature_xml: &str,
     evaluation_time: Option<ASN1Time>,
@@ -10115,9 +9942,6 @@ fn ensure_xml_signature_public_key_info_shape_with_namespaces(
     required_single_child_text_compact(ec_key_value_xml, "PublicKey")?;
     Ok(())
 }
-fn xml_signature_x509_certificates(key_info_xml: &str) -> Result<Vec<Vec<u8>>, MsgError> {
-    xml_signature_x509_certificates_with_namespaces(key_info_xml, &[])
-}
 fn xml_signature_x509_certificates_with_namespaces(
     key_info_xml: &str,
     inherited_namespaces: &[CanonicalXmlNamespaceBinding],
@@ -10794,6 +10618,7 @@ fn verify_x509_crl_signature(
         .verify(crl.tbs_cert_list.as_ref(), &signature)
         .map_err(|_| MsgError::ValidationFailed)
 }
+#[cfg(test)]
 fn decode_required_child_base64(container: &str, child: &str) -> Result<Vec<u8>, MsgError> {
     let span = required_single_xml_element(container, child)?;
     ensure_xml_element_attributes_allowed(container, span, &[])?;
@@ -10871,6 +10696,7 @@ fn ensure_xml_element_any_namespace(
         Err(MsgError::ValidationFailed)
     }
 }
+#[cfg(test)]
 fn xml_signature_evaluation_time(
     parsed: &ParsedMessage,
     signed_properties_xml: Option<&str>,
@@ -10899,6 +10725,7 @@ fn xml_signature_evaluation_time_for_verified_properties(
         .map(|value| parse_iso_datetime_as_asn1_time(&value))
         .transpose()
 }
+#[cfg(test)]
 fn xades_signed_properties_signing_time(
     signed_properties_xml: &str,
 ) -> Result<Option<String>, MsgError> {
@@ -11158,9 +10985,11 @@ struct CanonicalXmlNamespaceBinding {
     prefix: String,
     uri: String,
 }
+#[cfg(test)]
 fn canonicalize_supported_xml(xml: &str) -> Result<String, MsgError> {
     canonicalize_supported_xml_with_inherited_namespaces(xml, &[])
 }
+#[cfg(test)]
 fn canonicalize_supported_xml_with_inherited_namespaces(
     xml: &str,
     inherited_namespaces: &[CanonicalXmlAttribute],
@@ -12116,6 +11945,7 @@ fn element_attr(container: &str, span: XmlElementSpan, attr: &str) -> Option<Str
 fn attr_value_exact(opening: &str, attr: &str) -> Option<String> {
     attr_value_matching(opening, |name| name == attr)
 }
+#[cfg(test)]
 fn attr_value(opening: &str, attr: &str) -> Option<String> {
     attr_value_exact(opening, attr)
 }
@@ -12367,10 +12197,6 @@ fn insert_metadata_value(metadata: &mut Metadata, key: &str, value: &str) -> Res
         .map_err(|_| MsgError::ValidationFailed)?;
     metadata.insert(name, json);
     Ok(())
-}
-fn dedup_codes(codes: &mut Vec<String>) {
-    let mut seen = HashSet::new();
-    codes.retain(|code| seen.insert(code.clone()));
 }
 #[cfg(test)]
 mod tests {

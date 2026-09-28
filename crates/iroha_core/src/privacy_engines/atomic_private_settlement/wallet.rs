@@ -7,42 +7,56 @@
 //! paths are decoded only inside Rust and the consumed byte buffer is wiped on
 //! every success or failure path.
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use super::relation::{
+    atomic_private_settlement_dummy_input_memo_digest_v1,
+    atomic_private_settlement_output_memo_digests_v1, atomic_private_settlement_program_id_v1,
+    internal_statement_v1,
+};
 use super::{
     facade::{AtomicPrivateSettlementProofErrorV1, prove_atomic_private_settlement_v1},
     relation::{
         AtomicPrivateSettlementInputWitnessV1, AtomicPrivateSettlementProverWitnessV1,
         atomic_private_settlement_audit_input_commitment_v1,
-        atomic_private_settlement_dummy_input_memo_digest_v1,
-        atomic_private_settlement_output_memo_digests_v1, atomic_private_settlement_program_id_v1,
-        internal_statement_v1,
     },
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use crate::privacy_engines::proof_managed_accumulator::plan_two_leaf_proof_managed_transition_v1;
 use crate::private_settlement::audit::private_settlement_audit_plaintext_commitment_v1;
 use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
     PRIVATE_SETTLEMENT_INPUT_SLOTS_V1, PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1,
-    PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1, PrivateSettlementAuditCapsuleV1,
-    PrivateSettlementAuditNoteOpeningV1, PrivateSettlementAuditOutputV1,
-    PrivateSettlementAuditPlaintextV1, PrivateSettlementAuditPolicyV1,
-    PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1,
-    PrivateSettlementProofStatementV1, PrivateSettlementProvisionalLegMaterialV1,
-    PrivateSettlementSidecarAvailabilityBodyV1, private_settlement_proof_digest_v1,
+    PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditPlaintextV1,
+    PrivateSettlementAuditPolicyV1, PrivateSettlementCommitteeAuthorityV1,
+    PrivateSettlementDeltaV1, PrivateSettlementProofStatementV1,
+    PrivateSettlementProvisionalLegMaterialV1, private_settlement_proof_digest_v1,
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::nexus::{
+    PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1, PrivateSettlementAuditNoteOpeningV1,
+    PrivateSettlementAuditOutputV1, PrivateSettlementSidecarAvailabilityBodyV1,
+};
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_data_model::privacy::{
     PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
     PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
 };
-use rand_core_06::{CryptoRng, RngCore};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use rand_core_06::CryptoRng;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use rand_core_06::RngCore;
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
+use crate::privacy_engines::ivm_private_note::PRIVATE_NOTE_TREE_DEPTH_V1;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::privacy_engines::ivm_private_note::encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use crate::privacy_engines::ivm_private_note::{
-    PRIVATE_NOTE_TREE_DEPTH_V1, PrivateNotePlaintextV1, PrivateNoteRelationProfileV1,
-    derive_note_authority_v1, derive_note_nullifier_v1, derive_profiled_input_commitment_v1,
+    PrivateNotePlaintextV1, PrivateNoteRelationProfileV1, derive_note_authority_v1,
+    derive_note_nullifier_v1, derive_profiled_input_commitment_v1,
     derive_profiled_output_commitment_v1,
-    encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1,
 };
 
 const OWNER_BUNDLE_MAGIC_V1: &[u8; 4] = b"APWB";
@@ -362,6 +376,7 @@ impl core::fmt::Debug for AtomicPrivateSettlementProvisionalBundleV1 {
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Content-address every proof-complete leg and finalize one provisional bundle.
 ///
 /// The supplied manifest is the public-intent skeleton used for proof creation.
@@ -474,6 +489,7 @@ pub fn finalize_atomic_private_settlement_provisional_bundle_v1(
     })
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Canonical origin and successor state for one newly governed settlement pool.
 ///
 /// The membership witnesses remain encapsulated and can only be consumed into
@@ -493,7 +509,9 @@ pub struct AtomicPrivateSettlementBootstrapPlanV1 {
     inputs: [AtomicPrivateSettlementInputSecretV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl AtomicPrivateSettlementBootstrapPlanV1 {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Consume the plan into the owner-only input witnesses used by the bundle encoder.
     #[must_use]
     pub fn into_input_secrets(
@@ -523,6 +541,7 @@ pub enum AtomicPrivateSettlementWalletErrorV1 {
     Proof(#[from] AtomicPrivateSettlementProofErrorV1),
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn validate_preparation_context_v1(
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
@@ -554,6 +573,7 @@ fn validate_preparation_context_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Derive a positive funding note before choosing a settlement bundle.
 ///
 /// A funded input commitment is independent of the later bundle, authority
@@ -588,6 +608,7 @@ pub fn prepare_atomic_private_settlement_funding_note_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Derive both fixed input commitments under the settlement-only note profile.
 ///
 /// Inactive slots receive their unique bundle-bound dummy memo here.  Active
@@ -649,6 +670,7 @@ pub fn prepare_atomic_private_settlement_input_openings_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Derive the two stable pool/program nullifiers for prepared input openings.
 ///
 /// # Errors
@@ -689,6 +711,7 @@ pub fn derive_atomic_private_settlement_input_nullifiers_v1(
     Ok(nullifiers)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Finalize and encrypt the fixed recipient, change, and reimbursement outputs.
 ///
 /// This operation derives the three role memos from the exact committed audit
@@ -748,6 +771,7 @@ pub fn prepare_atomic_private_settlement_outputs_v1(
     Ok(encrypted)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Build exact membership witnesses and the validator-derived successor root
 /// for a newly activated two-note settlement pool.
 ///
@@ -1040,6 +1064,7 @@ fn decode_owner_bundle(
     })
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Encode one owner-only wallet bundle for later isolated proving.
 ///
 /// The result must be written by a native wallet to an owner-only regular file;

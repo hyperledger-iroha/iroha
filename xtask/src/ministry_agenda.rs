@@ -2,13 +2,15 @@ use blake3::Hasher as Blake3Hasher;
 use hex::FromHex;
 use iroha_data_model::ministry::{AgendaProposalAction, AgendaProposalV1};
 use norito::json;
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json::Value as JsonValue,
+};
 use rand::{
     SeedableRng,
     distr::{Distribution, weighted::WeightedIndex},
 };
 use rand_chacha::ChaCha20Rng;
-use serde::{Deserialize, Serialize};
-use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -54,7 +56,7 @@ pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
         Command::Validate(options) => validate_proposal(options),
         Command::Sortition(options) => {
             let summary = run_sortition(&options)?;
-            let json = serde_json::to_string_pretty(&summary)
+            let json = json::to_string_pretty(&summary)
                 .map_err(|err| format!("failed to serialize sortition summary: {err}"))?;
             if let Some(path) = options.output_path {
                 fs::write(&path, json.as_bytes()).map_err(|err| {
@@ -83,7 +85,7 @@ fn run_sortition(options: &SortitionOptions) -> Result<SortitionSummary, Box<dyn
             options.roster_path.display()
         )
     })?;
-    let roster: SortitionRoster = serde_json::from_slice(&roster_bytes).map_err(|err| {
+    let roster: SortitionRoster = json::from_slice(&roster_bytes).map_err(|err| {
         format!(
             "failed to parse roster JSON from `{}`: {err}",
             options.roster_path.display()
@@ -167,7 +169,7 @@ fn run_impact(options: ImpactOptions) -> Result<(), Box<dyn Error>> {
         None => None,
     };
     let report = build_impact_report(&proposals, registry.as_ref(), policy.as_ref());
-    let json = serde_json::to_string_pretty(&report)
+    let json = json::to_string_pretty(&report)
         .map_err(|err| format!("failed to serialize impact report: {err}"))?;
     if let Some(path) = &options.output_path {
         fs::write(path, json.as_bytes())
@@ -350,23 +352,23 @@ struct HashFamilyCounters {
     registry_conflicts: usize,
     policy_conflicts: usize,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 pub(crate) struct ImpactReport {
     pub(crate) format_version: u32,
     pub(crate) generated_at: String,
     pub(crate) proposals: Vec<ProposalImpactSummary>,
     pub(crate) totals: ImpactTotals,
 }
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, JsonSerialize, JsonDeserialize, Default)]
 pub(crate) struct ImpactTotals {
     pub(crate) proposals_analyzed: usize,
     pub(crate) targets_analyzed: usize,
     pub(crate) registry_conflicts: usize,
     pub(crate) policy_conflicts: usize,
-    #[serde(default)]
+    #[norito(default)]
     pub(crate) hash_families: Vec<HashFamilyImpact>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 pub(crate) struct ProposalImpactSummary {
     pub(crate) proposal_id: String,
     pub(crate) action: String,
@@ -377,27 +379,52 @@ pub(crate) struct ProposalImpactSummary {
     pub(crate) registry_conflicts: usize,
     pub(crate) policy_conflicts: usize,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 pub(crate) struct HashFamilyImpact {
     pub(crate) hash_family: String,
     pub(crate) targets: usize,
     pub(crate) registry_conflicts: usize,
     pub(crate) policy_conflicts: usize,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 pub(crate) struct ConflictDetail {
     pub(crate) source: ConflictSource,
     pub(crate) hash_family: String,
     pub(crate) hash_hex: String,
     pub(crate) reference: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
 }
-#[derive(Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy)]
 pub(crate) enum ConflictSource {
     DuplicateRegistry,
     PolicySnapshot,
+}
+impl ConflictSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::DuplicateRegistry => "duplicate_registry",
+            Self::PolicySnapshot => "policy_snapshot",
+        }
+    }
+}
+impl norito::json::FastJsonWrite for ConflictSource {
+    fn write_json(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+}
+impl norito::json::JsonDeserialize for ConflictSource {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "duplicate_registry" => Ok(Self::DuplicateRegistry),
+            "policy_snapshot" => Ok(Self::PolicySnapshot),
+            other => Err(norito::json::Error::Message(format!(
+                "unknown agenda conflict source `{other}`"
+            ))),
+        }
+    }
 }
 fn validate_proposal(options: ValidateOptions) -> Result<(), Box<dyn Error>> {
     let proposal = load_proposal(&options.proposal_path)?;
@@ -431,25 +458,25 @@ fn load_proposal(path: &Path) -> Result<AgendaProposalV1, Box<dyn Error>> {
     })?;
     Ok(proposal)
 }
-#[derive(Deserialize)]
+#[derive(JsonDeserialize)]
 struct SortitionRoster {
     format_version: u32,
     members: Vec<SortitionMember>,
 }
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, JsonDeserialize, JsonSerialize)]
 struct SortitionMember {
     member_id: String,
-    #[serde(default = "default_weight")]
+    #[norito(default = "default_weight")]
     weight: u64,
-    #[serde(default)]
+    #[norito(default)]
     role: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     organization: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     contact: Option<String>,
-    #[serde(default = "default_true")]
+    #[norito(default = "default_true")]
     eligible: bool,
-    #[serde(flatten)]
+    #[norito(flatten)]
     extra: BTreeMap<String, JsonValue>,
 }
 #[derive(Clone)]
@@ -457,7 +484,7 @@ struct EligibleMember {
     member: SortitionMember,
     original_index: usize,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SortitionSummary {
     pub(crate) format_version: u32,
     pub(crate) algorithm: String,
@@ -469,19 +496,19 @@ pub(crate) struct SortitionSummary {
     pub(crate) merkle_root_hex: String,
     pub(crate) selected: Vec<SelectedMemberSummary>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SortitionDigestSummary {
     pub(crate) blake3_hex: String,
     pub(crate) sha256_hex: String,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SelectedMemberSummary {
     pub(crate) member_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default, skip_serializing_if = "Option::is_none")]
     pub(crate) role: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default, skip_serializing_if = "Option::is_none")]
     pub(crate) organization: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default, skip_serializing_if = "Option::is_none")]
     pub(crate) contact: Option<String>,
     pub(crate) weight: u64,
     pub(crate) eligible_index: usize,
@@ -496,15 +523,15 @@ struct DrawResult {
     draw_position: usize,
     entropy: [u8; 32],
 }
-#[derive(Deserialize)]
+#[derive(JsonDeserialize)]
 struct DuplicateRegistry {
-    #[serde(default)]
+    #[norito(default)]
     entries: Vec<DuplicateRegistryEntry>,
 }
 impl DuplicateRegistry {
     fn load(path: &Path) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
-        let registry: Self = serde_json::from_str(&raw).map_err(|err| {
+        let registry: Self = json::from_str(&raw).map_err(|err| {
             format!(
                 "failed to parse duplicate registry JSON from {}: {err}",
                 path.display()
@@ -621,7 +648,7 @@ fn hash_leaves(members: &[EligibleMember]) -> Result<Vec<[u8; 32]>, Box<dyn Erro
     members
         .iter()
         .map(|entry| {
-            let json = serde_json::to_vec(&entry.member).map_err(|err| {
+            let json = json::to_vec(&entry.member).map_err(|err| {
                 format!(
                     "failed to serialize roster member `{}`: {err}",
                     entry.member.member_id
@@ -726,12 +753,12 @@ const fn default_weight() -> u64 {
 const fn default_true() -> bool {
     true
 }
-#[derive(Deserialize)]
+#[derive(JsonDeserialize)]
 struct DuplicateRegistryEntry {
     hash_family: String,
     hash_hex: String,
     proposal_id: String,
-    #[serde(default)]
+    #[norito(default)]
     note: Option<String>,
 }
 impl DuplicateRegistryEntry {
@@ -747,9 +774,9 @@ struct RegistryConflictRef {
     proposal_id: String,
     note: Option<String>,
 }
-#[derive(Deserialize)]
+#[derive(JsonDeserialize)]
 struct PolicySnapshot {
-    #[serde(default)]
+    #[norito(default)]
     entries: Vec<PolicySnapshotEntry>,
 }
 impl PolicySnapshot {
@@ -760,7 +787,7 @@ impl PolicySnapshot {
                 path.display()
             )
         })?;
-        let snapshot: Self = serde_json::from_str(&raw).map_err(|err| {
+        let snapshot: Self = json::from_str(&raw).map_err(|err| {
             format!(
                 "failed to parse policy snapshot JSON from {}: {err}",
                 path.display()
@@ -781,12 +808,12 @@ impl PolicySnapshot {
         map
     }
 }
-#[derive(Deserialize)]
+#[derive(JsonDeserialize)]
 struct PolicySnapshotEntry {
     hash_family: String,
     hash_hex: String,
     policy_id: String,
-    #[serde(default)]
+    #[norito(default)]
     note: Option<String>,
 }
 impl PolicySnapshotEntry {
@@ -927,8 +954,7 @@ mod tests {
             output_path: None,
         };
         let summary = run_sortition(&options).expect("sortition");
-        let roster: SortitionRoster =
-            serde_json::from_str(TEST_ROSTER).expect("parse roster fixture");
+        let roster: SortitionRoster = json::from_str(TEST_ROSTER).expect("parse roster fixture");
         let eligible = build_eligible_members(&roster).expect("eligible");
         let leaves = hash_leaves(&eligible).expect("hash leaves");
         let layers = build_merkle_layers(&leaves);

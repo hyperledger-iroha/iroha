@@ -14,6 +14,9 @@ use std::{
     process::ExitCode,
 };
 type Result<T> = std::result::Result<T, ReportError>;
+#[path = "common/json_require.rs"]
+mod json_require;
+use json_require::{require_f64, require_object, require_string, require_u64, value_type};
 const SIGNED_RS16_DA_SCHEMA: &str = "signed_rs16_da_v1";
 fn main() -> ExitCode {
     match emit_report(io::stdout().lock()) {
@@ -683,90 +686,6 @@ const USAGE: &str = "Usage: sumeragi_da_report [ARTIFACT_DIR]\n\n\
 Generate a Markdown report from Sumeragi DA integration test summaries.\n\
 Pass the directory containing *.summary.json artifacts as the first argument,\n\
 or set SUMERAGI_DA_ARTIFACT_DIR. Use --help to display this message.\n";
-fn require_object<'a>(map: &'a Map, key: &str, path: &Path) -> Result<&'a Map> {
-    map.get(key).map_or_else(
-        || {
-            Err(ReportError::MissingField {
-                path: path.to_path_buf(),
-                field: key.into(),
-            })
-        },
-        |value| match value {
-            Value::Object(obj) => Ok(obj),
-            other => Err(ReportError::InvalidType {
-                path: path.to_path_buf(),
-                field: key.into(),
-                expected: "object",
-                actual: value_type(other),
-            }),
-        },
-    )
-}
-fn require_u64(map: &Map, key: &str, path: &Path) -> Result<u64> {
-    map.get(key).map_or_else(
-        || {
-            Err(ReportError::MissingField {
-                path: path.to_path_buf(),
-                field: key.into(),
-            })
-        },
-        |value| {
-            value.as_u64().ok_or_else(|| ReportError::InvalidType {
-                path: path.to_path_buf(),
-                field: key.into(),
-                expected: "u64",
-                actual: value_type(value),
-            })
-        },
-    )
-}
-fn require_f64(map: &Map, key: &str, path: &Path) -> Result<f64> {
-    map.get(key).map_or_else(
-        || {
-            Err(ReportError::MissingField {
-                path: path.to_path_buf(),
-                field: key.into(),
-            })
-        },
-        |value| {
-            value.as_f64().ok_or_else(|| ReportError::InvalidType {
-                path: path.to_path_buf(),
-                field: key.into(),
-                expected: "f64",
-                actual: value_type(value),
-            })
-        },
-    )
-}
-fn require_string(map: &Map, key: &str, path: &Path) -> Result<String> {
-    map.get(key).map_or_else(
-        || {
-            Err(ReportError::MissingField {
-                path: path.to_path_buf(),
-                field: key.into(),
-            })
-        },
-        |value| match value {
-            Value::String(s) => Ok(s.clone()),
-            other => Err(ReportError::InvalidType {
-                path: path.to_path_buf(),
-                field: key.into(),
-                expected: "string",
-                actual: value_type(other),
-            }),
-        },
-    )
-}
-fn value_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
 fn u64_to_f64(value: u64) -> f64 {
     const TWO_POW_32: f64 = 4_294_967_296.0;
     let high = u32::try_from(value >> 32).expect("upper 32 bits fit in u32");

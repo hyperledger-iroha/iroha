@@ -821,6 +821,42 @@
       }
     ]
   },
+  "AssertSorafsPublicationV1": {
+    "Struct": [
+      {
+        "name": "manifest_digest",
+        "type": "ManifestDigest"
+      },
+      {
+        "name": "order_id",
+        "type": "ReplicationOrderId"
+      },
+      {
+        "name": "assignment_revision",
+        "type": "u64"
+      },
+      {
+        "name": "canonical_order_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "require_complete",
+        "type": "bool"
+      },
+      {
+        "name": "challenge",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "minimum_height",
+        "type": "u64"
+      },
+      {
+        "name": "minimum_block_hash",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "Asset": {
     "Struct": [
       {
@@ -2282,6 +2318,10 @@
       {
         "name": "execution_context_hash",
         "type": "Option<HashOf<BlockExecutionContextBundle>>"
+      },
+      {
+        "name": "global_beacon_pulse_hash",
+        "type": "Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>"
       }
     ]
   },
@@ -2355,6 +2395,10 @@
       {
         "name": "npos_consensus_effects",
         "type": "Option<NposConsensusEffects>"
+      },
+      {
+        "name": "global_beacon_pulse",
+        "type": "Option<FinalizedGlobalThresholdBeaconPulseV1>"
       },
       {
         "name": "execution_context",
@@ -2873,6 +2917,14 @@
       }
     ]
   },
+  "CanCheckSorafsStreamToken": {
+    "Struct": [
+      {
+        "name": "provider_id",
+        "type": "ProviderId"
+      }
+    ]
+  },
   "CanCheckSorafsTopologyApproval": {
     "Struct": [
       {
@@ -3015,6 +3067,14 @@
       {
         "name": "deployment_id",
         "type": "String"
+      }
+    ]
+  },
+  "CanOperateSorafsStreamToken": {
+    "Struct": [
+      {
+        "name": "provider_id",
+        "type": "ProviderId"
       }
     ]
   },
@@ -7795,6 +7855,18 @@
       }
     ]
   },
+  "FinalityValidator": {
+    "Struct": [
+      {
+        "name": "public_key",
+        "type": "PublicKey"
+      },
+      {
+        "name": "proof_of_possession",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "FinalizeSmartContractCodeUpload": {
     "Struct": [
       {
@@ -7861,6 +7933,10 @@
   },
   "FinalizedNextEpochSnapshot": {
     "Struct": [
+      {
+        "name": "committee_preparation",
+        "type": "Option<ValidatorCommitteePreparationV1>"
+      },
       {
         "name": "epoch",
         "type": "u64"
@@ -10671,6 +10747,7 @@
   "HashOf<ExecutionOutputV1>": "Hash",
   "HashOf<FastpqOrdinarySourceStatementLeafV1>": "Hash",
   "HashOf<FeedEvent>": "Hash",
+  "HashOf<FinalizedGlobalThresholdBeaconPulseV1>": "Hash",
   "HashOf<HeightContext>": "Hash",
   "HashOf<LaneBlockCommitment>": "Hash",
   "HashOf<LaneFinalityStatement>": "Hash",
@@ -10827,6 +10904,46 @@
         "discriminant": 12,
         "tag": "RepoAgreementId",
         "type": "RepoAgreementId"
+      }
+    ]
+  },
+  "InitialProviderAdmissionCouncilV1": {
+    "Struct": [
+      {
+        "name": "policy_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "trusted_signers",
+        "type": "Vec<Array<u8, 32>>"
+      },
+      {
+        "name": "signature_threshold",
+        "type": "u8"
+      }
+    ]
+  },
+  "InitialProviderAdmissionV1": {
+    "Struct": [
+      {
+        "name": "owner",
+        "type": "AccountId"
+      },
+      {
+        "name": "material",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "InitializeSorafsProviderAdmissionV1": {
+    "Struct": [
+      {
+        "name": "council",
+        "type": "InitialProviderAdmissionCouncilV1"
+      },
+      {
+        "name": "providers",
+        "type": "Vec<InitialProviderAdmissionV1>"
       }
     ]
   },
@@ -16779,6 +16896,14 @@
       }
     ]
   },
+  "MutateSorafsStreamTokenAuthority": {
+    "Struct": [
+      {
+        "name": "request",
+        "type": "StreamTokenAuthorityRequestV1"
+      }
+    ]
+  },
   "MutateSorafsStreamTokenCustody": {
     "Struct": [
       {
@@ -18114,6 +18239,9 @@
   "Option<HashOf<FastpqOrdinarySourceStatementLeafV1>>": {
     "Option": "HashOf<FastpqOrdinarySourceStatementLeafV1>"
   },
+  "Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>": {
+    "Option": "HashOf<FinalizedGlobalThresholdBeaconPulseV1>"
+  },
   "Option<HashOf<LaneFinalityStatement>>": {
     "Option": "HashOf<LaneFinalityStatement>"
   },
@@ -18330,6 +18458,9 @@
   "Option<ProviderId>": {
     "Option": "ProviderId"
   },
+  "Option<PublicKey>": {
+    "Option": "PublicKey"
+  },
   "Option<Quantity>": {
     "Option": "Quantity"
   },
@@ -18402,6 +18533,9 @@
   "Option<SortOrder>": {
     "Option": "SortOrder"
   },
+  "Option<StreamTokenExecutionV1>": {
+    "Option": "StreamTokenExecutionV1"
+  },
   "Option<StreamingSoranetRoute>": {
     "Option": "StreamingSoranetRoute"
   },
@@ -18413,6 +18547,9 @@
   },
   "Option<SumeragiConsensusStatus>": {
     "Option": "SumeragiConsensusStatus"
+  },
+  "Option<SumeragiHaltReason>": {
+    "Option": "SumeragiHaltReason"
   },
   "Option<TicketEnvelopeV1>": {
     "Option": "TicketEnvelopeV1"
@@ -18434,6 +18571,9 @@
   },
   "Option<UniversalAccountId>": {
     "Option": "UniversalAccountId"
+  },
+  "Option<ValidatorCommitteePreparationV1>": {
+    "Option": "ValidatorCommitteePreparationV1"
   },
   "Option<Vec<Array<u8, 32>>>": {
     "Option": "Vec<Array<u8, 32>>"
@@ -23272,6 +23412,14 @@
       }
     ]
   },
+  "RegisterCapacityDeclaration": {
+    "Struct": [
+      {
+        "name": "declaration",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "RemoteSpendIntent": {
     "Struct": [
       {
@@ -25767,6 +25915,7 @@
   "SignatureOf<MusubiSeedIngressReceiptPayloadV1>": "Signature",
   "SignatureOf<QueryRequestWithAuthority>": "Signature",
   "SignatureOf<SealedTransactionCommitmentPayload>": "Signature",
+  "SignatureOf<SumeragiFinalityAttestationBody>": "Signature",
   "SignatureOf<TransactionPayload>": "Signature",
   "SignedBlock": {
     "Struct": [
@@ -25952,6 +26101,38 @@
       },
       {
         "name": "fence",
+        "type": "u64"
+      },
+      {
+        "name": "expires_at_unix_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "SignerStreamTokenRequestV1": {
+    "Struct": [
+      {
+        "name": "operation_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "binding_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "original_custody",
+        "type": "SignerOperationCustodyV1"
+      },
+      {
+        "name": "signing_payload_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "signing_payload_size",
+        "type": "u64"
+      },
+      {
+        "name": "issued_at_unix_ms",
         "type": "u64"
       },
       {
@@ -28667,6 +28848,160 @@
       }
     ]
   },
+  "StreamTokenAuthorityActionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "reserve",
+        "type": "StreamTokenReviewedV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "complete",
+        "type": "StreamTokenCompleteRequestV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "expire",
+        "type": "StreamTokenExpireV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "check",
+        "type": "StreamTokenCheckV1"
+      }
+    ]
+  },
+  "StreamTokenAuthorityRequestV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "provider_id",
+        "type": "ProviderId"
+      },
+      {
+        "name": "expected_control_revision",
+        "type": "u64"
+      },
+      {
+        "name": "expected_control_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "action",
+        "type": "StreamTokenAuthorityActionV1"
+      }
+    ]
+  },
+  "StreamTokenCheckPhaseV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "current",
+        "type": "SignerOperationAuditHeadV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "before_provider",
+        "type": "StreamTokenNativeOperationV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "after_provider",
+        "type": "StreamTokenNativeOperationV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "before_commit",
+        "type": "StreamTokenNativeOperationV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "after_commit",
+        "type": "StreamTokenNativeOperationV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "before_release",
+        "type": "StreamTokenNativeOperationV1"
+      }
+    ]
+  },
+  "StreamTokenCheckV1": {
+    "Struct": [
+      {
+        "name": "challenge",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "expected_operator",
+        "type": "AccountId"
+      },
+      {
+        "name": "expected_observer",
+        "type": "AccountId"
+      },
+      {
+        "name": "floor",
+        "type": "StreamTokenFinalityFloorV1"
+      },
+      {
+        "name": "reviewed",
+        "type": "StreamTokenReviewedV1"
+      },
+      {
+        "name": "phase",
+        "type": "StreamTokenCheckPhaseV1"
+      }
+    ]
+  },
+  "StreamTokenCompleteRequestV1": {
+    "Struct": [
+      {
+        "name": "reviewed",
+        "type": "StreamTokenReviewedV1"
+      },
+      {
+        "name": "reservation",
+        "type": "SignerOperationReservationV1"
+      },
+      {
+        "name": "commitment",
+        "type": "SignerOperationCommitmentV1"
+      },
+      {
+        "name": "signatures_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "StreamTokenCompleteV1": {
+    "Struct": [
+      {
+        "name": "reviewed",
+        "type": "StreamTokenReviewedV1"
+      },
+      {
+        "name": "reservation",
+        "type": "SignerOperationReservationV1"
+      },
+      {
+        "name": "commitment",
+        "type": "SignerOperationCommitmentV1"
+      },
+      {
+        "name": "signatures_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "completed_at_unix_ms",
+        "type": "u64"
+      }
+    ]
+  },
   "StreamTokenCustodyControlRecordV1": {
     "Struct": [
       {
@@ -28728,6 +29063,135 @@
       {
         "discriminant": 4,
         "tag": "signer_authority_unavailable"
+      }
+    ]
+  },
+  "StreamTokenExecutionV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "transaction_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "entry_index",
+        "type": "u32"
+      },
+      {
+        "name": "instruction_index",
+        "type": "u32"
+      },
+      {
+        "name": "recorded_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "authority",
+        "type": "AccountId"
+      }
+    ]
+  },
+  "StreamTokenExpireV1": {
+    "Struct": [
+      {
+        "name": "operation_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "reservation",
+        "type": "SignerOperationReservationV1"
+      }
+    ]
+  },
+  "StreamTokenFinalityFloorV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "context_id",
+        "type": "HeightContextId"
+      }
+    ]
+  },
+  "StreamTokenNativeOperationV1": {
+    "Struct": [
+      {
+        "name": "provider_id",
+        "type": "ProviderId"
+      },
+      {
+        "name": "custody_control_revision",
+        "type": "u64"
+      },
+      {
+        "name": "custody_control_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "operation",
+        "type": "StreamTokenOperationV1"
+      },
+      {
+        "name": "reserved_execution",
+        "type": "StreamTokenExecutionV1"
+      },
+      {
+        "name": "terminal_execution",
+        "type": "Option<StreamTokenExecutionV1>"
+      }
+    ]
+  },
+  "StreamTokenOperationV1": {
+    "Struct": [
+      {
+        "name": "reviewed",
+        "type": "StreamTokenReviewedV1"
+      },
+      {
+        "name": "reservation",
+        "type": "SignerOperationReservationV1"
+      },
+      {
+        "name": "outcome",
+        "type": "StreamTokenOutcomeV1"
+      }
+    ]
+  },
+  "StreamTokenOutcomeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "reserved"
+      },
+      {
+        "discriminant": 1,
+        "tag": "completed",
+        "type": "StreamTokenCompleteV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "expired"
+      }
+    ]
+  },
+  "StreamTokenReviewedV1": {
+    "Struct": [
+      {
+        "name": "request",
+        "type": "SignerStreamTokenRequestV1"
+      },
+      {
+        "name": "intent",
+        "type": "SignerOperationIntentV1"
       }
     ]
   },
@@ -29263,6 +29727,176 @@
       }
     ]
   },
+  "SumeragiFinalityAttestation": {
+    "Struct": [
+      {
+        "name": "body",
+        "type": "SumeragiFinalityAttestationBody"
+      },
+      {
+        "name": "signature",
+        "type": "SignatureOf<SumeragiFinalityAttestationBody>"
+      }
+    ]
+  },
+  "SumeragiFinalityAttestationBody": {
+    "Struct": [
+      {
+        "name": "challenge",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "node_id",
+        "type": "PeerId"
+      },
+      {
+        "name": "node_fingerprint",
+        "type": "Hash"
+      },
+      {
+        "name": "build_fingerprint",
+        "type": "Hash"
+      },
+      {
+        "name": "config_fingerprint",
+        "type": "Hash"
+      },
+      {
+        "name": "genesis_block_hash",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "genesis_finality_proof",
+        "type": "SumeragiFinalityProof"
+      },
+      {
+        "name": "status",
+        "type": "SumeragiStatus"
+      },
+      {
+        "name": "finality_proof",
+        "type": "SumeragiFinalityProof"
+      }
+    ]
+  },
+  "SumeragiFinalityBundle": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "finality_proof",
+        "type": "SumeragiFinalityProof"
+      }
+    ]
+  },
+  "SumeragiFinalityProof": {
+    "Struct": [
+      {
+        "name": "block_header",
+        "type": "BlockHeader"
+      },
+      {
+        "name": "block_wire",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "committee",
+        "type": "Vec<FinalityValidator>"
+      }
+    ]
+  },
+  "SumeragiFootprint": {
+    "Struct": [
+      {
+        "name": "votes",
+        "type": "u64"
+      },
+      {
+        "name": "timeouts",
+        "type": "u64"
+      },
+      {
+        "name": "blocks",
+        "type": "u64"
+      },
+      {
+        "name": "exec_entries",
+        "type": "u64"
+      },
+      {
+        "name": "wants",
+        "type": "u64"
+      },
+      {
+        "name": "pending_apply",
+        "type": "u64"
+      },
+      {
+        "name": "sync_entries",
+        "type": "u64"
+      },
+      {
+        "name": "sync_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "peers",
+        "type": "u64"
+      },
+      {
+        "name": "recent_headers",
+        "type": "u64"
+      },
+      {
+        "name": "configs",
+        "type": "u64"
+      },
+      {
+        "name": "cert_cache",
+        "type": "u64"
+      },
+      {
+        "name": "evidence_keys",
+        "type": "u64"
+      },
+      {
+        "name": "probe",
+        "type": "u64"
+      }
+    ]
+  },
+  "SumeragiHaltReason": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "safety_record_corrupt"
+      },
+      {
+        "discriminant": 1,
+        "tag": "safety_record_inconsistent"
+      },
+      {
+        "discriminant": 2,
+        "tag": "safety_violation",
+        "type": "u64"
+      },
+      {
+        "discriminant": 3,
+        "tag": "apply_diverged",
+        "type": "u64"
+      },
+      {
+        "discriminant": 4,
+        "tag": "driver_anomaly"
+      }
+    ]
+  },
   "SumeragiLanePayloadOwnership": {
     "Struct": [
       {
@@ -29352,7 +29986,7 @@
       },
       {
         "discriminant": 1,
-        "tag": "IdleBlockIntervalMs",
+        "tag": "PayloadRetryIntervalMs",
         "type": "NonZero<u64>"
       },
       {
@@ -29372,16 +30006,11 @@
       },
       {
         "discriminant": 5,
-        "tag": "EmptyAfterViews",
-        "type": "NonZero<u64>"
-      },
-      {
-        "discriminant": 6,
         "tag": "EpochLengthBlocks",
         "type": "NonZero<u64>"
       },
       {
-        "discriminant": 7,
+        "discriminant": 6,
         "tag": "DemotionWindow",
         "type": "NonZero<u64>"
       }
@@ -29414,7 +30043,7 @@
         "type": "Vec<Algorithm>"
       },
       {
-        "name": "idle_block_interval_ms",
+        "name": "payload_retry_interval_ms",
         "type": "NonZero<u64>"
       },
       {
@@ -29430,16 +30059,88 @@
         "type": "NonZero<u32>"
       },
       {
-        "name": "empty_after_views",
-        "type": "NonZero<u64>"
-      },
-      {
         "name": "epoch_length_blocks",
         "type": "NonZero<u64>"
       },
       {
         "name": "demotion_window",
         "type": "NonZero<u64>"
+      }
+    ]
+  },
+  "SumeragiStatus": {
+    "Struct": [
+      {
+        "name": "instance",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "view",
+        "type": "u64"
+      },
+      {
+        "name": "stage",
+        "type": "u8"
+      },
+      {
+        "name": "leader",
+        "type": "Option<PublicKey>"
+      },
+      {
+        "name": "proxy_tail",
+        "type": "Option<PublicKey>"
+      },
+      {
+        "name": "high_qc_view",
+        "type": "Option<u64>"
+      },
+      {
+        "name": "level",
+        "type": "u32"
+      },
+      {
+        "name": "start_level",
+        "type": "u32"
+      },
+      {
+        "name": "t_retx_ms",
+        "type": "u64"
+      },
+      {
+        "name": "committed_height",
+        "type": "u64"
+      },
+      {
+        "name": "applied_height",
+        "type": "u64"
+      },
+      {
+        "name": "awaiting",
+        "type": "bool"
+      },
+      {
+        "name": "signer",
+        "type": "Option<PublicKey>"
+      },
+      {
+        "name": "unanchored",
+        "type": "bool"
+      },
+      {
+        "name": "abstaining",
+        "type": "bool"
+      },
+      {
+        "name": "halted",
+        "type": "Option<SumeragiHaltReason>"
+      },
+      {
+        "name": "footprint",
+        "type": "SumeragiFootprint"
       }
     ]
   },
@@ -29610,18 +30311,14 @@
     "Enum": [
       {
         "discriminant": 0,
-        "tag": "install_global_beacon_key"
+        "tag": "finalize_global_beacon_key"
       },
       {
         "discriminant": 1,
-        "tag": "retire_global_beacon_key"
-      },
-      {
-        "discriminant": 2,
         "tag": "install_parliament_tle_key"
       },
       {
-        "discriminant": 3,
+        "discriminant": 2,
         "tag": "retire_parliament_tle_key"
       }
     ]
@@ -31146,6 +31843,62 @@
       }
     ]
   },
+  "ValidatorCommitteePreparationV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "selection_epoch",
+        "type": "u64"
+      },
+      {
+        "name": "selection_height",
+        "type": "u64"
+      },
+      {
+        "name": "selection_anchor",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "target_epoch",
+        "type": "u64"
+      },
+      {
+        "name": "first_height",
+        "type": "u64"
+      },
+      {
+        "name": "last_height",
+        "type": "u64"
+      },
+      {
+        "name": "authority_generation",
+        "type": "u64"
+      },
+      {
+        "name": "preparing_authorization_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "election_seed",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "roster",
+        "type": "Vec<ValidatorPower>"
+      },
+      {
+        "name": "validator_set_pops",
+        "type": "Vec<Vec<u8>>"
+      }
+    ]
+  },
   "ValidatorPower": {
     "Struct": [
       {
@@ -31347,6 +32100,9 @@
   "Vec<FeedEventRecord>": {
     "Vec": "FeedEventRecord"
   },
+  "Vec<FinalityValidator>": {
+    "Vec": "FinalityValidator"
+  },
   "Vec<GameForcedBatchV1>": {
     "Vec": "GameForcedBatchV1"
   },
@@ -31394,6 +32150,9 @@
   },
   "Vec<HashOf<Vec<InstructionBox>>>": {
     "Vec": "HashOf<Vec<InstructionBox>>"
+  },
+  "Vec<InitialProviderAdmissionV1>": {
+    "Vec": "InitialProviderAdmissionV1"
   },
   "Vec<InstructionBox>": {
     "Vec": "InstructionBox"

@@ -18,15 +18,18 @@
 //! their fixed pre-z order; no proof root, residual, binding, codec digest, or
 //! predecessor axis from this stage is eligible for that preimage.
 
+#[cfg(test)]
 use core::marker::PhantomData;
 
+use super::rns_native_existing_radix_commitment_view::RNS_NATIVE_EXISTING_RADIX_RESIDUAL_MAX_BYTES_V1;
+#[cfg(test)]
 use super::{
     rns_native_existing_radix_commitment_view::{
-        ExistingRadixCommitmentsV1, RNS_NATIVE_EXISTING_RADIX_RESIDUAL_MAX_BYTES_V1,
-        RnsNativeExistingRadixCommitmentPrerequisiteV1,
+        ExistingRadixCommitmentsV1, RnsNativeExistingRadixCommitmentPrerequisiteV1,
     },
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
 };
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
@@ -39,9 +42,13 @@ use crate::{
     },
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
+#[cfg(test)]
 const FLAGS_V1: u8 = 0;
+#[cfg(test)]
 const MAGIC_V1: [u8; 4] = *b"ZRC2";
+#[cfg(test)]
 const STATEMENT_V1: u8 = 2;
 const DIGEST_BYTES_V1: usize = 32;
 const POINT_BYTES_V1: usize = 33;
@@ -79,24 +86,37 @@ pub(super) const RNS_NATIVE_RADIX_COMPLEMENT_LINEAR_RESIDUAL_MAX_BYTES_V1: usize
         - RECORD_SET_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const CIRCUIT_LANGUAGE_V1: &[u8] = b"statement=2;groups=344;coordinates=16384;B=2^15;raw-owner=(D_0..D_16,bD,S_0..S_16,bS);derived-R=sum_h=0..16(B^h*(C_D_h+C_S_h))+B^17*(C_bD+C_bS);one-derived-commitment;constraints=for-v=0..16383:R[v]+1=0-in-T256;padded-gates=16384;no-random-aggregate";
+#[cfg(test)]
 const FIELD_BOUNDARY_LANGUAGE_V1: &[u8] = b"T256-field-equality-only;digit-membership-in-[0,32768)-not-yet-verified;therefore-D-and-S-canonical-integer-reconstruction-and-canonical-complement-are-not-yet-claimed";
+#[cfg(test)]
 const SOLE_Z_ORDER_LANGUAGE_V1: &[u8] = b"existing-radix-transport-order-is-group-major:D[g,0..16],S[g,0..16];future-global-A-slot-order-is-role-major:D[17g+h],S[5848+17g+h];consumer-must-authenticate-this-permutation-before-deriving-the-sole-z;exclude-added-inventory-root,S3/S5/S8/S10-11-roots,this-proof-root,all-transcript-roots,residuals,bindings,codec-digests,and-all-inverse-commitments";
+#[cfg(test)]
 const REMAINING_BOUNDARY_V1: &[u8] = b"not-yet-verified:radix-digit-membership-and-inverses,D-minus-K-subtraction,difference-digit-membership,small-source-membership-and-inverses,q-mask-digit-membership-and-inverses,qPCS-S-same-opening,source-and-packing-same-opening,sole-z,global-lookup";
+#[cfg(test)]
 const TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.transcript";
+#[cfg(test)]
 const TRANSCRIPT_SCHEMA_V1: &[u8] = b"ZRC2/direct-coefficient/transcript/v1";
+#[cfg(test)]
 const CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.challenge";
+#[cfg(test)]
 const CIRCUIT_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.circuit-manifest";
+#[cfg(test)]
 const PROOF_SET_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.proof-set-root";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.residual";
+#[cfg(test)]
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.codec";
+#[cfg(test)]
 const VERIFIED_TRANSCRIPTS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.verified-transcripts";
+#[cfg(test)]
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-radix-complement-linear.prerequisite";
 
@@ -145,6 +165,7 @@ const _: () = {
     assert!(!RELEASE_READY_V1);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeRadixComplementLinearErrorV1 {
     ProofCapExceeded,
@@ -158,20 +179,24 @@ pub(super) enum RnsNativeRadixComplementLinearErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeRadixComplementLinearErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeRadixComplementLinearErrorV1 {}
 
+#[cfg(test)]
 impl From<GeneralizedBulletproofErrorV1> for RnsNativeRadixComplementLinearErrorV1 {
     fn from(_: GeneralizedBulletproofErrorV1) -> Self {
         Self::Algebra
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct UpstreamBindingV1 {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
@@ -187,6 +212,7 @@ struct UpstreamBindingV1 {
     pre_z_candidate_root: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl UpstreamBindingV1 {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeExistingRadixCommitmentPrerequisiteV1<'_, '_, S>,
@@ -232,6 +258,7 @@ impl UpstreamBindingV1 {
     }
 }
 
+#[cfg(test)]
 fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     for (ordinal, digest) in digests.iter().enumerate() {
         if *digest == [0; DIGEST_BYTES_V1] || digests[..ordinal].contains(digest) {
@@ -241,12 +268,14 @@ fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     true
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct RadixComplementCoreCommitmentsV1 {
     raw: ExistingRadixCommitmentsV1,
     derived: [Point; COMMITMENTS_PER_CORE_V1],
 }
 
+#[cfg(test)]
 fn weighted_radix_commitment_v1(low: [Point; RADIX_LOW_DIGITS_V1], top: Point) -> Point {
     let mut result = Point::identity();
     let mut weight = Scalar::one();
@@ -258,6 +287,7 @@ fn weighted_radix_commitment_v1(low: [Point; RADIX_LOW_DIGITS_V1], top: Point) -
     result + top.mul_scalar(weight)
 }
 
+#[cfg(test)]
 impl RadixComplementCoreCommitmentsV1 {
     fn new_v1(
         raw: ExistingRadixCommitmentsV1,
@@ -282,6 +312,7 @@ impl RadixComplementCoreCommitmentsV1 {
     }
 }
 
+#[cfg(test)]
 fn core_commitments_v1<F>(
     group: usize,
     commitment_at: &mut F,
@@ -297,11 +328,13 @@ where
     )
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -342,11 +375,13 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ExactCoreViewV1<'a> {
     bytes: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> ExactCoreViewV1<'a> {
     fn parse_v1(bytes: &'a [u8]) -> Result<Self, RnsNativeRadixComplementLinearErrorV1> {
         if bytes.len() != CORE_BYTES_V1 {
@@ -378,6 +413,7 @@ impl<'a> ExactCoreViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct RadixComplementProofSetViewV1<'a> {
     records: &'a [u8],
@@ -387,6 +423,7 @@ struct RadixComplementProofSetViewV1<'a> {
     codec_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> RadixComplementProofSetViewV1<'a> {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeExistingRadixCommitmentPrerequisiteV1<'_, 'a, S>,
@@ -515,6 +552,7 @@ impl<'a> RadixComplementProofSetViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn record_at_v1(
     records: &[u8],
     group: usize,
@@ -547,6 +585,7 @@ fn record_at_v1(
     Ok(&record[RECORD_HEADER_BYTES_V1..])
 }
 
+#[cfg(test)]
 fn encode_point_v1(
     point: Point,
 ) -> Result<[u8; POINT_BYTES_V1], RnsNativeRadixComplementLinearErrorV1> {
@@ -557,12 +596,14 @@ fn encode_point_v1(
     Ok(encoded)
 }
 
+#[cfg(test)]
 fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     for digest in upstream.digests_v1() {
         hash.update(&digest);
     }
 }
 
+#[cfg(test)]
 fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CIRCUIT_MANIFEST_DOMAIN_V1);
@@ -594,6 +635,7 @@ fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn absorb_raw_owner_v1(
     hash: &mut Keccak256,
     group: usize,
@@ -619,6 +661,7 @@ fn absorb_raw_owner_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn canonical_proof_set_root_v1<F>(
     upstream: UpstreamBindingV1,
     records: &[u8],
@@ -650,6 +693,7 @@ where
     Ok(digest)
 }
 
+#[cfg(test)]
 fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     proof_set_root: [u8; DIGEST_BYTES_V1],
@@ -676,6 +720,7 @@ fn canonical_residual_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
@@ -684,6 +729,7 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn radix_complement_constraints_v1(
     coordinates: usize,
     padded_gates: usize,
@@ -718,6 +764,7 @@ fn radix_complement_constraints_v1(
     Ok(constraints)
 }
 
+#[cfg(test)]
 fn build_radix_complement_statement_v1<S>(
     coordinates: usize,
     padded_gates: usize,
@@ -734,6 +781,7 @@ where
     )?)
 }
 
+#[cfg(test)]
 fn append_frame_v1(
     state: &mut Vec<u8>,
     value: &[u8],
@@ -747,6 +795,7 @@ fn append_frame_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn initial_transcript_state_v1(
     upstream: UpstreamBindingV1,
     group: usize,
@@ -810,12 +859,14 @@ fn initial_transcript_state_v1(
     Ok(state)
 }
 
+#[cfg(test)]
 fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(bytes);
     hash.finalize()
 }
 
+#[cfg(test)]
 fn derive_challenge_v1(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -848,6 +899,7 @@ fn derive_challenge_v1(
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
 
+#[cfg(test)]
 struct RadixComplementVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -859,6 +911,7 @@ where
     suite: PhantomData<S>,
 }
 
+#[cfg(test)]
 impl<'a, S> RadixComplementVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -912,6 +965,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<S> VerifierTranscript<S> for RadixComplementVerifierTranscriptV1<'_, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -945,6 +999,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeExistingRadixCommitmentPrerequisiteV1<'_, '_, S>,
     view: RadixComplementProofSetViewV1<'_>,
@@ -982,6 +1037,7 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 ///
 /// This is not digit membership, canonical reconstruction, subtraction,
 /// global lookup, readiness, release, or authorization evidence.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the existing-radix owner and unverified downstream residual must advance exactly once"
@@ -999,6 +1055,7 @@ pub(super) struct RnsNativeRadixComplementLinearPrerequisiteV1<
     binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeRadixComplementLinearPrerequisiteV1<'source, 'proof, S>
 {
@@ -1039,6 +1096,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
 /// Consume the existing-radix view and verify all 344 statement-2 cores
 /// sequentially.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the private statement-2 entry awaits subtraction, lookup, and sole-z consumers"

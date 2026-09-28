@@ -17,7 +17,6 @@ mod model {
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Canonical data-event selectors. Capability-specific variants keep their assigned wire tags.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::DataEventFilter")]
@@ -100,9 +99,19 @@ mod model {
         GameSession(Option<iroha_crypto::Hash>),
     }
     /// An event filter for [`super::proof::ProofEvent`] values.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::ProofEventFilter")]
     pub struct ProofEventFilter {
         /// If specified, matches only events for this proof id
@@ -111,9 +120,19 @@ mod model {
         pub(super) event_set: super::proof::ProofEventSet,
     }
     /// An event filter for [`super::verifying_keys::VerifyingKeyEvent`] values.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::filters::model::VerifyingKeyEventFilter"
     )]
@@ -124,9 +143,19 @@ mod model {
         pub(super) event_set: super::verifying_keys::VerifyingKeyEventSet,
     }
     /// An event filter for [`super::runtime_upgrade::RuntimeUpgradeEvent`] values.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::filters::model::RuntimeUpgradeEventFilter"
     )]
@@ -137,18 +166,38 @@ mod model {
         pub(super) event_set: super::runtime_upgrade::RuntimeUpgradeEventSet,
     }
     /// An event filter for viral incentive lifecycle events.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::SocialEventFilter")]
     pub struct SocialEventFilter {
         /// If specified, matches only events for this binding hash.
         pub(super) binding_matcher: Option<crate::oracle::KeyedHash>,
     }
     /// An event filter for [`super::soradns::SoradnsDirectoryEvent`] values.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::filters::model::SoradnsDirectoryEventFilter"
     )]
@@ -161,9 +210,19 @@ mod model {
         pub(super) event_set: super::soradns::SoradnsDirectoryEventSet,
     }
     /// An event filter for [`super::sorafs::SorafsGatewayEvent`] values.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::filters::model::SorafsGatewayEventFilter"
     )]
@@ -180,9 +239,19 @@ mod model {
         pub(super) event_set: super::sorafs::SorafsGatewayEventSet,
     }
     /// Exact structural filter for Musubi registry events.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::MusubiEventFilter")]
     pub struct MusubiEventFilter {
         /// If set, match only events structurally associated with this package.
@@ -195,9 +264,19 @@ mod model {
         pub(super) event_set: super::musubi::MusubiEventSet,
     }
     /// Filter for Space Directory manifest lifecycle events.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::filters::model::SpaceDirectoryEventFilter"
     )]
@@ -210,9 +289,19 @@ mod model {
         pub(super) event_set: super::space_directory::SpaceDirectoryEventSet,
     }
     /// Filter for native asset escrow lifecycle events.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::EscrowEventFilter")]
     pub struct EscrowEventFilter {
         /// If specified, matches only events for this escrow identifier.
@@ -231,9 +320,19 @@ mod model {
     ///
     /// Scope selectors are intersected. Because proposal and referendum event
     /// families are disjoint, setting both selectors matches no events.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::GovernanceEventFilter")]
     pub struct GovernanceEventFilter {
         /// If specified, matches only proposal-family events that carry this proposal id.
@@ -244,9 +343,19 @@ mod model {
         pub(super) event_set: super::governance::GovernanceEventSet,
     }
     /// An event filter for [`PeerEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::PeerEventFilter")]
     pub struct PeerEventFilter {
         /// If specified matches only events originating from this peer
@@ -255,9 +364,19 @@ mod model {
         pub(super) event_set: PeerEventSet,
     }
     /// An event filter for [`DomainEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::DomainEventFilter")]
     pub struct DomainEventFilter {
         /// If specified matches only events originating from this domain
@@ -267,9 +386,19 @@ mod model {
         pub(super) event_set: DomainEventSet,
     }
     /// An event filter for [`AccountEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::AccountEventFilter")]
     pub struct AccountEventFilter {
         /// If specified matches only events originating from this account
@@ -279,9 +408,19 @@ mod model {
         pub(super) event_set: AccountEventSet,
     }
     /// An event filter for [`AssetEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::AssetEventFilter")]
     pub struct AssetEventFilter {
         /// If specified matches only events originating from this asset
@@ -300,9 +439,19 @@ mod model {
         pub(super) event_set: AssetEventSet,
     }
     /// An event filter for [`AssetDefinitionEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::filters::model::AssetDefinitionEventFilter"
     )]
@@ -314,9 +463,19 @@ mod model {
         pub(super) event_set: AssetDefinitionEventSet,
     }
     /// An event filter for [`NftEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::NftEventFilter")]
     pub struct NftEventFilter {
         /// If specified matches only events originating from this NFT
@@ -326,9 +485,19 @@ mod model {
         pub(super) event_set: NftEventSet,
     }
     /// An event filter for [`RwaEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::RwaEventFilter")]
     pub struct RwaEventFilter {
         /// If specified matches only events originating from this RWA lot.
@@ -338,9 +507,19 @@ mod model {
         pub(super) event_set: RwaEventSet,
     }
     /// An event filter for [`TriggerEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::TriggerEventFilter")]
     pub struct TriggerEventFilter {
         /// If specified matches only events originating from this trigger
@@ -350,9 +529,19 @@ mod model {
         pub(super) event_set: TriggerEventSet,
     }
     /// An event filter for [`RoleEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::RoleEventFilter")]
     pub struct RoleEventFilter {
         /// If specified matches only events originating from this role
@@ -361,9 +550,19 @@ mod model {
         pub(super) event_set: RoleEventSet,
     }
     /// An event filter for [`ConfigurationEvent`]s
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::filters::model::ConfigurationEventFilter"
     )]
@@ -372,9 +571,19 @@ mod model {
         pub(super) event_set: ConfigurationEventSet,
     }
     /// An event filter for [`ExecutorEvent`].
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::ExecutorEventFilter")]
     pub struct ExecutorEventFilter {
         // executor is a global entity, so no id here
@@ -721,16 +930,19 @@ impl Default for OracleEventFilter {
     }
 }
 /// Filter for oracle feed aggregation events.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::filters::OracleEventFilter")]
 pub struct OracleEventFilter {
     /// Optional feed identifier matcher.
@@ -2441,9 +2653,8 @@ mod bridge_filters_model {
             IntoSchema,
             crate :: DeriveJsonSerialize,
             crate :: DeriveJsonDeserialize,
+            norito::NoritoSchema,
         )]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[derive(norito::NoritoSchema)]
         #[norito_schema(
             name = "iroha_data_model::events::data::filters::bridge_filters_model::model::BridgeEventFilter"
         )]

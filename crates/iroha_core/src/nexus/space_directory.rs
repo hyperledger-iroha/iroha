@@ -267,36 +267,6 @@ impl UaidDataspaceBindings {
             .or_default()
             .insert(account_id)
     }
-    /// Removes an `(dataspace, account)` binding for the UAID.
-    ///
-    /// Returns `true` when the account was present and removed.
-    pub fn unbind_account(&mut self, dataspace: DataSpaceId, account_id: &AccountId) -> bool {
-        if let Some(accounts) = self.entries.get_mut(&dataspace) {
-            let removed = accounts.remove(account_id);
-            let empty = accounts.is_empty();
-            if empty {
-                let _ = accounts;
-                self.entries.remove(&dataspace);
-            }
-            removed
-        } else {
-            false
-        }
-    }
-    /// Removes _all_ bindings for the provided account, returning the dataspaces cleared.
-    pub fn purge_account(&mut self, account_id: &AccountId) -> Vec<DataSpaceId> {
-        let mut emptied = Vec::new();
-        for (dataspace, accounts) in &mut self.entries {
-            accounts.remove(account_id);
-            if accounts.is_empty() {
-                emptied.push(*dataspace);
-            }
-        }
-        for dataspace in &emptied {
-            self.entries.remove(dataspace);
-        }
-        emptied
-    }
     /// Retain only bindings for dataspaces included in `allowed`.
     ///
     /// Returns `true` when at least one dataspace binding was removed.

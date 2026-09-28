@@ -165,6 +165,7 @@ impl RelayPerformanceAccumulator {
         self.relay_id
     }
     /// Records uptime counters for a given epoch.
+    #[cfg(test)]
     pub fn record_uptime(
         &mut self,
         epoch: u32,
@@ -207,6 +208,7 @@ impl RelayPerformanceAccumulator {
     /// Adds a blinded bandwidth proof to the accumulator.
     ///
     /// Returns `true` when the proof was accepted (i.e., not a duplicate and targeting this relay).
+    #[cfg(test)]
     pub fn ingest_bandwidth_proof(&mut self, proof: &RelayBandwidthProofV1) -> bool {
         matches!(
             self.try_ingest_bandwidth_proof(proof),

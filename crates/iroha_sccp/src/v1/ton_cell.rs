@@ -17,10 +17,9 @@ use std::sync::Arc;
 use iroha_data_model::sccp::deployment::SccpTonCodeRefV1;
 use sha2::{Digest as _, Sha256};
 
-use super::{
-    constants::{TON_HASH_CHUNK_HASHES, TON_MEMBER_CHUNK_ADDRESSES, TON_SNAKE_CHUNK_BYTES},
-    roster::RosterV1,
-};
+use super::constants::{TON_HASH_CHUNK_HASHES, TON_MEMBER_CHUNK_ADDRESSES};
+#[cfg(test)]
+use super::{constants::TON_SNAKE_CHUNK_BYTES, roster::RosterV1};
 
 /// Maximum data bits of one cell.
 pub const MAX_CELL_BITS: usize = 1023;
@@ -349,6 +348,7 @@ impl CellBuilder {
 /// # Errors
 ///
 /// Returns [`TonCellError::Empty`] for no bytes.
+#[cfg(test)]
 pub fn snake_bytes(bytes: &[u8]) -> Result<Cell, TonCellError> {
     if bytes.is_empty() {
         return Err(TonCellError::Empty);
@@ -372,6 +372,7 @@ pub fn snake_bytes(bytes: &[u8]) -> Result<Cell, TonCellError> {
 ///
 /// Returns [`TonCellError::BadSnake`], [`TonCellError::SnakeTooLong`] or
 /// [`TonCellError::OpaqueChild`].
+#[cfg(test)]
 pub fn parse_snake_bytes(cell: &Cell, max_bytes: usize) -> Result<Vec<u8>, TonCellError> {
     let mut out = Vec::new();
     let mut current = cell;
@@ -381,8 +382,7 @@ pub fn parse_snake_bytes(cell: &Cell, max_bytes: usize) -> Result<Vec<u8>, TonCe
         }
         let len = current.bit_len / 8;
         let has_next = current.refs.len() == 1;
-        if (has_next && len != TON_SNAKE_CHUNK_BYTES)
-            || !(1..=TON_SNAKE_CHUNK_BYTES).contains(&len)
+        if (has_next && len != TON_SNAKE_CHUNK_BYTES) || !(1..=TON_SNAKE_CHUNK_BYTES).contains(&len)
         {
             return Err(TonCellError::BadSnake);
         }
@@ -451,6 +451,7 @@ pub fn hash_chunks(hashes: &[[u8; 32]]) -> Result<Option<Cell>, TonCellError> {
 
 /// Inputs of the canonical minter initial data for a deployment pinned to one generation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub struct TonMinterInitV1 {
     /// Live Taira `NetworkId` bytes.
     pub taira_network_id: [u8; 32],
@@ -468,6 +469,7 @@ pub struct TonMinterInitV1 {
 
 /// The three cells under the minter data root, exposed for golden comparisons.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub struct TonMinterDataV1 {
     /// `minter_data` root cell.
     pub root: Cell,
@@ -489,6 +491,7 @@ pub struct TonMinterDataV1 {
 /// # Errors
 ///
 /// Returns [`TonCellError::BadRoster`] or [`TonCellError::CoinsTooLarge`].
+#[cfg(test)]
 pub fn minter_initial_data(init: &TonMinterInitV1) -> Result<TonMinterDataV1, TonCellError> {
     let roster_digest = init
         .roster
@@ -565,6 +568,7 @@ pub fn state_init(
 /// # Errors
 ///
 /// See [`minter_initial_data`].
+#[cfg(test)]
 pub fn minter_account_id(
     init: &TonMinterInitV1,
     minter_code: SccpTonCodeRefV1,
@@ -657,10 +661,19 @@ mod tests {
         builder.store_bytes(&[0; 127]).unwrap();
         builder.store_uint(0, 7).unwrap();
         assert_eq!(builder.bit_len(), 1023);
-        assert_eq!(builder.store_bit(true).unwrap_err(), TonCellError::BitOverflow);
+        assert_eq!(
+            builder.store_bit(true).unwrap_err(),
+            TonCellError::BitOverflow
+        );
         let mut builder = CellBuilder::new();
-        assert_eq!(builder.store_uint(4, 2).unwrap_err(), TonCellError::ValueTooWide);
-        assert_eq!(builder.store_uint(0, 129).unwrap_err(), TonCellError::ValueTooWide);
+        assert_eq!(
+            builder.store_uint(4, 2).unwrap_err(),
+            TonCellError::ValueTooWide
+        );
+        assert_eq!(
+            builder.store_uint(0, 129).unwrap_err(),
+            TonCellError::ValueTooWide
+        );
         assert!(builder.store_uint(u128::MAX, 128).is_ok());
         for _ in 0..4 {
             builder.store_ref(CellRef::opaque([0; 32], 0)).unwrap();
@@ -713,7 +726,11 @@ mod tests {
         );
         let tail = CellBuilder::new().store_bytes(&[1]).unwrap().build();
         let mut short = CellBuilder::new();
-        short.store_bytes(&[1; 126]).unwrap().store_ref(tail.clone()).unwrap();
+        short
+            .store_bytes(&[1; 126])
+            .unwrap()
+            .store_ref(tail.clone())
+            .unwrap();
         assert_eq!(
             parse_snake_bytes(&short.build(), 4096).unwrap_err(),
             TonCellError::BadSnake

@@ -121,6 +121,7 @@ impl JdgSdnEnforcer {
     pub fn registry(&self) -> &JdgSdnRegistry {
         &self.registry
     }
+    #[cfg(test)]
     /// Snapshot of the registered SDN key records.
     #[must_use]
     pub fn registry_snapshot(&self) -> Vec<JdgSdnKeyRecord> {
@@ -128,6 +129,7 @@ impl JdgSdnEnforcer {
     }
 }
 static ENFORCER: OnceLock<JdgSdnEnforcer> = OnceLock::new();
+#[cfg(test)]
 /// Initialise the global JDG SDN enforcer from a registry file and policy.
 ///
 /// Use this during node bootstrap to make the SDN registry available to
@@ -151,15 +153,6 @@ pub fn init_enforcer_from_path(
 #[must_use]
 pub fn enforcer() -> Option<&'static JdgSdnEnforcer> {
     ENFORCER.get()
-}
-/// Snapshot the active SDN registry and policy if the global enforcer exists.
-#[must_use]
-pub fn sdn_registry_status() -> Option<(JdgSdnPolicy, Vec<JdgSdnKeyRecord>)> {
-    enforcer().map(|enforcer| {
-        let policy = *enforcer.policy();
-        let registry = enforcer.registry_snapshot();
-        (policy, registry)
-    })
 }
 /// Errors surfaced while loading an SDN registry.
 #[derive(Debug, Error)]
@@ -735,6 +728,7 @@ impl JdgAttestationStore {
         }
         record
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Fetch attestations for a dataspace ordered from oldest to newest.
     #[must_use]
     pub fn for_dataspace(&self, dataspace: &DataSpaceId) -> Vec<JdgAttestationRecord> {
@@ -743,6 +737,7 @@ impl JdgAttestationStore {
             .map(|records| records.iter().cloned().collect())
             .unwrap_or_default()
     }
+    #[cfg(test)]
     /// Fetch attestations for a dataspace filtered by epoch.
     #[must_use]
     pub fn for_dataspace_and_epoch(

@@ -35,6 +35,18 @@ iroha = { git = "https://github.com/hyperledger-iroha/iroha.git", rev = "<IROHA_
 Pin `<IROHA_COMMIT>` to the revision deployed by your network. For a local
 checkout, use `iroha = { path = "/path/to/iroha/crates/iroha" }`.
 
+### Diagnostics
+
+The client emits its diagnostics as [`tracing`](https://docs.rs/tracing) events;
+install a `tracing` subscriber to see them. The SDK does not enable tracing's
+`log` forwarding, so applications that only install a `log` logger receive no
+client events by default. To forward them to `log`, enable the feature in your
+own manifest:
+
+```toml
+tracing = { version = "0.1", features = ["log"] }
+```
+
 ## Client construction
 
 Construct an asynchronous client with `Client::builder(config).build()?`.

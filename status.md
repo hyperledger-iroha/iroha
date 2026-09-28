@@ -6,7 +6,7 @@ The previous dirty working copies are preserved in the [dated historical archive
 
 ## Current implementation and local evidence
 
-September 27 Taira recovery fixes use the submitting canary account for beacon transaction proofs at all four peers and retain the separate operator key through Canary recovery. Focused Torii pre-auth tests pass 43/43 and page-cost tests pass 7/7; CLI regressions and a new signed deployment remain pending.
+September 28 Taira source uses 10,000 application/content tokens per second and 100,000-token bursts, with 600,000 tokens per minute for MCP, proofs, push registration and Connect handshakes. Push uses the exact per-minute limiter; Connect derives its fallback from configuration defaults. Content/proof egress allows 256 MiB/s with a 1 GiB burst, and the SoraFS gateway replenishes a constant-memory 600,000-token bucket over 60 seconds. Earlier minimal-config, template, profile and native public materialization checks passed; the four new push/Connect selectors pass source/census checks (3 tests, 73 subtests), with native runtime tests and the new snapshot still pending. Current ordinary prepared transactions and SDK builders use single-route admission. The native mutable-call workflow retains its exact plan, grants only an explicitly requested address/selector permission, and recovers attempted submissions read-only; its focused runtime tests remain pending. Native prepared, Swift and Nexus fixture generation, immutable qualification and rollout remain open. Public d431 Taira passes all 12 basic doctor checks on September 28 and reports height 10, ten nonempty blocks and an empty queue; it does not yet run these source changes.
 
 The [validator staking candidate](specs/staking_validator_completion.md) now distinguishes immutable mint-finality key generations from contiguous epoch authorizations. The current production boundary retains the incumbent authority; fresh global candidate admission and prepared generation activation remain closed pending authenticated successor keys, complete beacon custody and network qualification. Signed operator and peer consent, exact network-bound staking monetary plans, unpaid-reward reserves, beacon custody preflight and source-level fee classification have focused coverage, while retained exit and slash liabilities, four-to-seven-to-four transitions, ordinary paid staking, DA/liveness and workspace qualification remain open. The [World stack ownership correction](docs/history/2026-09-21/core-world-stack.md), [Core regression repair](docs/history/2026-09-20/core-regression-root-causes.md), [Core fixture and ballot correction](docs/history/2026-09-21/core-fixture-and-ballot-regressions.md) and [transaction journal stack correction](docs/history/2026-09-20/core-transaction-stack.md) retain their separate scoped evidence; their historical pass counts do not qualify this merged candidate.
 
@@ -287,8 +287,7 @@ source seal, artifact identity, or 13 GiB release limit is waived by local passe
   mint/redemption, long-history and adversarial recovery, same-source native
   artifacts and governed physical-device profiles remain unqualified. Host JNI,
   software models and ordinary secure-key signing do not establish offline money.
-- **Deployment:** SoraFS L1/L2 and dual Governance DAG evidence, SoraNet transport
-  and privileged Linux helper qualification, SCCP audited production proof/live
+- **Deployment:** SoraFS L1/L2 and dual Governance DAG evidence, SoraNet transport and privileged Linux helper qualification, SCCP audited production proof/live
   corridors and Inrou real Linux/AArch64/KVM guest qualification remain open.
   Current Taira quorum and degraded application readiness are recorded above; recovery qualification is pending.
 

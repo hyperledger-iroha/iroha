@@ -502,10 +502,14 @@ pub fn prepare_state(
             )));
         }
         nexus_staking = Some(NexusStakingSetup {
+            #[cfg(test)]
             stake_asset,
             fee_asset,
+            #[cfg(test)]
             fee_sink: gas_account_id.clone(),
+            #[cfg(test)]
             stake_escrow: gas_account_id.clone(),
+            #[cfg(test)]
             slash_sink: gas_account_id,
             validator_accounts,
         });
@@ -841,13 +845,20 @@ const NEXUS_RECIPES_STABLE: &[RecipeKind] = &[];
 // current height, validator tenure, stake custody, and reward authority.
 const NEXUS_RECIPES_CHAOS: &[RecipeKind] =
     &[RecipeKind::DvpSettlement, RecipeKind::IssueReplicationOrder];
+/// Genesis staking wiring retained for workload funding.
+///
+/// Only `fee_asset` and `validator_accounts` drive the current workload; the custody accounts and
+/// stake asset are asserted by tests until the staking recipes above are implemented.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct NexusStakingSetup {
+    #[cfg(test)]
     stake_asset: AssetDefinitionId,
     fee_asset: AssetDefinitionId,
+    #[cfg(test)]
     fee_sink: AccountId,
+    #[cfg(test)]
     stake_escrow: AccountId,
+    #[cfg(test)]
     slash_sink: AccountId,
     validator_accounts: Vec<AccountRecord>,
 }

@@ -1505,8 +1505,10 @@ fn pre_direct_candidate_projection_surface_is_sealed_one_pass_and_fail_closed() 
     assert!(!direct.contains("pub(super) fn prepare_direct_relation_schedule_after_qpcs_v1"));
     let qpcs_bind = qpcs
         .find("pub(super) fn bind_direct_claimed_relation_v2")
-        .expect("production qPCS bind");
-    assert!(!qpcs[qpcs_bind.saturating_sub(64)..qpcs_bind].contains("#[cfg(test)]"));
+        .expect("parked qPCS bind");
+    // The claimed qPCS bind has no production caller yet: its impl stays test-only.
+    let qpcs_bind_impl = qpcs[..qpcs_bind].rfind("\nimpl").expect("qPCS bind impl");
+    assert!(qpcs[..qpcs_bind_impl].ends_with("\n#[cfg(test)]"));
     let carrier = include_str!(
         "collective/incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2/claimed_qpcs_source_carrier_v2.rs"
     );

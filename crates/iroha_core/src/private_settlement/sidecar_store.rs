@@ -223,9 +223,6 @@ mod staged_lock_evidence_tests {
     }
 }
 
-/// Stable first-release durable restricted-sidecar profile descriptor.
-pub const PRIVATE_SETTLEMENT_SIDECAR_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"APV1+APS1:provisional=magic-APV1,version-1,exact-zero-certificate-manifest,policy,authority,proof,delta,encrypted-capsule,availability-body,stored-height,address=payload-digest.apv1|certified=magic-APS1,version-1,manifest,policy,authority,encrypted-leg-payload,stored-height,lifecycle,lifecycle-height,audit-approvals,audit-approval-validation-height,verified-leg,prepare-qc,commit-qc,terminal-evidence-digest,verification-evidence-digest,address=payload-digest.aps1|promotion=exact-material+exact-body+valid-3-of-4-certificate,final-fsync-before-provisional-delete,restart-reconcile-exact-pair|bounds=each-record<=12MiB,combined-count<=4096,combined-total<=48GiB|access=owner-only-provisional,exact-four-validator-proof-view,governed-auditor-capsule-view,missing-and-denied-share-unavailable|durability=owner-0700,files-0600,nofollow,single-link,same-euid,process-lease+held-flock,temp-create-new+fsync+rename+directory-fsync|restart=reject-unknown-or-noncanonical-or-substituted-evidence,quorum-equivalent-qc-body+authority-index-replay-is-write-free,remove-only-well-formed-stale-temp,rebuild-pool-nullifier-output-reservations|retention=collecting-audited-prepared-commit-certified-never-pruned,terminal-only-at-ticket-height|plaintext=forbidden";
-
 /// Capacity policy for one durable restricted-sidecar store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivateSettlementSidecarStoreConfigV1 {

@@ -3,19 +3,23 @@
 //! Serves deterministic JSON responses backed by the seed OpenAPI/RBAC files so
 //! SDK/CLI integrations can exercise the shape before the real service lands.
 use axum::{
-    Json, Router,
+    Router,
+    body::Bytes,
     extract::{Path as AxumPath, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use blake3::Hasher;
 use eyre::WrapErr;
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json::{self, Value},
+};
 use reqwest::{
     blocking::Client,
     header::{HeaderMap as ReqwestHeaderMap, HeaderValue},
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     env,
@@ -35,7 +39,7 @@ struct MockState {
     audit: Vec<AuditEvent>,
     analytics: Vec<AnalyticsPoint>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 struct Domain {
     id: String,
     org_id: String,
@@ -44,7 +48,7 @@ struct Domain {
     status: String,
     cache_profile: String,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 struct AuditEvent {
     id: String,
     actor: String,
@@ -52,11 +56,31 @@ struct AuditEvent {
     action: String,
     target: String,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
 struct AnalyticsPoint {
     metric: String,
     ts: String,
     value: f64,
+}
+/// Norito-rendered JSON response body.
+struct Json(Value);
+impl IntoResponse for Json {
+    fn into_response(self) -> Response {
+        match json::to_string(&self.0) {
+            Ok(body) => ([(CONTENT_TYPE, "application/json")], body).into_response(),
+            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+        }
+    }
+}
+type Rejection = (StatusCode, Json);
+fn bad_request(message: &str) -> Rejection {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(norito::json!({ "error": (message) })),
+    )
+}
+fn parse_body<T: json::JsonDeserialize>(body: &Bytes) -> Result<T, Rejection> {
+    json::from_slice(body).map_err(|err| bad_request(&format!("invalid JSON body: {err}")))
 }
 fn hash_file(path: &Path) -> eyre::Result<String> {
     let data =
@@ -111,7 +135,7 @@ struct Tenant {
     org: String,
     project: Option<String>,
 }
-fn require_tenant(headers: &HeaderMap) -> Result<Tenant, (StatusCode, Json<Value>)> {
+fn require_tenant(headers: &HeaderMap) -> Result<Tenant, Rejection> {
     let org = headers
         .get("X-SN-Org")
         .and_then(|v| v.to_str().ok())
@@ -120,12 +144,7 @@ fn require_tenant(headers: &HeaderMap) -> Result<Tenant, (StatusCode, Json<Value
         .map(str::to_owned);
     let org = match org {
         Some(value) => value,
-        None => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "missing X-SN-Org header"})),
-            ));
-        }
+        None => return Err(bad_request("missing X-SN-Org header")),
     };
     let project = headers
         .get("X-SN-Project")
@@ -144,25 +163,26 @@ fn router(state: Arc<MockState>) -> Router {
         .route("/v1/analytics/query", post(run_analytics))
         .with_state(state)
 }
-async fn meta(State(state): State<Arc<MockState>>) -> Json<Value> {
-    Json(json!({
-        "openapi_hash": state.openapi_hash,
-        "rbac_hash": state.rbac_hash,
+async fn meta(State(state): State<Arc<MockState>>) -> Json {
+    Json(norito::json!({
+        "openapi_hash": (state.openapi_hash),
+        "rbac_hash": (state.rbac_hash),
     }))
 }
 async fn list_domains(
     State(state): State<Arc<MockState>>,
     headers: HeaderMap,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<Json, Rejection> {
     let _tenant = require_tenant(&headers)?;
-    Ok(Json(json!({ "items": state.domains })))
+    Ok(Json(norito::json!({ "items": (state.domains) })))
 }
 async fn create_domain(
     State(_state): State<Arc<MockState>>,
     headers: HeaderMap,
-    Json(mut payload): Json<HashMap<String, Value>>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    body: Bytes,
+) -> Result<Json, Rejection> {
     let tenant = require_tenant(&headers)?;
+    let mut payload: HashMap<String, Value> = parse_body(&body)?;
     let hostname = payload
         .remove("hostname")
         .and_then(|v| v.as_str().map(ToOwned::to_owned))
@@ -175,24 +195,25 @@ async fn create_domain(
         status: "pending_validation".to_owned(),
         cache_profile: "core".to_owned(),
     };
-    Ok(Json(json!(domain)))
+    Ok(Json(norito::json!(domain)))
 }
 async fn purge_domain(
     AxumPath(domain_id): AxumPath<String>,
     headers: HeaderMap,
-    Json(payload): Json<PurgeRequest>,
-) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    body: Bytes,
+) -> Result<(StatusCode, Json), Rejection> {
     let _tenant = require_tenant(&headers)?;
-    let response = json!({
+    let payload: PurgeRequest = parse_body(&body)?;
+    let response = norito::json!({
         "domain_id": domain_id,
-        "kind": payload.kind,
-        "entries": payload.entries,
-        "request_id": payload.request_id.unwrap_or_else(|| "stub-request".to_owned()),
+        "kind": (payload.kind),
+        "entries": (payload.entries),
+        "request_id": (payload.request_id.unwrap_or_else(|| "stub-request".to_owned())),
         "status": "accepted"
     });
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
-#[derive(Deserialize)]
+#[derive(JsonDeserialize)]
 struct PurgeRequest {
     kind: String,
     entries: Vec<String>,
@@ -201,16 +222,16 @@ struct PurgeRequest {
 async fn list_audit(
     State(state): State<Arc<MockState>>,
     headers: HeaderMap,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<Json, Rejection> {
     let _tenant = require_tenant(&headers)?;
-    Ok(Json(json!({ "events": state.audit })))
+    Ok(Json(norito::json!({ "events": (state.audit) })))
 }
 async fn run_analytics(
     State(state): State<Arc<MockState>>,
     headers: HeaderMap,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<Json, Rejection> {
     let _tenant = require_tenant(&headers)?;
-    Ok(Json(json!({ "series": state.analytics })))
+    Ok(Json(norito::json!({ "series": (state.analytics) })))
 }
 async fn serve(listen: SocketAddr, openapi: PathBuf, rbac: PathBuf) -> eyre::Result<()> {
     let state = build_state(&openapi, &rbac)?;
@@ -227,32 +248,18 @@ fn run_cli(endpoint: &str, cli: CliCommand) -> eyre::Result<()> {
         .timeout(std::time::Duration::from_secs(3))
         .build()
         .wrap_err("failed to build HTTP client")?;
-    match cli {
-        CliCommand::Meta => {
-            let data: Value = client
-                .get(format!("{endpoint}/meta"))
-                .send()?
-                .error_for_status()?
-                .json()?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
-        }
-        CliCommand::Domains => {
-            let data: Value = client
-                .get(format!("{endpoint}/v1/domains"))
-                .send()?
-                .error_for_status()?
-                .json()?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
-        }
-        CliCommand::Audit => {
-            let data: Value = client
-                .get(format!("{endpoint}/v1/audit/events"))
-                .send()?
-                .error_for_status()?
-                .json()?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
-        }
-    }
+    let path = match cli {
+        CliCommand::Meta => "/meta",
+        CliCommand::Domains => "/v1/domains",
+        CliCommand::Audit => "/v1/audit/events",
+    };
+    let body = client
+        .get(format!("{endpoint}{path}"))
+        .send()?
+        .error_for_status()?
+        .bytes()?;
+    let data: Value = json::from_slice(&body)?;
+    println!("{}", json::to_string_pretty(&data)?);
     Ok(())
 }
 #[derive(Clone, Copy)]

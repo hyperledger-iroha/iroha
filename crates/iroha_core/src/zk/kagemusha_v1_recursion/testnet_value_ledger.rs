@@ -317,6 +317,7 @@ impl KagemushaTestnetMintCreditLedgerV1 {
         self.by_operation.len()
     }
 
+    #[cfg(test)]
     /// Inspect a counted credit by its finalized top-up operation ID.
     #[must_use]
     pub fn credit_by_operation(
@@ -326,6 +327,7 @@ impl KagemushaTestnetMintCreditLedgerV1 {
         self.by_operation.get(&operation_id).copied()
     }
 
+    #[cfg(test)]
     /// Inspect a counted credit by its unique proof-bound credit ID.
     #[must_use]
     pub fn credit_by_credit_id(

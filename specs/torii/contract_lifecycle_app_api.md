@@ -113,14 +113,16 @@ admission, rather than the server wall clock. An explicit timestamp is never
 replaced or clamped. Core still enforces the configured future-drift bound,
 signature-bound TTL, and NTS health policy when admitting the signed transaction.
 
-Every public contract-call payload binds `QueuePlanSynced` before fee quotation
+Every public contract-call payload binds `Ordinary` before fee quotation
 and signing. Clients validate that exact admission intent along with the
-executable, metadata, TTL, and fee intent; an otherwise valid `Ordinary` draft is
-rejected. Both local signing followed by `/transaction` and detached submit
-through `/v1/contracts/call` use the same globally certified admission owner
-without rebuilding the signed transaction. Detached submit emits its contract
+executable, metadata, TTL, and fee intent. Preparation resolves the complete
+routing plan and rejects multi-route work before exposing signing bytes. Both
+local signing followed by `/transaction` and detached submit through
+`/v1/contracts/call` use the same durable single-route admission owner without
+rebuilding the signed transaction. Detached submit emits a pending contract
 receipt only after `Accepted`; rejection and ambiguous-admission responses retain
-the canonical owner's status, headers, and body unchanged.
+the canonical owner's status, headers, and body unchanged. Acceptance alone is
+not evidence of successful execution.
 
 Direct settlement accepts either the transaction authority or one exact
 sponsor program. Receipt-lane (`lane_relay_burn`) Nexus settlement is

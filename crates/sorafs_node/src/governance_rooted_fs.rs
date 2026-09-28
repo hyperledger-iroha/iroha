@@ -10,6 +10,8 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use std::os::unix::fs::MetadataExt as _;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt as _;
+#[cfg(test)]
+use std::time::{Duration, Instant};
 use std::{
     ffi::{OsStr, OsString},
     fmt,
@@ -20,7 +22,6 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
 };
 #[cfg(unix)]
 unsafe extern "C" {
@@ -36,6 +37,7 @@ const TWO_SLOT_STORE_NAME_MAX_BYTES_V1: usize = 128;
 const TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1: usize = 16;
 const TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1: usize = 16;
 const TWO_SLOT_LOST_FOUND_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
+#[cfg(test)]
 const TWO_SLOT_INITIALIZATION_WAIT_MAX_V1: Duration = Duration::from_secs(5 * 60);
 const TWO_SLOT_NAMES_V1: [&str; 2] = ["slot-0.v1", "slot-1.v1"];
 const TWO_SLOT_COMMIT_MARKER_V1: [u8; 16] = *b"iroha-slot-v1-ok";

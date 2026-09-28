@@ -48,9 +48,9 @@ mod relation;
 mod state_checkpoint;
 mod state_relation;
 mod terminal_authorization;
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 mod terminal_body_commitment;
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 mod terminal_durable_commitments;
 #[cfg(feature = "zk-halo2-ipa")]
 mod testnet_observation;
@@ -64,6 +64,14 @@ mod typed_sha_consumer;
     any(test, feature = "kagemusha-real-proof-harness"),
     feature = "zk-halo2-ipa"
 ))]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the non-shipping harness binary drives one entry point; the remaining \
+                  qualification helpers serve this module's unit tests"
+    )
+)]
 mod real_handoff_qualification_tests;
 #[cfg(all(test, unix, feature = "zk-halo2-ipa"))]
 pub(crate) use real_handoff_qualification_tests::DiagnosticMintStageProofV1;
@@ -77,6 +85,9 @@ pub use accumulation::{
     decide_kagemusha_ep_accumulator_v1, decide_kagemusha_eq_accumulator_v1,
     fold_kagemusha_ep_accumulators_v1, fold_kagemusha_eq_accumulators_v1,
     initial_kagemusha_ep_accumulator_v1, initial_kagemusha_eq_accumulator_v1,
+};
+#[cfg(test)]
+pub use accumulation::{
     verify_and_decide_kagemusha_ep_fold_v1, verify_and_decide_kagemusha_eq_fold_v1,
 };
 pub use artifacts::{
@@ -100,32 +111,21 @@ pub(crate) use generation::generate_kagemusha_mint_hash_artifacts_for_guarded_te
 pub fn run_guarded_real_mint_authority_proof_v1() {
     real_handoff_qualification_tests::run_guarded_real_mint_authority_proof_v1();
 }
-pub use generation::{
-    KAGEMUSHA_OPERATION_RELATION_SCHEMA_ID_V1, KagemushaArtifactGenerationErrorV1,
-    KagemushaGeneratedOperationArtifactsV1,
-};
+pub use generation::KagemushaArtifactGenerationErrorV1;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+pub use generation::KagemushaGeneratedOperationArtifactsV1;
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg(test)]
 pub use generation::{
     KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
     KagemushaCommitEvidenceOpeningGenerationV1, KagemushaCommitWrapperEpGenerationWitnessV1,
     KagemushaCommitWrapperEqGenerationWitnessV1, KagemushaCommitWrapperGenerationWitnessV1,
     KagemushaGeneratedCommitWrapperArtifactsV1, KagemushaGeneratedCommitWrapperProofV1,
-    KagemushaGeneratedMintAuthorityArtifactsV1, KagemushaGeneratedMintAuthorityProofV1,
-    KagemushaGeneratedMintAuthorizationArtifactsV1, KagemushaGeneratedMintAuthorizationProofV1,
-    KagemushaGeneratedMintHashArtifactsV1, KagemushaGeneratedMintHashClaimV1,
-    KagemushaGeneratedPaymentProofV1, KagemushaGeneratedRecursiveStateArtifactsV1,
-    KagemushaGeneratedRecursiveStateProofV1, KagemushaGeneratedRedemptionProofV1,
+    KagemushaGeneratedPaymentProofV1, KagemushaGeneratedRedemptionProofV1,
     KagemushaGeneratedTerminalAuthorizationArtifactsV1,
     KagemushaGeneratedTerminalAuthorizationProofV1, KagemushaLoadedEpCommitWrapperArtifactsV1,
-    KagemushaLoadedEpMintAuthorityArtifactsV1, KagemushaLoadedEpMintAuthorizationArtifactsV1,
-    KagemushaLoadedEpMintHashArtifactsV1, KagemushaLoadedEpRecursiveStateArtifactsV1,
     KagemushaLoadedEpTerminalAuthorizationArtifactsV1, KagemushaLoadedEqCommitWrapperArtifactsV1,
-    KagemushaLoadedEqMintAuthorityArtifactsV1, KagemushaLoadedEqMintAuthorizationArtifactsV1,
-    KagemushaLoadedEqMintHashArtifactsV1, KagemushaLoadedEqRecursiveStateArtifactsV1,
-    KagemushaLoadedEqTerminalAuthorizationArtifactsV1, KagemushaMintAuthorityGenerationWitnessV1,
-    KagemushaMintAuthorizationGenerationWitnessV1, KagemushaMintHashArtifactGenerationWitnessV1,
-    KagemushaMintHashClaimGenerationWitnessV1, KagemushaRecursiveIncomingEpGenerationWitnessV1,
-    KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
+    KagemushaLoadedEqTerminalAuthorizationArtifactsV1,
     KagemushaTerminalAuthorizationEpGenerationWitnessV1,
     KagemushaTerminalAuthorizationEqGenerationWitnessV1,
     KagemushaTerminalAuthorizationGenerationWitnessV1,
@@ -133,28 +133,39 @@ pub use generation::{
     KagemushaTerminalAuthorizationHashClaimParityWitnessV1,
     KagemushaTerminalAuthorizationPrivateGenerationWitnessV1,
     KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
-    KagemushaTerminalSendGenerationWitnessV1, generate_kagemusha_commit_wrapper_artifacts_v1,
+    generate_kagemusha_commit_wrapper_artifacts_v1,
+    generate_kagemusha_terminal_authorization_artifacts_v1, prove_kagemusha_commit_wrapper_v1,
+    prove_kagemusha_terminal_authorization_hash_claim_v1,
+    prove_kagemusha_terminal_authorization_v1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+pub use generation::{
+    KagemushaGeneratedMintAuthorityArtifactsV1, KagemushaGeneratedMintAuthorityProofV1,
+    KagemushaGeneratedMintAuthorizationArtifactsV1, KagemushaGeneratedMintAuthorizationProofV1,
+    KagemushaGeneratedMintHashArtifactsV1, KagemushaGeneratedMintHashClaimV1,
+    KagemushaGeneratedRecursiveStateProofV1, KagemushaLoadedEpMintAuthorityArtifactsV1,
+    KagemushaLoadedEpMintAuthorizationArtifactsV1, KagemushaLoadedEpMintHashArtifactsV1,
+    KagemushaLoadedEqMintAuthorityArtifactsV1, KagemushaLoadedEqMintAuthorizationArtifactsV1,
+    KagemushaLoadedEqMintHashArtifactsV1, KagemushaMintAuthorityGenerationWitnessV1,
+    KagemushaMintAuthorizationGenerationWitnessV1, KagemushaMintHashArtifactGenerationWitnessV1,
+    KagemushaMintHashClaimGenerationWitnessV1, KagemushaTerminalSendGenerationWitnessV1,
     generate_kagemusha_mint_authority_artifacts_v1,
-    generate_kagemusha_mint_authorization_artifacts_v1, generate_kagemusha_mint_hash_artifacts_v1,
-    generate_kagemusha_recursive_state_artifacts_v1,
-    generate_kagemusha_terminal_authorization_artifacts_v1,
-    kagemusha_terminal_authorization_enabled_profile_table_v1,
-    load_kagemusha_ep_commit_wrapper_artifacts_v1, load_kagemusha_ep_mint_authority_artifacts_v1,
-    load_kagemusha_ep_mint_authorization_artifacts_v1, load_kagemusha_ep_mint_hash_artifacts_v1,
-    load_kagemusha_ep_recursive_state_artifacts_v1,
-    load_kagemusha_ep_terminal_authorization_artifacts_v1,
-    load_kagemusha_eq_commit_wrapper_artifacts_v1, load_kagemusha_eq_mint_authority_artifacts_v1,
-    load_kagemusha_eq_mint_authorization_artifacts_v1, load_kagemusha_eq_mint_hash_artifacts_v1,
-    load_kagemusha_eq_recursive_state_artifacts_v1,
-    load_kagemusha_eq_terminal_authorization_artifacts_v1, prove_kagemusha_commit_wrapper_v1,
+    generate_kagemusha_mint_authorization_artifacts_v1,
+    load_kagemusha_ep_mint_authority_artifacts_v1, load_kagemusha_ep_mint_hash_artifacts_v1,
+    load_kagemusha_eq_mint_authority_artifacts_v1, load_kagemusha_eq_mint_hash_artifacts_v1,
     prove_kagemusha_finalized_mint_from_checkpoint_v1, prove_kagemusha_mint_authority_bootstrap_v1,
     prove_kagemusha_mint_authority_rotation_from_checkpoint_v1, prove_kagemusha_mint_authority_v1,
     prove_kagemusha_mint_authorization_hash_claim_v1, prove_kagemusha_mint_authorization_v1,
-    prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_payment_v1,
-    prove_kagemusha_platform_credential_hash_claim_v1,
-    prove_kagemusha_recursive_state_hash_claim_v1, prove_kagemusha_recursive_state_v1,
-    prove_kagemusha_redemption_v1, prove_kagemusha_terminal_authorization_hash_claim_v1,
-    prove_kagemusha_terminal_authorization_v1,
+    prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_platform_credential_hash_claim_v1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+pub use generation::{
+    KagemushaGeneratedRecursiveStateArtifactsV1, KagemushaLoadedEpRecursiveStateArtifactsV1,
+    KagemushaLoadedEqRecursiveStateArtifactsV1, KagemushaRecursiveIncomingEpGenerationWitnessV1,
+    KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
+    generate_kagemusha_recursive_state_artifacts_v1, prove_kagemusha_recursive_state_hash_claim_v1,
+    prove_kagemusha_recursive_state_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use generation::{
@@ -167,8 +178,10 @@ pub use guard_bundle::{
     KagemushaPlatformCredentialStatementV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg(test)]
+pub use guard_verifier::KagemushaAuthenticatedGuardBundleVerifierV1;
+#[cfg(feature = "zk-halo2-ipa")]
 pub use guard_verifier::{
-    KagemushaAuthenticatedGuardBundleVerifierV1, KagemushaGuardBundleProofPartsV1,
     KagemushaGuardProofDiagnosticVerifierV1, KagemushaGuardVerificationErrorV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
@@ -203,40 +216,51 @@ pub use native_backend::{
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use provider_policy_root::KagemushaProviderRootCircuitParamsV1;
-pub use relation::{
-    KagemushaOperationRelationCircuitV1, KagemushaOperationRelationConfigV1,
-    KagemushaOperationRelationWitnessV1,
-};
+#[cfg(test)]
+pub use relation::KagemushaOperationRelationCircuitV1;
+#[cfg(test)]
+pub use relation::KagemushaOperationRelationConfigV1;
+pub use relation::KagemushaOperationRelationWitnessV1;
 #[cfg(feature = "zk-halo2-ipa")]
 pub use state_checkpoint::{KagemushaRecursiveStateCheckpointV1, KagemushaStateCheckpointErrorV1};
 pub use state_relation::{
     KagemushaPreparedIntentCommitmentsV1, KagemushaReceiveFoldCreditV1,
-    KagemushaStateRelationCircuitV1, KagemushaStateRelationPublicInputsV1,
-    KagemushaStateRelationWitnessV1, public_instance as kagemusha_state_public_instance_v1,
+    KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,
+    public_instance as kagemusha_state_public_instance_v1,
 };
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) use terminal_authorization::public_instance as kagemusha_terminal_authorization_public_instance_v1;
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg(test)]
 pub(crate) use terminal_authorization::{
-    KagemushaCommitWrapperEpCircuitV1, KagemushaCommitWrapperEqCircuitV1,
-    KagemushaCommitWrapperWitnessV1, KagemushaTerminalAuthorizationEpCircuitV1,
-    KagemushaTerminalAuthorizationEpWitnessV1, KagemushaTerminalAuthorizationEqCircuitV1,
+    KagemushaCommitWrapperWitnessV1, KagemushaTerminalAuthorizationEpWitnessV1,
     KagemushaTerminalAuthorizationEqWitnessV1, KagemushaTerminalAuthorizationWitnessV1,
-    TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, build_kagemusha_commit_wrapper_ep_v1,
-    build_kagemusha_commit_wrapper_eq_v1, build_kagemusha_terminal_authorization_ep_v1,
-    build_kagemusha_terminal_authorization_eq_v1,
+    build_kagemusha_commit_wrapper_ep_v1, build_kagemusha_commit_wrapper_eq_v1,
+    build_kagemusha_terminal_authorization_ep_v1, build_kagemusha_terminal_authorization_eq_v1,
     derive_kagemusha_commit_wrapper_deferred_audits_v1,
     derive_kagemusha_terminal_authorization_deferred_audits_v1,
 };
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+pub(crate) use terminal_authorization::{
+    KagemushaTerminalAuthorizationEpCircuitV1, KagemushaTerminalAuthorizationEqCircuitV1,
+    TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
+};
+#[cfg(test)]
 pub(crate) use terminal_authorization::{
     KagemushaTerminalAuthorizationPrivateTransitionV1,
-    KagemushaTerminalAuthorizationPublicInputsV1, TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
-    canonical_prepared_transition_binding_digest_v1, canonical_terminal_send_output_binding_v1,
-    kagemusha_candidate_envelope_digest_v1,
+    TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
+};
+pub(crate) use terminal_authorization::{
+    KagemushaTerminalAuthorizationPublicInputsV1, canonical_prepared_transition_binding_digest_v1,
+    canonical_terminal_send_output_binding_v1, kagemusha_candidate_envelope_digest_v1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(test)]
+pub use testnet_observation::{
+    KagemushaTestnetExperimentalMintAdmissionV1, KagemushaTestnetExperimentalMintTrialV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use testnet_observation::{
-    KagemushaTestnetExperimentalMintAdmissionV1, KagemushaTestnetExperimentalMintTrialV1,
     KagemushaTestnetFinalizedMintObservationV1, KagemushaTestnetLineageTrialV1,
     KagemushaTestnetProofObservationOwnerV1, KagemushaTestnetStateObservationScopeV1,
     KagemushaTestnetStateProofObservationV1, KagemushaTestnetValueAdmissionV1,
@@ -255,8 +279,7 @@ use iroha_data_model::kagemusha::{
     KagemushaMintCreditStatementV1, KagemushaMintCreditV1, KagemushaOperationKindV1,
     KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1, KagemushaPaymentRequestV1,
     KagemushaPaymentV1, KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
-    KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1, kagemusha_asset_identity_digest_v1,
-    kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
+    KagemushaRedemptionProofV1, kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
 };
 pub use iroha_data_model::kagemusha::{
     KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
@@ -934,49 +957,6 @@ impl KagemushaNormalizedGuardStatementV1 {
     pub fn canonical_digest(&self) -> Result<DigestV1, KagemushaRecursionErrorV1> {
         self.validate_shape()?;
         Ok(guard_bundle::normalized_guard_statement_digest_v1(self))
-    }
-
-    /// Check an exact typed redemption statement against every overlapping normalized guard field.
-    ///
-    /// This is a prover/local-state preflight. The recursive circuit must enforce the same
-    /// equalities; a successful host comparison is not monetary authority.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an invalid wire statement or any release, network, asset, scale, pool, lane,
-    /// epoch, key, policy, sequence, commitment, trusted-time, or guard-digest substitution.
-    pub fn validate_redemption_binding(
-        &self,
-        statement: &KagemushaRedemptionStatementV1,
-    ) -> Result<(), KagemushaRecursionErrorV1> {
-        statement
-            .validate_shape()
-            .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?;
-        let lifecycle = &statement.lifecycle;
-        let asset_id = kagemusha_asset_identity_digest_v1(&lifecycle.asset)
-            .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?;
-        if self.operation != KagemushaOperationV1::RedeemSplit
-            || statement.amount != self.amount
-            || statement.version != self.version
-            || lifecycle.operation_kind != KagemushaOperationKindV1::RedeemSplit
-            || lifecycle.release_id != self.release_id
-            || lifecycle.network_id.as_bytes() != &self.network_id
-            || asset_id != self.asset_id
-            || lifecycle.asset_incarnation != self.asset_incarnation
-            || lifecycle.scale != self.asset_scale
-            || lifecycle.liability_pool_id != self.liability_pool_id
-            || lifecycle.hardware_profile_id != self.hardware_profile_id
-            || lifecycle.policy_epoch != self.policy_epoch
-            || lifecycle.suite_id != self.successor_suite_id
-            || lifecycle.vk_digest != self.successor_vk_digest
-            || lifecycle
-                .canonical_digest()
-                .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?
-                != self.lifecycle_binding_digest
-        {
-            return Err(KagemushaRecursionErrorV1::PublicBindingMismatch);
-        }
-        Ok(())
     }
 
     fn validate_shape(&self) -> Result<(), KagemushaRecursionErrorV1> {
@@ -1834,11 +1814,13 @@ pub trait KagemushaRecursiveVerifierV1 {
     ) -> Result<(), String>;
 }
 
+#[cfg(test)]
 /// Explicit fail-closed backend for deployments which have not installed an authenticated
 /// Kagemusha proof release.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RejectAllKagemushaRecursiveVerifierV1;
 
+#[cfg(test)]
 impl KagemushaRecursiveVerifierV1 for RejectAllKagemushaRecursiveVerifierV1 {
     fn verify_state_proof_and_decide(
         &self,

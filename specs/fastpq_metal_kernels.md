@@ -97,10 +97,11 @@ threadgroup into the planner so runtime dispatches respect the hardware limits.
 The defaults clamp to 32/64/128/256 lanes as the log-size increases. The
 256-word threadgroup tile can hold butterflies for at most eight radix-2 stages;
 smaller domains retain the five-/four-stage heuristics, and wider stages are
-handed to the post-tiling kernel. Operator
+handed to the post-tiling kernel. Debug-build developer
 overrides (`FASTPQ_METAL_FFT_LANES`, `FASTPQ_METAL_FFT_TILE_STAGES`) flow through
 `FftArgs::threadgroup_lanes`/`local_stage_limit` and are applied by the kernels
-above without rebuilding the metallib.【crates/fastpq_prover/src/metal_config.rs:12】【crates/fastpq_prover/src/metal.rs:599】
+above without rebuilding the metallib. Release builds ignore them, and they stop
+applying once configured Metal overrides freeze the environment shim.【crates/fastpq_prover/src/metal_config.rs:12】【crates/fastpq_prover/src/metal.rs:599】
 
 Use `fastpq_metal_bench` to capture the resolved tuning values and verify that
 the multi-pass kernels were exercised (`post_tile_dispatches` in the JSON) before

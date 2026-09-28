@@ -11,17 +11,20 @@ mod fixed_array;
 pub mod payment;
 use super::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
-    TranscriptV1, generator_digest, hash_to_curve_rfc9380, health_checked_p256_rng_v1,
-    random_nonzero_scalar, validate_generator_independence,
+    generator_digest, hash_to_curve_rfc9380, validate_generator_independence,
 };
+#[cfg(test)]
+use super::p256::{TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar};
 use once_cell::sync::Lazy;
 use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use thiserror::Error;
+#[cfg(test)]
 /// Closed identifier for Twisted-ElGamal public-key possession transcripts.
 pub const PGC_KEY_POSSESSION_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.key-possession.p256.sha256.v1";
+#[cfg(test)]
 /// Closed identifier for Twisted-ElGamal opening transcripts.
 pub const PGC_CIPHERTEXT_OPENING_SUITE_V1: &[u8] =
     b"iroha.anonymous-pgc.ciphertext-opening.p256.sha256.v1";
@@ -83,11 +86,13 @@ impl AnonymousPgcParametersV1 {
     pub const fn parameter_digest(&self) -> [u8; 32] {
         self.parameter_digest
     }
+    #[cfg(test)]
     /// Return the key/randomness generator `g`.
     #[must_use]
     pub fn key_generator(&self) -> CompressedPointV1 {
         CompressedPointV1::from_projective(self.g).expect("derived Anonymous-PGC g is non-identity")
     }
+    #[cfg(test)]
     /// Return the message generator `h`.
     #[must_use]
     pub fn message_generator(&self) -> CompressedPointV1 {
@@ -780,12 +785,14 @@ pub fn add_ciphertexts(
     };
     Ok(ciphertext)
 }
+#[cfg(test)]
 /// Bound input for public-key possession.
 #[derive(Clone, Copy, Debug)]
 pub struct PgcKeyPossessionStatementV1<'a> {
     public_key: TwistedElGamalPublicKeyV1,
     transcript_binding: TranscriptBindingV1<'a>,
 }
+#[cfg(test)]
 impl<'a> PgcKeyPossessionStatementV1<'a> {
     /// Construct a fully bound public-key statement.
     ///
@@ -865,6 +872,7 @@ impl PgcKeyPossessionProofV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 /// Prove possession of the secret corresponding to a registered public key.
 ///
 /// # Errors
@@ -905,6 +913,7 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
+#[cfg(test)]
 /// Verify a public-key possession proof.
 ///
 /// # Errors
@@ -929,6 +938,7 @@ pub fn verify_key_possession(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Fully bound input to a Twisted-ElGamal ciphertext-opening proof.
 #[derive(Clone, Copy, Debug)]
 pub struct PgcCiphertextOpeningStatementV1<'a> {
@@ -936,6 +946,7 @@ pub struct PgcCiphertextOpeningStatementV1<'a> {
     ciphertext: TwistedElGamalCiphertextV1,
     transcript_binding: TranscriptBindingV1<'a>,
 }
+#[cfg(test)]
 impl<'a> PgcCiphertextOpeningStatementV1<'a> {
     /// Construct a bound opening statement.
     ///
@@ -1027,6 +1038,7 @@ impl PgcCiphertextOpeningProofV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 /// Prove knowledge of `(message, randomness)` opening a Twisted-ElGamal ciphertext.
 ///
 /// # Errors
@@ -1083,6 +1095,7 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
+#[cfg(test)]
 /// Verify a Twisted-ElGamal ciphertext-opening proof.
 ///
 /// # Errors
@@ -1120,6 +1133,7 @@ pub fn verify_ciphertext_opening(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Decode and verify exact opaque opening-proof bytes.
 ///
 /// # Errors
@@ -1144,6 +1158,7 @@ fn validate_binding(binding: &TranscriptBindingV1<'_>) -> Result<(), AnonymousPg
     }
     Ok(())
 }
+#[cfg(test)]
 fn key_possession_transcript(
     statement: &PgcKeyPossessionStatementV1<'_>,
     announcement: &CompressedPointV1,
@@ -1154,6 +1169,7 @@ fn key_possession_transcript(
     transcript.append_point(b"announcement", announcement)?;
     Ok(transcript)
 }
+#[cfg(test)]
 fn ciphertext_opening_transcript(
     statement: &PgcCiphertextOpeningStatementV1<'_>,
     announcement_left: &CompressedPointV1,

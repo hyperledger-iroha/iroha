@@ -36,12 +36,16 @@ struct SalSecretCopyValueV1<T: Copy + Zeroize>(T);
 struct BorrowedSalCopySlotV1<'a, T: Copy + Zeroize>(&'a mut T);
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static SAL_SECRET_COPY_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    #[cfg(test)]
     static FCMP_SAL_WITNESS_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    #[cfg(test)]
     static SAL_SECRET_CANONICALITY_STATE_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    #[cfg(test)]
     static SAL_SECRET_WIDE_INPUT_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -461,6 +465,7 @@ fn validate_sal_witness_relation_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Produce the canonical FCMP++ SAL proof.
 ///
 /// `context_hash` must be the protocol-domain-separated digest of the complete authoritative

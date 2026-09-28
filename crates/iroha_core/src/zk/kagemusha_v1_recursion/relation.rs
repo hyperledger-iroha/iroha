@@ -6,50 +6,80 @@
 //! GuardBundle statement hashes, sparse-Merkle insertion, recursive predecessor verification, and
 //! BGH19 delayed-history accumulation before an artifact release may use it for monetary proof.
 
+#[cfg(test)]
 use core::marker::PhantomData;
 
+#[cfg(test)]
 use ff::PrimeField;
+#[cfg(test)]
+use halo2_proofs::plonk::{Advice, Column, Instance, Selector};
+#[cfg(test)]
 use halo2_proofs::{
     circuit::{Layouter, V1, Value},
-    plonk::{
-        Advice, Circuit, Column, ConstraintSystem, Error as PlonkError, Expression, Instance,
-        Selector,
-    },
+    plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression},
     poly::Rotation,
 };
 use iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1;
 
 use super::KagemushaOperationV1;
+#[cfg(test)]
 use crate::zk::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1;
 
+#[cfg(test)]
 const MAIN_COLUMNS: usize = 24;
+#[cfg(test)]
 const OPERATION_INSTANCE_OFFSET: usize = 0;
 
+#[cfg(test)]
 const OP: usize = 0;
+#[cfg(test)]
 const S_BOOTSTRAP: usize = 1;
+#[cfg(test)]
 const S_MINT: usize = 2;
+#[cfg(test)]
 const S_SEND: usize = 3;
+#[cfg(test)]
 const S_RECEIVE: usize = 4;
+#[cfg(test)]
 const S_REDEEM: usize = 5;
+#[cfg(test)]
 const S_ROTATE: usize = 6;
+#[cfg(test)]
 const BALANCE_BEFORE: usize = 7;
+#[cfg(test)]
 const BALANCE_AFTER: usize = 8;
+#[cfg(test)]
 const AMOUNT: usize = 9;
+#[cfg(test)]
 const SEQUENCE_BEFORE: usize = 10;
+#[cfg(test)]
 const SEQUENCE_AFTER: usize = 11;
+#[cfg(test)]
 const EPOCH_BEFORE: usize = 12;
+#[cfg(test)]
 const EPOCH_AFTER: usize = 13;
+#[cfg(test)]
 const ROOT_BEFORE_LO: usize = 14;
+#[cfg(test)]
 const ROOT_BEFORE_HI: usize = 15;
+#[cfg(test)]
 const ROOT_AFTER_LO: usize = 16;
+#[cfg(test)]
 const ROOT_AFTER_HI: usize = 17;
+#[cfg(test)]
 const AMOUNT_INV: usize = 18;
+#[cfg(test)]
 const BOOTSTRAP_EPOCH_INV: usize = 19;
+#[cfg(test)]
 const ROOT_LO_INV: usize = 20;
+#[cfg(test)]
 const ROOT_HI_INV: usize = 21;
+#[cfg(test)]
 const ROOT_LO_NONZERO: usize = 22;
+#[cfg(test)]
 const ROOT_HI_NONZERO: usize = 23;
 
+#[cfg(test)]
 const RANGE_VALUES: [usize; 11] = [
     BALANCE_BEFORE,
     BALANCE_AFTER,
@@ -90,6 +120,7 @@ pub struct KagemushaOperationRelationWitnessV1 {
 }
 
 impl KagemushaOperationRelationWitnessV1 {
+    #[cfg(test)]
     fn operation_tag(self) -> u64 {
         match self.operation {
             KagemushaOperationV1::Bootstrap => 0,
@@ -101,12 +132,14 @@ impl KagemushaOperationRelationWitnessV1 {
         }
     }
 
+    #[cfg(test)]
     fn selectors(self) -> [u64; 6] {
         let mut selectors = [0; 6];
         selectors[usize::try_from(self.operation_tag()).expect("operation tag fits usize")] = 1;
         selectors
     }
 
+    #[cfg(test)]
     fn values<F: KagemushaPoseidonFieldV1>(self) -> [u128; RANGE_VALUES.len()] {
         let (root_before_lo, root_before_hi) =
             digest_chunks(F::select_component(self.replay_root_before));
@@ -128,6 +161,7 @@ impl KagemushaOperationRelationWitnessV1 {
     }
 }
 
+#[cfg(test)]
 /// Halo2 configuration for the fixed six-operation arithmetic kernel.
 #[derive(Clone, Copy, Debug)]
 pub struct KagemushaOperationRelationConfigV1 {
@@ -140,6 +174,7 @@ pub struct KagemushaOperationRelationConfigV1 {
     q_accumulate: Selector,
 }
 
+#[cfg(test)]
 /// One field-neutral circuit shape used by both Eq/Fp and Ep/Fq state parities.
 #[derive(Clone, Copy, Debug)]
 pub struct KagemushaOperationRelationCircuitV1<F> {
@@ -147,6 +182,7 @@ pub struct KagemushaOperationRelationCircuitV1<F> {
     marker: PhantomData<F>,
 }
 
+#[cfg(test)]
 impl<F> Default for KagemushaOperationRelationCircuitV1<F> {
     fn default() -> Self {
         Self {
@@ -156,6 +192,7 @@ impl<F> Default for KagemushaOperationRelationCircuitV1<F> {
     }
 }
 
+#[cfg(test)]
 impl<F> KagemushaOperationRelationCircuitV1<F> {
     /// Construct one witnessed arithmetic relation.
     #[must_use]
@@ -167,6 +204,7 @@ impl<F> KagemushaOperationRelationCircuitV1<F> {
     }
 }
 
+#[cfg(test)]
 impl<F> Circuit<F> for KagemushaOperationRelationCircuitV1<F>
 where
     F: KagemushaPoseidonFieldV1,
@@ -431,16 +469,19 @@ where
     }
 }
 
+#[cfg(test)]
 fn digest_chunks(digest: [u8; 32]) -> (u128, u128) {
     let lo = u128::from_le_bytes(digest[..16].try_into().expect("fixed digest half"));
     let hi = u128::from_le_bytes(digest[16..].try_into().expect("fixed digest half"));
     (lo, hi)
 }
 
+#[cfg(test)]
 fn field_from_u128<F: PrimeField + From<u64>>(value: u128) -> F {
     F::from(value as u64) + F::from((value >> 64) as u64) * F::from_u128(1_u128 << 64)
 }
 
+#[cfg(test)]
 fn inverse_or_zero<F>(value: u128) -> Value<F>
 where
     F: PrimeField + From<u64>,
@@ -452,6 +493,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn inverse_delta_or_zero<F>(before: u128, after: u128) -> Value<F>
 where
     F: PrimeField + From<u64>,

@@ -62,6 +62,8 @@ pub(crate) use self::membership::verify_fcmp_plus_plus_v1;
 pub(crate) use self::prover::fcmp_test_spendable_output_v1;
 #[cfg(feature = "privacy-release-evidence")]
 pub(crate) use self::prover::{fcmp_release_fixture_v1, fcmp_release_invalid_path_fixture_v1};
+#[cfg(test)]
+pub use self::wallet::decrypt_fcmp_wallet_note_v1;
 pub use self::{
     balance::{verify_fcmp_commitment_balance_v1, verify_fcmp_transaction_v1},
     prover::{
@@ -71,20 +73,16 @@ pub use self::{
         FCMP_AMOUNT_BITS_V1, FCMP_BP_PLUS_GENERATOR_DIGEST_V1, FCMP_BP_PLUS_UPSTREAM_REVISION_V1,
         FCMP_MAX_RANGE_COMMITMENTS_V1, FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1,
         FcmpOutputCommitmentOpeningV1, FcmpRangeProofV1, fcmp_bp_plus_generator_digest_v1,
-        fcmp_range_proof_size_v1, prove_fcmp_range_v1, verify_fcmp_range_v1,
+        fcmp_range_proof_size_v1, verify_fcmp_range_v1,
     },
-    sal::{
-        FCMP_SAL_PROOF_BYTES_V1, FcmpSalProofV1, FcmpSalWitnessV1, prove_fcmp_sal_v1,
-        verify_fcmp_sal_v1,
-    },
+    sal::{FCMP_SAL_PROOF_BYTES_V1, FcmpSalProofV1, FcmpSalWitnessV1, verify_fcmp_sal_v1},
     tree::{
         FcmpFrontierPartsV1, append_fcmp_outputs_v1, build_fcmp_frontier_v1,
         validate_fcmp_frontier_v1,
     },
     wallet::{
-        FcmpWalletNoteV1, decrypt_fcmp_wallet_note_v1, derive_fcmp_recipient_id_v1,
-        encrypt_fcmp_wallet_note_v1, fcmp_recipient_public_key_v1,
-        validate_fcmp_encrypted_output_v1,
+        FcmpWalletNoteV1, derive_fcmp_recipient_id_v1, encrypt_fcmp_wallet_note_v1,
+        fcmp_recipient_public_key_v1, validate_fcmp_encrypted_output_v1,
     },
     wire::{
         FCMP_MAX_INPUTS_NATIVE_V1, FCMP_MAX_PROOF_WIRE_BYTES_V1, FCMP_MIN_PROOF_WIRE_BYTES_V1,
@@ -93,6 +91,8 @@ pub use self::{
         decode_fcmp_plus_plus_wire_v1, fcmp_plus_plus_wire_size_v1,
     },
 };
+#[cfg(test)]
+pub use self::{range::prove_fcmp_range_v1, sal::prove_fcmp_sal_v1};
 /// Upstream FCMP++ revision used for the native first-release port and interoperability vectors.
 pub const FCMP_UPSTREAM_REVISION_V1: &str = "15ef71140944b5b5d2feff0e58569b71f34c84a2";
 /// Auditable source profile for the clean-room native port.
@@ -280,6 +280,7 @@ impl Drop for FcmpSecretOutputIdV1 {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static FCMP_SECRET_OUTPUT_ID_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }

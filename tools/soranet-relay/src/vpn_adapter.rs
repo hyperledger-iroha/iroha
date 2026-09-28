@@ -213,33 +213,6 @@ impl VpnAdapter {
         }
         Ok(())
     }
-    /// Build, pace, and send data cells with optional cover, accounting via this adapter.
-    pub async fn send_paced_data_frames<W: AsyncWrite + Unpin>(
-        &self,
-        writer: &mut W,
-        batch: VpnDataFrameBatch<'_>,
-        cover_meta: CoverFrameMeta,
-        seed: [u8; 32],
-    ) -> Result<(), VpnFrameIoError> {
-        let mut data_cells = Vec::with_capacity(batch.payloads.len());
-        for payload in batch.payloads {
-            let cell = self.overlay.data_cell(
-                batch.circuit_id,
-                batch.flow_label,
-                0,
-                batch.ack,
-                batch.flags,
-                payload.clone(),
-            )?;
-            data_cells.push(cell);
-        }
-        let cover_meta = CoverFrameMeta {
-            start_sequence: batch.start_sequence,
-            ..cover_meta
-        };
-        let schedule = schedule_frames(&self.overlay, data_cells, cover_meta, seed)?;
-        send_scheduled_frames_with_adapter(&schedule, writer, Some(self), Some(&self.session)).await
-    }
 }
 /// Outcome of a bridge send operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,10 +302,6 @@ impl VpnBridge {
     /// Override the data-frame flags used for future cells.
     pub fn set_flags(&mut self, flags: VpnCellFlagsV1) {
         self.flags = flags;
-    }
-    /// Override the cover-frame flags used for future schedules.
-    pub fn set_cover_flags(&mut self, flags: VpnCellFlagsV1) {
-        self.cover_flags = flags;
     }
     /// Update the seed used for cover scheduling.
     ///

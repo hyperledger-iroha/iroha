@@ -38,9 +38,6 @@ speculative engine abstraction while the dispatcher centralizes host policy.
   duplicated validation logic.
 - Make dispatcher pluggable so hosts can supply custom instrumentation without
   bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
 
 **Security / performance impact**: Centralised gating protects against hosts that
 forget to call `is_syscall_allowed`, and it allows future caching of pointer
@@ -63,12 +60,8 @@ configuration drift and ensures deterministic behaviour across deployments.
 
 ## Immediate next steps
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
+- Audit public re-exports to ensure only the runtime API and deliberately public
+  APIs leak out of the crate.
 
 Progress on each phase will be tracked in `status.md` once the implementation is
 underway.

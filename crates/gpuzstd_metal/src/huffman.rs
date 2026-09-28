@@ -20,6 +20,7 @@ pub(crate) struct HuffmanTable {
     pub(crate) codes: [u64; MAX_SYMBOLS],
     pub(crate) max_len: u8,
 }
+#[cfg(test)]
 pub(crate) fn encode_literals(input: &[u8]) -> Result<(Vec<u8>, HuffmanTable), HuffmanError> {
     if input.is_empty() {
         return Ok((

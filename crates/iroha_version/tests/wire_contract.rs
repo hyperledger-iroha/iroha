@@ -246,13 +246,3 @@ fn declared_version_owners_preserve_captured_frames() {
         norito::json::from_json(include_str!("fixtures/version_identity_frames.json")).unwrap();
     assert_eq!(frame_rows(), expected);
 }
-
-#[test]
-fn tmp_capture_version_frames() {
-    let rows = frame_rows();
-    std::fs::write(
-        "/private/tmp/claude-501/-Users-takemiyamakoto-dev-iroha/72f9ffb9-ff7e-4c95-85b5-4f004d06c958/scratchpad/version_identity_frames.json",
-        norito::json::to_json(&rows).unwrap(),
-    )
-    .unwrap();
-}

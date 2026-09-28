@@ -5132,6 +5132,11 @@ pub enum Error {
         /// Authority that was absent from the committed world state.
         authority: AccountId,
     },
+    /// Current consensus cannot execute this transaction admission: {reason}
+    UnsupportedTransactionAdmission {
+        /// Unsupported signed intent or resolved multi-route execution.
+        reason: String,
+    },
     /// Transaction routing could not be resolved: {reason}
     UnresolvedRoute {
         /// Deterministic route-resolution failure reason.
@@ -5189,6 +5194,33 @@ pub enum Error {
         reason: String,
     },
 }
+/// Require the signed admission intent supported by the current consensus executor.
+///
+/// # Errors
+/// Returns a permanent rejection for intents without a current execution owner.
+pub fn validate_current_admission_intent(intent: TransactionAdmissionIntent) -> Result<(), Error> {
+    if intent != TransactionAdmissionIntent::Ordinary {
+        return Err(Error::UnsupportedTransactionAdmission {
+            reason: "current consensus requires Ordinary admission; QueuePlanSynced has no execution owner".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Require a single resolved route supported by the current consensus executor.
+///
+/// # Errors
+/// Returns a permanent rejection for multi-route execution without a current owner.
+pub fn validate_current_admission_route(plan: &RoutingPlan) -> Result<(), Error> {
+    if !matches!(plan, RoutingPlan::Single(_)) {
+        return Err(Error::UnsupportedTransactionAdmission {
+            reason: "current consensus does not support multi-route transaction admission"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Failure that can pop up when pushing transaction into the queue
 #[derive(Debug)]
 pub struct Failure {
@@ -11986,6 +12018,11 @@ impl Queue {
                     "queue-plan journal replay contains duplicate queue identity {hash}"
                 )));
             }
+            validate_current_admission_intent(record.entrypoint.admission_intent())
+                .and_then(|()| validate_current_admission_route(&record.routing_plan))
+                .map_err(|error| invalid(format!(
+                    "queue journal transaction {hash} has unsupported_transaction_admission; retaining its durable record: {error}"
+                )))?;
             let recorded_routing_plan = record.routing_plan.clone();
             let recorded_admission_context = record.admission_context.clone();
             let recorded_global_admission_identity = record.global_admission_identity;
@@ -16860,6 +16897,12 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        validate_current_admission_intent(tx.entrypoint().admission_intent()).map_err(|err| {
+            Failure {
+                tx: tx.clone().into(),
+                err,
+            }
+        })?;
         self.check_startup_admission().map_err(|err| Failure {
             tx: tx.clone().into(),
             err,
@@ -16881,6 +16924,10 @@ impl Queue {
                 });
             }
         };
+        validate_current_admission_route(&routing_plan).map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         let routing_decision = routing_plan.coordinator_route();
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
@@ -16982,6 +17029,12 @@ impl Queue {
         gossip_payload: Option<Arc<Vec<u8>>>,
         plan_journal_mode: PlanJournalAdmissionMode,
     ) -> Result<QueuePushOutcome, Failure> {
+        validate_current_admission_intent(tx.entrypoint().admission_intent()).map_err(|err| {
+            Failure {
+                tx: tx.clone().into(),
+                err,
+            }
+        })?;
         self.check_startup_admission().map_err(|err| Failure {
             tx: tx.clone().into(),
             err,
@@ -17095,6 +17148,10 @@ impl Queue {
                 });
             }
         };
+        validate_current_admission_route(&routing_plan).map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         if expected_admission_context.is_some() && expected_admission_binding.is_some() {
             return Err(Failure {
                 tx: tx.into(),
@@ -17704,6 +17761,12 @@ impl Queue {
         preparation_mode: QueueAdmissionPreparationMode,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
+        validate_current_admission_intent(checked.as_accepted().entrypoint().admission_intent())
+            .and_then(|()| validate_current_admission_route(&routing_plan))
+            .map_err(|err| Failure {
+                tx: checked.as_accepted().clone().into(),
+                err,
+            })?;
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.
         if preparation_mode == QueueAdmissionPreparationMode::Ordinary {
@@ -18885,6 +18948,11 @@ impl Queue {
             }),
         );
         for (tx, routing_plan) in txs {
+            if let Err(err) = validate_current_admission_intent(tx.entrypoint().admission_intent())
+            {
+                precheck_failure = Some(Failure { tx: tx.into(), err });
+                break;
+            }
             let routing_plan = match self.resolve_precomputed_routing_plan_with_view(
                 &tx,
                 &state_view,
@@ -18901,6 +18969,10 @@ impl Queue {
                     break;
                 }
             };
+            if let Err(err) = validate_current_admission_route(&routing_plan) {
+                precheck_failure = Some(Failure { tx: tx.into(), err });
+                break;
+            }
             let routing_decision = routing_plan.coordinator_route();
             let lane_id = routing_decision.lane_id;
             let dataspace_id = routing_decision.dataspace_id;
@@ -27569,6 +27641,7 @@ pub mod tests {
         );
     }
     include!("queue/plan_journal_startup_atomicity_tests.rs");
+    include!("queue/current_admission_tests.rs");
     #[test]
     fn strict_queue_plan_journal_admission_replays_exact_transaction_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");

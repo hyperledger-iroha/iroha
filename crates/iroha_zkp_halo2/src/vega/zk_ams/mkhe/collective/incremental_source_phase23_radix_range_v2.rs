@@ -13,50 +13,71 @@
     reason = "the production scratch-sink authority remains uninhabited"
 )]
 
+#[cfg(test)]
+use super::source_algebra::Phase23GlobalLookupRadixSourceCursorV2;
+#[cfg(test)]
+use super::source_algebra::{
+    Phase23GlobalLookupSourceReplayEvidenceV1, Phase23GlobalLookupSourceReplayV1,
+    bind_radix_hyrax_replay_after_materialization_v2,
+};
 use super::{
     PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_CANONICAL_COEFFICIENTS_PER_BLOCK_V1,
-    PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1, PHASE23_RING_DEGREE_V1, ZkAmsMkheErrorV1,
-    phase23_record_position_v1,
-    source_algebra::{
-        Phase23GlobalLookupRadixSourceCursorV2, Phase23GlobalLookupSourceReplayEvidenceV1,
-        Phase23GlobalLookupSourceReplayV1, RadixHyraxProofSealV2,
-        bind_radix_hyrax_replay_after_materialization_v2,
-    },
+    PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1, PHASE23_RING_DEGREE_V1,
 };
+#[cfg(test)]
+use super::{ZkAmsMkheErrorV1, phase23_record_position_v1, source_algebra::RadixHyraxProofSealV2};
+#[cfg(test)]
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
+#[cfg(test)]
 use core::convert::Infallible;
 #[cfg(test)]
 use core::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
 use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
+#[cfg(test)]
 use std::path::PathBuf;
 
+#[cfg(test)]
 #[path = "incremental_source_phase23_radix_range_v2/prepared_comparator_plane_v1.rs"]
 mod prepared_comparator_plane_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_comparator_plane_v1::PreparedComparatorStatementV1;
+#[cfg(test)]
 #[path = "incremental_source_phase23_radix_range_v2/prepared_low_digit_plane_v1.rs"]
 mod prepared_low_digit_plane_v1;
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_low_digit_plane_v1::{PreparedLowDigitStatementV1, LowDigitWorkspaceV1, LowDigitWorkspaceErrorV1};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_low_digit_plane_v1::{LowDigitWorkspaceV1, LowDigitWorkspaceErrorV1};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_low_digit_plane_v1::PreparedLowDigitStatementV1;
 
+#[cfg(test)]
 #[path = "incremental_source_phase23_radix_range_v2/prepared_difference_digit_plane_v1.rs"]
 mod prepared_difference_digit_plane_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_difference_digit_plane_v1::PreparedDifferenceDigitStatementV1;
 #[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_difference_digit_plane_v1::TestPreparedDifferenceDigitV1;
 
+#[cfg(test)]
 #[path = "incremental_source_phase23_radix_range_v2/prepared_small_signed_plane_v1.rs"]
 mod prepared_small_signed_plane_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_small_signed_plane_v1::PreparedSmallSignedStatementV1;
 #[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_small_signed_plane_v1::TestPreparedSmallSignedV1;
 
+#[cfg(test)]
 #[path = "incremental_source_phase23_radix_range_v2/ordered_storage_handoff_v1.rs"]
 mod ordered_storage_handoff_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use ordered_storage_handoff_v1::MaterializedPlaneContextV1;
 
+#[cfg(test)]
 const RADIX_WITNESS_VERSION_V2: u8 = 2;
+#[cfg(test)]
 const RADIX_BASE_V2: u16 = 1 << 15;
 const RADIX_LOW_LIMBS_V2: usize = 17;
 const RADIX_COMPARATOR_BITS_V2: usize = 18;
@@ -95,23 +116,33 @@ const RADIX_WITNESS_NAMED_LIVE_PAYLOAD_BYTES_V2: usize = 3 * RADIX_COEFFICIENTS_
     + PHASE23_MAIN_BLOCK_BYTES_V1
     + RADIX_COEFFICIENT_SCRATCH_BUDGET_BYTES_V2;
 
+#[cfg(test)]
 const RADIX_SOURCE_MAPPING_FORMULA_V2: &[u8] =
     b"source=(((record*8+group)*64+block)*256)+coefficient";
+#[cfg(test)]
 const RADIX_PACKING_MAPPING_FORMULA_V2: &[u8] =
     b"packing=((record*8+group)*16384)+(coefficient*64)+block";
+#[cfg(test)]
 const RADIX_SLOT_MAPPING_FORMULA_V2: &[u8] =
     b"slot=((record*8+group)*3)+lane;lane-order=packed0,packed1,packed2";
+#[cfg(test)]
 const RADIX_PACKED_LANE_FORMULA_V2: &[u8] =
     b"lane0=(bD,bS,beta0..5);lane1=(beta6..13);lane2=(beta14..17,m,0,0,0);least-significant-bit-first";
+#[cfg(test)]
 const RADIX_DECOMPOSITION_FORMULA_V2: &[u8] =
     b"D=sum(h=0..16,2^(15h)*d_h)+2^255*bD;S=pT-1-D=sum(h=0..16,2^(15h)*s_h)+2^255*bS";
+#[cfg(test)]
 const RADIX_COMPARATOR_FORMULA_V2: &[u8] =
     b"K=(pT-1)/2+1;fixed-h=0..16-subtraction-borrows;m=bD*beta16;beta17=beta16-m;beta17=(D<K)";
+#[cfg(test)]
 const RADIX_WITNESS_MAPPING_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.phase23.radix-witness.mapping\0";
+#[cfg(test)]
 const RADIX_WITNESS_CONTEXT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.radix-witness.spool-context\0";
+#[cfg(test)]
 const RADIX_WITNESS_RECORD_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.radix-witness.materialization-record\0";
+#[cfg(test)]
 const RADIX_WITNESS_SEAL_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.radix-witness.materialization-seal\0";
 
@@ -128,6 +159,7 @@ const OPERATIONAL_RECEIPT_ACCEPTED_V2: bool = false;
 const RELEASE_READY_V2: bool = false;
 const RELEASE_COMPLETE_V2: bool = false;
 
+#[cfg(test)]
 const fn decrement_be_v2(mut value: [u8; 32]) -> [u8; 32] {
     let mut borrow = 1_u16;
     let mut offset = 0_usize;
@@ -141,6 +173,7 @@ const fn decrement_be_v2(mut value: [u8; 32]) -> [u8; 32] {
     value
 }
 
+#[cfg(test)]
 const fn centering_threshold_be_v2() -> [u8; 32] {
     let mut threshold = [0_u8; 32];
     let mut incoming = 0_u8;
@@ -163,7 +196,9 @@ const fn centering_threshold_be_v2() -> [u8; 32] {
     threshold
 }
 
+#[cfg(test)]
 const RADIX_MODULUS_MINUS_ONE_BE_V2: [u8; 32] = decrement_be_v2(VEGA_T256_SCALAR_MODULUS_BE_V1);
+#[cfg(test)]
 const RADIX_CENTERING_THRESHOLD_BE_V2: [u8; 32] = centering_threshold_be_v2();
 
 const _: () = {
@@ -195,6 +230,7 @@ const _: () = {
     assert!(!RELEASE_COMPLETE_V2);
 };
 
+#[cfg(test)]
 struct RadixWitnessCoordinateV2 {
     record: u16,
     family: u8,
@@ -206,6 +242,7 @@ struct RadixWitnessCoordinateV2 {
     first_slot: u16,
 }
 
+#[cfg(test)]
 fn radix_witness_coordinate_v2(
     record: usize,
     group: usize,
@@ -245,6 +282,7 @@ fn radix_witness_coordinate_v2(
     })
 }
 
+#[cfg(test)]
 fn radix_witness_slot_v2(
     record: usize,
     group: usize,
@@ -262,6 +300,7 @@ fn radix_witness_slot_v2(
     .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn radix_witness_packing_index_v2(
     source_block: usize,
     coefficient: usize,
@@ -274,6 +313,7 @@ fn radix_witness_packing_index_v2(
     Ok(coefficient * RADIX_SOURCE_BLOCKS_PER_GROUP_V2 + source_block)
 }
 
+#[cfg(test)]
 fn exact_radix_witness_mapping_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(RADIX_WITNESS_MAPPING_DOMAIN_V2);
@@ -327,6 +367,7 @@ fn exact_radix_witness_mapping_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1>
     require_nonzero_radix_digest_v2(hash.finalize())
 }
 
+#[cfg(test)]
 fn radix_witness_context_digest_v2(
     replay_record_digest: [u8; 32],
     source_receipt_digest: [u8; 32],
@@ -353,24 +394,29 @@ static RADIX_PACKED_COMPARATOR_DROPS_V2: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static RADIX_SECRET_COPY_DROPS_V2: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(test)]
 trait RadixSecretCopyValueV2: Copy {
     fn zeroize_v2(&mut self);
 }
 
+#[cfg(test)]
 impl RadixSecretCopyValueV2 for u8 {
     fn zeroize_v2(&mut self) {
         *self = 0;
     }
 }
 
+#[cfg(test)]
 impl RadixSecretCopyValueV2 for u16 {
     fn zeroize_v2(&mut self) {
         *self = 0;
     }
 }
 
+#[cfg(test)]
 struct RadixSecretCopyV2<T: RadixSecretCopyValueV2>(T);
 
+#[cfg(test)]
 impl<T: RadixSecretCopyValueV2> RadixSecretCopyV2<T> {
     fn new(mut value: T) -> Self {
         let owned = Self(value);
@@ -393,6 +439,7 @@ impl<T: RadixSecretCopyValueV2> RadixSecretCopyV2<T> {
     }
 }
 
+#[cfg(test)]
 impl RadixSecretCopyV2<u16> {
     fn or_assign_v2(&mut self, mut value: u16) {
         self.0 |= value;
@@ -402,6 +449,7 @@ impl RadixSecretCopyV2<u16> {
     }
 }
 
+#[cfg(test)]
 impl RadixSecretCopyV2<u8> {
     fn or_assign_v2(&mut self, mut value: u8) {
         self.0 |= value;
@@ -411,6 +459,7 @@ impl RadixSecretCopyV2<u8> {
     }
 }
 
+#[cfg(test)]
 impl<T: RadixSecretCopyValueV2> Drop for RadixSecretCopyV2<T> {
     fn drop(&mut self) {
         self.0.zeroize_v2();
@@ -424,14 +473,17 @@ impl<T: RadixSecretCopyValueV2> Drop for RadixSecretCopyV2<T> {
 struct RadixSecretBytesV2([u8; 32]);
 
 impl RadixSecretBytesV2 {
+    #[cfg(test)]
     fn zeroed_v2() -> Self {
         Self([0; 32])
     }
 
+    #[cfg(test)]
     fn as_ref_v2(&self) -> &[u8; 32] {
         &self.0
     }
 
+    #[cfg(test)]
     fn as_mut_v2(&mut self) -> &mut [u8; 32] {
         &mut self.0
     }
@@ -458,6 +510,7 @@ struct RadixCoefficientWitnessV2 {
 }
 
 impl RadixCoefficientWitnessV2 {
+    #[cfg(test)]
     fn zeroed_v2() -> Self {
         Self {
             slack: RadixSecretBytesV2::zeroed_v2(),
@@ -491,14 +544,17 @@ impl Drop for RadixCoefficientWitnessV2 {
     }
 }
 
+#[cfg(test)]
 struct RadixPackedComparatorV2([u8; RADIX_PACKED_LANES_PER_GROUP_V2]);
 
+#[cfg(test)]
 impl RadixPackedComparatorV2 {
     fn as_ref_v2(&self) -> &[u8; RADIX_PACKED_LANES_PER_GROUP_V2] {
         &self.0
     }
 }
 
+#[cfg(test)]
 impl Drop for RadixPackedComparatorV2 {
     fn drop(&mut self) {
         self.0.fill(0);
@@ -519,6 +575,7 @@ const _: () = {
     );
 };
 
+#[cfg(test)]
 fn fixed_subtract_be_v2(
     left: &[u8; 32],
     right: &[u8; 32],
@@ -538,6 +595,7 @@ fn fixed_subtract_be_v2(
     RadixSecretCopyV2::new(*borrow.as_ref_v2() as u8)
 }
 
+#[cfg(test)]
 fn fixed_add_be_v2(
     left: &[u8; 32],
     right: &[u8; 32],
@@ -555,6 +613,7 @@ fn fixed_add_be_v2(
     RadixSecretCopyV2::new(*carry.as_ref_v2() as u8)
 }
 
+#[cfg(test)]
 fn fixed_equal_bytes_v2(left: &[u8; 32], right: &[u8; 32]) -> RadixSecretCopyV2<u8> {
     let mut difference = RadixSecretCopyV2::new(0_u8);
     for index in 0..32 {
@@ -563,16 +622,19 @@ fn fixed_equal_bytes_v2(left: &[u8; 32], right: &[u8; 32]) -> RadixSecretCopyV2<
     RadixSecretCopyV2::new(u8::from(*difference.as_ref_v2() == 0))
 }
 
+#[cfg(test)]
 fn fixed_less_than_be_v2(left: &[u8; 32], right: &[u8; 32]) -> RadixSecretCopyV2<u8> {
     let mut difference = RadixSecretBytesV2::zeroed_v2();
     fixed_subtract_be_v2(left, right, difference.as_mut_v2())
 }
 
+#[cfg(test)]
 fn bit_le_from_be_v2(bytes: &[u8; 32], bit: usize) -> RadixSecretCopyV2<u8> {
     let byte = 31 - bit / 8;
     RadixSecretCopyV2::new((bytes[byte] >> (bit % 8)) & 1)
 }
 
+#[cfg(test)]
 fn extract_radix_digits_v2(
     bytes: &[u8; 32],
     low: &mut [u16; RADIX_LOW_LIMBS_V2],
@@ -588,6 +650,7 @@ fn extract_radix_digits_v2(
     bit_le_from_be_v2(bytes, 255)
 }
 
+#[cfg(test)]
 fn reconstruct_radix_v2(
     low: &[u16; RADIX_LOW_LIMBS_V2],
     top: &u8,
@@ -609,6 +672,7 @@ fn reconstruct_radix_v2(
     Ok(reconstructed)
 }
 
+#[cfg(test)]
 fn radix_coefficient_witness_v2(
     encoded: &[u8; 32],
 ) -> Result<RadixCoefficientWitnessV2, ZkAmsMkheErrorV1> {
@@ -706,6 +770,7 @@ fn radix_coefficient_witness_v2(
     Ok(witness)
 }
 
+#[cfg(test)]
 fn pack_comparator_lanes_v2(
     witness: &RadixCoefficientWitnessV2,
 ) -> Result<RadixPackedComparatorV2, ZkAmsMkheErrorV1> {
@@ -741,6 +806,7 @@ fn pack_comparator_lanes_v2(
 
 /// Purpose-bound scratch authority. Production cannot construct it in this
 /// slice; tests may supply only an unlinked confidential-spool directory.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) enum Phase23RadixWitnessScratchSinkV2
 {
     Production {
@@ -750,6 +816,7 @@ pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_so
     TestOnly(PathBuf),
 }
 
+#[cfg(test)]
 impl Phase23RadixWitnessScratchSinkV2 {
     fn into_directory_v2(self) -> PathBuf {
         match self {
@@ -762,6 +829,7 @@ impl Phase23RadixWitnessScratchSinkV2 {
     }
 }
 
+#[cfg(test)]
 struct RadixWitnessMaterializationRecordV2 {
     replay_record_digest: [u8; 32],
     source_receipt_digest: [u8; 32],
@@ -796,6 +864,7 @@ struct RadixWitnessMaterializationRecordV2 {
 
 /// Non-authorizing public axes copied while Evidence is consumed into its
 /// strict cursor. They have no constructor or accessor outside that transition.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
 struct Phase23RadixSourceCursorAxesV2
 {
@@ -805,6 +874,7 @@ struct Phase23RadixSourceCursorAxesV2
         [u8; 32],
 }
 
+#[cfg(test)]
 fn radix_witness_record_digest_v2(
     record: &RadixWitnessMaterializationRecordV2,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -848,6 +918,7 @@ fn radix_witness_record_digest_v2(
     require_nonzero_radix_digest_v2(hash.finalize())
 }
 
+#[cfg(test)]
 fn validate_radix_witness_record_v2(
     record: &RadixWitnessMaterializationRecordV2,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -891,6 +962,7 @@ fn validate_radix_witness_record_v2(
 }
 
 /// Unforgeable proof-order seal. Only successful materialization can mint it.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
 struct RadixWitnessMaterializationSealV2
 {
@@ -901,6 +973,7 @@ struct RadixWitnessMaterializationSealV2
     seal_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl RadixWitnessMaterializationSealV2 {
     fn mint_v2(
         replay_record_digest: [u8; 32],
@@ -956,6 +1029,7 @@ impl RadixWitnessMaterializationSealV2 {
     }
 }
 
+#[cfg(test)]
 fn radix_witness_seal_digest_v2(
     replay_record_digest: [u8; 32],
     spool_context_digest: [u8; 32],
@@ -978,6 +1052,7 @@ fn radix_witness_seal_digest_v2(
 
 /// Move-only compact witness owner. It deliberately has no snapshot, Evidence,
 /// seal, commitment, proof, serialization, or tuple-splitting accessor.
+#[cfg(test)]
 #[must_use = "dropping this owner closes replay evidence and the radix witness spool"]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
 struct Phase23RadixWitnessMaterializedV2
@@ -993,11 +1068,13 @@ struct Phase23RadixWitnessMaterializedV2
         Option<crate::vega::zk_ams::mkhe::global_lookup_statement_v1::OrderedPlaneSpoolWriterV1>,
 }
 
+#[cfg(test)]
 struct RadixWitnessProofBindingV2<R, K, P> {
     materialized: Option<Phase23RadixWitnessMaterializedV2<R, K, P>>,
     radix_hyrax_proof: Option<RadixHyraxProofSealV2>,
 }
 
+#[cfg(test)]
 struct Phase23RadixWitnessProofBoundV2<R, K, P> {
     replay: Phase23GlobalLookupSourceReplayV1<R, K, P>,
     witness_snapshot: ConfidentialSpoolSnapshotV1,
@@ -1007,6 +1084,7 @@ struct Phase23RadixWitnessProofBoundV2<R, K, P> {
 /// Private future transition only: consume the entire compact materialized
 /// owner and proof authority before validation. It is intentionally not exposed
 /// by the materialized owner in this slice.
+#[cfg(test)]
 fn bind_materialized_radix_hyrax_replay_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
     materialized: Phase23RadixWitnessMaterializedV2<R, K, P>,
     radix_hyrax_proof: RadixHyraxProofSealV2,
@@ -1018,6 +1096,7 @@ fn bind_materialized_radix_hyrax_replay_v2<R: crate::vega::MaskedRelaxedRandomSo
     .finish_v2()
 }
 
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> RadixWitnessProofBindingV2<R, K, P> {
     fn finish_v2(mut self) -> Result<Phase23RadixWitnessProofBoundV2<R, K, P>, ZkAmsMkheErrorV1> {
         let materialized = self
@@ -1066,6 +1145,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> RadixWitnessProofBinding
     }
 }
 
+#[cfg(test)]
 fn materialize_radix_group_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
     cursor: &mut Phase23GlobalLookupRadixSourceCursorV2<R, K, P>,
     writer: &mut ConfidentialSpoolWriterV1,
@@ -1110,6 +1190,7 @@ fn materialize_radix_group_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     Ok(())
 }
 
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn materialize_phase23_radix_witness_v2<
     R: crate::vega::MaskedRelaxedRandomSourceV1,
     K,
@@ -1208,12 +1289,14 @@ pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_so
     })
 }
 
+#[cfg(test)]
 fn require_nonzero_radix_digest_v2(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     (digest != [0; 32])
         .then_some(digest)
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 
+#[cfg(test)]
 fn map_spool_error_v2(
     _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
 ) -> ZkAmsMkheErrorV1 {

@@ -239,7 +239,7 @@ fn render_progress(event: DeploymentProgress) -> String {
     }
 }
 
-fn read_selected_artifact(artifact: &CompilerArtifactV1) -> Result<Vec<u8>, Diagnostic> {
+pub(super) fn read_selected_artifact(artifact: &CompilerArtifactV1) -> Result<Vec<u8>, Diagnostic> {
     let bytes = read_bounded_single_link_regular_file_v1(
         &artifact.artifact,
         iroha_contract_deploy::MAX_DEPLOYMENT_ARTIFACT_BYTES as u64,
@@ -357,7 +357,7 @@ fn view_diagnostic(error: eyre::Report) -> Diagnostic {
     Diagnostic::new(ErrorCode::Network, format!("{error:#}"))
 }
 
-fn select_artifact<'a>(
+pub(super) fn select_artifact<'a>(
     artifacts: &'a [CompilerArtifactV1],
     requested: Option<&str>,
 ) -> Result<&'a CompilerArtifactV1, Diagnostic> {
@@ -379,7 +379,7 @@ fn select_artifact<'a>(
     }
 }
 
-fn bound_alias(
+pub(super) fn bound_alias(
     network: &network::SelectedNetwork,
     package: &MusubiPackageSelectorV1,
     target: &str,
@@ -389,14 +389,14 @@ fn bound_alias(
         .with_help(format!("run `musubi network configure {} --package {} --contract {} --alias <name::your-domain>`; the network's selected wallet and fee policy are retained", network.name, quote_cli_argument(&package.to_string()), quote_cli_argument(target))))
 }
 
-fn selected_fee_payment(
+pub(super) fn selected_fee_payment(
     network: &network::SelectedNetwork,
 ) -> Result<FeePaymentIntent, Diagnostic> {
     network.fee_payment.clone().ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "deployment requires an explicit fee payer")
         .with_help("configure --fee-payer authority, or --fee-payer sponsor with its exact program and revision"))
 }
 
-fn parse_view_payload(source: &str) -> Result<Value, Diagnostic> {
+pub(super) fn parse_view_payload(source: &str) -> Result<Value, Diagnostic> {
     if source.len() > 64 * 1024 {
         return Err(Diagnostic::new(
             ErrorCode::Usage,
@@ -429,7 +429,7 @@ fn deployment_slot(
     ))
 }
 
-fn validate_journal_id(id: &str) -> Result<(), Diagnostic> {
+pub(super) fn validate_journal_id(id: &str) -> Result<(), Diagnostic> {
     if id.parse::<iroha::crypto::Hash>().is_err()
         || id.len() != 64
         || !id

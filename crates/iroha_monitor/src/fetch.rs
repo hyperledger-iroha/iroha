@@ -88,8 +88,6 @@ pub struct StatusPayload {
     pub queue_size: Option<u64>,
     pub uptime: Option<u64>,
     pub view_changes: Option<u64>,
-    #[allow(dead_code)]
-    pub governance: Option<json::Value>,
     pub crypto: Option<CryptoStatusPayload>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -411,7 +409,6 @@ fn stub_status_payload(peer_index: usize, total_peers: usize) -> StatusPayload {
         queue_size: Some((peer_index as u64) % 3),
         uptime: Some(1),
         view_changes: Some(0),
-        governance: None,
         crypto: None,
     }
 }

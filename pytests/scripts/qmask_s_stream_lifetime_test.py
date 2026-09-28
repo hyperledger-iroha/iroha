@@ -2,6 +2,9 @@
 
 Leaf I/O stand-ins make these fast Rust type-system controls independent of Cargo.
 They do not exercise encryption, resource accounting or production proof semantics.
+The sealed S-stream reader is parked behind `cfg(test)` until a production prover
+consumes it, so the harness compiles the module the way `cargo test` does: with
+`--cfg test` and without the module's own `stream_v1_tests.rs` child.
 """
 from __future__ import annotations
 import json
@@ -29,14 +32,27 @@ cases={
 }
 
 
+TEST_CHILD = '#[cfg(test)]\n#[path = "stream_v1_tests.rs"]\nmod tests;\n'
+
+
+def cfg_test_build_source(tmp_path: Path, source: Path) -> Path:
+    """Copy `source` without its unit-test child so it can compile under `--cfg test`."""
+    text = source.read_text()
+    assert text.count(TEST_CHILD) == 1, "stream module must keep exactly one unit-test child"
+    copy = tmp_path / f"{source.stem}_test_build.rs"
+    copy.write_text(text.replace(TEST_CHILD, ""))
+    return copy
+
+
 def compile_case(tmp_path: Path, source: Path, body: str):
     rustc = shutil.which("rustc")
     if rustc is None:
         pytest.skip("pinned Rust compiler required for actual-module lifetime controls")
+    source = cfg_test_build_source(tmp_path, source)
     driver = tmp_path / "lifetime.rs"
     driver.write_text(HARNESS.read_text().replace("@SOURCE@", str(source)).replace("@BODY@", body))
     result = subprocess.run(
-        [rustc, "--edition", "2024", "--crate-type", "lib", "--emit=metadata",
+        [rustc, "--edition", "2024", "--crate-type", "lib", "--cfg", "test", "--emit=metadata",
          "--error-format=json", str(driver), "-o", str(tmp_path / "lifetime.rmeta")],
         capture_output=True, text=True, timeout=60, cwd=ROOT,
     )

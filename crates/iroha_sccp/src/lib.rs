@@ -83,7 +83,10 @@ pub use test_fixtures::{
     SccpFinalizedBlockTestFixtureV1, sccp_exact_evm_governed_route_test_fixture_v1,
     sccp_exact_outbound_test_fixture_for_nonce_v1, sccp_exact_outbound_test_fixture_v1,
     sccp_exact_ton_governed_route_test_fixture_v1, sccp_exact_ton_outbound_test_fixture_v1,
-    sccp_finalize_taira_block_test_fixture_v1, sccp_finalize_taira_native_operation_block_test_fixture_v1, sccp_finalize_native_genesis_network_block_test_fixture_v1, sccp_sora_outbound_execution_policy_test_fixture_v1,
+    sccp_finalize_native_genesis_network_block_test_fixture_v1,
+    sccp_finalize_taira_block_test_fixture_v1,
+    sccp_finalize_taira_native_operation_block_test_fixture_v1,
+    sccp_sora_outbound_execution_policy_test_fixture_v1,
 };
 use tiny_keccak::Hasher;
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -345,7 +348,9 @@ pub const SCCP_TON_GROTH16_BLS12381_PROOF_BYTES_V1: usize = 48 + 96 + 48;
 pub const SCCP_TON_GROTH16_BLS12381_VERIFYING_KEY_BYTES_V1: usize = 1 + 48 + 3 * 96 + 12 * 48;
 /// Largest canonical transfer payload admitted by the TON contract boundary.
 pub const SCCP_TON_DESTINATION_MAX_PAYLOAD_BYTES_V1: usize = 374;
+#[cfg(test)]
 const SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1: usize = 50;
+#[cfg(test)]
 const SCCP_TON_CANONICAL_PAYLOAD_CHUNK_BYTES_V1: usize = 100;
 /// TL-B opcode of `SccpFinalizeFromTaira`.
 pub const SCCP_TON_FINALIZE_FROM_TAIRA_OPCODE_V1: u32 = 0x5343_4350;
@@ -1054,6 +1059,7 @@ impl SccpVerifiedDestinationMaterialV1 {
 /// TON uses [`encode_sccp_ton_verified_destination_body_boc_v1`] because its
 /// mint path spans three independent replay boundaries.
 #[must_use]
+#[cfg(test)]
 pub fn encode_sccp_verified_destination_calldata_v1(
     material: &SccpVerifiedDestinationMaterialV1,
     replay_witness: &SccpSparseMerkleWitnessV1,
@@ -2170,6 +2176,7 @@ pub struct SccpVerifiedTonDestinationMaterialV1 {
 /// Build the exact TON finalization body from verified proof material and
 /// three caller-supplied current-state replay witnesses.
 #[must_use]
+#[cfg(test)]
 pub fn encode_sccp_ton_verified_destination_body_boc_v1(
     material: &SccpVerifiedDestinationMaterialV1,
     query_id: u64,
@@ -2608,6 +2615,7 @@ fn read_be_u32(bytes: &[u8]) -> Option<u32> {
         u32::from_be_bytes(raw)
     })
 }
+#[cfg(test)]
 fn abi_padded_bytes(value: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&abi_word_u64(value.len() as u64));
@@ -2707,6 +2715,7 @@ fn sccp_evm_public_input_words(public_inputs: &SccpMessagePublicInputsV1) -> [H2
         public_inputs.finality_block_hash,
     ]
 }
+#[cfg(test)]
 fn encode_sccp_finalize_from_taira_calldata_v1(
     proof_bytes: &[u8],
     public_inputs: &SccpMessagePublicInputsV1,
@@ -4111,25 +4120,6 @@ fn sccp_ton_groth16_bls12381_artifact_is_self_canonical_v1(
         &artifact.request.verifying_key,
     )
 }
-/// Return whether an artifact is exactly reconstructed from governed TON route
-/// history and contains a valid BLS12-381 Groth16 proof.
-#[must_use]
-pub fn sccp_ton_groth16_bls12381_artifact_matches_governed_route_v1(
-    artifact: &SccpTonGroth16Bls12381ProofArtifactV1,
-    bundle: &TairaSccpMessageProofV1,
-    governed_route: &SccpGovernedRouteV1,
-) -> bool {
-    let Some(expected_request) =
-        build_sccp_ton_groth16_bls12381_proof_request_from_governed_route_v1(
-            bundle,
-            governed_route,
-        )
-    else {
-        return false;
-    };
-    artifact.request == expected_request
-        && sccp_ton_groth16_bls12381_artifact_is_self_canonical_v1(artifact)
-}
 /// Encode one self-consistent TON proving request with canonical Norito framing.
 #[must_use]
 pub fn encode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(
@@ -4264,12 +4254,15 @@ pub fn decode_bridge_sccp_ton_destination_proof_v1(
     sccp_ton_groth16_bls12381_artifact_is_self_canonical_v1(&artifact).then_some(artifact)
 }
 #[derive(Clone, Debug)]
+#[cfg(test)]
 struct TonBocCellV1 {
     data: Vec<u8>,
     bit_len: usize,
     refs: Vec<usize>,
 }
+#[cfg(test)]
 impl TonBocCellV1 {
+    #[cfg(test)]
     fn full_bytes(data: Vec<u8>, refs: Vec<usize>) -> Self {
         let bit_len = data.len() * 8;
         Self {
@@ -4279,6 +4272,7 @@ impl TonBocCellV1 {
         }
     }
 }
+#[cfg(test)]
 fn ton_boc_uint_width_v1(value: usize) -> Option<usize> {
     match value {
         0..=0xff => Some(1),
@@ -4288,6 +4282,7 @@ fn ton_boc_uint_width_v1(value: usize) -> Option<usize> {
         _ => None,
     }
 }
+#[cfg(test)]
 fn push_ton_boc_uint_v1(out: &mut Vec<u8>, value: usize, width: usize) -> Option<()> {
     if width == 0 || width > 4 || value >= (1usize << (width * 8)) {
         return None;
@@ -4296,6 +4291,7 @@ fn push_ton_boc_uint_v1(out: &mut Vec<u8>, value: usize, width: usize) -> Option
     out.extend_from_slice(&encoded[4 - width..]);
     Some(())
 }
+#[cfg(test)]
 fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
     if cells.is_empty() || cells.len() > u16::MAX.into() {
         return None;
@@ -4353,6 +4349,7 @@ fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
 /// Current-state witnesses for the three replay boundaries crossed by a TON
 /// destination mint.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub struct SccpTonMintReplayWitnessesV1 {
     /// Taira-to-TON bridge admission witness.
     pub bridge: SccpSparseMerkleWitnessV1,
@@ -4362,6 +4359,7 @@ pub struct SccpTonMintReplayWitnessesV1 {
     pub wallet: SccpSparseMerkleWitnessV1,
 }
 
+#[cfg(test)]
 fn append_ton_replay_witness_cells_v1(
     cells: &mut Vec<TonBocCellV1>,
     witness: &SccpSparseMerkleWitnessV1,
@@ -4393,41 +4391,7 @@ fn append_ton_replay_witness_cells_v1(
     }
     Some(root_index)
 }
-/// Build the canonical Bag-of-Cells representation of one
-/// `SccpFinalizeFromTaira` internal-message body.
-///
-/// The root stores the opcode, query id, schema version, message id, and
-/// statement hash. Its references use the exact contract TL-B topology:
-/// four linked public-signal cells, a proof root referencing `A/B/C`, a
-/// payload root referencing the fixed `50/100/100/remainder` segmentation,
-/// and the caller-supplied bridge/master/wallet replay-witness bundle.
-#[must_use]
-pub fn encode_sccp_ton_finalize_from_taira_body_boc_v1(
-    query_id: u64,
-    request: &SccpTonGroth16Bls12381ProofRequestV1,
-    proof: &SccpGroth16Bls12381ProofV1,
-    canonical_payload_bytes: &[u8],
-    replay_witnesses: &SccpTonMintReplayWitnessesV1,
-) -> Option<Vec<u8>> {
-    validate_sccp_ton_groth16_bls12381_request_v1(request)?;
-    if !verify_sccp_groth16_bls12381_pairing_v1(
-        proof,
-        &request.public_signals,
-        &request.verifying_key,
-    ) {
-        return None;
-    }
-    let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(proof)?;
-    encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
-        query_id,
-        &request.public_inputs,
-        &request.public_signals,
-        request.statement_hash,
-        &proof_bytes,
-        canonical_payload_bytes,
-        replay_witnesses,
-    )
-}
+#[cfg(test)]
 fn encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
     query_id: u64,
     public_inputs: &SccpMessagePublicInputsV1,
@@ -5126,32 +5090,6 @@ pub fn decode_bridge_sccp_destination_proof_v1(
 ) -> Option<SccpGroth16Bn254ProofArtifactV1> {
     let artifact = decode_bridge_sccp_destination_proof_framing_v1(proof)?;
     sccp_groth16_bn254_proof_artifact_is_self_canonical(&artifact).then_some(artifact)
-}
-/// Return whether a submitted Groth16 artifact is exactly bound to the
-/// canonical request reconstructed from governed historical state.
-pub fn sccp_groth16_bn254_proof_artifact_matches_governed_route_v1(
-    artifact: &SccpGroth16Bn254ProofArtifactV1,
-    bundle: &TairaSccpMessageProofV1,
-    governed_route: &SccpGovernedRouteV1,
-) -> bool {
-    let Some(request) =
-        build_sccp_groth16_bn254_proof_request_from_governed_route_v1(bundle, governed_route)
-    else {
-        return false;
-    };
-    if artifact.version != 1 || artifact.request != request {
-        return false;
-    }
-    let expected = match governed_route.destination {
-        SccpDestinationDeploymentV1::Evm(_) => {
-            wrap_sccp_evm_groth16_bn254_proof_result(&artifact.result.proof_bytes, &request)
-        }
-        SccpDestinationDeploymentV1::Tron(_) => {
-            wrap_sccp_tron_groth16_bn254_proof_result(&artifact.result.proof_bytes, &request)
-        }
-        SccpDestinationDeploymentV1::Ton(_) => return false,
-    };
-    expected.as_ref() == Some(artifact)
 }
 fn build_sccp_verified_destination_material_v1(
     bundle: &TairaSccpMessageProofV1,

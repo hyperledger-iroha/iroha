@@ -15291,7 +15291,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
                 _ = try ToriiCanonicalTransactionDraft.decode(
                     transactionPayloadB64: transactionPayloadB64,
                     signingMessageB64: signingMessageB64,
-                    expectedAdmissionIntent: .queuePlanSynced,
+                    expectedAdmissionIntent: .ordinary,
                     context: "contract call response"
                 )
             } catch {
@@ -15307,7 +15307,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
 
 /// A server-prepared contract call whose exact signing bytes and all public
 /// operation bindings are retained for a detached Ed25519 signature.
-/// Preparation requires QueuePlanSynced admission before exposing signing bytes.
+/// Preparation requires Ordinary single-route admission before exposing signing bytes.
 public struct ToriiContractCallDraft: Sendable, Equatable {
     public let request: ToriiContractCallRequest
     public let transactionPayload: Data
@@ -15395,7 +15395,7 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
             draft = try ToriiCanonicalTransactionDraft.decode(
                 transactionPayloadB64: transactionPayloadB64,
                 signingMessageB64: signingMessageB64,
-                expectedAdmissionIntent: .queuePlanSynced,
+                expectedAdmissionIntent: .ordinary,
                 context: "contract call response"
             )
             try Self.validateTransactionPayloadBindings(

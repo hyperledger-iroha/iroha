@@ -68,6 +68,7 @@ fn malformed(error: impl std::fmt::Display) -> FinalityError {
     JsonSerialize,
     JsonDeserialize,
     norito::NoritoSchema,
+    iroha_schema::IntoSchema,
 )]
 #[norito(deny_unknown_fields, no_fast_from_json)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::FinalityValidator")]
@@ -89,6 +90,7 @@ pub struct FinalityValidator {
     JsonSerialize,
     JsonDeserialize,
     norito::NoritoSchema,
+    iroha_schema::IntoSchema,
 )]
 #[norito(deny_unknown_fields, no_fast_from_json)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::SumeragiFinalityProof")]
@@ -112,6 +114,7 @@ pub struct SumeragiFinalityProof {
     JsonSerialize,
     JsonDeserialize,
     norito::NoritoSchema,
+    iroha_schema::IntoSchema,
 )]
 #[norito(deny_unknown_fields, no_fast_from_json)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::SumeragiFinalityBundle")]
@@ -490,6 +493,7 @@ impl SumeragiFinalityVerifier {
     JsonSerialize,
     JsonDeserialize,
     norito::NoritoSchema,
+    iroha_schema::IntoSchema,
 )]
 #[norito(deny_unknown_fields, no_fast_from_json)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::SumeragiFinalityAttestationBody")]
@@ -576,6 +580,7 @@ impl SumeragiFinalityAttestationBody {
     JsonSerialize,
     JsonDeserialize,
     norito::NoritoSchema,
+    iroha_schema::IntoSchema,
 )]
 #[norito(deny_unknown_fields, no_fast_from_json)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation")]

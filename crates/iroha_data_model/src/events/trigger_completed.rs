@@ -26,7 +26,6 @@ mod model {
         Encode,
         IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(
@@ -40,10 +39,18 @@ mod model {
     }
     /// Enum to represent outcome of trigger execution
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        FromVariant,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::events::trigger_completed::model::TriggerCompletedOutcome"
     )]
@@ -52,10 +59,6 @@ mod model {
         Failure(String),
     }
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
     #[repr(u8)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(
@@ -90,7 +93,6 @@ mod model {
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(

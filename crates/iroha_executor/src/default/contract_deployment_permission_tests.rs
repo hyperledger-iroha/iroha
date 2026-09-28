@@ -224,3 +224,38 @@ fn upload_prefix_cannot_self_grant_code_management_permission() {
     assert!(matches!(verdict, Err(ValidationFail::NotPermitted(message))
         if message.contains("CanGrantSmartContractCodeManagement")));
 }
+
+#[test]
+fn exact_entrypoint_grant_and_revoke_reach_shared_core_authority_boundary() {
+    use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+    let owner = account(31);
+    let address = ContractAddress::derive(
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .unwrap(),
+        &owner,
+        9,
+        DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
+    // The host query surface has no synthetic ownership answer. Native Core is
+    // the sole source of lifecycle and exact-holder authority for this token.
+    for selector in ["write", " write", ""] {
+        let permission = CanInvokeContractEntrypoint {
+            contract: address.clone(),
+            entrypoint: selector.to_owned(),
+        };
+        let mut grant = TestExecutor::non_genesis(owner.clone());
+        super::permission::visit_grant_account_permission(
+            &mut grant,
+            &Grant::account_permission(permission.clone(), owner.clone()),
+        );
+        let mut revoke = TestExecutor::non_genesis(owner.clone());
+        super::permission::visit_revoke_account_permission(
+            &mut revoke,
+            &Revoke::account_permission(permission, owner.clone()),
+        );
+        assert_eq!(grant.verdict().is_ok(), selector == "write");
+        assert_eq!(revoke.verdict().is_ok(), selector == "write");
+    }
+}

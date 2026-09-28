@@ -4,35 +4,21 @@
 //! store when the number of elements is known never to change. It is primarily used for byte
 //! buffers or other data that is loaded once and then treated as read‑only for the remainder of the
 //! program's lifetime.
-use crate::ffi;
 use core::ops::Deref;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{DeserializePayload, SerializePayload, core as ncore};
 use std::{boxed::Box, format, string::String, vec::Vec};
-ffi::ffi_item! {
-    /// Stores bytes that are not supposed to change during the runtime of the
-    /// program in a compact way.
-    ///
-    /// Compared to `Vec<T>` this type omits the capacity field, reducing the
-    /// memory footprint when the collection is immutable. The trade-off is that cloning requires
-    /// duplicating the entire buffer because there is no reference counting.
-    #[derive(
-        Clone,
-        Eq,
-        PartialEq,
-        Ord,
-        PartialOrd,
-        Hash,
-        Debug,
-        Default,
-    )]
-    #[repr(transparent)]
-    pub struct ConstVec<T>(Box<[T]>);
-    // SAFETY: `ConstVec` has no trap representation in ConstVec
-    ffi_type(unsafe {robust})
-}
+/// Stores bytes that are not supposed to change during the runtime of the
+/// program in a compact way.
+///
+/// Compared to `Vec<T>` this type omits the capacity field, reducing the
+/// memory footprint when the collection is immutable. The trade-off is that cloning requires
+/// duplicating the entire buffer because there is no reference counting.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[repr(transparent)]
+pub struct ConstVec<T>(Box<[T]>);
 impl<T: norito::NoritoSchema> norito::NoritoSchema for ConstVec<T> {
     fn nominal_name() -> String {
         norito::schema::identity::generic_name(

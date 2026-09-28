@@ -118,7 +118,8 @@ def test_openapi_generator_has_no_stub_fallback() -> None:
     # remains rejected. Any production/help occurrence is a regression.
     assert xtask.count('"--allow-stub"') == 1
     assert 'let args = ["xtask", "openapi", "--allow-stub"];' in xtask
-    assert "require_release_router_openapi(try_generate_router_openapi())?" in xtask
+    assert "canonical_release_openapi(&iroha_torii::openapi::generate_spec())?" in xtask
+    assert "try_generate_router_openapi" not in xtask
 
 
 def test_openapi_static_authorities_are_exact_package_mirrors() -> None:

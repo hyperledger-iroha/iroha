@@ -756,28 +756,28 @@ fn native_full_roster_compatibility_is_test_only_and_not_facaded() {
             assert!(gated_use.len() < 256, "detached cfg(test) for {owner}");
         }
     }
-    for retained in [
+    // The streamed collective owners have no production consumer yet, so their
+    // facade re-exports stay parked behind `cfg(test)` together with the owners.
+    for parked in [
         "ZkAmsMkheCollectivePartyStateV1",
         "ZkAmsMkheCollectivePublicKeyShareV1",
         "ZkAmsMkhePreparedCollectivePublicAV1",
         "ZkAmsMkheStreamingCollectiveCiphertextV1",
     ] {
         for source in facades {
-            let position = source
-                .find(retained)
-                .expect("production collective facade owner");
+            let position = source.find(parked).expect("parked collective facade owner");
             let use_start = source[..position]
                 .rfind("pub use ")
-                .expect("production collective facade pub use");
+                .expect("parked collective facade pub use");
             let preceding_line = source[..use_start]
                 .lines()
                 .rev()
                 .find(|line| !line.trim().is_empty())
                 .map(str::trim);
-            assert_ne!(
+            assert_eq!(
                 preceding_line,
                 Some("#[cfg(test)]"),
-                "required production facade became test-only: {retained}",
+                "parked collective facade must stay test-only: {parked}",
             );
         }
     }

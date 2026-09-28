@@ -163,6 +163,7 @@ pub(super) fn sample_preimage_from_seed(
     Some(Preimage {
         first,
         second,
+        #[cfg(test)]
         norm_squared,
     })
 }

@@ -54,6 +54,9 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+#[path = "common/fixture_fs.rs"]
+mod fixture_fs;
+use fixture_fs::{BoundDirectory, same_directory_identity};
 const GOVERNANCE_FIXTURE_SIGNING_SEED: [u8; 32] = [0xC7; 32];
 const GOVERNANCE_SDK_INVENTORY_SCHEMA: &str =
     "sorafs.reference_sdk.governance_fixture_inventory.v1";
@@ -90,53 +93,11 @@ fn unsupported_secure_fixture_filesystem_error() -> io::Error {
         "secure SoraFS fixture generation requires Unix file identities and handle-relative directory binding",
     )
 }
-struct BoundDirectory {
-    display_path: PathBuf,
-    canonical_path: PathBuf,
-    handle: File,
-}
 impl BoundDirectory {
+    /// Bind an output directory after requiring the secure Unix fixture filesystem.
     fn open(path: &Path, label: &str) -> Result<Self, Box<dyn Error>> {
         require_secure_fixture_filesystem()?;
-        require_real_directory_ancestry(path, label)?;
-        let before = fs::symlink_metadata(path)
-            .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
-        if before.file_type().is_symlink() || !before.is_dir() {
-            return Err(format!("{label} must be an existing non-symlink directory").into());
-        }
-        let handle = File::open(path)
-            .map_err(|error| format!("failed to open {label} `{}`: {error}", path.display()))?;
-        let opened = handle.metadata().map_err(|error| {
-            format!(
-                "failed to inspect opened {label} `{}`: {error}",
-                path.display()
-            )
-        })?;
-        let after = fs::symlink_metadata(path).map_err(|error| {
-            format!(
-                "failed to reinspect {label} `{}` after opening: {error}",
-                path.display()
-            )
-        })?;
-        require_real_directory_ancestry(path, label)?;
-        if after.file_type().is_symlink()
-            || !after.is_dir()
-            || !same_directory_identity(&before, &opened)
-            || !same_directory_identity(&before, &after)
-        {
-            return Err(format!("{label} changed identity while it was bound").into());
-        }
-        let canonical_path = fs::canonicalize(path).map_err(|error| {
-            format!(
-                "failed to canonicalize {label} `{}`: {error}",
-                path.display()
-            )
-        })?;
-        Ok(Self {
-            display_path: path.to_path_buf(),
-            canonical_path,
-            handle,
-        })
+        Self::bind(path, label)
     }
     fn open_child(&self, name: &str, label: &str) -> Result<Self, Box<dyn Error>> {
         let relative = Path::new(name);
@@ -205,35 +166,6 @@ impl BoundDirectory {
     }
     fn handle(&self) -> &File {
         &self.handle
-    }
-    fn verify(&self, label: &str) -> Result<(), Box<dyn Error>> {
-        require_real_directory_ancestry(&self.display_path, label)?;
-        let lexical = fs::symlink_metadata(&self.display_path).map_err(|error| {
-            format!(
-                "failed to reinspect {label} `{}`: {error}",
-                self.display_path.display()
-            )
-        })?;
-        let opened = self.handle.metadata().map_err(|error| {
-            format!(
-                "failed to reinspect bound {label} `{}`: {error}",
-                self.display_path.display()
-            )
-        })?;
-        let canonical = fs::canonicalize(&self.display_path).map_err(|error| {
-            format!(
-                "failed to recanonicalize {label} `{}`: {error}",
-                self.display_path.display()
-            )
-        })?;
-        if lexical.file_type().is_symlink()
-            || !lexical.is_dir()
-            || !same_directory_identity(&lexical, &opened)
-            || canonical != self.canonical_path
-        {
-            return Err(format!("{label} changed identity during fixture generation").into());
-        }
-        Ok(())
     }
 }
 static WORKING_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
@@ -368,48 +300,6 @@ impl GeneratorDirectories {
             .verify("reference-SDK fixture output directory")?;
         self.root.verify("SoraFS fixture output root")
     }
-}
-fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        env::current_dir()
-            .map_err(|error| format!("failed to resolve current directory: {error}"))?
-            .join(path)
-    };
-    let mut current = PathBuf::new();
-    for component in absolute.components() {
-        current.push(component);
-        let metadata = fs::symlink_metadata(&current).map_err(|error| {
-            format!(
-                "failed to inspect {label} ancestry `{}`: {error}",
-                current.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "{label} ancestry must not contain a symbolic link: {}",
-                current.display()
-            )
-            .into());
-        }
-        if !metadata.is_dir() {
-            return Err(format!(
-                "{label} ancestry must contain directories only: {}",
-                current.display()
-            )
-            .into());
-        }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_dir() && right.is_dir() && left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(not(unix))]
-fn same_directory_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
 }
 #[derive(Debug, Eq, PartialEq)]
 struct Args {
@@ -3232,7 +3122,7 @@ fn proof_json(proof: &PorProofV1, digest: [u8; 32]) -> Value {
     let mut sig = Map::new();
     let algorithm = match proof.signature.algorithm {
         SignatureAlgorithm::Ed25519 => "ed25519",
-        SignatureAlgorithm::MultiSig => "multisig",
+        SignatureAlgorithm::MultiSig => "multi-sig",
     };
     sig.insert("algorithm".into(), Value::from(algorithm));
     sig.insert(
@@ -3292,7 +3182,7 @@ fn verdict_json(verdict: &AuditVerdictV1) -> Value {
             let mut sig_map = Map::new();
             let algorithm = match sig.algorithm {
                 SignatureAlgorithm::Ed25519 => "ed25519",
-                SignatureAlgorithm::MultiSig => "multisig",
+                SignatureAlgorithm::MultiSig => "multi-sig",
             };
             sig_map.insert("algorithm".into(), Value::from(algorithm));
             sig_map.insert(

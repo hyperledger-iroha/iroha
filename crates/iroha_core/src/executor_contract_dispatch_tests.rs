@@ -1327,3 +1327,310 @@ fn native_exact_transaction_read_requires_source_account_grant_and_revalidates_r
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
         .expect_err("role revocation is effective");
 }
+/// Every authoritative SoraFS orderbook and reserve query is gated by its operator permission,
+/// while PoP-registry, moderation and reputation transparency reads stay public.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
+    use iroha_data_model::{
+        query::sorafs::prelude::*,
+        sorafs::{
+            capacity::ProviderId, moderation_ledger::ModerationFinalizedCursorV1,
+            reputation::ReputationJournalFinalizedCursorV1,
+        },
+    };
+    let world = World::with(
+        [],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(BOB_ID.clone()).build(&BOB_ID),
+        ],
+        [],
+    );
+    let latest_block = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        query::store::LiveQueryStore::start_test(),
+    );
+    let mut block = state.block(latest_block.clone());
+    let mut state_transaction = block.transaction();
+    let executor = super::Executor::Initial;
+    let singular = |query: SingularQueryBox| QueryRequest::Singular(query);
+    let orderbook_queries: Vec<QueryRequest> = vec![
+        singular(FindSorafsOrderbookPolicy.into()),
+        singular(FindSorafsOrderbookOrderById::new([0x11; 32]).into()),
+        singular(FindSorafsOrderbookCancellationByOrderId::new([0x12; 32]).into()),
+        singular(FindSorafsOrderbookReceiptById::new([0x13; 32]).into()),
+        singular(FindSorafsOrderbookTradeById::new([0x14; 32]).into()),
+        singular(FindSorafsOrderbookChannelById::new([0x15; 32]).into()),
+        singular(FindSorafsOrderbookStatus.into()),
+        singular(FindSorafsOrderbookOrders::new(None, None, None, 10).into()),
+        singular(FindSorafsOrderbookReceipts::new(None, None, None, 10).into()),
+        singular(FindSorafsOrderbookTrades::new(None, None, 10).into()),
+        singular(FindSorafsOrderbookChannels::new(None, None, None, 10).into()),
+        singular(FindSorafsOrderbookEvents::new(None, None, 10).into()),
+    ];
+    let reserve_queries: Vec<QueryRequest> = vec![
+        singular(FindSorafsReservePolicy::new().into()),
+        singular(FindSorafsReserveProviderById::new(ProviderId::new([0x51; 32])).into()),
+        singular(FindSorafsReserveMovementById::new([0x61; 32]).into()),
+        singular(FindSorafsReserveAppealById::new([0x71; 32]).into()),
+        singular(FindSorafsReserveProviders::new(None, None, 10).into()),
+        singular(FindSorafsReserveMovements::new(None, None, 10).into()),
+        singular(FindSorafsReserveAppeals::new(None, None, 10).into()),
+        singular(FindSorafsReserveEvents::new(None, None, 10).into()),
+    ];
+    let reputation_policy = singular(FindSorafsReputationJournalAuthorityPolicy.into());
+    let reputation_cursor = ReputationJournalFinalizedCursorV1 {
+        height: 7,
+        block_hash: [0x45; 32],
+        finalized_at_unix_ms: 1_700_000_000_000,
+    };
+    let public_queries: Vec<QueryRequest> = vec![
+        singular(FindSorafsPopIssuerPolicy.into()),
+        singular(FindSorafsPopCredentialCommitmentByDigest::new([1; 32]).into()),
+        singular(FindSorafsPopCommitmentRootByVersion::new(1).into()),
+        singular(FindSorafsPopRevocationPublicationByVersion::new(1).into()),
+        singular(FindSorafsPopRevocationByNonceCommitment::new([2; 32]).into()),
+        singular(FindSorafsPopAuditDigestBySequence::new(1).into()),
+        singular(FindSorafsPopRegistryStatus.into()),
+        singular(FindSorafsModerationPolicy.into()),
+        singular(FindSorafsModerationStatus.into()),
+        singular(
+            FindSorafsModerationAppeal::new("appeal-case".to_owned(), "round-1".to_owned()).into(),
+        ),
+        singular(
+            FindSorafsModerationEvents::new(
+                ModerationFinalizedCursorV1 {
+                    height: 7,
+                    block_hash: [0x44; 32],
+                },
+                None,
+                16,
+            )
+            .into(),
+        ),
+        singular(FindSorafsReputationJournalEvents::new(Some(reputation_cursor), None, 16).into()),
+    ];
+    macro_rules! validate {
+        ($query:expr) => {
+            executor.validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                $query,
+            )
+        };
+    }
+    macro_rules! hold_only {
+        ($permission:expr) => {
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from($permission)]),
+            );
+        };
+    }
+    for query in &public_queries {
+        validate!(query)
+            .unwrap_or_else(|error| panic!("transparency query must stay public: {error:?}"));
+    }
+    // An unrelated SoraFS operator permission must not open any gated family.
+    hold_only!(executor_permission::sorafs::CanBindSorafsAlias);
+    for query in orderbook_queries
+        .iter()
+        .chain(&reserve_queries)
+        .chain(std::iter::once(&reputation_policy))
+    {
+        let error = validate!(query)
+            .expect_err("gated SoraFS state must not be readable without its permission");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(_)),
+            "{error:?}"
+        );
+    }
+    for permission in [
+        Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
+        Permission::from(executor_permission::sorafs::CanCompleteSorafsReplicationOrder),
+    ] {
+        hold_only!(permission.clone());
+        for query in &orderbook_queries {
+            validate!(query).unwrap_or_else(|error| {
+                panic!("{} must read orderbook state: {error:?}", permission.name())
+            });
+        }
+        for query in &reserve_queries {
+            validate!(query).expect_err("orderbook operators must not read reserve state");
+        }
+    }
+    hold_only!(executor_permission::sorafs::CanSetSorafsReservePolicy);
+    for query in &reserve_queries {
+        validate!(query)
+            .unwrap_or_else(|error| panic!("reserve governors must read reserve state: {error:?}"));
+    }
+    for query in &orderbook_queries {
+        validate!(query).expect_err("reserve governors must not read orderbook state");
+    }
+    for permission in [
+        Permission::from(executor_permission::sorafs::CanManageSorafsReputationJournalPolicy),
+        Permission::from(executor_permission::sorafs::CanRecordSorafsReputationJournal),
+        Permission::from(executor_permission::sorafs::CanResolveSorafsCapacityDispute),
+    ] {
+        hold_only!(permission.clone());
+        validate!(&reputation_policy).unwrap_or_else(|error| {
+            panic!(
+                "{} must read the reputation authority policy: {error:?}",
+                permission.name()
+            )
+        });
+    }
+}
+/// The SCCP registry and validation-fee governance parameters are reserved from generic
+/// `SetParameter`, even for genesis and for holders of `CanSetParameters` or
+/// `CanManageSccpGovernance`; the SCCP manager permission does not substitute for the generic
+/// parameter permission.
+#[test]
+fn initial_executor_reserves_sccp_and_validation_fee_parameters_from_set_parameter() {
+    let generic_admin = checked_account_id();
+    let sccp_manager = checked_account_id();
+    let genesis_authority = checked_account_id();
+    let mut world = World::with(
+        [],
+        [
+            Account::new(generic_admin.clone()).build(&generic_admin),
+            Account::new(sccp_manager.clone()).build(&sccp_manager),
+            Account::new(genesis_authority.clone()).build(&genesis_authority),
+        ],
+        [],
+    );
+    world.account_permissions.insert(
+        generic_admin.clone(),
+        BTreeSet::from([executor_permission::parameter::CanSetParameters.into()]),
+    );
+    world.account_permissions.insert(
+        sccp_manager.clone(),
+        BTreeSet::from([executor_permission::sccp::CanManageSccpGovernance.into()]),
+    );
+    let set_custom = |id: &str| -> InstructionBox {
+        iroha_data_model::isi::SetParameter::new(iroha_data_model::parameter::Parameter::Custom(
+            CustomParameter::new(
+                CustomParameterId::new(id.parse().expect("test custom parameter id")),
+                Json::new(()),
+            ),
+        ))
+        .into()
+    };
+    let reserved = [
+        "sccp_registry_v1",
+        iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID,
+        iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::PARAMETER_ID_STR,
+        iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID,
+    ];
+    let state = state_for_testing(world);
+    {
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut genesis = block.transaction();
+        assert!(is_initial_genesis_context(&genesis));
+        for id in reserved {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut genesis, &genesis_authority, set_custom(id))
+                .expect_err("reserved parameters must stay closed during genesis");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(_)),
+                "{id}: {error:?}"
+            );
+        }
+    }
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+    let mut state_transaction = block.transaction();
+    for id in reserved {
+        for authority in [&generic_admin, &sccp_manager] {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, authority, set_custom(id))
+                .expect_err("reserved parameters must not be set through SetParameter");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(_)),
+                "{id}: {error:?}"
+            );
+        }
+    }
+    let error = super::Executor::Initial
+        .execute_instruction(
+            &mut state_transaction,
+            &sccp_manager,
+            set_custom("unrelated_parameter"),
+        )
+        .expect_err("the SCCP manager permission must not authorize generic parameters");
+    assert!(
+        matches!(&error, ValidationFail::NotPermitted(message) if message.contains("CanSetParameters")),
+        "{error:?}"
+    );
+    validate_initial_native_instruction_authority(
+        &state_transaction,
+        &generic_admin,
+        &set_custom("unrelated_parameter"),
+        false,
+    )
+    .expect("CanSetParameters must authorize an unreserved custom parameter");
+}
+/// DPN markers are exact unit payloads: malformed payloads fail closed before storage, even when
+/// genesis grants them.
+#[test]
+fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
+    let bootstrap = checked_account_id();
+    let destination = checked_account_id();
+    let world = World::with(
+        [],
+        [
+            Account::new(bootstrap.clone()).build(&bootstrap),
+            Account::new(destination.clone()).build(&destination),
+        ],
+        [],
+    );
+    let state = state_for_testing(world);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let mut genesis = block.transaction();
+    assert!(is_initial_genesis_context(&genesis));
+    for name in [
+        "DpnAdmin",
+        "DpnUser",
+        "DpnInori",
+        "DpnSettlement",
+        "DpnEprGuard",
+    ] {
+        for payload in ["{}", "[]", "true", "\"unexpected\""] {
+            let malformed = Permission::new(
+                name.to_owned(),
+                Json::from_raw_json(payload.to_owned()).expect("valid JSON fixture"),
+            );
+            let error = super::Executor::Initial
+                .execute_instruction(
+                    &mut genesis,
+                    &bootstrap,
+                    Grant::account_permission(malformed.clone(), destination.clone()).into(),
+                )
+                .expect_err("malformed DPN payload must be rejected even at genesis");
+            assert!(
+                matches!(&error, ValidationFail::NotPermitted(message)
+                    if message.contains(name) && message.contains("Invalid permission payload")),
+                "unexpected {name} {payload} rejection: {error:?}"
+            );
+            assert!(
+                !genesis
+                    .world
+                    .account_permissions_iter(&destination)
+                    .expect("destination permissions")
+                    .any(|stored| stored == &malformed),
+                "malformed {name} permission reached account storage"
+            );
+        }
+        let exact = Permission::new(name.to_owned(), Json::new(()));
+        super::Executor::Initial
+            .execute_instruction(
+                &mut genesis,
+                &bootstrap,
+                Grant::account_permission(exact, destination.clone()).into(),
+            )
+            .unwrap_or_else(|error| panic!("genesis must grant the exact {name} marker: {error}"));
+    }
+}

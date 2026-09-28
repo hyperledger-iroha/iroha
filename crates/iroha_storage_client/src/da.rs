@@ -336,7 +336,9 @@ fn chunk_profile_from_chunk_size(chunk_size: u32) -> Result<ChunkProfile> {
         break_mask: 1,
     })
 }
-fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> Result<()> {
+/// Reject a payload whose ingested digest or `PoR` chunk root differs from the manifest.
+#[doc(hidden)]
+pub fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> Result<()> {
     let blob_hash_bytes = manifest.blob_hash.as_ref();
     if store.payload_digest().as_bytes() != blob_hash_bytes {
         return Err(eyre!(
@@ -452,24 +454,35 @@ fn explicit_proofs(
     }
     Ok(proofs)
 }
-#[derive(Debug)]
-enum ProofOrigin {
+/// How a reported `PoR` leaf was selected.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProofOrigin {
+    /// Selected by deterministic seeded sampling.
     Sampled,
+    /// Requested explicitly by leaf index.
     Explicit,
 }
 impl ProofOrigin {
-    fn as_str(&self) -> &'static str {
+    /// Stable JSON label for this origin.
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Sampled => "sampled",
             Self::Explicit => "explicit",
         }
     }
 }
-struct ProofReport {
-    origin: ProofOrigin,
-    leaf_index: usize,
-    proof: PorProof,
-    verified: bool,
+/// One generated `PoR` proof and its verification result against the manifest root.
+#[doc(hidden)]
+pub struct ProofReport {
+    /// How the leaf was selected.
+    pub origin: ProofOrigin,
+    /// Flattened 0-based leaf index.
+    pub leaf_index: usize,
+    /// Generated proof.
+    pub proof: PorProof,
+    /// Whether the proof verified against the `PoR` root.
+    pub verified: bool,
 }
 struct ProofSummaryInputs<'a> {
     manifest: &'a DaManifestV1,
@@ -515,7 +528,9 @@ fn build_proof_summary(inputs: ProofSummaryInputs<'_>, proofs: &[ProofReport]) -
     map.insert("proofs".into(), Value::Array(proof_values));
     Value::Object(map)
 }
-fn proof_to_json(report: &ProofReport) -> Value {
+/// Render one proof report as the canonical DA proof-summary JSON object.
+#[doc(hidden)]
+pub fn proof_to_json(report: &ProofReport) -> Value {
     let mut map = Map::new();
     map.insert("origin".into(), Value::from(report.origin.as_str()));
     map.insert("leaf_index".into(), value_from_usize(report.leaf_index));
@@ -774,7 +789,9 @@ where
     })
 }
 
-fn value_from_usize(value: usize) -> Value {
+/// JSON number for a `usize`, saturating at `u64::MAX`.
+#[doc(hidden)]
+pub fn value_from_usize(value: usize) -> Value {
     Value::from(u64::try_from(value).unwrap_or(u64::MAX))
 }
 

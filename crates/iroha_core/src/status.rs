@@ -8,7 +8,7 @@
 //! Consensus status is published separately by the consensus driver.
 use crate::{
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
-    queue::{BackpressureState, QueuePressureSnapshot},
+    queue::QueuePressureSnapshot,
 };
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use iroha_crypto::{
@@ -60,7 +60,6 @@ pub(crate) fn lock_operator_status_slot<T>(
 static SETTLEMENT_STATUS: OnceLock<Mutex<SettlementStatusState>> = OnceLock::new();
 static LANE_ACTIVITY: OnceLock<Mutex<Vec<LaneActivitySnapshot>>> = OnceLock::new();
 static PIPELINE_EXECUTION: OnceLock<Mutex<PipelineExecutionSnapshot>> = OnceLock::new();
-static ACCESS_SET_SOURCES: OnceLock<Mutex<AccessSetSourceSummary>> = OnceLock::new();
 static DATASPACE_ACTIVITY: OnceLock<Mutex<Vec<DataspaceActivitySnapshot>>> = OnceLock::new();
 static LANE_COMMITMENTS: OnceLock<Mutex<Vec<LaneCommitmentSnapshot>>> = OnceLock::new();
 static DATASPACE_COMMITMENTS: OnceLock<Mutex<Vec<DataspaceCommitmentSnapshot>>> = OnceLock::new();
@@ -168,7 +167,6 @@ pub(crate) fn begin_public_lane_staking_status_overlay() -> PublicLaneStakingSta
         _not_send_or_sync: core::marker::PhantomData,
     }
 }
-static PIPELINE_CONFLICT_RATE_BPS: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_DEPTH: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_CAPACITY: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_RETAINED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -268,6 +266,7 @@ impl Default for NexusStakingLaneSnapshot {
         }
     }
 }
+#[cfg(test)]
 /// Aggregated Nexus staking snapshot (all lanes).
 #[derive(Clone, Debug, Default)]
 pub struct NexusStakingSnapshot {
@@ -536,6 +535,7 @@ pub fn record_pvp_settlement_event(update: PvpSettlementEventUpdate) {
         fx_window_ms: update.fx_window_ms,
     });
 }
+#[cfg(test)]
 /// Read-only snapshot of settlement telemetry state.
 pub fn settlement_snapshot() -> SettlementStatusSnapshot {
     let guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
@@ -621,18 +621,6 @@ pub struct PipelineExecutionSnapshot {
     pub detached_fallback_overlay_error_total: u64,
     /// Quarantine transactions executed in the sequential quarantine lane.
     pub quarantine_executed_total: u64,
-}
-/// Summary of access-set sources used for IVM transactions in the latest block.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct AccessSetSourceSummary {
-    /// Transactions using manifest-level access-set hints.
-    pub manifest_hints: u64,
-    /// Transactions using entrypoint-level access-set hints.
-    pub entrypoint_hints: u64,
-    /// Transactions derived from the dynamic prepass (merged sources).
-    pub prepass_merge: u64,
-    /// Transactions that fell back to the conservative global set.
-    pub conservative_fallback: u64,
 }
 /// Per-dataspace execution summary for operator dashboards.
 #[derive(Clone, Copy, Debug, Default)]
@@ -1079,10 +1067,12 @@ pub fn reset_public_lane_staking_lanes(lanes_to_reset: &BTreeSet<LaneId>) {
         .checked_add(1)
         .expect("nexus staking reset epoch must not overflow");
 }
+#[cfg(test)]
 /// Latest aggregated Nexus fee snapshot.
 pub fn nexus_fee_snapshot() -> NexusFeeSnapshot {
     lock_operator_status_slot(nexus_fee_slot(), "nexus fee status").clone()
 }
+#[cfg(test)]
 /// Latest aggregated Nexus staking snapshot.
 pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
     let guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
@@ -1091,17 +1081,12 @@ pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
     NexusStakingSnapshot { lanes }
 }
 /// Shared lock for tests that mutate global Nexus fee state.
-#[cfg(not(test))]
-pub fn nexus_fee_test_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
-}
-/// Shared lock for tests that mutate global Nexus fee state.
 #[cfg(test)]
 pub(crate) fn nexus_fee_test_lock() -> &'static NexusFeeTestLock {
     static LOCK: NexusFeeTestLock = NexusFeeTestLock;
     &LOCK
 }
+#[cfg(test)]
 /// Clear Nexus economics snapshots (test-only helper).
 pub fn reset_nexus_economics_for_tests() {
     #[cfg(test)]
@@ -1349,38 +1334,11 @@ pub fn inc_gossip_duplicate_known_skipped() {
 fn lane_activity_slot() -> &'static Mutex<Vec<LaneActivitySnapshot>> {
     LANE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
 }
-fn access_set_source_slot() -> &'static Mutex<AccessSetSourceSummary> {
-    ACCESS_SET_SOURCES.get_or_init(|| Mutex::new(AccessSetSourceSummary::default()))
-}
 fn dataspace_activity_slot() -> &'static Mutex<Vec<DataspaceActivitySnapshot>> {
     DATASPACE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
 }
 fn pipeline_execution_slot() -> &'static Mutex<PipelineExecutionSnapshot> {
     PIPELINE_EXECUTION.get_or_init(|| Mutex::new(PipelineExecutionSnapshot::default()))
-}
-/// Replace the lane-activity adapter diagnostic.
-pub fn set_lane_activity_snapshot(entries: Vec<LaneActivitySnapshot>) {
-    *lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot") = entries;
-}
-/// Replace the aggregate pipeline-execution adapter diagnostic.
-pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
-    #[cfg(test)]
-    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
-        return;
-    };
-    *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") = snapshot;
-}
-/// Replace the access-set source adapter diagnostic.
-pub fn set_access_set_source_summary(summary: AccessSetSourceSummary) {
-    *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") = summary;
-}
-/// Record the latest conflict rate (basis points) for the pipeline DAG.
-pub fn set_pipeline_conflict_rate_bps(bps: u64) {
-    PIPELINE_CONFLICT_RATE_BPS.store(bps, Ordering::Relaxed);
-}
-/// Replace the dataspace-activity adapter diagnostic.
-pub fn set_dataspace_activity_snapshot(entries: Vec<DataspaceActivitySnapshot>) {
-    *lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot") = entries;
 }
 fn lane_commitments_slot() -> &'static Mutex<Vec<LaneCommitmentSnapshot>> {
     LANE_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
@@ -1472,6 +1430,7 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
         }
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Replace the aggregated lane/dataspace commitment snapshots used by Nexus diagnostics.
 pub fn set_lane_commitments(
     lane_entries: Vec<LaneCommitmentSnapshot>,
@@ -1498,6 +1457,7 @@ pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
     );
     *guard = entries;
 }
+#[cfg(test)]
 /// Replace the stored lane relay envelopes captured during block sealing.
 pub fn set_lane_relay_envelopes(entries: Vec<LaneRelayEnvelope>) {
     let mut guard =
@@ -1764,33 +1724,6 @@ pub fn set_tx_queue_pressure(snapshot: QueuePressureSnapshot) {
     TX_QUEUE_SATURATED_BY_BYTES.store(saturated_by_bytes, Ordering::Relaxed);
     TX_QUEUE_SATURATED_BY_AGE.store(snapshot.saturated_by_age, Ordering::Relaxed);
     TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(snapshot.oldest_queued_tx_age_ms, Ordering::Relaxed);
-}
-/// Record the latest transaction-queue backpressure snapshot for operator queries.
-pub fn set_tx_queue_backpressure(state: BackpressureState) {
-    match state {
-        BackpressureState::Healthy { queued, capacity } => {
-            TX_QUEUE_DEPTH.store(queued as u64, Ordering::Relaxed);
-            TX_QUEUE_CAPACITY.store(capacity.get() as u64, Ordering::Relaxed);
-            TX_QUEUE_RETAINED_BYTES.store(0, Ordering::Relaxed);
-            TX_QUEUE_MAX_RETAINED_BYTES.store(0, Ordering::Relaxed);
-            TX_QUEUE_SATURATED.store(false, Ordering::Relaxed);
-            TX_QUEUE_SATURATED_BY_COUNT.store(false, Ordering::Relaxed);
-            TX_QUEUE_SATURATED_BY_BYTES.store(false, Ordering::Relaxed);
-            TX_QUEUE_SATURATED_BY_AGE.store(false, Ordering::Relaxed);
-            TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(0, Ordering::Relaxed);
-        }
-        BackpressureState::Saturated { queued, capacity } => {
-            TX_QUEUE_DEPTH.store(queued as u64, Ordering::Relaxed);
-            TX_QUEUE_CAPACITY.store(capacity.get() as u64, Ordering::Relaxed);
-            TX_QUEUE_RETAINED_BYTES.store(0, Ordering::Relaxed);
-            TX_QUEUE_MAX_RETAINED_BYTES.store(0, Ordering::Relaxed);
-            TX_QUEUE_SATURATED.store(true, Ordering::Relaxed);
-            TX_QUEUE_SATURATED_BY_COUNT.store(true, Ordering::Relaxed);
-            TX_QUEUE_SATURATED_BY_BYTES.store(false, Ordering::Relaxed);
-            TX_QUEUE_SATURATED_BY_AGE.store(false, Ordering::Relaxed);
-            TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(0, Ordering::Relaxed);
-        }
-    }
 }
 /// Snapshot the recorded transaction-queue backpressure state.
 pub fn tx_queue_backpressure() -> TxQueueBackpressureSnapshot {

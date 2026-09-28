@@ -955,6 +955,37 @@ fn i105_sentinel_for_discriminant(discriminant: u16) -> String {
         _ => format!("{I105_SENTINEL_FALLBACK_PREFIX}{discriminant}"),
     }
 }
+/// Write the I105 chain sentinel for `discriminant` without allocating.
+///
+/// Named chains use their fixed sentinel; any other discriminant is `n` followed by its decimal
+/// value, which always fits the six-byte scratch buffer.
+#[doc(hidden)]
+pub fn write_i105_sentinel(discriminant: u16, numeric: &mut [u8; 6]) -> &[u8] {
+    match discriminant {
+        CHAIN_DISCRIMINANT_SORA => I105_SENTINEL_SORA.as_bytes(),
+        CHAIN_DISCRIMINANT_TEST => I105_SENTINEL_TEST.as_bytes(),
+        CHAIN_DISCRIMINANT_DEV => I105_SENTINEL_DEV.as_bytes(),
+        discriminant => {
+            numeric[0] = I105_SENTINEL_FALLBACK_PREFIX.as_bytes()[0];
+            let mut reversed = [0_u8; 5];
+            let mut value = discriminant;
+            let mut digits = 0_usize;
+            loop {
+                reversed[digits] = b'0'
+                    + u8::try_from(value % 10).expect("decimal sentinel digit fits in one byte");
+                digits += 1;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            for index in 0..digits {
+                numeric[index + 1] = reversed[digits - 1 - index];
+            }
+            &numeric[..=digits]
+        }
+    }
+}
 /// Stable error codes surfaced by address encoders/decoders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountAddressErrorCode {
@@ -1496,7 +1527,10 @@ fn validate_base_n_digits(digits: &[u8], base: u32) -> Result<(), AccountAddress
     }
     Ok(())
 }
-fn i105_checksum_digits(canonical: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
+/// Bech32m-style checksum digits over the `snx` domain for a canonical account payload.
+#[doc(hidden)]
+#[must_use]
+pub fn i105_checksum_digits(canonical: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
     let mut chk = 1_u32;
     for byte in "snx".bytes() {
         chk = bech32_polymod_step(chk, byte >> 5);
@@ -1614,10 +1648,14 @@ fn lookup_i105_digit(symbol: &str) -> Option<u8> {
         .find_map(|(candidate, value)| (*candidate == symbol).then_some(*value))
 }
 fn i105_digit_symbol(digit: u8) -> Result<&'static str, AccountAddressError> {
-    I105_ALPHABET
-        .get(usize::from(digit))
-        .copied()
-        .ok_or(AccountAddressError::InvalidI105Digit(digit))
+    i105_symbol(digit).ok_or(AccountAddressError::InvalidI105Digit(digit))
+}
+/// Symbol for one I105 digit, or `None` outside the 105-digit alphabet.
+#[doc(hidden)]
+#[inline]
+#[must_use]
+pub fn i105_symbol(digit: u8) -> Option<&'static str> {
+    I105_SYMBOLS.get(usize::from(digit)).copied()
 }
 const BASE58_ALPHABET: [&str; 58] = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
@@ -1630,15 +1668,26 @@ const IROHA_POEM_KANA_HALFWIDTH: [&str; 47] = [
     "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ",
     "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 ];
-static I105_ALPHABET: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    let mut table = Vec::with_capacity(BASE58_ALPHABET.len() + IROHA_POEM_KANA_HALFWIDTH.len());
-    table.extend_from_slice(&BASE58_ALPHABET);
-    table.extend_from_slice(&IROHA_POEM_KANA_HALFWIDTH);
+const fn i105_symbols() -> [&'static str; I105_BASE_U8 as usize] {
+    let mut table = [""; I105_BASE_U8 as usize];
+    let mut index = 0;
+    while index < BASE58_ALPHABET.len() {
+        table[index] = BASE58_ALPHABET[index];
+        index += 1;
+    }
+    let mut kana = 0;
+    while kana < IROHA_POEM_KANA_HALFWIDTH.len() {
+        table[BASE58_ALPHABET.len() + kana] = IROHA_POEM_KANA_HALFWIDTH[kana];
+        kana += 1;
+    }
     table
-});
+}
+/// The I105 digit alphabet in digit order: Base58 followed by the half-width Iroha poem kana.
+#[doc(hidden)]
+pub const I105_SYMBOLS: [&str; I105_BASE_U8 as usize] = i105_symbols();
 static I105_DIGIT_TABLE: LazyLock<Vec<(&'static str, u8)>> = LazyLock::new(|| {
     let mut table = Vec::with_capacity(usize::from(I105_BASE_U8));
-    for (index, symbol) in I105_ALPHABET.iter().enumerate() {
+    for (index, symbol) in I105_SYMBOLS.iter().enumerate() {
         table.push((
             *symbol,
             u8::try_from(index).expect("I105 alphabet length fits within u8"),
@@ -1818,6 +1867,22 @@ mod tests {
             I105_SENTINEL_DEV
         );
         assert_eq!(i105_sentinel_for_discriminant(42), "n42");
+        let mut numeric = [0_u8; 6];
+        for discriminant in [
+            CHAIN_DISCRIMINANT_SORA,
+            CHAIN_DISCRIMINANT_TEST,
+            CHAIN_DISCRIMINANT_DEV,
+            42,
+            u16::MAX,
+        ] {
+            assert_eq!(
+                write_i105_sentinel(discriminant, &mut numeric),
+                i105_sentinel_for_discriminant(discriminant).as_bytes()
+            );
+        }
+        assert_eq!(i105_symbol(0), Some("1"));
+        assert_eq!(i105_symbol(58), Some(IROHA_POEM_KANA_HALFWIDTH[0]));
+        assert_eq!(i105_symbol(I105_BASE_U8), None);
         let address = AccountAddress::from_account_id(&AccountId::new(ed25519_pk()))
             .expect("address encoding");
         for discriminant in [
@@ -1989,7 +2054,7 @@ mod tests {
         }
         assert_eq!(
             symbols.len(),
-            I105_ALPHABET.len(),
+            I105_SYMBOLS.len(),
             "unexpected I105 alphabet length"
         );
     }

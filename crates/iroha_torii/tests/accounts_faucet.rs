@@ -521,8 +521,8 @@ async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Re
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
     assert_eq!(
         prepared_tx.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced,
-        "prepared faucet writes require strict quorum admission"
+        TransactionAdmissionIntent::Ordinary,
+        "prepared faucet writes bind current single-route admission"
     );
     app.clone()
         .oneshot(faucet_post_request(
@@ -533,7 +533,7 @@ async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Re
         .expect("faucet submit response")
 }
 
-async fn expect_faucet_submit_without_quorum(resp: Response) {
+async fn expect_faucet_submit_without_durable_admission(resp: Response) {
     let resp = expect_status(resp, StatusCode::SERVICE_UNAVAILABLE).await;
     assert!(
         resp.headers()
@@ -547,12 +547,17 @@ async fn expect_faucet_submit_without_quorum(resp: Response) {
         .expect("strict faucet response body");
     let payload: norito::json::Value =
         norito::json::from_slice(&body).expect("strict faucet response JSON");
+    #[cfg(feature = "connect")]
+    let expected_code = "queue_plan_journal_unavailable";
+    #[cfg(not(feature = "connect"))]
+    let expected_code = "queue_plan_synced_transport_unavailable";
+    assert_eq!(payload["code"].as_str(), Some(expected_code), "{payload:?}");
     assert!(
         payload
             .as_object()
             .and_then(|object| object.get("outcome"))
             .is_none(),
-        "an uncertified faucet write must not claim Pending"
+        "a faucet write without durable custody must not claim Pending"
     );
 }
 
@@ -666,7 +671,7 @@ fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
     );
 }
 #[tokio::test]
-async fn accounts_faucet_prepared_transfer_fails_closed_without_quorum() {
+async fn accounts_faucet_prepared_transfer_fails_closed_without_durable_admission() {
     let FaucetTestContext {
         _data_dir,
         app,
@@ -692,7 +697,7 @@ async fn accounts_faucet_prepared_transfer_fails_closed_without_quorum() {
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let height_before = state.committed_height();
     let resp = prepare_and_submit_faucet(&app, body).await;
-    expect_faucet_submit_without_quorum(resp).await;
+    expect_faucet_submit_without_durable_admission(resp).await;
     assert_eq!(queue.active_len(), 0);
     assert_eq!(state.committed_height(), height_before);
     let view = state.view();
@@ -753,7 +758,7 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
     assert_eq!(
         prepared_tx.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
+        TransactionAdmissionIntent::Ordinary
     );
     let marker_key: Name = iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
         .parse()
@@ -796,7 +801,7 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
         .oneshot(faucet_post_request("/v1/accounts/faucet", prepared_body))
         .await
         .expect("faucet submit response");
-    expect_faucet_submit_without_quorum(resp).await;
+    expect_faucet_submit_without_durable_admission(resp).await;
     assert_eq!(queue.active_len(), 0);
     let view = state.view();
     assert!(view.world().account(&user_id).is_err());
@@ -805,7 +810,7 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
     drop(view);
 
     // Seed only the account fixture so preparation's one-instruction form can
-    // be checked without inventing a QueuePlanSynced carrier block.
+    // be checked without inventing a committed block.
     register_faucet_user_for_test(&state, &user_id, &authority_id);
     let (pow_anchor_height, pow_nonce_hex) = solve_faucet_pow(
         &state,
@@ -846,7 +851,7 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
         SignedTransaction::decode_all_versioned(&post_wire).expect("decode post-onboarding tx");
     assert_eq!(
         post_tx.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
+        TransactionAdmissionIntent::Ordinary
     );
     assert_eq!(
         post_tx.instructions().explicit_instructions().count(),
@@ -856,7 +861,7 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_preserves_prefunded_balance_without_quorum() {
+async fn accounts_faucet_preserves_prefunded_balance_without_durable_admission() {
     let FaucetTestContext {
         _data_dir,
         app,
@@ -881,7 +886,7 @@ async fn accounts_faucet_preserves_prefunded_balance_without_quorum() {
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
-    expect_faucet_submit_without_quorum(resp).await;
+    expect_faucet_submit_without_durable_admission(resp).await;
     assert_eq!(queue.active_len(), 0);
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
@@ -899,7 +904,7 @@ async fn accounts_faucet_preserves_prefunded_balance_without_quorum() {
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_repeated_claims_do_not_spend_without_quorum() {
+async fn accounts_faucet_repeated_claims_do_not_spend_without_durable_admission() {
     let FaucetTestContext {
         _data_dir,
         app,
@@ -926,7 +931,7 @@ async fn accounts_faucet_repeated_claims_do_not_spend_without_quorum() {
         ]);
         let body = norito::json::to_json(&body).expect("serialize faucet request");
         let resp = prepare_and_submit_faucet(&app, body).await;
-        expect_faucet_submit_without_quorum(resp).await;
+        expect_faucet_submit_without_durable_admission(resp).await;
         assert_eq!(queue.active_len(), 0);
     }
     let view = state.view();
@@ -967,7 +972,7 @@ async fn accounts_faucet_prepares_alias_selector_config_but_needs_quorum() {
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
-    expect_faucet_submit_without_quorum(resp).await;
+    expect_faucet_submit_without_durable_admission(resp).await;
     assert_eq!(queue.active_len(), 0);
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
@@ -982,7 +987,7 @@ async fn accounts_faucet_prepares_alias_selector_config_but_needs_quorum() {
 }
 
 #[tokio::test]
-async fn faucet_prepared_envelope_aging_reaches_quorum_gate() {
+async fn faucet_prepared_envelope_aging_reaches_durable_admission_gate() {
     let context = build_faucet_test_context(false);
     let scrypt_params = faucet_pow_scrypt_params(
         context.pow_scrypt_log_n,
@@ -1023,7 +1028,7 @@ async fn faucet_prepared_envelope_aging_reaches_quorum_gate() {
         ))
         .await
         .expect("aged faucet submit response");
-    expect_faucet_submit_without_quorum(submitted).await;
+    expect_faucet_submit_without_durable_admission(submitted).await;
     assert_eq!(context.queue.active_len(), 0);
     context.app.shutdown().await;
 }
@@ -1079,7 +1084,7 @@ async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
     assert_eq!(
         prepared_tx.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
+        TransactionAdmissionIntent::Ordinary
     );
     for field in [
         "transaction_hash_hex",
@@ -1114,7 +1119,7 @@ async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
         ))
         .await
         .expect("faucet submit response");
-    expect_faucet_submit_without_quorum(submitted).await;
+    expect_faucet_submit_without_durable_admission(submitted).await;
     let response_loss_replay = context
         .app
         .clone()
@@ -1124,7 +1129,7 @@ async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
         ))
         .await
         .expect("faucet replay response");
-    expect_faucet_submit_without_quorum(response_loss_replay).await;
+    expect_faucet_submit_without_durable_admission(response_loss_replay).await;
     assert_eq!(context.queue.active_len(), 0);
     let destination = AssetId::new(context.asset_definition_id.clone(), context.user_id.clone());
     assert!(context.state.view().world().asset(&destination).is_err());
@@ -1445,7 +1450,7 @@ async fn accounts_faucet_puzzle_ignores_uncertified_claim() {
     let initial_claim_body =
         norito::json::to_json(&initial_claim_body).expect("serialize initial faucet request");
     let resp = prepare_and_submit_faucet(&app, initial_claim_body).await;
-    expect_faucet_submit_without_quorum(resp).await;
+    expect_faucet_submit_without_durable_admission(resp).await;
     let resp = app
         .clone()
         .oneshot(

@@ -7,6 +7,7 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+#[cfg(test)]
 const REPLAY_KEY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:torii:replay-cache:v1\0";
 /// Reason a nonce could not be admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +171,7 @@ impl ReplayCache {
         inner.capacity = capacity;
     }
     /// Admit a new nonce, rejecting replay and saturated live state.
+    #[cfg(test)]
     pub(crate) fn check_and_insert(&self, key: String) -> Result<(), InsertError> {
         self.check_and_insert_at(key, Instant::now())
     }
@@ -194,6 +196,7 @@ impl ReplayCache {
     ) -> Result<(), InsertError> {
         self.check_and_insert_digest_at_with_minimum_ttl(key, Instant::now(), minimum_ttl)
     }
+    #[cfg(test)]
     fn check_and_insert_at(&self, key: String, now: Instant) -> Result<(), InsertError> {
         // Callers may include an attacker-sized authority representation in
         // this key. Retain only a domain-separated fixed-size digest; keeping

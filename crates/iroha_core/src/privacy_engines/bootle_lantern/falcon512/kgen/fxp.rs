@@ -21,8 +21,6 @@ impl Default for FXR {
 impl DefaultIsZeroes for FXR {}
 impl FXR {
     pub(crate) const ZERO: Self = Self::from_i32(0);
-    #[allow(dead_code)]
-    pub(crate) const ONE: Self = Self::from_i32(1);
     // Convert a signed 32-bit integer to an FXR value. Since all signed
     // 32-bit integers are representable in the FXR format, no rounding
     // or truncation is applied.
@@ -54,40 +52,10 @@ impl FXR {
     pub(crate) fn set_sub(&mut self, other: Self) {
         self.0 = self.0.wrapping_sub(other.0);
     }
-    #[allow(dead_code)]
-    // Doubling (internally, wraps around at 64 bits).
-    #[inline(always)]
-    pub(crate) fn set_double(&mut self) {
-        self.0 <<= 1;
-    }
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn double(self) -> Self {
-        let mut r = self;
-        r.set_double();
-        r
-    }
     // Negation (internally, wraps around at 64 bits).
     #[inline(always)]
     pub(crate) fn set_neg(&mut self) {
         self.0 = self.0.wrapping_neg();
-    }
-    // Absolute value. If the represented value is -2^31, then this
-    // overflows (because +2^31 is not representable) and -2^31 is
-    // returned.
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn set_abs(&mut self) {
-        self.0 = self
-            .0
-            .wrapping_sub((self.0 << 1) & (((self.0 as i64) >> 63) as u64));
-    }
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn abs(self) -> Self {
-        let mut r = self;
-        r.set_abs();
-        r
     }
     // Multiplication (internally, wraps around at 64 bits).
     #[inline(always)]
@@ -152,22 +120,10 @@ impl FXR {
         let z = self.0.wrapping_add((1u64 << e) >> 1);
         self.0 = ((z as i64) >> e) as u64;
     }
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn div2e(self, e: u32) -> Self {
-        let mut r = self;
-        r.set_div2e(e);
-        r
-    }
-    // Halving: this is equivalent to div2e(1).
+    // Halving: this is equivalent to set_div2e(1).
     #[inline(always)]
     pub(crate) fn set_half(&mut self) {
         self.set_div2e(1);
-    }
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn half(self) -> Self {
-        self.div2e(1)
     }
     // Multiplication by 2^e (internally, wraps around at 64 bits).
     // Shift count MUST be less than 64. Shift count MAY be zero (in which
@@ -175,26 +131,6 @@ impl FXR {
     #[inline(always)]
     pub(crate) fn set_mul2e(&mut self, e: u32) {
         self.0 <<= e;
-    }
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn mul2e(self, e: u32) -> Self {
-        let mut r = self;
-        r.set_mul2e(e);
-        r
-    }
-    // Inversion. Equivalent to dividing 1 by this value.
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn set_inv(&mut self) {
-        self.0 = Self::inner_div(1u64 << 32, self.0);
-    }
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn inv(self) -> Self {
-        let mut r = self;
-        r.set_inv();
-        r
     }
     // Division. An internal division algorithm is applied; overflows
     // and similar edge conditions are ignored.

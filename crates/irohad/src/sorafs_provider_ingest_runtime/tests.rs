@@ -40,6 +40,8 @@ fn completed_musubi_capture_composer_has_one_concrete_inert_shape() {
 }
 #[test]
 fn completed_musubi_attestation_driver_composer_remains_inert_and_open_only() {
+    // Keep the parked composer type-checked; only this test may name it.
+    let _ = compose_inert_completed_musubi_attestation_driver_v1;
     let source = include_str!("../sorafs_provider_ingest_runtime.rs");
     let start = source
         .find("pub(crate) fn compose_inert_completed_musubi_attestation_driver_v1")
@@ -1823,8 +1825,8 @@ fn state_free_preflight_fixture() -> (
 ) {
     let (signer, _, _, _) = test_governed_signer(test_signer_policy(1), None);
     let config = SorafsProviderIngestRuntime {
-            native_source_origins: Default::default(),
-            native_completion_credential: None,
+        native_source_origins: Default::default(),
+        native_completion_credential: None,
         authenticated_source_fetch_handle: "https-pinned-source-pool:region-a".to_owned(),
         authenticated_source_fetch_revision: 5,
         authenticated_source_fetch_policy_digest: [0xB1; 32],
@@ -2123,7 +2125,10 @@ fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stabl
         vec![[0x33; 32], [0x22; 32]],
     ] {
         let source = TestAuthenticatedSourceInventoryV1::new(invalid);
-        assert!(validate_authenticated_source_inventory(&source, local_provider_id, None, false).is_err());
+        assert!(
+            validate_authenticated_source_inventory(&source, local_provider_id, None, false)
+                .is_err()
+        );
     }
     assert!(
         validate_authenticated_source_inventory(
@@ -2147,7 +2152,10 @@ fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stabl
             })
             .collect(),
     );
-    assert!(validate_authenticated_source_inventory(&oversized, local_provider_id, None, false).is_err());
+    assert!(
+        validate_authenticated_source_inventory(&oversized, local_provider_id, None, false)
+            .is_err()
+    );
 }
 #[test]
 fn authenticated_source_rejects_qualification_drift_across_readiness() {

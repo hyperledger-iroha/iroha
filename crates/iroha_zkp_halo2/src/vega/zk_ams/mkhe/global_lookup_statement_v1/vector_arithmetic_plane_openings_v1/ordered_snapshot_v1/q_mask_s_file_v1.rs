@@ -4,9 +4,11 @@
 //! writer closes after every eight slots. Its original consuming source owner
 //! completes four same-block opening tickets before it resumes the next block.
 use super::*;
+#[cfg(test)]
 use crate::vega::zk_ams::mkhe::rns_native_resource_budget::{
     RnsNativeProofResourceBudgetV1, RnsNativeResourceErrorV1, RnsNativeResourceReservationV1,
 };
+#[cfg(test)]
 use crate::vega::{
     bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
     zk_ams::mkhe::rns_native_profile::{
@@ -14,21 +16,26 @@ use crate::vega::{
     },
 };
 
+#[cfg(test)]
 const S_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.q-mask.original-S.local-spool\0";
+#[cfg(test)]
 const S_LAYOUT_V1: &[u8] = b"limb,repetition,coefficient;40,5,131072;u64le;2048/slot;top-zero;private-uniform-S;pre-initial-root";
 const S_SLOTS_V1: u64 = 12_800;
 const S_SLOT_BYTES_V1: u64 = 16_384;
+#[cfg(test)]
 const S_FIRST_BLOCK_SLOTS_V1: u64 = 8;
 const S_FILE_BYTES_V1: u64 = S_SLOTS_V1 * (S_SLOT_BYTES_V1 + 16);
 const _: () = assert!(S_FILE_BYTES_V1 == 209_920_000);
 
 /// Private geometry/context made only by the original sealed pair. It grants
 /// neither file access nor proof/source authority and has no public constructor.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct QMaskSFilePlanV1 {
     layout: ConfidentialSpoolLayoutV1,
     original_snapshot: [u8; 32],
     context: [u8; 32],
 }
+#[cfg(test)]
 impl QMaskSFilePlanV1 {
     pub(in crate::vega::zk_ams::mkhe) fn binding_v1(&self) -> [u8; 32] {
         self.context
@@ -63,10 +70,12 @@ impl QMaskSFilePlanV1 {
 }
 
 /// Actual leaf-memory custody; its fields and underfunded construction are private.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct QMaskSFileMemoryV1 {
     binding: [u8; 32],
     reservation: RnsNativeResourceReservationV1,
 }
+#[cfg(test)]
 impl QMaskSFileMemoryV1 {
     pub(in crate::vega::zk_ams::mkhe) fn reserve_block_workspace_v1(
         &self,
@@ -82,6 +91,7 @@ impl QMaskSFileMemoryV1 {
     }
 }
 
+#[cfg(test)]
 impl OrderedPlaneSpoolSnapshotV1 {
     pub(in crate::vega::zk_ams::mkhe) fn q_mask_s_file_plan_v1(
         &self,
@@ -178,6 +188,7 @@ impl OrderedPlaneSpoolSnapshotV1 {
     }
 }
 
+#[cfg(test)]
 struct QMaskSFileLiveV1 {
     writer: ConfidentialSpoolWriterV1,
     reservation: OrderedStorageReservationV1,
@@ -186,12 +197,14 @@ struct QMaskSFileLiveV1 {
 
 /// Actual partial S file and its original storage reservation. No raw writer,
 /// reset, new budget, late root or caller file can be installed.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct QMaskSFileV1 {
     live: Option<QMaskSFileLiveV1>,
     context: [u8; 32],
     next_slot: u64,
     block_end_slot: u64,
 }
+#[cfg(test)]
 impl QMaskSFileV1 {
     pub(in crate::vega::zk_ams::mkhe) fn binding_v1(&self) -> [u8; 32] {
         self.context
@@ -254,10 +267,12 @@ impl QMaskSFileV1 {
 /// Physical closed-block custody. The original source caller joins this file
 /// with its four same-block tickets before continuing; storage alone does not
 /// grant source, opening or proof authority.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct WrittenQMaskSBlockFileV1 {
     file: QMaskSFileV1,
 }
 
+#[cfg(test)]
 impl WrittenQMaskSBlockFileV1 {
     /// The actual closed leaf keeps the same source proof-ledger reservation.
     pub(in crate::vega::zk_ams::mkhe) fn require_original_budget_v1(
@@ -297,4 +312,5 @@ mod tests;
 
 #[path = "q_mask_s_file_v1/stream_v1.rs"]
 mod stream_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use stream_v1::{QMaskSBlockReadV1, SealedQMaskSFileV1};

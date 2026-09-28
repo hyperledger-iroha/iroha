@@ -39,6 +39,7 @@ const CURRENT_OPEN_RECEIPT_CAPABILITY_BLOCKERS_V1: u16 = ALL_RECEIPT_CAPABILITY_
 const _: () = assert!(ALL_RECEIPT_CAPABILITY_BLOCKERS_V1 == 0xff);
 const _: () = assert!(CURRENT_OPEN_RECEIPT_CAPABILITY_BLOCKERS_V1 == 0xf0);
 /// One release operation which must be authorized by opaque verified receipts.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ZkAmsMkheReceiptCapabilityConsumerV1 {
     /// Aggregate and admit the exact proof-carrying collective public key.
@@ -129,6 +130,7 @@ impl ZkAmsMkheReceiptCapabilityAuditV1 {
         Ok(())
     }
     /// Return whether one exact consumer is currently authorized.
+    #[cfg(test)]
     pub(super) const fn authorizes(self, consumer: ZkAmsMkheReceiptCapabilityConsumerV1) -> bool {
         match consumer {
             ZkAmsMkheReceiptCapabilityConsumerV1::CollectivePublicKeyAggregate => {
@@ -239,6 +241,7 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
 /// The collective-public-key aggregate and the three evaluated-key receipt consumers are authorized
 /// through their sealed handoffs. The independent algebraic/materialization/decryption blockers
 /// remain open, so these local successes do not make the complete release available.
+#[cfg(test)]
 pub(super) fn require_zk_ams_mkhe_receipt_capability_v1(
     consumer: ZkAmsMkheReceiptCapabilityConsumerV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -427,7 +430,7 @@ mod tests {
     #[test]
     fn source_surface_guards_distinguish_receipts_from_bypasses() {
         let production = include_str!("receipt_capability_audit.rs")
-            .split("#[cfg(test)]")
+            .split("#[cfg(test)]\nmod tests")
             .next()
             .expect("production source prefix");
         assert!(production.contains("native_bgv_opening_receipt_sealed: false"));

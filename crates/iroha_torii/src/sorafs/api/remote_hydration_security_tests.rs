@@ -55,8 +55,15 @@ fn active_content_types_require_isolated_origin() {
         "application/pdf",
         "application/wasm",
     ] {
-        assert!(content_type_is_active(media_type), "missed {media_type}");
+        assert!(
+            iroha_torii_shared::content_mime::is_active_media_type(media_type),
+            "missed {media_type}"
+        );
     }
-    assert!(!content_type_is_active("image/png"));
-    assert!(!content_type_is_active("application/octet-stream"));
+    assert!(!iroha_torii_shared::content_mime::is_active_media_type(
+        "image/png"
+    ));
+    assert!(!iroha_torii_shared::content_mime::is_active_media_type(
+        "application/octet-stream"
+    ));
 }

@@ -6,7 +6,7 @@ fn print_usage() {
         "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Validate and emit Torii's static OpenAPI authority through a live router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
+        "    Validate and emit Torii's compiled OpenAPI authority (the feature-pruned document Torii serves at /openapi.json). --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"
@@ -292,10 +292,10 @@ fn print_usage() {
         "    Regenerate Nexus lane commitment fixtures (defaults to fixtures/nexus/lane_commitments); pass --verify to ensure existing files match the generated payloads."
     );
     eprintln!(
-        "  cargo xtask nexus-connect-fixture (--write|--check) --output-root <absolute-directory>"
+        "  cargo xtask nexus-connect-fixture --print | (--write|--check) --output-root <absolute-directory>"
     );
     eprintln!(
-        "    Build the Rust-owned Nexus Connect transfer SDK fixture; write mode refuses Git checkouts and requires an external staging root."
+        "    Emit the exact native JSON with --print; file write mode still refuses Git checkouts and requires an external staging root."
     );
     eprintln!("  cargo xtask nexus-lane-maintenance --config <path>");
     eprintln!(

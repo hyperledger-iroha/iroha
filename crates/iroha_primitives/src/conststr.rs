@@ -3,7 +3,7 @@
 //! This module defines [`ConstString`], a union that stores short strings
 //! inline within the structure and falls back to heap allocation for longer
 //! ones. It is intended for data that never changes after construction but
-//! needs to be transferred across FFI boundaries or serialized efficiently.
+//! needs to be stored compactly or serialized efficiently.
 use core::{
     borrow::Borrow,
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},

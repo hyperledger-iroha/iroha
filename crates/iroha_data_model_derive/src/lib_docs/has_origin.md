@@ -21,12 +21,10 @@ By default variant is assumed to by origin id.
 
 ```
 use iroha_data_model::{
-    name::Name,
     parameter::CustomParameterId,
     prelude::{HasOrigin, IdBox, Identifiable},
 };
 use iroha_data_model_derive::{HasOrigin, IdEqOrdHash};
-use std::str::FromStr;
 
 #[derive(Debug, Clone, HasOrigin)]
 #[has_origin(origin = Layer)]
@@ -65,17 +63,21 @@ pub struct SubLayer {
 
 # impl From<LayerId> for IdBox {
 #     fn from(_source: LayerId) -> Self {
-#         IdBox::CustomParameterId(CustomParameterId::new(
-#             Name::from_str("layer_example").expect("valid parameter id"),
-#         ))
+#         IdBox::CustomParameterId(
+#             "layer_example"
+#                 .parse::<CustomParameterId>()
+#                 .expect("valid parameter id"),
+#         )
 #     }
 # }
 
 # impl From<SubLayerId> for IdBox {
 #     fn from(_source: SubLayerId) -> Self {
-#         IdBox::CustomParameterId(CustomParameterId::new(
-#             Name::from_str("sub_layer_example").expect("valid parameter id"),
-#         ))
+#         IdBox::CustomParameterId(
+#             "sub_layer_example"
+#                 .parse::<CustomParameterId>()
+#                 .expect("valid parameter id"),
+#         )
 #     }
 # }
 

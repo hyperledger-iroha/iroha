@@ -45,7 +45,7 @@
 //!   under the authoritative local transaction filter.
 use crate::filter::{FilterExpr, validate_filter};
 use iroha_data_model::query::{
-    CommittedTransaction, CommittedTxFilters,
+    CommittedTransaction,
     dsl::{CommittedTxPredicate as TP, CompoundPredicate as CP},
 };
 use iroha_model_base::name::Name;

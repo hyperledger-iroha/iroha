@@ -2,12 +2,11 @@
 
 use std::sync::Arc;
 
-use iroha_data_model::{
-    governance::types::BallotAttemptId,
-    isi::governance::{
-        ParliamentFinalizeOpenedBallotV1, ParliamentLifecycleTransitionV1,
-        ParliamentTleFinalReleaseSignatureV1,
-    },
+use iroha_data_model::governance::types::BallotAttemptId;
+#[cfg(test)]
+use iroha_data_model::isi::governance::{
+    ParliamentFinalizeOpenedBallotV1, ParliamentLifecycleTransitionV1,
+    ParliamentTleFinalReleaseSignatureV1,
 };
 use thiserror::Error;
 
@@ -113,6 +112,7 @@ impl TleReleaseCoordinatorV1 {
         Ok(partial)
     }
 
+    #[cfg(test)]
     /// Canonically combine public partials for one Core-authorized ballot.
     ///
     /// Input order is not trusted. The coordinator sorts by the frozen one-based
@@ -162,25 +162,6 @@ impl TleReleaseCoordinatorV1 {
                 },
             },
         ))
-    }
-
-    /// Reauthorize committed state and canonically combine public partials.
-    ///
-    /// This is the coordinator-facing entry point used immediately before an
-    /// operator signs and submits the returned lifecycle transition.
-    ///
-    /// # Errors
-    ///
-    /// Returns a closed error when Core no longer authorizes release or the
-    /// supplied partial set cannot produce the exact final release signature.
-    pub fn prepare_finalize_opened_ballot(
-        &self,
-        state: &impl StateReadOnly,
-        ballot_attempt_id: BallotAttemptId,
-        partials: &[TlePartialReleaseShareV1],
-    ) -> Result<ParliamentLifecycleTransitionV1, TleReleaseCoordinatorErrorV1> {
-        let context = authorize_parliament_tle_release_v1(state, ballot_attempt_id)?;
-        self.combine_authorized_partial_releases(&context, partials)
     }
 }
 

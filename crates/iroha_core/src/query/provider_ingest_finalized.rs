@@ -20,6 +20,14 @@ use super::archive_capture::{ArchiveCaptureGate, ArchiveCaptureReservation, Arch
 use super::archive_index::{
     ArchiveIndexLock, ArchiveIndexLockError, ArchiveIndexReadGuard, ArchiveIndexWriteGuard,
 };
+use super::finalized_archive_fs::{
+    STAGED_FILE_PREFIX, bounded_bytes_len, canonical_bytes_domain_digest,
+    is_canonical_digest_file_name,
+};
+#[cfg(unix)]
+use super::finalized_archive_fs::{
+    create_unix_staged_file, unix_staged_file_has_canonical_target, unix_stat_matches_metadata,
+};
 use crate::{
     kura::{
         Kura, KuraArchiveCaptureAuthenticationError, KuraPublicationLease, KuraV2CommitReceipt,
@@ -65,7 +73,6 @@ const CHECKPOINTS_DIRECTORY: &str = "checkpoints";
 const WRITER_LOCK_FILE: &str = ".writer.lock";
 const RECORD_FILE_SUFFIX: &str = ".provider-ingest-anchor.to";
 const CHECKPOINT_FILE_SUFFIX: &str = ".provider-ingest-base.to";
-const STAGED_FILE_PREFIX: &str = ".staged-";
 const KEY_DIGEST_DOMAIN_V1: &[u8] = b"iroha.sorafs.provider-ingest.finalized-archive-key.v1\0";
 const RECORD_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.provider-ingest.finalized-archive-record.v1\0";
@@ -2941,7 +2948,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             })?;
         if lock_metadata.file_type().is_symlink()
             || !lock_metadata.is_file()
-            || !archive_file_is_single_link(&lock_metadata)
+            || !secure_file_metadata::is_single_link(&lock_metadata)
             || archive_file_identity(&lock_metadata) != self.writer_lock_identity
             || !archive_file_metadata_unchanged(&lock_metadata, &opened_metadata)
         {
@@ -4247,12 +4254,6 @@ fn compaction_proposal(
             &prepared.canonical_bytes,
         ),
     )
-}
-fn canonical_bytes_domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(domain);
-    hasher.update(bytes);
-    *hasher.finalize().as_bytes()
 }
 fn validate_approval_checkpoint(
     approval: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
@@ -6039,9 +6040,6 @@ fn ensure_insert_capacity(
     }
     Ok(())
 }
-fn bounded_bytes_len(bytes: &[u8]) -> u64 {
-    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-}
 fn record_file_name(
     key: &ProviderIngestFinalizedArchiveKeyV1,
 ) -> Result<String, ProviderIngestFinalizedArchiveErrorV1> {
@@ -6056,15 +6054,6 @@ fn record_file_name(
 }
 fn checkpoint_file_name(checkpoint_digest: [u8; 32]) -> String {
     format!("{}{CHECKPOINT_FILE_SUFFIX}", hex::encode(checkpoint_digest))
-}
-fn is_canonical_digest_file_name(name: &str, suffix: &str) -> bool {
-    let Some(stem) = name.strip_suffix(suffix) else {
-        return false;
-    };
-    stem.len() == 64
-        && stem
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 fn validate_archive_root_path(path: &Path) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     if !path.is_absolute()
@@ -6356,42 +6345,6 @@ fn recover_staged_directory(
         Ok(())
     }
 }
-#[cfg(unix)]
-fn unix_staged_file_has_canonical_target(
-    directory: &fs::File,
-    staged_name: &OsStr,
-    staged: &rustix::fs::Stat,
-    canonical_suffix: &str,
-) -> Result<bool, rustix::io::Errno> {
-    use std::os::unix::ffi::OsStrExt as _;
-    let entries = rustix::fs::Dir::read_from(directory)?;
-    let mut matches = 0_u8;
-    for entry in entries {
-        let entry = entry?;
-        let name = OsStr::from_bytes(entry.file_name().to_bytes());
-        if name == OsStr::new(".") || name == OsStr::new("..") || name == staged_name {
-            continue;
-        }
-        let Some(name_utf8) = name.to_str() else {
-            continue;
-        };
-        if !is_canonical_digest_file_name(name_utf8, canonical_suffix) {
-            continue;
-        }
-        let candidate = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
-        if candidate.st_dev == staged.st_dev && candidate.st_ino == staged.st_ino {
-            if rustix::fs::FileType::from_raw_mode(candidate.st_mode)
-                != rustix::fs::FileType::RegularFile
-                || candidate.st_nlink as u64 != 2
-                || candidate.st_size != staged.st_size
-            {
-                return Ok(false);
-            }
-            matches = matches.saturating_add(1);
-        }
-    }
-    Ok(matches == 1)
-}
 fn publish_immutable_bytes(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -6611,49 +6564,6 @@ impl Drop for UnixStagedArtifact<'_> {
     }
 }
 #[cfg(unix)]
-fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsString)> {
-    use std::os::unix::fs::MetadataExt as _;
-    for _ in 0..128 {
-        let name = OsString::from(format!(
-            "{STAGED_FILE_PREFIX}{:08x}-{:016x}",
-            std::process::id(),
-            rand::random::<u64>()
-        ));
-        let file = match rustix::fs::openat(
-            directory,
-            &name,
-            rustix::fs::OFlags::WRONLY
-                | rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::EXCL
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        ) {
-            Ok(file) => fs::File::from(file),
-            Err(rustix::io::Errno::EXIST) => continue,
-            Err(error) => return Err(io::Error::from(error)),
-        };
-        let metadata = file.metadata()?;
-        let entry = rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(io::Error::from)?;
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || !unix_stat_matches_metadata(&entry, &metadata, 1)
-        {
-            let _ = rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::empty());
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "exclusive staged artifact identity changed during creation",
-            ));
-        }
-        return Ok((file, name));
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate a unique staged archive artifact",
-    ))
-}
-#[cfg(unix)]
 fn verify_unix_directory_handle(
     directory: &fs::File,
     expected: ArchiveFileIdentity,
@@ -6694,20 +6604,6 @@ fn verify_unix_named_file(
         ));
     }
     Ok(())
-}
-#[cfg(unix)]
-fn unix_stat_matches_metadata(
-    entry: &rustix::fs::Stat,
-    metadata: &fs::Metadata,
-    expected_links: u64,
-) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    rustix::fs::FileType::from_raw_mode(entry.st_mode) == rustix::fs::FileType::RegularFile
-        && entry.st_dev as u64 == metadata.dev()
-        && entry.st_ino as u64 == metadata.ino()
-        && entry.st_nlink as u64 == expected_links
-        && metadata.nlink() == expected_links
-        && u64::try_from(entry.st_size).ok() == Some(metadata.len())
 }
 #[cfg(unix)]
 fn read_bounded_archive_file_at_unix(
@@ -6856,7 +6752,7 @@ fn open_writer_lock_file(path: &Path) -> Result<fs::File, ProviderIngestFinalize
     })?;
     if path_metadata.file_type().is_symlink()
         || !path_metadata.is_file()
-        || !archive_file_is_single_link(&path_metadata)
+        || !secure_file_metadata::is_single_link(&path_metadata)
         || !archive_file_metadata_unchanged(&path_metadata, &opened_metadata)
     {
         return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidStorage {
@@ -6912,22 +6808,6 @@ const fn archive_file_identity_available(identity: ArchiveFileIdentity) -> bool 
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     false
 }
-fn archive_file_is_single_link(metadata: &SecureMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
-}
 fn direct_archive_directory_identity(path: &Path) -> io::Result<ArchiveFileIdentity> {
     let metadata = secure_file_metadata::from_path(path)?;
     let identity = archive_file_identity(&metadata);
@@ -6981,7 +6861,7 @@ fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<Secur
     let metadata = secure_file_metadata::from_path(path)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
-        || !archive_file_is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&metadata)
         || metadata.len() > max_bytes
     {
         return Err(io::Error::new(
@@ -7029,7 +6909,7 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     if bounded_bytes_len(&bytes) > max_bytes
         || path_after.file_type().is_symlink()
         || !path_after.is_file()
-        || !archive_file_is_single_link(&path_after)
+        || !secure_file_metadata::is_single_link(&path_after)
         || !archive_file_metadata_unchanged(&opened_before, &opened_after)
         || !archive_file_metadata_unchanged(&opened_before, &path_after)
         || opened_after.len() != bounded_bytes_len(&bytes)

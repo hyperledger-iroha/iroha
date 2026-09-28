@@ -626,6 +626,7 @@ impl LiveQueryStore {
             .clone()
             .ok_or(QueryExecutionFail::Expired)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn ordinary_cursor_retained_bytes(
         &self,
         cursor: &ForwardCursor,
@@ -936,6 +937,7 @@ impl LiveQueryStoreHandle {
         }
         Ok(request)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return the weighted bytes retained by an ordinary stored cursor.
     ///
     /// The lookup validates the opaque query ID, authority, expected cursor, completed revalidation
@@ -954,9 +956,9 @@ impl LiveQueryStoreHandle {
     }
     /// Return the retained-memory and archived-policy binding for a cursor.
     ///
-    /// This validates the same opaque ID, authority, exact cursor position, completed Start
-    /// archive, and ordinary-memory ownership as [`Self::ordinary_cursor_retained_bytes`]. The
-    /// returned value is copyable, so no map guard survives into execution.
+    /// This validates the opaque ID, authority, exact cursor position, completed Start archive,
+    /// and ordinary-memory ownership. The returned value is copyable, so no map guard survives
+    /// into execution.
     pub(crate) fn ordinary_cursor_binding(
         &self,
         cursor: &ForwardCursor,

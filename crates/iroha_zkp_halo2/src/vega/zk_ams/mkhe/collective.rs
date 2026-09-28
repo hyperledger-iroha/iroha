@@ -6,9 +6,15 @@
 //! coefficients never cross the public API boundary.
 #[cfg(test)]
 use super::active_exact_binding::mint_test_state_owned_collective_secret_binding_v1;
+#[cfg(test)]
 use super::{
-    BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, MaskedRelaxedRandomSourceV1,
-    RnsPolynomial, Scalar, SecretPolynomial, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
+    BgvProfile, MaskedRelaxedRandomSourceV1, RnsPolynomial, ZkAmsMkheErrorV1,
+    cpk_relation::prepare_active_collective_public_a_v1, manifest::release_profile_v1,
+    packing::ZkAmsT256PackingLayoutV1,
+};
+#[cfg(test)]
+use super::{
+    MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, SecretPolynomial, ZkAmsMkhePartyIdV1,
     active::{
         ZkAmsMkheActiveCollectivePublicKeyStatementV1, ZkAmsMkheActiveCollectivePublicKeyWitnessV1,
         ZkAmsMkheActivePartySecretV1, ZkAmsMkheActiveRkgProofV1, ZkAmsMkheGovernedActiveRosterV1,
@@ -18,21 +24,19 @@ use super::{
     },
     active_exact_binding::{PersistentWitnessConsumerV1, VerifiedPersistentWitnessBindingV1},
     checked_coefficient_work, checked_ring_multiplication_work,
-    cpk_relation::{
-        ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, ZkAmsMkheCpkPartyBPointerV1,
-        prepare_active_collective_public_a_v1,
-    },
+    cpk_relation::{ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, ZkAmsMkheCpkPartyBPointerV1},
     manifest::{
-        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_release_manifest_v1,
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, zk_ams_mkhe_release_manifest_v1,
         zk_ams_mkhe_security_certificate_v1,
     },
-    packing::{ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1},
+    packing::ZkAmsT256PackedPlaintextV1,
     persistent_membership_evidence::{
-        ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1, ZkAmsMkhePersistentMembershipContextV1,
-        ZkAmsMkhePersistentMembershipErrorV1, ZkAmsMkhePersistentMembershipEvidenceV1,
+        ZkAmsMkhePersistentMembershipContextV1, ZkAmsMkhePersistentMembershipErrorV1,
+        ZkAmsMkhePersistentMembershipEvidenceV1,
     },
     wire::{ZkAmsMkheRnsPolynomialWireV1, governed_roster_digest},
 };
+use super::{Scalar, persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1};
 #[cfg(test)]
 use super::{
     packing::packed_plaintext_to_rns_v1,
@@ -42,6 +46,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::vega::sponge::keccak256;
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::ProofRandomSource,
     vega::{
@@ -53,20 +58,25 @@ use crate::{
         sponge::Keccak256,
     },
 };
+#[cfg(test)]
 #[path = "collective/borrowed_product.rs"]
 pub(super) mod borrowed_product;
 #[path = "collective/incremental_source.rs"]
 mod incremental_source;
 #[path = "collective/party_local_rkg_ephemeral_v1.rs"]
 mod party_local_rkg_ephemeral_v1;
+#[cfg(test)]
 #[path = "collective/persistent_direct_opening_v1.rs"]
 mod persistent_direct_opening_v1;
+#[cfg(test)]
 #[path = "collective/prepared_public_a.rs"]
 mod prepared_public_a;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use incremental_source::{
     MaterializedPlaneContextV1, RnsNativeClaimedDirectNumericOriginV2,
     RnsNativeQpcsCompositeAuthorityV2,
 };
+#[cfg(test)]
 #[expect(
     unused_imports,
     reason = "sealed sibling-only streaming capabilities share one narrow reexport seam"
@@ -80,32 +90,48 @@ pub(super) use incremental_source::{
     mint_zk_ams_mkhe_streaming_collective_encryption_key_authority_v1,
     prepare_zk_ams_mkhe_streaming_collective_automorphism_output_v1,
 };
+#[cfg(test)]
 pub use incremental_source::{
     ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_v1,
 };
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::DirectRkgOneProofDurabilityPermitV2;
+#[cfg(test)]
 pub(super) use party_local_rkg_ephemeral_v1::DirectRkgOneProverSessionV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::DirectRkgOnePublicationOwnerV1;
+#[cfg(test)]
 use party_local_rkg_ephemeral_v1::PartyLocalRkgEphemeralOpeningV1;
-pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::{
-    DirectRkgOneProofDurabilityPermitV2, DirectRkgOnePublicationOwnerV1,
-};
+#[cfg(test)]
 use persistent_direct_opening_v1::{PersistentDirectOpeningAxesV1, PersistentDirectOpeningOwnerV1};
+#[cfg(test)]
 pub use prepared_public_a::{
     ZkAmsMkhePreparedCollectivePublicAV1, prepare_zk_ams_mkhe_collective_public_a_v1,
 };
+#[cfg(test)]
 pub(super) const COLLECTIVE_CIPHERTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.compact-collective-ciphertext";
+#[cfg(test)]
 const COLLECTIVE_PARTY_SHARE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-public-key-share";
+#[cfg(test)]
 const COLLECTIVE_PARTY_SHARE_ACTIVE_ADMISSION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-public-key-share.active-admission";
+#[cfg(test)]
 const COLLECTIVE_PARTY_SHARE_STAGED_ADMISSION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-public-key-share.staged-admission";
+#[cfg(test)]
 const COLLECTIVE_PUBLIC_KEY_STAGED_ADMISSION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-public-key.staged-admission";
+#[cfg(test)]
 const COLLECTIVE_PUBLIC_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-public-key";
+#[cfg(test)]
 const CKS_RNS_NATIVE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial-digest";
+#[cfg(test)]
 const CKS_RNS_WIRE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial";
+#[cfg(test)]
 const COLLECTIVE_ENCRYPTION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-encryption";
+#[cfg(test)]
 const COLLECTIVE_ENCRYPTION_NONCE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-encryption-nonce";
 #[cfg(test)]
@@ -120,24 +146,28 @@ const COLLECTIVE_AUTOMORPHISM_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collecti
 const COLLECTIVE_MULTIPLY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-multiply";
 #[cfg(test)]
 const COLLECTIVE_LEVEL_ONE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-level-one";
+#[cfg(test)]
 fn clear_secret_bytes_v1(bytes: &mut [u8]) {
     let bytes = core::hint::black_box(bytes);
     bytes.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *bytes);
 }
+#[cfg(test)]
 fn clear_secret_i8_slice_v1(values: &mut [i8]) {
     let values = core::hint::black_box(values);
     values.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *values);
 }
+#[cfg(test)]
 fn clear_secret_i64_slice_v1(values: &mut [i64]) {
     let values = core::hint::black_box(values);
     values.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *values);
 }
+#[cfg(test)]
 fn clear_secret_u64_slice_v1(values: &mut [u64]) {
     let values = core::hint::black_box(values);
     values.fill(0);
@@ -153,7 +183,9 @@ fn clear_secret_canonical_plaintext_v1(values: &mut [[u8; 32]]) {
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *values);
 }
+#[cfg(test)]
 pub(super) struct ZeroizingRns(RnsPolynomial);
+#[cfg(test)]
 impl ZeroizingRns {
     pub(super) fn from_canonical_flat_v1(
         profile: &BgvProfile,
@@ -203,6 +235,7 @@ impl ZeroizingRns {
         )
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingRns {
     fn drop(&mut self) {
         clear_secret_u64_slice_v1(&mut self.0.coefficients);
@@ -221,7 +254,9 @@ impl Drop for ZeroizingSecretCoefficients {
 /// The state remains the only long-lived owner. This adapter exists solely to
 /// bind the complete CPK relation to the exact state opening and erases its
 /// narrowed copy on every ordinary, error, and unwind exit.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct ZeroizingT256MembershipCoefficientsV1(Vec<i8>);
+#[cfg(test)]
 impl ZeroizingT256MembershipCoefficientsV1 {
     fn from_bounded(secret: &SecretPolynomial, bound: i8) -> Result<Self, ZkAmsMkheErrorV1> {
         let expected_coefficients = ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1
@@ -262,6 +297,7 @@ impl ZeroizingT256MembershipCoefficientsV1 {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingT256MembershipCoefficientsV1 {
     fn drop(&mut self) {
         clear_secret_i8_slice_v1(&mut self.0);
@@ -273,6 +309,7 @@ pub(super) const ZK_AMS_MKHE_PERSISTENT_OPENING_RETAINED_POINT_BYTES_V1: usize =
     ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 * PERSISTENT_OPENING_POINT_WIRE_BYTES_V1;
 type PersistentOpeningCommitmentWireV1 =
     [[u8; PERSISTENT_OPENING_POINT_WIRE_BYTES_V1]; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1];
+#[cfg(test)]
 fn encode_persistent_opening_commitments_v1(
     commitments: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
 ) -> Result<PersistentOpeningCommitmentWireV1, ZkAmsMkheErrorV1> {
@@ -285,6 +322,7 @@ fn encode_persistent_opening_commitments_v1(
     }
     Ok(encoded)
 }
+#[cfg(test)]
 fn commit_cpk_membership_opening_v1(
     coefficients: &[i8],
     blindings: &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
@@ -323,6 +361,7 @@ const _: () = {
     assert!(ZK_AMS_MKHE_PERSISTENT_OPENING_RETAINED_POINT_BYTES_V1 == 264);
     assert!(core::mem::size_of::<PersistentOpeningCommitmentWireV1>() == 264);
 };
+#[cfg(test)]
 fn ensure_state_owned_cpk_commitments_v1(
     verified: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
     expected: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
@@ -340,7 +379,9 @@ impl Drop for ZeroizingCanonicalPlaintext {
         clear_secret_canonical_plaintext_v1(&mut self.0);
     }
 }
+#[cfg(test)]
 struct ZeroizingEntropyProbe([u8; 32]);
+#[cfg(test)]
 impl Drop for ZeroizingEntropyProbe {
     fn drop(&mut self) {
         clear_secret_bytes_v1(&mut self.0);
@@ -351,6 +392,7 @@ impl Drop for ZeroizingEntropyProbe {
 /// The allocation is created while it is still all zero, then filled in
 /// place. Moving this owner therefore moves only a pointer, never live nonce
 /// bytes.
+#[cfg(test)]
 struct ZeroizingEncryptionNonce(Box<[u8; 32]>);
 #[cfg(test)]
 std::thread_local! {
@@ -358,6 +400,7 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
 }
+#[cfg(test)]
 impl ZeroizingEncryptionNonce {
     fn zeroed() -> Self {
         Self(Box::new([0; 32]))
@@ -372,6 +415,7 @@ impl ZeroizingEncryptionNonce {
         self.as_bytes() == &[0; 32]
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingEncryptionNonce {
     fn drop(&mut self) {
         clear_secret_bytes_v1(self.0.as_mut());
@@ -382,18 +426,22 @@ impl Drop for ZeroizingEncryptionNonce {
         }
     }
 }
+#[cfg(test)]
 struct ZeroizingRandomByte([u8; 1]);
+#[cfg(test)]
 impl Drop for ZeroizingRandomByte {
     fn drop(&mut self) {
         clear_secret_bytes_v1(&mut self.0);
     }
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CollectiveEncryptionInputTopologyV1 {
     layout_digest: [u8; 32],
     plaintext_chunk_index: u32,
     plaintext_used_slots: u32,
 }
+#[cfg(test)]
 impl CollectiveEncryptionInputTopologyV1 {
     const fn from_packed(
         layout: ZkAmsT256PackingLayoutV1,
@@ -408,6 +456,7 @@ impl CollectiveEncryptionInputTopologyV1 {
 }
 /// Move-only fresh-encryption identity. The opaque nonce never enters the
 /// public ciphertext; only its domain-separated transcript digest does.
+#[cfg(test)]
 struct CollectiveEncryptionInputIdentityV1 {
     topology: CollectiveEncryptionInputTopologyV1,
     encryption_nonce: ZeroizingEncryptionNonce,
@@ -510,6 +559,7 @@ impl Drop for ZkAmsMkheCollectiveEncryptionOpeningV1 {
         }
     }
 }
+#[cfg(test)]
 const PERSISTENT_BLINDING_ENTROPY_BYTES_V1: usize = 64;
 const PERSISTENT_BLINDING_CANONICAL_BYTES_V1: usize = 32;
 const PERSISTENT_BLINDING_STATE_BYTES_V1: usize =
@@ -519,7 +569,9 @@ const PERSISTENT_BLINDING_STATE_BYTES_V1: usize =
 /// Scalar reduction borrows the fixed array, avoiding an unmanaged array copy;
 /// this owner covers the complete caller-visible buffer across errors and
 /// unwinds.
+#[cfg(test)]
 struct PersistentSecretCommitmentBlindingEntropyV1([u8; PERSISTENT_BLINDING_ENTROPY_BYTES_V1]);
+#[cfg(test)]
 impl PersistentSecretCommitmentBlindingEntropyV1 {
     const fn zeroed() -> Self {
         Self([0; PERSISTENT_BLINDING_ENTROPY_BYTES_V1])
@@ -531,6 +583,7 @@ impl PersistentSecretCommitmentBlindingEntropyV1 {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for PersistentSecretCommitmentBlindingEntropyV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -551,6 +604,7 @@ impl Drop for PersistentSecretCommitmentBlindingEntropyV1 {
 /// proof boundary, and every named scalar is erased on drop.
 struct ZeroizingCpkMembershipBlindingsV1([Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1]);
 impl ZeroizingCpkMembershipBlindingsV1 {
+    #[cfg(test)]
     fn sample<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
         // Own the complete zero-initialized array before making the first
         // fallible or panicking entropy request. This makes every partial
@@ -579,6 +633,7 @@ impl ZeroizingCpkMembershipBlindingsV1 {
     ///
     /// No by-value or mutable access is exposed: the party state remains the
     /// sole owner while the precursor is produced and until the state drops.
+    #[cfg(test)]
     const fn as_array(&self) -> &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
         &self.0
     }
@@ -621,10 +676,12 @@ std::thread_local! {
 ///
 /// The sibling CPK adapter can consume this value but cannot construct it or
 /// obtain either the secret coefficients or the original blindings.
+#[cfg(test)]
 pub(super) struct PersistentDirectOpeningLeaseV1<'a> {
     owner: &'a mut PersistentDirectOpeningOwnerV1,
     coefficients: ZeroizingT256MembershipCoefficientsV1,
 }
+#[cfg(test)]
 impl<'a> PersistentDirectOpeningLeaseV1<'a> {
     pub(super) const fn profile_digest(&self) -> [u8; 32] {
         self.owner.axes.profile_digest
@@ -691,11 +748,13 @@ impl<'a> PersistentDirectOpeningLeaseV1<'a> {
         })
     }
 }
+#[cfg(test)]
 pub(super) struct ReopenedCpkDirectOpeningLeaseV1<'a> {
     opening: PersistentDirectOpeningLeaseV1<'a>,
     error_coefficients: ZeroizingT256MembershipCoefficientsV1,
     error_blindings: ZeroizingCpkMembershipBlindingsV1,
 }
+#[cfg(test)]
 impl ReopenedCpkDirectOpeningLeaseV1<'_> {
     pub(super) fn prove_error_membership_v1<R: ProofRandomSource>(
         &self,
@@ -746,12 +805,14 @@ impl ReopenedCpkDirectOpeningLeaseV1<'_> {
 /// fn requires_clone<T: Clone>() {}
 /// requires_clone::<ZkAmsMkheCollectivePartyStateV1>();
 /// ```
+#[cfg(test)]
 pub struct ZkAmsMkheCollectivePartyStateV1 {
     persistent_direct_opening: PersistentDirectOpeningOwnerV1,
     public_error: SecretPolynomial,
     party_local_rkg_ephemeral_opening: Option<PartyLocalRkgEphemeralOpeningV1>,
     party_local_rkg_ephemeral_creation_mask: u64,
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheCollectivePartyStateV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -791,6 +852,7 @@ impl core::fmt::Debug for ZkAmsMkheCollectivePartyStateV1 {
             .finish()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectivePartyStateV1 {
     #[cfg(test)]
     pub(super) const fn profile_digest(&self) -> [u8; 32] {
@@ -1139,12 +1201,14 @@ impl ZkAmsMkheCollectivePartyStateV1 {
 /// independent move-only relation authority; this admission prevents callers
 /// from pairing that authority with substituted legacy proof bytes when the
 /// native-equivalent share digest is derived by the compact path.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug, PartialEq, Eq)]
 struct VerifiedCollectivePublicKeyShareActiveAdmissionV1 {
     _seal: VerifiedCollectivePublicKeyShareActiveAdmissionSealV1,
     evidence_digest: [u8; 32],
 }
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug, PartialEq, Eq)]
 struct VerifiedCollectivePublicKeyShareActiveAdmissionSealV1;
@@ -1155,7 +1219,9 @@ struct VerifiedCollectivePublicKeyShareActiveAdmissionSealV1;
 /// binds the private native-proof admission while the proof bytes still exist,
 /// plus the exact native/wire polynomial digests needed by later bounded
 /// consumers. It has no decoder, public constructor, or production `Clone`.
+#[cfg(test)]
 struct VerifiedCollectivePublicKeyShareStagedAdmissionSealV1;
+#[cfg(test)]
 pub(super) struct VerifiedCollectivePublicKeyShareStagedAdmissionV1 {
     _seal: VerifiedCollectivePublicKeyShareStagedAdmissionSealV1,
     profile_digest: [u8; 32],
@@ -1174,6 +1240,7 @@ pub(super) struct VerifiedCollectivePublicKeyShareStagedAdmissionV1 {
     party_public_b_wire_digest: [u8; 32],
     admission_digest: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for VerifiedCollectivePublicKeyShareStagedAdmissionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1184,6 +1251,7 @@ impl core::fmt::Debug for VerifiedCollectivePublicKeyShareStagedAdmissionV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl VerifiedCollectivePublicKeyShareStagedAdmissionV1 {
     pub(super) const fn share_digest(&self) -> [u8; 32] {
         self.share_digest
@@ -1233,12 +1301,14 @@ impl VerifiedCollectivePublicKeyShareStagedAdmissionV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 struct StagedCollectivePublicKeyAdmissionSealV1;
 /// One-shot admission for a final key built from the sealed staged batch.
 ///
 /// Runtime and ceremony consumers must consume this private capability beside
 /// the materialized key; accepting the key digest alone would discard the
 /// ordered share/proof lineage established before the large owners were freed.
+#[cfg(test)]
 pub(super) struct ZkAmsMkheStagedCollectivePublicKeyAdmissionV1 {
     _seal: StagedCollectivePublicKeyAdmissionSealV1,
     profile_digest: [u8; 32],
@@ -1250,6 +1320,7 @@ pub(super) struct ZkAmsMkheStagedCollectivePublicKeyAdmissionV1 {
     share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     admission_digest: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheStagedCollectivePublicKeyAdmissionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1267,6 +1338,7 @@ impl core::fmt::Debug for ZkAmsMkheStagedCollectivePublicKeyAdmissionV1 {
 /// The share is move-only in production because it contains the private active
 /// admission capability used by bounded complete-CPK consumers. Unit tests may
 /// clone malformed fixtures solely to exercise hostile validation paths.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectivePublicKeyShareV1 {
@@ -1285,6 +1357,7 @@ pub struct ZkAmsMkheCollectivePublicKeyShareV1 {
     digest: [u8; 32],
     active_admission: Option<VerifiedCollectivePublicKeyShareActiveAdmissionV1>,
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectivePublicKeyShareV1 {
     /// Exact governed contributor.
     #[must_use]
@@ -1341,6 +1414,7 @@ impl ZkAmsMkheCollectivePublicKeyShareV1 {
     }
 }
 /// Verified aggregate of all eight collective-public-key shares.
+#[cfg(test)]
 pub struct ZkAmsMkheCollectivePublicKeyV1 {
     version: u8,
     profile_digest: [u8; 32],
@@ -1355,6 +1429,7 @@ pub struct ZkAmsMkheCollectivePublicKeyV1 {
     share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     digest: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheCollectivePublicKeyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1368,6 +1443,7 @@ impl core::fmt::Debug for ZkAmsMkheCollectivePublicKeyV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectivePublicKeyV1 {
     /// Frozen release profile digest.
     #[must_use]
@@ -1457,6 +1533,7 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
 /// Production code obtains `prepared` by borrowing the live move-only CPK
 /// ceremony. Each returned share shares that one backing and is immediately
 /// consumed by the ceremony's next-party transition.
+#[cfg(test)]
 pub fn generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1<
     R: MaskedRelaxedRandomSourceV1,
 >(
@@ -1678,6 +1755,7 @@ fn add_canonical_residues_in_place_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn staged_collective_public_key_admission_digest_v1(
     admission: &ZkAmsMkheStagedCollectivePublicKeyAdmissionV1,
 ) -> [u8; 32] {
@@ -1695,6 +1773,7 @@ fn staged_collective_public_key_admission_digest_v1(
     }
     hash.finalize()
 }
+#[cfg(test)]
 impl ZkAmsMkheStagedCollectivePublicKeyAdmissionV1 {
     fn validate_for_key_v1(
         &self,
@@ -1733,9 +1812,11 @@ impl ZkAmsMkheStagedCollectivePublicKeyAdmissionV1 {
         self.validate_for_key_v1(roster, transcript_digest, key)
     }
 }
+#[cfg(test)]
 struct ZeroizingStagedCollectivePublicKeyConstructionV1 {
     key: Option<ZkAmsMkheCollectivePublicKeyV1>,
 }
+#[cfg(test)]
 impl ZeroizingStagedCollectivePublicKeyConstructionV1 {
     fn into_public(mut self) -> ZkAmsMkheCollectivePublicKeyV1 {
         self.key
@@ -1743,6 +1824,7 @@ impl ZeroizingStagedCollectivePublicKeyConstructionV1 {
             .expect("validated staged collective key must remain present")
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingStagedCollectivePublicKeyConstructionV1 {
     fn drop(&mut self) {
         if let Some(key) = self.key.as_mut() {
@@ -1758,6 +1840,7 @@ impl Drop for ZeroizingStagedCollectivePublicKeyConstructionV1 {
 /// zeroizing aggregate. The final key takes both allocations by move after all
 /// eight compact admissions and streamed per-party digests match. Any error or
 /// unwind before the move-to-public boundary clears both buffers.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn finalize_collective_public_key_from_staged_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -1863,6 +1946,7 @@ pub(super) fn finalize_collective_public_key_from_staged_v1(
     admission.validate_for_key_v1(roster, transcript_digest, key)?;
     Ok((construction.into_public(), admission))
 }
+#[cfg(test)]
 fn validate_collective_public_key_share(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -1879,6 +1963,7 @@ fn validate_collective_public_key_share(
 }
 /// Replay the complete native active proof. This is the only minting gate for
 /// [`VerifiedCollectivePublicKeyShareActiveAdmissionV1`].
+#[cfg(test)]
 fn validate_collective_public_key_share_unsealed_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -1918,6 +2003,7 @@ fn validate_collective_public_key_share_unsealed_v1(
         &share.proof,
     )
 }
+#[cfg(test)]
 fn release_security_certificate_digest() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let certificate = zk_ams_mkhe_security_certificate_v1()?;
     let digest = certificate.certificate_digest();
@@ -1926,6 +2012,7 @@ fn release_security_certificate_digest() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     }
     Ok(digest)
 }
+#[cfg(test)]
 fn collective_public_key_share_digest(
     share: &ZkAmsMkheCollectivePublicKeyShareV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1953,6 +2040,7 @@ fn collective_public_key_share_digest(
 /// capability. The ordinary share digest binds the complete public statement;
 /// the evidence stream additionally binds the raw proof and authentication
 /// bytes which are deliberately not all present in that legacy digest.
+#[cfg(test)]
 fn collective_public_key_share_active_admission_digest_v1(
     share: &ZkAmsMkheCollectivePublicKeyShareV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1973,6 +2061,7 @@ fn collective_public_key_share_active_admission_digest_v1(
     }
     Ok(digest)
 }
+#[cfg(test)]
 fn mint_collective_public_key_share_active_admission_v1(
     share: &ZkAmsMkheCollectivePublicKeyShareV1,
 ) -> Result<VerifiedCollectivePublicKeyShareActiveAdmissionV1, ZkAmsMkheErrorV1> {
@@ -1981,6 +2070,7 @@ fn mint_collective_public_key_share_active_admission_v1(
         evidence_digest: collective_public_key_share_active_admission_digest_v1(share)?,
     })
 }
+#[cfg(test)]
 fn validate_collective_public_key_share_active_admission_v1(
     share: &ZkAmsMkheCollectivePublicKeyShareV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1993,6 +2083,7 @@ fn validate_collective_public_key_share_active_admission_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn cks_staged_residue_digests_v1(
     profile: &BgvProfile,
     residues: &[u64],
@@ -2032,6 +2123,7 @@ pub(super) fn cks_staged_residue_digests_v1(
     }
     Ok(digests)
 }
+#[cfg(test)]
 fn collective_public_key_share_staged_admission_digest_v1(
     admission: &VerifiedCollectivePublicKeyShareStagedAdmissionV1,
 ) -> [u8; 32] {
@@ -2058,6 +2150,7 @@ fn collective_public_key_share_staged_admission_digest_v1(
 ///
 /// Callers must perform any required CAS publication before this transition:
 /// after it returns neither the `P`-sized party `b_i` nor the proof bytes exist.
+#[cfg(test)]
 pub(super) fn consume_collective_public_key_share_for_staging_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -2110,6 +2203,7 @@ pub(super) fn consume_collective_public_key_share_for_staging_v1(
 /// evidence. Thus substituted legacy proof bytes cannot alter a supposedly
 /// native-equivalent share digest without replaying the allocation-heavy proof
 /// verifier inside this bounded path.
+#[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn validate_collective_public_key_share_for_verified_cpk_compact_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2186,6 +2280,7 @@ pub(super) fn validate_collective_public_key_share_for_verified_cpk_compact_v1(
 /// The output is exactly [`collective_public_key_digest`] for the same ordered
 /// shares. Common `a` is derived one limb at a time and no aggregate-key object
 /// or second complete RNS polynomial is constructed.
+#[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn collective_public_key_digest_from_bounded_cpk_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2263,6 +2358,7 @@ pub(super) fn collective_public_key_digest_from_bounded_cpk_v1(
     }
     Ok(digest)
 }
+#[cfg(test)]
 fn collective_public_key_digest(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     profile: &BgvProfile,
@@ -2288,6 +2384,7 @@ fn collective_public_key_digest(
     }
     Ok(hash.finalize())
 }
+#[cfg(test)]
 fn update_wire_polynomial_hash(
     hash: &mut Keccak256,
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
@@ -2304,6 +2401,7 @@ fn update_wire_polynomial_hash(
     Ok(())
 }
 /// BLAKE3 content address of the exact direct-object party-`b` framing.
+#[cfg(test)]
 pub(super) fn cpk_party_b_payload_blake3_v1(
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -3504,6 +3602,7 @@ fn scaled_public_error(
     let raw = ZeroizingRns(error.as_rns(profile)?);
     Ok(ZeroizingRns(raw.0.scale_plaintext_modulus(profile)?))
 }
+#[cfg(test)]
 fn negate_and_add_scaled_error_in_place(
     product: &mut RnsPolynomial,
     error: &SecretPolynomial,
@@ -3532,6 +3631,7 @@ fn negate_and_add_scaled_error_in_place(
     }
     Ok(())
 }
+#[cfg(test)]
 fn sample_nonzero_ternary<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     random: &mut R,
@@ -3598,6 +3698,7 @@ fn derive_collective_encryption_nonce_v1<R: MaskedRelaxedRandomSourceV1>(
     }
     Ok(nonce)
 }
+#[cfg(test)]
 fn entropy_probe_has_short_period(probe: &[u8; 32]) -> bool {
     (1..=probe.len() / 2).any(|period| {
         probe[period..]
@@ -3671,6 +3772,7 @@ fn sample_bounded_error<R: MaskedRelaxedRandomSourceV1>(
         coefficients: core::mem::take(&mut coefficients.0),
     })
 }
+#[cfg(test)]
 fn bounded_error_polynomial(profile: &BgvProfile, error: &SecretPolynomial) -> bool {
     error.coefficients.len() == profile.ring_degree
         && error
@@ -3711,6 +3813,7 @@ fn derive_natural_lift_effective_error_zero(
         coefficients: core::mem::take(&mut coefficients.0),
     })
 }
+#[cfg(test)]
 fn update_rns_hash(
     hash: &mut Keccak256,
     profile: &BgvProfile,

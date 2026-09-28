@@ -36,6 +36,17 @@ pub(super) fn read_authorization(
     alias: &ContractAlias,
     dataspace_id: DataSpaceId,
 ) -> Result<DeploymentAuthorization> {
+    match_permissions(
+        &read_effective_permissions(client, authority)?,
+        alias,
+        dataspace_id,
+    )
+}
+
+pub(super) fn read_effective_permissions(
+    client: &Client,
+    authority: &AccountId,
+) -> Result<BTreeSet<Permission>> {
     #[derive(norito::derive::JsonDeserialize)]
     struct Page {
         items: Vec<Permission>,
@@ -103,7 +114,7 @@ pub(super) fn read_authorization(
             ));
         }
         if page.items.is_empty() {
-            return match_permissions(&permissions, alias, dataspace_id);
+            return Ok(permissions);
         }
         permissions.extend(page.items);
         if permissions.len() > 16_000 {

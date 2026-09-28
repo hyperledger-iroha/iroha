@@ -12,9 +12,8 @@ The macro should never be used on structs that aren't uniquely identifiable
 The common use-case:
 
 ```
-use iroha_data_model::{IdBox, Identifiable, name::Name, parameter::CustomParameterId};
+use iroha_data_model::{IdBox, Identifiable, parameter::CustomParameterId};
 use iroha_data_model_derive::IdEqOrdHash;
-use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Id {
@@ -28,9 +27,11 @@ struct Struct {
 
 # impl From<Id> for IdBox {
 #     fn from(_source: Id) -> Self {
-#         IdBox::CustomParameterId(CustomParameterId::new(
-#             Name::from_str("id_eq_ord_hash_example").expect("valid parameter id"),
-#         ))
+#         IdBox::CustomParameterId(
+#             "id_eq_ord_hash_example"
+#                 .parse::<CustomParameterId>()
+#                 .expect("valid parameter id"),
+#         )
 #     }
 # }
 
@@ -75,9 +76,8 @@ impl core::hash::Hash for Struct {
 Manual selection of the identifier field:
 
 ```
-use iroha_data_model::{IdBox, Identifiable, name::Name, parameter::CustomParameterId};
+use iroha_data_model::{IdBox, Identifiable, parameter::CustomParameterId};
 use iroha_data_model_derive::IdEqOrdHash;
-use std::str::FromStr;
 
 #[derive(Debug, IdEqOrdHash)]
 struct InnerStruct {
@@ -87,9 +87,11 @@ struct InnerStruct {
 
 # impl From<Id> for IdBox {
 #     fn from(_source: Id) -> Self {
-#         IdBox::CustomParameterId(CustomParameterId::new(
-#             Name::from_str("inner_id_eq_ord_hash_example").expect("valid parameter id"),
-#         ))
+#         IdBox::CustomParameterId(
+#             "inner_id_eq_ord_hash_example"
+#                 .parse::<CustomParameterId>()
+#                 .expect("valid parameter id"),
+#         )
 #     }
 # }
 
@@ -101,17 +103,21 @@ struct Struct {
 
 # impl From<InnerStruct> for IdBox {
 #     fn from(_source: InnerStruct) -> Self {
-#         IdBox::CustomParameterId(CustomParameterId::new(
-#             Name::from_str("inner_struct_example").expect("valid parameter id"),
-#         ))
+#         IdBox::CustomParameterId(
+#             "inner_struct_example"
+#                 .parse::<CustomParameterId>()
+#                 .expect("valid parameter id"),
+#         )
 #     }
 # }
 
 # impl From<Struct> for IdBox {
 #     fn from(_source: Struct) -> Self {
-#         IdBox::CustomParameterId(CustomParameterId::new(
-#             Name::from_str("struct_example").expect("valid parameter id"),
-#         ))
+#         IdBox::CustomParameterId(
+#             "struct_example"
+#                 .parse::<CustomParameterId>()
+#                 .expect("valid parameter id"),
+#         )
 #     }
 # }
 

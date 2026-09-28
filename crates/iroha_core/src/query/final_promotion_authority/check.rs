@@ -1,5 +1,6 @@
 //! Shared no-write eligibility for native execution and a current applied observation cut.
 use super::*;
+use crate::smartcontracts::isi::helpers::world_account_has_permission as has_permission;
 use iroha_data_model::{
     account::AccountId,
     isi::sorafs::MutateSorafsFinalPromotionAuthority,
@@ -17,15 +18,6 @@ use sorafs_manifest::signer::{
     custody::{SignerCustodyUseContextV1, VerifiedSignerCustodyV1, verify_signer_custody_use_v1},
     protocol::SignerOperationActionV1,
 };
-
-fn has_permission(world: &impl WorldReadOnly, account: &AccountId, permission: Permission) -> bool {
-    world.accounts().get(account).is_some()
-        && (world.account_contains_inherent_permission(account, &permission)
-            || world
-                .account_roles_iter(account)
-                .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
-}
 
 pub(crate) fn authorized(
     world: &impl WorldReadOnly,

@@ -1,16 +1,20 @@
 //! Exact T256 packing through conjugate quadratic factors of `X^N + 1`.
 use super::{
-    BgvProfile, RnsPolynomial, ZkAmsMkheErrorV1, bytes_mod_u64, checked_coefficient_work,
+    BgvProfile, ZkAmsMkheErrorV1,
     manifest::{
-        RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
-        release_profile_v1,
+        ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1,
     },
+};
+#[cfg(test)]
+use super::{
+    RnsPolynomial, bytes_mod_u64, checked_coefficient_work, manifest::RELEASE_MODULI_V1,
     t256_centered_residue_with_modulus_residue,
 };
 use crate::vega::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
     sponge::{Keccak256, keccak256, shake256},
 };
+#[cfg(test)]
 use core::fmt;
 const PACKING_VERSION_V1: u8 = 1;
 const SLOT_GALOIS_GENERATOR_V1: usize = 5;
@@ -18,12 +22,15 @@ const GALOIS_KEY_SCHEDULE_BITS_V1: u32 = 16;
 const RELEASE_ROOT_DERIVATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-fp2-root";
 const RELEASE_ROOT_IDENTITY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-fp2-root-identity";
 const PACKING_LAYOUT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packing-layout";
+#[cfg(test)]
 const PACKED_PLAINTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packed-plaintext";
+#[cfg(test)]
 const PACKED_RNS_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-transformed-rns";
 const PACKED_SUBFIELD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packed-subfield";
 const PACKED_SUBFIELD_RELATION_V1: &[u8] = b"sigma_p(M)=M mod p:sigma_p(X)=X^(p mod 2N)=X^(2N-1)";
 const ROTATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation";
 const GALOIS_KEY_SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-galois-key-schedule";
+#[cfg(test)]
 const ROTATION_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation-certificate";
 const RELEASE_PACKING_CERTIFICATE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.t256-release-packing-certificate";
@@ -123,7 +130,9 @@ impl Drop for ZeroizingPackingScalarsV1 {
 }
 /// Bounded scratch owner for the quadratic-extension NTT evaluations used by
 /// packed decoding. Deliberately neither `Clone` nor `Debug`.
+#[cfg(test)]
 struct ZeroizingPackingFp2V1(Vec<T256Fp2>);
+#[cfg(test)]
 impl ZeroizingPackingFp2V1 {
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -137,6 +146,7 @@ impl ZeroizingPackingFp2V1 {
         self.0.push(value);
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingPackingFp2V1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -150,6 +160,7 @@ impl Drop for ZeroizingPackingFp2V1 {
 }
 /// Wiping owner borrowed by the visitor for one canonical decoded scalar.
 /// Deliberately neither `Clone` nor `Debug`; errors and unwinds erase it.
+#[cfg(test)]
 struct ZeroizingPackingScalarBytesV1([u8; 32]);
 #[cfg(test)]
 std::thread_local! {
@@ -163,6 +174,7 @@ fn packing_scalar_bytes_zeroized_drop_count_v1() -> usize {
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
+#[cfg(test)]
 impl ZeroizingPackingScalarBytesV1 {
     const fn new() -> Self {
         Self([0; 32])
@@ -174,6 +186,7 @@ impl ZeroizingPackingScalarBytesV1 {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingPackingScalarBytesV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -189,7 +202,9 @@ impl Drop for ZeroizingPackingScalarBytesV1 {
 }
 /// Reusable, exactly release-sized decoder workspace. The sole evaluation vector is erased after
 /// every chunk and again when the workspace is dropped. Deliberately neither `Clone` nor `Debug`.
+#[cfg(test)]
 pub(super) struct T256PackedPlaintextDecodeWorkspaceV1(ZeroizingPackingFp2V1);
+#[cfg(test)]
 impl T256PackedPlaintextDecodeWorkspaceV1 {
     /// Fallibly reserve the complete decoder workspace before consuming input.
     pub(super) fn try_new_v1() -> Result<Self, ZkAmsMkheErrorV1> {
@@ -204,6 +219,7 @@ impl T256PackedPlaintextDecodeWorkspaceV1 {
 /// Borrow guard that erases the named decoder workspace on success, error,
 /// and unwind. Compiler-created scalar/register copies remain outside this
 /// narrow optimizer-resistant guarantee.
+#[cfg(test)]
 struct ClearingPackingFp2BorrowV1<'workspace>(&'workspace mut [T256Fp2]);
 #[cfg(test)]
 std::thread_local! {
@@ -217,6 +233,7 @@ fn packing_workspace_zeroized_drop_count_v1() -> usize {
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
+#[cfg(test)]
 impl Drop for ClearingPackingFp2BorrowV1<'_> {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -268,6 +285,7 @@ impl Drop for ZeroizingPackedRnsBindingV1 {
 }
 /// Heap-stable owner for exactly one release-RNS limb. Its storage is private,
 /// optimizer-resistantly erased on every drop path, and deliberately neither `Clone` nor `Debug`.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -280,6 +298,7 @@ pub(super) struct ZeroizingT256ReleaseLimbV1 {
 /// travel with the coefficient slice; future adapters must accept this typed borrow intact when
 /// preserving that association. Reading its parts separately does not by itself enforce correct
 /// pairing. Deliberately neither `Clone` nor `Debug`.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -289,6 +308,7 @@ pub(super) struct FilledT256ReleaseLimbV1<'limb> {
     modulus: u64,
     coefficients: &'limb [u64],
 }
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -319,6 +339,7 @@ fn t256_release_limb_zeroized_drop_count_v1() -> usize {
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -353,6 +374,7 @@ impl ZeroizingT256ReleaseLimbV1 {
         })
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingT256ReleaseLimbV1 {
     fn drop(&mut self) {
         self.filled_limb = None;
@@ -372,6 +394,7 @@ impl Drop for ZeroizingT256ReleaseLimbV1 {
 /// Borrowed, exact-validation capability for allocation-free release-limb lifting. Its fields stay
 /// private so sibling modules cannot recover the raw packed artifact through this capability.
 /// Deliberately neither `Clone` nor `Debug`.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -380,6 +403,7 @@ pub(super) struct ValidatedT256PackedPlaintextV1<'packed> {
     layout: ZkAmsT256PackingLayoutV1,
     packed: &'packed ZkAmsT256PackedPlaintextV1,
 }
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -441,6 +465,7 @@ impl<'packed> ValidatedT256PackedPlaintextV1<'packed> {
 }
 /// Move-only ordered transcript state shared by the release wrapper and tiny parity tests. It
 /// retains only the Keccak state and non-secret profile geometry, never polynomial coefficients.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -451,6 +476,7 @@ struct OrderedRnsBindingHashV1 {
     moduli: &'static [u64],
     next_limb: usize,
 }
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -519,6 +545,7 @@ impl OrderedRnsBindingHashV1 {
 /// Move-only incremental native RNS-binding hasher for one validated packed
 /// plaintext. It enforces the canonical release limb order `0..38` and retains
 /// neither a full plaintext lift nor an individual limb.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -527,6 +554,7 @@ pub(super) struct T256PackedRnsBindingHasherV1<'packed> {
     plaintext: ValidatedT256PackedPlaintextV1<'packed>,
     transcript: OrderedRnsBindingHashV1,
 }
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -570,6 +598,7 @@ impl<'packed> T256PackedRnsBindingHasherV1<'packed> {
         self.transcript.finish()
     }
 }
+#[cfg(test)]
 fn lift_centered_t256_coefficients_into_v1(
     coefficients: &[[u8; 32]],
     modulus: u64,
@@ -586,6 +615,7 @@ fn lift_centered_t256_coefficients_into_v1(
     }
 }
 impl T256Fp2 {
+    #[cfg(test)]
     fn zero() -> Self {
         Self {
             c0: Scalar::zero(),
@@ -610,12 +640,14 @@ impl T256Fp2 {
             c1: -self.c1,
         }
     }
+    #[cfg(test)]
     fn add(self, rhs: Self) -> Self {
         Self {
             c0: self.c0 + rhs.c0,
             c1: self.c1 + rhs.c1,
         }
     }
+    #[cfg(test)]
     fn sub(self, rhs: Self) -> Self {
         Self {
             c0: self.c0 - rhs.c0,
@@ -629,6 +661,7 @@ impl T256Fp2 {
             c1: self.c0 * rhs.c1 + self.c1 * rhs.c0,
         }
     }
+    #[cfg(test)]
     fn scale(self, scalar: Scalar) -> Self {
         Self {
             c0: self.c0 * scalar,
@@ -679,6 +712,7 @@ pub struct ZkAmsT256PackingLayoutV1 {
     pub digest: [u8; 32],
 }
 /// One exact packed-plaintext chunk in coefficient representation.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(PartialEq, Eq)]
 pub struct ZkAmsT256PackedPlaintextV1 {
@@ -709,6 +743,7 @@ fn packed_plaintext_zeroized_drop_count_v1() -> usize {
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
+#[cfg(test)]
 impl Drop for ZkAmsT256PackedPlaintextV1 {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.coefficients);
@@ -730,6 +765,7 @@ impl Drop for ZkAmsT256PackedPlaintextV1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
+#[cfg(test)]
 impl fmt::Debug for ZkAmsT256PackedPlaintextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -809,6 +845,7 @@ pub struct ZkAmsT256RotationV1 {
     pub digest: [u8; 32],
 }
 /// Evidence that coefficient and release-RNS automorphisms agree exactly.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsT256RotationCertificateV1 {
     /// Certificate schema version.
@@ -988,6 +1025,7 @@ pub fn zk_ams_t256_packing_layout_v1(
     Ok(layout)
 }
 /// Return the exact odd Galois exponent implementing a forward cyclic rotation.
+#[cfg(test)]
 pub fn zk_ams_t256_rotation_exponent_v1(steps: u32) -> Result<u32, ZkAmsMkheErrorV1> {
     zk_ams_t256_rotation_exponent_for_direction_v1(steps, ZkAmsT256RotationDirectionV1::Forward)
 }
@@ -1061,12 +1099,14 @@ pub fn zk_ams_t256_galois_key_schedule_v1() -> Result<ZkAmsT256GaloisKeySchedule
     Ok(schedule)
 }
 /// Validate a caller-supplied schedule and reject missing, duplicate, or reordered keys.
+#[cfg(test)]
 pub fn validate_zk_ams_t256_galois_key_schedule_v1(
     schedule: &ZkAmsT256GaloisKeyScheduleV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     validate_galois_key_schedule(schedule)
 }
 /// Validate the exact ordered exponent list provisioned by a key ceremony.
+#[cfg(test)]
 pub fn validate_zk_ams_t256_galois_key_exponents_v1(
     schedule: &ZkAmsT256GaloisKeyScheduleV1,
     provisioned_exponents: &[u32],
@@ -1107,6 +1147,7 @@ pub fn zk_ams_t256_rotation_v1(
     Ok(rotation)
 }
 /// Return the exact key exponents that compose a canonical rotation request.
+#[cfg(test)]
 pub fn zk_ams_t256_rotation_key_plan_v1(
     layout: ZkAmsT256PackingLayoutV1,
     rotation: ZkAmsT256RotationV1,
@@ -1156,6 +1197,7 @@ pub fn zk_ams_t256_rotation_key_plan_v1(
     Ok(plan)
 }
 /// Encode exactly one fixed-width chunk; nonzero unused slots are rejected.
+#[cfg(test)]
 pub fn encode_zk_ams_t256_packed_plaintext_v1(
     layout: ZkAmsT256PackingLayoutV1,
     chunk_index: u32,
@@ -1196,6 +1238,7 @@ pub fn encode_zk_ams_t256_packed_plaintext_v1(
     Ok(packed)
 }
 /// Decode one exact chunk and reject non-subfield values or nonzero padding.
+#[cfg(test)]
 pub fn decode_zk_ams_t256_packed_plaintext_v1(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -1229,6 +1272,7 @@ pub fn decode_zk_ams_t256_packed_plaintext_v1(
     Ok(decoded)
 }
 /// Decode one validated chunk through a caller-owned reusable workspace.
+#[cfg(test)]
 pub(super) fn visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -1247,6 +1291,7 @@ pub(super) fn visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1(
 /// reuse the sole packing decoder without cloning its coefficient vector or
 /// exposing the private packed-artifact digest constructor. The temporary
 /// packed owner erases every coefficient on all return and unwind paths.
+#[cfg(test)]
 pub(super) fn visit_rehydrated_t256_coefficients_used_slots_with_workspace_v1(
     layout: ZkAmsT256PackingLayoutV1,
     chunk_index: u32,
@@ -1271,6 +1316,7 @@ pub(super) fn visit_rehydrated_t256_coefficients_used_slots_with_workspace_v1(
     )
 }
 
+#[cfg(test)]
 fn visit_validated_packed_plaintext_used_slots_with_workspace_v1(
     packed: &ZkAmsT256PackedPlaintextV1,
     workspace: &mut T256PackedPlaintextDecodeWorkspaceV1,
@@ -1316,6 +1362,7 @@ fn visit_validated_packed_plaintext_used_slots_with_workspace_v1(
 ///
 /// This helper exists to check the native coefficient/RNS path. Ciphertext
 /// rotation never calls it and never substitutes cleartext evaluation.
+#[cfg(test)]
 pub fn permute_zk_ams_t256_slots_v1(
     layout: ZkAmsT256PackingLayoutV1,
     rotation: ZkAmsT256RotationV1,
@@ -1350,6 +1397,7 @@ pub fn permute_zk_ams_t256_slots_v1(
     Ok(output)
 }
 /// Apply a rotation directly to canonical T256 coefficients without decoding slots.
+#[cfg(test)]
 pub fn rotate_zk_ams_t256_packed_plaintext_v1(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -1394,6 +1442,7 @@ pub fn rotate_zk_ams_t256_packed_plaintext_v1(
     Ok(output)
 }
 /// Verify limb-for-limb agreement between T256 and release-RNS automorphisms.
+#[cfg(test)]
 pub fn zk_ams_t256_rotation_certificate_v1(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -1435,6 +1484,7 @@ pub fn zk_ams_t256_rotation_certificate_v1(
     validate_rotation_certificate(layout, packed, rotation, &schedule, certificate)?;
     Ok(certificate)
 }
+#[cfg(test)]
 pub(super) fn packed_plaintext_to_rns_v1(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -1499,6 +1549,7 @@ fn used_slots_for_chunk(
         layout.slots_per_chunk
     })
 }
+#[cfg(test)]
 fn validate_packed(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -1520,6 +1571,7 @@ fn validate_packed(
     }
     validate_packed_subfield_coefficients(&packed.coefficients)
 }
+#[cfg(test)]
 fn validate_packed_subfield_coefficients(
     coefficients: &[[u8; 32]],
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1590,6 +1642,7 @@ fn packing_layout_digest(layout: ZkAmsT256PackingLayoutV1) -> Result<[u8; 32], Z
     );
     Ok(keccak256(&frame))
 }
+#[cfg(test)]
 fn packed_plaintext_digest(
     packed: &ZkAmsT256PackedPlaintextV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1722,12 +1775,14 @@ fn rotation_digest(rotation: ZkAmsT256RotationV1) -> Result<[u8; 32], ZkAmsMkheE
     frame.extend_from_slice(&schedule_digest);
     Ok(keccak256(&frame))
 }
+#[cfg(test)]
 fn reject_partial_chunk_rotation(rotation: ZkAmsT256RotationV1) -> Result<(), ZkAmsMkheErrorV1> {
     if rotation.steps != 0 && rotation.used_slots != ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 as u32 {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
     Ok(())
 }
+#[cfg(test)]
 fn automorphism_coefficients(
     coefficients: &[Scalar],
     exponent: usize,
@@ -1759,6 +1814,7 @@ fn automorphism_coefficients(
     }
     Ok(output)
 }
+#[cfg(test)]
 fn check_rotation_workspace(profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
     profile.validate()?;
     let rns_polynomial_bytes = profile
@@ -1779,6 +1835,7 @@ fn check_rotation_workspace(profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn rns_polynomial_digest(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -1805,6 +1862,7 @@ pub(super) fn rns_polynomial_digest(
     }
     Ok(hash.finalize())
 }
+#[cfg(test)]
 fn rotation_certificate_digest(certificate: ZkAmsT256RotationCertificateV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(320);
     frame.extend_from_slice(ROTATION_CERTIFICATE_DOMAIN_V1);
@@ -1906,6 +1964,7 @@ fn validate_release_packing_certificate(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_rotation_certificate(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -2053,6 +2112,7 @@ fn release_root() -> Result<T256Fp2, ZkAmsMkheErrorV1> {
     }
     Ok(pinned)
 }
+#[cfg(test)]
 fn root_for_degree(degree: usize) -> Result<T256Fp2, ZkAmsMkheErrorV1> {
     if degree < 2
         || !degree.is_power_of_two()
@@ -2066,6 +2126,7 @@ fn root_for_degree(degree: usize) -> Result<T256Fp2, ZkAmsMkheErrorV1> {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
     ))
 }
+#[cfg(test)]
 fn encode_coefficients(slots: &[Scalar], degree: usize) -> Result<Vec<Scalar>, ZkAmsMkheErrorV1> {
     if slots.len() != degree / 2 {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -2122,6 +2183,7 @@ fn decode_coefficients(
     }
     Ok(slots.take())
 }
+#[cfg(test)]
 fn slot_root_index(degree: usize, slot: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if slot >= degree / 2 {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -2132,6 +2194,7 @@ fn slot_root_index(degree: usize, slot: usize) -> Result<usize, ZkAmsMkheErrorV1
     }
     Ok((exponent - 1) / 2)
 }
+#[cfg(test)]
 fn bit_reverse_permute(values: &mut [T256Fp2]) {
     let mut target = 0_usize;
     for index in 1..values.len() {
@@ -2146,6 +2209,7 @@ fn bit_reverse_permute(values: &mut [T256Fp2]) {
         }
     }
 }
+#[cfg(test)]
 fn cyclic_ntt(values: &mut [T256Fp2], root: T256Fp2) {
     bit_reverse_permute(values);
     let mut width = 2;
@@ -2164,6 +2228,7 @@ fn cyclic_ntt(values: &mut [T256Fp2], root: T256Fp2) {
         width <<= 1;
     }
 }
+#[cfg(test)]
 fn inverse_cyclic_ntt(values: &mut [T256Fp2], root: T256Fp2) -> Result<(), ZkAmsMkheErrorV1> {
     cyclic_ntt(values, root.conjugate());
     let inverse_degree = Scalar::from_u64(

@@ -179,7 +179,9 @@ through `GovernanceDagRequestAuthenticationReplayStoreV1`. The resulting
 backend-dispatch capability has the authentication headers removed and its URI
 normalized to origin form, so a downstream proxy cannot reinterpret an
 absolute request target. The in-memory replay cache is an isolated-test utility
-and is not production qualification evidence.
+and is not production qualification evidence. No shipped ingress route consumes
+the receiver yet, so it and its request-authentication verifier are compiled
+only for `sorafs_node` tests until that route is wired.
 The standard outbound path already consumes verified nonces through separate
 sealed IPFS and signed-head slots; these slots preserve the authenticated
 request namespace across process restart.

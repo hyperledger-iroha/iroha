@@ -993,6 +993,7 @@ pub fn inspect_token(bytes: &[u8]) -> Result<TokenBundle, TokenToolError> {
     TokenBundle::new(token)
 }
 /// Decode a base64 or hexadecimal token string.
+#[cfg(test)]
 pub fn decode_token_string(input: &str) -> Result<Vec<u8>, TokenToolError> {
     let trimmed = input.trim();
     let is_hex_candidate = trimmed.len().is_multiple_of(2)

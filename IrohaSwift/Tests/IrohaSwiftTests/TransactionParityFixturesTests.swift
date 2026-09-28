@@ -1285,11 +1285,11 @@ private struct SwiftFixtureAdmissionIntent: Decodable {
             context: "Swift parity admission intent"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard try container.decode(String.self, forKey: .intent) == "queue_plan_synced" else {
+        guard try container.decode(String.self, forKey: .intent) == "ordinary" else {
             throw DecodingError.dataCorruptedError(
                 forKey: .intent,
                 in: container,
-                debugDescription: "intent must be the literal 'queue_plan_synced'"
+                debugDescription: "intent must be the literal 'ordinary'"
             )
         }
         guard try container.decodeNil(forKey: .value) else {

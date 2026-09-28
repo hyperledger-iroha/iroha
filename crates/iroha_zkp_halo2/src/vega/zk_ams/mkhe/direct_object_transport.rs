@@ -20,18 +20,29 @@
 //! This module intentionally closes no proof, admission, or release gate.
 
 #![allow(dead_code)]
-use super::{MKHE_VERSION_V1, ZkAmsMkheErrorV1};
+#[cfg(test)]
+use super::MKHE_VERSION_V1;
+use super::ZkAmsMkheErrorV1;
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
+#[cfg(test)]
 const DIRECT_OBJECT_POINTER_TAG_V1: [u8; 4] = *b"ZDOP";
+#[cfg(test)]
 const DIRECT_OBJECT_POINTER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-object-pointer";
+#[cfg(test)]
 const DIRECT_OBJECT_SNAPSHOT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-object-snapshot";
+#[cfg(test)]
 const DIRECT_OBJECT_READ_RECEIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-object-read-receipt";
+#[cfg(test)]
 const DIRECT_OBJECT_STAGING_TOKEN_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-object-staging-token";
+#[cfg(test)]
 const DIRECT_OBJECT_SEAL_TOKEN_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-object-seal-token";
+#[cfg(test)]
 const DIRECT_OBJECT_PUBLISHED_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-object-published-binding";
+#[cfg(test)]
 const DIRECT_OBJECT_PUBLICATION_RECEIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-object-publication-receipt";
 /// Fixed width of one canonical direct-object pointer frame.
@@ -39,12 +50,16 @@ pub const ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1: usize = 4 + 1 + 1 + 8 + 32
 /// Sole maximum request passed to an untrusted direct-object provider.
 pub const ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1: usize = 8 * 1024;
 /// Existing first-release ceiling for one canonical RNS polynomial object.
+#[cfg(test)]
 const DIRECT_RNS_POLYNOMIAL_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 /// Existing first-release ceiling for one standalone native proof object.
+#[cfg(test)]
 const DIRECT_RELATION_PROOF_MAX_BYTES_V1: u64 = 32 * 1024 * 1024;
 /// Phase one is transport plumbing only; it is not direct-proof admission.
+#[cfg(test)]
 pub(super) const ZK_AMS_MKHE_DIRECT_OBJECT_ADMISSION_GATE_V1: bool = false;
 /// No release gate may depend on this module until the relation verifier lands.
+#[cfg(test)]
 pub(super) const ZK_AMS_MKHE_DIRECT_OBJECT_RELEASE_GATE_V1: bool = false;
 /// Canonical type of a separately addressed direct-relation object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +99,7 @@ pub enum ZkAmsMkheDirectObjectKindV1 {
     CollectiveCiphertextC1 = 16,
 }
 impl ZkAmsMkheDirectObjectKindV1 {
+    #[cfg(test)]
     const fn payload_ceiling(self) -> u64 {
         match self {
             Self::RkgH0
@@ -144,6 +160,7 @@ pub struct ZkAmsMkheDirectObjectPointerV1 {
 }
 impl ZkAmsMkheDirectObjectPointerV1 {
     /// Construct a canonical pointer from an independently computed content address.
+    #[cfg(test)]
     pub fn new(
         kind: ZkAmsMkheDirectObjectKindV1,
         payload_bytes: u64,
@@ -166,6 +183,7 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         Ok(value)
     }
     /// Construct a pointer by hashing one already bounded in-memory payload.
+    #[cfg(test)]
     pub fn from_payload(
         kind: ZkAmsMkheDirectObjectKindV1,
         payload: &[u8],
@@ -177,6 +195,7 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         }
         Self::new(kind, payload_bytes, norito::streaming::blake3_hash(payload))
     }
+    #[cfg(test)]
     fn validate_for_kind(
         self,
         expected_kind: ZkAmsMkheDirectObjectKindV1,
@@ -193,6 +212,7 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         Ok(())
     }
     /// Encode the sole fixed-width, big-endian pointer frame.
+    #[cfg(test)]
     #[must_use]
     pub fn encode(self) -> [u8; ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1] {
         let mut bytes = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1];
@@ -205,6 +225,7 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         bytes
     }
     /// Decode exactly one pointer and reject truncation, trailing bytes, and kind confusion.
+    #[cfg(test)]
     pub fn decode_exact(
         expected_kind: ZkAmsMkheDirectObjectKindV1,
         bytes: &[u8],
@@ -235,26 +256,31 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         Ok(value)
     }
     /// Bound object kind.
+    #[cfg(test)]
     #[must_use]
     pub const fn kind(self) -> ZkAmsMkheDirectObjectKindV1 {
         self.kind
     }
     /// Exact complete object length.
+    #[cfg(test)]
     #[must_use]
     pub const fn payload_bytes(self) -> u64 {
         self.payload_bytes
     }
     /// BLAKE3 digest of every byte in the exact complete object.
+    #[cfg(test)]
     #[must_use]
     pub const fn payload_blake3(self) -> [u8; 32] {
         self.payload_blake3
     }
     /// Domain-separated digest of the complete canonical pointer frame.
+    #[cfg(test)]
     #[must_use]
     pub const fn pointer_digest(self) -> [u8; 32] {
         self.pointer_digest
     }
 }
+#[cfg(test)]
 fn direct_object_pointer_digest(pointer: ZkAmsMkheDirectObjectPointerV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_POINTER_DOMAIN_V1);
@@ -270,6 +296,7 @@ fn direct_object_pointer_digest(pointer: ZkAmsMkheDirectObjectPointerV1) -> [u8;
 /// one publication namespace. The canonical adapter additionally binds that identity to the exact
 /// publication session, object kind, and length. A staging token is deliberately neither `Clone`
 /// nor `Copy`; sealing consumes it.
+#[cfg(test)]
 pub struct ZkAmsMkheDirectObjectStagingTokenV1 {
     publication_identity: [u8; 32],
     staging_identity: [u8; 32],
@@ -277,6 +304,7 @@ pub struct ZkAmsMkheDirectObjectStagingTokenV1 {
     payload_bytes: u64,
     token_digest: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheDirectObjectStagingTokenV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -291,6 +319,7 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectStagingTokenV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheDirectObjectStagingTokenV1 {
     /// Construct one backend-issued staging token under exact publication axes.
     pub fn new(
@@ -349,6 +378,7 @@ impl ZkAmsMkheDirectObjectStagingTokenV1 {
         self.token_digest
     }
 }
+#[cfg(test)]
 fn direct_object_staging_token_digest(token: &ZkAmsMkheDirectObjectStagingTokenV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_STAGING_TOKEN_DOMAIN_V1);
@@ -364,6 +394,7 @@ fn direct_object_staging_token_digest(token: &ZkAmsMkheDirectObjectStagingTokenV
 /// identity prevents a mutable-stage handle from being confused with immutable sealed storage.
 /// Publication borrows this token so an ambiguous commit can be reconciled without inventing an
 /// abort or unpublish operation.
+#[cfg(test)]
 pub struct ZkAmsMkheDirectObjectSealTokenV1 {
     publication_identity: [u8; 32],
     staging_identity: [u8; 32],
@@ -373,6 +404,7 @@ pub struct ZkAmsMkheDirectObjectSealTokenV1 {
     payload_bytes: u64,
     token_digest: [u8; 32],
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheDirectObjectSealTokenV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -388,6 +420,7 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectSealTokenV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheDirectObjectSealTokenV1 {
     /// Consume mutable staging authority and bind a backend seal identity.
     pub fn from_staging(
@@ -461,6 +494,7 @@ impl ZkAmsMkheDirectObjectSealTokenV1 {
         self.token_digest
     }
 }
+#[cfg(test)]
 fn direct_object_seal_token_digest(token: &ZkAmsMkheDirectObjectSealTokenV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_SEAL_TOKEN_DOMAIN_V1);
@@ -487,6 +521,7 @@ pub struct ZkAmsMkheDirectObjectPublishedBindingV1 {
 }
 impl ZkAmsMkheDirectObjectPublishedBindingV1 {
     /// Construct one authoritative lookup result for an exact pointer.
+    #[cfg(test)]
     pub fn new(
         publication_identity: [u8; 32],
         published_object_identity: [u8; 32],
@@ -503,6 +538,7 @@ impl ZkAmsMkheDirectObjectPublishedBindingV1 {
         binding.validate()?;
         Ok(binding)
     }
+    #[cfg(test)]
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.pointer.validate_for_kind(self.pointer.kind)?;
         if self.publication_identity == [0; 32]
@@ -515,26 +551,31 @@ impl ZkAmsMkheDirectObjectPublishedBindingV1 {
         Ok(())
     }
     /// Current publication session which performed authoritative lookup.
+    #[cfg(test)]
     #[must_use]
     pub const fn publication_identity(self) -> [u8; 32] {
         self.publication_identity
     }
     /// Backend-local immutable-object identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn published_object_identity(self) -> [u8; 32] {
         self.published_object_identity
     }
     /// Exact typed content address found by lookup.
+    #[cfg(test)]
     #[must_use]
     pub const fn pointer(self) -> ZkAmsMkheDirectObjectPointerV1 {
         self.pointer
     }
     /// Digest binding every authoritative lookup axis.
+    #[cfg(test)]
     #[must_use]
     pub const fn binding_digest(self) -> [u8; 32] {
         self.binding_digest
     }
 }
+#[cfg(test)]
 fn direct_object_published_binding_digest(
     binding: ZkAmsMkheDirectObjectPublishedBindingV1,
 ) -> [u8; 32] {
@@ -559,6 +600,7 @@ fn direct_object_published_binding_digest(
 ///
 /// This trait deliberately has no abort, discard, delete, or unpublish method. Incomplete staging
 /// and orphaned seals are backend garbage-collection concerns, not security transitions.
+#[cfg(test)]
 pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProviderV1 {
     /// Nonzero identity of this exact open publication session.
     fn publication_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1>;
@@ -619,6 +661,7 @@ pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProv
 /// object operation carries its exact pointer, so one provider snapshot can serve all public
 /// polynomials and the proof without mutable object selection. `read_at` performs one absolute,
 /// non-retrying read; a short result is always rejected by the canonical adapter.
+#[cfg(test)]
 pub trait ZkAmsMkheDirectObjectReadAtProviderV1 {
     /// Nonzero identity of this exact open provider session.
     fn provider_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1>;
@@ -650,6 +693,7 @@ pub(super) struct ZkAmsMkheDirectObjectSnapshotV1 {
     snapshot_binding_digest: [u8; 32],
 }
 impl ZkAmsMkheDirectObjectSnapshotV1 {
+    #[cfg(test)]
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.pointer.validate_for_kind(self.pointer.kind)?;
         if self.provider_identity == [0; 32]
@@ -662,26 +706,31 @@ impl ZkAmsMkheDirectObjectSnapshotV1 {
         Ok(())
     }
     /// Exact typed content address bound to this pass.
+    #[cfg(test)]
     #[must_use]
     pub(super) const fn pointer(self) -> ZkAmsMkheDirectObjectPointerV1 {
         self.pointer
     }
     /// Exact open-provider session identity bound to this pass.
+    #[cfg(test)]
     #[must_use]
     pub(super) const fn provider_identity(self) -> [u8; 32] {
         self.provider_identity
     }
     /// Exact immutable revision identity bound to this pass.
+    #[cfg(test)]
     #[must_use]
     pub(super) const fn snapshot_identity(self) -> [u8; 32] {
         self.snapshot_identity
     }
     /// Digest binding the provider session, snapshot, and canonical pointer.
+    #[cfg(test)]
     #[must_use]
     pub(super) const fn snapshot_binding_digest(self) -> [u8; 32] {
         self.snapshot_binding_digest
     }
 }
+#[cfg(test)]
 fn direct_object_snapshot_digest(snapshot: ZkAmsMkheDirectObjectSnapshotV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_SNAPSHOT_DOMAIN_V1);
@@ -691,6 +740,7 @@ fn direct_object_snapshot_digest(snapshot: ZkAmsMkheDirectObjectSnapshotV1) -> [
     hash.finalize()
 }
 /// Bind one provider session to one exact object before any payload read.
+#[cfg(test)]
 pub(super) fn bind_zk_ams_mkhe_direct_object_snapshot_v1<P>(
     expected_kind: ZkAmsMkheDirectObjectKindV1,
     expected_pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -720,6 +770,7 @@ where
     Ok(snapshot)
 }
 /// Re-observe every provider axis and reject any drift from a bound snapshot.
+#[cfg(test)]
 pub(super) fn ensure_zk_ams_mkhe_direct_object_snapshot_v1<P>(
     expected: ZkAmsMkheDirectObjectSnapshotV1,
     provider: &mut P,
@@ -744,6 +795,7 @@ where
 /// subrange.  Sound consumers use it through
 /// [`ZkAmsMkheDirectObjectReadTransactionV1`], whose final receipt binds the
 /// hash of the complete canonical object.
+#[cfg(test)]
 pub(super) fn read_zk_ams_mkhe_direct_object_at_exact_v1<P>(
     snapshot: ZkAmsMkheDirectObjectSnapshotV1,
     provider: &mut P,
@@ -787,6 +839,7 @@ pub struct ZkAmsMkheDirectObjectReadReceiptV1 {
     receipt_digest: [u8; 32],
 }
 impl ZkAmsMkheDirectObjectReadReceiptV1 {
+    #[cfg(test)]
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.snapshot.validate()?;
         if self.canonical_bytes != self.snapshot.pointer.payload_bytes
@@ -800,26 +853,31 @@ impl ZkAmsMkheDirectObjectReadReceiptV1 {
         Ok(())
     }
     /// Exact provider snapshot whose bytes were consumed.
+    #[cfg(test)]
     #[must_use]
     pub(super) const fn snapshot(&self) -> ZkAmsMkheDirectObjectSnapshotV1 {
         self.snapshot
     }
     /// Exact number of canonical bytes consumed.
+    #[cfg(test)]
     #[must_use]
     pub const fn canonical_bytes(&self) -> u64 {
         self.canonical_bytes
     }
     /// Independently recomputed BLAKE3 digest of the complete byte stream.
+    #[cfg(test)]
     #[must_use]
     pub const fn payload_blake3(&self) -> [u8; 32] {
         self.payload_blake3
     }
     /// Digest binding all receipt axes.
+    #[cfg(test)]
     #[must_use]
     pub(super) const fn receipt_digest(&self) -> [u8; 32] {
         self.receipt_digest
     }
 }
+#[cfg(test)]
 fn direct_object_read_receipt_digest(receipt: &ZkAmsMkheDirectObjectReadReceiptV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_READ_RECEIPT_DOMAIN_V1);
@@ -833,12 +891,14 @@ fn direct_object_read_receipt_digest(receipt: &ZkAmsMkheDirectObjectReadReceiptV
 ///
 /// Any invalid request or provider failure permanently poisons the transaction;
 /// callers cannot retry into a different byte stream under the same hash state.
+#[cfg(test)]
 pub(super) struct ZkAmsMkheDirectObjectReadTransactionV1 {
     snapshot: ZkAmsMkheDirectObjectSnapshotV1,
     next_offset: u64,
     payload_hasher: norito::streaming::Blake3Hasher,
     failed: bool,
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheDirectObjectReadTransactionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -849,6 +909,7 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectReadTransactionV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheDirectObjectReadTransactionV1 {
     /// Begin one snapshot-bound pass before touching object bytes.
     pub(super) fn begin<P>(
@@ -967,6 +1028,7 @@ impl ZkAmsMkheDirectObjectReadTransactionV1 {
     }
 }
 /// Validate one complete object with fixed workspace and no payload allocation.
+#[cfg(test)]
 pub fn validate_zk_ams_mkhe_direct_object_v1<P>(
     expected_kind: ZkAmsMkheDirectObjectKindV1,
     expected_pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -1018,6 +1080,7 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectPublicationReceiptV1 {
     }
 }
 impl ZkAmsMkheDirectObjectPublicationReceiptV1 {
+    #[cfg(test)]
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.pointer.validate_for_kind(self.pointer.kind)?;
         self.published_binding.validate()?;
@@ -1056,46 +1119,55 @@ impl ZkAmsMkheDirectObjectPublicationReceiptV1 {
         Ok(())
     }
     /// Exact typed content address proven published and readable.
+    #[cfg(test)]
     #[must_use]
     pub const fn pointer(&self) -> ZkAmsMkheDirectObjectPointerV1 {
         self.pointer
     }
     /// Exact publication session which performed the operation and lookup.
+    #[cfg(test)]
     #[must_use]
     pub const fn publication_identity(&self) -> [u8; 32] {
         self.publication_identity
     }
     /// Backend-unique identity of the consumed mutable stage.
+    #[cfg(test)]
     #[must_use]
     pub const fn staging_identity(&self) -> [u8; 32] {
         self.staging_identity
     }
     /// Backend-unique identity of the immutable sealed stage.
+    #[cfg(test)]
     #[must_use]
     pub const fn seal_identity(&self) -> [u8; 32] {
         self.seal_identity
     }
     /// Authoritative pointer lookup retained by the publication receipt.
+    #[cfg(test)]
     #[must_use]
     pub const fn published_binding(&self) -> ZkAmsMkheDirectObjectPublishedBindingV1 {
         self.published_binding
     }
     /// Complete content-hash receipt from the published provider.
+    #[cfg(test)]
     #[must_use]
     pub const fn post_publish_read_receipt(&self) -> &ZkAmsMkheDirectObjectReadReceiptV1 {
         &self.post_publish_read_receipt
     }
     /// Whether an error acknowledgement was reconciled to an exact published pointer.
+    #[cfg(test)]
     #[must_use]
     pub const fn reconciled_after_publish_error(&self) -> bool {
         self.reconciled_after_publish_error
     }
     /// Digest binding every publication, lookup, and readback axis.
+    #[cfg(test)]
     #[must_use]
     pub const fn receipt_digest(&self) -> [u8; 32] {
         self.receipt_digest
     }
 }
+#[cfg(test)]
 fn direct_object_publication_receipt_digest(
     receipt: &ZkAmsMkheDirectObjectPublicationReceiptV1,
 ) -> [u8; 32] {
@@ -1113,6 +1185,7 @@ fn direct_object_publication_receipt_digest(
     hash.update(&[u8::from(receipt.reconciled_after_publish_error)]);
     hash.finalize()
 }
+#[cfg(test)]
 fn ensure_direct_object_publication_identity_v1<P>(
     publisher: &mut P,
     expected: [u8; 32],
@@ -1126,6 +1199,7 @@ where
     }
     Ok(())
 }
+#[cfg(test)]
 fn observe_direct_object_staged_len_v1<P>(
     publisher: &mut P,
     expected_publication_identity: [u8; 32],
@@ -1143,6 +1217,7 @@ where
     stable?;
     Ok(length)
 }
+#[cfg(test)]
 fn observe_direct_object_sealed_len_v1<P>(
     publisher: &mut P,
     expected_publication_identity: [u8; 32],
@@ -1170,6 +1245,7 @@ where
 /// This type intentionally has no `Drop` implementation. In particular, a
 /// failed post-publish check can never invoke backend cleanup that might race a
 /// successful but ambiguously acknowledged commit.
+#[cfg(test)]
 pub struct ZkAmsMkheDirectObjectPublicationTransactionV1<
     'a,
     P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
@@ -1183,6 +1259,7 @@ pub struct ZkAmsMkheDirectObjectPublicationTransactionV1<
     expected_payload_hasher: norito::streaming::Blake3Hasher,
     failed: bool,
 }
+#[cfg(test)]
 impl<P> core::fmt::Debug for ZkAmsMkheDirectObjectPublicationTransactionV1<'_, P>
 where
     P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
@@ -1201,6 +1278,7 @@ where
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl<'a, P> ZkAmsMkheDirectObjectPublicationTransactionV1<'a, P>
 where
     P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,

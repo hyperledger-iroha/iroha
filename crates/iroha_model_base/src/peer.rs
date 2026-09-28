@@ -35,10 +35,6 @@ mod model {
     #[debug("{public_key}")]
     #[getset(get = "pub")]
     #[repr(transparent)]
-    #[cfg_attr(
-        any(feature = "ffi_export", feature = "ffi_import"),
-        ffi_type(unsafe {robust})
-    )]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::peer::model::PeerId")]
     pub struct PeerId {

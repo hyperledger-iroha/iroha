@@ -24,7 +24,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
-use iroha_zkp_halo2::poseidon::{poseidon2_params_width3, poseidon2_params_width6};
+use iroha_zkp_poseidon::poseidon::{poseidon2_params_width3, poseidon2_params_width6};
 use norito::{json, to_bytes};
 use std::{env, error::Error, fs, path::Path};
 const DESCRIPTOR_FIXTURE_PATH: &str = concat!(

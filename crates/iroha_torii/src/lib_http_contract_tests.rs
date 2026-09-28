@@ -12,7 +12,6 @@ mod matched_route_metadata_tests {
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, EnabledFeatures, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-    use tower::ServiceExt as _;
     const ITEM: RouteDescriptor = RouteDescriptor::new(
         "test.item.read",
         HttpMethod::Get,
@@ -978,12 +977,10 @@ mod response_negotiation_middleware_tests {
         response::Response,
         routing::{get, post},
     };
-    use http_body_util::BodyExt as _;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    use tower::ServiceExt as _;
     fn native_response(content_type: &'static str) -> Response {
         Response::builder()
             .status(StatusCode::OK)
@@ -1461,8 +1458,6 @@ mod typed_error_contract_tests {
         response::Response,
         routing::get,
     };
-    use http_body_util::BodyExt as _;
-    use tower::ServiceExt as _;
     fn with_error_contract(router: Router) -> Router {
         router.layer(axum::middleware::from_fn(enforce_typed_error_contract))
     }
@@ -2714,7 +2709,6 @@ mod request_id_middleware_tests {
         routing::get,
     };
     use std::collections::HashSet;
-    use tower::ServiceExt as _;
     fn request_id(response: &axum::response::Response) -> &str {
         response
             .headers()

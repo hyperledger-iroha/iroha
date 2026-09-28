@@ -53,9 +53,7 @@ mod model {
     ///     .expect("valid fixture seed");
     /// let id = AccountId::new(keypair.public_key().clone());
     /// ```
-    #[derive(Clone, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(Clone, IntoSchema, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::account::model::AccountId")]
     pub struct AccountId {
         /// Controller responsible for authorising account actions.
@@ -66,7 +64,6 @@ mod model {
     #[allow(clippy::multiple_inherent_impl)]
     #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::account::model::Account")]
     pub struct Account {
@@ -88,7 +85,6 @@ mod model {
     #[allow(clippy::multiple_inherent_impl)]
     #[derive(crate :: DeriveJsonSerialize)]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::account::model::NewAccount")]
     pub struct NewAccount {
@@ -297,14 +293,6 @@ impl norito::json::JsonDeserialize for NewAccount {
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct OpaqueAccountId(Hash);
 impl OpaqueAccountId {
     /// Construct an opaque identifier from a pre-hashed value.

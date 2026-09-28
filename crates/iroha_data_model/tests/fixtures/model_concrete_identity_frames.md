@@ -6,15 +6,15 @@ those fields describe the fixture provenance.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_concrete_identity_frames.json` | 13 populated families, each as root, Vec, Some and BTreeMap: 52 frames | `f98e5af26c89b5f5fe4564a2a949f629aafa301c8e17e3c03613c231bd42a196` |
-| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `4c6b28ddace04a3227c8c0a90202ad31165e4c241f2ec7a7b27117d1e33d5c46` |
+| `model_concrete_identity_frames.json` | 12 populated families, each as root, Vec, Some and BTreeMap: 48 frames | `9863f060024faac07731fea50438465b8688a23a234ca675d52acbb6309d7c33` |
+| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `7ccd7a69b10aea86929ba018c3765e395b4c7bff7431a73d0dfab8ab78cbf526` |
 | `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `7a4bdb7eae4c9aca0351bd6549628e185d3e24da0aa03cf54669f9e853c14ae1` |
 
-The seven concrete owners are Action, DataEvent, SmartContractContext,
-ExecutorContext, TriggerContext, BlockSubscriptionRequest and BlockMessage.
+The six concrete owners are Action, DataEvent, SmartContractContext,
+ExecutorContext, BlockSubscriptionRequest and BlockMessage.
 Actions cover schedules with and without retry and explicit execution. Data events
-cover peer addition, account metadata, GameSession and Governance. The three
-contexts contain populated authority/header/event values. Stream cases cover two
+cover peer addition, account metadata, GameSession and Governance. The two
+contexts contain populated authority/header values. Stream cases cover two
 requested heights and a deterministic signed block with transaction results.
 
 `actual_type_name` retains the compiler name observed before declaration, including
@@ -75,3 +75,13 @@ On 2026-09-26, `SignedBlock` gained its trailing `commit_certificate` field
 refreshed only the block-message family and the HTTP block-message adapter: each
 frame gains the encoded `None` field and its length prefixes and checksums follow.
 All other families are unchanged.
+
+On 2026-09-28, the unused `TriggerContext` payload was removed together with the
+retired Rust trigger SDK, and its `trigger-context` family (four frames) was
+dropped from the capture. The same native-producer refresh follows the committed
+`BlockHeader` extension with the trailing required `global_beacon_pulse_hash`
+option (absent in these fixtures): `smart-contract-context` and
+`executor-context` gain two bare bytes, and `block-message` and the block-message
+adapter gain four. Nominal names and schema hashes are unchanged, and every other
+family is byte-for-byte unchanged. Frame counts in the earlier run summaries
+above predate this refresh.

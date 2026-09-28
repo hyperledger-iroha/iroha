@@ -262,7 +262,8 @@
         "type": "object",
         "additionalProperties": true,
         "required": [
-          "path"
+          "path",
+          "body"
         ],
         "properties": {
           "path": {
@@ -280,7 +281,7 @@
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Optional activation payload. If omitted, flat top-level fields (except path/headers/accept) are forwarded."
+            "description": "Activation request payload."
           },
           "headers": {
             "type": "object",
@@ -305,7 +306,8 @@
         "type": "object",
         "additionalProperties": true,
         "required": [
-          "path"
+          "path",
+          "body"
         ],
         "properties": {
           "path": {
@@ -323,7 +325,7 @@
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Optional cancellation payload. If omitted, flat top-level fields (except path/headers/accept) are forwarded."
+            "description": "Cancellation request payload."
           },
           "headers": {
             "type": "object",
@@ -461,15 +463,14 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "body"
+        ],
         "properties": {
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Raw alias resolve payload. If omitted, flat top-level fields are forwarded as body."
-          },
-          "alias": {
-            "type": "string",
-            "description": "Convenience shortcut for `body.alias`."
+            "description": "Raw alias resolve payload."
           },
           "headers": {
             "type": "object",
@@ -493,15 +494,14 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "body"
+        ],
         "properties": {
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Raw alias-index resolve payload. If omitted, flat top-level fields are forwarded as body."
-          },
-          "index": {
-            "type": "integer",
-            "description": "Convenience shortcut for `body.index`."
+            "description": "Raw alias-index resolve payload."
           },
           "headers": {
             "type": "object",
@@ -525,23 +525,14 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "body"
+        ],
         "properties": {
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Raw alias-by-account payload. If omitted, flat top-level fields are forwarded as body."
-          },
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `body.account_id`."
-          },
-          "dataspace": {
-            "type": "string",
-            "description": "Optional convenience shortcut for `body.dataspace`."
-          },
-          "domain": {
-            "type": "string",
-            "description": "Optional convenience shortcut for `body.domain`."
+            "description": "Raw alias-by-account payload."
           },
           "headers": {
             "type": "object",

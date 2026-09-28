@@ -4,6 +4,8 @@
 //! concrete curves, generator derivation domains, and entropy providers remain
 //! explicit adapters so a protocol can freeze its own consensus bytes.
 pub(crate) mod exact_small_coefficient_source_v1;
+// Only the parked MKHE relation provers consume the secret u15 MSM kernel.
+#[cfg(test)]
 pub(crate) mod secret_u15_msm_v1;
 use exact_small_coefficient_source_v1::{
     ExactSmallCoefficientAggregatesV1, ExactSmallCoefficientConstraintSourceV1,
@@ -1710,6 +1712,13 @@ fn accumulate<F: ProofScalar>(accumulator: &mut ScalarVector<F>, values: &[(usiz
 }
 enum VerifierConstraintSourceV1 {
     Materialized,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the test-only T256 membership verifier builds exact small-coefficient sources"
+        )
+    )]
     ExactSmallCoefficient(ExactSmallCoefficientConstraintSourceV1),
 }
 /// Public circuit statement, constraints, and commitment points to verify.

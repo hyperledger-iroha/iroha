@@ -4,21 +4,21 @@
 //! manifests, storing bytecode, and binding contract instances. Read APIs query the authenticated
 //! world-state view so callers never rely on process-local caches. This replaces the historical
 //! process-global map and ensures every node observes the same registry contents.
-use crate::{
-    smartcontracts::Execute,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::smartcontracts::Execute;
+use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly};
 use iroha_crypto::Hash;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::isi::smart_contract_code::{
+    ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
+};
 use iroha_data_model::{
     account::AccountId,
-    isi::smart_contract_code::{
-        ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
-    },
     parameter::{CustomParameterId, Parameters},
     prelude::ValidationFail,
-    smart_contract::manifest::{ContractManifest, EntryPointKind},
     smart_contract::{
         ContractAddress, ContractAlias, ContractLifecycleControlV1, ContractLifecycleOwnerV1,
+        manifest::{ContractManifest, EntryPointKind},
     },
 };
 use iroha_model_base::{name::Name, state_path::StatePath};
@@ -679,6 +679,7 @@ pub struct ContractCodeRecord {
     /// Optional compiled bytecode bytes (entire `.to` image).
     pub code_bytes: Option<Vec<u8>>,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Register a smart contract manifest on-chain via the canonical ISI.
 ///
 /// Any registered authority may publish an exact artifact manifest signed by its own key.
@@ -705,6 +706,7 @@ pub fn register_manifest(
     RegisterSmartContractCode { manifest }.execute(authority, state_transaction)?;
     Ok(())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Register compiled contract bytecode on-chain and return its `code_hash`.
 ///
 /// The helper verifies the self-describing `CNTR` artifact, uses its canonical
@@ -726,6 +728,7 @@ pub fn register_code_bytes(
     RegisterSmartContractBytes { code_hash, code }.execute(authority, state_transaction)?;
     Ok(code_hash)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Bind `contract_address` to a `code_hash` at an exact lifecycle revision.
 ///
 /// The address must already have a retained lifecycle record owned by

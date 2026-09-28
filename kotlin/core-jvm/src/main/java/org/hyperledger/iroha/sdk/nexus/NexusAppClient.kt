@@ -160,7 +160,7 @@ class NexusAppClient @JvmOverloads constructor(
             timeToLiveMs = normalized.ttlMs,
             nonce = normalized.nonce,
             feePayment = normalized.feePayment,
-            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            admissionIntent = TransactionAdmissionIntent.ORDINARY,
             metadata = normalized.metadata.mapValues { JsonValue.string(it.value) },
         )
         val payloadBytes = codecAdapter.encodeTransaction(payload)

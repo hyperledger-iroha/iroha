@@ -28,7 +28,7 @@
         }
       },
       "admission_intent": {
-        "intent": "queue_plan_synced",
+        "intent": "ordinary",
         "value": null
       },
       "metadata": {}
@@ -63,7 +63,7 @@
         }
       },
       "admission_intent": {
-        "intent": "queue_plan_synced",
+        "intent": "ordinary",
         "value": null
       },
       "metadata": {}
@@ -98,7 +98,7 @@
         }
       },
       "admission_intent": {
-        "intent": "queue_plan_synced",
+        "intent": "ordinary",
         "value": null
       },
       "metadata": {}

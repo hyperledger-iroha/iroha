@@ -24,11 +24,9 @@ required-features = ["dev-tools"]
 
 [dependencies]
 iroha_model_base = { workspace = true, optional = true }
-blake3 = { workspace = true }
 blake2 = { version = "0.10.6", default-features = false }
 tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
 sha2 = { version = "0.10.9", default-features = false }
-bs58 = { version = "0.5.1", default-features = false, features = ["alloc"] }
 norito = { path = "../norito", default-features = false, features = ["base-codec"] }
 halo2curves = { workspace = true }
 iroha_crypto = { path = "../iroha_crypto", features = ["node-crypto"], default-features = false }

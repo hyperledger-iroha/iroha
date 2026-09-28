@@ -2066,9 +2066,6 @@ impl IVMHost for KotoTestHost {
     {
         self
     }
-    fn supports_concurrent_blocks(&self) -> bool {
-        self.inner.supports_concurrent_blocks()
-    }
     fn begin_tx(
         &mut self,
         declared: &crate::parallel::StateAccessSet,

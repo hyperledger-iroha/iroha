@@ -29,15 +29,14 @@ use sorafs_node::pop_credentials::PopRequestAuthorityV1;
 use sorafs_node::pop_credentials::pop_enrollment_recipient_public_key_digest_v1;
 use sorafs_node::pop_credentials::{
     POP_API_AUTHENTICATION_MAX_BYTES_V1, POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
-    POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1, POP_SERVICE_COLLECTION_MAX_V1,
-    POP_WALLET_DELIVERY_MAX_BYTES_V1, PopApprovalSignerV1, PopApprovalV1,
-    PopCommittedRegistryContextV1, PopCredentialApiActionV1, PopCredentialApiAuthenticator,
-    PopCredentialApiV1, PopCredentialService, PopCredentialServiceError,
-    PopCredentialServicePolicyV1, PopEnrollmentRecipientV1, PopEnrollmentStateV1,
-    PopEnrollmentStatusV1, PopFinalizedCursorV1, PopFinalizedRegistryProjectionV1,
-    PopFinalizedRegistryReader, PopIssuanceDraftV1, PopIssuerSigner, PopIssuerSigningPurposeV1,
-    PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1, PopRegistrySubmitter, PopWalletKeyWrapper,
-    PopWalletRecipientV1, PopWalletVault,
+    POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1, POP_SERVICE_COLLECTION_MAX_V1, PopApprovalSignerV1,
+    PopApprovalV1, PopCommittedRegistryContextV1, PopCredentialApiActionV1,
+    PopCredentialApiAuthenticator, PopCredentialApiV1, PopCredentialService,
+    PopCredentialServiceError, PopCredentialServicePolicyV1, PopEnrollmentRecipientV1,
+    PopEnrollmentStateV1, PopEnrollmentStatusV1, PopFinalizedCursorV1,
+    PopFinalizedRegistryProjectionV1, PopFinalizedRegistryReader, PopIssuanceDraftV1,
+    PopIssuerSigner, PopIssuerSigningPurposeV1, PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1,
+    PopRegistrySubmitter, PopWalletKeyWrapper, PopWalletRecipientV1, PopWalletVault,
 };
 use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
@@ -53,9 +52,6 @@ pub const POP_ENROLLMENT_REQUEST_MAX_BYTES_V1: usize =
 /// Maximum request envelope for membership proofs.
 pub const POP_PROOF_REQUEST_MAX_BYTES_V1: usize =
     canonical_base64_max_len(POP_MEMBERSHIP_PROOF_MAX_BYTES_V1) + 64 * 1024;
-/// Maximum response envelope for an encrypted wallet delivery.
-pub const POP_WALLET_DELIVERY_RESPONSE_MAX_BYTES_V1: usize =
-    canonical_base64_max_len(POP_WALLET_DELIVERY_MAX_BYTES_V1) + 8 * 1024;
 const POP_CANONICAL_DECODE_MAX_DEPTH_V1: usize = 64;
 const fn canonical_base64_max_len(decoded_len: usize) -> usize {
     decoded_len.div_ceil(3).saturating_mul(4)

@@ -27,8 +27,6 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 [dependencies]
 iroha_model_base = { workspace = true }
 axum = { workspace = true, features = ["http1", "tokio", "json"] }
-clap = { workspace = true, features = ["derive"] }
-eyre = { workspace = true }
 iroha_config = { path = "../iroha_config" }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["application-model"] }
 iroha_logger = { workspace = true }
@@ -44,7 +42,6 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-mu
 base64 = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
-time = { workspace = true }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["node-crypto"] }
 ed25519-dalek = "2.2.0"
 reqwest = { workspace = true, features = ["multipart", "rustls-tls", "stream"] }

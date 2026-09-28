@@ -1,7 +1,7 @@
 //! Structures, traits and impls related to *runtime* `Executor`s.
-#[cfg(any(feature = "transparent_api", feature = "ffi_import"))]
+#[cfg(feature = "transparent_api")]
 pub use self::model::*;
-#[cfg(not(any(feature = "transparent_api", feature = "ffi_import")))]
+#[cfg(not(feature = "transparent_api"))]
 pub use self::model::{
     ArtifactAbiHashMismatchInfo, ContractRejection, DecodedCodeSizeLimitInfo,
     DecodedInstructionLimitInfo, Executor, ExecutorDataModel, IvmAdmissionError,
@@ -39,7 +39,6 @@ mod model {
         IntoSchema,
     )]
     #[allow(clippy::multiple_inherent_impl)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     #[repr(transparent)]
     #[getset(get = "pub")]
     pub struct Executor {
@@ -73,7 +72,6 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[display("{self:?}")]
     #[getset(get = "pub")]
 
@@ -114,7 +112,6 @@ mod model {
         IntoSchema,
     )]
     #[ignore_extra_doc_attributes]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[derive(thiserror::Error, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::executor::model::ValidationFail")]
     pub enum ValidationFail {
@@ -168,9 +165,7 @@ mod model {
         IntoSchema,
     )]
     #[display("Seiyaku {contract} rejected with {error_type}::{name} ({code})")]
-    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
-    #[derive(norito::NoritoSchema)]
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::executor::model::ContractRejection")]
     pub struct ContractRejection {
         /// Canonical source-level contract identity embedded in the artifact.
@@ -437,9 +432,9 @@ mod model {
         /// ABI hash authenticated by the submitted artifact's CNTR section.
         pub actual: Hash,
     }
-    // Client builds that disable `transparent_api`/`ffi_import` skip re-exporting
-    // these detail structs (see conditional `pub use` above) while still allowing
-    // servers and FFI consumers to access the full metadata when needed.
+    // Client builds that disable `transparent_api` skip re-exporting these detail
+    // structs (see conditional `pub use` above) while still allowing servers to
+    // access the full metadata when needed.
 }
 // Unify conversions from query `FindError` into `ValidationFail` by wrapping it in
 // `QueryExecutionFail::Find`. This enables ergonomic `?` usage at call sites

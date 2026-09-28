@@ -4,7 +4,6 @@
 //! come from one StateView; absent registration-incarnation evidence is never synthesized.
 
 use super::*;
-use iroha_core::state::{StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _};
 use iroha_data_model::{asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
 use iroha_primitives::numeric::NumericSpec;
 

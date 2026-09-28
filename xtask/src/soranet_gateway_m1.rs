@@ -1,6 +1,7 @@
 //! SNNet-15M1 alpha bundle generator for the SoraGlobal Gateway CDN.
 //! Orchestrates PoP provisioning bundles, gateway/resolver baselines,
 //! federated ops packs, and billing dry-runs into a single evidence root.
+use crate::soranet_common::sanitize_label;
 use crate::{soranet_gateway, soranet_gateway_billing, soranet_gateway_ops, soranet_pop};
 use eyre::{Result, WrapErr, eyre};
 use norito::{
@@ -235,17 +236,6 @@ fn resolve_path(base: &Path, candidate: &Path) -> PathBuf {
     } else {
         base.join(candidate)
     }
-}
-fn sanitize_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_string()
 }
 fn summarize_path(path: &Path, root: &Path) -> String {
     match path.strip_prefix(root) {

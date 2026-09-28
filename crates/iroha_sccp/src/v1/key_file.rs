@@ -4,7 +4,8 @@
 //! `key_dir`, holding the headered Norito frame of
 //! `SccpBridgeKeyFileV1 { secret: [u8; 32], created_at_ms: u64 }`. This module owns the frame
 //! format, key generation from the OS CSPRNG, address derivation and signing; directory
-//! handling, modes and atomic writes belong to the attestor (`irohad`).
+//! handling, modes and atomic writes belong to the attestor (`irohad`). Key generation, signing
+//! and file-name parsing are compiled only for tests until that attestor consumes them.
 //!
 //! The secret is wiped when the value is dropped and never appears in `Debug` output. Wiping is
 //! best effort without `unsafe`: the bytes are overwritten behind an optimization barrier.
@@ -69,6 +70,7 @@ impl SccpBridgeKeyFileV1 {
     /// # Errors
     ///
     /// Returns [`KeyFileError::EntropyUnavailable`] when the OS RNG fails.
+    #[cfg(test)]
     pub fn generate(created_at_ms: u64) -> Result<Self, KeyFileError> {
         let secret = signature::fresh_entropy().map_err(|_| KeyFileError::EntropyUnavailable)?;
         Self::new(secret, created_at_ms)
@@ -118,6 +120,7 @@ impl SccpBridgeKeyFileV1 {
     /// # Errors
     ///
     /// See [`signature::sign_digest`].
+    #[cfg(test)]
     pub fn sign_digest(&self, digest: &[u8; 32]) -> Result<[u8; 65], SignatureError> {
         signature::sign_digest(&self.secret, digest)
     }
@@ -140,8 +143,7 @@ impl SccpBridgeKeyFileV1 {
     /// Returns [`KeyFileError::Decode`] for a malformed frame and
     /// [`KeyFileError::InvalidSecret`] for an invalid scalar.
     pub fn from_frame(bytes: &[u8]) -> Result<Self, KeyFileError> {
-        let decoded: Self =
-            norito::decode_from_bytes(bytes).map_err(|_| KeyFileError::Decode)?;
+        let decoded: Self = norito::decode_from_bytes(bytes).map_err(|_| KeyFileError::Decode)?;
         if signature::address_of_secret(&decoded.secret).is_err() {
             return Err(KeyFileError::InvalidSecret);
         }
@@ -175,6 +177,7 @@ pub fn key_file_name(address: &[u8; 20]) -> String {
 
 /// Parse `<address-hex>.key` back into an address; `None` for any other name.
 #[must_use]
+#[cfg(test)]
 pub fn parse_key_file_name(name: &str) -> Option<[u8; 20]> {
     let hex = name.strip_suffix(KEY_FILE_SUFFIX)?;
     if hex.len() != 40
@@ -274,7 +277,10 @@ mod tests {
         let key = SccpBridgeKeyFileV1::new(fixed_secret(), 9).unwrap();
         let debug = format!("{key:?}");
         assert!(debug.contains("<redacted>"));
-        let secret_hex: String = fixed_secret().iter().map(|byte| format!("{byte:02x}")).collect();
+        let secret_hex: String = fixed_secret()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         assert!(!debug.contains(&secret_hex));
         assert!(!debug.contains(&format!("{:?}", fixed_secret())));
         let frame_debug = format!("{:?}", key.to_frame().unwrap());

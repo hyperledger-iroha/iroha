@@ -239,15 +239,13 @@ fn validate_chunk_size(chunk: usize) -> Result<(), MerkleError> {
         Err(MerkleError::InvalidChunkSize { chunk })
     }
 }
-crate::ffi::ffi_item! {
-    /// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-    pub struct MerkleProof<T> {
-        /// Zero-based index of the leaf among all leaves.
-        leaf_index: u32,
-        /// List of missing nodes required to recompute the nodes leading from a leaf to the root.
-        audit_path: Vec<Option<HashOf<T>>>,
-    }
+/// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+pub struct MerkleProof<T> {
+    /// Zero-based index of the leaf among all leaves.
+    leaf_index: u32,
+    /// List of missing nodes required to recompute the nodes leading from a leaf to the root.
+    audit_path: Vec<Option<HashOf<T>>>,
 }
 /// Compact Merkle proof using a direction bitset and sibling nodes.
 ///

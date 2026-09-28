@@ -556,16 +556,25 @@ impl Worker {
         {
             return Err(BeaconError::Crypto);
         }
-        round
+        let fresh_partial = round
             .aggregator
             .accept_partial(message.partial)
             .map_err(|_| BeaconError::Crypto)?;
+        let had_local_frame = round.local_frame.is_some();
         round.authorized = true;
         // A valid contribution authorizes participation in this exact requested slot; a
         // malformed transport claim alone never causes local signing.
         let _ = self.sign_local();
         self.finalize();
-        self.broadcast();
+        if fresh_partial
+            || (!had_local_frame
+                && self
+                    .round
+                    .as_ref()
+                    .is_some_and(|round| round.local_frame.is_some()))
+        {
+            self.broadcast();
+        }
         Ok(())
     }
     fn finalize(&self) {
@@ -773,6 +782,8 @@ mod tests {
     fn current_partials_require_exact_parent_instance_and_authenticated_seat() {
         let fixture = fixture();
         let mut receiver = worker(&fixture, 0);
+        let network = Arc::new(CaptureNet::default());
+        receiver.net = network.clone();
         receiver.open(5).unwrap();
         let round = receiver.round.as_ref().unwrap();
         let partial = fixture.signers[1]
@@ -821,8 +832,14 @@ mod tests {
             .unwrap()
             .verify(&pulse)
             .unwrap();
+        let sent = network.0.lock().len();
         receiver.receive(&from, &encode(&message).unwrap()).unwrap();
         assert_eq!(result(&receiver), pulse);
+        assert_eq!(
+            network.0.lock().len(),
+            sent,
+            "duplicate shares cannot create broadcast echo loops"
+        );
         let mut trailing = encode(&message).unwrap().to_vec();
         trailing.push(0);
         assert!(decode(&trailing).is_err());
