@@ -1617,8 +1617,8 @@ KAGAMI_STAGES += (("signed genesis identity publication and custody", (
 )),)
 
 STAGES += (("parliament seating retains exact genesis replacement authority", (
-    "taira_parliament_seating::tests::seat_parliament_seats_a_generated_network_once",
-    "taira_parliament_seating::tests::resign_identity_requires_one_canonical_line",
+    "taira::parliament_seating::tests::seat_parliament_seats_a_generated_network_once",
+    "taira::parliament_seating::tests::resign_identity_requires_one_canonical_line",
 )),)
 
 KAGAMI_STAGES += (("typed public beacon history candidates and explicit proof limits", (
@@ -4347,6 +4347,77 @@ def require_network_fixture_capacity(directory: Path) -> None:
             f"for bounded storage and scratch space; {available} available at {directory}")
 
 
+def validate_cli_seating_test_registration(root: Path, selections, mask) -> None:
+    """Bind the seating suite through its explicit CLI module route before Cargo.
+
+    This covers one maintained flat suite, like the MV registration guard; it
+    does not infer arbitrary Rust module trees or replace the native inventory.
+    """
+    selected = [name for harness, name in selections if harness == "cli"]
+    if not selected:
+        return
+    package = root / "crates/iroha_cli/src"
+    tests = package / "taira_parliament_seating_tests.rs"
+    if not tests.is_file():
+        if any("parliament_seating" in name for name in selected):
+            raise ValueError("CLI seating test source is absent")
+        return
+    test_source = mask(tests.read_text())
+    leaves = set()
+    for match in re.finditer(r'^#\[test\]\s*\nfn (\w+)\s*\(', test_source, re.MULTILINE):
+        before = test_source[:match.start()]
+        if before.count("{") == before.count("}"):
+            leaves.add(match.group(1))
+    owned = [name for name in selected if name.rsplit("::", 1)[-1] in leaves
+             or "parliament_seating" in name]
+    if not owned:
+        return
+    _, target, kind, arguments = HARNESS_TARGETS["cli"]
+    manifest = tomllib.loads((package.parent / "Cargo.toml").read_text())
+    binaries = [row for row in manifest.get("bin", []) if row.get("name") == "iroha"]
+    if (target != "iroha" or kind != "bin"
+            or arguments != ["-p", "iroha_cli", "--bin", "iroha"]
+            or manifest.get("package", {}).get("name") != "iroha_cli"
+            or len(binaries) != 1):
+        raise ValueError("CLI seating Cargo target registration differs")
+    path = binaries[0].get("path", "src/bin/iroha.rs")
+    if (not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts
+            or (package.parent / path).resolve() != (package / "bin/iroha.rs").resolve()):
+        raise ValueError("CLI seating Cargo target source differs")
+
+    def active_matches(relative, pattern):
+        text = (package / relative).read_text()
+        masked = mask(text)
+        return [match for match in re.finditer(pattern, text, re.MULTILINE)
+                if masked[match.start():match.start() + 2] == text[match.start():match.start() + 2]
+                and masked[:match.start()].count("{") == masked[:match.start()].count("}")]
+
+    includes = active_matches("bin/iroha.rs", r'^include!\("\.\./main_shared\.rs"\);$')
+    parent = mask((package / "main_shared.rs").read_text())
+    parents = list(re.finditer(r'^mod (taira);$', parent, re.MULTILINE))
+    if len(includes) != 1 or len(parents) != 1:
+        raise ValueError("CLI seating entrypoint module route differs")
+    before = parent[:parents[0].start()]
+    boundary = max(before.rfind(";"), before.rfind("}")) + 1
+    if before.count("{") != before.count("}") or before[boundary:].strip():
+        raise ValueError("CLI seating parent must use its unqualified default source path")
+
+    def alias(relative, child):
+        matches = active_matches(relative, r'^#\[path = "' + re.escape(child)
+                                 + r'"\]\s*\n(?:pub(?:\(crate\))? )?mod (\w+);')
+        if len(matches) != 1:
+            raise ValueError(f"CLI seating module route differs: {relative} -> {child}")
+        return matches[0].group(1)
+
+    prefix = "::".join((parents[0].group(1),
+                        alias("taira.rs", "taira_parliament_seating.rs"),
+                        alias("taira_parliament_seating.rs", "taira_parliament_seating_tests.rs")))
+    available = {prefix + "::" + leaf for leaf in leaves}
+    missing = [name for name in owned if name not in available]
+    if missing:
+        raise ValueError("CLI seating selector lacks its registered module route: " + ", ".join(missing))
+
+
 def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str, tuple]) -> None:
     """Reject absent selected test declarations in captured source before Cargo.
 
@@ -4370,6 +4441,8 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
         namespace = {"__name__": "taira_selected_source_text", "__file__": str(helper)}
         exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
         mask = namespace["mask_rust_comments"]
+        validate_cli_seating_test_registration(
+            root, [("cli", name) for _, names in scoped_stages.get("cli", ()) for name in names], mask)
         declarations = (
             re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*\("),
             re.compile(r"\b(?:state_test|routing_test)!\s*[({]\s*"
