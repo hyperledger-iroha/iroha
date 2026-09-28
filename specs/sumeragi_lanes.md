@@ -119,19 +119,21 @@ A lane member executes a lane block `B` at lane height `x` as follows; `Valid(R)
 2. Monotone anchors: `anchor_height ≥` the anchor of lane block `x − 1` (from its `R` preimage).
 3. The lane is active at the anchor: `active_from ≤ anchor_height` and not
    (`closing = Some(c)` with `anchor_height ≥ c`).
-4. Every transaction: canonical encoding, size and signature limits, chain id, not expired at the
-   anchor's block time, and **routes to this lane** under the committed routing state of the
-   anchor (§5.1).
-5. No transaction hash appears in lane blocks `x − W .. x − 1` or earlier in `B`
-   (`W = profile.dedup_window`, the preimages carry the hashes).
+4. Every transaction: canonical encoding, size and signature limits, chain id, and not expired at
+   the anchor block's creation time.
+5. No transaction hash appears earlier in `B` or in the lane's committed blocks that `G` has not
+   merged as of the anchor (the lane executor keeps these hashes from its committed results).
 
 `R_x = H("iroha/lane/result/v1" ‖ norito(LaneResult))` with
 `LaneResult { anchor_height, anchor_hash, tx_hashes, payload_bytes, next_committee_digest, next_params }`;
 `next_*` are the pinned constants (§2.3), so the core's lag-2 rule holds trivially.
 
-Admission is a pure function of the lane block and committed `G` state; it never reads or
-writes world state beyond the anchor's committed routing and catalog, so a lane cannot change
-state and every honest lane member computes the same `R_x`.
+Admission is a pure function of the lane block, the lane's own chain and permanent facts of `G`
+(the anchor block's hash and time, and this lane's record fields, which never change once set),
+so every honest lane member computes the same `R_x` whenever it executes. Admission never reads
+world state and never checks routing: routing is decided at merge (§4.3 step 3), where `G`'s
+state is the single authority, so a lane's result cannot depend on how recent a node's view of
+the lane set is.
 
 ## 4. Merging lanes into `G`
 
@@ -170,10 +172,12 @@ block (chain parameters), so a `G` block's execution stays within the execution 
    lane is closing with `c`, `anchor_height < c`. A violating block makes the `G` block `Invalid`.
 3. The transactions of the merged lane blocks are executed in order — lanes ascending, lane heights
    ascending, transactions in batch order — after lane 0's transactions, exactly as if they were
-   one ordered list in the `G` block. Each transaction's outcome (accepted / rejected with reason)
-   is committed in `R_h` like any other. Admission at the lane does not guarantee acceptance: a
-   transaction may fail at merge (state changed since the anchor), and is then rejected with a
-   fee as usual.
+   one ordered list in the `G` block. Before executing a merged transaction, execution evaluates
+   `route(tx, state before h)` (§5.1): a transaction whose route is not the lane that carried it,
+   or whose hash the chain already committed (possibly via another lane or lane 0), is rejected
+   as *misrouted* or *duplicate* with no effect and no fee. Every other transaction executes and
+   its outcome (accepted / rejected with reason, fees as usual) is committed in `R_h`. Admission
+   at the lane does not guarantee acceptance: state may have changed since the anchor.
 4. The lane records' `merged` frontiers advance to `to`, and the load samples of §6.1 are updated.
 
 **Parallel execution.** Step 3 fixes the *result*: the canonical serial order above. The executor
@@ -217,9 +221,9 @@ them and pruned with those `G` blocks.
 `route(tx, state) -> LaneId` uses only committed state: explicit routing rules (fixed lanes) first;
 otherwise the default route is sharded over lane 0 and the **active, non-closing** elastic lanes by
 `H(tx.authority) mod k` (authority-based sharding keeps one account's transactions in one lane,
-preserving their nonce order). A node routes new transactions with its latest applied `G` state;
-lanes validate routing at their anchor (§3.2 step 4). A transaction routed with a newer state than
-the lane's anchor may be refused and is re-routed.
+preserving their order). A node routes new transactions with its latest applied `G` state; `G`
+re-evaluates the route at merge (§4.3 step 3), so a transaction routed just before a lane opened
+or closed is rejected as misrouted without effect, stays pending in the queue and is re-routed.
 
 ### 5.2 Queue partitions
 
