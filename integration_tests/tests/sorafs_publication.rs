@@ -272,6 +272,7 @@ async fn refresh_network_adverts(
     network: &Network,
     authority: &PublicationAuthorityFixture,
 ) -> Result<()> {
+    timeout(wire::DEADLINE, async {
     for provider in 0..3 {
         let advert = authority.advert(provider, network.network_id(), now()?)?;
         for peer in network.peers().iter().take(3) {
@@ -291,7 +292,8 @@ async fn refresh_network_adverts(
             );
         }
     }
-    Ok(())
+    Ok::<_, eyre::Report>(())
+    }).await?
 }
 
 /// Build an actual network and return only after all three production workers finalize completion.

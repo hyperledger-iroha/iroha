@@ -27,6 +27,10 @@ use sorafs_manifest::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// Advertisement delivery, task submission, and terminal repair observation each have the
+// transport helper's finite deadline. A source must remain discoverable for all three phases.
+const ADVERT_VALIDITY_SECS: u64 = 3 * super::sorafs_publication_http::DEADLINE.as_secs();
+
 /// Independent test custody and networkless admission inputs for the actual provider network.
 pub(super) struct PublicationAuthorityFixture {
     council_key: KeyPair,
@@ -171,16 +175,23 @@ impl PublicationAuthorityFixture {
             .materials
             .get(index)
             .ok_or_else(|| eyre::eyre!("provider index"))?;
+        let expires_at = now
+            .checked_add(ADVERT_VALIDITY_SECS)
+            .ok_or_else(|| eyre::eyre!("advert validity overflow"))?;
         ensure!(
-            now >= material.issued_at && now + 60 < material.retention_epoch,
-            "advert must be within admission validity"
+            now >= material.issued_at
+                && expires_at < material.retention_epoch
+                && material.proposal.endpoints.iter().all(|endpoint| {
+                    expires_at <= endpoint.attestation.expires_at
+                }),
+            "advert operation window must fit within admission and endpoint validity"
         );
         let key = &self.advert_keys[index];
         let mut advert = ProviderAdvertV1 {
             version: 1,
             network_id: *network.as_bytes(),
             issued_at: now,
-            expires_at: now + 60,
+            expires_at,
             body: material.advert_body.clone(),
             signature: AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,

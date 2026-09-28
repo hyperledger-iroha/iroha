@@ -2,13 +2,13 @@
 //! All transitions are submitted as signed transactions; there is no direct certificate/state setup.
 use super::*;
 
-pub(super) struct EnactedFixture {
-    pub(super) attempt_id: GovernanceAttemptId,
-    pub(super) height: u64,
-    pub(super) logical_beacon: BeaconSessionId,
+pub(crate) struct EnactedFixture {
+    pub(crate) attempt_id: GovernanceAttemptId,
+    pub(crate) height: u64,
+    pub(crate) logical_beacon: BeaconSessionId,
 }
 
-pub(super) fn builder(builder: NetworkBuilder) -> NetworkBuilder {
+pub(crate) fn builder(builder: NetworkBuilder) -> NetworkBuilder {
     let citizens = citizen_accounts(&citizen_keys());
     let mut builder = builder
         .with_npos_consensus()
@@ -100,7 +100,7 @@ pub(super) fn builder(builder: NetworkBuilder) -> NetworkBuilder {
     builder
 }
 
-pub(super) async fn enact(
+pub(crate) async fn enact(
     network: &iroha_test_network::Network,
     proposal: ProposalKind,
     preliminary: Vec<InstructionBox>,

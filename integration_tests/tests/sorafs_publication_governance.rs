@@ -2,7 +2,7 @@
 //! Run explicitly with `parliament-test-signers`; the corridor signs genuine seven-body evidence.
 
 #[cfg(unix)]
-#[path = "sora_parliament_lifecycle_smoke.rs"]
+#[path = "sora_parliament_lifecycle_support.rs"]
 mod parliament;
 #[cfg(unix)]
 #[path = "sorafs_network.rs"]

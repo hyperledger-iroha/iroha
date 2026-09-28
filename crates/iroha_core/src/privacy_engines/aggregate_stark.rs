@@ -6284,6 +6284,7 @@ mod retained_polynomial_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
     use rand::{SeedableRng as _, rngs::StdRng};
     pub(super) const PARAMETERS: AggregateStarkParametersV1 = AggregateStarkParametersV1 {
         proof_magic: *b"AGG1",
