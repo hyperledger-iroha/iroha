@@ -84,21 +84,23 @@ fn bench_aesenc_cuda_batch(c: &mut Criterion) {
     for (i, state) in states.iter_mut().enumerate().take(blocks) {
         state[0] = (i & 0xff) as u8;
     }
+    let mut out = vec![[0; 16]; blocks];
     c.bench_function("aesenc_cuda_batch_round", |b| {
         b.iter(|| {
-            let out =
-                ivm::aesenc_batch_cuda(std::hint::black_box(&states), std::hint::black_box(rk))
-                    .expect("cuda batch");
-            std::hint::black_box(out)
+            assert!(ivm::aesenc_batch_cuda_into(
+                std::hint::black_box(&states),
+                std::hint::black_box(rk),
+                &mut out
+            ));
+            std::hint::black_box(&out);
         })
     });
     c.bench_function("aesenc_cpu_loop_round", |b| {
         b.iter(|| {
-            let out: Vec<[u8; 16]> = states
-                .iter()
-                .map(|&s| ivm::aesenc_impl(std::hint::black_box(s), std::hint::black_box(rk)))
-                .collect();
-            std::hint::black_box(out)
+            for (state, output) in states.iter().zip(out.iter_mut()) {
+                *output = ivm::aesenc_impl(std::hint::black_box(*state), std::hint::black_box(rk));
+            }
+            std::hint::black_box(&out);
         })
     });
 }
@@ -114,21 +116,25 @@ fn bench_aesdec_cuda_batch(c: &mut Criterion) {
         state[0] = (i & 0xff) as u8;
     }
     // Pre-encode once via CUDA to simulate decode input
-    let enc = ivm::aesenc_batch_cuda(&states, rk).expect("cuda batch enc");
+    let mut enc = vec![[0; 16]; blocks];
+    assert!(ivm::aesenc_batch_cuda_into(&states, rk, &mut enc));
+    let mut out = vec![[0; 16]; blocks];
     c.bench_function("aesdec_cuda_batch_round", |b| {
         b.iter(|| {
-            let out = ivm::aesdec_batch_cuda(std::hint::black_box(&enc), std::hint::black_box(rk))
-                .expect("cuda batch");
-            std::hint::black_box(out)
+            assert!(ivm::aesdec_batch_cuda_into(
+                std::hint::black_box(&enc),
+                std::hint::black_box(rk),
+                &mut out
+            ));
+            std::hint::black_box(&out);
         })
     });
     c.bench_function("aesdec_cpu_loop_round", |b| {
         b.iter(|| {
-            let out: Vec<[u8; 16]> = enc
-                .iter()
-                .map(|&s| ivm::aesdec_impl(std::hint::black_box(s), std::hint::black_box(rk)))
-                .collect();
-            std::hint::black_box(out)
+            for (state, output) in enc.iter().zip(out.iter_mut()) {
+                *output = ivm::aesdec_impl(std::hint::black_box(*state), std::hint::black_box(rk));
+            }
+            std::hint::black_box(&out);
         })
     });
 }

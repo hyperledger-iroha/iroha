@@ -33,6 +33,7 @@ impl Core {
             let signed = verify_proposal_signature(
                 &*self.crypto,
                 &self.instance,
+                &self.cfg.epoch.id,
                 &self.cfg.committee,
                 leader,
                 &p,
@@ -40,7 +41,14 @@ impl Core {
             .is_ok();
             #[cfg(sumeragi_mutation = "MS18")]
             let signed = {
-                let msg = crate::preimage::prop_preimage(&self.instance, self.height, w, &bh, &ad);
+                let msg = crate::preimage::prop_preimage(
+                    &self.instance,
+                    &self.cfg.epoch.id,
+                    self.height,
+                    w,
+                    &bh,
+                    &ad,
+                );
                 p.instance == self.instance
                     && self.cfg.committee.get(leader).is_some()
                     && (self.cfg.committee.members().iter())
@@ -157,6 +165,13 @@ impl Core {
         let checks = [
             (header.instance != self.instance, Defect::HeaderInstance),
             (header.height != self.height, Defect::HeaderHeight),
+            (header.epoch != self.cfg.epoch.id, Defect::EpochContext),
+            (
+                self.height == self.cfg.epoch.last_height
+                    && !header.attest
+                    && !cfg!(sumeragi_mutation = "MS45"),
+                Defect::BoundaryAttestation,
+            ),
             (
                 header.parent_hash != self.tip.block_hash && !cfg!(sumeragi_mutation = "MS19"),
                 Defect::ParentHash,

@@ -19,6 +19,7 @@ kotodama_lang = { path = "../kotodama_lang" }
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 
 [dev-dependencies]
+mv = { workspace = true }
 base64 = { workspace = true, features = ["alloc"] }
 hex = { workspace = true, features = ["alloc"] }
 

@@ -249,7 +249,7 @@ fn build_onboarding_test_context_at(
         &nexus.governance,
         &nexus.registry,
     ));
-    state.install_lane_manifests(&lane_manifests);
+    state.install_lane_manifests_for_testing(&lane_manifests);
     let mut genesis_instructions: Vec<iroha_data_model::prelude::InstructionBox> =
         vec![Log::new(Level::INFO, "onboarding anchor".to_owned()).into()];
     for key_pair in &validator_keys {
@@ -335,7 +335,7 @@ fn build_onboarding_test_context_at(
         iroha_config::parameters::actual::Queue::default(),
         events_sender,
     ));
-    queue.install_lane_manifests_with_state(&lane_manifests, &state);
+    queue.install_lane_manifests_with_state_for_testing(&lane_manifests, &state);
     // Embedded SoraFS checkpoint stores intentionally fail fast when any writer is opening in
     // this process. Keep distinct fixture roots, but serialize only their short initialization.
     let init_guard = ONBOARDING_TORII_INIT_LOCK

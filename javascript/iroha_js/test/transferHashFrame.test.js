@@ -35,7 +35,7 @@ assert.deepEqual(envelope(), canonicalEnvelope);
 
 test('transfer-only hashing rejects execution-sized payloads before parsing their contents', () => {
   assert.throws(
-    () => _browserSignedTransferTransactionHashHex(envelope(Buffer.alloc(1024 * 1024 + 1))),
+    () => _browserSignedTransferTransactionHashHex(envelope(Buffer.alloc(1024 * 1024 + 1)), 753),
     (error) => {
       assert.ok(error instanceof BrowserTransactionCodecError);
       assert.equal(error.code, 'bounds_exceeded');
@@ -59,7 +59,7 @@ for (const [label, value, code] of [
   test(`transfer-only and general hash reject ${label} at the shared frame boundary`, () => {
     let originalError;
     for (const hash of [browserSignedTransactionHashHex, _browserSignedTransferTransactionHashHex]) {
-      assert.throws(() => hash(value), error => {
+      assert.throws(() => hash(value, 753), error => {
         assert.ok(error instanceof BrowserTransactionCodecError);
         assert.ok(error instanceof TypeError);
         assert.equal(error.code, code);

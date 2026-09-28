@@ -143,7 +143,7 @@ impl StateBlock<'_> {
             .try_reserve(admission.budget())
             .map_err(MergeLedgerCommitError::NativeResourceAdmission)?;
         let mut producer =
-            ExecutionOutputProducer::new(self, source, Some(host)).map_err(invalid)?;
+            ExecutionOutputProducer::new(self, source, Some(host)).map_err(native_attempt_error)?;
         // Start-hook settlement belongs to the carrier, never the first native
         // input. An error poisons and drops this whole unpublished overlay.
         let start_settlement = std::mem::take(&mut producer.state.settlement_accumulator);
@@ -157,9 +157,13 @@ impl StateBlock<'_> {
         producer.state.settlement_accumulator = start_settlement;
         let result = finish_native(producer.state, executions);
         let result = native_output_result(producer.state, result)?;
-        let pipeline = producer.execute_pipeline_outputs().map_err(invalid);
+        let pipeline = producer
+            .execute_pipeline_outputs()
+            .map_err(native_attempt_error);
         native_output_result(producer.state, pipeline)?;
-        let time = producer.execute_scheduled_time_outputs().map_err(invalid);
+        let time = producer
+            .execute_scheduled_time_outputs()
+            .map_err(native_attempt_error);
         native_output_result(producer.state, time)?;
         producer.state.require_storage_admission()?;
         producer.finish().map_err(invalid)?;
@@ -259,7 +263,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .ok_or_else(|| invalid("native group lost its coordinator route".into()))?;
             let disposition = self
                 .execute_network_source(index, &mut ivm_cache)
-                .map_err(invalid)?;
+                .map_err(native_attempt_error)?;
             let stateless_accepted = disposition.stateless_accepted;
             let authenticated_signed_replay_alias = disposition.authenticated_signed_replay_alias;
             let ExecutionOutputV1::Network(output) = &self.rows[index] else {
@@ -461,5 +465,39 @@ mod local_refusal_tests {
             Err(MergeLedgerCommitError::StateStorageAdmission(error)) if error == expected
         ));
         drop(occupied);
+    }
+}
+
+/// Preserve local refusal at the native carrier boundary, before settlement.
+pub(super) fn native_attempt_error(error: ExecutionAttemptError<String>) -> MergeLedgerCommitError {
+    match error {
+        ExecutionAttemptError::Rejected(reason) => {
+            MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+        }
+        ExecutionAttemptError::Deferred(reason) => {
+            MergeLedgerCommitError::ExecutionDeferred(reason)
+        }
+    }
+}
+
+#[cfg(test)]
+mod local_attempt_tests {
+    use super::*;
+
+    #[test]
+    fn native_output_boundary_preserves_local_refusal_provenance() {
+        for reason in [
+            ivm::error::ExecutionDeferral::AllocationUnavailable,
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+        ] {
+            assert!(
+                matches!(native_attempt_error(ExecutionAttemptError::Deferred(reason.into())),
+                MergeLedgerCommitError::ExecutionDeferred(actual) if actual.reason() == reason)
+            );
+        }
+        assert!(
+            matches!(native_attempt_error(ExecutionAttemptError::Rejected("invalid source".into())),
+            MergeLedgerCommitError::ExecutionBatchInvalid(reason) if reason == "invalid source")
+        );
     }
 }

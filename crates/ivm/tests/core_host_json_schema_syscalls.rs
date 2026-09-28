@@ -9,7 +9,8 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-    EmbeddedStateType, IVM, PointerType, ProgramMetadata, encoding, instruction::wide, syscalls,
+    EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, encoding, instruction::wide,
+    syscalls,
 };
 mod common;
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -32,6 +33,7 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
 }
 fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
     EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: "DirectMapKeyFixture".to_owned(),
         compiler_fingerprint: "ivm-integration-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -65,21 +67,15 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
         error_types: Vec::new(),
     }
 }
-fn assemble_state_map_syscall(number: u32, name: &str, key: EmbeddedStateType) -> Vec<u8> {
+fn assemble_state_map_schema(name: &str, key: EmbeddedStateType) -> Vec<u8> {
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&state_map_interface(name, key).encode_section());
-    program.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            u8::try_from(number).expect("fixture syscall fits compact encoding"),
-        )
-        .to_le_bytes(),
-    );
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
     program
 }
-fn assemble_state_map_syscall_with_literals(
-    number: u32,
+fn assemble_state_map_schema_with_literals(
     name: &str,
     key: EmbeddedStateType,
     literals: &[&[u8]],
@@ -123,14 +119,9 @@ fn assemble_state_map_syscall_with_literals(
     }
     program.extend_from_slice(&data);
     program.extend(std::iter::repeat_n(0, post_pad));
-    program.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            u8::try_from(number).expect("fixture syscall fits compact encoding"),
-        )
-        .to_le_bytes(),
-    );
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
     let literal_ptrs = offsets
         .into_iter()
         .map(|offset| {
@@ -735,11 +726,7 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     let base_tlv = tlv(PointerType::Name, b"entries");
     let key_payload = tlv(PointerType::Blob, b"canonical key bytes");
     let key_tlv = tlv(PointerType::NoritoBytes, &key_payload);
-    let canonical_prog = assemble_state_map_syscall(
-        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
-        "entries",
-        EmbeddedStateType::Bytes,
-    );
+    let canonical_prog = assemble_state_map_schema("entries", EmbeddedStateType::Bytes);
     let expected_path = format!("entries/{}", hex::encode(&key_payload));
     let decode_path = |vm: &IVM| {
         let tlv = vm
@@ -752,25 +739,26 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
         assert_eq!(path.as_ref(), expected_path);
     };
     let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
+    let mut host = CoreHost::new();
     let p_base = vm.alloc_input_tlv(&base_tlv).expect("alloc input base");
     let p_key = vm.alloc_input_tlv(&key_tlv).expect("alloc input key");
     vm.set_register(10, p_base);
     vm.set_register(11, p_key);
     vm.load_program(&canonical_prog).unwrap();
-    vm.run().unwrap();
+    host.syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &mut vm)
+        .unwrap();
     decode_path(&vm);
     let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
+    let mut host = CoreHost::new();
     vm.load_program(&canonical_prog).unwrap();
     let p_base = alloc_heap_tlv(&mut vm, &base_tlv);
     let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
     vm.set_register(10, p_base);
     vm.set_register(11, p_key);
-    vm.run().unwrap();
+    host.syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &mut vm)
+        .unwrap();
     decode_path(&vm);
-    let (literal_prog, literal_ptrs) = assemble_state_map_syscall_with_literals(
-        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
+    let (literal_prog, literal_ptrs) = assemble_state_map_schema_with_literals(
         "entries",
         EmbeddedStateType::Bytes,
         &[base_tlv.as_slice(), key_tlv.as_slice()],
@@ -778,11 +766,12 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     let base_addr = literal_ptrs[0];
     let key_addr = literal_ptrs[1];
     let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
+    let mut host = CoreHost::new();
     vm.load_program(&literal_prog).unwrap();
     vm.set_register(10, base_addr);
     vm.set_register(11, key_addr);
-    vm.run().unwrap();
+    host.syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &mut vm)
+        .unwrap();
     decode_path(&vm);
 }
 #[test]

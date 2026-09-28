@@ -49,13 +49,13 @@ impl<K: Key, V: Value, M: WorldStorageMode<K, V>> FieldShells for Storage<K, V, 
     }
 }
 
-impl<V: Value> FieldShells for Cell<V> {
+impl<V: Value, C: Send + Sync + 'static> FieldShells for Cell<V, C> {
     fn retained_layout() -> Layout {
-        Layout::new::<RetainedCell<V>>()
+        Layout::new::<RetainedCell<V, C>>()
     }
 
     fn prepared_layout() -> Layout {
-        publication::cell_shell_layout::<V>()
+        publication::cell_shell_layout::<V, C>()
     }
 }
 

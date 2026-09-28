@@ -37,7 +37,7 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        '02077b99802e3ccefc22b4e58e46513b88fadf3c8a4fb236ecf114d42f2d6f04',
+        '82794eccde6d14ea18ba5c40f06d559e1ffb1c9fb10882a734e0703a12fe600d',
         (
             AssetSpec('001.ko', '0c9adc69818f257e8f29ea98f7dd576fc5afdb801030f3413c11056086d491a2', 228, True),
             AssetSpec('002.ko', '4b32085d63144de5a6d19634490994a0fadca60737bab8dfb5ef361d1ebd7135', 311, True),
@@ -115,7 +115,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_name_map_runtime.rs',
-        '9aaab2323ce5a05f987364aa17679766484e861c4032fcd5d1959ff275944716',
+        '758a0262ea3a21cb774f731c665a3a2485c99f258e45c3224046101cc36214e6',
         (
             AssetSpec('001.ko', 'c0d59dd29744c70955b883227fdd3d48e50bbabe387a71b85a62cc2feea227d3', 269, True),
             AssetSpec('002.ko', '5a82559e5cba3e2df840615c6385f3931602c3e9494bee83f3328c47e442e5ff', 396, True),
@@ -150,7 +150,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        'f3a84d80c4607ee21d8b59902a7f848ee6e88ebd00aef2b16e528f9086c62d2c',
+        'df53249b485038a33317acc31e76c6aebce5d5f78ac0867a330e226919838b59',
         (
             AssetSpec('001.ko', 'b224232a52b7ed477fc6573e7f7c0804a493b104c26f5e61d3232497e13e4950', 316, False),
             AssetSpec('002.ko', '301483b79eb9279a9c84bda840ef3e601bcb283c7c50143922cf28498b4aea2b', 606, False),
@@ -171,7 +171,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_lists.rs',
-        'a0ace51a68895a17ff986061528a1a95a3a8dd1386b944ab6ed9843380bb4f77',
+        '974038d6d58408be851e1fd604fddf177d43acd03ba09a35ecfbfbb9a71ef414',
         (
             AssetSpec('001.ko', 'eefd96e03bd7bd00aaa6da1aefa41385f86bcf702f60e4c949de1e905f3a0fac', 575, True),
             AssetSpec('002.ko', '06544f9c17080965311c0537d02d2d8f97b34b20a14183cc08a476fca66da4b8', 412, True),
@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/src/koto_test_driver_tests.rs',
-        'f23b28ae78de8aaed2244f872e5ccfd0b8f817713b4fb6cafa436801d984b06d',
+        'abc50a2b4752fc6b71f6712f706ea5e9edb1f9f8454cc0e2735e442b613bb388',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -231,7 +231,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs',
-        '65af9350557a584b846de68ad39e7a464f759b291db5d08227383173f0c86fc6',
+        '37f877c3a0fab35c908b1d31f34a233d442bf2e30e9d563db0a455c1ea57099c',
         (
             AssetSpec('001.ko', 'dee9b111e29ae18bfa974545eda20c3accf2420bfb2596de4dfce17e38d51cd8', 2978, True),
             AssetSpec('002.ko', 'fa16878159bb06bcc92bab63c9b955c4a15cb71f1571e56e5b095b168851d61b', 1454, True),
@@ -246,7 +246,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_scalar.rs',
-        'e1ae85ff9384ef55f063f3af15df6d347ab4015b510006be428ecc797906fe19',
+        '541f30d4efe9ec2c3911d5e5fcaeafda7717a11dba226ad9e71255c5bd285d6c',
         (
             AssetSpec('001.ko', '378b20a6b02c767716a13c52402a2e60f0755bf6d2d3ae1cc26bef854a24fe41', 198, True),
             AssetSpec('002.ko', '5ab0c326c77dffbec932ee230893a42207f8160499c70455fe198d2b20f19303', 755, True),
@@ -256,7 +256,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/resolved.rs',
-        '10c339775b1992ac4a752f06a1ac760aaccb1a6e1a0cc57723d21e88a856e0d5',
+        '8d641cd1b1efc1ab58a59ba8bc7e4187f80965949f10c792586635a7f1f0ba06',
         (
             AssetSpec('001.ko', 'a15f6256b419624f839af6961586120b08958cb3886b9f7a51671471b7a85e88', 176, False),
             AssetSpec('002.ko', 'fbdce614e48b118614c6817b2ec40eaa3719125c19ec72fe332acd0d5c0e8577', 249, False),
@@ -288,11 +288,26 @@ SOURCES = (
 
 # These semantic anchors explain the reviewed Rust consumer changes instead
 # of allowing their skeleton seals to be advanced as opaque digest substitutions.
+# These are source contracts, not execution evidence. Table ABI and anchored AXT
+# runtime behavior are qualified by the corresponding Rust integration targets.
 SOURCE_REQUIRED_FRAGMENTS = {
     'crates/ivm/tests/kotodama.rs': (
+        b'vm.set_register(10, 0);',
+        b'vm.set_register(11, 0);',
+        b'vm.set_register(12, result);',
+        b'vm.set_register(13, 1);',
+        b'common::decode_i64_return_word(&vm, 0)',
+        b'fn retired_axt_handle_intrinsics_are_rejected()',
+        b'"asset_handle",',
+        b'"axt::use_asset_handle",',
+        b'.expect_err("retired AXT pointer operation is not in V1")',
         br'Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")',
     ),
     'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
+        b'vm.public_call_result_word(index)',
+        b'common::decode_i64_return_word(&vm, 6 + index)',
+        b'.try_runtime_template()',
+        b'.expect("runtime template allocation fits test host")',
         b'fn native_json_literal_and_dynamic_options_preserve_identical_tags()',
         b'"maybe": { "some": "1.25" },',
         b'"present": { "some": null },',
@@ -317,8 +332,16 @@ SOURCE_REQUIRED_FRAGMENTS = {
 }
 SOURCE_FORBIDDEN_FRAGMENTS = {
     'crates/ivm/tests/kotodama.rs': (
+        b'__entrypoint_impl__',
+        b'decode_i64_register(',
+        b'axt::AssetHandle {',
         b'ParsedAccountId',
         br'Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")',
+    ),
+    'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
+        b'decode_i64_register(',
+        b'vm.register(10',
+        b'.runtime_template()',
     ),
     'crates/ivm/tests/kotodama_lists.rs': (
         b'{{"operation":"{operation}","index":"{index}"}}',
@@ -470,8 +493,44 @@ def _validate_checkout() -> None:
 class KotodamaFixtureAssetSourceGuard(unittest.TestCase):
     """Keep extraction semantics and mutation failures explicit."""
 
-    def test_checkout_matches_preimage(self) -> None:
+    def test_checkout_matches_reviewed_current_sources(self) -> None:
         _validate_checkout()
+
+    def test_reviewed_source_contract_mutations_fail_before_digest_checks(self) -> None:
+        by_path = {source.path: source for source in SOURCES}
+        for path, fragments in SOURCE_REQUIRED_FRAGMENTS.items():
+            source = by_path[path]
+            data = (ROOT / path).read_bytes()
+            for fragment in fragments:
+                with self.subTest(path=path, fragment=fragment):
+                    self.assertIn(fragment, data)
+                    with self.assertRaisesRegex(GuardFailure, "required reviewed source contract"):
+                        _normalize_source(source, data.replace(fragment, b"removed source contract"))
+        for path, fragments in SOURCE_FORBIDDEN_FRAGMENTS.items():
+            source = by_path[path]
+            data = (ROOT / path).read_bytes()
+            for fragment in fragments:
+                with self.subTest(path=path, retired=fragment):
+                    self.assertNotIn(fragment, data)
+                    with self.assertRaisesRegex(GuardFailure, "stale source contract"):
+                        _normalize_source(source, data + b"\n" + fragment)
+
+    def test_include_ownership_and_projection_mutations_fail_closed(self) -> None:
+        source = SOURCES[0]
+        data = (ROOT / source.path).read_bytes()
+        match = next(_INCLUDE_RE.finditer(data))
+        include = match.group(0)
+        changed = include.replace(match.group("path"), b"../fixtures/koto_v1/foreign/001.ko")
+        with self.assertRaisesRegex(GuardFailure, "include path drift"):
+            _normalize_source(source, data[:match.start()] + changed + data[match.end():])
+        with self.assertRaisesRegex(GuardFailure, "fixture includes"):
+            _normalize_source(source, data + b"\n" + include)
+        # The current matrix owns sentinel removal through CaseSource::Fixture.
+        # Changing that owner must fail before the ordinary skeleton fingerprint.
+        self.assertIn(b"CaseSource::Fixture(", data)
+        changed = data.replace(b"CaseSource::Fixture(", b"CaseSource::Inline(", 1)
+        with self.assertRaisesRegex(GuardFailure, "sentinel projection drift"):
+            _normalize_source(source, changed)
 
     def test_payload_mutation_fails_closed(self) -> None:
         source = SOURCES[0]

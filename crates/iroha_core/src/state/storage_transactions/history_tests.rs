@@ -637,3 +637,38 @@ fn original_identity_retirement_observer_is_lazy_and_never_retains_its_owner() {
     assert!(first.upgrade().is_none());
     assert!(second.upgrade().is_none());
 }
+
+#[test]
+fn attached_publication_busy_retry_retains_original_cursor_charge_and_release_sources() {
+    let storage = owner();
+    commit(&storage, 1, &[key(1), key(2)], false);
+    let mut pending = Some(storage.prepare_next_block(false).unwrap());
+    let mut block = storage.attach_prepared(&mut pending).unwrap();
+    block.insert_block([key(3)].into_iter().collect(), height(2));
+    let mut field = TransactionsBlockField::new(block);
+    field.try_prepare_publication().unwrap();
+    let reserved = storage.budget.reserved_bytes();
+    for _ in 0..3 {
+        let blocker = storage.released.guard(storage.blocks.acquire_writer());
+        let Err(TransactionsBlockError::MembershipAdmission(MembershipAdmissionError::Busy(_))) =
+            field.try_prepare_physical()
+        else {
+            panic!("actual original history writer must refuse physical admission");
+        };
+        field.release_physical_for_retry();
+        assert_eq!(storage.budget.reserved_bytes(), reserved);
+        assert_eq!(storage.latest_height(), 1);
+        drop(blocker);
+    }
+    field.try_prepare_physical().unwrap();
+    // Recover a successfully acquired prefix too: no normal retry may leave it locked.
+    field.release_physical_for_retry();
+    assert!(storage.blocks.try_acquire_writer().is_some());
+    assert_eq!(storage.budget.reserved_bytes(), reserved);
+    field.try_prepare_physical().unwrap();
+    field.publish_prepared();
+    drop(field);
+    assert_eq!(storage.latest_height(), 2);
+    assert_eq!(storage.view().get(&key(1)), Some(height(1)));
+    assert_eq!(storage.view().get(&key(3)), Some(height(2)));
+}

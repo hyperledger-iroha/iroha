@@ -9,8 +9,8 @@ fn bindings(f: &fixture::Fixture) -> Vec<HeightInputBinding> {
         .iter()
         .map(|height| HeightInputBinding {
             height: height.block.header().height().get(),
-            finality_hash: Hash::new(norito::encode_canonical(&height.proof).unwrap()),
-            contexts_hash: Hash::new(&height.evidence),
+            carrier_hash: Hash::new(height.block.encode_wire().unwrap()),
+            lane_evidence_hash: Hash::new(&height.evidence),
             query_hashes: height.queries().iter().map(Hash::new).collect(),
         })
         .collect()
@@ -36,25 +36,19 @@ fn roundtrip_preserves_every_independent_fact_and_actual_signed_request() {
         let bytes = frame(&f);
         let (decoded, limits, actual) = decode_frame(&bytes).unwrap().into_parts();
         assert_eq!(decoded.network_id, original.network_id);
-        assert_eq!(decoded.first_context, original.first_context);
+        assert_eq!(
+            decoded.genesis_epoch_context_id,
+            original.genesis_epoch_context_id
+        );
+        assert_eq!(decoded.chain_id, original.chain_id);
         assert_eq!(decoded.first_height, original.first_height);
         assert_eq!(decoded.last_height, original.last_height);
-        assert_eq!(
-            decoded.nexus_amx_context_hash,
-            original.nexus_amx_context_hash
-        );
-        assert_eq!(
-            decoded.execution_policy_hash,
-            original.execution_policy_hash
-        );
+        assert_eq!(decoded.lane_policy, original.lane_policy);
         assert_eq!(
             norito::encode_canonical(&decoded.active_lanes).unwrap(),
             norito::encode_canonical(&original.active_lanes).unwrap()
         );
-        assert_eq!(
-            norito::encode_canonical(&decoded.lane_authorities).unwrap(),
-            norito::encode_canonical(&original.lane_authorities).unwrap()
-        );
+
         assert_eq!(decoded.scheduled.len(), original.scheduled.len());
         assert!(!decoded.scheduled.is_empty());
         for (got, expected) in decoded.scheduled.iter().zip(&original.scheduled) {
@@ -67,8 +61,8 @@ fn roundtrip_preserves_every_independent_fact_and_actual_signed_request() {
         assert_eq!(actual.len(), expected.len());
         for (got, expected) in actual.iter().zip(expected) {
             assert_eq!(got.height, expected.height);
-            assert_eq!(got.finality_hash, expected.finality_hash);
-            assert_eq!(got.contexts_hash, expected.contexts_hash);
+            assert_eq!(got.carrier_hash, expected.carrier_hash);
+            assert_eq!(got.lane_evidence_hash, expected.lane_evidence_hash);
             assert_eq!(got.query_hashes, expected.query_hashes);
         }
         assert_eq!(

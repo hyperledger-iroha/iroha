@@ -1,6 +1,8 @@
 //! Support types for SM2/SM3/SM4 primitives.
 #[cfg(feature = "sm-ffi-openssl")]
 pub use self::openssl_sm::{OpenSslSmBackend, OpenSslSmError};
+pub(crate) mod verification;
+
 use crate::Algorithm;
 use crate::{
     Error, ParseError,
@@ -19,7 +21,7 @@ use signature::Signer;
 use sm2::{
     PublicKey as Sm2EcPublicKey, SecretKey,
     dsa::{Signature as Sm2RawSignature, SigningKey, VerifyingKey},
-    elliptic_curve::sec1::{Coordinates, ToEncodedPoint},
+    elliptic_curve::sec1::ToEncodedPoint,
     pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
 };
 use sm3::digest::Digest as _;
@@ -41,13 +43,9 @@ const SM2_PRIVATE_KEY_LEN: usize = 32;
 const SM2_PUBLIC_KEY_UNCOMPRESSED_LEN: usize = 65;
 const SM2_RANDOM_KEY_ATTEMPTS: usize = 1024;
 fn validate_distid(distid: &str) -> Result<(), ParseError> {
-    let bit_len = distid
-        .len()
-        .checked_mul(8)
-        .ok_or_else(|| ParseError("SM2 distinguishing identifier length overflowed".into()))?;
-    u16::try_from(bit_len)
-        .map_err(|_| ParseError("SM2 distinguishing identifier exceeds 65535 bits".into()))?;
-    Ok(())
+    verification::identity_bits(distid)
+        .map(drop)
+        .map_err(verification::KeyRejection::into_parse_error)
 }
 fn distid_len_prefix(distid: &str) -> Result<[u8; SM2_DISTID_LEN_BYTES], ParseError> {
     validate_distid(distid)?;
@@ -55,27 +53,8 @@ fn distid_len_prefix(distid: &str) -> Result<[u8; SM2_DISTID_LEN_BYTES], ParseEr
         .map_err(|_| ParseError("SM2 distinguishing identifier length exceeds u16".into()))?;
     Ok(len.to_be_bytes())
 }
-fn split_sm2_payload(payload: &[u8]) -> Result<(String, &[u8]), ParseError> {
-    if payload.len() < SM2_DISTID_LEN_BYTES {
-        return Err(ParseError(
-            "SM2 payload missing distid length prefix".into(),
-        ));
-    }
-    let len_bytes: [u8; SM2_DISTID_LEN_BYTES] = payload[..SM2_DISTID_LEN_BYTES]
-        .try_into()
-        .map_err(|_| ParseError("SM2 payload missing distid length prefix".into()))?;
-    let distid_len = u16::from_be_bytes(len_bytes) as usize;
-    let expected = SM2_DISTID_LEN_BYTES
-        .checked_add(distid_len)
-        .ok_or_else(|| ParseError("SM2 distid length overflowed".into()))?;
-    if payload.len() < expected {
-        return Err(ParseError("SM2 payload truncated distid".into()));
-    }
-    let distid_bytes = &payload[SM2_DISTID_LEN_BYTES..expected];
-    let distid = std::str::from_utf8(distid_bytes)
-        .map_err(|_| ParseError("SM2 distid must be valid UTF-8".into()))?;
-    validate_distid(distid)?;
-    Ok((distid.to_owned(), &payload[expected..]))
+fn split_sm2_payload(payload: &[u8]) -> Result<(&str, &[u8]), ParseError> {
+    verification::split_payload(payload).map_err(verification::KeyRejection::into_parse_error)
 }
 #[cfg(feature = "sm-ffi-openssl")]
 fn map_openssl_sm_error(context: &str, err: OpenSslSmError) -> Error {
@@ -99,12 +78,6 @@ fn map_openssl_sm_error(context: &str, err: OpenSslSmError) -> Error {
         OpenSslSmError::InvalidCcmNonceLength(len) => Error::Other(format!(
             "{context}: invalid SM4 CCM nonce length {len} (expected between 7 and 13 bytes)"
         )),
-        OpenSslSmError::InvalidPublicKey(message) | OpenSslSmError::InvalidDistid(message) => {
-            Error::Parse(ParseError(format!("{context}: {message}")))
-        }
-        OpenSslSmError::Sm2NotImplemented => {
-            Error::Other(format!("{context}: SM2 unavailable from OpenSSL provider"))
-        }
         OpenSslSmError::Sm4GcmNotImplemented => Error::Other(format!(
             "{context}: SM4 GCM unavailable from OpenSSL provider"
         )),
@@ -218,18 +191,9 @@ impl Sm2PublicKey {
     /// Returns [`ParseError`] when the provided bytes are not a valid SM2 point.
     pub fn from_sec1_bytes(distid: impl AsRef<str>, bytes: &[u8]) -> Result<Self, ParseError> {
         let distid = distid.as_ref();
-        validate_distid(distid)?;
-        if !bytes.is_empty() && bytes.iter().all(|byte| *byte == 0) {
-            return Err(ParseError(
-                "invalid SM2 public key: all-zero SEC1 payload".to_owned(),
-            ));
-        }
-        if sec1_uncompressed_public_key_has_zero_coordinate_material(bytes) {
-            return Err(ParseError(
-                "invalid SM2 public key: all-zero SEC1 coordinate payload".to_owned(),
-            ));
-        }
-        VerifyingKey::from_sec1_bytes(distid, bytes)
+        let point = verification::parse_point(distid, bytes)
+            .map_err(verification::KeyRejection::into_parse_error)?;
+        VerifyingKey::new(distid, point)
             .map(Self)
             .map_err(|_| ParseError("invalid SM2 public key".to_owned()))
     }
@@ -311,26 +275,25 @@ impl Sm2PublicKey {
     ///
     /// # Errors
     /// Returns [`Error::BadSignature`] when verification fails.
+    /// The canonical SM2 relation is independent of optional OpenSSL SM3/SM4 acceleration.
     pub fn verify(&self, message: &[u8], signature: &Sm2Signature) -> Result<(), Error> {
-        use signature::Verifier;
-        #[cfg(feature = "sm-ffi-openssl")]
-        {
-            let pk_bytes = self.to_sec1_bytes(false);
-            match OpenSslSmBackend::sm2_verify(&pk_bytes, self.0.distid(), message, signature) {
-                Ok(true) => return Ok(()),
-                Ok(false) => return Err(Error::BadSignature),
-                Err(
-                    OpenSslSmError::Sm2NotImplemented
-                    | OpenSslSmError::Sm4GcmNotImplemented
-                    | OpenSslSmError::PreviewDisabled,
-                ) => {}
-                Err(err) => return Err(map_openssl_sm_error("OpenSSL SM2 verify", err)),
-            }
-        }
-        let sig = signature.as_sm2().map_err(|_| Error::BadSignature)?;
-        self.0
-            .verify(message, &sig)
-            .map_err(|_| Error::BadSignature)
+        let identity_hash = verification::identity_hash(self.distid(), self.0.as_affine())
+            .map_err(|_| Error::BadSignature)?;
+        verification::verify(
+            self.0.as_affine(),
+            &identity_hash,
+            message,
+            &signature.as_bytes(),
+        )
+    }
+
+    pub(crate) fn into_compact(self) -> Result<crate::PublicKey, ParseError> {
+        let encoded = self.0.to_encoded_point(false);
+        let payload = encode_sm2_public_key_payload(self.distid(), encoded.as_bytes())?;
+        Ok(crate::PublicKey(crate::PublicKeyCompact::new(
+            Algorithm::Sm2,
+            &payload,
+        )))
     }
     /// Borrow the inner SM2 verifying key.
     pub fn as_inner(&self) -> &VerifyingKey {
@@ -344,43 +307,14 @@ impl Sm2PublicKey {
     /// Returns [`ParseError`] when the distinguishing identifier length exceeds `u16::MAX` bits or the public key
     /// cannot be represented as an uncompressed SEC1 point.
     pub fn compute_z(&self, distid: &str) -> Result<[u8; 32], ParseError> {
-        let entla_bits = distid
-            .len()
-            .checked_mul(8)
-            .ok_or_else(|| ParseError("SM2 distinguishing identifier length overflowed".into()))?;
-        let entla = u16::try_from(entla_bits)
-            .map_err(|_| ParseError("SM2 distinguishing identifier exceeds 65535 bits".into()))?;
-        let mut hasher = sm3::Sm3::new();
-        hasher.update(entla.to_be_bytes());
-        hasher.update(distid.as_bytes());
-        hasher.update(SM2_EQUATION_A_BYTES);
-        hasher.update(SM2_EQUATION_B_BYTES);
-        hasher.update(SM2_GENERATOR_X_BYTES);
-        hasher.update(SM2_GENERATOR_Y_BYTES);
-        let encoded = self.0.as_affine().to_encoded_point(false);
-        match encoded.coordinates() {
-            Coordinates::Uncompressed { x, y } => {
-                hasher.update(x);
-                hasher.update(y);
-                let digest = hasher.finalize();
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&digest);
-                Ok(out)
-            }
-            _ => Err(ParseError(
-                "SM2 public key must be encoded as an uncompressed SEC1 point".into(),
-            )),
-        }
+        verification::identity_hash(distid, self.0.as_affine())
+            .map_err(verification::KeyRejection::into_parse_error)
     }
-}
-fn sec1_uncompressed_public_key_has_zero_coordinate_material(bytes: &[u8]) -> bool {
-    bytes.len() == SM2_PUBLIC_KEY_UNCOMPRESSED_LEN
-        && bytes.first() == Some(&0x04)
-        && bytes[1..].iter().all(|byte| *byte == 0)
 }
 impl PartialEq for Sm2PublicKey {
     fn eq(&self, other: &Self) -> bool {
-        self.distid() == other.distid() && self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
+        self.distid() == other.distid()
+            && self.0.to_encoded_point(false) == other.0.to_encoded_point(false)
     }
 }
 impl Eq for Sm2PublicKey {}
@@ -636,8 +570,8 @@ pub fn decode_sm2_public_key_payload(payload: &[u8]) -> Result<Sm2PublicKey, Par
             "SM2 public key payload must be {SM2_PUBLIC_KEY_UNCOMPRESSED_LEN} bytes"
         )));
     }
-    let key = Sm2PublicKey::from_sec1_bytes(&distid, rest)?;
-    if key.to_sec1_bytes(false) != rest {
+    let key = Sm2PublicKey::from_sec1_bytes(distid, rest)?;
+    if key.0.to_encoded_point(false).as_bytes() != rest {
         return Err(ParseError("non-canonical SM2 public key encoding".into()));
     }
     Ok(key)
@@ -837,9 +771,6 @@ impl Sm2Signature {
         raw[..32].copy_from_slice(&r);
         raw[32..].copy_from_slice(&s);
         Self::from_bytes(&raw)
-    }
-    fn as_sm2(&self) -> Result<Sm2RawSignature, signature::Error> {
-        Sm2RawSignature::from_bytes(&self.as_bytes())
     }
 }
 impl From<Sm2RawSignature> for Sm2Signature {
@@ -1883,11 +1814,7 @@ impl Sm4Key {
             plaintext,
         ) {
             Ok(result) => return Ok(result),
-            Err(
-                OpenSslSmError::Sm2NotImplemented
-                | OpenSslSmError::Sm4GcmNotImplemented
-                | OpenSslSmError::PreviewDisabled,
-            ) => {}
+            Err(OpenSslSmError::Sm4GcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
             Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-GCM encrypt", err)),
         }
         let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
@@ -1921,11 +1848,7 @@ impl Sm4Key {
             tag,
         ) {
             Ok(result) => return Ok(result),
-            Err(
-                OpenSslSmError::Sm2NotImplemented
-                | OpenSslSmError::Sm4GcmNotImplemented
-                | OpenSslSmError::PreviewDisabled,
-            ) => {}
+            Err(OpenSslSmError::Sm4GcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
             Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-GCM decrypt", err)),
         }
         let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
@@ -2304,9 +2227,7 @@ pub mod openssl_provider {
     #[cfg(ossl300)]
     use openssl::cipher::Cipher;
     use openssl::{
-        ec::EcGroup,
         hash::{Hasher, MessageDigest},
-        nid::Nid,
         version,
     };
     use std::sync::{
@@ -2339,7 +2260,7 @@ pub mod openssl_provider {
         /// Attempt to load the OpenSSL-backed provider.
         ///
         /// The loader enforces the preview guard and validates that the linked OpenSSL build
-        /// exposes the SM3 digest, SM2 group, and (when available) the SM4-GCM cipher before
+        /// exposes the SM3 digest and (when available) the SM4-GCM cipher before
         /// returning success. Deployments lacking these capabilities surface `NotImplemented`
         /// so callers can fall back to the pure-Rust implementation.
         ///
@@ -2357,7 +2278,6 @@ pub mod openssl_provider {
                 ));
             }
             Hasher::new(MessageDigest::sm3()).map_err(|_| OpenSslProviderError::NotImplemented)?;
-            EcGroup::from_curve_name(Nid::SM2).map_err(|_| OpenSslProviderError::NotImplemented)?;
             #[cfg(ossl300)]
             {
                 let cipher = Cipher::fetch(None, "SM4-GCM", None)
@@ -2455,18 +2375,13 @@ pub use openssl_provider::{OpenSslProvider, OpenSslProviderError};
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview OpenSSL-backed implementations for SM primitives.
 pub mod openssl_sm {
-    use super::{OpenSslProvider, Sm2Signature, Sm3Digest};
+    use super::{OpenSslProvider, Sm3Digest};
     use openssl::{
-        bn::BigNumContext,
         cipher::{Cipher, CipherRef},
         cipher_ctx::CipherCtx,
-        ec::{EcGroup, EcKey, EcPoint},
-        ecdsa::EcdsaSig,
         error::ErrorStack,
         hash::{Hasher, MessageDigest},
-        nid::Nid,
     };
-    use sm3::Digest;
     use thiserror::Error;
     /// Errors returned by the preview OpenSSL SM backend.
     #[derive(Debug, Error)]
@@ -2474,18 +2389,9 @@ pub mod openssl_sm {
         /// Wrapper for lower-level OpenSSL failures.
         #[error("OpenSSL error: {0}")]
         OpenSsl(#[from] ErrorStack),
-        /// Raised when the preview flag or environment toggle is disabled.
+        /// Raised when the configured preview flag is disabled.
         #[error("OpenSSL SM provider preview is disabled")]
         PreviewDisabled,
-        /// Indicates that the provided SM2 public key is invalid or unsupported.
-        #[error("invalid SM2 public key: {0}")]
-        InvalidPublicKey(String),
-        /// Indicates that the provided distinguishing identifier cannot be encoded.
-        #[error("invalid SM2 distinguishing identifier: {0}")]
-        InvalidDistid(String),
-        /// Indicates that the linked OpenSSL build does not provide SM2 primitives.
-        #[error("SM2 verification via OpenSSL is unavailable")]
-        Sm2NotImplemented,
         /// Indicates that the linked OpenSSL build does not provide SM4-GCM.
         #[error("SM4 GCM via OpenSSL is unavailable")]
         Sm4GcmNotImplemented,
@@ -2717,57 +2623,6 @@ pub mod openssl_sm {
             ctx.cipher_update_vec(ciphertext, &mut plaintext)?;
             Ok(plaintext)
         }
-        /// Verify SM2 signatures via OpenSSL when preview support is enabled.
-        ///
-        /// # Errors
-        ///
-        /// Returns `Err` if preview support is disabled or OpenSSL fails to verify the signature.
-        pub fn sm2_verify(
-            public_key_sec1: &[u8],
-            distid: &str,
-            message: &[u8],
-            signature: &Sm2Signature,
-        ) -> Result<bool, OpenSslSmError> {
-            if !OpenSslProvider::is_enabled() {
-                return Err(OpenSslSmError::PreviewDisabled);
-            }
-            let sm_public = match super::Sm2PublicKey::from_sec1_bytes(distid, public_key_sec1) {
-                Ok(public) => public,
-                Err(crate::ParseError(message)) => {
-                    if message == "invalid SM2 public key" {
-                        return Err(OpenSslSmError::Sm2NotImplemented);
-                    }
-                    return Err(OpenSslSmError::InvalidPublicKey(message));
-                }
-            };
-            let group = match EcGroup::from_curve_name(Nid::SM2) {
-                Ok(group) => group,
-                Err(_) => return Err(OpenSslSmError::Sm2NotImplemented),
-            };
-            let mut ctx = BigNumContext::new()?;
-            let point = match EcPoint::from_bytes(&group, public_key_sec1, &mut ctx) {
-                Ok(point) => point,
-                Err(_) => return Err(OpenSslSmError::Sm2NotImplemented),
-            };
-            let ec_key = match EcKey::from_public_key(&group, &point) {
-                Ok(key) => key,
-                Err(_) => return Err(OpenSslSmError::Sm2NotImplemented),
-            };
-            let za = sm_public
-                .compute_z(distid)
-                .map_err(|crate::ParseError(message)| OpenSslSmError::InvalidDistid(message))?;
-            let mut hasher = sm3::Sm3::new();
-            hasher.update(za);
-            hasher.update(message);
-            let digest = hasher.finalize();
-            let mut digest_bytes = [0u8; Sm3Digest::LENGTH];
-            digest_bytes.copy_from_slice(&digest);
-            let der = signature
-                .try_as_der()
-                .map_err(|crate::ParseError(message)| OpenSslSmError::InvalidPublicKey(message))?;
-            let openssl_sig = EcdsaSig::from_der(&der)?;
-            Ok(openssl_sig.verify(&digest_bytes, &ec_key)?)
-        }
     }
 }
 #[cfg(test)]
@@ -2776,7 +2631,7 @@ mod tests {
     use hex::decode as hex_decode;
     use rand_core::{OsRng, TryCryptoRng, TryRngCore};
     use signature::hazmat::PrehashVerifier;
-    use sm2::elliptic_curve::sec1::{Coordinates, ToEncodedPoint};
+    use sm2::elliptic_curve::sec1::ToEncodedPoint;
     use sm3::Sm3;
     use std::str::FromStr;
     const ANNEX_SIG_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
@@ -2872,10 +2727,6 @@ mod tests {
     #[test]
     fn openssl_sm4_ccm_error_mapping_describes_ccm_lengths() {
         assert_eq!(
-            map_openssl_sm_error("OpenSSL SM2 verify", OpenSslSmError::Sm2NotImplemented),
-            Error::Other("OpenSSL SM2 verify: SM2 unavailable from OpenSSL provider".into())
-        );
-        assert_eq!(
             map_openssl_sm_error(
                 "OpenSSL SM4-CCM encrypt",
                 OpenSslSmError::InvalidCcmTagLength(5),
@@ -2950,7 +2801,8 @@ mod tests {
         hasher.update(SM2_GENERATOR_X_BYTES);
         hasher.update(SM2_GENERATOR_Y_BYTES);
         let encoded = public.as_inner().as_affine().to_encoded_point(false);
-        let Coordinates::Uncompressed { x, y } = encoded.coordinates() else {
+        let sm2::elliptic_curve::sec1::Coordinates::Uncompressed { x, y } = encoded.coordinates()
+        else {
             panic!("SM2 public key must encode as uncompressed SEC1 point");
         };
         hasher.update(x);
@@ -3078,7 +2930,8 @@ mod tests {
         let za = public.compute_z(distid).expect("compute ZA");
         let message = b"za alignment check";
         let signature = private.sign(message);
-        let raw_signature = signature.as_sm2().expect("convert to raw signature");
+        let raw_signature =
+            Sm2RawSignature::from_bytes(&signature.as_bytes()).expect("convert to raw signature");
         let mut sm3 = Sm3::new();
         sm3.update(za);
         sm3.update(message);
@@ -3601,3 +3454,11 @@ mod tests {
         assert!(Sm2Signature::from_der(&der).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "sm2_verification_tests.rs"]
+mod sm2_verification_tests;
+
+#[cfg(test)]
+#[path = "sm2_payload_tests.rs"]
+mod sm2_payload_tests;

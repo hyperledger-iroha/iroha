@@ -64,7 +64,7 @@ fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topol
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
     stx.world
         .parameters
@@ -121,7 +121,7 @@ fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topol
 fn candidate_rejects_other_authority_tampered_consent_and_invalid_pop() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, intruder, _, _) = prepare_accounts(&mut stx);
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::new(42));
@@ -147,7 +147,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
     let (validator, delegator, escrow, definition, nexus) = {
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);
         let nexus = stx.nexus.clone();
         stx.apply();
@@ -156,7 +156,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(peer_key.public_key().clone());
     {
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         stx.nexus = nexus.clone();
         let lane = LaneId::new(42);
         let candidate = signed_candidate(&stx, &validator, &peer_key, 1_000, lane);
@@ -193,7 +193,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
         ));
         // A rejected multi-instruction transaction drops its entire StateTransaction.
     }
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     stx.nexus = nexus;
     assert!(!stx.world.peers.iter().any(|id| id == &peer));
     assert!(
@@ -228,7 +228,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
 fn activation_requires_validator_authority_after_genesis() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, intruder, _, _) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
     RegisterPublicLaneValidator::new(
@@ -258,7 +258,7 @@ fn activation_requires_validator_authority_after_genesis() {
 fn registered_participant_peer_requires_consent_even_for_the_validator_owner() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(peer_key.public_key().clone());
@@ -297,7 +297,7 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
     RegisterPublicLaneValidator::new(
@@ -404,8 +404,15 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
 fn global_candidate_without_authenticated_schedule_fails_before_any_write() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
-    let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
+    let (validator, escrow, definition, nexus) = {
+        let mut stx = block.transaction_for_callback_testing();
+        let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
+        let nexus = stx.nexus.clone();
+        stx.apply();
+        (validator, escrow, definition, nexus)
+    };
+    let mut stx = block.transaction_for_callback_testing();
+    stx.nexus = nexus.clone();
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let mut candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::new(42));
     candidate.registration.lane_id = LaneId::SINGLE;
@@ -420,11 +427,15 @@ fn global_candidate_without_authenticated_schedule_fails_before_any_write() {
     let error = candidate
         .execute(&validator, &mut stx)
         .expect_err("global admission needs the exact committed finality anchor");
-    assert!(
-        error
-            .to_string()
-            .contains("authenticated incumbent finality")
-    );
+    assert!(matches!(
+        error,
+        Error::InvariantViolation(message)
+            if message.as_ref() == "height 0 is not committed in this view"
+    ));
+    // Reject the actual transaction, then inspect the independent next overlay.
+    drop(stx);
+    let mut stx = block.transaction_for_callback_testing();
+    stx.nexus = nexus;
     assert!(
         !stx.world
             .peers
@@ -455,7 +466,7 @@ fn global_candidate_without_authenticated_schedule_fails_before_any_write() {
 fn candidate_requires_committed_schedule_and_rejects_expired_tenure_consent() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::new(42));
@@ -494,7 +505,7 @@ fn candidate_requires_committed_schedule_and_rejects_expired_tenure_consent() {
 fn participant_binding_does_not_enter_global_pool_even_with_validator_key() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
     stx.commit_topology
         .get_mut()
@@ -542,7 +553,7 @@ fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
     stx.nexus.staking.min_validator_stake = 1000_u64.into();
@@ -593,11 +604,24 @@ fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
     unbond(&validator, 1000_u64, "participant-self-unbond-a")
         .execute(&validator, &mut stx)
         .expect("owner may schedule a slashable withdrawal");
-    let error = unbond(&validator, 1000_u64, "participant-self-unbond-b")
+    unbond(&validator, 1000_u64, "participant-self-unbond-b")
         .execute(&validator, &mut stx)
-        .expect_err("self withdrawal below minimum changes global eligibility");
-    assert!(error.to_string().contains("prepared epoch key transition"));
-    BondPublicLaneStake {
+        .expect(
+            "a participant may schedule the rest of its self stake while custody stays reserved",
+        );
+    let nexus = stx.nexus.clone();
+    let delegator_asset = AssetId::new(definition.clone(), delegator.clone());
+    let delegator_before = stx
+        .world
+        .assets
+        .get(&delegator_asset)
+        .unwrap()
+        .as_ref()
+        .clone();
+    stx.apply();
+    let mut stx = block.transaction_for_callback_testing();
+    stx.nexus = nexus.clone();
+    let error = BondPublicLaneStake {
         monetary_plan: fixture_bond_plan(
             &stx,
             lane_id,
@@ -612,7 +636,19 @@ fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
         metadata: Metadata::default(),
     }
     .execute(&delegator, &mut stx)
-    .expect("delegation does not change global seat selection");
+    .expect_err("an exit request rejects new stake even in a participant lane");
+    assert!(matches!(
+        error,
+        Error::InvariantViolation(message) if message.contains("does not accept new stake")
+    ));
+    // Drop the rejected transaction; all existing withdrawal liabilities survive.
+    drop(stx);
+    let mut stx = block.transaction_for_callback_testing();
+    stx.nexus = nexus;
+    assert_eq!(
+        stx.world.assets.get(&delegator_asset).unwrap().as_ref(),
+        &delegator_before
+    );
     unbond(&delegator, 100_u64, "global-safe-delegator-unbond")
         .execute(&delegator, &mut stx)
         .expect("delegator may schedule a slashable withdrawal");
@@ -650,7 +686,7 @@ fn self_bond_restores_minimum_without_rewriting_candidate_identity() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
     RegisterPublicLaneValidator::new(
@@ -711,7 +747,7 @@ fn self_bond_restores_minimum_without_rewriting_candidate_identity() {
 fn frozen_global_binding_allows_requests_but_rejects_tenure_or_peer_rewrites() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, delegator, _, _) = prepare_accounts(&mut stx);
     let original = PublicLaneValidatorRecord {
         lane_id: LaneId::SINGLE,

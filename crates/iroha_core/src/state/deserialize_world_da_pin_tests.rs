@@ -75,7 +75,14 @@ fn restore(world: &World) -> Result<World, json::Error> {
         ivm: &ivm,
         _marker: PhantomData,
     };
-    parse_world(SnapshotJsonMap::parse(&encoded, "world")?, &seed)
+    parse_world(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
+        SnapshotJsonMap::parse(&encoded, "world")?,
+        &seed,
+    )
+    .map_err(crate::state::deserialize::snapshot_format_error_for_test)
 }
 
 fn maps(world: &World) -> [String; 4] {
@@ -144,9 +151,16 @@ fn every_pin_map_is_a_required_first_release_snapshot_field() {
             map.remove(name).is_some(),
             "serialized schema must include {name}"
         );
-        let error = parse_world(map, &seed)
-            .err()
-            .expect("missing canonical map must fail");
+        let error = parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            map,
+            &seed,
+        )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+        .err()
+        .expect("missing canonical map must fail");
         assert!(error.to_string().contains(name), "{error}");
     }
 }

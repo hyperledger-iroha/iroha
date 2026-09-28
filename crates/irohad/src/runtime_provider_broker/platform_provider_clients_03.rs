@@ -2841,6 +2841,7 @@ impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBr
                 session: session.record().clone(),
                 height: slot.height,
                 finalized_chain_anchor: slot.finalized_chain_anchor,
+                context: slot.context,
             };
             let request_payload = encode_canonical(&request, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)?;
             let result = provider_call!(

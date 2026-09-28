@@ -62,24 +62,25 @@ fn deterministic_metadata_preparation_matches_existing_apply_without_publication
     let state = state();
     let carrier = carrier();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    for authority in [
-        ApplyTopologyAuthority::V2Finality,
-        ApplyTopologyAuthority::Fixture,
-    ] {
+    {
         let prepared_bytes = {
             let mut prepared = state.block(carrier.header());
             let events_before = prepared.world.external_event_buf.len();
             prepared
-                .prepare_deterministic_carrier_metadata(&carrier, topology(), authority.clone())
+                .prepare_deterministic_carrier_metadata(&carrier, topology())
                 .unwrap();
             assert_eq!(prepared.world.external_event_buf.len(), events_before);
             assert_eq!(prepared.block_hashes.last(), Some(&carrier.hash()));
             assert_eq!(prepared.world.musubi_resolver_index_checkpoints.len(), 1);
-            assert_eq!(prepared.commit_topology.len(), 4);
-            assert!(
-                prepared
-                    .canonical_carrier_commit_metadata_authorization
-                    .is_none()
+            assert_eq!(
+                prepared.commit_topology.iter().cloned().collect::<Vec<_>>(),
+                topology()
+            );
+            assert!(prepared.prev_commit_topology.is_empty());
+            assert!(prepared.pending_autoscale_lifecycle.is_none());
+            assert_eq!(
+                prepared.world.sumeragi_lanes(),
+                state.world.sumeragi_lanes.view().get()
             );
             crate::snapshot::canonical_staged_state_snapshot_bytes(&prepared)
         };
@@ -89,8 +90,7 @@ fn deterministic_metadata_preparation_matches_existing_apply_without_publication
             .commit_unchecked()
             .unpack(|_| {});
         let mut applied = state.block(carrier.header());
-        let (events, result) =
-            applied.apply_without_execution_inner(&committed, topology(), authority);
+        let (events, result) = applied.apply_without_execution_inner(&committed, topology());
         result.unwrap();
         assert!(
             !events.is_empty(),
@@ -121,11 +121,7 @@ fn deterministic_metadata_preparation_keeps_npos_rejection_before_writes() {
     let before = crate::snapshot::canonical_staged_state_snapshot_bytes(&prepared);
     assert!(
         prepared
-            .prepare_deterministic_carrier_metadata(
-                &carrier,
-                topology(),
-                ApplyTopologyAuthority::V2Finality,
-            )
+            .prepare_deterministic_carrier_metadata(&carrier, topology(),)
             .is_err()
     );
     assert_eq!(
@@ -145,11 +141,7 @@ fn deterministic_metadata_preparation_cannot_resolve_output_publication_guard() 
         .reserve_ordinary_execution_outputs(&carrier)
         .unwrap();
     prepared
-        .prepare_deterministic_carrier_metadata(
-            &carrier,
-            topology(),
-            ApplyTopologyAuthority::V2Finality,
-        )
+        .prepare_deterministic_carrier_metadata(&carrier, topology())
         .unwrap();
     assert!(matches!(
         prepared.execution_output_plan.as_ref(),
@@ -178,11 +170,7 @@ fn malformed_or_foreign_metadata_is_rejected_before_any_staged_write() {
         let before = crate::snapshot::canonical_staged_state_snapshot_bytes(&scope);
         assert!(
             scope
-                .prepare_deterministic_carrier_metadata(
-                    &source,
-                    topology(),
-                    ApplyTopologyAuthority::V2Finality
-                )
+                .prepare_deterministic_carrier_metadata(&source, topology(),)
                 .is_err()
         );
         assert_eq!(
@@ -202,19 +190,11 @@ fn prepared_carrier_cannot_append_its_hash_twice() {
     let source = carrier();
     let mut scope = state.block(source.header());
     scope
-        .prepare_deterministic_carrier_metadata(
-            &source,
-            topology(),
-            ApplyTopologyAuthority::V2Finality,
-        )
+        .prepare_deterministic_carrier_metadata(&source, topology())
         .unwrap();
     let before = crate::snapshot::canonical_staged_state_snapshot_bytes(&scope);
     let error = scope
-        .prepare_deterministic_carrier_metadata(
-            &source,
-            topology(),
-            ApplyTopologyAuthority::V2Finality,
-        )
+        .prepare_deterministic_carrier_metadata(&source, topology())
         .unwrap_err();
     assert!(error.to_string().contains("exact State predecessor"));
     assert_eq!(

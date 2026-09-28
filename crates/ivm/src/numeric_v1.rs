@@ -11,6 +11,7 @@ use crate::{
     syscalls,
 };
 use core::cmp::Ordering;
+use iroha_primitives::numeric_int::{IntBinaryOperation, IntUnaryOperation};
 use iroha_primitives::{
     bigint::{BigInt, BigIntError},
     numeric::{
@@ -73,6 +74,7 @@ fn numeric_fault(error: NumericOperationError) -> Result<NumericFaultV1, VMError
         NumericOperationError::InexactConversion => NumericFaultV1::InexactConversion,
         NumericOperationError::NegativeQuantity => NumericFaultV1::NegativeQuantity,
         NumericOperationError::QuantityUnderflow => NumericFaultV1::QuantityUnderflow,
+        NumericOperationError::NegativeSquareRoot => NumericFaultV1::NegativeSquareRoot,
         NumericOperationError::NonCanonical => {
             return Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical));
         }
@@ -175,6 +177,7 @@ fn observe_work(vm: &mut IVM, step: NumericWorkStep) -> Result<(), VMError> {
         NumericWorkStep::ScaleByPowerOfTen { .. }
         | NumericWorkStep::Materialize { .. }
         | NumericWorkStep::Negate { .. }
+        | NumericWorkStep::Compare { .. }
         | NumericWorkStep::Add { .. }
         | NumericWorkStep::Subtract { .. }
         | NumericWorkStep::Multiply { .. }
@@ -359,6 +362,40 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 } else {
                     publish_decimal(vm, &value)?;
                 }
+            }
+        }
+        syscalls::SYSCALL_INT_ISQRT | syscalls::SYSCALL_INT_ABS => {
+            let value = decode_int_register(vm, 10)?;
+            let mode = failure_mode(vm, &[11, 12, 13])?;
+            let operation = if number == syscalls::SYSCALL_INT_ISQRT {
+                IntUnaryOperation::Isqrt
+            } else {
+                IntUnaryOperation::Abs
+            };
+            let result = operation.evaluate_observed(&value, &mut |step| observe_work(vm, step));
+            if let Some(result) = resolve_observed(vm, mode, result)? {
+                publish_int(vm, &result)?;
+            }
+        }
+        syscalls::SYSCALL_INT_MIN
+        | syscalls::SYSCALL_INT_MAX
+        | syscalls::SYSCALL_INT_DIV_CEIL
+        | syscalls::SYSCALL_INT_GCD
+        | syscalls::SYSCALL_INT_MEAN => {
+            let lhs = decode_int_register(vm, 10)?;
+            let rhs = decode_int_register(vm, 11)?;
+            let mode = failure_mode(vm, &[12, 13])?;
+            let operation = match number {
+                syscalls::SYSCALL_INT_MIN => IntBinaryOperation::Min,
+                syscalls::SYSCALL_INT_MAX => IntBinaryOperation::Max,
+                syscalls::SYSCALL_INT_DIV_CEIL => IntBinaryOperation::DivCeil,
+                syscalls::SYSCALL_INT_GCD => IntBinaryOperation::Gcd,
+                _ => IntBinaryOperation::Mean,
+            };
+            let result =
+                operation.evaluate_observed(&lhs, &rhs, &mut |step| observe_work(vm, step));
+            if let Some(result) = resolve_observed(vm, mode, result)? {
+                publish_int(vm, &result)?;
             }
         }
         syscalls::SYSCALL_INT_FROM_I64 | syscalls::SYSCALL_INT_FROM_U64 => {

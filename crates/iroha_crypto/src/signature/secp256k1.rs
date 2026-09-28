@@ -1,4 +1,8 @@
+//! Secp256k1 signatures with one canonical public-key parser.
+
 use self::ecdsa_secp256k1::EcdsaSecp256k1Impl;
+mod public_key;
+
 use crate::{Error, KeyGenOption, ParseError};
 use std::{format, vec::Vec};
 /// ECDSA over secp256k1 with SHA-256 hashing (used for interoperability).
@@ -83,13 +87,15 @@ impl EcdsaSecp256k1Sha256 {
     /// Returns [`ParseError`] when the payload cannot be decoded into a valid key or
     /// when the encoding is non-canonical (must match the canonical SEC1 encoding).
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
-        EcdsaSecp256k1Impl::parse_public_key(payload)
+        public_key::parse(payload).map_err(public_key::KeyRejection::into_parse_error)
     }
 
     /// Validate a SEC1 public key for a decode path without retaining an
     /// encoded copy or consulting process-local state.
-    pub(crate) fn validate_public_key_for_decode(payload: &[u8]) -> Result<(), ParseError> {
-        EcdsaSecp256k1Impl::parse_public_key(payload).map(drop)
+    pub(crate) fn validate_public_key_for_decode(
+        payload: &[u8],
+    ) -> Result<(), public_key::KeyRejection> {
+        public_key::parse(payload).map(drop)
     }
     /// Parse a SEC1-encoded private key.
     ///
@@ -191,12 +197,10 @@ mod tests {
 mod ecdsa_secp256k1 {
     use super::{PrivateKey, PublicKey};
     use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
-    use k256::{
-        ecdsa::{
-            RecoveryId, Signature, SigningKey, VerifyingKey,
-            signature::hazmat::{PrehashSigner as _, PrehashVerifier as _},
-        },
-        elliptic_curve::sec1::ToEncodedPoint as _,
+    use elliptic_curve::sec1::ToEncodedPoint as _;
+    use k256::ecdsa::{
+        RecoveryId, Signature, SigningKey, VerifyingKey,
+        signature::hazmat::{PrehashSigner as _, PrehashVerifier as _},
     };
     #[cfg(feature = "rand")]
     use rand::rngs::OsRng;
@@ -342,25 +346,6 @@ mod ecdsa_secp256k1 {
             verifying_key
                 .verify_prehash(&digest, &signature)
                 .map_err(|_| Error::BadSignature)
-        }
-        pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
-            if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
-                return Err(ParseError(
-                    "secp256k1 public key material must not be all zero".to_string(),
-                ));
-            }
-            let key =
-                PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
-            // `EncodedPoint` stores secp256k1's fixed-width SEC1 representation
-            // inline. Avoid `PublicKey::to_sec1_bytes`, which boxes the same
-            // canonical encoding and would make decode validation heap-backed.
-            let canonical = key.to_encoded_point(true);
-            if canonical.as_bytes() != payload {
-                return Err(ParseError(
-                    "non-canonical secp256k1 public key encoding".to_string(),
-                ));
-            }
-            Ok(key)
         }
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
             if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
@@ -511,6 +496,37 @@ mod test {
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
     }
 
+    #[test]
+    fn typed_decode_rejections_preserve_backend_diagnostics_and_precedence() {
+        let key = public_key();
+        let uncompressed = key.to_encoded_point(false);
+        for payload in [
+            &[][..],
+            &[0; 1][..],
+            &[0; 33][..],
+            &[0xff; 33][..],
+            uncompressed.as_bytes(),
+        ] {
+            let rejection =
+                EcdsaSecp256k1Sha256::validate_public_key_for_decode(payload).unwrap_err();
+            assert_eq!(
+                rejection.into_parse_error(),
+                EcdsaSecp256k1Sha256::parse_public_key(payload).unwrap_err()
+            );
+        }
+        assert!(matches!(
+            EcdsaSecp256k1Sha256::validate_public_key_for_decode(&[0]),
+            Err(public_key::KeyRejection::AllZero)
+        ));
+        assert!(matches!(
+            EcdsaSecp256k1Sha256::validate_public_key_for_decode(&[]),
+            Err(public_key::KeyRejection::Encoding(_))
+        ));
+        assert!(matches!(
+            EcdsaSecp256k1Sha256::validate_public_key_for_decode(uncompressed.as_bytes()),
+            Err(public_key::KeyRejection::NonCanonical)
+        ));
+    }
     #[test]
     fn decode_validator_matches_public_parser_acceptance() {
         let key = public_key();

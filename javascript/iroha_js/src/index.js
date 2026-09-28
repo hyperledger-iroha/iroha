@@ -354,7 +354,6 @@ export {
   buildIvmProvedTransactionPayload,
   signQuotedIvmProvedTransactionPayload,
   buildIvmProvedTransaction,
-  submitIvmProvedContractCall,
   buildApplySccpRouteGovernanceInstruction,
   buildApplySccpRouteGovernanceTransaction,
   buildMintAssetTransaction,

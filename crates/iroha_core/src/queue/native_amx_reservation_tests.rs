@@ -22,6 +22,8 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -38,6 +40,9 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
     // catalog; that marker necessarily precedes (and therefore conflicts with) the
     // authenticated two-lane configured-primary anchor established below.
     let mut state = State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         world_with_test_domains(),
         kura,
         LiveQueryStore::start_test(),

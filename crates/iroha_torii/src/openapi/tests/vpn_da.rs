@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 97_915;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 97_586;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "335b63a8f7ee43574111bbd47417229781e34c94e5c5dd7ab99f2d4a0cffedc0";
+    "796e886f73e79ce6a7f65d06bae25b8f17d80e4723abe4bfecbbe9a96f6d6234";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"
@@ -588,142 +588,25 @@ fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
     }
 }
 #[test]
-fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
+fn retired_ivm_binding_preparation_and_proof_jobs_are_absent_from_openapi() {
     let doc = generate_spec();
     let paths = doc.get("paths").and_then(Value::as_object).expect("paths");
-    assert!(paths.contains_key("/v1/zk/ivm/derive"));
-    let prove_post = paths
-        .get("/v1/zk/ivm/prove")
-        .and_then(Value::as_object)
-        .and_then(|path| path.get("post"))
-        .and_then(Value::as_object)
-        .expect("prove post");
-    let request_ref = prove_post
-        .get("requestBody")
-        .and_then(Value::as_object)
-        .and_then(|body| body.get("content"))
-        .and_then(Value::as_object)
-        .and_then(|content| content.get("application/json"))
-        .and_then(Value::as_object)
-        .and_then(|media| media.get("schema"))
-        .and_then(Value::as_object)
-        .and_then(|schema| schema.get("$ref"))
-        .and_then(Value::as_str);
-    assert_eq!(request_ref, Some("#/components/schemas/ZkIvmProveRequest"));
-    assert!(prove_post.get("security").is_some(), "prove POST auth");
-    assert_eq!(
-        prove_post
-            .get("responses")
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get("200"))
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("headers"))
-            .and_then(Value::as_object)
-            .and_then(|headers| headers.get("Cache-Control"))
-            .and_then(Value::as_object)
-            .and_then(|header| header.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("const"))
-            .and_then(Value::as_str),
-        Some("private, no-store")
-    );
-    let job_path = paths
-        .get("/v1/zk/ivm/prove/{job_id}")
-        .and_then(Value::as_object)
-        .expect("prove job path");
-    for method in ["get", "delete"] {
-        let operation = job_path
-            .get(method)
-            .and_then(Value::as_object)
-            .expect("prove job operation");
-        let pattern = operation
-            .get("parameters")
-            .and_then(Value::as_array)
-            .and_then(|parameters| parameters.first())
-            .and_then(Value::as_object)
-            .and_then(|parameter| parameter.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("pattern"))
-            .and_then(Value::as_str);
-        assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{method} path id");
-        assert!(operation.get("security").is_some(), "{method} job auth");
-        assert_eq!(
-            operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("headers"))
-                .and_then(Value::as_object)
-                .and_then(|headers| headers.get("Cache-Control"))
-                .and_then(Value::as_object)
-                .and_then(|header| header.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("const"))
-                .and_then(Value::as_str),
-            Some("private, no-store"),
-            "{method} cache policy"
-        );
-    }
+    assert!(!paths.contains_key("/v1/zk/ivm/derive"));
+    assert!(!paths.contains_key("/v1/zk/ivm/prove"));
+    assert!(!paths.contains_key("/v1/zk/ivm/prove/{job_id}"));
     let schemas = doc
         .get("components")
         .and_then(Value::as_object)
         .and_then(|components| components.get("schemas"))
         .and_then(Value::as_object)
         .expect("schemas");
-    let job = schemas
-        .get("ZkIvmProveJob")
-        .and_then(Value::as_object)
-        .expect("job schema");
-    assert_eq!(
-        job.get("oneOf").and_then(Value::as_array).map(Vec::len),
-        Some(3)
-    );
-    let done = schemas
-        .get("ZkIvmProveJobDone")
-        .and_then(Value::as_object)
-        .expect("done schema");
-    assert_eq!(done.get("additionalProperties"), Some(&Value::Bool(false)));
-    let required = done
-        .get("required")
-        .and_then(Value::as_array)
-        .expect("done required");
-    assert_eq!(
-        required
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>(),
-        vec!["job_id", "status", "proved", "attachment"]
-    );
-    let proof_properties = schemas
-        .get("ZkIvmCompactProof")
-        .and_then(Value::as_object)
-        .and_then(|schema| schema.get("properties"))
-        .and_then(Value::as_object)
-        .expect("compact proof properties");
-    assert!(proof_properties.contains_key("bytes_b64"));
-    assert!(!proof_properties.contains_key("bytes"));
-    assert_eq!(
-        proof_properties
-            .get("bytes_b64")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("maxLength"))
-            .and_then(Value::as_u64),
-        Some(11_184_812)
-    );
-    for state in openapi_contract_strings(
-        "vpn.zk_ivm_openapi_uses_compact_state_dependent_schemas.strings.1",
-    ) {
-        let pattern = schemas
-            .get(state)
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("job_id"))
-            .and_then(Value::as_object)
-            .and_then(|job_id| job_id.get("pattern"))
-            .and_then(Value::as_str);
-        assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{state}");
+    for retired in [
+        "ZkIvmProveRequest",
+        "ZkIvmProveJob",
+        "ZkIvmProveJobDone",
+        "ZkIvmCompactProof",
+    ] {
+        assert!(!schemas.contains_key(retired), "retired schema {retired}");
     }
 }
 #[test]
@@ -1867,6 +1750,9 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "ContractLifecycleGovernance",
             "ContractEmergencyHold",
             "GlobalDataTriggerPermissionGovernance",
+            "KagemushaVerifierPolicyInstall",
+            "KagemushaVerifierReleaseInstall",
+            "KagemushaVerifierReleaseActivate",
         ]
     );
     let proposal_payload_refs = proposal_variants
@@ -1895,6 +1781,9 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "#/components/schemas/GovernanceParliamentProposalPayloadContractLifecycleV1",
             "#/components/schemas/GovernanceParliamentProposalPayloadContractEmergencyHoldV1",
             "#/components/schemas/GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierPolicyInstallV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1",
         ]
     );
     for payload_ref in proposal_payload_refs {

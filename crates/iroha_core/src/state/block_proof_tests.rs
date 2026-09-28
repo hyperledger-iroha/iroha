@@ -166,6 +166,9 @@ fn proof_fixture() -> CommittedNetworkProofFixture {
 fn proof_state(fixture: &CommittedNetworkProofFixture) -> Box<State> {
     let state = Box::new(
         State::try_new_with_chain_and_network_id(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             World::default(),
             Arc::clone(&fixture.kura),
             crate::query::store::LiveQueryStore::start_test(),
@@ -195,9 +198,9 @@ fn mutate_stored_block(
 }
 
 fn assert_invalid_finalized_body(mutate: impl FnOnce(&mut BlockPayload, &mut BlockResult)) {
-    let fixture = CommittedNetworkProofFixture::with_malformed_target(
-        |parent| mutate_stored_block(&proof_target(parent, false), mutate),
-    );
+    let fixture = CommittedNetworkProofFixture::with_malformed_target(|parent| {
+        mutate_stored_block(&proof_target(parent, false), mutate)
+    });
     let target = fixture.target();
     let entry = target.network_entrypoint_at(0).unwrap().hash();
     let error = proof_state(&fixture)
@@ -382,7 +385,9 @@ fn block_proofs_reject_retired_context_even_with_exact_finality() {
                     iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new());
                 context.version = 0;
                 assert!(!context.has_current_version());
-                payload.header.set_execution_context_hash(Some(HashOf::new(&context)));
+                payload
+                    .header
+                    .set_execution_context_hash(Some(HashOf::new(&context)));
                 payload.execution_context = Some(context);
             })
         },

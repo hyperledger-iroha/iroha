@@ -7,7 +7,7 @@
 //! TODO: compose remaining source/metadata/trace/resident admission under the
 //! complete global carrier owner before enabling native runtime admission.
 
-use super::{StateBlock, StateTransaction, VerifiedLaneDecisionGroupV1};
+use super::{StateBlock, StateTransaction};
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
@@ -40,12 +40,8 @@ pub(super) struct ReservedExecutionOutputPlan {
     proposal: HashOf<BlockHeader>,
     input_root: Option<Hash>,
     network_inputs: u32,
-    native: bool,
     maximum_rows: u32,
     budget: ExecutionOutputBudget,
-    prefix_count: u32,
-    prefix_bytes: u64,
-    unused_time: u32,
 }
 
 /// Immutable actual invocation source, constructed only by the execution producer.
@@ -70,22 +66,13 @@ impl OwnedExecutionSource {
 /// Complete source list from actual Network/Pipeline/Time execution, including
 /// rejected and zero-transcript invocations. A transcript archive cannot build it.
 pub(super) struct OwnedExecutionSources {
-    native: bool,
     proposal: HashOf<BlockHeader>,
     source_context: iroha_data_model::fastpq::FastpqSourceStatementContextV1,
     entries: Vec<OwnedExecutionSource>,
     network_routes: Vec<crate::queue::RoutingDecision>,
-    // Each charge stays with the corresponding original Vec through the
-    // retained prefix, including validation and publication refusal.
-    _entries_charge: Option<mv::allocation::AllocationCharge>,
-    _network_routes_charge: Option<mv::allocation::AllocationCharge>,
-    merge_prefix: Option<std::sync::Arc<super::merge_execution_prefix::MergeExecutionPrefixSeal>>,
 }
 
 impl OwnedExecutionSources {
-    pub(super) fn is_native(&self) -> bool {
-        self.native
-    }
     pub(super) fn proposal(&self) -> HashOf<BlockHeader> {
         self.proposal
     }
@@ -100,18 +87,8 @@ impl OwnedExecutionSources {
     pub(super) fn network_routes(&self) -> &[crate::queue::RoutingDecision] {
         &self.network_routes
     }
-    pub(super) fn merge_prefix(
-        &self,
-    ) -> Option<&std::sync::Arc<super::merge_execution_prefix::MergeExecutionPrefixSeal>> {
-        self.merge_prefix.as_ref()
-    }
-    pub(super) fn prefix_count(&self) -> usize {
-        self.merge_prefix
-            .as_ref()
-            .map_or(0, |prefix| prefix.inputs().len())
-    }
     pub(super) fn carrier_network_routes(&self) -> &[crate::queue::RoutingDecision] {
-        &self.network_routes[self.prefix_count()..]
+        &self.network_routes
     }
 }
 
@@ -126,9 +103,6 @@ pub(super) enum ExecutionOutputPlanState {
     Authorized(producer::AuthorizedExecutionOutputs),
     Finalizing,
     Finalized(producer::FinalizedExecutionOutputs),
-    // Actual sealed objects have moved into the private carrier owner. This
-    // closed marker still forbids every raw StateBlock publication path.
-    Captured,
     Poisoned,
 }
 
@@ -210,33 +184,13 @@ impl StateBlock<'_> {
             return Err("ordinary output plan differs from its applying source".into());
         }
         block.validate_proposal_commitments()?;
-        self.verify_merge_prefix_carrier(block)?;
-        self.require_merge_prefix_recording()?;
         let count = u32::try_from(block.network_entrypoint_count())
             .map_err(|_| "Network input count exceeds u32")?;
         let root = MerkleTree::root_from_typed_leaves(
             block.network_entrypoints().map(TransactionEntrypoint::hash),
         )
         .map(Hash::from);
-        self.reserve_execution_outputs(count, root, false, Some(block))
-    }
-
-    /// Native route groups contribute one output each, regardless of route count.
-    /// Call only from the exact after-start continuation with preflighted sources.
-    /// # Errors
-    /// Rejects repeated ownership, invalid input width or infeasible capacity.
-    pub(super) fn reserve_native_execution_outputs(
-        &mut self,
-        groups: &[VerifiedLaneDecisionGroupV1],
-    ) -> Result<(), String> {
-        let count = u32::try_from(groups.len()).map_err(|_| "native input count exceeds u32")?;
-        let root = MerkleTree::root_from_typed_leaves(
-            groups
-                .iter()
-                .map(|group| group.body().payload().input.entrypoint.hash()),
-        )
-        .map(Hash::from);
-        self.reserve_execution_outputs(count, root, true, None)
+        self.reserve_execution_outputs(count, root)
     }
 
     #[cfg(test)]
@@ -251,8 +205,6 @@ impl StateBlock<'_> {
         &mut self,
         count: u32,
         input_root: Option<Hash>,
-        native: bool,
-        ordinary: Option<&SignedBlock>,
     ) -> Result<(), String> {
         if self.execution_output_plan.is_some() {
             return Err("carrier output reservations already have an owner".into());
@@ -277,37 +229,14 @@ impl StateBlock<'_> {
                 .checked_add(phase.count)
                 .ok_or("reserved row count overflows u32")
         })?;
-        let pipeline_candidates = frozen.pipeline_candidates;
-        let time_invocations = frozen.time_invocations;
-        let prefix_count = self.merge_prefix_seal().map_or(Ok(0), |prefix| {
-            u32::try_from(prefix.inputs().len()).map_err(|_| "merge prefix count exceeds u32")
-        })?;
-        let prefix_bytes = self
-            .merge_prefix_seal()
-            .map_or(0, |prefix| prefix.row_bytes());
-        let prefix_budget = if let Some(source) = ordinary {
-            self.take_merge_prefix_budget(source, pipeline_candidates, time_invocations)?
-        } else {
-            if prefix_count != 0 {
-                return Err("native source cannot replace a merge prefix".into());
-            }
-            None
-        };
-        let (budget, unused_time) = match prefix_budget {
-            Some((budget, unused)) => (budget, unused),
-            None => (ExecutionOutputBudget::new(limits, phases)?, 0),
-        };
+        let budget = ExecutionOutputBudget::new(limits, phases)?;
         self.execution_output_plan = Some(ExecutionOutputPlanState::Reserved(
             ReservedExecutionOutputPlan {
                 proposal: self._curr_block.hash(),
                 input_root,
                 network_inputs: count,
-                native,
                 maximum_rows,
                 budget,
-                prefix_count,
-                prefix_bytes,
-                unused_time,
             },
         ));
         Ok(())

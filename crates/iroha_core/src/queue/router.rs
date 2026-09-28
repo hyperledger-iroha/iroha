@@ -25,7 +25,7 @@ use iroha_data_model::{
         contract_alias::SetContractAlias,
         kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         musubi::{
-            AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
+            AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1, AdvanceMusubiPinOutboxV1,
             AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
             RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
             RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
@@ -6115,6 +6115,7 @@ fn musubi_instruction_dataspace_target(any: &dyn core::any::Any) -> Option<DataS
         return Some(register.binding.home_dataspace);
     }
     if any.downcast_ref::<RegisterMusubiArchiveV1>().is_some()
+        || any.downcast_ref::<AdvanceMusubiPinOutboxV1>().is_some()
         || any
             .downcast_ref::<RegisterMusubiProviderBundleAttestationV1>()
             .is_some()

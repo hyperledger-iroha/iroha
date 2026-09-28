@@ -1049,6 +1049,7 @@ fn global_beacon_aggregator_from_sign_request(
         session,
         request.height,
         request.finalized_chain_anchor,
+        request.context,
     )
     .map_err(|_| BrokerError::Rejected)
 }

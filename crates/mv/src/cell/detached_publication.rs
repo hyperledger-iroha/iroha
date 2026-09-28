@@ -229,6 +229,10 @@ impl<'a, V: Value, A, I, C: Send + Sync + 'static> DetachedPublicationSlot<'a, V
             prepared.metadata.dirty,
         )
     }
+    /// Inspect readiness without consuming or dropping the original custody.
+    pub(super) fn is_prepared(&self) -> bool {
+        self.complete && !self.released
+    }
     /// Unlock every original physical phase and retain payload and callbacks.
     /// This is terminal and cannot promote cleanup to journal authority.
     pub fn release_writers(&mut self) {

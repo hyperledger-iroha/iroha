@@ -4,8 +4,8 @@
   "assets": [
     {
       "path": "diagnostic_explanations_v1.tsv",
-      "byte_length": 41666,
-      "sha256": "2f0ca96cf5caba090bd60fe5da77d57bdea9b15efcf1d373997f23026968f3fd",
+      "byte_length": 41671,
+      "sha256": "279b331c3e4dc53353fcc823f87245388832f7d94b7311067a3fc03cc68751ca",
       "layout": "header and schema followed by 247 tab-separated code, phase, summary, and help rows with backslash escapes",
       "source_preimages": [
         {
@@ -15,8 +15,8 @@
     },
     {
       "path": "compile_fail_cases_v1.tsv",
-      "byte_length": 10965,
-      "sha256": "8fe13bc7b315727258f9303562a012e0d5068a8bba940d912c0bf45c78186b33",
+      "byte_length": 11391,
+      "sha256": "80a569564fa11d2aeef61262c9b436079fad58ee01266732aa329403d7787a13",
       "layout": "header and schema followed by 59 tab-separated compile-fail case rows with backslash escapes",
       "source_preimages": [
         {

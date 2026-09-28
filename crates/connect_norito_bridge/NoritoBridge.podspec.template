@@ -13,6 +13,7 @@ Pod::Spec.new do |s|
     :sha256 => '__ARCHIVE_SHA256__'
   }
   s.vendored_frameworks = 'NoritoBridge.xcframework'
+  s.frameworks       = ['CoreGraphics']
   s.platform         = :ios, '15.0'
   s.swift_versions   = ['5.9']
 end

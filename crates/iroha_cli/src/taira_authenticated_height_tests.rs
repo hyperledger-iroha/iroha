@@ -146,9 +146,13 @@ impl Fixture {
         let mut proof = proof.clone();
         if proof.height() > 1 {
             Self::edit_certificate(&mut proof, |certificate| {
-                let mut qc: Qc = norito::decode_from_bytes(&certificate.commit_qc).unwrap();
+                let mut qc: Qc = norito::decode_from_bytes(certificate.commit_qc()).unwrap();
                 self.resign_certificate(&mut qc, view, omitted);
-                certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
+                *certificate = CommitCertificate::from_untrusted_parts(
+                    certificate.consensus_header().to_vec(),
+                    norito::encode_canonical(&qc).unwrap(),
+                    certificate.result_preimage().to_vec(),
+                );
             });
         }
         proof
@@ -156,9 +160,13 @@ impl Fixture {
 
     fn corrupt_signature(proof: &mut SumeragiFinalityProof) {
         Self::edit_certificate(proof, |certificate| {
-            let mut qc: Qc = norito::decode_from_bytes(&certificate.commit_qc).unwrap();
+            let mut qc: Qc = norito::decode_from_bytes(certificate.commit_qc()).unwrap();
             qc.agg_sig.0[0] ^= 1;
-            certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
+            *certificate = CommitCertificate::from_untrusted_parts(
+                certificate.consensus_header().to_vec(),
+                norito::encode_canonical(&qc).unwrap(),
+                certificate.result_preimage().to_vec(),
+            );
         });
     }
 
@@ -800,9 +808,13 @@ fn authenticated_height_rejects_invalid_current_and_parent_witnesses() {
     let mut invalid = fixture.proofs[2].clone();
     Fixture::edit_certificate(&mut invalid, |certificate| {
         let mut header: iroha_sumeragi::message::BlockHeader =
-            norito::decode_from_bytes(&certificate.consensus_header).unwrap();
+            norito::decode_from_bytes(certificate.consensus_header()).unwrap();
         header.parent_result.0[0] ^= 1;
-        certificate.consensus_header = norito::encode_canonical(&header).unwrap();
+        *certificate = CommitCertificate::from_untrusted_parts(
+            norito::encode_canonical(&header).unwrap(),
+            certificate.commit_qc().to_vec(),
+            certificate.result_preimage().to_vec(),
+        );
     });
     assert!(
         verifier
@@ -1037,13 +1049,17 @@ mod deployment_prefix {
                 2 => proof.committee[0].proof_of_possession[0] ^= 1,
                 3 | 4 => Fixture::edit_certificate(&mut proof, |certificate| {
                     let mut header: iroha_sumeragi::message::BlockHeader =
-                        norito::decode_from_bytes(&certificate.consensus_header).unwrap();
+                        norito::decode_from_bytes(certificate.consensus_header()).unwrap();
                     if mutation == 3 {
                         header.instance.0[0] ^= 1;
                     } else {
                         header.parent_hash.0[0] ^= 1;
                     }
-                    certificate.consensus_header = norito::encode_canonical(&header).unwrap();
+                    *certificate = CommitCertificate::from_untrusted_parts(
+                        norito::encode_canonical(&header).unwrap(),
+                        certificate.commit_qc().to_vec(),
+                        certificate.result_preimage().to_vec(),
+                    );
                 }),
                 _ => unreachable!(),
             }

@@ -209,7 +209,8 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitSuccessAgainstMock() async throws {
-        let scenarioHash = "feedfacecafebeefcafedeadbeef000100000000000000000000000000000000"
+        let envelope = try tcMakePipelineEnvelope(marker: 0x11)
+        let scenarioHash = envelope.transactionHash.hexEncodedString()
         try await preparePipelineScenario(.success,
                                           hashHex: scenarioHash,
                                           statusKinds: ["Queued", "Approved", "Committed", "Applied"])
@@ -217,7 +218,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let client = try makeAuthenticatedMockClient(mock)
         let sdk = IrohaSDK(toriiClient: client)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
-        let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x11)
         let status = try await sdk.submitAndWait(envelope: envelope)
         XCTAssertEqual(status.hash, scenarioHash)
         XCTAssertEqual(status.status.state, .applied)
@@ -225,13 +225,13 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitFailureAgainstMock() async throws {
-        let scenarioHash = "feedfacecafebeefcafedeadbeef000200000000000000000000000000000000"
+        let envelope = try tcMakePipelineEnvelope(marker: 0x22)
+        let scenarioHash = envelope.transactionHash.hexEncodedString()
         try await preparePipelineScenario(.failure, hashHex: scenarioHash)
         let mock = try XCTUnwrap(self.mock)
         let client = try makeAuthenticatedMockClient(mock)
         let sdk = IrohaSDK(toriiClient: client)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
-        let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x22)
         do {
             _ = try await sdk.submitAndWait(envelope: envelope)
             XCTFail("expected pipeline failure")
@@ -250,7 +250,8 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitTimeoutAgainstMock() async throws {
-        let scenarioHash = "feedfacecafebeefcafedeadbeef000300000000000000000000000000000000"
+        let envelope = try tcMakePipelineEnvelope(marker: 0x33)
+        let scenarioHash = envelope.transactionHash.hexEncodedString()
         try await preparePipelineScenario(.timeout,
                                           hashHex: scenarioHash,
                                           statusKinds: ["Queued"],
@@ -261,7 +262,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01,
                                                             timeout: 0.3,
                                                             maxAttempts: 3)
-        let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x33)
         do {
             _ = try await sdk.submitAndWait(envelope: envelope)
             XCTFail("expected pipeline timeout")
@@ -280,10 +280,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         case success
         case failure
         case timeout
-    }
-
-    private enum IntegrationError: Error {
-        case invalidHashEncoding
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -636,19 +632,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
             report: report,
             reportJSON: #"{"chunk_count":1}"#
         )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    private func makePipelineEnvelope(hashHex: String, marker: UInt8) throws -> SignedTransactionEnvelope {
-        guard let hashData = Data(hexString: hashHex) else {
-            XCTFail("invalid hash hex \(hashHex)")
-            throw IntegrationError.invalidHashEncoding
-        }
-        let payload = Data([marker, marker ^ 0xFF, 0xA5])
-        return SignedTransactionEnvelope(norito: payload,
-                                         signedTransaction: payload,
-                                         payload: nil,
-                                         transactionHash: hashData)
     }
 
     private func loadDaProofFixture() throws -> (manifest: Data, payload: Data, blobHashHex: String) {

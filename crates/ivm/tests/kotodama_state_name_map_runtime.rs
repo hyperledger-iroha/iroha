@@ -55,7 +55,7 @@ fn durable_name_map_roundtrip_read_after_write() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_map_read_modify_write_roundtrip() {
@@ -63,7 +63,7 @@ fn durable_name_map_read_modify_write_roundtrip() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 2);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 2);
 }
 #[test]
 fn durable_name_map_if_branch_reassignment_roundtrip() {
@@ -71,7 +71,7 @@ fn durable_name_map_if_branch_reassignment_roundtrip() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_map_roundtrip_through_name_parameter() {
@@ -79,7 +79,7 @@ fn durable_name_map_roundtrip_through_name_parameter() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_map_roundtrip_through_helper() {
@@ -87,7 +87,7 @@ fn durable_name_map_roundtrip_through_helper() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_map_struct_value_roundtrip_through_helper() {
@@ -95,7 +95,7 @@ fn durable_name_map_struct_value_roundtrip_through_helper() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 42);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 42);
 }
 #[test]
 fn missing_mixed_aggregate_option_uses_complete_helper_fallback() {
@@ -103,7 +103,11 @@ fn missing_mixed_aggregate_option_uses_complete_helper_fallback() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn present_mixed_aggregate_option_ignores_fallback_value_without_field_corruption() {
@@ -111,7 +115,11 @@ fn present_mixed_aggregate_option_ignores_fallback_value_without_field_corruptio
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn mixed_aggregate_unwrap_or_remains_eager_on_the_present_arm() {
@@ -119,7 +127,7 @@ fn mixed_aggregate_unwrap_or_remains_eager_on_the_present_arm() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let (vm, wsv) = run_program_with_wsv(src, MockWorldStateView::new());
-    assert_eq!(common::decode_i64_register(&vm, 10), 7);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 7);
     let fallback_calls = wsv
         .sc_get(&encoded_int_state_path("FallbackCalls", 1))
         .expect("eager fallback must persist its observable state mutation");
@@ -131,7 +139,7 @@ fn mixed_aggregate_unwrap_or_evaluates_fallback_once_on_the_absent_arm() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let (vm, wsv) = run_program_with_wsv(src, MockWorldStateView::new());
-    assert_eq!(common::decode_i64_register(&vm, 10), 11);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 11);
     let fallback_calls = wsv
         .sc_get(&encoded_int_state_path("FallbackCalls", 1))
         .expect("selected fallback must persist its observable state mutation");
@@ -143,7 +151,11 @@ fn missing_nested_mixed_aggregate_option_preserves_every_fallback_word() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn aggregate_option_rejects_a_different_fallback_shape() {
@@ -166,7 +178,7 @@ fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_map_roundtrip_across_wsv_invocations() {
@@ -178,7 +190,7 @@ fn durable_name_map_roundtrip_across_wsv_invocations() {
         .expect("fixture sentinel newline");
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_aggregate_get_or_preserves_persisted_bounded_lists() {
@@ -190,7 +202,11 @@ fn durable_aggregate_get_or_preserves_persisted_bounded_lists() {
         .expect("fixture sentinel newline");
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn durable_aggregate_ensure_preserves_existing_record_words() {
@@ -198,7 +214,11 @@ fn durable_aggregate_ensure_preserves_existing_record_words() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
@@ -210,7 +230,7 @@ fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
         .expect("fixture sentinel newline");
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_to_account_id_map_roundtrip() {
@@ -218,7 +238,11 @@ fn durable_name_to_account_id_map_roundtrip() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
@@ -230,7 +254,11 @@ fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
         .expect("fixture sentinel newline");
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
@@ -238,7 +266,11 @@ fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn durable_name_map_key_survives_function_call() {
@@ -246,7 +278,7 @@ fn durable_name_map_key_survives_function_call() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_map_branch_value_drives_following_state_set() {
@@ -254,7 +286,7 @@ fn durable_name_map_branch_value_drives_following_state_set() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 2);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 2);
 }
 #[test]
 fn durable_name_map_branch_value_survives_following_addition() {
@@ -262,7 +294,7 @@ fn durable_name_map_branch_value_survives_following_addition() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 2);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 2);
 }
 #[test]
 fn durable_name_map_branch_value_survives_path_work() {
@@ -270,7 +302,7 @@ fn durable_name_map_branch_value_survives_path_work() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn durable_name_map_branch_value_survives_following_state_work() {
@@ -278,5 +310,5 @@ fn durable_name_map_branch_value_survives_following_state_work() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 2);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 2);
 }

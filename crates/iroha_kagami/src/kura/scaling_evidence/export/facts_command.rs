@@ -115,7 +115,7 @@ struct OriginalArgs {
     /// Maximum bytes for each of the four original peer configs
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=MAX_BYTES))]
     peer_config_max_bytes: u64,
-    /// Original independent canonical genesis HeightContext absolute path
+    /// Original independent canonical genesis ValidatorEpochContextV1 absolute path
     #[arg(long)]
     context: PathBuf,
     /// Independently pinned raw SHA-256 of the original context
@@ -133,15 +133,15 @@ struct OriginalArgs {
     /// Maximum complete original journal bytes
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=MAX_BYTES))]
     journal_max_bytes: u64,
-    /// Original canonical Vec<FinalizedNativeContextV1> absolute path
+    /// Original canonical Vec<NativeHeightEvidenceV1> absolute path
     #[arg(long)]
-    finality: PathBuf,
-    /// Independently pinned raw SHA-256 of the complete finality vector
+    carrier: PathBuf,
+    /// Independently pinned raw SHA-256 of the complete carrier vector
     #[arg(long, value_parser = parse_sha256)]
-    finality_sha256: [u8; 32],
-    /// Maximum complete finality vector bytes
+    carrier_sha256: [u8; 32],
+    /// Maximum complete carrier vector bytes
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=MAX_BYTES))]
-    finality_max_bytes: u64,
+    carrier_max_bytes: u64,
     /// Original canonical Vec<CommittedTransaction> absolute path, preserving every query
     #[arg(long)]
     queries: PathBuf,
@@ -361,7 +361,7 @@ impl OriginalArgs {
             self.peer_config_max_bytes,
             self.context_max_bytes,
             self.journal_max_bytes,
-            self.finality_max_bytes,
+            self.carrier_max_bytes,
             self.queries_max_bytes,
         ];
         let total = caps.iter().try_fold(0u64, |total, &n| {
@@ -414,10 +414,10 @@ impl OriginalArgs {
                 sha256: self.journal_sha256,
                 max_bytes: self.journal_max_bytes,
             },
-            finality: ProofInputBinding {
-                path: self.finality,
-                sha256: self.finality_sha256,
-                max_bytes: self.finality_max_bytes,
+            carrier: ProofInputBinding {
+                path: self.carrier,
+                sha256: self.carrier_sha256,
+                max_bytes: self.carrier_max_bytes,
             },
             queries: ProofInputBinding {
                 path: self.queries,

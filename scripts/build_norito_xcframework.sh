@@ -1304,7 +1304,8 @@ CONSUMER_EOF
     "$CLANG_BINARY" -target "$clang_target" -isysroot "$sdkroot" \
     -I "$ROOT_DIR/crates/connect_norito_bridge/include" "$consumer_dir/main.c" \
     -Wl,-all_load "$library" \
-    -framework Foundation -framework Security -framework Metal -framework Accelerate \
+    -framework Foundation -framework Security -framework Metal -framework CoreGraphics \
+    -framework Accelerate \
     -lc++ -liconv -o "$consumer_dir/consumer" || return $?
   host_arch="$(/usr/bin/uname -m)"
   if [[ ( "$target_triple" == "$MACOS_ARM_TRIPLE" && "$host_arch" == "arm64" ) \

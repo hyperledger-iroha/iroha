@@ -41,6 +41,8 @@ fn key(byte: u8) -> PublicKey {
 
 fn qc(kind: VoteKind, height: u64, block_hash: Hash32) -> Qc {
     Qc {
+        attestation_witness: None,
+        epoch: crate::testing::TEST_EPOCH.id,
         kind,
         instance: Hash32::ZERO,
         height,
@@ -56,6 +58,7 @@ fn qc(kind: VoteKind, height: u64, block_hash: Hash32) -> Qc {
 
 fn vote(block_hash: Hash32) -> Vote {
     Vote {
+        epoch: crate::testing::TEST_EPOCH.id,
         kind: VoteKind::Commit,
         instance: Hash32::ZERO,
         height: 1,
@@ -72,6 +75,8 @@ fn vote(block_hash: Hash32) -> Vote {
 fn block() -> Block {
     Block {
         header: BlockHeader {
+            control_witness: crate::types::ControlWitness::empty(),
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: Hash32::ZERO,
             height: 1,
             origin_view: 0,
@@ -134,7 +139,7 @@ fn every_effect() -> Vec<Action> {
 #[test]
 fn det_s24_o2_barrier_holds_every_effect() {
     let effects = every_effect();
-    let record = SafetyRecord::fresh(Hash32::ZERO, key(9), 0, None);
+    let record = SafetyRecord::fresh(Hash32::ZERO, crate::testing::TEST_EPOCH.id, key(9), 0, None);
     let mut io = Io::default();
     let mut barrier = Barrier::default();
     // No pending record: nothing waits.

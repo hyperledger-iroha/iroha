@@ -423,3 +423,71 @@ fn admitted_owned_publication_rejects_foreign_scope_without_losing_original() {
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(other.reserved_bytes(), 0);
 }
+
+#[test]
+fn original_block_slot_keeps_prepaid_frozen_source_charge_through_refusal_and_retry() {
+    use crate::{BlockPublication as _, FrozenBlockPublication as _};
+    let budget = AllocationBudget::new(1 << 20);
+    let target = fixture(&budget);
+    let original = target
+        .try_capture_admitted_block(BlockMode::Ordinary, |block| {
+            block.try_insert_admitted(7, 79).unwrap();
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    let pointer = std::ptr::from_ref(original.blocks.get(&7).unwrap());
+    let original_bytes = budget.reserved_bytes();
+    let foreign = AllocationBudget::new(1 << 20);
+    let foreign_scope = foreign.try_owned_refund_scope().unwrap();
+    let (original, refusal) =
+        match BlockPublicationSlot::try_from_frozen_owned(original, &target, &foreign_scope) {
+            Ok(_) => panic!("foreign scope must not acquire original writers"),
+            Err(refusal) => refusal,
+        };
+    assert_eq!(refusal, AdmittedStorageError::ScopeIdentity);
+    assert_eq!(
+        std::ptr::from_ref(original.blocks.get(&7).unwrap()),
+        pointer
+    );
+    assert_eq!(budget.reserved_bytes(), original_bytes);
+    assert!(target.revert.try_acquire_writer().is_some());
+    assert!(target.blocks.try_acquire_writer().is_some());
+    drop(foreign_scope);
+    assert_eq!(foreign.reserved_bytes(), 0);
+    let scope = budget.try_owned_refund_scope().unwrap();
+    let retained_bytes = budget.reserved_bytes();
+    let mut slot = match BlockPublicationSlot::try_from_frozen_owned(original, &target, &scope) {
+        Ok(slot) => slot,
+        Err(_) => panic!("exact original scope"),
+    };
+    // Force refusal after actual undo acquisition, not at a fabricated gate.
+    let blocker = target.blocks.acquire_writer();
+    assert!(matches!(
+        slot.try_prepare_frozen(),
+        Err(PublicationPreparationError::Busy(_))
+    ));
+    let original = slot.recover_frozen();
+    assert_eq!(
+        std::ptr::from_ref(original.blocks.get(&7).unwrap()),
+        pointer
+    );
+    assert_eq!(budget.reserved_bytes(), retained_bytes);
+    assert!(target.revert.try_acquire_writer().is_some());
+    drop(blocker);
+    assert!(target.blocks.try_acquire_writer().is_some());
+    drop(slot);
+    budget.set_limit_bytes(0);
+    let mut slot = match BlockPublicationSlot::try_from_frozen_owned(original, &target, &scope) {
+        Ok(slot) => slot,
+        Err(_) => panic!("retry uses the same original scope, without new reservation"),
+    };
+    drop(scope);
+    slot.try_prepare_frozen().unwrap();
+    assert_eq!(budget.reserved_bytes(), retained_bytes);
+    slot.publish_prepared();
+    assert_eq!(std::ptr::from_ref(target.view().get(&7).unwrap()), pointer);
+    assert_eq!(target.view().get(&7), Some(&79));
+    drop(slot);
+    drop(target);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

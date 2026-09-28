@@ -87,8 +87,7 @@ use std::{
     sync::LazyLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-const CONSENSUS_PROTOCOL_VERSION: u32 =
-    iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
+const CONSENSUS_PROTOCOL_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
 #[cfg(test)]
 fn checked_genesis_fixture_keypair() -> KeyPair {
     KeyPair::try_random().expect("genesis fixture key generation should succeed")
@@ -378,38 +377,8 @@ pub fn signed_genesis_validator_pops(block: &SignedBlock) -> Result<BTreeMap<Pub
 pub fn signed_genesis_consensus_metadata(
     block: &SignedBlock,
 ) -> Result<ConsensusHandshakeMetadata> {
-    let mut metadata = None;
-    for transaction in block.external_transactions() {
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            continue;
-        };
-        for instruction in instructions {
-            let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
-                continue;
-            };
-            let Parameter::Custom(custom) = set_parameter.inner() else {
-                continue;
-            };
-            if custom.id() != &consensus_metadata::handshake_meta_id() {
-                continue;
-            }
-            let decoded = custom
-                .payload()
-                .try_into_any::<ConsensusHandshakeMetadata>()
-                .map_err(|error| eyre!("decode signed genesis consensus metadata: {error}"))?;
-            if metadata.replace(decoded).is_some() {
-                return Err(eyre!(
-                    "signed genesis contains more than one consensus metadata instruction"
-                ));
-            }
-        }
-    }
-    let metadata = metadata
-        .ok_or_else(|| eyre!("signed genesis contains no consensus metadata instruction"))?;
-    metadata
-        .validate()
-        .map_err(|error| eyre!("invalid signed genesis consensus metadata: {error}"))?;
-    Ok(metadata)
+    iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
+        .map_err(|error| eyre!(error))
 }
 fn validate_signed_manifest_binding(
     manifest: &RawGenesisTransaction,
@@ -1739,9 +1708,6 @@ impl RawGenesisTransaction {
                     max_validators: npos.max_validators(),
                     min_self_bond: npos.min_self_bond().clone(),
                     min_nomination_bond: npos.min_nomination_bond().clone(),
-                    max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                    seat_band_pct: npos.seat_band_pct(),
-                    max_entity_correlation_pct: npos.max_entity_correlation_pct(),
                     finality_margin_blocks: npos.finality_margin_blocks(),
                     evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                     activation_lag_blocks: npos.activation_lag_blocks(),
@@ -3263,7 +3229,7 @@ mod tests {
             r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_v2":{},"kagemusha_mint_finality":{},"transactions":[{{}}]}}"#,
             iroha_data_model::account::address::chain_discriminant(),
             executor_path.file_name().unwrap().to_str().unwrap(),
-            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+            iroha_data_model::sumeragi::PROTOCOL_VERSION,
             sumeragi_v2,
             kagemusha_mint_finality,
         );

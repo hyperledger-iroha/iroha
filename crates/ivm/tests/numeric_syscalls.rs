@@ -186,7 +186,9 @@ where
     // result state. A runtime template provides that isolation while avoiding
     // a full VM construction, program decode, and operand installation for
     // every boundary probe.
-    let template = probe_vm.runtime_template();
+    let template = probe_vm
+        .try_runtime_template()
+        .expect("runtime template allocation fits test host");
     probe_vm.run().expect("baseline staged operation");
     let staged = probe_vm
         .last_staged_syscall_context()
@@ -269,12 +271,12 @@ where
     prefixes
 }
 #[test]
-fn abi_contains_exactly_the_54_numeric_calls_and_rejects_retired_numbers() {
-    let numbers = (0x01_0100..=0x01_0113)
+fn abi_contains_exactly_the_61_numeric_calls_and_rejects_retired_numbers() {
+    let numbers = (0x01_0100..=0x01_011A)
         .chain(0x01_0120..=0x01_0130)
         .chain(0x01_0140..=0x01_0150)
         .collect::<Vec<_>>();
-    assert_eq!(numbers.len(), 54);
+    assert_eq!(numbers.len(), 61);
     let vm = IVM::new(u64::MAX);
     let host = DefaultHost::new();
     for number in numbers {
@@ -296,7 +298,7 @@ fn abi_contains_exactly_the_54_numeric_calls_and_rejects_retired_numbers() {
 }
 #[test]
 fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
-    let expected = (0x01_0100..=0x01_0113)
+    let expected = (0x01_0100..=0x01_011A)
         .chain(0x01_0120..=0x01_0130)
         .chain(0x01_0140..=0x01_0150)
         .collect::<BTreeSet<_>>();
@@ -308,6 +310,28 @@ fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
         let mut vm = vm_for(syscall, u64::MAX);
         vm.set_register(10, raw);
         vm.run().expect("construct int");
+        assert_eq!(result_int(&vm), BigInt::from_i128(expected));
+        covered.insert(syscall);
+    }
+    for (syscall, input, expected) in [
+        (syscalls::SYSCALL_INT_ISQRT, 17_i128, 4_i128),
+        (syscalls::SYSCALL_INT_ABS, -7, 7),
+    ] {
+        let mut vm = vm_for(syscall, u64::MAX);
+        let input = install_int(&mut vm, &BigInt::from_i128(input));
+        vm.set_register(10, input);
+        vm.run().expect("execute integer helper");
+        assert_eq!(result_int(&vm), BigInt::from_i128(expected));
+        covered.insert(syscall);
+    }
+    for (syscall, left, right, expected) in [
+        (syscalls::SYSCALL_INT_MIN, -7, 3, -7),
+        (syscalls::SYSCALL_INT_MAX, -7, 3, 3),
+        (syscalls::SYSCALL_INT_DIV_CEIL, -7, 3, -2),
+        (syscalls::SYSCALL_INT_GCD, -12, 8, 4),
+        (syscalls::SYSCALL_INT_MEAN, -7, 2, -2),
+    ] {
+        let vm = run_int_binary(syscall, left, right);
         assert_eq!(result_int(&vm), BigInt::from_i128(expected));
         covered.insert(syscall);
     }
@@ -1938,4 +1962,124 @@ fn fused_numeric_gas_exhaustion_is_fatal_before_unfunded_work() {
         }
     });
     assert!(!phases.is_empty());
+}
+
+#[test]
+fn integer_helpers_cover_full_width_results_and_staged_failures() {
+    use iroha_primitives::numeric_int::{IntBinaryOperation, IntUnaryOperation};
+    let maximum = max_int();
+    let minimum = min_int();
+    for (syscall, operation) in [
+        (syscalls::SYSCALL_INT_ISQRT, IntUnaryOperation::Isqrt),
+        (syscalls::SYSCALL_INT_ABS, IntUnaryOperation::Abs),
+    ] {
+        let mut vm = vm_for(syscall, u64::MAX);
+        let pointer = install_int(&mut vm, &maximum);
+        vm.set_register(10, pointer);
+        vm.run().expect("full-width unary helper");
+        assert_eq!(result_int(&vm), operation.evaluate(&maximum).unwrap());
+        let prefixes = collect_oog_prefixes(syscall, |vm| {
+            let pointer = install_int(vm, &BigInt::from(17_u64));
+            vm.set_register(10, pointer);
+        });
+        assert!(prefixes[&SyscallMeteringPhase::Arithmetic.tag()].len() >= 2);
+    }
+    for (syscall, operation, left, right) in [
+        (
+            syscalls::SYSCALL_INT_MIN,
+            IntBinaryOperation::Min,
+            &minimum,
+            &maximum,
+        ),
+        (
+            syscalls::SYSCALL_INT_MAX,
+            IntBinaryOperation::Max,
+            &minimum,
+            &maximum,
+        ),
+        (
+            syscalls::SYSCALL_INT_DIV_CEIL,
+            IntBinaryOperation::DivCeil,
+            &maximum,
+            &maximum,
+        ),
+        (
+            syscalls::SYSCALL_INT_GCD,
+            IntBinaryOperation::Gcd,
+            &minimum,
+            &maximum,
+        ),
+        (
+            syscalls::SYSCALL_INT_MEAN,
+            IntBinaryOperation::Mean,
+            &maximum,
+            &maximum,
+        ),
+    ] {
+        let mut vm = vm_for(syscall, u64::MAX);
+        let left_pointer = install_int(&mut vm, left);
+        let right_pointer = install_int(&mut vm, right);
+        vm.set_register(10, left_pointer);
+        vm.set_register(11, right_pointer);
+        vm.run().expect("full-width binary helper");
+        assert_eq!(result_int(&vm), operation.evaluate(left, right).unwrap());
+        let prefixes = collect_oog_prefixes(syscall, |vm| {
+            let left = install_int(vm, &BigInt::from(17_u64));
+            let right = install_int(vm, &BigInt::from(6_u64));
+            vm.set_register(10, left);
+            vm.set_register(11, right);
+        });
+        assert!(prefixes[&SyscallMeteringPhase::Arithmetic.tag()].len() >= 2);
+    }
+    for (syscall, left, right, fault) in [
+        (
+            syscalls::SYSCALL_INT_ISQRT,
+            BigInt::from(-1_i64),
+            None,
+            NumericFaultV1::NegativeSquareRoot,
+        ),
+        (
+            syscalls::SYSCALL_INT_ABS,
+            minimum.clone(),
+            None,
+            NumericFaultV1::MantissaOverflow,
+        ),
+        (
+            syscalls::SYSCALL_INT_DIV_CEIL,
+            maximum,
+            Some(BigInt::zero()),
+            NumericFaultV1::DivisionByZero,
+        ),
+        (
+            syscalls::SYSCALL_INT_DIV_CEIL,
+            minimum.clone(),
+            Some(BigInt::from(-1_i64)),
+            NumericFaultV1::MantissaOverflow,
+        ),
+        (
+            syscalls::SYSCALL_INT_GCD,
+            minimum,
+            Some(BigInt::zero()),
+            NumericFaultV1::MantissaOverflow,
+        ),
+    ] {
+        for mode in [NUMERIC_FAILURE_TRAP, NUMERIC_FAILURE_STATUS] {
+            let mut vm = vm_for(syscall, u64::MAX);
+            let pointer = install_int(&mut vm, &left);
+            vm.set_register(10, pointer);
+            if let Some(right) = &right {
+                let pointer = install_int(&mut vm, right);
+                vm.set_register(11, pointer);
+            }
+            vm.set_register(14, mode);
+            if mode == NUMERIC_FAILURE_TRAP {
+                assert_eq!(vm.run(), Err(VMError::NumericFault(fault)));
+                assert_eq!(vm.register(10), pointer);
+            } else {
+                vm.run().expect("reported numeric domain failure");
+                assert_eq!(vm.register(10), 0);
+                assert_eq!(vm.register(11), fault.tag());
+            }
+        }
+    }
 }

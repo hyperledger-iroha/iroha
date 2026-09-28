@@ -20,7 +20,11 @@ fn mint_request_shape_roundtrips_all_eleven_fields() {
             .strip_suffix('\n')
             .expect("fixture sentinel newline");
     let vm = run_program(source);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn mixed_pointer_and_scalar_literal_fields_keep_their_exact_types() {
@@ -29,5 +33,27 @@ fn mixed_pointer_and_scalar_literal_fields_keep_their_exact_types() {
             .strip_suffix('\n')
             .expect("fixture sentinel newline");
     let vm = run_program(source);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
+}
+
+#[test]
+fn empty_nominal_products_roundtrip_through_durable_state_lists() {
+    let vm = run_program(
+        r#"seiyaku EmptyState {
+            struct Empty {}
+            state StateMap<Name, List<Empty, 2>> Values;
+            kotoage fn main() -> bool authorize("WriteState") {
+                let key = Name::parse("empty");
+                let List<Empty, 2> expected = [Empty {}, Empty {}];
+                Values[key] = expected;
+                let List<Empty, 2> absent = [];
+                Values.get(key).unwrap_or(absent) == expected
+            }
+        }"#,
+    );
+    assert_eq!(vm.public_call_result_word(0), Ok(1));
 }

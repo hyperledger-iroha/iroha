@@ -43,7 +43,7 @@ fn new_state(
     let nexus = state.nexus_snapshot();
     let lane_manifests =
         Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
-    state.install_lane_manifests(&lane_manifests);
+    state.install_lane_manifests_for_testing(&lane_manifests);
     state
 }
 fn new_account_in_domain(account_id: &AccountId, _domain: &str) -> Account {
@@ -914,7 +914,14 @@ fn non_vm_gas_limit_too_low_rejects() {
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
-    assert!(matches!(res, Err(ValidationFail::NotPermitted(_))));
+    assert!(matches!(
+        res,
+        Err(
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
+                ValidationFail::NotPermitted(_)
+            )
+        )
+    ));
 }
 #[test]
 fn ivm_syscall_charges_fees() {
@@ -1258,7 +1265,9 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     block.gas_limit_per_block = used.saturating_sub(1);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, res) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_hash, res) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(matches!(
         res,
         Err(TransactionRejectionReason::Validation(

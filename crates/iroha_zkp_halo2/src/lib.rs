@@ -46,6 +46,7 @@ mod params;
 #[cfg(feature = "full")]
 mod poly;
 #[cfg(feature = "model-primitives")]
+#[cfg(feature = "model-primitives")]
 pub use iroha_zkp_poseidon::poseidon;
 #[cfg(all(test, feature = "full"))]
 #[allow(

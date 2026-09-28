@@ -892,7 +892,7 @@ fn admitted_replacement_retains_mode_and_restored_preimages_through_callback_abo
     drop(storage);
     assert_eq!(
         budget.reserved_bytes(),
-        Publication::allocation_demand().unwrap().bytes()
+        retained_publication_identity_bytes()
     );
     drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -999,7 +999,7 @@ fn admitted_replacement_of_empty_undo_still_records_replace_mode() {
     drop(storage);
     assert_eq!(
         budget.reserved_bytes(),
-        Publication::allocation_demand().unwrap().bytes()
+        retained_publication_identity_bytes()
     );
     drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -1042,7 +1042,7 @@ fn admitted_replacement_final_undo_clear_refusal_preserves_original_pair() {
     drop(storage);
     assert_eq!(
         budget.reserved_bytes(),
-        Publication::allocation_demand().unwrap().bytes()
+        retained_publication_identity_bytes()
     );
     drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -1091,7 +1091,7 @@ fn admitted_replacement_callback_cleanup_cannot_publish_a_partial_owner() {
     drop(storage);
     assert_eq!(
         budget.reserved_bytes(),
-        Publication::allocation_demand().unwrap().bytes()
+        retained_publication_identity_bytes()
     );
     drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -1137,7 +1137,7 @@ fn admitted_replacement_second_plan_refusal_returns_a_healthy_original_pair() {
         drop(storage);
         assert_eq!(
             budget.reserved_bytes(),
-            Publication::allocation_demand().unwrap().bytes()
+            retained_publication_identity_bytes()
         );
         drop(predecessor);
         assert_eq!(budget.reserved_bytes(), 0);
@@ -1187,7 +1187,7 @@ fn admitted_replacement_planning_refusal_discards_the_restored_private_prefix() 
     drop(storage);
     assert_eq!(
         budget.reserved_bytes(),
-        Publication::allocation_demand().unwrap().bytes()
+        retained_publication_identity_bytes()
     );
     drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -1307,3 +1307,48 @@ fn admitted_snapshot_capacity_and_planning_refusals_leave_source_reusable() {
 
 #[path = "fresh_pair_acquisition_tests.rs"]
 mod fresh_pair_acquisition;
+
+// A captured predecessor retains owner/version identities, but no notification.
+fn retained_publication_identity_bytes() -> usize {
+    Publication::allocation_demand().unwrap().bytes()
+        - ReleaseNotification::allocation_layout::<AllocationCharge>().size()
+}
+
+#[test]
+fn admitted_initial_storage_includes_identity_notification_before_allocation() {
+    let required = ReplacementStorage::initial_allocation_demand()
+        .unwrap()
+        .bytes();
+    let budget = AllocationBudget::new(required - 1);
+    let _context = ReplacementContext::new(&budget);
+    assert!(matches!(
+        ReplacementStorage::try_new_admitted(budget.clone()),
+        Err(AdmittedStorageError::Allocation(_))
+    ));
+    assert_eq!(budget.reserved_bytes(), 0);
+    budget.set_limit_bytes(required);
+    let storage = ReplacementStorage::try_new_admitted(budget.clone()).unwrap();
+    assert_eq!(budget.reserved_bytes(), required);
+    let identity = storage.publication.capture();
+    let prepared = match identity.try_prepare_current::<()>(&storage.publication) {
+        Ok(prepared) => prepared,
+        Err(_) => panic!("uncontended original publication identity"),
+    };
+    let wait = match identity.try_prepare_current::<()>(&storage.publication) {
+        Err((PublicationPreparationError::Busy(wait), None)) => wait,
+        _ => panic!("the actual held identity must return its own release source"),
+    };
+    drop(prepared.abort());
+    drop(storage);
+    assert_eq!(
+        budget.reserved_bytes(),
+        Publication::allocation_demand().unwrap().bytes()
+    );
+    drop(identity);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseNotification::allocation_layout::<AllocationCharge>().size()
+    );
+    drop(wait);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

@@ -574,7 +574,6 @@ fn soracloud_ivm_host_rejects_the_state_backed_axt_surface() -> Result<()> {
         ivm_syscalls::SYSCALL_AXT_TOUCH,
         ivm_syscalls::SYSCALL_AXT_COMMIT,
         ivm_syscalls::SYSCALL_VERIFY_DS_PROOF,
-        ivm_syscalls::SYSCALL_USE_ASSET_HANDLE,
     ] {
         assert!(!host.allows_syscall(ivm::SyscallPolicy::AbiV1, syscall));
         let mut vm = IVM::new(u64::MAX);
@@ -2432,6 +2431,7 @@ fn soracloud_contract_artifact_with_words(entrypoints: &[&str], code_words: &[u3
         abi_version: 1,
     };
     let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: Vec::new(),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "irohad-soracloud-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),

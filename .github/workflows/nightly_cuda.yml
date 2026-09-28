@@ -23,6 +23,41 @@ env:
   RUST_TEST_THREADS: "1"
 
 jobs:
+  cuda-driverless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: "."
+      - name: CUDA driver boundary without toolkit or driver
+        run: |
+          set -o pipefail
+          mkdir -p dist/cuda-driverless
+          cargo test --locked -p cust_raw -- --include-ignored \
+            2>&1 | tee dist/cuda-driverless/driver-tests.log
+          python3 - <<'PY'
+          import pathlib
+          import subprocess
+          target = pathlib.Path("target/cuda-nightly/debug/deps")
+          binaries = [path for path in target.glob("driver_absent-*") if path.is_file() and path.suffix == ""]
+          assert binaries, "driverless qualification executable is missing"
+          reports = []
+          for binary in binaries:
+              linked = subprocess.check_output(["ldd", str(binary)], text=True)
+              assert "libcuda" not in linked and "nvcuda" not in linked, linked
+              print(binary, linked)
+              reports.append(f"{binary}\n{linked}")
+          pathlib.Path("dist/cuda-driverless/native-links.txt").write_text("\n".join(reports))
+          PY
+      - name: Upload driverless qualification
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cuda-driverless
+          path: dist/cuda-driverless
+          retention-days: 14
   cuda-hardware:
     runs-on: [self-hosted, Linux, cuda]
     timeout-minutes: 180
@@ -56,8 +91,14 @@ jobs:
             nvcc --version || true
           } | tee dist/cuda-nightly/hardware.md
           cat dist/cuda-nightly/hardware.md >> "$GITHUB_STEP_SUMMARY"
-      - name: IVM CUDA tests
-        run: cargo test -p ivm --lib cuda_ --features cuda -- --nocapture
+      - name: IVM required CUDA hardware qualification (generated diagnostic candidate)
+        run: |
+          set -o pipefail
+          cargo test --locked -p ivm --test cuda_hardware --features cuda-hardware-tests -- --nocapture \
+            2>&1 | tee dist/cuda-nightly/ivm-generated-hardware.log
+          cargo test --locked -p ivm --lib cuda_ --features cuda -- --nocapture
+          cargo test --locked -p ivm --test ivm_group_02 cuda --features cuda -- --nocapture
+          cargo test --locked -p ivm --test ivm_group_07 poseidon_cuda --features cuda -- --nocapture
       - name: FASTPQ CUDA tests
         run: cargo test -p fastpq_prover --lib --features fastpq-gpu cuda -- --nocapture
       - name: Norito CUDA zstd helper and loader tests
@@ -83,6 +124,18 @@ jobs:
             | tee dist/cuda-nightly/kotlin-bridge.sha256
           cd kotlin
           ./gradlew :core-jvm:cudaHardwareTest --console=plain
+      - name: IVM checked-in PTX identity and bundled hardware qualification
+        run: |
+          set -o pipefail
+          # Missing artifacts fail this release gate explicitly. Generated-candidate
+          # receipts above remain diagnostics, never evidence for bundled binaries.
+          IVM_CUDA_PTX_MODE=check cargo build --locked -p ivm --features cuda \
+            2>&1 | tee dist/cuda-nightly/ivm-ptx-identity.log
+          sha256sum crates/ivm/cuda/*.cu crates/ivm/cuda/*.ptx \
+            > dist/cuda-nightly/ivm-ptx.sha256
+          IVM_CUDA_PTX_MODE=bundled cargo test --locked -p ivm --test cuda_hardware \
+            --features cuda-hardware-tests -- --nocapture \
+            2>&1 | tee dist/cuda-nightly/ivm-bundled-hardware.log
       - name: Upload CUDA inventory
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

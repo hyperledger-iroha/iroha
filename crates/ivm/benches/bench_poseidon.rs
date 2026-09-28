@@ -1,6 +1,6 @@
 //! Benchmarks for Poseidon hash functions used by IVM.
 use criterion::{BenchmarkId, Criterion};
-use ivm::{poseidon2, poseidon2_many, poseidon6, poseidon6_many};
+use ivm::{poseidon2, poseidon2_many_into, poseidon6, poseidon6_many_into};
 use std::hint::black_box;
 fn bench_poseidon2(c: &mut Criterion) {
     c.bench_function("poseidon2", |b| {
@@ -23,10 +23,11 @@ fn bench_poseidon2_many(c: &mut Criterion) {
         let inputs: Vec<(u64, u64)> = (0..size)
             .map(|idx| (idx as u64, (idx as u64).wrapping_mul(3).wrapping_add(1)))
             .collect();
+        let mut result = vec![0; size];
         group.bench_with_input(BenchmarkId::from_parameter(size), &inputs, |b, inputs| {
             b.iter(|| {
-                let result = poseidon2_many(black_box(inputs));
-                black_box(result);
+                assert!(poseidon2_many_into(black_box(inputs), &mut result));
+                black_box(&result);
             });
         });
     }
@@ -48,10 +49,11 @@ fn bench_poseidon6_many(c: &mut Criterion) {
                 ]
             })
             .collect();
+        let mut result = vec![0; size];
         group.bench_with_input(BenchmarkId::from_parameter(size), &inputs, |b, inputs| {
             b.iter(|| {
-                let result = poseidon6_many(black_box(inputs));
-                black_box(result);
+                assert!(poseidon6_many_into(black_box(inputs), &mut result));
+                black_box(&result);
             });
         });
     }

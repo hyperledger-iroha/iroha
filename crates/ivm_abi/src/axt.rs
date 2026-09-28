@@ -1,35 +1,46 @@
 //! Atomic cross-transaction (AXT) helper types.
 //!
-//! The structures defined here deliberately model only the subset of fields exercised by the
-//! current host implementation. They provide a Norito- compatible schema so test fixtures can
-//! round-trip through the pointer-ABI TLVs exposed to the VM. As the end-to-end pipeline matures
-//! these models should converge with the canonical data-model crate.
+//! VM-facing descriptor, touch, and proof helpers adapt the canonical data-model
+//! AXT wire to pointer-ABI TLVs. Remote-spend staging carries the exact
+//! `AxtAnchoredSpendV1` model value. Staging checks public structural binding;
+//! finalized-source and issuer authority remain State-owned admission work.
 use crate::{
     codec::{decode_canonical_norito, encode_canonical_norito},
     error::VMError,
 };
-use iroha_crypto::{Hash, Signature};
+use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_crypto::Signature;
 #[cfg(test)]
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
+#[cfg(test)]
+use iroha_data_model::nexus::SpendOp as ModelSpendOp;
 use iroha_data_model::nexus::{
-    AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
-    AxtHandleBudgetKey as ModelAxtHandleBudgetKey,
-    AxtHandleBudgetRecord as ModelAxtHandleBudgetRecord, AxtHandleFragment,
-    AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry as ModelAxtPolicyEntry,
+    AssetHandle as ModelAssetHandle, AxtAnchoredSpendReplayKeyV1, AxtAnchoredSpendV1, AxtBinding,
+    AxtDescriptor as ModelAxtDescriptor, AxtHandleReplayKey,
     AxtPolicySnapshot as ModelAxtPolicySnapshot,
     AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
     AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec,
-    GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
-    HandleSubject as ModelHandleSubject, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
-    ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
-    SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest, compute_descriptor_binding,
-    compute_remote_spend_intent_commitment_v1, validate_descriptor as validate_model_descriptor,
+    MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES, ProofBlob as ModelProofBlob,
+    RemoteSpendIntent as ModelRemoteSpendIntent, TouchManifest as ModelTouchManifest,
+    compute_descriptor_binding, compute_remote_spend_intent_commitment_v1,
+    validate_descriptor as validate_model_descriptor,
 };
+#[cfg(test)]
+use iroha_data_model::nexus::{
+    AxtHandleBudgetKey as ModelAxtHandleBudgetKey, AxtHandleIssuerContextV1,
+    GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
+    HandleSubject as ModelHandleSubject,
+};
+#[cfg(test)]
+use iroha_data_model::prelude::AssetDefinitionId;
 use iroha_data_model::{
     asset::AssetBalanceScope,
-    prelude::{AccountId, AssetDefinitionId, Quantity},
+    prelude::{AccountId, Quantity},
 };
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::DataSpaceId;
+#[cfg(test)]
+use iroha_model_base::topology::LaneId;
 use norito::codec::{Decode, Encode};
 use std::{
     borrow::Cow,
@@ -138,7 +149,7 @@ impl AxtProofUseFacts {
         }
     }
 }
-/// Errors returned by [`resolve_handle_amount`].
+/// Errors returned by [`resolve_handle_amount_components`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleAmountResolutionError {
     /// No cleartext amount was provided; a public proof scalar cannot authorize a private amount.
@@ -246,21 +257,6 @@ fn derive_amount_commitment_from_normalized_payload(
             ])
             .into()
         },
-    )
-}
-/// Resolve an effective amount and commitment for a clear-amount handle usage.
-///
-/// A redacted intent cannot be authorized by the public `committed_amount` scalar
-/// in [`AxtProofEnvelope`]. Private amounts remain unavailable until their
-/// proof-bound relation and budget checks are implemented.
-pub fn resolve_handle_amount(
-    intent: &RemoteSpendIntent,
-    proof: Option<&ProofBlob>,
-) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
-    resolve_handle_amount_components(
-        intent.asset_dsid,
-        intent.op.amount.as_ref(),
-        proof.map(|blob| blob.payload.as_slice()),
     )
 }
 /// Resolve an effective amount from the canonical model components shared by
@@ -499,12 +495,10 @@ pub fn expiry_slot_with_skew(
     let skew_slots = effective_ms.div_ceil(slot_ms);
     expiry_slot.saturating_add(skew_slots)
 }
-/// Policy hook for gating AXT touches and handle usage.
+/// Policy hook for gating AXT touches.
 pub trait AxtPolicy: Send + Sync {
     /// Decide whether a touch manifest is allowed for the given dataspace.
     fn allow_touch(&self, dsid: DataSpaceId, manifest: &TouchManifest) -> Result<(), VMError>;
-    /// Decide whether a handle usage is allowed.
-    fn allow_handle(&self, usage: &HandleUsage) -> Result<(), VMError>;
 }
 /// Default AXT policy that allows all operations.
 pub struct AllowAllAxtPolicy;
@@ -512,17 +506,10 @@ impl AxtPolicy for AllowAllAxtPolicy {
     fn allow_touch(&self, _dsid: DataSpaceId, _manifest: &TouchManifest) -> Result<(), VMError> {
         Ok(())
     }
-    fn allow_handle(&self, _usage: &HandleUsage) -> Result<(), VMError> {
-        Ok(())
-    }
 }
 /// Simple policy implementation backed by an AXT policy snapshot.
 #[derive(Clone, Debug)]
-pub struct SnapshotAxtPolicy {
-    entries: BTreeMap<DataSpaceId, ModelAxtPolicyEntry>,
-    slot_length_ms: NonZeroU64,
-    max_clock_skew_ms: u64,
-}
+pub struct SnapshotAxtPolicy;
 impl SnapshotAxtPolicy {
     /// Construct a policy from a snapshot.
     ///
@@ -547,68 +534,15 @@ impl SnapshotAxtPolicy {
     /// not canonically ordered or its version does not bind its exact entries.
     pub fn new_with_timing(
         snapshot: &ModelAxtPolicySnapshot,
-        slot_length_ms: NonZeroU64,
-        max_clock_skew_ms: u64,
+        _slot_length_ms: NonZeroU64,
+        _max_clock_skew_ms: u64,
     ) -> Result<Self, ModelAxtPolicySnapshotValidationError> {
         snapshot.validate()?;
-        let entries = snapshot
-            .entries
-            .iter()
-            .map(|binding| (binding.dsid, binding.policy))
-            .collect();
-        Ok(Self {
-            entries,
-            slot_length_ms,
-            max_clock_skew_ms,
-        })
+        Ok(Self)
     }
 }
 impl AxtPolicy for SnapshotAxtPolicy {
     fn allow_touch(&self, _dsid: DataSpaceId, _manifest: &TouchManifest) -> Result<(), VMError> {
-        Ok(())
-    }
-    fn allow_handle(&self, usage: &HandleUsage) -> Result<(), VMError> {
-        let entry = self
-            .entries
-            .get(&usage.intent.asset_dsid)
-            .ok_or(VMError::PermissionDenied)?;
-        if entry.manifest_root.iter().all(|byte| *byte == 0) {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage
-            .handle
-            .manifest_view_root
-            .iter()
-            .all(|byte| *byte == 0)
-        {
-            return Err(VMError::PermissionDenied);
-        }
-        if let Some(requested) = usage.handle.max_clock_skew_ms
-            && u64::from(requested) > self.max_clock_skew_ms
-        {
-            return Err(VMError::PermissionDenied);
-        }
-        let expiry_slot = expiry_slot_with_skew(
-            usage.handle.expiry_slot,
-            self.slot_length_ms,
-            self.max_clock_skew_ms,
-            usage.handle.max_clock_skew_ms,
-        );
-        if entry.current_slot > 0 && entry.current_slot > expiry_slot {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.target_lane != entry.target_lane {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.manifest_view_root.as_slice() != entry.manifest_root.as_slice() {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.handle_era != entry.active_handle_era {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.sub_nonce != entry.next_handle_counter {
-            return Err(VMError::PermissionDenied);
-        }
         Ok(())
     }
 }
@@ -684,67 +618,18 @@ fn canonical_nonempty_strings(values: &[String]) -> bool {
         .all(|value| !value.is_empty() && value.trim() == value)
         && values.windows(2).all(|pair| pair[0] < pair[1])
 }
-/// Subset of the AssetHandle ticket encoded by asset dataspace capability issuers.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "ivm_abi::axt::AssetHandle")]
-pub struct AssetHandle {
-    /// Exact asset definition authorized by the issuer signature.
-    pub asset_definition_id: AssetDefinitionId,
-    /// Declared permissions (example values such as "transfer").
-    pub scope: Vec<String>,
-    /// Subject bound to the capability.
-    pub subject: HandleSubject,
-    /// Budget parameters controlling single-/multi-use semantics.
-    pub budget: HandleBudget,
-    /// Exact active policy era selected by the issuer.
-    pub handle_era: u64,
-    /// Exact next per-dataspace counter selected by the issuer.
-    pub sub_nonce: u64,
-    /// Lane/group binding advertised by the issuer.
-    pub group_binding: GroupBinding,
-    /// Lane the handle is authorised to execute on.
-    pub target_lane: LaneId,
-    /// Poseidon-style binding of this handle to a descriptor (32 bytes).
-    pub axt_binding: Vec<u8>,
-    /// Dataspace manifest root observed by the issuer at handle time.
-    pub manifest_view_root: Vec<u8>,
-    /// Expiry slot for freshness enforcement.
-    pub expiry_slot: u64,
-    /// Optional wall-clock skew allowance enforced by the host.
-    pub max_clock_skew_ms: Option<u32>,
-    /// Immutable network, issuer, code, and ABI context authenticated by the signature.
-    pub issuer_context: AxtHandleIssuerContextV1,
-    /// Mandatory signature made by the issuer key resolved from committed policy.
-    pub issuer_signature: Signature,
-}
-impl AssetHandle {
-    /// Returns the binding as a 32-byte array when present.
-    #[must_use]
-    pub fn binding_array(&self) -> Option<[u8; 32]> {
-        if self.axt_binding.len() == 32 {
-            let mut buf = [0u8; 32];
-            buf.copy_from_slice(&self.axt_binding);
-            Some(buf)
-        } else {
-            None
-        }
-    }
-}
-/// Validate the context-free shape and value invariants of an asset handle.
+/// Validate the context-free shape and value invariants of a signed model handle.
 ///
-/// Policy bindings, current slots, descriptor identity, subjects, operations,
-/// and cumulative budgets require host context and are intentionally checked
-/// by [`AxtPolicy`] and [`HostAxtState`].
+/// Current issuer authority, descriptor identity, freshness, and cumulative
+/// budgets require authenticated State context. The signed model value is the
+/// only V1 handle wire; there is no pointer-only handle representation.
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] for malformed fixed-width fields or a
-/// non-canonical account identifier and [`VMError::PermissionDenied`] for
-/// unusable zero/empty capability values.
-pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
-    if handle.axt_binding.len() != 32
-        || handle.manifest_view_root.len() != 32
-        || handle.group_binding.composability_group_id.is_empty()
+/// Returns [`VMError::NoritoInvalid`] for noncanonical strings or account IDs
+/// and [`VMError::PermissionDenied`] for unusable capability values.
+pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMError> {
+    if handle.group_binding.composability_group_id.is_empty()
         || !canonical_nonempty_strings(&handle.scope)
         || (!handle.subject.account.is_empty()
             && canonical_account_id(&handle.subject.account).is_none())
@@ -776,141 +661,13 @@ pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
     }
     Ok(())
 }
-/// Validate a persisted data-model handle with the pointer-runtime invariants.
+/// Validate a signed model remote-spend intent's context-free invariants.
 ///
 /// # Errors
 ///
-/// Returns the same error classification as [`validate_asset_handle`].
-pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMError> {
-    validate_asset_handle(&AssetHandle {
-        asset_definition_id: handle.asset_definition_id.clone(),
-        scope: handle.scope.clone(),
-        subject: HandleSubject {
-            account: handle.subject.account.clone(),
-            origin_dsid: handle.subject.origin_dsid,
-        },
-        budget: HandleBudget {
-            remaining: handle.budget.remaining.clone(),
-            per_use: handle.budget.per_use.clone(),
-        },
-        handle_era: handle.handle_era,
-        sub_nonce: handle.sub_nonce,
-        group_binding: GroupBinding {
-            composability_group_id: handle.group_binding.composability_group_id.clone(),
-            epoch_id: handle.group_binding.epoch_id,
-        },
-        target_lane: handle.target_lane,
-        axt_binding: handle.axt_binding.as_bytes().to_vec(),
-        manifest_view_root: handle.manifest_view_root.to_vec(),
-        expiry_slot: handle.expiry_slot,
-        max_clock_skew_ms: handle.max_clock_skew_ms,
-        issuer_context: handle.issuer_context,
-        issuer_signature: handle.issuer_signature.clone(),
-    })
-}
-impl TryFrom<&AssetHandle> for ModelAssetHandle {
-    type Error = VMError;
-
-    fn try_from(handle: &AssetHandle) -> Result<Self, Self::Error> {
-        let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-        let manifest_view_root = manifest_root_array(handle)?;
-        Ok(Self {
-            asset_definition_id: handle.asset_definition_id.clone(),
-            scope: handle.scope.clone(),
-            subject: ModelHandleSubject {
-                account: handle.subject.account.clone(),
-                origin_dsid: handle.subject.origin_dsid,
-            },
-            budget: ModelHandleBudget {
-                remaining: handle.budget.remaining.clone(),
-                per_use: handle.budget.per_use.clone(),
-            },
-            handle_era: handle.handle_era,
-            sub_nonce: handle.sub_nonce,
-            group_binding: ModelGroupBinding {
-                composability_group_id: handle.group_binding.composability_group_id.clone(),
-                epoch_id: handle.group_binding.epoch_id,
-            },
-            target_lane: handle.target_lane,
-            axt_binding: AxtBinding::new(binding),
-            manifest_view_root,
-            expiry_slot: handle.expiry_slot,
-            max_clock_skew_ms: handle.max_clock_skew_ms,
-            issuer_context: handle.issuer_context,
-            issuer_signature: handle.issuer_signature.clone(),
-        })
-    }
-}
-/// Capability subject metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "ivm_abi::axt::HandleSubject")]
-pub struct HandleSubject {
-    /// Canonical I105 account identifier of the spender.
-    pub account: String,
-    /// Optional originating dataspace for cross-DS handles.
-    pub origin_dsid: Option<DataSpaceId>,
-}
-/// Handle budget parameters.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "ivm_abi::axt::HandleBudget")]
-pub struct HandleBudget {
-    /// Remaining allowance for the capability.
-    pub remaining: Quantity,
-    /// Optional per-use cap.
-    pub per_use: Option<Quantity>,
-}
-/// Dataspace composability group binding advertised by the capability.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "ivm_abi::axt::GroupBinding")]
-pub struct GroupBinding {
-    /// Domain or composability group identifier.
-    pub composability_group_id: Vec<u8>,
-    /// Epoch identifier linked to the handle.
-    pub epoch_id: u64,
-}
-impl PartialOrd for GroupBinding {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for GroupBinding {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.composability_group_id
-            .cmp(&other.composability_group_id)
-            .then_with(|| self.epoch_id.cmp(&other.epoch_id))
-    }
-}
-/// Intent forwarded to an asset dataspace via `USE_ASSET_HANDLE`.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "ivm_abi::axt::RemoteSpendIntent")]
-pub struct RemoteSpendIntent {
-    /// Target asset dataspace identifier.
-    pub asset_dsid: DataSpaceId,
-    /// Operation payload (e.g., transfer details) expressed as JSON-ish strings for now.
-    pub op: SpendOp,
-}
-/// Simplified representation of spend operations.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "ivm_abi::axt::SpendOp")]
-pub struct SpendOp {
-    /// Exact asset definition authorized by the handle and proof statement.
-    pub asset_definition_id: AssetDefinitionId,
-    /// Operation kind (e.g., "transfer").
-    pub kind: String,
-    /// Origin account id in canonical I105 form.
-    pub from: String,
-    /// Destination account id in canonical I105 form.
-    pub to: String,
-    /// Cleartext amount. A redacted value is rejected by V1 handle admission.
-    pub amount: Option<Quantity>,
-}
-/// Validate context-free invariants of a remote spend intent.
-///
-/// # Errors
-///
-/// Returns [`VMError::NoritoInvalid`] for empty or non-canonical operation and account strings, and
-/// [`VMError::PermissionDenied`] for an absent or zero amount.
-pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VMError> {
+/// Returns [`VMError::NoritoInvalid`] for non-transfer operations or
+/// noncanonical accounts and [`VMError::PermissionDenied`] for an absent or zero amount.
+pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Result<(), VMError> {
     if intent.op.kind != "transfer" {
         return Err(VMError::NoritoInvalid);
     }
@@ -926,12 +683,10 @@ pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VM
     }
     Ok(())
 }
-
 fn canonical_account_id(value: &str) -> Option<AccountId> {
     let parsed = AccountId::parse_encoded(value).ok()?;
     (parsed.to_string() == value).then_some(parsed)
 }
-
 /// Require a registered asset policy's balance scope to match the intent dataspace.
 ///
 /// Globally scoped assets belong to the universal dataspace. A
@@ -954,59 +709,14 @@ pub fn validate_remote_spend_asset_scope(
     };
     matches.then_some(()).ok_or(VMError::PermissionDenied)
 }
-/// Validate a persisted data-model intent with the pointer-runtime invariants.
-///
-/// # Errors
-///
-/// Returns the same error classification as [`validate_remote_spend_intent`].
-pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Result<(), VMError> {
-    validate_remote_spend_intent(&RemoteSpendIntent {
-        asset_dsid: intent.asset_dsid,
-        op: SpendOp {
-            asset_definition_id: intent.op.asset_definition_id.clone(),
-            kind: intent.op.kind.clone(),
-            from: intent.op.from.clone(),
-            to: intent.op.to.clone(),
-            amount: intent.op.amount.clone(),
-        },
-    })
-}
-/// Require a proof-bound commitment to the exact runtime remote-spend statement.
-///
-/// This is a semantic membership check only. The caller must first verify the
-/// FASTPQ proof cryptographically. Keeping the check separate ensures it still
-/// runs for every handle when a verified proof is reused from a per-dataspace
-/// cache or proof fragment.
-///
-/// # Errors
-///
-/// Returns [`VMError::NoritoInvalid`] when the proof is not a canonical AXT
-/// envelope, and [`VMError::PermissionDenied`] when it lacks the exact
-/// handle identity/asset/operation/account/amount commitment.
-pub fn validate_remote_spend_intent_commitment(
-    handle: &AssetHandle,
-    intent: &RemoteSpendIntent,
-    effective_amount: &Quantity,
-    proof: &ProofBlob,
-) -> Result<(), VMError> {
-    if intent.op.amount.as_ref() != Some(effective_amount)
-        || handle.asset_definition_id != intent.op.asset_definition_id
-    {
-        return Err(VMError::PermissionDenied);
-    }
-    validate_remote_spend_intent_commitment_components(
-        expected_remote_spend_intent_commitment_v1(handle, intent, effective_amount)?,
-        &proof.payload,
-    )
-}
 /// Require a proof-bound commitment for a persisted data-model remote spend.
 ///
 /// The caller must first verify the FASTPQ proof cryptographically.
 ///
 /// # Errors
 ///
-/// Returns the same error classification as
-/// [`validate_remote_spend_intent_commitment`].
+/// Returns [`VMError::PermissionDenied`] for a mismatched asset or absent
+/// proof-bound commitment, and [`VMError::NoritoInvalid`] for malformed proof bytes.
 pub fn validate_model_remote_spend_intent_commitment(
     handle: &ModelAssetHandle,
     intent: &ModelRemoteSpendIntent,
@@ -1049,40 +759,6 @@ pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
         expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
         &facts.remote_spend_intent_commitments,
     )
-}
-
-/// Derive the commitment expected for one concrete pointer-ABI handle use.
-///
-/// # Errors
-///
-/// Returns [`VMError::NoritoInvalid`] if the handle descriptor binding is not
-/// exactly 32 bytes, and [`VMError::PermissionDenied`] if the intent names an
-/// asset other than the one authenticated by the handle issuer.
-pub fn expected_remote_spend_intent_commitment_v1(
-    handle: &AssetHandle,
-    intent: &RemoteSpendIntent,
-    effective_amount: &Quantity,
-) -> Result<[u8; 32], VMError> {
-    if handle.asset_definition_id != intent.op.asset_definition_id {
-        return Err(VMError::PermissionDenied);
-    }
-    let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-    let replay_key = AxtHandleReplayKey::from_parts(
-        intent.asset_dsid,
-        handle.issuer_context.asset_definition_incarnation,
-        binding,
-        handle.handle_era,
-        handle.sub_nonce,
-        handle.target_lane,
-    );
-    Ok(compute_remote_spend_intent_commitment_v1(
-        replay_key,
-        &handle.asset_definition_id,
-        &intent.op.kind,
-        &intent.op.from,
-        &intent.op.to,
-        effective_amount,
-    ))
 }
 
 /// Derive the commitment expected for one concrete persisted handle use.
@@ -1275,8 +951,7 @@ pub struct HostAxtState {
     expected_dsids: BTreeSet<DataSpaceId>,
     touches: BTreeMap<DataSpaceId, TouchManifest>,
     proofs: BTreeMap<DataSpaceId, ProofBlob>,
-    handles: Vec<HandleUsage>,
-    handle_fragments: Vec<AxtHandleFragment>,
+    spends: Vec<AxtAnchoredSpendV1>,
 }
 impl HostAxtState {
     #[must_use]
@@ -1288,8 +963,7 @@ impl HostAxtState {
             expected_dsids,
             touches: BTreeMap::new(),
             proofs: BTreeMap::new(),
-            handles: Vec::new(),
-            handle_fragments: Vec::new(),
+            spends: Vec::new(),
         }
     }
     #[must_use]
@@ -1365,65 +1039,6 @@ impl HostAxtState {
         }
         Ok(())
     }
-    pub fn record_handle(&mut self, usage: HandleUsage) -> Result<(), VMError> {
-        if usage.amount.is_zero() {
-            return Err(VMError::PermissionDenied);
-        }
-        validate_asset_handle(&usage.handle)?;
-        validate_remote_spend_intent(&usage.intent)?;
-        if usage.handle.asset_definition_id != usage.intent.op.asset_definition_id {
-            return Err(VMError::PermissionDenied);
-        }
-        if !self.expected_dsids.contains(&usage.intent.asset_dsid) {
-            return Err(VMError::PermissionDenied);
-        }
-        if !self.touches.contains_key(&usage.intent.asset_dsid) {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage
-            .handle
-            .scope
-            .iter()
-            .all(|scope| scope != &usage.intent.op.kind)
-        {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.intent.op.from != usage.handle.subject.account {
-            return Err(VMError::PermissionDenied);
-        }
-        let binding = usage.handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-        if binding != self.binding {
-            return Err(VMError::PermissionDenied);
-        }
-        // Ensure replay protection per handle/sub-nonce combination before budget checks.
-        if self.handles.iter().any(|prev| {
-            prev.intent.asset_dsid == usage.intent.asset_dsid
-                && prev.handle.handle_era == usage.handle.handle_era
-                && prev
-                    .handle
-                    .binding_array()
-                    .is_some_and(|prev_binding| prev_binding == binding)
-                && prev.handle.target_lane == usage.handle.target_lane
-                && usage.handle.sub_nonce == prev.handle.sub_nonce
-        }) {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.amount > usage.handle.budget.remaining {
-            return Err(VMError::PermissionDenied);
-        }
-        if let Some(per_use) = usage.handle.budget.per_use.as_ref()
-            && &usage.amount > per_use
-        {
-            return Err(VMError::PermissionDenied);
-        }
-        if let Some(proof) = &usage.proof {
-            validate_proof_blob(proof)?;
-        }
-        let fragment = AxtHandleFragment::try_from(&usage)?;
-        self.handles.push(usage);
-        self.handle_fragments.push(fragment);
-        Ok(())
-    }
     #[must_use]
     pub fn touches(&self) -> &BTreeMap<DataSpaceId, TouchManifest> {
         &self.touches
@@ -1432,145 +1047,106 @@ impl HostAxtState {
     pub fn proofs(&self) -> &BTreeMap<DataSpaceId, ProofBlob> {
         &self.proofs
     }
-    #[must_use]
-    pub fn handles(&self) -> &[HandleUsage] {
-        &self.handles
+    /// Stage one canonical signed spend claim for transactional State admission.
+    ///
+    /// This checks only internally consistent public fields. It does not
+    /// authenticate the claimed finalized source anchor, execution receipt,
+    /// issuer key, or replay state; State must reject the completed envelope
+    /// until those authorities are available.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a spend outside the active descriptor, malformed static
+    /// binding, or a local allocation failure before the vector grows.
+    pub fn record_spend(&mut self, spend: AxtAnchoredSpendV1) -> Result<(), VMError> {
+        if !self.expected_dsids.contains(&spend.draft.intent.asset_dsid)
+            || spend.draft.handle.axt_binding != AxtBinding::new(self.binding)
+            || validate_model_asset_handle(&spend.draft.handle).is_err()
+            || validate_model_remote_spend_intent(&spend.draft.intent).is_err()
+            || spend.issuer_payload_v1().is_err()
+        {
+            return Err(VMError::PermissionDenied);
+        }
+        if self.spends.len() >= iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 {
+            return Err(VMError::PermissionDenied);
+        }
+        self.spends.try_reserve(1).map_err(|_| {
+            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+        })?;
+        self.spends.push(spend);
+        Ok(())
     }
+    /// Staged signed spends in exact VM call order.
     #[must_use]
-    /// Return handle fragments recorded from accepted handle usages.
-    pub fn handle_fragments(&self) -> &[AxtHandleFragment] {
-        &self.handle_fragments
+    pub fn spends(&self) -> &[AxtAnchoredSpendV1] {
+        &self.spends
     }
+    /// Validate the staged envelope before its exact signed wires are materialized.
+    ///
+    /// This checks local one-use identities only. It does not grant source
+    /// finality, issuer authority, or permission to apply a remote spend.
+    ///
+    /// # Errors
+    /// Rejects missing declared material, duplicate signed issuer nonces or
+    /// source transfer coordinates, and unavailable local index allocation.
     pub fn validate_commit(&self) -> Result<(), VMError> {
         for dsid in &self.expected_dsids {
             if self.descriptor.touch_for(dsid).is_some() && !self.touches.contains_key(dsid) {
                 return Err(VMError::PermissionDenied);
             }
         }
-        let mut seen_nonces: BTreeSet<(DataSpaceId, [u8; 32], u64, LaneId, u64)> = BTreeSet::new();
-        let mut accumulators: BTreeMap<HandleBudgetKey, ModelAxtHandleBudgetRecord> =
-            BTreeMap::new();
-        for usage in &self.handles {
-            if usage.handle.asset_definition_id != usage.intent.op.asset_definition_id {
-                return Err(VMError::PermissionDenied);
-            }
-            let binding = usage.handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-            let key = (
-                usage.intent.asset_dsid,
-                binding,
-                usage.handle.handle_era,
-                usage.handle.target_lane,
-                usage.handle.sub_nonce,
-            );
-            if !seen_nonces.insert(key) {
-                return Err(VMError::PermissionDenied);
-            }
-            if usage.amount > usage.handle.budget.remaining {
-                return Err(VMError::PermissionDenied);
-            }
-            if let Some(proof) = usage
-                .proof
-                .as_ref()
-                .or_else(|| self.proofs.get(&usage.intent.asset_dsid))
-                && let Some(expiry_slot) = proof.expiry_slot
-                && (expiry_slot == 0 || usage.handle.expiry_slot > expiry_slot)
+        for dsid in &self.expected_dsids {
+            if !self.proofs.contains_key(dsid)
+                && !self
+                    .spends
+                    .iter()
+                    .any(|spend| spend.draft.intent.asset_dsid == *dsid)
             {
                 return Err(VMError::PermissionDenied);
             }
-            if usage.proof.is_none() && !self.proofs.contains_key(&usage.intent.asset_dsid) {
-                return Err(VMError::PermissionDenied);
-            }
-            let budget_key = try_handle_budget_key(usage.intent.asset_dsid, &usage.handle)?;
-            accumulators
-                .entry(budget_key.clone())
-                .or_insert_with(ModelAxtHandleBudgetRecord::empty)
-                .try_consume(&budget_key, &usage.amount, 0)
-                .map_err(|_| VMError::PermissionDenied)?;
         }
-        let mut dataspace_proofs_present: BTreeSet<DataSpaceId> =
-            self.proofs.keys().copied().collect();
-        for usage in &self.handles {
-            if usage.proof.is_some() {
-                dataspace_proofs_present.insert(usage.intent.asset_dsid);
-            }
+        // One signed issuer nonce and one finalized source transfer may each
+        // authorize at most one staged use. Compare the physical source
+        // coordinate rather than the claim digest: a second handle/nonce must
+        // not make the same transfer occurrence appear fresh. These bounded,
+        // fallible indexes are local preflight only; State still owns durable
+        // replay and rejects all remote spends until source finality is proven.
+        let mut nonces = Vec::<AxtAnchoredSpendReplayKeyV1>::new();
+        let mut occurrences = Vec::new();
+        nonces.try_reserve_exact(self.spends.len()).map_err(|_| {
+            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+        })?;
+        occurrences
+            .try_reserve_exact(self.spends.len())
+            .map_err(|_| {
+                VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            })?;
+        for spend in &self.spends {
+            nonces.push(spend.replay_key_v1());
+            let anchor = &spend.authorization.anchor;
+            let occurrence = &spend.draft.source_occurrence;
+            occurrences.push((
+                anchor.network_id,
+                anchor.block_header_hash,
+                occurrence.source_tx_index,
+                occurrence.transcript_index,
+                occurrence.delta_index,
+            ));
         }
-        for dsid in &self.expected_dsids {
-            if !dataspace_proofs_present.contains(dsid) {
-                return Err(VMError::PermissionDenied);
-            }
+        nonces.sort_unstable();
+        occurrences.sort_unstable();
+        if nonces.windows(2).any(|pair| pair[0] == pair[1])
+            || occurrences.windows(2).any(|pair| pair[0] == pair[1])
+        {
+            return Err(VMError::PermissionDenied);
         }
         Ok(())
     }
 }
-/// Recorded handle usage for commit validation.
-#[derive(Debug, Clone)]
-pub struct HandleUsage {
-    pub handle: AssetHandle,
-    pub intent: RemoteSpendIntent,
-    pub proof: Option<ProofBlob>,
-    pub amount: Quantity,
-    pub amount_commitment: Option<[u8; 32]>,
-}
-impl TryFrom<&HandleUsage> for AxtHandleFragment {
-    type Error = VMError;
-    fn try_from(usage: &HandleUsage) -> Result<Self, Self::Error> {
-        if usage.intent.op.amount.as_ref() != Some(&usage.amount) {
-            return Err(VMError::PermissionDenied);
-        }
-        let handle = ModelAssetHandle::try_from(&usage.handle)?;
-        let intent = ModelRemoteSpendIntent {
-            asset_dsid: usage.intent.asset_dsid,
-            op: ModelSpendOp {
-                asset_definition_id: usage.intent.op.asset_definition_id.clone(),
-                kind: usage.intent.op.kind.clone(),
-                from: usage.intent.op.from.clone(),
-                to: usage.intent.op.to.clone(),
-                amount: usage.intent.op.amount.clone(),
-            },
-        };
-        let proof = usage.proof.as_ref().map(|p| ModelProofBlob {
-            payload: p.payload.clone(),
-            expiry_slot: p.expiry_slot,
-        });
-        Ok(AxtHandleFragment {
-            handle,
-            intent,
-            proof,
-            amount: Some(usage.amount.clone()),
-            amount_commitment: usage.amount_commitment,
-        })
-    }
-}
-/// Canonical consensus key used to aggregate an issuer-signed handle family.
-pub type HandleBudgetKey = ModelAxtHandleBudgetKey;
-/// Derive the canonical consensus budget key from a pointer-ABI handle.
-///
-/// # Errors
-///
-/// Returns [`VMError::NoritoInvalid`] for malformed fixed-width fields and
-/// [`VMError::PermissionDenied`] when `asset_dsid` is not the dataspace
-/// authenticated by the issuer context.
-pub fn try_handle_budget_key(
-    asset_dsid: DataSpaceId,
-    handle: &AssetHandle,
-) -> Result<HandleBudgetKey, VMError> {
-    if handle.issuer_context.asset_dsid != asset_dsid {
-        return Err(VMError::PermissionDenied);
-    }
-    let model = ModelAssetHandle::try_from(handle)?;
-    Ok(HandleBudgetKey::from_handle(&model))
-}
-fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
-    if handle.manifest_view_root.len() != 32 {
-        return Err(VMError::NoritoInvalid);
-    }
-    let mut manifest_root = [0u8; 32];
-    manifest_root.copy_from_slice(&handle.manifest_view_root);
-    Ok(manifest_root)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::nexus::AxtPolicyEntry as ModelAxtPolicyEntry;
     use iroha_model_base::domain::DomainId;
     const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
@@ -1696,27 +1272,27 @@ mod tests {
         binding: [u8; 32],
         remaining: u128,
         per_use: Option<u128>,
-    ) -> AssetHandle {
-        AssetHandle {
+    ) -> ModelAssetHandle {
+        ModelAssetHandle {
             asset_definition_id: test_asset_definition_id(),
             scope: vec!["transfer".into()],
-            subject: HandleSubject {
+            subject: ModelHandleSubject {
                 account: ACCOUNT_FROM_LITERAL.into(),
                 origin_dsid: Some(dsid),
             },
-            budget: HandleBudget {
+            budget: ModelHandleBudget {
                 remaining: quantity(remaining),
                 per_use: per_use.map(quantity),
             },
             handle_era: 1,
             sub_nonce: 7,
-            group_binding: GroupBinding {
+            group_binding: ModelGroupBinding {
                 composability_group_id: vec![0; 32],
                 epoch_id: 10,
             },
             target_lane: LaneId::new(0),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: vec![1; 32],
+            axt_binding: AxtBinding::new(binding),
+            manifest_view_root: [1; 32],
             expiry_slot: 99,
             max_clock_skew_ms: Some(0),
             issuer_context: AxtHandleIssuerContextV1 {
@@ -1730,41 +1306,29 @@ mod tests {
     fn standalone_handle_validation_rejects_every_context_free_fault() {
         let dsid = DataSpaceId::new(7);
         let valid = sample_handle(dsid, [0x11; 32], 10, Some(5));
-        assert_eq!(validate_asset_handle(&valid), Ok(()));
-        let mut malformed = valid.clone();
-        malformed.axt_binding.pop();
-        assert_eq!(
-            validate_asset_handle(&malformed),
-            Err(VMError::NoritoInvalid)
-        );
-        let mut malformed = valid.clone();
-        malformed.manifest_view_root.push(0);
-        assert_eq!(
-            validate_asset_handle(&malformed),
-            Err(VMError::NoritoInvalid)
-        );
+        assert_eq!(validate_model_asset_handle(&valid), Ok(()));
         let mut malformed = valid.clone();
         malformed.group_binding.composability_group_id.clear();
         assert_eq!(
-            validate_asset_handle(&malformed),
+            validate_model_asset_handle(&malformed),
             Err(VMError::NoritoInvalid)
         );
         let mut unusable = valid.clone();
         unusable.scope.clear();
         assert_eq!(
-            validate_asset_handle(&unusable),
+            validate_model_asset_handle(&unusable),
             Err(VMError::PermissionDenied)
         );
         let mut unusable = valid.clone();
         unusable.budget.remaining = Quantity::zero();
         assert_eq!(
-            validate_asset_handle(&unusable),
+            validate_model_asset_handle(&unusable),
             Err(VMError::PermissionDenied)
         );
         let mut unusable = valid.clone();
         unusable.budget.per_use = Some(Quantity::zero());
         assert_eq!(
-            validate_asset_handle(&unusable),
+            validate_model_asset_handle(&unusable),
             Err(VMError::PermissionDenied)
         );
         for field in ["handle era", "sub nonce", "group epoch", "expiry slot"] {
@@ -1777,31 +1341,31 @@ mod tests {
                 _ => unreachable!(),
             }
             assert_eq!(
-                validate_asset_handle(&unusable),
+                validate_model_asset_handle(&unusable),
                 Err(VMError::PermissionDenied),
                 "zero {field} must fail validation"
             );
         }
-        let malformed_mutations: [fn(&mut AssetHandle); 4] = [
-            |handle: &mut AssetHandle| handle.scope[0].push(' '),
-            |handle: &mut AssetHandle| handle.scope.push("transfer".to_owned()),
-            |handle: &mut AssetHandle| {
+        let malformed_mutations: [fn(&mut ModelAssetHandle); 4] = [
+            |handle: &mut ModelAssetHandle| handle.scope[0].push(' '),
+            |handle: &mut ModelAssetHandle| handle.scope.push("transfer".to_owned()),
+            |handle: &mut ModelAssetHandle| {
                 handle.scope = vec!["withdraw".to_owned(), "transfer".to_owned()];
             },
-            |handle: &mut AssetHandle| handle.subject.account.push(' '),
+            |handle: &mut ModelAssetHandle| handle.subject.account.push(' '),
         ];
         for mutate in malformed_mutations {
             let mut malformed = valid.clone();
             mutate(&mut malformed);
             assert_eq!(
-                validate_asset_handle(&malformed),
+                validate_model_asset_handle(&malformed),
                 Err(VMError::NoritoInvalid)
             );
         }
         let mut unusable = valid;
         unusable.subject.account.clear();
         assert_eq!(
-            validate_asset_handle(&unusable),
+            validate_model_asset_handle(&unusable),
             Err(VMError::PermissionDenied)
         );
     }
@@ -1809,7 +1373,7 @@ mod tests {
     fn asset_handle_subject_requires_canonical_account_id() {
         let dsid = DataSpaceId::new(7);
         let valid = sample_handle(dsid, [0x11; 32], 10, Some(5));
-        assert_eq!(validate_asset_handle(&valid), Ok(()));
+        assert_eq!(validate_model_asset_handle(&valid), Ok(()));
 
         let mut malformed = ACCOUNT_FROM_LITERAL.to_owned();
         malformed.pop();
@@ -1826,7 +1390,7 @@ mod tests {
             let mut invalid = valid.clone();
             invalid.subject.account = account;
             assert_eq!(
-                validate_asset_handle(&invalid),
+                validate_model_asset_handle(&invalid),
                 Err(VMError::NoritoInvalid),
                 "{case} subject account must fail"
             );
@@ -1894,10 +1458,10 @@ mod tests {
             "an explicit None remains the authenticated no-expiry value"
         );
     }
-    fn sample_intent(dsid: DataSpaceId, amount: Option<u128>) -> RemoteSpendIntent {
-        RemoteSpendIntent {
+    fn sample_intent(dsid: DataSpaceId, amount: Option<u128>) -> ModelRemoteSpendIntent {
+        ModelRemoteSpendIntent {
             asset_dsid: dsid,
-            op: SpendOp {
+            op: ModelSpendOp {
                 asset_definition_id: test_asset_definition_id(),
                 kind: "transfer".into(),
                 from: ACCOUNT_FROM_LITERAL.into(),
@@ -1915,7 +1479,7 @@ mod tests {
     fn remote_spend_intent_rejects_empty_whitespace_and_zero_values() {
         let dsid = DataSpaceId::new(7);
         let valid = sample_intent(dsid, Some(1));
-        assert_eq!(validate_remote_spend_intent(&valid), Ok(()));
+        assert_eq!(validate_model_remote_spend_intent(&valid), Ok(()));
         for field in ["kind", "from", "to"] {
             let mut invalid = valid.clone();
             match field {
@@ -1925,17 +1489,17 @@ mod tests {
                 _ => unreachable!(),
             }
             assert_eq!(
-                validate_remote_spend_intent(&invalid),
+                validate_model_remote_spend_intent(&invalid),
                 Err(VMError::NoritoInvalid),
                 "invalid {field} must fail"
             );
         }
         assert_eq!(
-            validate_remote_spend_intent(&sample_intent(dsid, Some(0))),
+            validate_model_remote_spend_intent(&sample_intent(dsid, Some(0))),
             Err(VMError::PermissionDenied)
         );
         assert_eq!(
-            validate_remote_spend_intent(&sample_intent(dsid, None)),
+            validate_model_remote_spend_intent(&sample_intent(dsid, None)),
             Err(VMError::PermissionDenied),
             "a redacted intent cannot be authorized by a public proof scalar"
         );
@@ -1943,7 +1507,7 @@ mod tests {
             let mut invalid = valid.clone();
             invalid.op.kind = kind.to_owned();
             assert_eq!(
-                validate_remote_spend_intent(&invalid),
+                validate_model_remote_spend_intent(&invalid),
                 Err(VMError::NoritoInvalid),
                 "non-transfer operation {kind:?} must fail closed"
             );
@@ -1977,7 +1541,7 @@ mod tests {
     fn remote_spend_intent_from_and_to_require_canonical_account_ids() {
         let dsid = DataSpaceId::new(7);
         let valid = sample_intent(dsid, Some(1));
-        assert_eq!(validate_remote_spend_intent(&valid), Ok(()));
+        assert_eq!(validate_model_remote_spend_intent(&valid), Ok(()));
 
         let mut malformed = ACCOUNT_FROM_LITERAL.to_owned();
         malformed.pop();
@@ -1999,7 +1563,7 @@ mod tests {
                     _ => unreachable!(),
                 }
                 assert_eq!(
-                    validate_remote_spend_intent(&invalid),
+                    validate_model_remote_spend_intent(&invalid),
                     Err(VMError::NoritoInvalid),
                     "{case} {field} account must fail"
                 );
@@ -2060,7 +1624,7 @@ mod tests {
         proof
     }
     fn proof_for_remote_spends(
-        intents: &[(&AssetHandle, &RemoteSpendIntent, Quantity)],
+        intents: &[(&ModelAssetHandle, &ModelRemoteSpendIntent, Quantity)],
     ) -> ProofBlob {
         let dsid = intents
             .first()
@@ -2071,8 +1635,7 @@ mod tests {
         binding.remote_spend_intent_commitments = intents
             .iter()
             .map(|(handle, intent, amount)| {
-                expected_remote_spend_intent_commitment_v1(handle, intent, amount)
-                    .expect("fixture handle binding")
+                expected_model_remote_spend_intent_commitment_v1(handle, intent, amount)
             })
             .collect();
         binding.remote_spend_intent_commitments.sort_unstable();
@@ -2090,6 +1653,32 @@ mod tests {
             .expect("encode remote-spend proof envelope"),
             expiry_slot: Some(10),
         }
+    }
+    fn resolve_test_amount(
+        intent: &ModelRemoteSpendIntent,
+        proof: Option<&ProofBlob>,
+    ) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
+        resolve_handle_amount_components(
+            intent.asset_dsid,
+            intent.op.amount.as_ref(),
+            proof.map(|blob| blob.payload.as_slice()),
+        )
+    }
+    fn validate_model_claim_for_test(
+        handle: &ModelAssetHandle,
+        intent: &ModelRemoteSpendIntent,
+        amount: &Quantity,
+        proof: &ProofBlob,
+    ) -> Result<(), VMError> {
+        validate_model_remote_spend_intent_commitment(
+            handle,
+            intent,
+            amount,
+            &ModelProofBlob {
+                payload: proof.payload.clone(),
+                expiry_slot: proof.expiry_slot,
+            },
+        )
     }
     #[test]
     fn proof_payload_decode_helpers_reject_oversized_canonical_envelope() {
@@ -2114,11 +1703,11 @@ mod tests {
 
         assert_eq!(validate_proof_blob(&oversized), Err(VMError::NoritoInvalid));
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&oversized)),
+            resolve_test_amount(&intent, Some(&oversized)),
             Err(HandleAmountResolutionError::InvalidProofEnvelope)
         );
         assert_eq!(
-            validate_remote_spend_intent_commitment(&handle, &intent, &amount, &oversized),
+            validate_model_claim_for_test(&handle, &intent, &amount, &oversized),
             Err(VMError::NoritoInvalid)
         );
         let expected_raw = derive_amount_commitment_from_normalized_payload(
@@ -2149,53 +1738,26 @@ mod tests {
             (&second_handle, &second, second_amount.clone()),
         ]);
         assert_eq!(
-            validate_remote_spend_intent_commitment(&clear_handle, &clear, &clear_amount, &proof,),
+            validate_model_claim_for_test(&clear_handle, &clear, &clear_amount, &proof,),
             Ok(())
         );
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &second_handle,
-                &second,
-                &second_amount,
-                &proof,
-            ),
+            validate_model_claim_for_test(&second_handle, &second, &second_amount, &proof),
             Ok(())
         );
         let mut redacted = second.clone();
         redacted.op.amount = None;
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &second_handle,
-                &redacted,
-                &second_amount,
-                &proof,
-            ),
+            validate_model_claim_for_test(&second_handle, &redacted, &second_amount, &proof,),
             Err(VMError::PermissionDenied),
             "semantic membership cannot admit a public-scalar hidden route"
         );
         let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
             .expect("decode reusable proof once");
         let facts = AxtProofUseFacts::from_verified_envelope(envelope);
-        let model_clear = ModelRemoteSpendIntent {
-            asset_dsid: clear.asset_dsid,
-            op: ModelSpendOp {
-                asset_definition_id: clear.op.asset_definition_id.clone(),
-                kind: clear.op.kind.clone(),
-                from: clear.op.from.clone(),
-                to: clear.op.to.clone(),
-                amount: clear.op.amount.clone(),
-            },
-        };
-        let model_handle = AxtHandleFragment::try_from(&HandleUsage {
-            handle: clear_handle.clone(),
-            intent: clear.clone(),
-            proof: None,
-            amount: clear_amount.clone(),
-            amount_commitment: None,
-        })
-        .expect("convert fixture handle")
-        .handle;
-        let mut model_redacted = model_clear.clone();
+        let model_handle = clear_handle.clone();
+        let model_clear = clear.clone();
+        let mut model_redacted = clear.clone();
         model_redacted.op.amount = None;
         let model_proof = ModelProofBlob {
             payload: proof.payload.clone(),
@@ -2203,21 +1765,13 @@ mod tests {
         };
         assert_eq!(
             validate_model_remote_spend_intent_commitment(
-                &model_handle,
+                &clear_handle,
                 &model_redacted,
                 &clear_amount,
                 &model_proof,
             ),
-            Err(VMError::PermissionDenied)
-        );
-        assert_eq!(
-            validate_model_remote_spend_intent_commitment_from_proof_facts(
-                &model_handle,
-                &model_redacted,
-                &clear_amount,
-                &facts,
-            ),
-            Err(VMError::PermissionDenied)
+            Err(VMError::PermissionDenied),
+            "a redacted intent cannot use a public proof scalar",
         );
         assert_eq!(
             validate_model_remote_spend_intent_commitment_from_proof_facts(
@@ -2270,12 +1824,7 @@ mod tests {
                 _ => unreachable!(),
             }
             assert_eq!(
-                validate_remote_spend_intent_commitment(
-                    &clear_handle,
-                    &substituted,
-                    &clear_amount,
-                    &proof,
-                ),
+                validate_model_claim_for_test(&clear_handle, &substituted, &clear_amount, &proof,),
                 Err(VMError::PermissionDenied),
                 "substituted {field} must not reuse the proof"
             );
@@ -2283,17 +1832,12 @@ mod tests {
         let mut substituted_dsid = clear.clone();
         substituted_dsid.asset_dsid = DataSpaceId::new(94);
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &clear_handle,
-                &substituted_dsid,
-                &clear_amount,
-                &proof,
-            ),
+            validate_model_claim_for_test(&clear_handle, &substituted_dsid, &clear_amount, &proof,),
             Err(VMError::PermissionDenied),
             "substituted asset dataspace must not reuse the proof"
         );
         assert_eq!(
-            validate_remote_spend_intent_commitment(&clear_handle, &clear, &quantity(6), &proof,),
+            validate_model_claim_for_test(&clear_handle, &clear, &quantity(6), &proof,),
             Err(VMError::PermissionDenied)
         );
         let mut substituted_asset = clear.clone();
@@ -2302,24 +1846,14 @@ mod tests {
             "iris".parse().expect("test asset name"),
         );
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &clear_handle,
-                &substituted_asset,
-                &clear_amount,
-                &proof,
-            ),
+            validate_model_claim_for_test(&clear_handle, &substituted_asset, &clear_amount, &proof,),
             Err(VMError::PermissionDenied),
             "substituted asset definition must not reuse the proof"
         );
         let mut substituted_handle = clear_handle.clone();
-        substituted_handle.axt_binding = vec![0x94; 32];
+        substituted_handle.axt_binding = AxtBinding::new([0x94; 32]);
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &substituted_handle,
-                &clear,
-                &clear_amount,
-                &proof,
-            ),
+            validate_model_claim_for_test(&substituted_handle, &clear, &clear_amount, &proof,),
             Err(VMError::PermissionDenied)
         );
         let mut reincarnated_handle = clear_handle.clone();
@@ -2335,29 +1869,25 @@ mod tests {
             1,
         );
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &reincarnated_handle,
-                &clear,
-                &clear_amount,
-                &proof,
-            ),
+            validate_model_claim_for_test(&reincarnated_handle, &clear, &clear_amount, &proof,),
             Err(VMError::PermissionDenied),
             "a proof for the retired incarnation must not authorize a current-incarnation handle"
         );
         let mut second_handle = clear_handle.clone();
         second_handle.sub_nonce += 1;
         assert_eq!(
-            validate_remote_spend_intent_commitment(&second_handle, &clear, &clear_amount, &proof,),
+            validate_model_claim_for_test(&second_handle, &clear, &clear_amount, &proof,),
             Err(VMError::PermissionDenied),
             "a proof for one handle must not authorize a new handle identity"
         );
 
         let clear_commitment =
-            expected_remote_spend_intent_commitment_v1(&clear_handle, &clear, &clear_amount)
-                .expect("fixture commitment");
-        let second_commitment =
-            expected_remote_spend_intent_commitment_v1(&second_handle, &second, &second_amount)
-                .expect("fixture commitment");
+            expected_model_remote_spend_intent_commitment_v1(&clear_handle, &clear, &clear_amount);
+        let second_commitment = expected_model_remote_spend_intent_commitment_v1(
+            &second_handle,
+            &second,
+            &second_amount,
+        );
         assert_eq!(
             facts.validate_remote_spend_consumption(&[second_commitment, clear_commitment]),
             Ok(())
@@ -2374,7 +1904,7 @@ mod tests {
         );
 
         // An empty intent set remains valid metadata for generic VERIFY_DS
-        // proof flows, but it must never authorize USE_ASSET_HANDLE.
+        // proof flows, but it does not authorize a remote spend.
         let empty_proof = proof_with_amount(dsid, None, None);
         let mut empty_envelope =
             norito::decode_from_bytes::<AxtProofEnvelope>(&empty_proof.payload)
@@ -2386,12 +1916,7 @@ mod tests {
         )
         .expect("generic FastPQ proof accepts an empty remote-spend binding");
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &clear_handle,
-                &clear,
-                &clear_amount,
-                &empty_proof,
-            ),
+            validate_model_claim_for_test(&clear_handle, &clear, &clear_amount, &empty_proof,),
             Err(VMError::PermissionDenied)
         );
 
@@ -2401,12 +1926,7 @@ mod tests {
             expiry_slot: empty_proof.expiry_slot,
         };
         assert_eq!(
-            validate_remote_spend_intent_commitment(
-                &clear_handle,
-                &clear,
-                &clear_amount,
-                &unbound_proof,
-            ),
+            validate_model_claim_for_test(&clear_handle, &clear, &clear_amount, &unbound_proof,),
             Err(VMError::PermissionDenied)
         );
     }
@@ -2523,7 +2043,7 @@ mod tests {
     fn resolve_handle_amount_accepts_cleartext_intent() {
         let dsid = DataSpaceId::new(90);
         let intent = sample_intent(dsid, Some(42));
-        let resolved = resolve_handle_amount(&intent, None).expect("resolve amount");
+        let resolved = resolve_test_amount(&intent, None).expect("resolve amount");
         assert_eq!(resolved.amount, quantity(42));
         assert_eq!(resolved.amount_commitment, None);
     }
@@ -2569,7 +2089,7 @@ mod tests {
             expiry_slot: None,
         };
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&malformed)),
+            resolve_test_amount(&intent, Some(&malformed)),
             Err(HandleAmountResolutionError::InvalidProofEnvelope)
         );
         let canonical = proof_with_amount(dsid, Some(42), None);
@@ -2583,7 +2103,7 @@ mod tests {
         };
         assert_ne!(alternate, canonical.payload);
         assert_eq!(
-            resolve_handle_amount(
+            resolve_test_amount(
                 &intent,
                 Some(&ProofBlob {
                     payload: alternate,
@@ -2599,11 +2119,11 @@ mod tests {
         let intent = sample_intent(dsid, None);
         let proof = proof_with_amount(dsid, Some(77), None);
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&proof)),
+            resolve_test_amount(&intent, Some(&proof)),
             Err(HandleAmountResolutionError::MissingAmount)
         );
         assert_eq!(
-            resolve_handle_amount(&intent, None),
+            resolve_test_amount(&intent, None),
             Err(HandleAmountResolutionError::MissingAmount)
         );
         assert_eq!(
@@ -2616,7 +2136,7 @@ mod tests {
         let dsid = DataSpaceId::new(97);
         let intent = sample_intent(dsid, Some(77));
         let proof = proof_with_derived_amount_commitment(dsid, 77);
-        let resolved = resolve_handle_amount(&intent, Some(&proof))
+        let resolved = resolve_test_amount(&intent, Some(&proof))
             .expect("canonical supplied commitment must resolve");
         let expected = derive_amount_commitment(dsid, &quantity(77), Some(&proof.payload));
         assert_eq!(resolved.amount_commitment, Some(expected));
@@ -2629,7 +2149,7 @@ mod tests {
             expiry_slot: proof.expiry_slot,
         };
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&mutated)),
+            resolve_test_amount(&intent, Some(&mutated)),
             Err(HandleAmountResolutionError::CommitmentMismatch)
         );
     }
@@ -2639,7 +2159,7 @@ mod tests {
         let intent = sample_intent(dsid, Some(9));
         let proof = proof_with_amount(dsid, Some(9), Some([0xA5; 32]));
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&proof)),
+            resolve_test_amount(&intent, Some(&proof)),
             Err(HandleAmountResolutionError::CommitmentMismatch)
         );
     }
@@ -2648,7 +2168,7 @@ mod tests {
         let dsid = DataSpaceId::new(96);
         let intent = sample_intent(dsid, Some(31));
         let proof = proof_with_amount(dsid, Some(31), None);
-        let host = resolve_handle_amount(&intent, Some(&proof)).expect("host resolution");
+        let host = resolve_test_amount(&intent, Some(&proof)).expect("host resolution");
         let components = resolve_handle_amount_components(
             dsid,
             intent.op.amount.as_ref(),
@@ -2662,7 +2182,7 @@ mod tests {
         let dsid = DataSpaceId::new(96);
         let intent = sample_intent(dsid, Some(31));
         let proof = proof_with_derived_amount_commitment(dsid, 31);
-        let expected = resolve_handle_amount(&intent, Some(&proof)).expect("payload resolution");
+        let expected = resolve_test_amount(&intent, Some(&proof)).expect("payload resolution");
         let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
             .expect("decode canonical proof once");
         let facts = AxtProofUseFacts::from_verified_envelope(envelope);
@@ -2704,7 +2224,7 @@ mod tests {
         envelope.amount_commitment = Some(commitment);
         proof.payload = encode_canonical_norito(&envelope).expect("encode committed proof");
 
-        let expected = resolve_handle_amount(&intent, Some(&proof)).expect("payload resolution");
+        let expected = resolve_test_amount(&intent, Some(&proof)).expect("payload resolution");
         let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
             .expect("decode canonical proof once");
         let facts = AxtProofUseFacts::from_verified_envelope(envelope);
@@ -2727,7 +2247,7 @@ mod tests {
         let intent = sample_intent(dsid, Some(11));
         let proof = proof_with_amount(dsid, Some(12), None);
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&proof)),
+            resolve_test_amount(&intent, Some(&proof)),
             Err(HandleAmountResolutionError::Mismatch)
         );
     }
@@ -2738,7 +2258,7 @@ mod tests {
         intent.op.amount = Some("1.5".parse().expect("canonical fractional quantity"));
         let proof = proof_with_amount(dsid, Some(1), None);
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&proof)),
+            resolve_test_amount(&intent, Some(&proof)),
             Err(HandleAmountResolutionError::InvalidProofScalar)
         );
     }
@@ -2753,7 +2273,7 @@ mod tests {
         );
         let proof = proof_with_amount(dsid, Some(u128::MAX), None);
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&proof)),
+            resolve_test_amount(&intent, Some(&proof)),
             Err(HandleAmountResolutionError::InvalidProofScalar)
         );
     }
@@ -2763,91 +2283,9 @@ mod tests {
         let intent = sample_intent(dsid, Some(0));
         let proof = proof_with_amount(dsid, Some(0), None);
         assert_eq!(
-            resolve_handle_amount(&intent, Some(&proof)),
+            resolve_test_amount(&intent, Some(&proof)),
             Err(HandleAmountResolutionError::ZeroAmount)
         );
-    }
-    #[test]
-    fn try_from_usage_rejects_redacted_public_scalar_amount() {
-        let dsid = DataSpaceId::new(93);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let intent = sample_intent(dsid, None);
-        let proof = proof_with_amount(dsid, Some(5), None);
-        let usage = HandleUsage {
-            handle: sample_handle(dsid, binding, 10, Some(10)),
-            intent,
-            proof: Some(proof),
-            amount: quantity(5),
-            amount_commitment: Some([0xA5; 32]),
-        };
-        assert_eq!(
-            AxtHandleFragment::try_from(&usage),
-            Err(VMError::PermissionDenied)
-        );
-        let mut mismatched = usage.clone();
-        mismatched.intent.op.amount = Some(quantity(6));
-        assert_eq!(
-            AxtHandleFragment::try_from(&mismatched),
-            Err(VMError::PermissionDenied),
-            "the recorded effective amount must match the clear signed intent"
-        );
-        mismatched.intent.op.amount = Some(quantity(5));
-        mismatched.amount_commitment = None;
-        let fragment = AxtHandleFragment::try_from(&mismatched)
-            .expect("a matching clear amount can be materialized");
-        assert_eq!(fragment.amount, Some(quantity(5)));
-    }
-    #[test]
-    fn snapshot_policy_rejects_excess_skew_request() {
-        let dsid = DataSpaceId::new(8);
-        let entry = ModelAxtPolicyEntry {
-            manifest_root: [0xAB; 32],
-            target_lane: LaneId::new(0),
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 10,
-        };
-        let entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
-            dsid,
-            policy: entry,
-        }];
-        let snapshot = ModelAxtPolicySnapshot {
-            version: ModelAxtPolicySnapshot::compute_version(&entries),
-            entries,
-        };
-        let policy = SnapshotAxtPolicy::new_with_timing(
-            &snapshot,
-            NonZeroU64::new(10).expect("slot length"),
-            5,
-        )
-        .expect("canonical policy snapshot");
-        let binding = [0x11; 32];
-        let mut handle = sample_handle(dsid, binding, 25, None);
-        handle.manifest_view_root = entry.manifest_root.to_vec();
-        handle.target_lane = entry.target_lane;
-        handle.handle_era = entry.active_handle_era;
-        handle.sub_nonce = entry.next_handle_counter;
-        handle.max_clock_skew_ms = Some(6);
-        let intent = sample_intent(dsid, Some(1));
-        let usage = HandleUsage {
-            handle,
-            intent,
-            proof: None,
-            amount: quantity(1),
-            amount_commitment: None,
-        };
-        assert!(matches!(
-            policy.allow_handle(&usage),
-            Err(VMError::PermissionDenied)
-        ));
     }
     #[test]
     fn snapshot_policy_rejects_noncanonical_snapshot_without_panicking() {
@@ -2872,144 +2310,157 @@ mod tests {
         ));
     }
     #[test]
-    fn commit_rejects_cumulative_budget_overspend() {
-        let dsid = DataSpaceId::new(5);
+    fn public_axt_commit_requires_one_proof_per_declared_dataspace() {
+        let dsid = DataSpaceId::new(93);
         let descriptor = AxtDescriptor {
             dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
+            touches: Vec::new(),
         };
-        let binding = compute_binding(&descriptor).expect("binding");
+        let binding = compute_binding(&descriptor).expect("canonical binding");
         let mut state = HostAxtState::new(descriptor, binding);
+        assert_eq!(state.validate_commit(), Err(VMError::PermissionDenied));
         state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch matches descriptor");
-        let mut handle = sample_handle(dsid, binding, 100, None);
-        let proof = Some(ProofBlob {
-            payload: vec![1],
-            expiry_slot: None,
-        });
-        state
-            .record_handle(HandleUsage {
-                handle: handle.clone(),
-                intent: sample_intent(dsid, Some(60)),
-                proof: proof.clone(),
-                amount: quantity(60),
-                amount_commitment: None,
-            })
-            .expect("first usage within budget");
-        handle.sub_nonce = handle.sub_nonce.saturating_add(1);
-        state
-            .record_handle(HandleUsage {
-                handle,
-                intent: sample_intent(dsid, Some(50)),
-                proof,
-                amount: quantity(50),
-                amount_commitment: None,
-            })
-            .expect("second usage tracked");
-        assert!(matches!(
-            state.validate_commit(),
-            Err(VMError::PermissionDenied)
-        ));
-    }
-    #[test]
-    fn commit_rejects_budget_overspend_across_sub_nonces() {
-        let dsid = DataSpaceId::new(6);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch matches descriptor");
-        let mut handle = sample_handle(dsid, binding, 100, None);
-        let proof = Some(ProofBlob {
-            payload: vec![9],
-            expiry_slot: None,
-        });
-        state
-            .record_handle(HandleUsage {
-                handle: handle.clone(),
-                intent: sample_intent(dsid, Some(60)),
-                proof: proof.clone(),
-                amount: quantity(60),
-                amount_commitment: None,
-            })
-            .expect("first usage within budget");
-        handle.sub_nonce = handle.sub_nonce.saturating_add(1);
-        state
-            .record_handle(HandleUsage {
-                handle,
-                intent: sample_intent(dsid, Some(60)),
-                proof,
-                amount: quantity(60),
-                amount_commitment: None,
-            })
-            .expect("second usage recorded for different sub-nonce");
-        assert!(matches!(
-            state.validate_commit(),
-            Err(VMError::PermissionDenied)
-        ));
-    }
-    #[test]
-    fn commit_keeps_budgets_separate_for_distinct_signed_assets() {
-        let dsid = DataSpaceId::new(6);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch matches descriptor");
-        let first_handle = sample_handle(dsid, binding, 100, None);
-        let mut second_handle = first_handle.clone();
-        second_handle.sub_nonce = second_handle.sub_nonce.saturating_add(1);
-        second_handle.asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("axt", "universal").expect("test asset domain"),
-            "iris".parse().expect("test asset name"),
-        );
-        let mut second_intent = sample_intent(dsid, Some(60));
-        second_intent.op.asset_definition_id = second_handle.asset_definition_id.clone();
-        let proof = Some(ProofBlob {
-            payload: vec![9],
-            expiry_slot: None,
-        });
-        state
-            .record_handle(HandleUsage {
-                handle: first_handle,
-                intent: sample_intent(dsid, Some(60)),
-                proof: proof.clone(),
-                amount: quantity(60),
-                amount_commitment: None,
-            })
-            .expect("first asset usage within its budget");
-        state
-            .record_handle(HandleUsage {
-                handle: second_handle,
-                intent: second_intent,
-                proof,
-                amount: quantity(60),
-                amount_commitment: None,
-            })
-            .expect("second asset usage within its independent budget");
-
+            .record_proof(dsid, Some(proof_with_amount(dsid, Some(5), None)), None)
+            .expect("valid public proof record");
         assert_eq!(state.validate_commit(), Ok(()));
+    }
+    #[test]
+    fn signed_spends_stage_in_order_and_reject_inconsistent_binding() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json"
+        )))
+        .expect("current signed-spend fixture JSON");
+        let happy = fixture["spends"]["happy"]
+            .as_array()
+            .expect("signed-spend fixture array");
+        let spends: Vec<AxtAnchoredSpendV1> = happy
+            .iter()
+            .cloned()
+            .map(|value| norito::json::from_value(value).expect("signed-spend fixture"))
+            .collect();
+        assert_eq!(spends.len(), 2);
+        let descriptor = AxtDescriptor {
+            dsids: spends
+                .iter()
+                .map(|spend| spend.draft.intent.asset_dsid)
+                .collect(),
+            touches: Vec::new(),
+        };
+        let binding = *spends[0].draft.handle.axt_binding.as_bytes();
+        let mut state = HostAxtState::new(descriptor, binding);
+        let mut wrong_binding = spends[0].clone();
+        wrong_binding.draft.handle.axt_binding = AxtBinding::new([0xFF; 32]);
+        assert_eq!(
+            state.record_spend(wrong_binding),
+            Err(VMError::PermissionDenied)
+        );
+        assert!(state.spends().is_empty());
+        let mut wrong_amount = spends[0].clone();
+        wrong_amount.draft.amount = Some(Quantity::from(99_u64));
+        assert_eq!(
+            state.record_spend(wrong_amount),
+            Err(VMError::PermissionDenied)
+        );
+        assert!(state.spends().is_empty());
+        let mut wrong_scope = spends[0].clone();
+        wrong_scope.draft.handle.scope.clear();
+        assert_eq!(
+            state.record_spend(wrong_scope),
+            Err(VMError::PermissionDenied)
+        );
+        assert!(state.spends().is_empty());
+        let mut wrong_operation = spends[0].clone();
+        wrong_operation.draft.intent.op.kind = "mint".to_owned();
+        assert_eq!(
+            state.record_spend(wrong_operation),
+            Err(VMError::PermissionDenied)
+        );
+        assert!(state.spends().is_empty());
+        for spend in &spends {
+            state
+                .record_spend(spend.clone())
+                .expect("stage signed spend");
+        }
+        assert_eq!(state.spends(), spends);
+        assert_eq!(state.validate_commit(), Ok(()));
+    }
+    #[test]
+    fn signed_spend_commit_rejects_reused_nonce_or_source_transfer_coordinate() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::nexus::AxtSpendNonceV1;
+
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json"
+        )))
+        .expect("current signed-spend fixture JSON");
+        let first: AxtAnchoredSpendV1 =
+            norito::json::from_value(fixture["spends"]["happy"][0].clone())
+                .expect("canonical signed spend");
+        let issuer = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let anchor = first.authorization.anchor;
+        let context = first.draft.handle.issuer_context;
+        let binding = *first.draft.handle.axt_binding.as_bytes();
+        let new_state = || {
+            HostAxtState::new(
+                AxtDescriptor {
+                    dsids: vec![first.draft.intent.asset_dsid],
+                    touches: Vec::new(),
+                },
+                binding,
+            )
+        };
+
+        // A second valid issuer signature cannot reuse the same nonce even
+        // when it names a different transfer coordinate.
+        let mut another_coordinate = first.draft.clone();
+        another_coordinate.source_occurrence.delta_index = 1;
+        another_coordinate.source_occurrence.pair_ordinal = 1;
+        let repeated_nonce = another_coordinate
+            .sign_by_issuer_v1(
+                anchor,
+                first.authorization.expiry_slot,
+                first.authorization.nonce,
+                issuer.private_key(),
+            )
+            .expect("issuer signs a distinct claimed coordinate");
+        assert_eq!(
+            repeated_nonce.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Ok(())
+        );
+        let mut state = new_state();
+        state
+            .record_spend(first.clone())
+            .expect("stage first spend");
+        state
+            .record_spend(repeated_nonce)
+            .expect("stage second signed claim");
+        assert_eq!(state.validate_commit(), Err(VMError::PermissionDenied));
+        assert_eq!(state.spends().len(), 2);
+
+        // A fresh nonce cannot authorize the same source transfer again.
+        let repeated_transfer = first
+            .draft
+            .clone()
+            .sign_by_issuer_v1(
+                anchor,
+                first.authorization.expiry_slot,
+                AxtSpendNonceV1::try_new([0xBC; 32]).expect("fresh nonce"),
+                issuer.private_key(),
+            )
+            .expect("issuer signs the same claimed transfer with a fresh nonce");
+        assert_eq!(
+            repeated_transfer.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Ok(())
+        );
+        let mut state = new_state();
+        state.record_spend(first).expect("stage first spend");
+        state
+            .record_spend(repeated_transfer)
+            .expect("stage second signed claim");
+        assert_eq!(state.validate_commit(), Err(VMError::PermissionDenied));
+        assert_eq!(state.spends().len(), 2);
     }
     #[test]
     fn handle_budget_key_groups_sub_nonces_but_separates_signed_assets() {
@@ -3019,9 +2470,8 @@ mod tests {
         let mut next_nonce = first.clone();
         next_nonce.sub_nonce = next_nonce.sub_nonce.saturating_add(1);
 
-        let first_key = try_handle_budget_key(dsid, &first).expect("valid handle key");
-        let next_nonce_key =
-            try_handle_budget_key(dsid, &next_nonce).expect("valid next-nonce handle key");
+        let first_key = ModelAxtHandleBudgetKey::from_handle(&first);
+        let next_nonce_key = ModelAxtHandleBudgetKey::from_handle(&next_nonce);
         assert_eq!(
             first_key, next_nonce_key,
             "sub-nonces share the issuer-signed aggregate budget"
@@ -3032,15 +2482,14 @@ mod tests {
             DomainId::try_new("axt", "universal").expect("test asset domain"),
             "iris".parse().expect("test asset name"),
         );
-        let other_asset_key =
-            try_handle_budget_key(dsid, &other_asset).expect("valid other-asset handle key");
+        let other_asset_key = ModelAxtHandleBudgetKey::from_handle(&other_asset);
         assert_ne!(
             first_key, other_asset_key,
             "distinct issuer-signed assets must not share a budget"
         );
     }
     #[test]
-    fn handle_budget_key_is_identical_for_abi_and_model_handles() {
+    fn signed_model_handle_budget_key_binds_every_authorized_field() {
         let dsid = DataSpaceId::new(6);
         let mut abi_handle = sample_handle(dsid, [0x5A; 32], 123, Some(17));
         abi_handle.asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -3053,7 +2502,7 @@ mod tests {
         abi_handle.group_binding.composability_group_id = vec![0x44; 32];
         abi_handle.group_binding.epoch_id = 71;
         abi_handle.target_lane = LaneId::new(9);
-        abi_handle.manifest_view_root = vec![0xA5; 32];
+        abi_handle.manifest_view_root = [0xA5; 32];
         abi_handle.expiry_slot = 456;
         abi_handle.max_clock_skew_ms = Some(987);
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -3084,29 +2533,13 @@ mod tests {
             abi_version: 1,
             abi_hash: [0xB3; 32],
         };
-        let mut intent = sample_intent(dsid, Some(1));
-        intent.op.asset_definition_id = abi_handle.asset_definition_id.clone();
-        let model_handle = AxtHandleFragment::try_from(&HandleUsage {
-            handle: abi_handle.clone(),
-            intent,
-            proof: None,
-            amount: quantity(1),
-            amount_commitment: None,
-        })
-        .expect("canonical model handle")
-        .handle;
-
-        let abi_key = try_handle_budget_key(dsid, &abi_handle).expect("canonical pointer-ABI key");
-        let model_key = HandleBudgetKey::from_handle(&model_handle);
-        assert_eq!(
-            abi_key, model_key,
-            "ABI and persisted handles must normalize to one budget identity"
-        );
+        let model_handle = abi_handle;
+        let model_key = ModelAxtHandleBudgetKey::from_handle(&model_handle);
 
         let assert_model_mutation_changes_key = |mutated: ModelAssetHandle, field: &str| {
             assert_ne!(
-                abi_key,
-                HandleBudgetKey::from_handle(&mutated),
+                model_key,
+                ModelAxtHandleBudgetKey::from_handle(&mutated),
                 "{field} must remain part of the normalized budget identity"
             );
         };
@@ -3184,296 +2617,6 @@ mod tests {
         assert_model_mutation_changes_key(mutated, "issuer ABI hash");
     }
     #[test]
-    fn commit_rejects_per_use_overspend_per_dataspace() {
-        let dsid = DataSpaceId::new(7);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch matches descriptor");
-        let mut handle = sample_handle(dsid, binding, 200, Some(70));
-        let proof = Some(ProofBlob {
-            payload: vec![2],
-            expiry_slot: None,
-        });
-        state
-            .record_handle(HandleUsage {
-                handle: handle.clone(),
-                intent: sample_intent(dsid, Some(50)),
-                proof: proof.clone(),
-                amount: quantity(50),
-                amount_commitment: None,
-            })
-            .expect("first usage within budget");
-        handle.sub_nonce = handle.sub_nonce.saturating_add(1);
-        state
-            .record_handle(HandleUsage {
-                handle,
-                intent: sample_intent(dsid, Some(50)),
-                proof,
-                amount: quantity(50),
-                amount_commitment: None,
-            })
-            .expect("second usage within budget");
-        assert!(matches!(
-            state.validate_commit(),
-            Err(VMError::PermissionDenied)
-        ));
-    }
-    #[test]
-    fn record_handle_rejects_replay_same_sub_nonce() {
-        let dsid = DataSpaceId::new(8);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch recorded");
-        let handle = sample_handle(dsid, binding, 50, None);
-        let intent = sample_intent(dsid, Some(10));
-        let usage = HandleUsage {
-            handle,
-            intent,
-            proof: None,
-            amount: quantity(10),
-            amount_commitment: None,
-        };
-        state
-            .record_handle(usage.clone())
-            .expect("first usage accepted");
-        let err = state
-            .record_handle(usage)
-            .expect_err("duplicate sub-nonce must be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
-    }
-    #[test]
-    fn record_handle_rejects_asset_not_authenticated_by_handle_issuer() {
-        let dsid = DataSpaceId::new(8);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch recorded");
-        let handle = sample_handle(dsid, binding, 50, None);
-        let mut intent = sample_intent(dsid, Some(10));
-        intent.op.asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("axt", "universal").expect("test asset domain"),
-            "iris".parse().expect("test asset name"),
-        );
-
-        assert_eq!(
-            state.record_handle(HandleUsage {
-                handle,
-                intent,
-                proof: None,
-                amount: quantity(10),
-                amount_commitment: None,
-            }),
-            Err(VMError::PermissionDenied),
-            "one signed handle must not authorize a different asset in the same dataspace"
-        );
-    }
-    #[test]
-    fn record_handle_allows_out_of_order_sub_nonce() {
-        let dsid = DataSpaceId::new(11);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch recorded");
-        let mut handle_high = sample_handle(dsid, binding, 100, None);
-        handle_high.sub_nonce = 2;
-        let mut handle_low = handle_high.clone();
-        handle_low.sub_nonce = 1;
-        let proof = Some(ProofBlob {
-            payload: vec![1],
-            expiry_slot: None,
-        });
-        state
-            .record_handle(HandleUsage {
-                handle: handle_high,
-                intent: sample_intent(dsid, Some(10)),
-                proof: proof.clone(),
-                amount: quantity(10),
-                amount_commitment: None,
-            })
-            .expect("first usage accepted");
-        state
-            .record_handle(HandleUsage {
-                handle: handle_low,
-                intent: sample_intent(dsid, Some(10)),
-                proof,
-                amount: quantity(10),
-                amount_commitment: None,
-            })
-            .expect("second usage accepted");
-        assert!(matches!(state.validate_commit(), Ok(())));
-    }
-    #[test]
-    fn record_handle_allows_same_sub_nonce_across_dataspaces_on_same_lane() {
-        let ds_a = DataSpaceId::new(8);
-        let ds_b = DataSpaceId::new(9);
-        let descriptor = AxtDescriptor {
-            dsids: vec![ds_a, ds_b],
-            touches: vec![
-                AxtTouchSpec {
-                    dsid: ds_a,
-                    read: vec!["orders".into()],
-                    write: vec!["ledger".into()],
-                },
-                AxtTouchSpec {
-                    dsid: ds_b,
-                    read: vec!["orders".into()],
-                    write: vec!["ledger".into()],
-                },
-            ],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(ds_a, sample_touch_manifest())
-            .expect("touch recorded");
-        state
-            .record_touch(ds_b, sample_touch_manifest())
-            .expect("touch recorded");
-        let mut handle_a = sample_handle(ds_a, binding, 10, None);
-        handle_a.target_lane = LaneId::new(1);
-        let mut handle_b = sample_handle(ds_b, binding, 10, None);
-        handle_b.subject.origin_dsid = handle_a.subject.origin_dsid;
-        handle_b.target_lane = handle_a.target_lane;
-        handle_b.sub_nonce = handle_a.sub_nonce;
-        let proof = Some(ProofBlob {
-            payload: vec![1],
-            expiry_slot: None,
-        });
-        state
-            .record_handle(HandleUsage {
-                handle: handle_a,
-                intent: sample_intent(ds_a, Some(10)),
-                proof: proof.clone(),
-                amount: quantity(10),
-                amount_commitment: None,
-            })
-            .expect("first usage accepted");
-        state
-            .record_handle(HandleUsage {
-                handle: handle_b,
-                intent: sample_intent(ds_b, Some(10)),
-                proof,
-                amount: quantity(10),
-                amount_commitment: None,
-            })
-            .expect("second usage accepted for different dataspace");
-        assert!(matches!(state.validate_commit(), Ok(())));
-    }
-    #[test]
-    fn record_handle_rejects_zero_era_or_sub_nonce() {
-        let dsid = DataSpaceId::new(10);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch recorded");
-        let base_handle = sample_handle(dsid, binding, 50, None);
-        let intent = sample_intent(dsid, Some(10));
-        let mut zero_era = base_handle.clone();
-        zero_era.handle_era = 0;
-        let err = state
-            .record_handle(HandleUsage {
-                handle: zero_era,
-                intent: intent.clone(),
-                proof: None,
-                amount: quantity(10),
-                amount_commitment: None,
-            })
-            .expect_err("zero handle era must be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
-        let mut zero_nonce = base_handle;
-        zero_nonce.sub_nonce = 0;
-        let err = state
-            .record_handle(HandleUsage {
-                handle: zero_nonce,
-                intent,
-                proof: None,
-                amount: quantity(10),
-                amount_commitment: None,
-            })
-            .expect_err("zero sub-nonce must be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
-    }
-    #[test]
-    fn record_handle_populates_handle_fragments() {
-        let dsid = DataSpaceId::new(7);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch matches descriptor");
-        let handle = sample_handle(dsid, binding, 10, None);
-        let usage = HandleUsage {
-            handle,
-            intent: sample_intent(dsid, Some(5)),
-            proof: None,
-            amount: quantity(5),
-            amount_commitment: None,
-        };
-        state.record_handle(usage).expect("handle usage recorded");
-        let fragment = state
-            .handle_fragments()
-            .first()
-            .expect("handle fragment recorded");
-        assert_eq!(fragment.handle.axt_binding.as_bytes(), &binding);
-        assert_eq!(fragment.intent.asset_dsid, dsid);
-        assert_eq!(fragment.amount, Some(Quantity::from(5_u64)));
-    }
-    #[test]
     fn record_proof_rejects_expired_slot() {
         let dsid = DataSpaceId::new(8);
         let descriptor = AxtDescriptor {
@@ -3499,92 +2642,6 @@ mod tests {
         assert!(matches!(err, VMError::PermissionDenied));
     }
     #[test]
-    fn commit_rejects_proof_expiry_before_handle_expiry() {
-        let dsid = DataSpaceId::new(9);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch recorded");
-        state
-            .record_proof(
-                dsid,
-                Some(ProofBlob {
-                    payload: vec![0xBB],
-                    expiry_slot: Some(50),
-                }),
-                Some(1),
-            )
-            .expect("proof accepted for current slot");
-        let handle = sample_handle(dsid, binding, 100, None);
-        state
-            .record_handle(HandleUsage {
-                handle: AssetHandle {
-                    expiry_slot: 60,
-                    ..handle
-                },
-                intent: sample_intent(dsid, Some(10)),
-                proof: None,
-                amount: quantity(10),
-                amount_commitment: None,
-            })
-            .expect("handle recorded");
-        assert!(matches!(
-            state.validate_commit(),
-            Err(VMError::PermissionDenied)
-        ));
-    }
-    #[test]
-    fn commit_rejects_replayed_sub_nonce_for_same_binding() {
-        let dsid = DataSpaceId::new(12);
-        let descriptor = AxtDescriptor {
-            dsids: vec![dsid],
-            touches: vec![AxtTouchSpec {
-                dsid,
-                read: vec!["orders".into()],
-                write: vec!["ledger".into()],
-            }],
-        };
-        let binding = compute_binding(&descriptor).expect("binding");
-        let mut state = HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(dsid, sample_touch_manifest())
-            .expect("touch recorded");
-        let handle = sample_handle(dsid, binding, 200, Some(200));
-        let proof = Some(ProofBlob {
-            payload: vec![0xA5],
-            expiry_slot: None,
-        });
-        let usage = HandleUsage {
-            handle: handle.clone(),
-            intent: sample_intent(dsid, Some(25)),
-            proof: proof.clone(),
-            amount: quantity(25),
-            amount_commitment: None,
-        };
-        state
-            .record_handle(usage.clone())
-            .expect("first usage recorded");
-        // Simulate a replayed handle injected from an external source (e.g., snapshot).
-        state.handles.push(usage);
-        assert!(matches!(
-            state.validate_commit(),
-            Err(VMError::PermissionDenied)
-        ));
-    }
-}
-
-#[cfg(test)]
-mod captured_frame_identity_tests {
-    #[test]
     fn observed_declared_identities() {
         crate::captured_identity_tests::assert_bidirectional::<super::AxtDescriptor>(
             "ivm_abi::axt::AxtDescriptor",
@@ -3594,24 +2651,6 @@ mod captured_frame_identity_tests {
         );
         crate::captured_identity_tests::assert_bidirectional::<super::TouchManifest>(
             "ivm_abi::axt::TouchManifest",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::AssetHandle>(
-            "ivm_abi::axt::AssetHandle",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::HandleSubject>(
-            "ivm_abi::axt::HandleSubject",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::HandleBudget>(
-            "ivm_abi::axt::HandleBudget",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::GroupBinding>(
-            "ivm_abi::axt::GroupBinding",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::RemoteSpendIntent>(
-            "ivm_abi::axt::RemoteSpendIntent",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::SpendOp>(
-            "ivm_abi::axt::SpendOp",
         );
         crate::captured_identity_tests::assert_bidirectional::<super::ProofBlob>(
             "ivm_abi::axt::ProofBlob",

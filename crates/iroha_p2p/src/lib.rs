@@ -496,8 +496,8 @@ pub struct ConsensusConfigCaps {
     pub execution_policy_hash: [u8; 32],
     /// Canonical digest of deterministic, locally configured Nexus policy.
     pub nexus_policy_digest: [u8; 32],
-    /// Canonical fixed-width Sumeragi v2 shared-runtime configuration hash.
-    pub v2_config_fingerprint: [u8; 32],
+    /// Canonical signed-genesis native consensus-configuration fingerprint.
+    pub native_config_fingerprint: [u8; 32],
     /// Canonical digest of the complete IVM gas schedule in this binary.
     pub ivm_gas_schedule_hash: [u8; 32],
 }

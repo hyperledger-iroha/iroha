@@ -41,7 +41,7 @@ def emit(root, argv):
     api, p2p = int(get('--base-api-port')), int(get('--base-p2p-port'))
     genesis, context = 'hash:' + '01' * 32 + '#ABCD', 'hash:' + '03' * 32 + '#ABCD'
     value = dict(schema=inputs.ANCHORS_SCHEMA, version=1, lane_count=lanes, chain_id=chain,
-        consensus_mode='npos', genesis_hash=genesis, context_id=context, network_id=genesis,
+        consensus_mode='npos', genesis_hash=genesis, genesis_epoch_context_id=context, network_id=genesis,
         genesis_public_key='ed0120' + 'AB' * 32, chain_discriminant=0,
         peers=[], accounts=[], artifacts=[])
     files = {'genesis.json': b'{}', 'genesis.signed.nrt': b'fake-native-signed-genesis',

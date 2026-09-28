@@ -660,7 +660,10 @@ impl GovernanceRules {
         })
     }
 }
+mod authority;
 mod runtime_overlay;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 /// Registry of manifests keyed by lane identifier.
 #[derive(Debug)]
@@ -981,6 +984,15 @@ impl LaneManifestRegistry {
     /// Construct an empty registry (no lanes require manifests).
     pub fn empty() -> Self {
         Self::default()
+    }
+    /// Construct the fail-closed empty registry used only during emergency Fast startup.
+    ///
+    /// Unlike an ordinary empty registry, this provisional value has no frozen
+    /// source and cannot authorize a materialized State transition.
+    pub fn provisional_empty_for_emergency_fast_startup() -> Self {
+        let mut registry = Self::empty();
+        registry.source_snapshot = None;
+        registry
     }
     /// Return the canonical digest of the accepted active-catalog manifest source set.
     ///

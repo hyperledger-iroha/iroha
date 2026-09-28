@@ -1217,7 +1217,7 @@ mod tests {
                 .collect()
         }
         let mut count = 0;
-        for line in include_str!("assets/digest384_reference_v1.tsv")
+        for line in crate::poseidon_digest384::DIGEST384_REFERENCE_V1
             .lines()
             .filter(|line| !line.starts_with('#'))
         {

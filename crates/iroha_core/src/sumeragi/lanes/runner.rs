@@ -184,7 +184,13 @@ impl LaneRunnerHandle {
             .map(|record| {
                 let instance = running
                     .get(&(record.lane, record.incarnation))
-                    .and_then(|lane| crate::sumeragi::node::status_dto(&lane.driver.handle()));
+                    .and_then(|lane| {
+                        crate::sumeragi::node::status_dto(
+                            &lane.driver.handle(),
+                            iroha_crypto::Hash::prehashed(lane_genesis_result(&record).0),
+                            None,
+                        )
+                    });
                 SumeragiLaneStatus { record, instance }
             })
             .collect()
@@ -356,6 +362,7 @@ impl Inner {
             &*inputs.records,
             &*shared,
             &instance,
+            config.epoch.id,
             &[(key, false)],
             0,
             custody,
@@ -368,7 +375,12 @@ impl Inner {
         );
         let tip = store.height();
         let configs = (tip..=tip.saturating_add(2))
-            .map(|height| (height, config.clone()))
+            .map(|height| {
+                (
+                    height,
+                    iroha_sumeragi::types::ConfigSlot::Ready(config.clone()),
+                )
+            })
             .collect();
         let init = assemble_init(
             &*store,
@@ -427,6 +439,7 @@ impl Inner {
         .spawn(
             inputs.driver,
             DriverStart {
+                allocation_budget: inputs.state.ivm_execution_budget(),
                 local: local_params(config.committee.n(), &inputs.local),
                 init,
                 signers: vec![Box::new(signer)],

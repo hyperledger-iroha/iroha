@@ -115,36 +115,21 @@ fn nested_snapshot_shares_large_rollback_state_until_mutated() {
     let authority: AccountId = fixture_account("alice");
     let mut host = CoreHost::new(authority);
     let verified_ballot = Arc::clone(&host.zk_verified_ballot);
-    let replay_ledger = Arc::clone(&host.axt_replay_ledger);
     let proof_cache = Arc::clone(&host.axt_proof_cache);
-    let handle_budget_ledger = Arc::clone(&host.axt_handle_budget_ledger);
     host.fastpq_batch_entries = Some(Vec::new());
     let snapshot = host.snapshot_nested_contract_call();
     assert!(Arc::ptr_eq(&snapshot.zk_verified_ballot, &verified_ballot));
-    assert!(Arc::ptr_eq(&snapshot.axt_replay_ledger, &replay_ledger));
     assert!(Arc::ptr_eq(&snapshot.axt_proof_cache, &proof_cache));
-    assert!(Arc::ptr_eq(
-        &snapshot.axt_handle_budget_ledger,
-        &handle_budget_ledger
-    ));
     assert!(
         host.fastpq_batch_entries.is_none(),
         "frame-local batch storage must be moved, not cloned"
     );
     Arc::make_mut(&mut host.zk_verified_ballot).push_back([7; 32]);
-    Arc::make_mut(&mut host.axt_handle_budget_ledger).clear();
     assert!(!Arc::ptr_eq(&host.zk_verified_ballot, &verified_ballot));
-    assert!(!Arc::ptr_eq(
-        &host.axt_handle_budget_ledger,
-        &handle_budget_ledger
-    ));
     host.finish_nested_contract_call(snapshot, NestedContractCallOutcome::Rollback)
         .expect("restore shared rollback state");
     assert!(Arc::ptr_eq(&host.zk_verified_ballot, &verified_ballot));
-    assert!(Arc::ptr_eq(
-        &host.axt_handle_budget_ledger,
-        &handle_budget_ledger
-    ));
+    assert!(Arc::ptr_eq(&host.axt_proof_cache, &proof_cache));
     assert!(host.zk_verified_ballot.is_empty());
     assert!(host.fastpq_batch_entries.is_some());
 }

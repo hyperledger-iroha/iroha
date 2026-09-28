@@ -4,7 +4,6 @@ use crate::{
     telemetry::StateTelemetry,
 };
 use core::{
-    mem,
     num::{NonZeroU32, NonZeroU64},
     time::Duration,
 };
@@ -71,17 +70,18 @@ use iroha_data_model::{
         MusubiReplicationOrderLocationReferenceV1,
     },
     nexus::{
-        AssetHandle, AssetHandleDraft, AssetPermissionManifest, AxtAssetIncarnationV1, AxtBinding,
-        AxtDescriptor, AxtEnvelopeRecord, AxtFastpqBinding, AxtHandleBudgetKey,
-        AxtHandleBudgetRecord, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
-        AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment, AxtRejectReason,
-        AxtRemoteSpendClaimV1, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceMetadata,
-        GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
-        LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneFinalityStatement,
-        LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneSchedulerPolicy,
-        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob,
-        PublicLaneRewardClaimStateV1, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneUnbonding, RemoteSpendIntent, SpendOp, TouchManifest,
+        AssetHandle, AssetHandleDraft, AssetPermissionManifest, AxtAnchoredSpendDraftV1,
+        AxtAnchoredSpendIssuerAuthorizationV1, AxtAnchoredSpendReplayKeyV1, AxtAnchoredSpendV1,
+        AxtAssetIncarnationV1, AxtBinding, AxtDescriptor, AxtEnvelopeRecord, AxtFastpqBinding,
+        AxtFinalizedSpendAnchorV1, AxtHandleBudgetKey, AxtHandleBudgetRecord,
+        AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
+        AxtProofEnvelope, AxtSourceSuccessReceiptV1, AxtSourceTransferOccurrenceV1,
+        AxtSpendNonceV1, DataSpaceCatalog, DataSpaceMetadata, GroupBinding, HandleBudget,
+        HandleSubject, LaneCatalog, LaneConfig, LaneFastpqProofMaterial, LaneFinalityAuthorityV1,
+        LaneFinalityStatement, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError,
+        LaneSchedulerPolicy, LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility,
+        ManifestVersion, ProofBlob, PublicLaneRewardClaimStateV1, PublicLaneRewardRole,
+        PublicLaneRewardShare, PublicLaneUnbonding, RemoteSpendIntent, SpendOp,
     },
     proof::{ProofId, ProofRecord, ProofStatus},
     query::{
@@ -111,7 +111,7 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
 };
-use ivm::{IVM, IVMHost, encoding, pointer_abi::PointerType, syscalls};
+use ivm::{IVM, encoding, pointer_abi::PointerType};
 use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
@@ -223,6 +223,7 @@ fn configure_pre_genesis_nexus_fixture(
     )
     .expect("open the fixture with its immutable configured catalog");
     *state = State::try_new_with_chain_and_network_id(
+        state.ivm_execution_budget(),
         world,
         kura,
         LiveQueryStore::start_test(),
@@ -233,7 +234,7 @@ fn configure_pre_genesis_nexus_fixture(
     )
     .expect("construct the fresh configured fixture before lane publication");
     // Governed and private lane evidence must precede catalog publication.
-    state.install_lane_manifests(&lane_manifests);
+    state.install_lane_manifests_for_testing(&lane_manifests);
     state.install_pre_genesis_nexus_for_testing(nexus);
     state.configure_test_runtime_defaults();
 }
@@ -717,12 +718,16 @@ fn commit_pin_intent_world_projection_for_test(
     let mut world = state.world.block();
     let effects = super::world_commit::PreparedWorldCommit::prepare_overlay(
         &mut world,
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         block_height,
         &nexus,
         &state.lane_incarnation_activation_heights_snapshot(),
         Some(&pending),
         None,
     )
+    .map_err(crate::execution_attempt::expect_completed_rejection)
     .expect("prepare canonical pin-index fixture World");
     world.commit();
     drop(effects);
@@ -863,7 +868,8 @@ state_test! { sync test_state_constructor_installs_default_lane_manifest
 }
 state_test! { sync feature_stable_fallible_constructor_preserves_chain_id
     let chain_id = ChainId::from("feature-stable-state-constructor");
-    let_row! { state = State::try_new_with_chain_with_telemetry( World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), chain_id.clone(), StateTelemetry::default(), ) .expect("feature-stable State construction must validate empty durable storage") };
+    let_row! { state = State::try_new_with_chain_with_telemetry(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), chain_id.clone(), StateTelemetry::default(), ) .expect("feature-stable State construction must validate empty durable storage") };
     assert_eq!(state.chain_id, chain_id);
 }
 fn world_with_privacy_tightenings(
@@ -1334,6 +1340,7 @@ state_test! { large_stack pre_genesis_installer_retains_nondefault_dataspace_bas
         )
         .expect("configured Kura");
         let mut state = State::try_new(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
             World::default(),
             kura,
             LiveQueryStore::start_test(),
@@ -1540,7 +1547,8 @@ ledger::nft::create_for_all_users();
 state_test! { sync fallible_state_constructor_rejects_poisoned_kura_before_initialization
     let kura = Kura::blank_kura_for_testing();
     kura.poison_canonical_storage_for_tests();
-    let_row! { result = State::try_new( World::default(), kura, LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] StateTelemetry::default(), ) };
+    let_row! { result = State::try_new(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), World::default(), kura, LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] StateTelemetry::default(), ) };
     assert!(
         matches!(result, Err(MergeLedgerCommitError::Persistence(_))),
         "canonical-storage poison must be returned by the production constructor"
@@ -1550,7 +1558,8 @@ state_test! { sync fallible_state_constructor_rejects_malformed_durable_commit_m
     let kura = Kura::blank_kura_for_testing();
     kura.overwrite_commit_marker_for_tests(b"not a canonical commit marker")
         .expect("corrupt durable commit marker fixture");
-    let_row! { result = State::try_new( World::default(), kura, LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] StateTelemetry::default(), ) };
+    let_row! { result = State::try_new(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), World::default(), kura, LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] StateTelemetry::default(), ) };
     assert!(
         matches!(result, Err(MergeLedgerCommitError::Persistence(_))),
         "malformed durable authority must fail before State can be constructed"
@@ -1697,6 +1706,26 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
         "security-authoritative AXT exact-use guards must be part of canonical snapshots"
     );
     assert_eq!(
+        world_annotations.get("axt_spend_nonce_ledger"),
+        Some(&false),
+        "fresh issuer spend nonces must be part of canonical snapshots"
+    );
+    assert_eq!(
+        block_annotations.get("axt_spend_nonce_ledger"),
+        Some(&false),
+        "in-flight issuer spend nonces must survive transactional publication"
+    );
+    assert_eq!(
+        world_annotations.get("axt_source_transfer_replay_ledger"),
+        Some(&false),
+        "physical source transfer replay guards must be part of canonical snapshots"
+    );
+    assert_eq!(
+        block_annotations.get("axt_source_transfer_replay_ledger"),
+        Some(&false),
+        "in-flight source transfer replay guards must survive transactional publication"
+    );
+    assert_eq!(
         world_annotations.get("axt_handle_budget_ledger"),
         Some(&false),
         "security-authoritative AXT family consumption must be part of canonical snapshots"
@@ -1779,14 +1808,6 @@ state_test! { sync merge_write_set_distinguishes_equal_values_written_to_differe
 fn checked_da_ack_signature(byte: u8) -> Signature {
     Signature::try_from_bytes(&[byte; 64])
         .expect("checked state DA acknowledgement signature fixture")
-}
-fn axt_test_digest(domain: &[u8], parts: &[&[u8]]) -> Hash {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(domain);
-    for part in parts {
-        payload.extend_from_slice(part);
-    }
-    Hash::new(payload)
 }
 state_test! { sync world_transaction_apply_commits_sorafs_and_da_overlays
     let world = World::default();
@@ -1916,219 +1937,6 @@ fn configure_axt_fixture_lane_catalog(state: &mut State, lane_catalog: LaneCatal
     }
     world.commit();
 }
-fn axt_proof_blob_for_remote_spend(
-    dsid: DataSpaceId,
-    manifest_root: [u8; 32],
-    proof_seed: &[u8],
-    expiry_slot: u64,
-    fragment: &AxtHandleFragment,
-    effective_amount: &Quantity,
-) -> ProofBlob {
-    let claim = AxtRemoteSpendClaimV1::new(
-        AxtHandleReplayKey::from_handle(fragment.intent.asset_dsid, &fragment.handle),
-        fragment.intent.op.asset_definition_id.clone(),
-        fragment.intent.op.kind.clone(),
-        fragment.intent.op.from.clone(),
-        fragment.intent.op.to.clone(),
-        effective_amount.clone(),
-    );
-    axt_proof_blob_for_with_profile(
-        dsid,
-        manifest_root,
-        proof_seed,
-        expiry_slot,
-        None,
-        vec![claim],
-    )
-}
-fn axt_proof_blob_for_with_committed_amount(
-    dsid: DataSpaceId,
-    manifest_root: [u8; 32],
-    proof_seed: &[u8],
-    expiry_slot: u64,
-    committed_amount: Option<u128>,
-) -> ProofBlob {
-    axt_proof_blob_for_with_profile(
-        dsid,
-        manifest_root,
-        proof_seed,
-        expiry_slot,
-        committed_amount,
-        Vec::new(),
-    )
-}
-#[allow(clippy::too_many_lines)]
-fn axt_proof_blob_for_with_profile(
-    dsid: DataSpaceId,
-    manifest_root: [u8; 32],
-    proof_seed: &[u8],
-    expiry_slot: u64,
-    committed_amount: Option<u128>,
-    mut remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
-) -> ProofBlob {
-    let source_tx_commitment = axt_test_digest(b"axt-state-test:source-tx", &[proof_seed]);
-    let claim_digest = axt_test_digest(b"axt-state-test:claim", &[proof_seed]);
-    let witness_commitment = axt_test_digest(b"axt-state-test:witness", &[proof_seed]);
-    let policy_commitment = axt_test_digest(b"axt-state-test:policy", &[&manifest_root]);
-    remote_spend_claims
-        .sort_by_key(iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1);
-    let remote_spend_intent_commitments = remote_spend_claims
-        .iter()
-        .map(iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1)
-        .collect::<Vec<_>>();
-    let source_asset = remote_spend_claims
-        .first()
-        .map(|claim| claim.asset_definition_id.clone());
-    assert!(
-        remote_spend_claims
-            .iter()
-            .all(|claim| Some(&claim.asset_definition_id) == source_asset.as_ref()),
-        "one FASTPQ proof fixture must use one exact asset definition"
-    );
-    let_row! { binding = AxtFastpqBinding { parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(), source_dsid: dsid.as_u64(), source_dataspace: format!("state-test-dataspace-{}", dsid.as_u64()), source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())), source_tx_commitment: hex::encode(source_tx_commitment.as_ref()), claim_type: "tx_predicate".to_owned(), claim_digest: hex::encode(claim_digest.as_ref()), witness_commitment: hex::encode(witness_commitment.as_ref()), policy_commitment: hex::encode(policy_commitment.as_ref()), verified_effect_type: "test_effect".to_owned(), corridor: "state-test-corridor".to_owned(), verifier_id: "fastpq".to_owned(), verifier_version: "v1".to_owned(), target_dsids: vec![dsid.as_u64()], effect_binding: source_asset.as_ref().map(|asset| iroha_data_model::nexus::AxtEffectBinding { destination_domain: None, destination_account_id: None, vault_account_id: None, issuance_account_id: None, source_asset_definition_id: Some(asset.to_string()), destination_asset_definition_id: None, source_amount_i64: None, destination_amount_i64: None, }), remote_spend_intent_commitments, } };
-    let mut dsid_bytes = [0_u8; 16];
-    dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
-    let_row! { mut batch = fastpq_prover::TransitionBatch::new( fastpq_prover::AXT_DEFAULT_PARAMETER, fastpq_prover::PublicInputs { dsid: dsid_bytes, slot: expiry_slot, old_root: axt_test_digest(b"axt-state-test:old-root", &[proof_seed]).into(), new_root: manifest_root, perm_root: axt_test_digest(b"axt-state-test:perm-root", &[proof_seed]).into(), tx_set_hash: axt_test_digest(b"axt-state-test:tx-set", &[proof_seed]).into(), }, ) };
-    let mut transcripts = if remote_spend_claims.is_empty() {
-        vec![iroha_data_model::fastpq::TransferTranscript {
-            batch_hash: source_tx_commitment,
-            deltas: vec![iroha_data_model::fastpq::TransferDeltaTranscript {
-                from_account: ALICE_ID.clone(),
-                to_account: BOB_ID.clone(),
-                asset_definition: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                amount: Quantity::from(1_u64),
-                from_balance_before: Quantity::from(1_000_000_u64),
-                from_balance_after: Quantity::from(999_999_u64),
-                to_balance_before: Quantity::from(100_u64),
-                to_balance_after: Quantity::from(101_u64),
-                from_smt_witness: Default::default(),
-                to_smt_witness: Default::default(),
-            }],
-            authority_digest: Hash::new(b"axt-state-test:transfer-authority"),
-            poseidon_preimage_digest: None,
-        }]
-    } else {
-        remote_spend_claims
-            .iter()
-            .map(|claim| {
-                let from = AccountId::parse_encoded(&claim.from).expect("canonical sender");
-                let to = AccountId::parse_encoded(&claim.to).expect("canonical receiver");
-                let amount = iroha_data_model::fastpq::normalized_numeric_to_u64(
-                    claim.effective_amount.as_numeric(),
-                    0,
-                )
-                .expect("fixture transfer amount is an exact scale-zero u64");
-                iroha_data_model::fastpq::TransferTranscript {
-                    batch_hash: source_tx_commitment,
-                    deltas: vec![iroha_data_model::fastpq::TransferDeltaTranscript {
-                        from_account: from,
-                        to_account: to,
-                        asset_definition: claim.asset_definition_id.clone(),
-                        amount: claim.effective_amount.clone(),
-                        from_balance_before: Quantity::from(1_000_000_u64),
-                        from_balance_after: Quantity::from(1_000_000_u64 - amount),
-                        to_balance_before: Quantity::from(100_u64),
-                        to_balance_after: Quantity::from(100_u64 + amount),
-                        from_smt_witness: Default::default(),
-                        to_smt_witness: Default::default(),
-                    }],
-                    authority_digest: Hash::new(b"axt-state-test:transfer-authority"),
-                    poseidon_preimage_digest: None,
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-    let (old_root, new_root) =
-        fastpq_prover::gadgets::transfer::attach_transfer_smt_witnesses(&mut transcripts)
-            .expect("attach transfer SMT witnesses");
-    batch.public_inputs.old_root = old_root;
-    batch.public_inputs.new_root = new_root;
-    for transcript in &mut transcripts {
-        transcript.poseidon_preimage_digest =
-            Some(fastpq_prover::gadgets::transfer::compute_poseidon_digest(
-                &transcript.deltas[0],
-                &transcript.batch_hash,
-            ));
-        for delta in &transcript.deltas {
-            let balance_bytes = |value: &Quantity| {
-                iroha_data_model::fastpq::normalized_numeric_to_u64(value.as_numeric(), 0)
-                    .expect("fixture balance is an exact u64")
-                    .to_le_bytes()
-                    .to_vec()
-            };
-            batch.push(fastpq_prover::StateTransition::new(
-                iroha_data_model::fastpq::transfer_balance_key(
-                    &delta.asset_definition,
-                    &delta.from_account,
-                )
-                .expect("canonical balance key"),
-                balance_bytes(&delta.from_balance_before),
-                balance_bytes(&delta.from_balance_after),
-                fastpq_prover::OperationKind::Transfer,
-            ));
-            batch.push(fastpq_prover::StateTransition::new(
-                iroha_data_model::fastpq::transfer_balance_key(
-                    &delta.asset_definition,
-                    &delta.to_account,
-                )
-                .expect("canonical balance key"),
-                balance_bytes(&delta.to_balance_before),
-                balance_bytes(&delta.to_balance_after),
-                fastpq_prover::OperationKind::Transfer,
-            ));
-        }
-    }
-    batch.metadata.insert(
-        iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
-        norito::to_bytes(&transcripts).expect("encode transfer transcripts"),
-    );
-    fastpq_prover::set_axt_remote_spend_claims(&mut batch, &binding, &remote_spend_claims)
-        .expect("attach remote-spend claims");
-    batch.sort();
-    batch.metadata.insert(
-        "entry_hash".to_owned(),
-        source_tx_commitment.as_ref().to_vec(),
-    );
-    crate::fastpq::quantity_fixture::materialize(&mut batch);
-    fastpq_prover::bind_axt_batch_with_proof_metadata(
-        &mut batch,
-        &binding,
-        manifest_root,
-        None,
-        committed_amount,
-        Some(expiry_slot),
-    )
-    .expect("bind AXT state test batch");
-    let_row! { proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER) .expect("FASTPQ prover") .prove_axt_bound(&batch, &binding) .expect("FASTPQ proof") };
-    let_row! { fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload") };
-    let mut envelope = AxtProofEnvelope {
-        dsid,
-        manifest_root,
-        da_commitment: None,
-        proof: fastpq_payload,
-        fastpq_binding: Some(binding),
-        committed_amount,
-        amount_commitment: None,
-    };
-    let mut proof = ProofBlob {
-        payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
-        expiry_slot: Some(expiry_slot),
-    };
-    if let Some(amount) = committed_amount {
-        let quantity = Quantity::from(amount);
-        envelope.amount_commitment = Some(ivm::axt::derive_amount_commitment(
-            dsid,
-            &quantity,
-            Some(proof.payload.as_slice()),
-        ));
-        proof.payload =
-            norito::to_bytes(&envelope).expect("encode commitment-bound proof envelope");
-    }
-    proof
-}
 state_test! { sync deserialize_rejects_invalid_ram_lfe_program_policy_storage
     let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let resolver = crate::state::checked_keypair();
@@ -2180,6 +1988,9 @@ fn deserialize_state_snapshot_value_with_kura(
 ) -> Result<Box<State>, deserialize::StateRestoreError> {
     deserialize::KuraSeed {
         operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        execution_budget: mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura,
         query_handle: LiveQueryStore::start_test(),
@@ -2327,83 +2138,6 @@ fn axt_replay_incarnation_for_test(seed: u8) -> AxtAssetIncarnationV1 {
     bytes[Hash::LENGTH - 1] |= 1;
     AxtAssetIncarnationV1::try_from_bytes(bytes)
         .expect("AXT replay-key fixture incarnation must be canonical and non-zero")
-}
-fn authenticated_axt_replay_world(
-    dsid: DataSpaceId,
-    fixture_tag: u8,
-) -> (
-    World,
-    KeyPair,
-    UniversalAccountId,
-    [u8; 32],
-    AssetDefinitionId,
-    AxtAssetIncarnationV1,
-) {
-    let issuer = crate::state::checked_keypair();
-    let issuer_account_id = AccountId::new(issuer.public_key().clone());
-    let issuer_uaid = UniversalAccountId::from_hash(Hash::new([b'a', b'x', b't', fixture_tag]));
-    let issuer_account = Account::new(issuer_account_id.clone())
-        .with_uaid(Some(issuer_uaid))
-        .build(&issuer_account_id);
-    let asset_domain_id =
-        DomainId::try_new("axt-replay", "universal").expect("valid AXT replay domain");
-    let asset_domain = Domain::new(asset_domain_id.clone()).build(&issuer_account_id);
-    let asset_definition_id =
-        AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1])
-            .expect("valid AXT fixture asset id");
-    let asset_definition = AssetDefinition::numeric(
-        asset_definition_id.clone(),
-        "AXT replay fixture asset",
-        iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-        None,
-    )
-    .with_owning_domain(Some(asset_domain_id))
-    .build(&issuer_account_id);
-    let mut world = World::with([asset_domain], [issuer_account], [asset_definition]);
-    let manifest = AssetPermissionManifest {
-        version: ManifestVersion::default(),
-        uaid: issuer_uaid,
-        dataspace: dsid,
-        issued_ms: 0,
-        activation_epoch: 1,
-        expiry_epoch: None,
-        entries: Vec::new(),
-    };
-    let mut manifest_record = SpaceDirectoryManifestRecord::new(manifest);
-    manifest_record.lifecycle.mark_activated(1);
-    let mut manifest_root = [0_u8; 32];
-    manifest_root.copy_from_slice(manifest_record.manifest_hash.as_ref());
-    let mut manifest_set = SpaceDirectoryManifestSet::default();
-    manifest_set.upsert(manifest_record);
-    world
-        .space_directory_manifests_mut_for_testing()
-        .insert(issuer_uaid, manifest_set);
-    let mut issuer_bindings = UaidDataspaceBindings::default();
-    issuer_bindings.bind_account(dsid, issuer_account_id);
-    world
-        .uaid_dataspaces_mut_for_testing()
-        .insert(issuer_uaid, issuer_bindings);
-    let registration_header =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([b'h', fixture_tag]));
-    let execution_identity = Hash::new([b'e', fixture_tag]);
-    let incarnation = AxtAssetIncarnationV1::derive(
-        &DEFAULT_TEST_NETWORK_ID,
-        &asset_definition_id,
-        &registration_header,
-        &execution_identity,
-        u64::from(fixture_tag),
-    );
-    world
-        .axt_asset_incarnations
-        .insert(asset_definition_id.clone(), incarnation);
-    (
-        world,
-        issuer,
-        issuer_uaid,
-        manifest_root,
-        asset_definition_id,
-        incarnation,
-    )
 }
 fn axt_budget_key_for_replay_key(key: &AxtHandleReplayKey) -> AxtHandleBudgetKey {
     let mut context = AxtHandleIssuerContextV1::default();
@@ -2593,6 +2327,127 @@ state_test! { sync axt_replay_ledger_is_required_in_state_snapshot
         "unexpected missing-replay-ledger error: {error}"
     );
 }
+state_test! { sync anchored_axt_spend_replay_pair_is_permanent_and_required_in_state_snapshot
+    let state = blank_state();
+    let key = AxtAnchoredSpendReplayKeyV1 {
+        issuer_context: AxtHandleIssuerContextV1::default(),
+        nonce: AxtSpendNonceV1::try_new([0xA7; 32]).expect("nonzero nonce"),
+    };
+    key.validate().expect("valid replay identity");
+    let source = source_transfer_replay_key_for_tests(&key);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable initial state hash");
+    {
+        let mut block = state.world.axt_spend_nonce_ledger.block();
+        block.insert(key, 17);
+        block.commit();
+    }
+    {
+        let mut block = state.world.axt_source_transfer_replay_ledger.block();
+        block.insert(source, AxtSourceTransferReplayRecordV1 { issuer_nonce: key, consumed_slot: 17 });
+        block.commit();
+    }
+    let after = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable replayed state hash");
+    assert_ne!(before, after, "spend replay identities must affect canonical State");
+
+    let snapshot = norito::json::to_value(&state).expect("serialize spend nonce ledger");
+    let restored = deserialize_state_snapshot_value(snapshot.clone())
+        .expect("restore paired spend replay ledgers");
+    assert_eq!(restored.world.axt_spend_nonce_ledger.view().get(&key), Some(&17));
+    assert_eq!(
+        restored.world.axt_source_transfer_replay_ledger.view().get(&source),
+        Some(&AxtSourceTransferReplayRecordV1 { issuer_nonce: key, consumed_slot: 17 })
+    );
+
+    let mut omitted = snapshot.clone();
+    let_row! { norito::json::Value::Object(root) = &mut omitted else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root.get_mut("world").expect("snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("axt_spend_nonce_ledger").is_some());
+    let error = deserialize_state_snapshot_value(omitted)
+        .err()
+        .expect("missing first-release nonce authority must fail closed");
+    assert!(error.to_string().contains("axt_spend_nonce_ledger"));
+
+    let mut omitted = snapshot.clone();
+    let_row! { norito::json::Value::Object(root) = &mut omitted else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root.get_mut("world").expect("snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("axt_source_transfer_replay_ledger").is_some());
+    let error = deserialize_state_snapshot_value(omitted)
+        .err()
+        .expect("missing physical source replay authority must fail closed");
+    assert!(error.to_string().contains("axt_source_transfer_replay_ledger"));
+
+    {
+        let mut block = state.world.axt_source_transfer_replay_ledger.block();
+        block.insert(source, AxtSourceTransferReplayRecordV1 { issuer_nonce: key, consumed_slot: 18 });
+        block.commit();
+    }
+    let error = deserialize_state_snapshot_value(
+        norito::json::to_value(&state).expect("serialize mismatched replay ledgers")
+    )
+    .err()
+    .expect("a source transfer with a different consumed slot must fail closed");
+    assert!(error.to_string().contains("axt_source_transfer_replay_ledger"));
+
+    let unpaired_nonce = AxtAnchoredSpendReplayKeyV1 {
+        nonce: AxtSpendNonceV1::try_new([0xA8; 32]).expect("second nonce"),
+        ..key
+    };
+    let duplicate_source = AxtSourceTransferReplayKeyV1 { delta_index: source.delta_index + 1, ..source };
+    {
+        let mut block = state.world.axt_spend_nonce_ledger.block();
+        block.insert(unpaired_nonce, 19);
+        block.commit();
+    }
+    {
+        let mut block = state.world.axt_source_transfer_replay_ledger.block();
+        block.insert(source, AxtSourceTransferReplayRecordV1 { issuer_nonce: key, consumed_slot: 17 });
+        block.insert(duplicate_source, AxtSourceTransferReplayRecordV1 { issuer_nonce: key, consumed_slot: 17 });
+        block.commit();
+    }
+    let error = deserialize_state_snapshot_value(
+        norito::json::to_value(&state).expect("serialize duplicated replay nonce")
+    )
+    .err()
+    .expect("two physical source transfers cannot share one issuer nonce");
+    assert!(error.to_string().contains("axt_source_transfer_replay_ledger"));
+}
+state_test! { sync anchored_axt_replay_restore_rejects_out_of_range_source_coordinates
+    let key = AxtAnchoredSpendReplayKeyV1 {
+        issuer_context: AxtHandleIssuerContextV1::default(),
+        nonce: AxtSpendNonceV1::try_new([0xB7; 32]).expect("nonzero nonce"),
+    };
+    let source = source_transfer_replay_key_for_tests(&key);
+    let limit = iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32;
+    for (field, invalid_source) in [
+        ("transcript index", AxtSourceTransferReplayKeyV1 { transcript_index: limit, ..source }),
+        ("delta index", AxtSourceTransferReplayKeyV1 { delta_index: limit, ..source }),
+    ] {
+        let state = blank_state();
+        {
+            let mut nonces = state.world.axt_spend_nonce_ledger.block();
+            nonces.insert(key, 17);
+            nonces.commit();
+        }
+        {
+            let mut transfers = state.world.axt_source_transfer_replay_ledger.block();
+            transfers.insert(
+                invalid_source,
+                AxtSourceTransferReplayRecordV1 { issuer_nonce: key, consumed_slot: 17 },
+            );
+            transfers.commit();
+        }
+        let snapshot = norito::json::to_value(&state).expect("serialize invalid replay coordinate");
+        let error = deserialize_state_snapshot_value(snapshot)
+            .err()
+            .expect("restored replay coordinate must be bounded");
+        assert!(
+            error.to_string().contains(field),
+            "unexpected {field} replay-restore error: {error}"
+        );
+    }
+}
 state_test! { sync axt_replay_ledger_rejects_invalid_persisted_record
     let (state, _, _) = state_with_axt_replay_record();
     let mut snapshot = norito::json::to_value(&state).expect("serialize AXT replay ledger");
@@ -2712,15 +2567,25 @@ state_test! { sync axt_policy_counter_survives_serialized_state_snapshot
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 5, 0);
     let mut block = restored.block(header);
     let mut transaction = block.transaction();
-    transaction
-        .record_axt_envelope(axt_envelope_for_block_freeze(
+    let error = transaction
+        .record_axt_envelope(axt_envelope_with_unverified_spend(
             handle,
             dataspace,
             LaneId::SINGLE,
             AxtBinding::new([0xC7; 32]),
             1,
         ))
-        .expect("the exact next nonce remains usable after snapshot restart");
+        .expect_err("snapshot restore must not bypass finalized source admission");
+    assert!(error.to_string().contains("source-anchored AXT spends"));
+    assert_eq!(
+        transaction
+            .world
+            .axt_policies()
+            .get(&dataspace)
+            .map(|policy| policy.next_handle_counter),
+        Some(7),
+        "an unverified spend cannot advance the restored counter"
+    );
 }
 state_test! { sync axt_handle_counters_are_required_in_state_snapshot
     let mut state = blank_state();
@@ -3566,10 +3431,7 @@ fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture 
     let request_id = Hash::new("staking-invariant-unbond");
     let mut world = World::default();
     let stake_asset = AssetId::new(
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("stakeinvariant", "universal").expect("fixture domain"),
-            "reserve".parse().expect("fixture asset name"),
-        ),
+        SumeragiNposParameters::default().xor_asset_definition_id,
         validator.clone(),
     );
     let (account_id, account) = Account::new(validator.clone())
@@ -4720,7 +4582,8 @@ state_test! { sync account_alias_bindings_roundtrip_through_state_json
             "derived account index `{derived_field}` must not be serialized"
         );
     }
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -4991,7 +4854,8 @@ state_test! { sync asset_definition_alias_bindings_roundtrip_through_state_json
     seed_snapshot_asset_incarnations(&mut world);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5099,7 +4963,8 @@ state_test! { sync asset_escrow_record_roundtrips_through_state_json
     world.asset_escrows.insert(public_id, public_record.clone());
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5125,7 +4990,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     world = reward_reserves::registered_custody_world_for_test(
         world,
         &reward_asset,
-        Quantity::from(1_477_u64),
+        Quantity::from(1_480_u64),
     );
     {
         let mut parameters = world.parameters.block();
@@ -5139,20 +5004,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         ));
         parameters.commit();
     }
-    let validator = ALICE_ID.clone();
-    let staker = BOB_ID.clone();
     let mismatched_lane = LaneId::new(99);
-    let_row! { stake_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").expect("stake asset domain"), "stake".parse().expect("stake asset name"), ) };
-    let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
-    for account in [validator.clone(), staker.clone()] {
-        let (id, value) = Account::new(account.clone()).build(&account).into_key_value();
-        world.accounts.insert(id, value);
-    }
-    world = reward_reserves::registered_custody_world_for_test(
-        world,
-        &reward_asset,
-        Quantity::from(1_500_u64),
-    );
     let request_id = Hash::new("unbond-request");
     world.public_lane_validators.insert(
         (LaneId::SINGLE, validator.clone()),
@@ -5276,7 +5128,8 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         block.commit();
     }
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value.clone()) .expect("deserialize state") };
     let roundtrip = norito::json::to_value(&restored).unwrap();
     for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "public_lane_reward_accruals", "public_lane_reward_reserves", "public_lane_stake_custody", "public_lane_stake_reserves", "space_directory_manifests"] {
@@ -5364,7 +5217,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
 
 }
 use crate::{
-    block::{BlockBuilder, BlockValidationError, ValidBlock, valid::validate_axt_envelopes},
+    block::{BlockBuilder, BlockValidationError, ValidBlock},
     da::DaShardCursorJournal,
     governance::manifest::{
         GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
@@ -5389,6 +5242,8 @@ fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig 
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -5412,6 +5267,9 @@ fn autoscale_storage_state_for_testing(
     query_handle: crate::query::store::LiveQueryStoreHandle,
 ) -> State {
     let mut state = State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::default(),
         kura,
         query_handle,
@@ -6028,7 +5886,8 @@ state_test! { sync proof_status_index_roundtrips_through_state_json
     );
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.view();
     let_row! { verified_ids = FindProofRecordsByStatus { status: ProofStatus::Verified, } .execute(CompoundPredicate::PASS, &view) .expect("query verified proof records") .map(|record| record.id) .collect::<Vec<_>>() };
@@ -11576,7 +11435,7 @@ impl CommittedAutoscaleDrift {
                 registry.consensus_policy_digest(),
                 updated.consensus_policy_digest()
             );
-            state.install_lane_manifests(&updated);
+            state.install_lane_manifests_for_testing(&updated);
             return;
         }
         self.apply_to_projection(&mut state.nexus.write());
@@ -12415,6 +12274,7 @@ state_test! { sync autoscale_transition_fails_closed_for_restricted_base_profile
     )
     .expect("open the exact restricted configured catalog");
     let mut state = State::try_new(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -16173,7 +16033,7 @@ state_test! { sync autoscale_scale_in_hides_same_block_da_commitments_for_retire
     let_row! { mut elastic_lane = autoscale_elastic_lane_config_from_base(retired_lane_id, &base_lane, 1) .expect("public base should produce a matching elastic lane") };
     attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
     let_row! { manifest_status = |lane: &LaneConfig, privacy_commitments| LaneManifestStatus { lane: lane.id, alias: lane.alias.clone(), dataspace: lane.dataspace_id, visibility: lane.visibility, storage: lane.storage, governance: lane.governance.clone(), manifest_path: Some(PathBuf::from(format!( "/tmp/autoscale-same-block-da-lane-{}.json", lane.id.as_u32() ))), governance_rules: None, privacy_commitments, } };
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
         BTreeMap::from([
             (base_lane.id, manifest_status(&base_lane, Vec::new())),
             (elastic_lane.id, manifest_status(&elastic_lane, Vec::new())),
@@ -16995,9 +16855,11 @@ state_test! { sync autoscale_transition_preserves_cross_lane_axt_replay_for_surv
     let binding = AxtBinding::new([0xD4; 32]);
     let_row! { handle = AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dataspace), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: LaneId::SINGLE, axt_binding: binding, manifest_view_root: [0xC3; 32], expiry_slot: 100, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dataspace, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
     let replay_key = AxtHandleReplayKey::from_handle(dataspace, &handle);
-    let_row! { envelope = AxtEnvelopeRecord { binding, lane: retired_envelope_lane, descriptor: AxtDescriptor { dsids: vec![dataspace], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle, intent: RemoteSpendIntent { asset_dsid: dataspace, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 2, } };
     let mut state_block = state.block(second.header());
-    state_block.record_replayed_axt_envelope(&envelope, 1);
+    state_block.world.axt_replay_ledger.insert(
+        replay_key,
+        axt_replay_record_for_key(&replay_key, 1, 100),
+    );
     assert!(
         state_block
             .world
@@ -18766,6 +18628,7 @@ state_test! { sync apply_lane_lifecycle_allows_retiring_corrupt_autoscale_manage
             &nexus.configured_lane_catalog,
         );
         let mut state = State::try_new(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
             World::default(),
             kura,
             query_handle,
@@ -19664,7 +19527,8 @@ fn authenticated_startup_state_for_testing(
     configured: &LaneCatalog,
 ) -> (Arc<Kura>, State) {
     let kura = authenticated_kura_for_testing(store_root, configured);
-    let_row! { mut state = State::try_new_with_chain( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), (*DEFAULT_TEST_CHAIN_ID).clone(), #[cfg(feature = "telemetry")] <_>::default(), ) .expect("construct production-like authenticated startup State") };
+    let_row! { mut state = State::try_new_with_chain(
+    crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), (*DEFAULT_TEST_CHAIN_ID).clone(), #[cfg(feature = "telemetry")] <_>::default(), ) .expect("construct production-like authenticated startup State") };
     state
         .prepare_configured_primary_geometry_anchor(configured)
         .expect("anchor authenticated configured primary");
@@ -19680,7 +19544,8 @@ fn authenticated_startup_anchors_custom_primary_and_journals_secondaries_exactly
     let_row! { configured = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig { alias: "configured-custom-primary".to_owned(), ..LaneConfig::default() }, LaneConfig { id: LaneId::new(1), alias: "configured-secondary".to_owned(), ..LaneConfig::default() }, ], ) .expect("custom-primary configured catalog") };
     for restart in 0..2 {
         let kura = authenticated_kura_for_testing(store_root.clone(), &configured);
-        let_row! { mut state = State::try_new_with_chain( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), (*DEFAULT_TEST_CHAIN_ID).clone(), #[cfg(feature = "telemetry")] <_>::default(), ) .expect("construct production-like authenticated startup State") };
+        let_row! { mut state = State::try_new_with_chain(
+        crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), (*DEFAULT_TEST_CHAIN_ID).clone(), #[cfg(feature = "telemetry")] <_>::default(), ) .expect("construct production-like authenticated startup State") };
         let secondary_blocks = fixture_static_storage_identity(&state, &configured, LaneId::new(1))
             .blocks_dir(&store_root);
         if restart == 0 {
@@ -21101,7 +20966,8 @@ state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_ac
         })
         .expect("retire lane1 before simulating a restart and recreation");
     let retired_snapshot = norito::json::to_value(&state).expect("serialize retired state");
-    let_row! { restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
+    let_row! { mut restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
     assert_eq!(
         restarted.lane_incarnation_lineage_snapshot()[&LaneId::new(1)],
         historical_lineage,
@@ -21550,10 +21416,9 @@ state_test! { sync configured_startup_preserves_axt_replay_entries_for_removed_d
         "dataspace removal cannot revive an unexpired exact handle use"
     );
 }
-state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_rebind_and_restart
+state_test! { sync axt_permanent_counter_survives_dataspace_rebind_and_restart
     let retained = DataSpaceId::UNIVERSAL;
     let dataspace = DataSpaceId::new(7);
-    let lane = LaneId::SINGLE;
     let manifest_root = [0xD7; 32];
     let mut state = blank_test_state();
     let initial_nexus = dataspace_retirement_nexus!(initial retained, dataspace);
@@ -21562,92 +21427,26 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
         dataspace,
         AxtPolicyEntry {
             manifest_root,
-            target_lane: lane,
+            target_lane: LaneId::SINGLE,
             active_handle_era: 1,
             next_handle_counter: 1,
             current_slot: 0,
         },
     );
-    let issuer = crate::state::checked_keypair();
-    let context = AxtHandleIssuerContextV1 {
-        asset_dsid: dataspace,
-        issuer_manifest_root: manifest_root,
-        ..Default::default()
-    };
-    let used_binding = AxtBinding::new([0xD8; 32]);
-    let unused_binding = AxtBinding::new([0xD9; 32]);
-    let used = signed_axt_handle_for_block_freeze(
-        &issuer,
-        context.clone(),
-        lane,
-        used_binding,
-        1,
-        1,
-    );
-    let unused_same_subnonce = signed_axt_handle_for_block_freeze(
-        &issuer,
-        context,
-        lane,
-        unused_binding,
-        1,
-        1,
-    );
-    {
-        let genesis = empty_signed_block_after(None, 1);
-        store_block_for_state_commit(&state.kura, &genesis);
-        let mut block = state.block(genesis.header());
-        let mut transaction = block.transaction();
-        transaction
-            .record_axt_envelope(axt_envelope_for_block_freeze(
-                used,
-                dataspace,
-                lane,
-                used_binding,
-                1,
-            ))
-            .expect("first sub-nonce advances the permanent ratchet");
-        transaction.apply();
-        block.commit_empty_block_for_testing().expect("commit first AXT use");
-    }
-    assert_eq!(
-        state
-            .world
-            .axt_handle_counters
-            .view()
-            .get(&dataspace)
-            .map(AxtHandleCounterRecord::next),
-        Some(2)
-    );
-
     let error = state
         .set_nexus(dataspace_retirement_nexus!(retained retained))
         .expect_err("physical dataspace retirement requires an on-chain catalog transition");
     assert!(matches!(error, LaneLifecycleError::RuntimeCatalog(_)));
-    assert!(state.world.axt_policies.view().get(&dataspace).is_some());
+    state.remove_axt_policy(&dataspace);
     assert_eq!(
         state.world.axt_handle_counters.view().get(&dataspace).map(AxtHandleCounterRecord::next),
         Some(2),
-        "rejected configuration changes must preserve the permanent ratchet"
+        "policy removal advances the permanent high-water mark"
     );
-    // Physical dataspaces remain part of the committed catalog. Revoke their
-    // authorization explicitly before testing policy recreation across restart.
-    state.remove_axt_policy(&dataspace);
-    assert!(state.world.axt_policies.view().get(&dataspace).is_none());
-    assert_eq!(
-        state
-            .world
-            .axt_handle_counters
-            .view()
-            .get(&dataspace)
-            .map(AxtHandleCounterRecord::next),
-        Some(3),
-        "policy removal must advance the permanent high-water mark"
-    );
-
-    seed_snapshot_metadata_through_height_for_test(&state, 1);
     let snapshot = norito::json::to_value(&state).expect("serialize revoked dataspace policy state");
     let mut restarted =
-        deserialize_state_snapshot_value_with_kura(snapshot, Arc::clone(&state.kura)).expect("restart from canonical snapshot");
+        deserialize_state_snapshot_value_with_kura(snapshot, Arc::clone(&state.kura))
+            .expect("restart from canonical snapshot");
     restarted
         .set_nexus(initial_nexus)
         .expect("retain the same committed dataspace route after restart");
@@ -21655,7 +21454,7 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
         dataspace,
         AxtPolicyEntry {
             manifest_root,
-            target_lane: lane,
+            target_lane: LaneId::SINGLE,
             active_handle_era: 1,
             next_handle_counter: 1,
             current_slot: 0,
@@ -21668,61 +21467,30 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
             .view()
             .get(&dataspace)
             .map(|policy| policy.next_handle_counter),
-        Some(4),
-        "policy recreation must project the transition-revoked permanent counter instead of resetting to one"
-    );
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, 2, 0);
-    let mut block = restarted.block(header);
-    let mut transaction = block.transaction();
-    let error = transaction
-        .record_axt_envelope(axt_envelope_for_block_freeze(
-            unused_same_subnonce,
-            dataspace,
-            lane,
-            unused_binding,
-            2,
-        ))
-        .expect_err("a different old family at the consumed sub-nonce must remain stale");
-    assert!(
-        error.to_string().contains("authorization generation mismatch"),
-        "unexpected stale-generation rejection: {error}"
+        Some(3),
+        "policy recreation projects the permanent counter instead of resetting it"
     );
 }
-state_test! { sync axt_generation_rejects_presigned_future_nonce_after_authority_cycle
+state_test! { sync axt_generation_ratchet_survives_authority_cycle_and_snapshot
     let dataspace = DataSpaceId::new(8);
-    let lane = LaneId::SINGLE;
     let manifest_root = [0xE1; 32];
     let mut state = blank_test_state();
     state.set_axt_policy(
         dataspace,
         AxtPolicyEntry {
             manifest_root,
-            target_lane: lane,
+            target_lane: LaneId::SINGLE,
             active_handle_era: 1,
             next_handle_counter: 1,
             current_slot: 0,
         },
     );
-    let binding = AxtBinding::new([0xE2; 32]);
-    let old_future_handle = signed_axt_handle_for_block_freeze(
-        &crate::state::checked_keypair(),
-        AxtHandleIssuerContextV1 {
-            asset_dsid: dataspace,
-            issuer_manifest_root: manifest_root,
-            ..Default::default()
-        },
-        lane,
-        binding,
-        1,
-        3,
-    );
-
     state.remove_axt_policy(&dataspace);
     state.set_axt_policy(
         dataspace,
         AxtPolicyEntry {
             manifest_root,
-            target_lane: lane,
+            target_lane: LaneId::SINGLE,
             active_handle_era: 1,
             next_handle_counter: 1,
             current_slot: 0,
@@ -21737,28 +21505,18 @@ state_test! { sync axt_generation_rejects_presigned_future_nonce_after_authority
         .expect("authority cycling retains its durable ratchet");
     assert_eq!(ratchet.next(), 3);
     assert_eq!(ratchet.authorization_generation(), 3);
-
     let snapshot = norito::json::to_value(&state).expect("serialize cycled authority state");
     let restarted = deserialize_state_snapshot_value(snapshot)
         .expect("restore generation-aware ratchet from canonical snapshot");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-    let mut block = restarted.block(header);
-    let mut transaction = block.transaction();
-    let error = transaction
-        .record_axt_envelope(axt_envelope_for_block_freeze(
-            old_future_handle,
-            dataspace,
-            lane,
-            binding,
-            1,
-        ))
-        .expect_err(
-            "an old-generation handle must fail even when its future nonce becomes current",
-        );
-    assert!(
-        error.to_string().contains("generation mismatch")
-            || error.to_string().contains("era mismatch"),
-        "unexpected old-generation rejection: {error}"
+    assert_eq!(
+        restarted
+            .world
+            .axt_handle_counters
+            .view()
+            .get(&dataspace)
+            .copied(),
+        Some(ratchet),
+        "snapshot restore retains the exact generation-aware ratchet"
     );
 }
 state_test! { sync set_nexus_preserves_axt_family_budget_for_removed_dataspaces
@@ -25053,7 +24811,7 @@ fn lane_lifecycle_same_lane_confidential_policy_change_hides_previous_da_indexes
 
 fn install_lane_manifest_registry(state: &State, lanes: &[(LaneId, DataSpaceId, Vec<AccountId>)]) {
     let nexus = state.nexus_snapshot();
-    let mut statuses = BTreeMap::new();
+    let mut bindings_by_lane = BTreeMap::new();
     for (lane_id, dataspace_id, validators) in lanes {
         let lane = nexus
             .lane_catalog
@@ -25066,12 +24824,16 @@ fn install_lane_manifest_registry(state: &State, lanes: &[(LaneId, DataSpaceId, 
             "manifest fixture binds the exact route"
         );
         let_row! { validator_bindings = validators .iter() .map(|validator| ManifestValidatorBinding { validator: validator.clone(), peer_id: PeerId::from( validator .try_signatory() .expect("manifest test validators must be single-signatory") .clone(), ), torii_url: None, }) .collect() };
-        let_row! { rules = GovernanceRules { validators: validators.clone(), validator_bindings, ..GovernanceRules::default() } };
-        let_row! { status = LaneManifestStatus { lane: *lane_id, alias: lane.alias.clone(), dataspace: *dataspace_id, visibility: lane.visibility, storage: lane.storage, governance: lane.governance.clone(), manifest_path: Some(std::path::PathBuf::from("/tmp/manifest.json")), governance_rules: Some(rules), privacy_commitments: Vec::new(), } };
-        statuses.insert(*lane_id, status);
+        bindings_by_lane.insert(*lane_id, validator_bindings);
     }
-    let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    state.install_lane_manifests(&registry);
+    let registry = Arc::new(
+        crate::governance::manifest::test_support::validator_registry(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            bindings_by_lane,
+        ),
+    );
+    state.install_lane_manifests_for_testing(&registry);
 }
 /// Install deliberately stale route claims for authority rejection tests.
 fn install_stale_lane_manifest_registry_for_test(
@@ -25115,13 +24877,17 @@ fn install_stale_lane_manifest_registry_for_test(
             (*lane_id, status)
         })
         .collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+        statuses,
+    )));
 }
 fn install_lane_privacy_commitment_fixture(state: &State, private_lane: LaneId) {
     use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
     let nexus = state.nexus_snapshot();
     let_row! { statuses = nexus .lane_catalog .lanes() .iter() .map(|lane| { let is_private = lane.id == private_lane; let status = LaneManifestStatus { lane: lane.id, alias: lane.alias.clone(), dataspace: lane.dataspace_id, visibility: lane.visibility, storage: lane.storage, governance: lane.governance.clone(), manifest_path: is_private .then(|| std::path::PathBuf::from("/tmp/lane-privacy.manifest.json")), governance_rules: None, privacy_commitments: is_private .then(|| { vec![LanePrivacyCommitment::merkle( LaneCommitmentId::new(1), MerkleCommitment::from_root_bytes([0xA5; 32], 12), )] }) .unwrap_or_default(), }; (lane.id, status) }) .collect() };
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+        statuses,
+    )));
 }
 fn install_lane_manifest_registry_for_keypairs(
     state: &State,
@@ -25154,7 +24920,7 @@ fn install_lane_manifest_registry_with_bindings(
     let_row! { rules = GovernanceRules { validators, validator_bindings, ..GovernanceRules::default() } };
     let_row! { status = LaneManifestStatus { lane: lane_id, alias: lane.alias.clone(), dataspace: dataspace_id, visibility: lane.visibility, storage: lane.storage, governance: lane.governance.clone(), manifest_path: Some(std::path::PathBuf::from("/tmp/manifest.json")), governance_rules: Some(rules), privacy_commitments: Vec::new(), } };
     let_row! { registry = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([( lane_id, status, )]))) };
-    state.install_lane_manifests(&registry);
+    state.install_lane_manifests_for_testing(&registry);
 }
 state_test! { sync lane_manifest_fixtures_preserve_exact_catalog_identity_across_scoped_reads
     let state = State::new_for_testing(World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
@@ -26539,7 +26305,8 @@ fn merge_candidates_ignore_verified_lane_relay_record_for_future_created_autosca
 lane_relay_state_test! { merge_candidates_restart_hydrates_only_active_verified_lane_relay_records let (state, validator_keypairs) = setup_lane_relay_burn_state(); let_row! { validator_ids: Vec<_> = validator_keypairs .iter() .map(|keypair| AccountId::new(keypair.public_key().clone())) .collect() }; let signers: Vec<&KeyPair> = validator_keypairs.iter().collect(); let signers_bitmap = full_signer_bitmap(validator_keypairs.len()); let future_created_lane = LaneId::new(1);
    // The active relay belongs to the canonical single-lane snapshot. The
    // future and unknown routes below are independent adversarial records.
-let_row! { active_envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let_row! { stale_unknown_envelope = sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap) .with_manifest_root(Some([0x77; 32])) }; let_row! { future_created_envelope = sample_lane_relay_envelope( 2, future_created_lane, &signers, full_signer_bitmap(validator_keypairs.len()), ) .with_manifest_root(Some([0x88; 32])) }; seed_snapshot_metadata_through_height_for_test(&state, 1); let active_record = sample_verified_lane_relay_record(&active_envelope); let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope); let future_created_record = sample_verified_lane_relay_record(&future_created_envelope); let mut snapshot_nexus = state.nexus_snapshot(); snapshot_nexus.autoscale.enabled = false; snapshot_nexus.lane_catalog = LaneCatalog::default(); snapshot_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&state, snapshot_nexus); let_row! { active_key = State::verified_lane_relay_state_key(&active_envelope).expect("active state key") }; let_row! { stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope) .expect("stale unknown state key") }; let_row! { future_created_key = State::verified_lane_relay_state_key(&future_created_envelope) .expect("future-created state key") }; insert_verified_lane_relay_record_state(&state, active_key.clone(), &active_record); insert_verified_lane_relay_record_state( &state, stale_unknown_key.clone(), &stale_unknown_record, ); insert_verified_lane_relay_record_state( &state, future_created_key.clone(), &future_created_record, ); assert_eq!( state .verified_lane_relay_records_from_contract_state() .len(), 3, "test setup must persist all relay records before restart" ); assert!( state.lane_relay_snapshot().is_empty(), "contract-state persistence alone must not populate the runtime relay cache" ); seed_autoscale_sample_history_for_snapshot_test(&state); let json_value = norito::json::to_value(&state).expect("serialize state snapshot"); let_row! { restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") }; { let mut nexus = restarted.nexus.write(); nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn; } install_autoscale_elastic_catalog_for_test( &restarted, autoscale_elastic_catalog_lane_for_test(future_created_lane, 7), ); install_lane_manifest_registry( &restarted, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)], ); assert_eq!( restarted .verified_lane_relay_records_from_contract_state() .len(), 3, "restart should recover all persisted canonical relay records before hydration filters apply" ); assert!(restarted.lane_relay_snapshot().is_empty()); assert!(restarted.merge_active_lane_authority_snapshot(2).is_err(), "a future-created catalog lane must prevent an incomplete global authority catalog"); let mut repaired_nexus = restarted.nexus_snapshot(); repaired_nexus.autoscale.enabled = false; repaired_nexus.lane_catalog = LaneCatalog::default(); repaired_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&restarted, repaired_nexus);
+let_row! { active_envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let_row! { stale_unknown_envelope = sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap) .with_manifest_root(Some([0x77; 32])) }; let_row! { future_created_envelope = sample_lane_relay_envelope( 2, future_created_lane, &signers, full_signer_bitmap(validator_keypairs.len()), ) .with_manifest_root(Some([0x88; 32])) }; seed_snapshot_metadata_through_height_for_test(&state, 1); let active_record = sample_verified_lane_relay_record(&active_envelope); let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope); let future_created_record = sample_verified_lane_relay_record(&future_created_envelope); let mut snapshot_nexus = state.nexus_snapshot(); snapshot_nexus.autoscale.enabled = false; snapshot_nexus.lane_catalog = LaneCatalog::default(); snapshot_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&state, snapshot_nexus); let_row! { active_key = State::verified_lane_relay_state_key(&active_envelope).expect("active state key") }; let_row! { stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope) .expect("stale unknown state key") }; let_row! { future_created_key = State::verified_lane_relay_state_key(&future_created_envelope) .expect("future-created state key") }; insert_verified_lane_relay_record_state(&state, active_key.clone(), &active_record); insert_verified_lane_relay_record_state( &state, stale_unknown_key.clone(), &stale_unknown_record, ); insert_verified_lane_relay_record_state( &state, future_created_key.clone(), &future_created_record, ); assert_eq!( state .verified_lane_relay_records_from_contract_state() .len(), 3, "test setup must persist all relay records before restart" ); assert!( state.lane_relay_snapshot().is_empty(), "contract-state persistence alone must not populate the runtime relay cache" ); seed_autoscale_sample_history_for_snapshot_test(&state); let json_value = norito::json::to_value(&state).expect("serialize state snapshot"); let_row! { restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") }; { let mut nexus = restarted.nexus.write(); nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn; } install_autoscale_elastic_catalog_for_test( &restarted, autoscale_elastic_catalog_lane_for_test(future_created_lane, 7), ); install_lane_manifest_registry( &restarted, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)], ); assert_eq!( restarted .verified_lane_relay_records_from_contract_state() .len(), 3, "restart should recover all persisted canonical relay records before hydration filters apply" ); assert!(restarted.lane_relay_snapshot().is_empty()); assert!(restarted.merge_active_lane_authority_snapshot(2).is_err(), "a future-created catalog lane must prevent an incomplete global authority catalog"); let mut repaired_nexus = restarted.nexus_snapshot(); repaired_nexus.autoscale.enabled = false; repaired_nexus.lane_catalog = LaneCatalog::default(); repaired_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&restarted, repaired_nexus);
    install_lane_manifest_registry_for_keypairs(&restarted, &[LaneId::SINGLE], &validator_keypairs);
    let carrier_height = u64::try_from(restarted.committed_height()).expect("fixture height fits u64") + 1;
    assert_eq!(carrier_height, 2, "restored relay source supplies the next global carrier parent");
@@ -26677,7 +26444,8 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
     }
     seed_autoscale_sample_history_for_snapshot_test(&state);
     let json_value = norito::json::to_value(&state).expect("serialize state snapshot");
-    let_row! { restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") };
+    let_row! { restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+    execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") };
     {
         let mut nexus = restarted.nexus.write();
         nexus.fees.settlement_mode =
@@ -28314,7 +28082,11 @@ fn seed_lane_committee_beacon_for_test(state: &State) -> u64 {
     );
     let mut world = state.world.block();
     world
-        .install_global_beacon_fixture_for_testing(key_record, pulse)
+        .install_global_beacon_fixture_for_testing(
+            key_record,
+            pulse,
+            &crate::beacon::pulse_context_fixture_v1(),
+        )
         .expect("install verified committee selection beacon");
     world.commit();
     pulse_height + 1
@@ -30450,13 +30222,13 @@ state_test! { sync da_pin_intents_hydrate_from_kura_block_log
     let nexus = state.nexus_snapshot();
     let mut world = state.world.block();
     let effects = super::world_commit::PreparedWorldCommit::prepare_overlay(
-        &mut world,
+        &mut world, &mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
         pending.block_height,
         &nexus,
         &state.lane_incarnation_activation_heights_snapshot(),
         Some(&pending),
         None,
-    )
+    ).map_err(crate::execution_attempt::expect_completed_rejection)
     .expect("prepare the signed pin's exact authoritative World indexes");
     assert_eq!(world.da_pin_intents_by_ticket.len(), 1);
     assert_eq!(world.da_pin_intents_by_manifest.len(), 1);
@@ -31023,7 +30795,8 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("init kura");
     let query_handle = LiveQueryStore::start_test();
-    let_row! { mut state = State::try_new( World::default(), Arc::clone(&kura), query_handle, #[cfg(feature = "telemetry")] <_>::default(), ) .expect("open multi-bundle DA test State against configured Kura") };
+    let_row! { mut state = State::try_new(
+    crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), World::default(), Arc::clone(&kura), query_handle, #[cfg(feature = "telemetry")] <_>::default(), ) .expect("open multi-bundle DA test State against configured Kura") };
     state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
         lane_catalog: catalog,
         lane_config,
@@ -31119,7 +30892,8 @@ fn hydrate_da_indexes_replays_multi_shard_bundle() {
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("init kura");
     let query_handle = LiveQueryStore::start_test();
-    let_row! { mut state = State::try_new( World::default(), Arc::clone(&kura), query_handle, #[cfg(feature = "telemetry")] <_>::default(), ) .expect("open dual-lane DA test State against configured Kura") };
+    let_row! { mut state = State::try_new(
+    crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), World::default(), Arc::clone(&kura), query_handle, #[cfg(feature = "telemetry")] <_>::default(), ) .expect("open dual-lane DA test State against configured Kura") };
     state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
         lane_catalog: catalog,
         lane_config: lane_config.clone(),
@@ -31608,7 +31382,7 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES, membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES, membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
@@ -31688,7 +31462,8 @@ state_test! { sync both_state_constructors_account_exactly_for_distinct_journal_
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let kura = state_journal_test_kura(temp_dir.path().join("kura").as_path());
         let expected = seed_distinct_state_journal_main_and_temp_files(&kura);
-        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: Arc::new(LaneManifestRegistry::empty()), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
+        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: Arc::new(LaneManifestRegistry::empty()), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
         assert_eq!(state.query_index_status_snapshot(), expected.query_index);
         assert_eq!(
             state.query_projection_checkpoint_snapshot(),
@@ -32250,6 +32025,7 @@ state_test! { sync confidential_compute_receipts_hydrate_from_kura
     )
     .expect("configured confidential lane Kura");
     let_row! { mut state = State::try_new(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -32279,7 +32055,7 @@ state_test! { sync confidential_compute_receipts_hydrate_from_kura
     ])));
     manifests.validate_active_coverage_for_catalog(&catalog)
         .expect("exact confidential lane privacy coverage");
-    state.install_lane_manifests(&manifests);
+    state.install_lane_manifests_for_testing(&manifests);
     state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
         lane_catalog: catalog.clone(),
         lane_config,
@@ -33298,7 +33074,8 @@ state_test! { sync axt_policy_snapshot_metrics_record_cache_hit
         temp_dir.path().join("kura"),
         &nexus.lane_catalog,
     );
-    let_row! { mut state = State::try_new_with_chain( world, kura, LiveQueryStore::start_test(), (*DEFAULT_TEST_CHAIN_ID).clone(), telemetry, ) .expect("telemetry fixture durable State startup journals must validate") };
+    let_row! { mut state = State::try_new_with_chain(
+crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), world, kura, LiveQueryStore::start_test(), (*DEFAULT_TEST_CHAIN_ID).clone(), telemetry, ) .expect("telemetry fixture durable State startup journals must validate") };
     state.install_pre_genesis_nexus_for_testing(nexus);
     state.configure_test_runtime_defaults();
     let block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 1, 0));
@@ -33603,13 +33380,58 @@ fn signed_axt_handle_for_block_freeze(
     .sign_by_issuer_v1(context, issuer.private_key())
     .expect("sign AXT block-freeze fixture")
 }
-fn axt_envelope_for_block_freeze(
+fn axt_envelope_with_unverified_spend(
     handle: AssetHandle,
     dataspace: DataSpaceId,
     lane: LaneId,
     binding: AxtBinding,
     commit_height: u64,
 ) -> AxtEnvelopeRecord {
+    let network_id = handle.issuer_context.network_id.clone();
+    let anchor = AxtFinalizedSpendAnchorV1 {
+        genesis_hash: *network_id.as_bytes(),
+        network_id,
+        dataspace_id: dataspace,
+        lane_id: lane,
+        lane_incarnation: Hash::new(b"state-test-axt-lane"),
+        finalized_height: 1,
+        block_header_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"state-test-axt-block",
+        )),
+        quorum_certificate_digest: Hash::new(b"state-test-axt-qc"),
+        committee_digest: Hash::new(b"state-test-axt-committee"),
+        pre_state_root: Hash::new(b"state-test-axt-prestate"),
+        post_state_root: Hash::new(b"state-test-axt-poststate"),
+        transaction_set_digest: Hash::new(b"state-test-axt-transactions"),
+        da_manifest_digest: Hash::new(b"state-test-axt-da"),
+    };
+    let source_receipt = AxtSourceSuccessReceiptV1 {
+        finalized_anchor_digest: anchor.digest_v1(),
+        source_tx_commitment: [1; 32],
+        source_tx_index: 0,
+        post_transaction_state_root: [2; 32],
+        effect_set_digest: [3; 32],
+    };
+    let intent = RemoteSpendIntent {
+        asset_dsid: dataspace,
+        op: SpendOp {
+            asset_definition_id: handle.asset_definition_id.clone(),
+            kind: "transfer".into(),
+            from: ALICE_ID.to_string(),
+            to: BOB_ID.to_string(),
+            amount: Some(Quantity::from(1_u64)),
+        },
+    };
+    let source_occurrence = AxtSourceTransferOccurrenceV1 {
+        source_tx_commitment: source_receipt.source_tx_commitment,
+        source_success_receipt_digest: source_receipt.digest_v1(),
+        source_tx_index: 0,
+        transcript_index: 0,
+        delta_index: 0,
+        pair_ordinal: 0,
+        transfer_digest: [4; 32],
+        remote_spend_claim_commitment: [5; 32],
+    };
     AxtEnvelopeRecord {
         binding,
         lane,
@@ -33619,996 +33441,106 @@ fn axt_envelope_for_block_freeze(
         },
         touches: Vec::new(),
         proofs: Vec::new(),
-        handles: vec![AxtHandleFragment {
-            handle,
-            intent: RemoteSpendIntent {
-                asset_dsid: dataspace,
-                op: SpendOp {
-                    asset_definition_id:
-                        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                        ])
-                        .expect("valid AXT fixture asset id"),
-                    kind: "transfer".into(),
-                    from: ALICE_ID.to_string(),
-                    to: BOB_ID.to_string(),
-                    amount: Some(Quantity::from(1_u64)),
-                },
+        spends: vec![AxtAnchoredSpendV1 {
+            draft: AxtAnchoredSpendDraftV1 {
+                handle,
+                intent,
+                proof: None,
+                amount: Some(Quantity::from(1_u64)),
+                amount_commitment: None,
+                source_receipt,
+                source_occurrence,
             },
-            proof: None,
-            amount: Some(Quantity::from(1_u64)),
-            amount_commitment: None,
+            authorization: AxtAnchoredSpendIssuerAuthorizationV1 {
+                anchor,
+                expiry_slot: 100,
+                nonce: AxtSpendNonceV1::try_new([1; 32]).expect("nonzero fixture nonce"),
+                issuer_signature: iroha_crypto::Signature::from_bytes(&[1; 64]),
+            },
         }],
         commit_height,
     }
 }
-#[test]
-#[allow(clippy::too_many_lines)]
-fn axt_authorization_is_frozen_before_same_block_issuer_and_policy_rotation() {
-    let dataspace = DataSpaceId::new(34);
-    let lane = LaneId::new(2);
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::axt-block-freeze"));
-    let old_issuer = crate::state::checked_keypair();
-    let new_issuer = crate::state::checked_keypair();
-    let old_account = AccountId::new(old_issuer.public_key().clone());
-    let new_account = AccountId::new(new_issuer.public_key().clone());
-    let domain_id = DomainId::try_new("axt-freeze", "universal").expect("domain id");
-    let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let_row! { old_account_record = new_account_in_domain(&old_account, &domain_id) .with_uaid(Some(uaid)) .build(&ALICE_ID) };
-    let mut world = World::with([domain], [old_account_record], []);
-    world
-        .rebuild_account_identity_indexes()
-        .expect("seed the canonical old issuer account");
-    let_row! { old_manifest = AssetPermissionManifest { version: ManifestVersion::default(), uaid, dataspace, issued_ms: 0, activation_epoch: 1, expiry_epoch: None, entries: Vec::new(), } };
-    let mut old_manifest_record = SpaceDirectoryManifestRecord::new(old_manifest);
-    old_manifest_record.lifecycle.mark_activated(1);
-    let mut old_manifest_set = SpaceDirectoryManifestSet::default();
-    old_manifest_set.upsert(old_manifest_record.clone());
-    world
-        .space_directory_manifests_mut_for_testing()
-        .insert(uaid, old_manifest_set);
-    let mut old_bindings = UaidDataspaceBindings::default();
-    old_bindings.bind_account(dataspace, old_account.clone());
-    world
-        .uaid_dataspaces_mut_for_testing()
-        .insert(uaid, old_bindings);
-    let mut old_manifest_root = [0_u8; 32];
-    old_manifest_root.copy_from_slice(old_manifest_record.manifest_hash.as_ref());
-    let_row! { lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![LaneConfig::default(), LaneConfig { id: lane, dataspace_id: dataspace, alias: "axt-freeze".into(), ..LaneConfig::default() }], ) .expect("AXT freeze lane catalog") };
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(world, kura, query_handle);
-    configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
-    state.set_axt_policy(
-        dataspace,
-        AxtPolicyEntry {
-            manifest_root: old_manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
-    let network_id = state.network_id;
-    let binding = AxtBinding::new([0xA4; 32]);
-    let_row! { old_context = AxtHandleIssuerContextV1 { network_id, asset_dsid: dataspace, asset_definition_incarnation: AxtHandleIssuerContextV1::default().asset_definition_incarnation, issuer: uaid, issuer_manifest_root: old_manifest_root, code_root: [0xC1; 32], abi_version: 1, abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1), } };
-    let_row! { old_handle = signed_axt_handle_for_block_freeze(&old_issuer, old_context, lane, binding, 1, 1) };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-    let mut block = state.block(header);
-    let_row! { frozen_issuer = block .axt_block_start_snapshot() .issuer_binding(dataspace) .expect("old issuer is resolvable at block start") .clone() };
-    assert_eq!(frozen_issuer.issuer, uaid);
-    assert_eq!(frozen_issuer.public_key, old_issuer.public_key().clone());
-    let_row! { new_manifest = AssetPermissionManifest { version: ManifestVersion::default(), uaid, dataspace, issued_ms: 1, activation_epoch: 2, expiry_epoch: None, entries: Vec::new(), } };
-    let mut new_manifest_record = SpaceDirectoryManifestRecord::new(new_manifest);
-    new_manifest_record.lifecycle.mark_activated(2);
-    let mut new_manifest_root = [0_u8; 32];
-    new_manifest_root.copy_from_slice(new_manifest_record.manifest_hash.as_ref());
-    let mut new_manifest_set = SpaceDirectoryManifestSet::default();
-    new_manifest_set.upsert(new_manifest_record);
-    {
-        let mut rotation = block.transaction();
-        rotation.world.accounts.remove(old_account.clone());
-        let_row! { (account_id, account_value) = new_account_in_domain(&new_account, &domain_id) .with_uaid(Some(uaid)) .build(&ALICE_ID) .into_key_value() };
-        rotation.world.accounts.insert(account_id, account_value);
-        rotation
-            .world
-            .uaid_accounts
-            .insert(uaid, new_account.clone());
-        let mut bindings = UaidDataspaceBindings::default();
-        bindings.bind_account(dataspace, new_account.clone());
-        rotation.world.uaid_dataspaces.insert(uaid, bindings);
-        rotation
-            .world
-            .space_directory_manifests
-            .insert(uaid, new_manifest_set);
-        rotation.world.axt_policies.insert(
-            dataspace,
-            AxtPolicyEntry {
-                manifest_root: new_manifest_root,
-                target_lane: lane,
-                active_handle_era: 2,
-                next_handle_counter: 1,
-                current_slot: 1,
-            },
-        );
-        let_row! { effective = rotation .axt_execution_policy_snapshot() .expect("block execution always carries its frozen AXT policy") };
-        assert_eq!(effective.entries[0].policy.manifest_root, old_manifest_root);
-        assert_eq!(effective.entries[0].policy.active_handle_era, 1);
-        rotation.apply();
-    }
-    assert!(
-        old_handle
-            .verify_issuer_signature_v1(old_context, &frozen_issuer.public_key)
-            .is_ok(),
-        "the block-start key must continue authenticating old-policy handles"
-    );
-    let_row! { new_context = AxtHandleIssuerContextV1 { issuer_manifest_root: new_manifest_root, ..old_context } };
-    let_row! { new_handle = signed_axt_handle_for_block_freeze(&new_issuer, new_context, lane, binding, 2, 3) };
-    assert!(
-        new_handle
-            .verify_issuer_signature_v1(new_context, &frozen_issuer.public_key)
-            .is_err(),
-        "the rotated key must not become authoritative in its rotation block"
-    );
-    {
-        let mut use_old = block.transaction();
-        let mut host = CoreHost::new(ALICE_ID.clone());
-        host.hydrate_axt_state(&use_old)
-            .expect("hydrate the immutable block-start AXT context");
-        let_row! { (host_policy, host_issuer, host_key) = host .axt_hydrated_authorization_for_tests(dataspace) .expect("host receives the frozen AXT authorization tuple") };
-        assert_eq!(host_policy.manifest_root, old_manifest_root);
-        assert_eq!(host_policy.active_handle_era, 1);
-        assert_eq!(host_issuer, uaid);
-        assert_eq!(host_key, old_issuer.public_key().clone());
-        use_old
-            .record_axt_envelope(axt_envelope_for_block_freeze(
-                old_handle.clone(),
-                dataspace,
-                lane,
-                binding,
-                1,
-            ))
-            .expect("old-policy handle remains admissible for the rotation block");
-        use_old.apply();
-    }
-    block
-        .finalize_axt_policy_transition_ratchets()
-        .expect("old-handle use and policy rotation each consume one ratchet step");
-    let_row! { post_rotation = block .world .axt_policies .get(&dataspace) .copied() .expect("rotated policy remains staged") };
-    assert_eq!(post_rotation.manifest_root, new_manifest_root);
-    assert_eq!(post_rotation.active_handle_era, 2);
-    assert_eq!(post_rotation.next_handle_counter, 3);
-    let frozen_after_use = block.axt_execution_policy_snapshot();
-    assert_eq!(
-        frozen_after_use.entries[0].policy.manifest_root,
-        old_manifest_root
-    );
-    assert_eq!(frozen_after_use.entries[0].policy.next_handle_counter, 2);
-    let mut rejected_new = block.transaction();
-    assert!(
-        rejected_new
-            .record_axt_envelope(axt_envelope_for_block_freeze(
-                new_handle.clone(),
-                dataspace,
-                lane,
-                binding,
-                1,
-            ))
-            .is_err(),
-        "new policy/key material must not be usable in its rotation block"
-    );
-    drop(rejected_new);
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit the rotation block");
-    let restart_nexus = state.nexus_snapshot();
-    let restarted_world = mem::replace(&mut state.world, World::new());
-    let_row! { restarted = State::new_with_nexus_for_testing( restarted_world, restart_nexus, LiveQueryStore::start_test(), ) };
-    assert_eq!(restarted.network_id, network_id);
-    let next_header = BlockHeader::new(nonzero!(2_u64), None, None, 2, 0);
-    let mut next_block = restarted.block(next_header);
-    let_row! { next_issuer = next_block .axt_block_start_snapshot() .issuer_binding(dataspace) .expect("rotated issuer is resolvable in the next block") };
-    assert_eq!(next_issuer.public_key, new_issuer.public_key().clone());
-    let mut use_new = next_block.transaction();
-    let_row! { next_envelope = axt_envelope_for_block_freeze(new_handle.clone(), dataspace, lane, binding, 2) };
-    use_new
-        .record_axt_envelope(next_envelope.clone())
-        .expect("new policy/key becomes admissible at the next block boundary");
-    use_new.apply();
-    let mut replay = next_block.transaction();
-    assert!(
-        replay.record_axt_envelope(next_envelope).is_err(),
-        "restart/replay must not consume the same exact counter twice"
-    );
-}
-state_test! { sync recording_axt_envelope_is_transactional_and_advances_only_on_apply
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query_handle);
-    let dsid = DataSpaceId::new(33);
-    let lane = LaneId::new(2);
-    let_row! { initial_policy = AxtPolicyEntry { manifest_root: [0xAA; 32], target_lane: lane, active_handle_era: 1, next_handle_counter: 1, current_slot: 0, } };
-    state.set_axt_policy(dsid, initial_policy);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
-    let binding = AxtBinding::new([0xAB; 32]);
-    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: [0xAA; 32], expiry_slot: 50, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
-    let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor: AxtDescriptor { dsids: vec![dsid], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle: handle.clone(), intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 1, } };
-    for (label, invalid_handle) in [
-        (
-            "future era",
-            iroha_data_model::nexus::AssetHandle {
-                handle_era: u64::MAX,
-                ..handle.clone()
-            },
-        ),
-        (
-            "future counter",
-            iroha_data_model::nexus::AssetHandle {
-                sub_nonce: u64::MAX,
-                ..handle.clone()
-            },
-        ),
-        (
-            "stale counter",
-            iroha_data_model::nexus::AssetHandle {
-                sub_nonce: 0,
-                ..handle.clone()
-            },
-        ),
-    ] {
-        let mut invalid_envelope = envelope.clone();
-        invalid_envelope.handles[0].handle = invalid_handle;
-        let mut rejected = block.transaction();
-        assert!(
-            rejected.record_axt_envelope(invalid_envelope).is_err(),
-            "{label} must not advance committed policy"
-        );
-    }
-    assert_eq!(
-        block.world.axt_policies.get(&dsid).copied(),
-        Some(initial_policy),
-        "invalid AXT sequences must be mutation-free"
-    );
-    let mut split_budget_attack = envelope.clone();
-    split_budget_attack.handles[0].intent.op.amount = Some(Quantity::from(6_u64));
-    split_budget_attack.handles[0].amount = Some(Quantity::from(6_u64));
-    let mut second = split_budget_attack.handles[0].clone();
-    second.handle.sub_nonce = 2;
-    split_budget_attack.handles.push(second);
-    let split_budget_key = AxtHandleBudgetKey::from_handle(&handle);
-    {
-        let mut rejected = block.transaction();
-        assert!(
-            rejected.record_axt_envelope(split_budget_attack).is_err(),
-            "a later handle that exceeds the family budget must reject the whole envelope"
-        );
-    }
-    assert_eq!(
-        block.world.axt_policies.get(&dsid).copied(),
-        Some(initial_policy),
-        "a multi-handle budget failure must not advance policy"
-    );
-    assert!(
-        block
-            .world
-            .axt_handle_budget_ledger
-            .get(&split_budget_key)
-            .is_none(),
-        "a multi-handle budget failure must not publish partial consumption"
-    );
-    {
-        let mut rejected = block.transaction();
-        rejected
-            .record_axt_envelope(envelope.clone())
-            .expect("exact AXT sequence should stage");
-        let_row! { staged = rejected .world .axt_policies() .get(&dsid) .expect("policy staged in transaction") };
-        assert_eq!(staged.active_handle_era, handle.handle_era);
-        assert_eq!(
-            staged.next_handle_counter,
-            handle.sub_nonce.saturating_add(1)
-        );
-    }
-    assert_eq!(
-        block.world.axt_policies.get(&dsid).copied(),
-        Some(initial_policy),
-        "dropping a rejected transaction must restore the AXT ratchet"
-    );
-    assert!(
-        block.axt_envelopes().is_empty(),
-        "a rejected transaction must not publish its pending envelope"
-    );
-    assert!(
-        block
-            .world
-            .axt_replay_ledger
-            .get(&AxtHandleReplayKey::from_handle(dsid, &handle))
-            .is_none(),
-        "a rejected transaction must not publish its replay entry"
-    );
-    assert!(
-        block
-            .world
-            .axt_handle_budget_ledger
-            .get(&split_budget_key)
-            .is_none(),
-        "dropping a staged transaction must roll back cumulative family consumption"
-    );
-    let mut stx = block.transaction();
-    stx.record_axt_envelope(envelope)
-        .expect("exact AXT sequence should stage");
-    stx.apply();
-    let_row! { updated = block .world .axt_policies .get(&dsid) .expect("policy persisted") };
-    assert_eq!(updated.active_handle_era, handle.handle_era);
-    assert_eq!(
-        updated.next_handle_counter,
-        handle.sub_nonce.saturating_add(1)
-    );
-    let_row! { expected_slot = block .axt_policy_snapshot() .entries .first() .map_or(0, |entry| entry.policy.current_slot) };
-    assert_eq!(updated.current_slot, expected_slot);
-    let replay_key = AxtHandleReplayKey::from_handle(dsid, &handle);
-    assert_eq!(
-        block
-            .world
-            .axt_replay_ledger
-            .get(&replay_key)
-            .expect("normal execution must persist the exact replay row")
-            .budget_key,
-        AxtHandleBudgetKey::from_handle(&handle),
-        "normal execution must bind its compact replay row to the exact signed family"
-    );
-}
-state_test! { sync recording_redacted_axt_amount_rejects_without_charging_budget
-    let mut state = State::new_for_testing(
-        World::new(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let dsid = DataSpaceId::new(35);
-    let lane = LaneId::new(2);
-    let manifest_root = [0xAE; 32];
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
-    let binding = AxtBinding::new([0xAF; 32]);
-    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-        0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-    ])
-    .expect("valid AXT fixture asset id");
-    let proof = axt_proof_blob_for_with_committed_amount(
-        dsid,
-        manifest_root,
-        b"state-hidden-budget",
-        50,
-        Some(5),
-    );
-    let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
-        .expect("decode hidden-amount proof envelope");
-    let handle = AssetHandle {
-        scope: vec!["transfer".into()],
-        asset_definition_id: asset_definition_id.clone(),
-        subject: HandleSubject {
-            account: ALICE_ID.to_string(),
-            origin_dsid: Some(dsid),
-        },
-        budget: HandleBudget {
-            remaining: Quantity::from(10_u64),
-            per_use: Some(Quantity::from(10_u64)),
-        },
-        handle_era: 1,
-        sub_nonce: 1,
-        group_binding: GroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 1,
-        },
-        target_lane: lane,
-        axt_binding: binding,
-        manifest_view_root: manifest_root,
-        expiry_slot: 50,
-        max_clock_skew_ms: Some(0),
-        issuer_context: AxtHandleIssuerContextV1 {
-            asset_dsid: dsid,
-            ..Default::default()
-        },
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
-    let budget_key = AxtHandleBudgetKey::from_handle(&handle);
-    let envelope = AxtEnvelopeRecord {
-        binding,
-        lane,
-        descriptor: AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        },
-        touches: Vec::new(),
-        proofs: Vec::new(),
-        handles: vec![AxtHandleFragment {
-            handle,
-            intent: RemoteSpendIntent {
-                asset_dsid: dsid,
-                op: SpendOp {
-                    asset_definition_id,
-                    kind: "transfer".into(),
-                    from: ALICE_ID.to_string(),
-                    to: BOB_ID.to_string(),
-                    amount: None,
-                },
-            },
-            proof: Some(proof),
-            amount: None,
-            amount_commitment: proof_envelope.amount_commitment,
-        }],
-        commit_height: 1,
-    };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let error = stx
-        .record_axt_envelope(envelope)
-        .expect_err("a proof's public scalar cannot authorize a redacted spend amount");
-    assert!(
-        error.to_string().contains("MissingAmount"),
-        "unexpected redacted amount rejection: {error}"
-    );
-    drop(stx);
-    assert!(
-        block.world.axt_handle_budget_ledger.get(&budget_key).is_none(),
-        "rejected redacted amount must not stage family consumption"
-    );
-}
-state_test! { sync axt_handle_budget_persists_across_state_block_commits
-    fn run_case(first_amount: u64, second_amount: u64) -> Result<Quantity, Error> {
-        let mut state = State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let dsid = DataSpaceId::new(36);
-        let lane = LaneId::new(2);
-        let manifest_root = [0xB0; 32];
-        let binding = AxtBinding::new([0xB1; 32]);
-        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-        ])
-        .expect("valid AXT fixture asset id");
-        state.set_axt_policy(
-            dsid,
-            AxtPolicyEntry {
-                manifest_root,
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            },
-        );
-        let make_envelope = |sub_nonce: u64, amount: u64, commit_height: u64| {
-            let proof = axt_proof_blob_for_with_committed_amount(
-                dsid,
-                manifest_root,
-                &[u8::try_from(sub_nonce).expect("small fixture counter")],
-                50,
-                Some(u128::from(amount)),
-            );
-            let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
-                .expect("decode amount-bound proof envelope");
-            AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor: AxtDescriptor {
-                    dsids: vec![dsid],
-                    touches: Vec::new(),
-                },
-                touches: Vec::new(),
-                proofs: Vec::new(),
-                handles: vec![AxtHandleFragment {
-                    handle: AssetHandle {
-                        scope: vec!["transfer".into()],
-                        asset_definition_id: asset_definition_id.clone(),
-                        subject: HandleSubject {
-                            account: ALICE_ID.to_string(),
-                            origin_dsid: Some(dsid),
-                        },
-                        budget: HandleBudget {
-                            remaining: Quantity::from(10_u64),
-                            per_use: Some(Quantity::from(10_u64)),
-                        },
-                        handle_era: 1,
-                        sub_nonce,
-                        group_binding: GroupBinding {
-                            composability_group_id: vec![0; 32],
-                            epoch_id: 1,
-                        },
-                        target_lane: lane,
-                        axt_binding: binding,
-                        manifest_view_root: manifest_root,
-                        expiry_slot: 50,
-                        max_clock_skew_ms: Some(0),
-                        issuer_context: AxtHandleIssuerContextV1 {
-                            asset_dsid: dsid,
-                            ..Default::default()
-                        },
-                        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-                    },
-                    intent: RemoteSpendIntent {
-                        asset_dsid: dsid,
-                        op: SpendOp {
-                            asset_definition_id: asset_definition_id.clone(),
-                            kind: "transfer".into(),
-                            from: ALICE_ID.to_string(),
-                            to: BOB_ID.to_string(),
-                            amount: Some(Quantity::from(amount)),
-                        },
-                    },
-                    proof: Some(proof),
-                    amount: Some(Quantity::from(amount)),
-                    amount_commitment: proof_envelope.amount_commitment,
-                }],
-                commit_height,
-            }
-        };
-        let first = make_envelope(1, first_amount, 1);
-        let budget_key = AxtHandleBudgetKey::from_handle(&first.handles[0].handle);
-        {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-            let mut block = state.block(header);
-            let mut transaction = block.transaction();
-            transaction.record_axt_envelope(first)?;
-            transaction.apply();
-            block.commit_empty_block_for_testing().expect("commit first AXT family spend");
-        }
-        assert_eq!(
-            state
-                .world
-                .axt_handle_budget_ledger
-                .view()
-                .get(&budget_key)
-                .expect("first block publishes cumulative family spend")
-                .consumed(),
-            &Quantity::from(first_amount)
-        );
-        {
-            let header = BlockHeader::new(nonzero!(2_u64), None, None, 2, 0);
-            let mut block = state.block(header);
-            let mut transaction = block.transaction();
-            transaction.record_axt_envelope(make_envelope(2, second_amount, 2))?;
-            transaction.apply();
-            block.commit_empty_block_for_testing().expect("commit second AXT family spend");
-        }
-        Ok(state
-            .world
-            .axt_handle_budget_ledger
-            .view()
-            .get(&budget_key)
-            .expect("second block retains cumulative family spend")
-            .consumed()
-            .clone())
-    }
 
-    let error = run_case(7, 7)
-        .expect_err("two committed blocks cannot each reset the same signed family allowance");
-    assert!(
-        error.to_string().contains("signed budget"),
-        "unexpected cross-block budget rejection: {error}"
-    );
-    assert_eq!(
-        run_case(5, 5).expect("two blocks may consume the exact signed family allowance"),
-        Quantity::from(10_u64)
-    );
-}
-state_test! { sync kura_replay_records_handle_without_ratcheting_post_state_again
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query_handle);
-    let dsid = DataSpaceId::new(34);
-    let lane = LaneId::new(2);
-    let manifest_root = [0xAC; 32];
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 1,
-        },
-    );
-    let binding = AxtBinding::new([0xAD; 32]);
-    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 50, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
-    let replay_key = AxtHandleReplayKey::from_handle(dsid, &handle);
-    let budget_key = AxtHandleBudgetKey::from_handle(&handle);
-    let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor: AxtDescriptor { dsids: vec![dsid], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 1, } };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-    let mut state_block = state.block(header);
-    state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&envelope), 1);
-    state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&envelope), 1);
-    assert_eq!(
-        state_block
-            .world
-            .axt_policies
-            .get(&dsid)
-            .expect("post-state policy")
-            .next_handle_counter,
-        2,
-        "Kura replay and restart replay must not advance an advertised post-state twice"
-    );
-    assert!(
-        state_block
-            .world
-            .axt_replay_ledger
-            .get(&replay_key)
-            .is_some(),
-        "replay must still rebuild the replay ledger"
-    );
-    assert_eq!(
-        state_block
-            .world
-            .axt_replay_ledger
-            .get(&replay_key)
-            .expect("replay row")
-            .budget_key,
-        budget_key,
-        "idempotent replay must retain the exact signed family link"
-    );
-    assert_eq!(
-        state_block
-            .world
-            .axt_handle_budget_ledger
-            .get(&budget_key)
-            .expect("replay must rebuild the cumulative family budget")
-            .consumed(),
-        &Quantity::from(5_u64),
-        "replaying the same exact handle twice must charge its family once"
-    );
-}
-state_test! { sync kura_replay_rejects_same_compact_key_from_different_signed_family
-    let mut state = State::new_for_testing(
-        World::new(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let dsid = DataSpaceId::new(134);
-    let lane = LaneId::new(2);
-    let manifest_root = [0xCE; 32];
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 1,
-        },
-    );
-    let binding = AxtBinding::new([0xCF; 32]);
-    let handle = iroha_data_model::nexus::AssetHandle {
-        scope: vec!["transfer".into()],
-        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-        ])
-        .expect("valid AXT fixture asset id"),
-        subject: HandleSubject {
-            account: ALICE_ID.to_string(),
-            origin_dsid: Some(dsid),
-        },
-        budget: HandleBudget {
-            remaining: Quantity::from(10_u64),
-            per_use: Some(Quantity::from(10_u64)),
-        },
-        handle_era: 1,
-        sub_nonce: 1,
-        group_binding: GroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 1,
-        },
+state_test! { sync unverified_anchored_spend_rejection_is_transactional
+    let dataspace = DataSpaceId::new(33);
+    let lane = LaneId::SINGLE;
+    let binding = AxtBinding::new([0xAB; 32]);
+    let mut state = blank_test_state();
+    let policy = AxtPolicyEntry {
+        manifest_root: [0xAA; 32],
         target_lane: lane,
-        axt_binding: binding,
-        manifest_view_root: manifest_root,
-        expiry_slot: 50,
-        max_clock_skew_ms: Some(0),
-        issuer_context: AxtHandleIssuerContextV1 {
-            asset_dsid: dsid,
+        active_handle_era: 1,
+        next_handle_counter: 1,
+        current_slot: 0,
+    };
+    state.set_axt_policy(dataspace, policy);
+    let handle = signed_axt_handle_for_block_freeze(
+        &crate::state::checked_keypair(),
+        AxtHandleIssuerContextV1 {
+            asset_dsid: dataspace,
+            issuer_manifest_root: policy.manifest_root,
             ..Default::default()
         },
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
-    let make_envelope = |handle: AssetHandle| AxtEnvelopeRecord {
-        binding,
         lane,
-        descriptor: AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        },
-        touches: Vec::new(),
-        proofs: Vec::new(),
-        handles: vec![AxtHandleFragment {
-            intent: RemoteSpendIntent {
-                asset_dsid: dsid,
-                op: SpendOp {
-                    asset_definition_id: handle.asset_definition_id.clone(),
-                    kind: "transfer".into(),
-                    from: ALICE_ID.to_string(),
-                    to: BOB_ID.to_string(),
-                    amount: Some(Quantity::from(5_u64)),
-                },
-            },
-            handle,
-            proof: None,
-            amount: Some(Quantity::from(5_u64)),
-            amount_commitment: None,
-        }],
-        commit_height: 1,
-    };
-    let first = make_envelope(handle.clone());
-    let mut substituted = handle;
-    substituted.budget.remaining = Quantity::from(20_u64);
-    let substituted = make_envelope(substituted);
-    assert_eq!(
-        AxtHandleReplayKey::from_handle(dsid, &first.handles[0].handle),
-        AxtHandleReplayKey::from_handle(dsid, &substituted.handles[0].handle),
-        "fixture must preserve the intentionally compact replay identity"
-    );
-    assert_ne!(
-        AxtHandleBudgetKey::from_handle(&first.handles[0].handle),
-        AxtHandleBudgetKey::from_handle(&substituted.handles[0].handle),
-        "fixture must substitute a distinct issuer-signed family"
-    );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-    let mut state_block = state.block(header);
-    state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&first), 1);
-    let rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&substituted), 1);
-    }));
-    assert!(
-        rejection.is_err(),
-        "an existing compact replay key must not skip a different signed family"
-    );
-}
-#[test]
-#[allow(clippy::too_many_lines)]
-fn axt_replay_ledger_records_and_prunes() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query_handle);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.axt.slot_length_ms = NonZeroU64::new(1).expect("slot length");
-        nexus.axt.replay_retention_slots = NonZeroU64::new(2).expect("retention");
-    }
-    let dsid = DataSpaceId::new(51);
-    let lane = LaneId::new(0);
-    let binding = AxtBinding::new([0xBA; 32]);
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root: [0xCC; 32],
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
-    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: iroha_data_model::nexus::HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: iroha_data_model::nexus::HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: iroha_data_model::nexus::GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: [0xCC; 32], expiry_slot: 2, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
-    let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor: AxtDescriptor { dsids: vec![dsid], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle: handle.clone(), intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 1, } };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    stx.current_lane_id = Some(lane);
-    stx.record_axt_envelope(envelope)
-        .expect("first exact AXT counter should stage");
-    stx.apply();
-    let key = AxtHandleReplayKey::from_handle(dsid, &handle);
-    let_row! { entry = block .world .axt_replay_ledger .get(&key) .expect("replay entry recorded") };
-    assert_eq!(entry.used_slot, 1);
-    assert_eq!(entry.retain_until_slot, 3, "retention horizon applies");
-    block
-        .commit_world_overlay_for_testing()
-        .expect("first replay-protected handle use should commit");
-    // Advance to a far-future slot and ensure stale entries are pruned before recording.
-    let_row! { new_handle = iroha_data_model::nexus::AssetHandle { expiry_slot: 20, sub_nonce: 2, ..handle } };
-    let future_header = BlockHeader::new(nonzero!(2_u64), None, None, 10, 0);
-    let mut block = state.block(future_header);
-    let mut stx = block.transaction();
-    stx.current_lane_id = Some(lane);
-    stx.record_axt_envelope(AxtEnvelopeRecord {
-        handles: vec![AxtHandleFragment {
-            handle: new_handle.clone(),
-            intent: RemoteSpendIntent {
-                asset_dsid: dsid,
-                op: SpendOp {
-                    asset_definition_id:
-                        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                        ])
-                        .expect("valid AXT fixture asset id"),
-                    kind: "transfer".into(),
-                    from: ALICE_ID.to_string(),
-                    to: BOB_ID.to_string(),
-                    amount: Some(Quantity::from(4_u64)),
-                },
-            },
-            proof: None,
-            amount: Some(Quantity::from(4_u64)),
-            amount_commitment: None,
-        }],
         binding,
-        lane,
-        descriptor: AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        },
-        touches: Vec::new(),
-        proofs: Vec::new(),
-        commit_height: 2,
-    })
-    .expect("next exact AXT counter should stage");
-    stx.apply();
-    assert!(
-        block.world.axt_replay_ledger.get(&key).is_none(),
-        "stale replay entry should be pruned"
+        1,
+        1,
     );
-    let new_key = AxtHandleReplayKey::from_handle(dsid, &new_handle);
-    let_row! { new_entry = block .world .axt_replay_ledger .get(&new_key) .expect("new entry recorded") };
-    assert_eq!(new_entry.used_slot, 10);
-    assert!(new_entry.retain_until_slot >= 12);
+    let budget_key = AxtHandleBudgetKey::from_handle(&handle);
+    let replay_key = AxtHandleReplayKey::from_handle(dataspace, &handle);
+    let envelope = axt_envelope_with_unverified_spend(handle, dataspace, lane, binding, 1);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 1, 0));
+    let mut transaction = block.transaction();
+    let mut redacted = envelope.clone();
+    redacted.spends[0].draft.amount = None;
+    redacted.spends[0].draft.intent.op.amount = None;
+    redacted.spends[0].draft.amount_commitment = Some([0x44; 32]);
+    let mut split = envelope.clone();
+    split.spends.push(split.spends[0].clone());
+    // Complete source authentication is still an open admission gate. Neither
+    // disclosed, redacted, nor duplicated final-shape claims may debit any
+    // budget or advance replay/policy state through an unresolved source.
+    for rejected in [envelope, redacted, split] {
+        let error = transaction.record_axt_envelope(rejected)
+            .expect_err("unresolved finalized source state must reject the signed spend");
+        assert!(error.to_string().contains("source-anchored AXT spends"));
+        assert_eq!(transaction.world.axt_policies().get(&dataspace), Some(&policy));
+        assert!(transaction.world.axt_handle_budget_ledger.get(&budget_key).is_none());
+        assert!(transaction.world.axt_replay_ledger.get(&replay_key).is_none());
+    }
+    transaction.apply();
+    assert!(block.axt_envelopes().is_empty());
+    assert_eq!(block.world.axt_policies.get(&dataspace).copied(), Some(policy));
 }
-#[test]
-#[allow(clippy::too_many_lines)]
-fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
-    use iroha_data_model::nexus::{LaneStorageProfile, LaneVisibility};
-    use iroha_primitives::time::TimeSource;
-    fn build_block_with_envelope(
-        envelope: AxtEnvelopeRecord,
-        snapshot: AxtPolicySnapshot,
-        time_source: TimeSource,
-        prev_block: Option<&SignedBlock>,
-    ) -> SignedBlock {
-        let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
-        let signer = crate::state::checked_keypair();
-        let_row! { mut block: SignedBlock = builder .chain(0, prev_block) .sign(signer.private_key()) .unpack(|_| {}) .into() };
-        let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
-        let results: Vec<TransactionResultInner> = Vec::new();
-        {
-            let outputs = crate::execution_output_test_support::structural_network_outputs(
-                &block,
-                &entry_hashes,
-                results,
-            );
-            let fragments =
-                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-            block.set_execution_outputs(
-                outputs,
-                fragments,
-                BTreeMap::new(),
-                vec![envelope],
-                snapshot,
-                Default::default(),
-                Vec::new(),
-                &crate::execution_output_test_support::structural_output_limits(),
-            )
-        }
-        .expect("empty test block should attach AXT envelope results");
-        block
-    }
-    fn validate_and_apply_block(
-        state: &mut State,
-        block: SignedBlock,
-    ) -> (CommittedBlock, Vec<AxtHandleReplayKey>) {
-        let mut state_block = state.block(block.header());
-        // The first block is an already-finalized fixture: applying it must hydrate
-        // replay state exactly as Kura replay would. A forged envelope must not be
-        // smuggled through `validate_unchecked`, whose execution surface correctly
-        // requires the envelope to have been produced by transaction execution.
-        let committed = ValidBlock::new_unverified_for_tests(block)
-            .commit_unchecked()
-            .unpack(|_| {});
-        let_row! { env_len = committed .as_ref() .axt_envelopes() .map_or(0, <[iroha_data_model::nexus::AxtEnvelopeRecord]>::len) };
-        assert!(env_len > 0, "committed block missing AXT envelopes");
-        let _ = state_block.apply_without_execution(&committed, Vec::new());
-        let_row! { ledger_keys: Vec<_> = state_block .world .axt_replay_ledger .iter() .map(|(key, _)| *key) .collect() };
-        let ledger_count = ledger_keys.len();
-        assert!(
-            ledger_count > 0,
-            "ledger should record entries after apply_without_execution (count={ledger_count})"
-        );
-        state_block.commit().expect("state commit");
-        (committed, ledger_keys)
-    }
-    let authority = ALICE_ID.clone();
-    let merchant_id = BOB_ID.clone();
-    let dsid = DataSpaceId::new(81);
-    let lane = LaneId::new(0);
-    let (world, issuer, issuer_uaid, manifest_root, asset_definition_id, incarnation) =
-        authenticated_axt_replay_world(dsid, 0x77);
-    let_row! { lane_catalog = LaneCatalog::new( nonzero!(1_u32), vec![LaneConfig { id: lane, shard_id: None, dataspace_id: dsid, alias: "primary".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), manifest_policy: DaManifestPolicy::Strict, confidential_compute: None, scheduler: None, settlement_buffer: None, metadata: BTreeMap::new(), }], ) .expect("lane catalog") };
-    let_row! { mut nexus = iroha_config::parameters::actual::Nexus { lane_catalog: lane_catalog.clone(), lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog), dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dsid, alias: "axt-replay".to_owned(), description: None, fault_tolerance: 1, }]) .expect("axt replay dataspace catalog"), ..Default::default() } };
-    nexus.axt.slot_length_ms = NonZeroU64::new(10).expect("slot length");
-    nexus.axt.replay_retention_slots = NonZeroU64::new(4).expect("retention");
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(world, kura, query_handle);
-    *state.nexus.get_mut() = nexus;
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
+
+state_test! { sync unverified_anchored_spend_replay_preserves_existing_guards
+    let dataspace = DataSpaceId::new(34);
+    let lane = LaneId::SINGLE;
+    let binding = AxtBinding::new([0xAC; 32]);
+    let state = blank_test_state();
+    let handle = signed_axt_handle_for_block_freeze(
+        &crate::state::checked_keypair(),
+        AxtHandleIssuerContextV1 {
+            asset_dsid: dataspace,
+            ..Default::default()
         },
+        lane,
+        binding,
+        1,
+        1,
     );
-    let_row! { descriptor = AxtDescriptor { dsids: vec![dsid], touches: vec![AxtTouchSpec { dsid, read: Vec::new(), write: Vec::new(), }], } };
-    let binding = descriptor.binding().expect("descriptor binding");
-    let_row! { touch_fragment = AxtTouchFragment { dsid, manifest: TouchManifest { read: Vec::new(), write: Vec::new(), }, } };
-    let issuer_context = AxtHandleIssuerContextV1 {
-        network_id: state.network_id,
-        asset_dsid: dsid,
-        asset_definition_incarnation: incarnation,
-        issuer: issuer_uaid,
-        issuer_manifest_root: manifest_root,
-        code_root: [0; 32],
-        abi_version: 1,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-    };
-    let handle = signed_axt_handle_for_block_freeze(&issuer, issuer_context, lane, binding, 1, 1);
-    assert_eq!(handle.asset_definition_id, asset_definition_id);
-    let_row! { handle_fragment = AxtHandleFragment { handle, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id, kind: "transfer".into(), from: authority.to_string(), to: merchant_id.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, } };
-    let_row! { proof_fragment = AxtProofFragment { dsid, proof: axt_proof_blob_for_remote_spend( dsid, manifest_root, b"persisted-block-replay", 200, &handle_fragment, &Quantity::from(5_u64), ), } };
-    let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor, touches: vec![touch_fragment], proofs: vec![proof_fragment], handles: vec![handle_fragment.clone()], commit_height: 1, } };
-    let mut snapshot = WorldReadOnly::axt_policy_snapshot(&state.world.view());
-    let post_policy = snapshot
-        .entries
-        .iter_mut()
-        .find(|binding| binding.dsid == dsid)
-        .expect("fixture policy exists");
-    post_policy.policy.next_handle_counter = 2;
-    snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-    let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
-    let_row! { first_block = build_block_with_envelope( envelope.clone(), snapshot.clone(), time_source.clone(), None, ) };
-    let_row! { (committed_first, ledger_keys) = validate_and_apply_block(&mut state, first_block) };
-    let replay_key = AxtHandleReplayKey::from_handle(dsid, &handle_fragment.handle);
-    assert!(
-        ledger_keys.contains(&replay_key),
-        "replay ledger should persist committed handle usage (keys={ledger_keys:?})"
-    );
-    let persisted_view = state.view();
-    assert!(
-        persisted_view
-            .world()
-            .axt_replay_ledger()
-            .get(&replay_key)
-            .is_some(),
-        "replay ledger should persist committed handle usage"
-    );
-    drop(persisted_view);
-    state.set_axt_policy(
-        dsid,
-        AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 0,
-        },
-    );
-    let_row! { replay_block = build_block_with_envelope( envelope, snapshot, time_source, Some(committed_first.as_ref()), ) };
-    let replay_state_block = state.block(replay_block.header());
-    let err = validate_axt_envelopes(&replay_block, &replay_state_block).unwrap_err();
-    match err {
-        BlockValidationError::AxtEnvelopeValidationFailed(details) => {
-            assert_eq!(details.reason, AxtRejectReason::ReplayCache);
-            assert_eq!(details.dataspace, Some(dsid));
-            assert_eq!(details.lane, Some(lane));
-        }
-        other => panic!("unexpected validation error: {other:?}"),
-    }
+    let replay_key = AxtHandleReplayKey::from_handle(dataspace, &handle);
+    let replay_record = axt_replay_record_for_key(&replay_key, 1, 2);
+    let mut world_block = state.world.block();
+    world_block.axt_replay_ledger.insert(replay_key, replay_record.clone());
+    world_block.commit();
+    let envelope = axt_envelope_with_unverified_spend(handle, dataspace, lane, binding, 1);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 100, 0));
+    let error = block.replay_axt_envelopes_for_testing(core::slice::from_ref(&envelope))
+        .expect_err("Kura replay must reject an unresolved source-anchored spend");
+    assert!(error.to_string().contains("source-anchored AXT spends"));
+    assert_eq!(block.world.axt_replay_ledger.get(&replay_key), Some(&replay_record));
 }
 state_test! { sync world_state_snapshot_trait_available_on_views_blocks_and_transactions
     let state = blank_test_state();
@@ -36011,8 +34943,8 @@ state_test! { sync confidential_digest_reflects_registry_commit
     {
         let mut stx = block2.transaction();
         let id = VerifyingKeyId::new("halo2/ipa", "vk_cache");
-        let rec = crate::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
-            .expect("canonical compiled IVM verifier key");
+        let rec = crate::zk::confidential_v2::confidential_transfer_v2_vk_record("test", 1)
+            .expect("canonical confidential-transfer verifier key");
         verifying_keys::RegisterVerifyingKey { id, record: rec }
             .execute(&ALICE_ID, &mut stx)
             .expect("register verifying key");
@@ -38029,6 +36961,7 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
     )
     .expect("reopen Fast Kura fixture");
     let seed = || deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
         lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura: Arc::clone(&fast_kura),
         query_handle: LiveQueryStore::start_test(),
@@ -41266,7 +40199,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .sign(ALICE_KEYPAIR.private_key());
         let accepted = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed));
         let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let (_, result) = state_block.validate_transaction(accepted, &mut cache);
+        let (_, result) = state_block.validate_transaction(accepted, &mut cache).expect("local execution completes");
         let err = result.expect_err("trigger should fail to execute");
         assert!(
             matches!(
@@ -45361,7 +44294,11 @@ fn global_beacon_fixture_installs_the_logical_slot_index() {
     let world = World::new();
     let mut block = world.block();
     block
-        .install_global_beacon_fixture_for_testing(key_record, pulse)
+        .install_global_beacon_fixture_for_testing(
+            key_record,
+            pulse,
+            &crate::beacon::pulse_context_fixture_v1(),
+        )
         .expect("install proof-valid global beacon fixture");
     block.commit();
 
@@ -45384,7 +44321,7 @@ include!("view_projection_tests.rs");
 include!("musubi_snapshot_validation_tests.rs");
 include!("lane_authority_exactness_tests.rs");
 include!("snapshot_owner_policy_tests.rs");
-include!("snapshot_context_predecessor_tests.rs");
+include!("native_lane_state_snapshot_tests.rs");
 include!("snapshot_service_state_roundtrip_tests.rs");
 include!("governance_activation_tests.rs");
 
@@ -45725,8 +44662,7 @@ state_test! { large_stack ordinary_merge_view_projection_keeps_its_original_map_
 }
 
 state_test! { large_stack genesis_merge_authority_owns_exact_signed_stage_and_typed_rejections
-    use crate::sumeragi::{GenesisMergeAuthorityError, V2GenesisBootstrapError,
-        freeze_genesis_merge_authority, freeze_staged_genesis_v2};
+    use crate::sumeragi::{GenesisMergeAuthorityError, freeze_genesis_merge_authority};
     use iroha_data_model::block::consensus_v2::ConsensusMode;
     let fixture = super::strict_replay_tests::StrictReplayFixture::new();
     let state = fixture.replay_state(Kura::blank_kura_for_testing());
@@ -45738,23 +44674,25 @@ state_test! { large_stack genesis_merge_authority_owns_exact_signed_stage_and_ty
         &iroha_primitives::time::TimeSource::new_system(), &state,
         ConsensusMode::Permissioned,
     ).unpack(|_| {}).unwrap_or_else(|(_, error)| panic!("restage exact fixture genesis: {error}"));
-    let ordinary = freeze_staged_genesis_v2(&fixture.genesis, &staged, ConsensusMode::Permissioned)
-        .expect("ordinary authenticated bootstrap");
+    let signed_epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&fixture.genesis.0)
+        .expect("actual signed native epoch");
     let projected = staged.staged_genesis_merge_authority_snapshot().expect("same overlay projection");
     let authority = freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned)
         .expect("new capability consumes the same authenticated bootstrap and overlay");
-    assert_eq!(authority.context(), ordinary.context());
-    assert_eq!(authority.proofs_of_possession(), ordinary.proofs_of_possession());
+    assert_eq!(authority.epoch(), &signed_epoch);
+    assert_eq!(authority.genesis().hash(), fixture.genesis.0.hash());
+    assert_eq!(authority.consensus_hash(), Hash::from(fixture.genesis.0.hash()));
+    for member in &authority.epoch().committee {
+        iroha_crypto::bls_normal_pop_verify(member.validator.public_key(), &member.proof_of_possession).unwrap();
+    }
     assert_eq!(authority.catalog_hash(), projected.0);
     assert_eq!(authority.active_lanes(), projected.1);
     assert_eq!(authority.lane_authority_catalog(), &projected.2);
     assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Npos),
-        Err(GenesisMergeAuthorityError::Bootstrap(V2GenesisBootstrapError::SignedConsensusModeMismatch))));
+        Err(GenesisMergeAuthorityError::SignedConsensusModeMismatch)));
 
     let original_header = staged._curr_block;
     staged._curr_block = BlockHeader::new(nonzero!(1_u64), None, None, 42, 0);
-    assert!(freeze_staged_genesis_v2(&fixture.genesis, &staged, ConsensusMode::Permissioned).is_ok(),
-        "the new exact-header check is scoped to the new capability");
     assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned),
         Err(GenesisMergeAuthorityError::StagedHeaderMismatch)));
     staged._curr_block = original_header;
@@ -45762,15 +44700,13 @@ state_test! { large_stack genesis_merge_authority_owns_exact_signed_stage_and_ty
     let original_network = staged.network_id;
     staged.network_id = crate::unit_test_support::synthetic_network_id("different-staged-network");
     assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned),
-        Err(GenesisMergeAuthorityError::Bootstrap(V2GenesisBootstrapError::StagedNetworkIdMismatch))));
+        Err(GenesisMergeAuthorityError::StagedNetworkIdMismatch)));
     staged.network_id = original_network;
     staged.lane_incarnations.insert(LaneId::SINGLE, Hash::new(b"unsigned-active-map"));
-    assert!(freeze_staged_genesis_v2(&fixture.genesis, &staged, ConsensusMode::Permissioned).is_ok(),
-        "the signed commitment retains private lineage, not the mutable active-map alias");
     assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned),
         Err(GenesisMergeAuthorityError::Merge(MergeLedgerCommitError::IncarnationContext(_)))));
     drop(staged);
-    assert_eq!(authority.context(), ordinary.context(), "owned authority survives the overlay drop");
+    assert_eq!(authority.epoch(), &signed_epoch, "owned native authority survives the overlay drop");
     assert_eq!(authority.active_lanes(), projected.1);
 }
 

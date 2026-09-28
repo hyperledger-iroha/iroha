@@ -30,7 +30,7 @@ fn proof_event_includes_call_hash() {
         iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
     let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     // Build a tx with a VerifyProof instruction for an unsupported real backend.

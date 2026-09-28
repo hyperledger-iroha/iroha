@@ -274,6 +274,21 @@ function crc64(payload) {
   return BigInt.asUintN(64, crc ^ CRC64_MASK);
 }
 
+function callableFixture({
+  entryPc = 0,
+  frameBytes = 0,
+  argumentRoles = [],
+  resultRoles = [u32Le(0)],
+} = {}) {
+  const roles = (items) => concatBytes(u64Le(items.length), ...items.map(field));
+  return concatBytes(
+    field(u64Le(entryPc)),
+    field(u32Le(frameBytes)),
+    field(roles(argumentRoles)),
+    field(roles(resultRoles)),
+  );
+}
+
 function compilerArtifactFixture({
   name = "Demo",
   fingerprint = "kotodama_lang/test",
@@ -283,6 +298,8 @@ function compilerArtifactFixture({
   entrypoints = 1,
   states = 0,
   errorTypes = 0,
+  callables = Array.from({ length: entrypoints }, (_, index) => callableFixture({ entryPc: index * 4 })),
+  omitCallables = false,
   interfaceAbiByte = 0x23,
   headerAbiByte = 0x23,
 } = {}) {
@@ -298,6 +315,7 @@ function compilerArtifactFixture({
     field(accessHints ? Uint8Array.from([1, 1, 0]) : Uint8Array.from([0])),
     field(vector(kotoba)),
     field(vector(entrypoints)),
+    ...(omitCallables ? [] : [field(concatBytes(u64Le(callables.length), ...callables.map(field)))]),
     field(vector(states)),
     field(vector(errorTypes)),
   );
@@ -325,7 +343,7 @@ function compilerArtifactFixture({
     new TextEncoder().encode("CNTR"),
     u32Le(frame.length),
     frame,
-    Uint8Array.from([0, 0, 0, 0]),
+    new Uint8Array(Math.max(1, callables.length) * 4),
   );
 }
 
@@ -1031,6 +1049,27 @@ test("compiler manifest numeric entrypoint schemas match the canonical V1 leaf s
   }
 });
 
+test("compiler manifests admit arguments and results beyond the retired register limit", async () => {
+  const result = await compileMutatedServiceResponse(({ manifest }) => {
+    const entrypoint = manifest.entrypoints[0];
+    entrypoint.params = Array.from({ length: 32 }, (_, index) => ({
+      name: `value${index}`,
+      type_name: "int",
+    }));
+    const integer = { kind: "Leaf", value: { kind: "Int", value: null } };
+    entrypoint.argument_schema = {
+      fields: entrypoint.params.map(({ name }) => ({ name, ty: { nodes: [integer] } })),
+    };
+    entrypoint.return_type = `(${Array.from({ length: 32 }, () => "int").join(", ")})`;
+    entrypoint.return_schema = {
+      nodes: [{ kind: "Tuple", value: 32 }, ...Array.from({ length: 32 }, () => integer)],
+    };
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.output.manifest.entrypoints[0].params.length, 32);
+  assert.equal(result.output.manifest.entrypoints[0].return_schema.nodes.length, 33);
+});
+
 test("compiler manifest boundary rejects unknown, inconsistent, and unbounded data", async () => {
   const cases = [
     ["unknown manifest field", ({ manifest }) => { manifest.unknown = true; }, /invalid field set/u],
@@ -1059,12 +1098,12 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
     }, /does not match its declared parameter/u],
     ["too many parameters", ({ manifest }) => {
       const entrypoint = manifest.entrypoints[0];
-      entrypoint.params = Array.from({ length: 14 }, (_, index) => ({
+      entrypoint.params = Array.from({ length: 8193 }, (_, index) => ({
         name: `value${index}`,
         type_name: "int",
       }));
       entrypoint.argument_schema = { fields: [] };
-    }, /at most 13 items/u],
+    }, /at most 8192 items/u],
     ["missing Unit return descriptors", ({ manifest }) => {
       manifest.entrypoints[0].return_type = null;
       manifest.entrypoints[0].return_schema = null;
@@ -1262,6 +1301,49 @@ test("compiler manifest dynamic hints resolve declared StateMaps per list", asyn
   }
 });
 
+test("compiler artifact boundary requires bounded canonical V1 callable descriptors", async () => {
+  const pointer = (kind, id) => concatBytes(u32Le(kind), field(Uint8Array.from([id, 0])));
+  const cases = [
+    ["retired interface layout", { omitCallables: true }],
+    ["missing callable root", { callables: [] }],
+    ["unaligned root", { callables: [callableFixture({ entryPc: 1 })] }],
+    ["out-of-code root", { callables: [callableFixture({ entryPc: 4 })] }],
+    ["duplicate roots", { callables: [callableFixture(), callableFixture()] }],
+    ["unaligned frame", { callables: [callableFixture({ frameBytes: 8 })] }],
+    ["oversized frame", { callables: [callableFixture({ frameBytes: 4 * 1024 * 1024 + 16 })] }],
+    ["empty result", { callables: [callableFixture({ resultRoles: [] })] }],
+    ["oversized arguments", { callables: [callableFixture({ argumentRoles: Array.from({ length: 8193 }, () => u32Le(1)) })] }],
+    ["unknown role", { callables: [callableFixture({ resultRoles: [u32Le(9)] })] }],
+    ["unknown pointer type", { callables: [callableFixture({ resultRoles: [pointer(3, 0x13)] })] }],
+    ["private role without ZK", { callables: [callableFixture({ argumentRoles: [pointer(8, 0x11)] })] }],
+    ["trailing descriptor fields", { callables: [concatBytes(callableFixture(), field(u32Le(0)))] }],
+  ];
+  for (const [label, options] of cases) {
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(
+        { async compileKotodama() { return serviceSuccessWithArtifact(compilerArtifactFixture(options)); } },
+        "seiyaku Demo {}",
+      ),
+      /interface|callable/u,
+      label,
+    );
+  }
+  const artifact = compilerArtifactFixture({
+    features: 1,
+    callables: [callableFixture(), callableFixture({
+      entryPc: 4,
+      frameBytes: 16,
+      argumentRoles: [u32Le(0), u32Le(1), u32Le(2), pointer(3, 0x11), u32Le(4), u32Le(5), u32Le(6), u32Le(7), pointer(8, 0x12)],
+      resultRoles: Array.from({ length: 8192 }, () => u32Le(1)),
+    })],
+  });
+  const accepted = await compileKotodamaWithNativeBinding(
+    { async compileKotodama() { return serviceSuccessWithArtifact(artifact, (manifest) => { manifest.features_bitmap = 1; }); } },
+    "seiyaku Demo {}",
+  );
+  assert.equal(accepted.ok, true);
+});
+
 test("compiler output requires a framed self-describing IVM artifact bound to manifest identity", async () => {
   const malformedArtifacts = [
     ["one byte", Uint8Array.from([1])],
@@ -1413,7 +1495,7 @@ test("compiler literal-table validation matches Rust ABI-v1 framing", async () =
     ],
     [
       "unassigned pointer type",
-      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ typeId: 0x0013 }) }]),
+      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ typeId: 0x0014 }) }]),
       /not allowed by ABI v1/u,
     ],
     [

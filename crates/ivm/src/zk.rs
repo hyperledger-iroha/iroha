@@ -157,6 +157,76 @@ fn prover_pool() -> &'static rayon::ThreadPool {
 mod tests {
     use super::*;
     #[test]
+    fn fallible_trace_copies_preserve_nested_paths_and_snapshots() {
+        let root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![[7; 32]])
+            .root()
+            .expect("one-leaf test tree has a root");
+        let mut constraints = ConstraintLog::default();
+        constraints.record(Constraint::Zero { reg: 7, cycle: 1 });
+        let copied_constraints = constraints
+            .try_clone_allocation()
+            .expect("bounded constraints");
+        assert_eq!(copied_constraints.list, constraints.list);
+        assert!(
+            copied_constraints
+                .allocated_bytes()
+                .expect("checked capacity")
+                > 0
+        );
+
+        let mut memory = MemLog::default();
+        memory.record(MemEvent::Load {
+            addr: 8,
+            value: 13,
+            size: 8,
+            path: vec![[1; 32], [2; 32]],
+            root,
+        });
+        let copied_memory = memory.try_clone_allocation().expect("bounded memory paths");
+        assert_eq!(copied_memory.events, memory.events);
+        assert!(copied_memory.allocated_bytes().expect("checked capacity") > 0);
+        if let MemEvent::Load { path, .. } = &mut memory.events[0] {
+            path[0] = [9; 32];
+        }
+        assert_ne!(copied_memory.events, memory.events);
+
+        let mut registers = RegLog::default();
+        registers.record(RegEvent::Write {
+            index: 7,
+            value: 21,
+            tag: true,
+            path: vec![[3; 32]],
+            root,
+        });
+        let copied_registers = registers
+            .try_clone_allocation()
+            .expect("bounded register paths");
+        assert_eq!(copied_registers.events, registers.events);
+        assert!(
+            copied_registers
+                .allocated_bytes()
+                .expect("checked capacity")
+                > 0
+        );
+
+        let mut trace = DeltaTraceLog::default();
+        let mut gpr = [0; 256];
+        gpr[7] = 21;
+        trace.record(4, gpr, [false; 256]);
+        gpr[7] = 22;
+        trace.record(8, gpr, [false; 256]);
+        let copied_trace = trace.try_clone_allocation().expect("bounded delta trace");
+        assert_eq!(copied_trace.entries, trace.entries);
+        assert_eq!(copied_trace.expand(), trace.expand());
+        assert!(copied_trace.allocated_bytes().expect("checked capacity") > 0);
+
+        let mut steps = StepLog::default();
+        steps.record(4, root, root);
+        let copied_steps = steps.try_clone_allocation().expect("bounded steps");
+        assert_eq!(copied_steps.steps, steps.steps);
+        assert!(copied_steps.allocated_bytes().expect("checked capacity") > 0);
+    }
+    #[test]
     fn reg_logger_guard_clears_on_drop() {
         let log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
         {
@@ -341,6 +411,30 @@ pub enum Constraint {
     /// Register value must fit in `bits` bits at cycle `cycle`.
     Range { reg: usize, bits: u8, cycle: u64 },
 }
+fn trace_allocation_error() -> crate::error::VMError {
+    crate::error::VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+}
+fn trace_vector_bytes<T>(capacity: usize) -> Result<usize, crate::error::VMError> {
+    let bytes = capacity
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(trace_allocation_error)?;
+    (bytes <= isize::MAX as usize)
+        .then_some(bytes)
+        .ok_or_else(trace_allocation_error)
+}
+fn trace_add_bytes(left: usize, right: usize) -> Result<usize, crate::error::VMError> {
+    left.checked_add(right).ok_or_else(trace_allocation_error)
+}
+#[cfg(test)]
+fn try_copy_trace_slice<T: Clone>(source: &[T]) -> Result<Vec<T>, crate::error::VMError> {
+    let _ = trace_vector_bytes::<T>(source.len())?;
+    let mut copied = Vec::new();
+    copied
+        .try_reserve_exact(source.len())
+        .map_err(|_| trace_allocation_error())?;
+    copied.extend_from_slice(source);
+    Ok(copied)
+}
 /// Collector for constraints encountered during execution.
 #[derive(Default, Clone)]
 pub struct ConstraintLog {
@@ -349,6 +443,15 @@ pub struct ConstraintLog {
 impl ConstraintLog {
     pub fn record(&mut self, c: Constraint) {
         self.list.push(c);
+    }
+    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
+        trace_vector_bytes::<Constraint>(self.list.capacity())
+    }
+    #[cfg(test)]
+    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
+        Ok(Self {
+            list: try_copy_trace_slice(&self.list)?,
+        })
     }
 }
 /// A memory access recorded during diagnostic trace collection.
@@ -381,6 +484,56 @@ pub struct MemLog {
 impl MemLog {
     pub fn record(&mut self, e: MemEvent) {
         self.events.push(e);
+    }
+    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
+        self.events.iter().try_fold(
+            trace_vector_bytes::<MemEvent>(self.events.capacity())?,
+            |bytes, event| {
+                let path = match event {
+                    MemEvent::Load { path, .. } | MemEvent::Store { path, .. } => path,
+                };
+                trace_add_bytes(bytes, trace_vector_bytes::<[u8; 32]>(path.capacity())?)
+            },
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
+        let _ = trace_vector_bytes::<MemEvent>(self.events.len())?;
+        let mut events = Vec::new();
+        events
+            .try_reserve_exact(self.events.len())
+            .map_err(|_| trace_allocation_error())?;
+        for event in &self.events {
+            events.push(match event {
+                MemEvent::Load {
+                    addr,
+                    value,
+                    size,
+                    path,
+                    root,
+                } => MemEvent::Load {
+                    addr: *addr,
+                    value: *value,
+                    size: *size,
+                    path: try_copy_trace_slice(path)?,
+                    root: *root,
+                },
+                MemEvent::Store {
+                    addr,
+                    value,
+                    size,
+                    path,
+                    root,
+                } => MemEvent::Store {
+                    addr: *addr,
+                    value: *value,
+                    size: *size,
+                    path: try_copy_trace_slice(path)?,
+                    root: *root,
+                },
+            });
+        }
+        Ok(Self { events })
     }
     /// Zero retained memory values before discarding the event log.
     pub(crate) fn scrub(&mut self) {
@@ -417,6 +570,57 @@ pub struct RegLog {
 impl RegLog {
     pub fn record(&mut self, e: RegEvent) {
         self.events.push(e);
+    }
+    #[cfg(test)]
+    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
+        self.events.iter().try_fold(
+            trace_vector_bytes::<RegEvent>(self.events.capacity())?,
+            |bytes, event| {
+                let path = match event {
+                    RegEvent::Read { path, .. } | RegEvent::Write { path, .. } => path,
+                };
+                trace_add_bytes(bytes, trace_vector_bytes::<[u8; 32]>(path.capacity())?)
+            },
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
+        let _ = trace_vector_bytes::<RegEvent>(self.events.len())?;
+        let mut events = Vec::new();
+        events
+            .try_reserve_exact(self.events.len())
+            .map_err(|_| trace_allocation_error())?;
+        for event in &self.events {
+            events.push(match event {
+                RegEvent::Read {
+                    index,
+                    value,
+                    tag,
+                    path,
+                    root,
+                } => RegEvent::Read {
+                    index: *index,
+                    value: *value,
+                    tag: *tag,
+                    path: try_copy_trace_slice(path)?,
+                    root: *root,
+                },
+                RegEvent::Write {
+                    index,
+                    value,
+                    tag,
+                    path,
+                    root,
+                } => RegEvent::Write {
+                    index: *index,
+                    value: *value,
+                    tag: *tag,
+                    path: try_copy_trace_slice(path)?,
+                    root: *root,
+                },
+            });
+        }
+        Ok(Self { events })
     }
     /// Zero retained register values before discarding the event log.
     pub(crate) fn scrub(&mut self) {
@@ -459,6 +663,35 @@ pub struct DeltaEntry {
     pub changes: Vec<(usize, u64, bool)>,
 }
 impl DeltaTraceLog {
+    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
+        self.entries.iter().try_fold(
+            trace_vector_bytes::<DeltaEntry>(self.entries.capacity())?,
+            |bytes, entry| {
+                trace_add_bytes(
+                    bytes,
+                    trace_vector_bytes::<(usize, u64, bool)>(entry.changes.capacity())?,
+                )
+            },
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
+        let _ = trace_vector_bytes::<DeltaEntry>(self.entries.len())?;
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(self.entries.len())
+            .map_err(|_| trace_allocation_error())?;
+        for entry in &self.entries {
+            entries.push(DeltaEntry {
+                pc: entry.pc,
+                changes: try_copy_trace_slice(&entry.changes)?,
+            });
+        }
+        Ok(Self {
+            entries,
+            last: self.last.clone(),
+        })
+    }
     pub fn record(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
         if let Some(prev) = &self.last {
             let mut changes = Vec::new();
@@ -539,6 +772,15 @@ pub struct StepLog {
     pub steps: Vec<StepEntry>,
 }
 impl StepLog {
+    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
+        trace_vector_bytes::<StepEntry>(self.steps.capacity())
+    }
+    #[cfg(test)]
+    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
+        Ok(Self {
+            steps: try_copy_trace_slice(&self.steps)?,
+        })
+    }
     pub fn record(
         &mut self,
         pc: u64,

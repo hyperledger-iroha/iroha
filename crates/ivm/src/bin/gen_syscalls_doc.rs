@@ -51,14 +51,6 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(VoteGetTallyRequest)".into();
         ret = "host-owned ptr (&NoritoBytes)".into();
         gas = "G_vote_get + bytes".into();
-    } else if up.contains("DECODE_INT") || n == 0x53 {
-        args = "r10=&NoritoBytes(Norito-framed i64)".into();
-        ret = "r10=i64".into();
-        gas = "G_numeric + bytes".into();
-    } else if up.contains("ENCODE_INT") || n == 0x55 {
-        args = "r10=value:i64".into();
-        ret = "r10=ptr (&NoritoBytes(Norito-framed i64))".into();
-        gas = "G_numeric + bytes".into();
     } else if up.contains("BUILD_PATH_KEY_NORITO") || n == 0x56 {
         args = "r10=&Name(base), r11=&NoritoBytes(key)".into();
         ret = "r10=ptr (&NoritoBytes(StatePath))".into();

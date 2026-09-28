@@ -10,14 +10,16 @@ use iroha_data_model::{
     asset::id::AssetDefinitionId,
     block::BlockHeader,
     nexus::{
-        AssetHandle, AssetHandleDraft, AxtAssetIncarnationV1, AxtBinding, AxtDescriptorBuilder,
-        AxtEffectBinding, AxtFastpqBinding, AxtHandleFragment, AxtHandleIssuerContextV1,
-        AxtHandleReplayKey, AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, GroupBinding,
+        AssetHandle, AssetHandleDraft, AxtAnchoredSpendDraftV1, AxtAnchoredSpendV1,
+        AxtAssetIncarnationV1, AxtBinding, AxtDescriptorBuilder, AxtEffectBinding,
+        AxtFastpqBinding, AxtFinalizedSpendAnchorV1, AxtHandleIssuerContextV1, AxtHandleReplayKey,
+        AxtProofEnvelope, AxtProofFragment, AxtSourceSuccessReceiptV1,
+        AxtSourceTransferOccurrenceV1, AxtSpendNonceV1, AxtTouchFragment, GroupBinding,
         HandleBudget, HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
         UniversalAccountId, compute_descriptor_binding, compute_remote_spend_intent_commitment_v1,
     },
     testing::axt::{
-        DescriptorFixture, EnvelopeFixture, HandleFixtures, PoseidonConstantsFixture,
+        AnchoredSpendFixtures, DescriptorFixture, EnvelopeFixture, PoseidonConstantsFixture,
         PoseidonParamsFixture,
     },
 };
@@ -42,10 +44,13 @@ const POSEIDON_FIXTURE_PATH: &str = concat!(
 fn fixture_issuer() -> KeyPair {
     KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519)
 }
+fn fixture_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"axt-fixture-network",
+    )))
+}
 fn fixture_asset_incarnation(asset_definition_id: &AssetDefinitionId) -> AxtAssetIncarnationV1 {
-    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::new(b"axt-fixture-network"),
-    ));
+    let network_id = fixture_network_id();
     let registration_header_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"axt-fixture-asset-registration-header",
     ));
@@ -59,9 +64,7 @@ fn fixture_asset_incarnation(asset_definition_id: &AssetDefinitionId) -> AxtAsse
     )
 }
 fn signed_fixture_handle(draft: AssetHandleDraft, dsid: DataSpaceId) -> AssetHandle {
-    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::new(b"axt-fixture-network"),
-    ));
+    let network_id = fixture_network_id();
     let context = AxtHandleIssuerContextV1 {
         network_id,
         asset_dsid: dsid,
@@ -76,11 +79,32 @@ fn signed_fixture_handle(draft: AssetHandleDraft, dsid: DataSpaceId) -> AssetHan
         .sign_by_issuer_v1(context, fixture_issuer().private_key())
         .expect("fixture issuer key must sign canonical AXT claims")
 }
-fn fixture_digest(label: &[u8], dsid: DataSpaceId) -> String {
+fn fixture_hash(label: &[u8], dsid: DataSpaceId) -> Hash {
     let mut payload = Vec::new();
     payload.extend_from_slice(label);
     payload.extend_from_slice(&dsid.as_u64().to_le_bytes());
-    encode(Hash::new(payload).as_ref())
+    Hash::new(payload)
+}
+fn fixture_digest(label: &[u8], dsid: DataSpaceId) -> String {
+    encode(fixture_hash(label, dsid).as_ref())
+}
+fn fixture_anchor(dsid: DataSpaceId, lane: LaneId) -> AxtFinalizedSpendAnchorV1 {
+    let network_id = fixture_network_id();
+    AxtFinalizedSpendAnchorV1 {
+        network_id,
+        genesis_hash: *network_id.as_bytes(),
+        dataspace_id: dsid,
+        lane_id: lane,
+        lane_incarnation: fixture_hash(b"lane-incarnation", dsid),
+        finalized_height: 42 + dsid.as_u64(),
+        block_header_hash: HashOf::from_untyped_unchecked(fixture_hash(b"block-header", dsid)),
+        quorum_certificate_digest: fixture_hash(b"commit-qc", dsid),
+        committee_digest: fixture_hash(b"committee", dsid),
+        pre_state_root: fixture_hash(b"pre-state", dsid),
+        post_state_root: fixture_hash(b"post-state", dsid),
+        transaction_set_digest: fixture_hash(b"transaction-set", dsid),
+        da_manifest_digest: fixture_hash(b"da-manifest", dsid),
+    }
 }
 fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
     AxtFastpqBinding {
@@ -157,11 +181,11 @@ fn proof_blob_fixture(
     da_commitment: Option<[u8; 32]>,
     proof: Vec<u8>,
     expiry_slot: u64,
-    source_asset: Option<&AssetDefinitionId>,
+    source_transfer: Option<(&AssetDefinitionId, &Quantity)>,
     remote_spend_intent_commitments: Vec<[u8; 32]>,
 ) -> Result<ProofBlob, Box<dyn Error>> {
     let mut fastpq_binding = fixture_fastpq_binding(dsid);
-    if let Some(asset) = source_asset {
+    let committed_amount = if let Some((asset, amount)) = source_transfer {
         fastpq_binding.claim_type = "tx_predicate".to_owned();
         fastpq_binding.effect_binding = Some(AxtEffectBinding {
             destination_domain: None,
@@ -173,7 +197,16 @@ fn proof_blob_fixture(
             source_amount_i64: None,
             destination_amount_i64: None,
         });
-    }
+        Some(
+            amount
+                .as_numeric()
+                .try_mantissa_u128()
+                .filter(|scalar| amount.scale() == 0 && *scalar != 0)
+                .ok_or("fixture clear amount must be a nonzero scale-zero u128 quantity")?,
+        )
+    } else {
+        None
+    };
     fastpq_binding.remote_spend_intent_commitments = remote_spend_intent_commitments;
     let payload = to_bytes(&AxtProofEnvelope {
         dsid,
@@ -181,7 +214,7 @@ fn proof_blob_fixture(
         da_commitment,
         proof,
         fastpq_binding: Some(fastpq_binding),
-        committed_amount: None,
+        committed_amount,
         amount_commitment: None,
     })?;
     Ok(ProofBlob {
@@ -189,17 +222,68 @@ fn proof_blob_fixture(
         expiry_slot: Some(expiry_slot),
     })
 }
-fn transfer_handle_fixture(
+fn signed_fixture_spend(
+    handle: AssetHandle,
+    intent: RemoteSpendIntent,
+    proof: ProofBlob,
+    amount: Quantity,
+    anchor: AxtFinalizedSpendAnchorV1,
+) -> AxtAnchoredSpendV1 {
+    let dsid = anchor.dataspace_id;
+    let source_receipt = AxtSourceSuccessReceiptV1 {
+        finalized_anchor_digest: anchor.digest_v1(),
+        source_tx_commitment: fixture_hash(b"source-tx", dsid).into(),
+        source_tx_index: 1,
+        post_transaction_state_root: fixture_hash(b"tx-post-state", dsid).into(),
+        effect_set_digest: fixture_hash(b"tx-effects", dsid).into(),
+    };
+    let source_occurrence = AxtSourceTransferOccurrenceV1 {
+        source_tx_commitment: source_receipt.source_tx_commitment,
+        source_success_receipt_digest: source_receipt.digest_v1(),
+        source_tx_index: source_receipt.source_tx_index,
+        transcript_index: 0,
+        delta_index: 0,
+        pair_ordinal: 0,
+        transfer_digest: fixture_hash(b"transfer", dsid).into(),
+        remote_spend_claim_commitment: compute_remote_spend_intent_commitment_v1(
+            AxtHandleReplayKey::from_handle(dsid, &handle),
+            &intent.op.asset_definition_id,
+            &intent.op.kind,
+            &intent.op.from,
+            &intent.op.to,
+            &amount,
+        ),
+    };
+    let expiry_slot = handle.expiry_slot;
+    AxtAnchoredSpendDraftV1 {
+        handle,
+        intent,
+        proof: Some(proof),
+        amount: Some(amount),
+        amount_commitment: None,
+        source_receipt,
+        source_occurrence,
+    }
+    .sign_by_issuer_v1(
+        anchor,
+        expiry_slot,
+        AxtSpendNonceV1::try_new(fixture_hash(b"spend-nonce", dsid).into())
+            .expect("fixture nonce is nonzero"),
+        fixture_issuer().private_key(),
+    )
+    .expect("fixture spend has consistent issuer and finalized-anchor bindings")
+}
+fn transfer_spend_fixture(
     binding: AxtBinding,
     manifest_view_root: [u8; 32],
     proof: ProofBlob,
     asset_definition_id: AssetDefinitionId,
     alice: String,
     bob: String,
-) -> AxtHandleFragment {
+) -> AxtAnchoredSpendV1 {
     let dsid = DataSpaceId::new(1);
-    AxtHandleFragment {
-        handle: signed_fixture_handle(
+    signed_fixture_spend(
+        signed_fixture_handle(
             AssetHandleDraft {
                 asset_definition_id: asset_definition_id.clone(),
                 scope: vec!["transfer".to_string()],
@@ -220,12 +304,12 @@ fn transfer_handle_fixture(
                 target_lane: LaneId::new(4),
                 axt_binding: binding,
                 manifest_view_root,
-                expiry_slot: 200,
+                expiry_slot: 120,
                 max_clock_skew_ms: Some(5_000),
             },
             dsid,
         ),
-        intent: RemoteSpendIntent {
+        RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
                 asset_definition_id,
@@ -235,22 +319,22 @@ fn transfer_handle_fixture(
                 amount: Some(Quantity::from(2_500_u64)),
             },
         },
-        proof: Some(proof),
-        amount: Some(Quantity::from(2_500_u64)),
-        amount_commitment: None,
-    }
+        proof,
+        Quantity::from(2_500_u64),
+        fixture_anchor(dsid, LaneId::new(4)),
+    )
 }
-fn lock_handle_fixture(
+fn lock_spend_fixture(
     binding: AxtBinding,
     manifest_view_root: [u8; 32],
     proof: ProofBlob,
     asset_definition_id: AssetDefinitionId,
     bob: String,
     carol: String,
-) -> AxtHandleFragment {
+) -> AxtAnchoredSpendV1 {
     let dsid = DataSpaceId::new(7);
-    AxtHandleFragment {
-        handle: signed_fixture_handle(
+    signed_fixture_spend(
+        signed_fixture_handle(
             AssetHandleDraft {
                 asset_definition_id: asset_definition_id.clone(),
                 scope: vec!["transfer".to_string()],
@@ -271,12 +355,12 @@ fn lock_handle_fixture(
                 target_lane: LaneId::new(4),
                 axt_binding: binding,
                 manifest_view_root,
-                expiry_slot: 160,
+                expiry_slot: 98,
                 max_clock_skew_ms: Some(2_000),
             },
             dsid,
         ),
-        intent: RemoteSpendIntent {
+        RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
                 asset_definition_id,
@@ -286,16 +370,16 @@ fn lock_handle_fixture(
                 amount: Some(Quantity::from(9_001_u64)),
             },
         },
-        proof: Some(proof),
-        amount: Some(Quantity::from(9_001_u64)),
-        amount_commitment: None,
-    }
+        proof,
+        Quantity::from(9_001_u64),
+        fixture_anchor(dsid, LaneId::new(4)),
+    )
 }
-fn rejected_handle_fixtures(happy: &[AxtHandleFragment]) -> Vec<AxtHandleFragment> {
+fn rejected_spend_fixtures(happy: &[AxtAnchoredSpendV1]) -> Vec<AxtAnchoredSpendV1> {
     let mut mismatched_binding = happy[0].clone();
-    mismatched_binding.handle.axt_binding = AxtBinding::new([0u8; 32]);
+    mismatched_binding.draft.handle.axt_binding = AxtBinding::new([0u8; 32]);
     let mut stale_manifest = happy[1].clone();
-    stale_manifest.handle.manifest_view_root = [0u8; 32];
+    stale_manifest.draft.handle.manifest_view_root = [0u8; 32];
     vec![mismatched_binding, stale_manifest]
 }
 fn build_envelope_fixture(
@@ -357,19 +441,27 @@ fn build_envelope_fixture(
     let proof_one = proof_blob_fixture(
         dsid_one,
         manifest_root_one,
-        Some([0x11; 32]),
+        Some(
+            fixture_anchor(dsid_one, LaneId::new(4))
+                .da_manifest_digest
+                .into(),
+        ),
         vec![0xAA, 0xBB, 0xCC, 0xDD],
         120,
-        Some(&transfer_asset),
+        Some((&transfer_asset, &transfer_amount)),
         vec![transfer_commitment],
     )?;
     let proof_seven = proof_blob_fixture(
         dsid_seven,
         manifest_root_seven,
-        None,
+        Some(
+            fixture_anchor(dsid_seven, LaneId::new(4))
+                .da_manifest_digest
+                .into(),
+        ),
         vec![0xFE, 0xED, 0xFA, 0xCE],
         98,
-        Some(&lock_asset),
+        Some((&lock_asset, &lock_amount)),
         vec![lock_commitment],
     )?;
     let proofs = vec![
@@ -382,8 +474,8 @@ fn build_envelope_fixture(
             proof: proof_seven.clone(),
         },
     ];
-    let happy_handles = vec![
-        transfer_handle_fixture(
+    let happy_spends = vec![
+        transfer_spend_fixture(
             binding,
             manifest_root_one,
             proof_one,
@@ -391,7 +483,7 @@ fn build_envelope_fixture(
             alice,
             bob.clone(),
         ),
-        lock_handle_fixture(
+        lock_spend_fixture(
             binding,
             manifest_root_seven,
             proof_seven,
@@ -400,13 +492,13 @@ fn build_envelope_fixture(
             carol,
         ),
     ];
-    let rejects = rejected_handle_fixtures(&happy_handles);
+    let rejects = rejected_spend_fixtures(&happy_spends);
     Ok(EnvelopeFixture {
         descriptor_hex: descriptor.descriptor_hex.clone(),
         binding_hex: descriptor.binding_hex.clone(),
         proofs,
-        handles: HandleFixtures {
-            happy: happy_handles,
+        spends: AnchoredSpendFixtures {
+            happy: happy_spends,
             rejects,
         },
     })
@@ -480,8 +572,78 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::seeded_account;
-    use iroha_data_model::account::AccountId;
+    use super::{
+        build_descriptor_fixture, build_envelope_fixture, fixture_issuer, proof_blob_fixture,
+        seeded_account,
+    };
+    use iroha_data_model::{
+        account::AccountId, asset::id::AssetDefinitionId, nexus::AxtProofEnvelope,
+    };
+    use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
+    use iroha_primitives::numeric::Quantity;
+
+    #[test]
+    fn clear_fixture_proofs_require_exact_nonzero_integer_scalars() {
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("fixtures", "universal").expect("fixture domain"),
+            "transfer".parse().expect("fixture asset name"),
+        );
+        let proof_for_amount = |amount: &Quantity| {
+            proof_blob_fixture(
+                DataSpaceId::new(1),
+                [1; 32],
+                Some([2; 32]),
+                vec![3],
+                120,
+                Some((&asset, amount)),
+                Vec::new(),
+            )
+        };
+        for literal in ["0", "1.5", "340282366920938463463374607431768211456"] {
+            let amount = literal.parse().expect("full-width quantity");
+            let error = proof_for_amount(&amount).expect_err("invalid proof scalar is rejected");
+            assert_eq!(
+                error.to_string(),
+                "fixture clear amount must be a nonzero scale-zero u128 quantity"
+            );
+        }
+        let maximum = u128::MAX.to_string().parse().expect("maximum proof scalar");
+        let proof = proof_for_amount(&maximum).expect("exact u128 boundary is accepted");
+        let envelope: AxtProofEnvelope =
+            norito::decode_canonical(&proof.payload).expect("canonical proof envelope");
+        assert_eq!(envelope.committed_amount, Some(u128::MAX));
+        assert_eq!(envelope.amount_commitment, None);
+    }
+
+    #[test]
+    fn generated_spends_have_fresh_signatures_and_reject_substitutions() {
+        let descriptor = build_descriptor_fixture().expect("fixture descriptor");
+        let envelope = build_envelope_fixture(&descriptor).expect("anchored-spend fixture");
+        assert_eq!(envelope.spends.happy.len(), 2);
+        assert_eq!(envelope.spends.rejects.len(), 2);
+        let issuer = fixture_issuer();
+        for spend in &envelope.spends.happy {
+            spend
+                .verify_issuer_signatures_v1(
+                    spend.draft.handle.issuer_context,
+                    spend.authorization.anchor,
+                    issuer.public_key(),
+                )
+                .expect("valid fixture issuer signature");
+        }
+        for spend in &envelope.spends.rejects {
+            assert!(
+                spend
+                    .verify_issuer_signatures_v1(
+                        spend.draft.handle.issuer_context,
+                        spend.authorization.anchor,
+                        issuer.public_key(),
+                    )
+                    .is_err(),
+                "mutated anchored spend cannot retain issuer authority"
+            );
+        }
+    }
 
     #[test]
     fn seeded_fixture_accounts_are_valid_and_distinct() {

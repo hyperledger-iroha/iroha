@@ -29,9 +29,9 @@ fn new_block() -> crate::block::CommittedBlock {
     .commit_unchecked()
     .unpack(|_| {})
 }
-fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
-    state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
-}
+// Direct staking component fixtures retain a bounded ordinary invocation before
+// opening StateTransaction. Their source is not a signed Network input and grants
+// no publication authority; end-to-end fee/finality tests use the real producer.
 fn block_header_with_height(height: u64) -> iroha_data_model::block::BlockHeader {
     let mut header = new_block().as_ref().header();
     header.set_height(NonZeroU64::new(height).expect("non-zero height"));
@@ -362,7 +362,12 @@ fn configure_reward_fixture(
     stx.nexus.staking.slash_sink_account_id = sink.to_string();
     register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(&stx, lane_id, &validator, (initial_stake.clone()).clone()),
+        monetary_plan: fixture_registration_plan(
+            &stx,
+            lane_id,
+            &validator,
+            (initial_stake.clone()).clone(),
+        ),
         lane_id,
         peer_id: validator_peer_id(&validator),
         validator: validator.clone(),
@@ -455,7 +460,12 @@ fn complete_staking_committee(stx: &mut StateTransaction<'_, '_>, lane_id: LaneI
         .execute(&ALICE_ID, stx)
         .expect("fund committee stake");
         RegisterPublicLaneValidator {
-            monetary_plan: fixture_registration_plan(&stx, lane_id, &validator, Quantity::from(1_000_u64)),
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                lane_id,
+                &validator,
+                Quantity::from(1_000_u64),
+            ),
             lane_id,
             peer_id,
             validator: validator.clone(),
@@ -508,7 +518,7 @@ fn genesis_monetary_context_requires_initial_height_and_exact_expiry() {
     let state = setup_state();
     let genesis = new_block();
     let mut block = state.block(genesis.as_ref().header());
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1)
         .expect("NPoS genesis uses the same exact genesis lifetime");
     stx.world
@@ -537,7 +547,7 @@ fn genesis_monetary_context_requires_initial_height_and_exact_expiry() {
     );
     drop(stx);
     block.block_hashes.push(genesis.as_ref().hash());
-    let stx = block.transaction();
+    let stx = block.transaction_for_callback_testing();
     assert!(
         effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1).is_err(),
         "the height-one scope cannot replay after a block is already committed"
@@ -545,7 +555,7 @@ fn genesis_monetary_context_requires_initial_height_and_exact_expiry() {
     drop(stx);
     drop(block);
     let mut successor = state.block(block_header_with_height(2));
-    let stx = successor.transaction();
+    let stx = successor.transaction_for_callback_testing();
     assert!(
         effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 2).is_err(),
         "a non-genesis block cannot use genesis scope even with a current expiry"
@@ -558,7 +568,7 @@ fn network_monetary_context_keeps_the_committed_epoch_window() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
-    let stx = block.transaction();
+    let stx = block.transaction_for_callback_testing();
     let scope = PublicLaneMonetaryScopeV1::Network(*stx.network_id());
     for expiry in [2, 8] {
         effects::validate_plan_context(&stx, &scope, expiry)
@@ -570,17 +580,21 @@ fn network_monetary_context_keeps_the_committed_epoch_window() {
 }
 
 #[test]
-fn genesis_staking_without_npos_preserves_exact_transfer_and_custody() {
+fn genesis_staking_requires_committed_xor_and_preserves_exact_transfer_and_custody() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
-    stx.world
+    let mut stx = block.transaction_for_callback_testing();
+    // Genesis scope authenticates height; it cannot replace the committed network
+    // currency identity required by an actual monetary staking operation.
+    let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
+    let committed_parameters = stx
+        .world
         .parameters
         .get_mut()
         .custom
-        .remove(&SumeragiNposParameters::parameter_id());
+        .remove(&SumeragiNposParameters::parameter_id())
+        .expect("fixture pins the actual network XOR definition");
     assert!(stx.world.sumeragi_npos_parameters().is_none());
-    let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
     let lane = LaneId::SINGLE;
     let source = AssetId::new(definition.clone(), validator.clone());
     let destination = AssetId::new(definition, escrow);
@@ -598,6 +612,42 @@ fn genesis_staking_without_npos_preserves_exact_transfer_and_custody() {
             amount.clone(),
         ),
     };
+    let error = registration
+        .clone()
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("genesis cannot invent an absent network currency identity");
+    assert!(
+        error
+            .to_string()
+            .contains("committed network XOR asset identity")
+    );
+    assert_eq!(
+        stx.world.assets.get(&source).unwrap().as_ref(),
+        &Quantity::from(10_000_u64)
+    );
+    assert!(stx.world.assets.get(&destination).is_none());
+    assert!(
+        stx.world
+            .public_lane_validators
+            .get(&(lane, validator.clone()))
+            .is_none()
+    );
+    assert!(
+        stx.world
+            .public_lane_stake_custody
+            .get(&(lane, validator.clone()))
+            .is_none()
+    );
+    assert!(
+        stx.world
+            .public_lane_stake_reserves
+            .get(&destination)
+            .is_none()
+    );
+    stx.world
+        .parameters
+        .get_mut()
+        .set_parameter(Parameter::Custom(committed_parameters));
     let mut invalid_expiry = registration.clone();
     invalid_expiry.monetary_plan.valid_until_height = 2;
     let mut invalid_amount = registration.clone();
@@ -642,7 +692,7 @@ fn genesis_staking_without_npos_preserves_exact_transfer_and_custody() {
     }
     registration
         .execute(&ALICE_ID, &mut stx)
-        .expect("exact prefunded genesis registration needs no NPoS election schedule");
+        .expect("exact prefunded genesis registration uses the committed network XOR");
     ActivatePublicLaneValidator {
         lane_id: lane,
         validator: validator.clone(),
@@ -683,5 +733,11 @@ fn genesis_staking_without_npos_preserves_exact_transfer_and_custody() {
             .bonded,
         amount
     );
-    assert!(stx.world.sumeragi_npos_parameters().is_none());
+    assert_eq!(
+        stx.world
+            .sumeragi_npos_parameters()
+            .unwrap()
+            .xor_asset_definition_id,
+        SumeragiNposParameters::default().xor_asset_definition_id
+    );
 }

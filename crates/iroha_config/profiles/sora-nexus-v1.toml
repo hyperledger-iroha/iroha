@@ -31,7 +31,6 @@ block_cadence_ms = 5000
 epoch_length_blocks = 3600
 block_max_transactions = 10000
 ivm_gas_limit_per_block = 50000000
-npos_seat_band_pct = 100
 npos_min_self_bond = 1
 
 # Consensus-bound, roster-independent node configuration.

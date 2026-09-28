@@ -43,6 +43,9 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         let probe_domain = Domain::new(domain_id.clone()).build(&authority);
         let probe_account = Account::new(authority.clone()).build(&authority);
         let probe_state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             World::with([probe_domain], [probe_account], []),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
@@ -51,7 +54,9 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         )
         .expect("probe state must accept its explicit network id");
         install_test_lane_manifests(&probe_state);
-        probe_state.seed_genesis_for_testing().expect("authenticate rejected-probe predecessor");
+        probe_state
+            .seed_genesis_for_testing()
+            .expect("authenticate rejected-probe predecessor");
         let probe_block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             external_signed.clone(),
         ))])
@@ -184,6 +189,9 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     let query_handle = LiveQueryStore::start_test();
     let fixture_triggers = std::mem::take(&mut world.triggers);
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         world,
         kura,
         query_handle,
@@ -192,7 +200,9 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     )
     .expect("test state must accept its explicit network id");
     install_test_lane_manifests(&state);
-    state.seed_genesis_for_testing().expect("authenticate rejected Pipeline predecessor");
+    state
+        .seed_genesis_for_testing()
+        .expect("authenticate rejected Pipeline predecessor");
     state.world.triggers = fixture_triggers;
     let metadata_key =
         Name::from_str("sequential_rejected_commitment_marker").expect("metadata key");

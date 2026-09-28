@@ -92,12 +92,6 @@ pub fn decode_literal_descriptor(raw: u64) -> Result<(LiteralKindV1, u64), VMErr
 }
 /// Embedded contract interface section marker used by self-describing contract artifacts.
 pub const CONTRACT_INTERFACE_SECTION_MAGIC: [u8; 4] = *b"CNTR";
-/// Compiler-owned local entrypoint that identifies the terminal return target
-/// in a Kotodama test-suite interface sidecar.
-///
-/// Generic IVM 1.0 test images do not embed the sidecar. Production contract admission rejects this
-/// reserved selector; only the crate-private Kotodama test preparation path accepts it.
-pub const KOTO_TEST_RETURN_ENTRYPOINT: &str = "__koto_test_return";
 /// Stable nominal Norito schema name for the first-release contract interface.
 pub const CONTRACT_INTERFACE_SCHEMA_NAME_V1: &str = "iroha.kotodama.EmbeddedContractInterfaceV1";
 /// Stable nominal Norito schema name for embedded durable-state type trees.
@@ -1325,6 +1319,8 @@ pub struct EmbeddedContractInterfaceV1 {
     pub access_set_hints: Option<AccessSetHints>,
     pub kotoba: Vec<KotobaTranslationEntry>,
     pub entrypoints: Vec<EmbeddedEntrypointDescriptor>,
+    /// Complete sorted table of callable roots, exact slot roles, and frame reservations.
+    pub callables: Vec<crate::call::EmbeddedCallableV1>,
     pub states: Vec<EmbeddedStateDescriptor>,
     /// Stable application error codes accepted by `require`.
     pub error_types: Vec<ContractErrorTypeDescriptor>,
@@ -2352,6 +2348,7 @@ mod tests {
     #[test]
     fn contract_interface_section_roundtrips_nested_states() {
         let interface = EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "metadata-tests".to_owned(),
             abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),

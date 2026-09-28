@@ -29,11 +29,9 @@ fn fixture() -> Fixture {
         network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
             Hash::new(b"native lane crypto fixture"),
         )),
-        protocol_version: wire::PROTOCOL_VERSION,
+        protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
         opening_global_height: 1,
-        opening_global_context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(
-            Hash::new(b"crypto fixture opening"),
-        )),
+        opening_consensus_hash: Hash::new(b"crypto fixture opening"),
         admitted_binding_hash: Hash::new(b"exact first admitted group"),
         admission_priority: crate::state::QueuePlanAdmissionPriorityV1::new(1, 0).unwrap(),
         epoch: 0,

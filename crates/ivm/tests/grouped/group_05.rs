@@ -24,6 +24,8 @@ mod kotodama_state_struct_pointer;
 mod kotodama_struct_fields;
 #[path = "../kotodama_struct_fields_corehost.rs"]
 mod kotodama_struct_fields_corehost;
+#[path = "../kotodama_structural_equality.rs"]
+mod kotodama_structural_equality;
 #[path = "../kotodama_ternary_lowering.rs"]
 mod kotodama_ternary_lowering;
 #[path = "../kotodama_tuple_codegen_neg.rs"]
@@ -68,3 +70,8 @@ mod metadata_parse;
 mod metadata_roundtrip;
 #[path = "../metal_disable_on_mismatch.rs"]
 mod metal_disable_on_mismatch;
+
+#[path = "../kotodama_call_tables.rs"]
+mod kotodama_call_tables;
+#[path = "../tiny_workload_dispatch.rs"]
+mod tiny_workload_dispatch;

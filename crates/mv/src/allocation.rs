@@ -15,7 +15,7 @@ use std::{
     cell::Cell,
     fmt, ptr,
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -26,8 +26,16 @@ use crate::{ReleaseNotification, ReleaseWait};
 pub mod map;
 
 mod buffer;
+mod refund_batch;
+mod retained_payload;
+mod shared;
 
-pub use buffer::{ChargedBuffer, ChargedBufferError, ChargedBufferFromChargeError};
+pub use buffer::{
+    ChargedBuffer, ChargedBufferError, ChargedBufferFromChargeError, PrepaidBufferError,
+};
+pub use refund_batch::AllocationRefundBatch;
+pub use retained_payload::{RetainedPayload, RetainedPayloadError};
+pub use shared::{ChargedShared, PrepaidSharedError};
 
 thread_local! {
     // Scope records live on this thread's stack; registration allocates nothing.
@@ -70,6 +78,7 @@ impl RefundScope {
 struct EnteredRefundScope<'scope> {
     scope: &'scope RefundScope,
     pool: &'scope Pool,
+    retained: Option<&'scope Cell<bool>>,
 }
 
 impl Drop for EnteredRefundScope<'_> {
@@ -78,14 +87,22 @@ impl Drop for EnteredRefundScope<'_> {
         // Unlink and end the TLS access before invoking any user callback. A
         // matching outer scope receives this wake; other threads are unaffected.
         if self.scope.pending.get() {
-            self.pool.notify_refund();
+            if let Some(retained) = self.retained {
+                retained.set(true);
+            } else {
+                self.pool.notify_refund();
+            }
         }
     }
 }
 
 struct Pool {
-    limit: usize,
+    // A configuration reload changes the limit of this same original pool.
+    // The read lock spans acquisition so a concurrent shrink cannot admit
+    // fresh credits against the former limit.
+    limit: RwLock<usize>,
     reserved: AtomicUsize,
+    peak_reserved: AtomicUsize,
     released: ReleaseNotification,
 }
 
@@ -106,8 +123,8 @@ impl Pool {
             let mut current = head.get();
             while !current.is_null() {
                 // SAFETY: only this thread accesses its TLS chain. Each record
-                // is borrowed at a stable stack address by EnteredRefundScope,
-                // whose destructor unlinks it before that borrow or pool ends.
+                // stays at its stable stack or admitted owned address until
+                // its final guard/custodian unlinks it before reclamation.
                 let scope = unsafe { &*current };
                 if ptr::eq(scope.pool, self) {
                     scope.pending.set(true);
@@ -215,11 +232,12 @@ impl AllocationScope<'_> {
     }
 }
 
-/// One immutable finite allocation limit shared by its outstanding owners.
+/// One finite allocation pool shared by its outstanding owners.
 ///
 /// Clones refer to the same pool. Dropping the budget handle does not invalidate
 /// outstanding reservations or allocation charges. Zero allows only zero-byte
-/// layouts; it never means unlimited.
+/// layouts; it never means unlimited. A configuration update changes the
+/// limit in place without forgiving charges held by earlier borrowers.
 #[derive(Clone)]
 pub struct AllocationBudget {
     pool: Arc<Pool>,
@@ -228,7 +246,7 @@ pub struct AllocationBudget {
 impl AllocationBudget {
     // Equality of actual retained pool owners, never a caller-supplied digest
     // or the address of a movable AllocationBudget handle.
-    fn same_pool(&self, other: &Self) -> bool {
+    pub(crate) fn same_pool(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.pool, &other.pool)
     }
 
@@ -236,16 +254,41 @@ impl AllocationBudget {
     pub fn new(limit_bytes: usize) -> Self {
         Self {
             pool: Arc::new(Pool {
-                limit: limit_bytes,
+                limit: RwLock::new(limit_bytes),
                 reserved: AtomicUsize::new(0),
+                peak_reserved: AtomicUsize::new(0),
                 released: ReleaseNotification::default(),
             }),
         }
     }
 
-    /// Return the immutable policy limit in requested allocation bytes.
+    /// Return the current policy limit in requested allocation bytes.
     pub fn limit_bytes(&self) -> usize {
-        self.pool.limit
+        *self
+            .pool
+            .limit
+            .read()
+            .expect("allocation budget limit lock")
+    }
+
+    /// Reconfigure this original pool without releasing any outstanding charge.
+    ///
+    /// Shrinking below live reservations blocks new nonzero admissions until
+    /// enough allocations are actually freed. Growth wakes capacity waiters
+    /// after the limit lock is released. Callers holding physical cache locks
+    /// must enclose the entire reload in `with_deferred_refund_notifications`.
+    pub fn set_limit_bytes(&self, limit_bytes: usize) {
+        let mut limit = self
+            .pool
+            .limit
+            .write()
+            .expect("allocation budget limit lock");
+        let grew = limit_bytes > *limit;
+        *limit = limit_bytes;
+        drop(limit);
+        if grew {
+            self.pool.notify_refund();
+        }
     }
 
     /// Observe credits currently held by prepaid or allocated owners.
@@ -278,6 +321,14 @@ impl AllocationBudget {
         })
     }
 
+    /// Highest original-pool demand admitted since this budget was created.
+    ///
+    /// Credits held by prepaid leases remain included until their actual owner
+    /// refunds them. Reloading the limit does not reset this diagnostic.
+    pub fn peak_reserved_bytes(&self) -> usize {
+        self.pool.peak_reserved.load(Ordering::Acquire)
+    }
+
     /// Defer this thread's refund notifications through a synchronous operation.
     ///
     /// Freed allocation credits become available immediately. Only wakes for
@@ -296,6 +347,21 @@ impl AllocationBudget {
         &self,
         operation: impl for<'scope> FnOnce(&'scope AllocationScope<'scope>) -> R,
     ) -> R {
+        self.with_refund_scope(None, operation)
+    }
+
+    /// Retain this original pool's wakes beyond a synchronous scratch operation.
+    /// The returned owner must outlive every physical writer enclosing its scopes.
+    /// Creating it only clones the existing pool handle and allocates nothing.
+    pub fn deferred_refund_batch(&self) -> AllocationRefundBatch {
+        AllocationRefundBatch::new(self.clone())
+    }
+
+    fn with_refund_scope<R>(
+        &self,
+        retained: Option<&Cell<bool>>,
+        operation: impl for<'scope> FnOnce(&'scope AllocationScope<'scope>) -> R,
+    ) -> R {
         let scope = RefundScope {
             pool: Arc::as_ptr(&self.pool),
             previous: Cell::new(REFUND_SCOPES.with(Cell::get)),
@@ -304,6 +370,7 @@ impl AllocationBudget {
         let entered = EnteredRefundScope {
             scope: &scope,
             pool: &self.pool,
+            retained,
         };
         REFUND_SCOPES.with(|head| head.set(ptr::from_ref(&scope)));
         let capability = AllocationScope {
@@ -349,22 +416,28 @@ impl AllocationBudget {
         &self,
         bytes: usize,
     ) -> Result<AllocationReservation, AllocationRefusal> {
-        if bytes > self.pool.limit {
+        let limit_guard = self
+            .pool
+            .limit
+            .read()
+            .expect("allocation budget limit lock");
+        let limit = *limit_guard;
+        if bytes > limit {
             return Err(AllocationRefusal::ExceedsLimit {
                 requested_bytes: bytes,
-                limit_bytes: self.pool.limit,
+                limit_bytes: limit,
             });
         }
         let release = self.pool.released.observe();
         let mut reserved = self.pool.reserved.load(Ordering::Acquire);
         loop {
-            // Subtraction is safe because every credit acquisition checks this
-            // same immutable limit and only original owners can refund credits.
-            if bytes > self.pool.limit - reserved {
+            // A shrink may leave prior reservations above the new limit.
+            // The limit read lock serializes this decision with reconfiguration.
+            if bytes > limit.saturating_sub(reserved) {
                 return Err(AllocationRefusal::Capacity {
                     requested_bytes: bytes,
                     reserved_bytes: reserved,
-                    limit_bytes: self.pool.limit,
+                    limit_bytes: limit,
                     release,
                 });
             }
@@ -375,6 +448,9 @@ impl AllocationBudget {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
+                    self.pool
+                        .peak_reserved
+                        .fetch_max(reserved + bytes, Ordering::AcqRel);
                     return Ok(AllocationReservation {
                         pool: Arc::clone(&self.pool),
                         remaining: bytes,
@@ -391,6 +467,7 @@ impl fmt::Debug for AllocationBudget {
         f.debug_struct("AllocationBudget")
             .field("limit_bytes", &self.limit_bytes())
             .field("reserved_bytes", &self.reserved_bytes())
+            .field("peak_reserved_bytes", &self.peak_reserved_bytes())
             .finish()
     }
 }
@@ -404,7 +481,7 @@ pub enum AllocationRefusal {
     ExceedsLimit {
         /// Checked requested layout sum.
         requested_bytes: usize,
-        /// Immutable pool limit.
+        /// Policy limit observed for this refusal.
         limit_bytes: usize,
     },
     /// Other outstanding owners temporarily occupy the required capacity.
@@ -413,7 +490,7 @@ pub enum AllocationRefusal {
         requested_bytes: usize,
         /// Diagnostic occupied credits at the refused probe.
         reserved_bytes: usize,
-        /// Immutable pool limit.
+        /// Policy limit observed for this refusal.
         limit_bytes: usize,
         /// Retry hint tied to this exact pool; it grants no future reservation.
         release: ReleaseWait,

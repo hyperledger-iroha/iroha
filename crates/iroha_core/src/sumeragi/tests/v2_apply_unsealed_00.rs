@@ -409,7 +409,7 @@ fn install_fixture_validator_authority(
             .collect::<BTreeMap<_, _>>()
     };
     statuses.insert(LaneId::SINGLE, status);
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
     let mut expected = context
         .roster
         .iter()
@@ -2123,7 +2123,7 @@ fn install_recreatable_reservation_lane(
         .map(|status| (status.lane, status))
         .collect::<BTreeMap<_, _>>();
     statuses.insert(lane.id, status);
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
     state.nexus.write().routing_policy.rules.insert(
         0,
         iroha_config::parameters::actual::LaneRoutingRule {

@@ -10,10 +10,12 @@
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
 mod authority_admission;
+use crate::execution_attempt::{ExecutionAttemptError, ExecutionDeferred};
+
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
-    interlane::verify_lane_privacy_proofs,
+    interlane::{LanePrivacyRegistry, verify_lane_privacy_proofs},
     nexus::space_directory::{
         LaneIdentityMetadataError,
         extract_authority_domains as extract_directory_authority_domains,
@@ -79,6 +81,9 @@ pub(crate) enum LaneExecutionInputError {
     /// Original local State storage pool refused this attempt.
     #[error(transparent)]
     Storage(#[from] crate::state::StateStorageAdmissionError),
+    /// Original local execution pool refused this attempt before settlement.
+    #[error(transparent)]
+    Deferred(#[from] ExecutionDeferred),
 }
 
 #[cfg(test)]
@@ -1250,6 +1255,9 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -3166,12 +3174,15 @@ impl StateBlock<'_> {
     /// Tests and benchmarks share the production attempt/apply/rejection implementation.
     /// This fixture owner grants no carrier publication authority; a real consuming
     /// output seal rejects its unjoined invocation journal.
+    ///
+    /// # Errors
+    /// Local execution deferral leaves the attempt unfinished and cannot become a wire rejection.
     #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
-    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
+    ) -> Result<(HashOf<TransactionEntrypoint>, TransactionResultInner), ExecutionDeferred> {
         self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
     }
     #[cfg(test)]
@@ -3184,7 +3195,7 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         entrypoint_index: usize,
         routing: crate::queue::RoutingDecision,
-    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
+    ) -> Result<(HashOf<TransactionEntrypoint>, TransactionResultInner), ExecutionDeferred> {
         self.validate_transaction_at_entrypoint_index_and_routing(
             tx,
             ivm_cache,
@@ -3249,7 +3260,7 @@ impl StateBlock<'_> {
                     ivm_cache,
                     Some(raw_entrypoint_index),
                     Some(routing),
-                );
+                )?;
             self.require_storage_admission()?;
             results.push((raw_entrypoint_index, entrypoint_hash, result));
         }
@@ -3298,30 +3309,41 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         entrypoint_index: Option<u64>,
         routing_decision: Option<crate::queue::RoutingDecision>,
-    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
+    ) -> Result<(HashOf<TransactionEntrypoint>, TransactionResultInner), ExecutionDeferred> {
         let hash = tx.hash_as_entrypoint();
-        let result = self
-            .execute_component_network_source(tx, ivm_cache, entrypoint_index, routing_decision)
-            .map_err(|reason| {
-                TransactionRejectionReason::Validation(ValidationFail::InternalError(reason))
-            })
-            .and_then(|result| result);
-        (hash, result)
+        let result = match self.execute_component_network_source(
+            tx,
+            ivm_cache,
+            entrypoint_index,
+            routing_decision,
+        ) {
+            Ok(result) => result,
+            Err(ExecutionAttemptError::Rejected(reason)) => Err(
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(reason)),
+            ),
+            Err(ExecutionAttemptError::Deferred(reason)) => return Err(reason),
+        };
+        Ok((hash, result))
     }
     /// Execute admission, business logic and callbacks in the caller's overlay.
     ///
     /// The caller owns rollback, rejection penalties/fees and the output fit check
     /// before applying any successful business changes. This method never applies
-    /// the overlay. Returns the trigger sequence or the actual typed rejection.
+    /// the overlay. Returns the trigger sequence, a deterministic rejection, or a
+    /// non-serializable local refusal before any completed-output settlement.
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub(crate) fn execute_accepted_transaction_in_overlay(
         tx: AcceptedTransaction<'_>,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
         routing_decision: Option<crate::queue::RoutingDecision>,
-    ) -> TransactionResultInner {
+    ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
+        if let Some(reason) = state_transaction.execution_deferral() {
+            return Err(ExecutionAttemptError::Deferred(reason));
+        }
         if let TransactionEntrypoint::SealedCommitment(commitment) = tx.entrypoint() {
-            return Self::validate_sealed_transaction_commitment(commitment, state_transaction);
+            return Self::validate_sealed_transaction_commitment(commitment, state_transaction)
+                .map_err(ExecutionAttemptError::Rejected);
         }
         if let TransactionEntrypoint::SealedReveal(reveal) = tx.entrypoint() {
             return Self::validate_sealed_transaction_reveal(
@@ -3342,7 +3364,8 @@ impl StateBlock<'_> {
                         ValidationFail::NotPermitted(
                             "missing gas limit in fee payment intent".to_owned(),
                         ),
-                    ));
+                    )
+                    .into());
                 }
                 code::ensure_contract_execution_allowed(
                     &state_transaction.world,
@@ -3380,7 +3403,8 @@ impl StateBlock<'_> {
                         ValidationFail::NotPermitted(
                             "missing gas limit in fee payment intent".to_owned(),
                         ),
-                    ));
+                    )
+                    .into());
                 }
                 Self::validate_ivm(
                     authority.clone(),
@@ -3403,7 +3427,11 @@ impl StateBlock<'_> {
             DataTriggerSequence::default()
         } else {
             debug!("Transaction validated successfully; processing data triggers");
-            let trigger_sequence = state_transaction.execute_data_triggers_dfs(&authority)?;
+            let trigger_result = state_transaction.execute_data_triggers_dfs(&authority);
+            if let Some(reason) = state_transaction.execution_deferral() {
+                return Err(ExecutionAttemptError::Deferred(reason));
+            }
+            let trigger_sequence = trigger_result?;
             debug!("Data triggers executed successfully");
             trigger_sequence
         };
@@ -3481,12 +3509,15 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
         routing_decision: Option<crate::queue::RoutingDecision>,
-    ) -> TransactionResultInner {
+    ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         let key = sealed_commitment_state_key(&reveal.commitment);
         let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted("sealed transaction commitment is not pending".into()),
-            ));
+            return Err(
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "sealed transaction commitment is not pending".into(),
+                ))
+                .into(),
+            );
         };
         let record: PendingSealedTransactionCommitment =
             norito::decode_from_bytes(bytes).map_err(sealed_state_decode_error)?;
@@ -3512,10 +3543,13 @@ impl StateBlock<'_> {
         transaction_metadata: Option<&Metadata>,
         deploy_target: Option<iroha_data_model::smart_contract::ContractAddress>,
         ivm_cache: &mut IvmCache,
-    ) -> Result<(), TransactionRejectionReason> {
+    ) -> Result<(), ExecutionAttemptError<TransactionRejectionReason>> {
         // Parse and cache metadata + derived hashes.
         let bytes = contract.as_ref();
         let summary = ivm_cache.summarize_executable(bytes).map_err(|error| {
+            if let Some(owner) = ExecutionDeferred::from_vm_error(&error) {
+                return ExecutionAttemptError::Deferred(owner);
+            }
             let failure = match error {
                 ivm::VMError::UnknownSyscall(number) => ValidationFail::NotPermitted(format!(
                     "unknown syscall number 0x{number:02x} for abi_version 1"
@@ -3524,7 +3558,7 @@ impl StateBlock<'_> {
                     crate::smartcontracts::ivm::admission_reason_from_vm_error(error),
                 ),
             };
-            TransactionRejectionReason::Validation(failure)
+            ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(failure))
         })?;
         let is_contract = matches!(
             &summary,
@@ -3592,7 +3626,8 @@ impl StateBlock<'_> {
                                 },
                             ),
                         ),
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -3635,7 +3670,7 @@ impl StateBlock<'_> {
                                 },
                             ),
                         ),
-                    ));
+                    ).into());
                 }
             }
             if bytes_cap != 0 {
@@ -3650,7 +3685,8 @@ impl StateBlock<'_> {
                                 },
                             ),
                         ),
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -3679,7 +3715,8 @@ impl StateBlock<'_> {
                             "unknown syscall number 0x{number:02x} for abi_version {}",
                             meta.abi_version
                         )),
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -3707,11 +3744,12 @@ impl StateBlock<'_> {
                 .is_some()
             || deploy_target.is_some()
         {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
+            return Err(
+                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                     iroha_data_model::executor::IvmAdmissionError::ManifestMalformed,
-                ),
-            ));
+                ))
+                .into(),
+            );
         }
         // Protected namespaces admission (governance gating)
         if let Some(contract_address) = deploy_target {
@@ -3752,7 +3790,7 @@ impl StateBlock<'_> {
                             "deployment into governed contract address requires enacted governance proposal"
                                 .to_owned(),
                         ),
-                    ));
+                    ).into());
                 }
                 #[cfg(feature = "telemetry")]
                 state_transaction
@@ -3770,7 +3808,7 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
-    ) -> Result<(), TransactionRejectionReason> {
+    ) -> Result<(), ExecutionAttemptError<TransactionRejectionReason>> {
         let tx: SignedTransaction = tx.into();
         let authority = tx.authority().clone();
         state_transaction
@@ -3779,14 +3817,16 @@ impl StateBlock<'_> {
             .clone()
             .execute_transaction(state_transaction, &authority, tx, ivm_cache)
             .map_err(|error| {
-                if let ValidationFail::InternalError(msg) = &error {
-                    error!(
-                        error = msg,
-                        "Internal error occurred during transaction validation, \
+                error.map_rejection(|error| {
+                    if let ValidationFail::InternalError(msg) = &error {
+                        error!(
+                            error = msg,
+                            "Internal error occurred during transaction validation, \
                          is Runtime Executor correct?"
-                    )
-                }
-                error.into()
+                        )
+                    }
+                    error.into()
+                })
             })
     }
 }
@@ -4520,23 +4560,22 @@ fn enforce_lane_policies(
             &state_transaction.nexus.governance,
         )?;
     }
+    // The manifest snapshot is the consensus input. Rebuild the privacy
+    // projection here so an old or locally corrupted cache cannot choose a
+    // different proof-verification or compliance result on another peer.
+    let lane_privacy_registry = LanePrivacyRegistry::from_manifest_registry(manifest_registry);
     let privacy_proofs = collect_lane_privacy_proofs(tx);
     let verified_privacy_commitments = if privacy_proofs.is_empty() {
         BTreeSet::new()
     } else {
-        verify_lane_privacy_proofs(
-            state_transaction.lane_privacy_registry.as_ref(),
-            lane_id,
-            &privacy_proofs,
-        )
-        .map_err(|err| {
-            reject_lane_policy(&lane_alias, format!("lane privacy proof rejected: {err}"))
-        })?
+        verify_lane_privacy_proofs(&lane_privacy_registry, lane_id, &privacy_proofs).map_err(
+            |err| reject_lane_policy(&lane_alias, format!("lane privacy proof rejected: {err}")),
+        )?
     };
-    let lane_privacy_registry = if state_transaction.lane_privacy_registry.is_empty() {
+    let lane_privacy_registry = if lane_privacy_registry.is_empty() {
         None
     } else {
-        Some(state_transaction.lane_privacy_registry.clone())
+        Some(Arc::new(lane_privacy_registry))
     };
     let publishes_space_directory_manifest = publishes_only_space_directory_manifests(tx);
     let lane_identity = if publishes_space_directory_manifest {
@@ -6199,7 +6238,9 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) => {
                 assert!(
@@ -6336,7 +6377,9 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(
             result.is_ok(),
             "single-key signatories with multisig roles should keep ordinary direct-signing rights: {result:?}"
@@ -6424,7 +6467,9 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(
             result.is_ok(),
             "multisig propose envelope should bypass direct-sign rejection for signatory roles: {result:?}"
@@ -6541,7 +6586,9 @@ pub mod tests {
         let mut block = state.block(header);
         block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(
             result.is_ok(),
             "lane validator gating should not reject multisig propose envelopes from live signers: {result:?}"
@@ -6612,7 +6659,9 @@ pub mod tests {
         let mut block = state.block(header);
         block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(
             result.is_ok(),
             "lane validator gating should ignore plain transactions that do not touch governance surfaces: {result:?}"
@@ -7021,7 +7070,9 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Err(TransactionRejectionReason::AccountDoesNotExist(FindError::Account(id))) => {
                 assert_eq!(id, authority, "unexpected missing-account id");
@@ -7103,7 +7154,9 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(result.is_ok(), "self-register flow should pass: {result:?}");
         assert!(
             block.world.accounts.get(&authority).is_some(),
@@ -7145,7 +7198,9 @@ pub mod tests {
         let mut block = state.block(header);
         let account_before = block.world.accounts.get(&authority).cloned();
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(
             matches!(&result,
                 Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
@@ -7195,7 +7250,9 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
                 iroha_data_model::isi::error::InstructionExecutionError::Find(FindError::Account(
@@ -8672,6 +8729,13 @@ pub mod tests {
             TypeId::of::<
                 iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
             >(),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1>(
+            ),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>(
+            ),
+            TypeId::of::<
+                iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
+            >(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle>(),
         ];
@@ -9253,7 +9317,9 @@ pub mod tests {
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let accepted = super::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, res) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, res) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(matches!(
             res,
             Err(TransactionRejectionReason::Validation(
@@ -9307,7 +9373,7 @@ pub mod tests {
         program.extend_from_slice(&code);
         program
     }
-    /// Build a minimal self-describing contract containing only a view entrypoint and HALT.
+    /// Build a minimal self-describing view returning one initialized Unit table word.
     fn minimal_ivm_contract_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata {
             max_cycles: 1_000,
@@ -9315,6 +9381,7 @@ pub mod tests {
         }
         .encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "TxManifestFixture".to_owned(),
             compiler_fingerprint: "iroha-core-tx-tests".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -9342,7 +9409,7 @@ pub mod tests {
             states: Vec::new(),
         };
         program.extend_from_slice(&interface.encode_section());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::unit_return());
         program
     }
     /// Build a minimal program and override `max_cycles` in the header.
@@ -9515,6 +9582,7 @@ pub mod tests {
             let mut ivm_cache = IvmCache::new();
             block
                 .validate_transaction(accepted, &mut ivm_cache)
+                .expect("local execution completes")
                 .1
                 .map(|_| ())
         }
@@ -9666,7 +9734,9 @@ pub mod tests {
         .sign(fixture.keypair.private_key());
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block2
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(info),
@@ -9871,7 +9941,9 @@ pub mod tests {
         .sign(fixture.keypair.private_key());
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block2
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(info),
@@ -10953,7 +11025,9 @@ pub mod tests {
         )
         .expect("stateless sequence checks should pass when metadata present");
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
@@ -11020,7 +11094,9 @@ pub mod tests {
         )
         .expect("stateless sequence checks should pass when metadata present");
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         result.expect("sequence should be accepted");
         let updated = block
             .world
@@ -11110,7 +11186,9 @@ pub mod tests {
         .sign(kp.private_key());
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         assert!(result.is_ok(), "max_cycles within bound should pass");
     }
     mod time_trigger {
@@ -11776,7 +11854,10 @@ pub mod tests {
                 .sign(keypair.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
                 let mut ivm_cache = IvmCache::new();
-                block.validate_transaction(accepted, &mut ivm_cache).1
+                block
+                    .validate_transaction(accepted, &mut ivm_cache)
+                    .expect("local execution completes")
+                    .1
             }};
         }
         let (code, _) = ivm::KotodamaCompiler::new()
@@ -11982,7 +12063,9 @@ pub mod tests {
             .sign(keypair.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             let mut ivm_cache = IvmCache::new();
-            let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+            let (_hash, result) = block
+                .validate_transaction(accepted, &mut ivm_cache)
+                .expect("local execution completes");
             assert!(matches!(
                 result,
                 Err(TransactionRejectionReason::Validation(
@@ -12298,7 +12381,9 @@ pub mod tests {
         let mut block = state.block(header);
         block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_hash, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         result.expect("live autoscale-routed transaction should bypass blocked base lane");
     }
     fn lane_execution_input_artifact(
@@ -12479,7 +12564,9 @@ pub mod tests {
                 privacy_commitments: Vec::new(),
             },
         );
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+            statuses,
+        )));
         state
     }
     #[test]
@@ -12652,6 +12739,7 @@ pub mod tests {
                 0,
                 explicit_route,
             )
+            .expect("local execution completes")
             .1;
         let reveal_result = block
             .validate_transaction_with_entrypoint_index_and_routing_context(
@@ -12660,6 +12748,7 @@ pub mod tests {
                 1,
                 explicit_route,
             )
+            .expect("local execution completes")
             .1;
         assert!(matches!(
             &external_result,
@@ -12917,7 +13006,9 @@ pub mod tests {
         block.gas_limit_per_block = 0;
         let mut cache = IvmCache::new();
 
-        let (_, result) = block.validate_transaction(accepted, &mut cache);
+        let (_, result) = block
+            .validate_transaction(accepted, &mut cache)
+            .expect("local execution completes");
 
         result.expect("zero block gas limit must mean unlimited");
         assert!(block.gas_used_in_block > 0);
@@ -13183,10 +13274,12 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_, first_result) = block.validate_transaction(
-            AcceptedTransaction::new_unchecked(Cow::Owned(first)),
-            &mut ivm_cache,
-        );
+        let (_, first_result) = block
+            .validate_transaction(
+                AcceptedTransaction::new_unchecked(Cow::Owned(first)),
+                &mut ivm_cache,
+            )
+            .expect("local execution completes");
         first_result.expect("first authority-scoped claim succeeds");
         assert!(
             block.world.smart_contract_state.get(&marker_path).is_some(),
@@ -13207,6 +13300,9 @@ pub mod tests {
         let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
         let restarted = crate::state::deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),
@@ -13237,10 +13333,12 @@ pub mod tests {
             [faucet_test_transfer(&definition_id, &faucet, &recipient, 2)],
         );
         assert_ne!(duplicate.hash(), first_hash);
-        let (_, duplicate_result) = replay_block.validate_transaction(
-            AcceptedTransaction::new_unchecked(Cow::Owned(duplicate)),
-            &mut ivm_cache,
-        );
+        let (_, duplicate_result) = replay_block
+            .validate_transaction(
+                AcceptedTransaction::new_unchecked(Cow::Owned(duplicate)),
+                &mut ivm_cache,
+            )
+            .expect("local execution completes");
         assert!(
             matches!(
                 &duplicate_result,
@@ -13262,10 +13360,12 @@ pub mod tests {
             .expect("other marker present")
             .0;
         assert_ne!(marker_path, other_path);
-        let (_, other_result) = replay_block.validate_transaction(
-            AcceptedTransaction::new_unchecked(Cow::Owned(other_tx)),
-            &mut ivm_cache,
-        );
+        let (_, other_result) = replay_block
+            .validate_transaction(
+                AcceptedTransaction::new_unchecked(Cow::Owned(other_tx)),
+                &mut ivm_cache,
+            )
+            .expect("local execution completes");
         other_result.expect("another authority cannot be pre-consumed");
     }
 
@@ -13313,10 +13413,12 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
-        let (_, failure) = block.validate_transaction(
-            AcceptedTransaction::new_unchecked(Cow::Owned(failing)),
-            &mut ivm_cache,
-        );
+        let (_, failure) = block
+            .validate_transaction(
+                AcceptedTransaction::new_unchecked(Cow::Owned(failing)),
+                &mut ivm_cache,
+            )
+            .expect("local execution completes");
         assert!(failure.is_err(), "overdrawn faucet transfer must fail");
         assert!(
             block.world.smart_contract_state.get(&marker_path).is_none(),
@@ -13329,10 +13431,12 @@ pub mod tests {
             &semantic_hash,
             [faucet_test_transfer(&definition_id, &faucet, &recipient, 1)],
         );
-        let (_, retry_result) = block.validate_transaction(
-            AcceptedTransaction::new_unchecked(Cow::Owned(retry)),
-            &mut ivm_cache,
-        );
+        let (_, retry_result) = block
+            .validate_transaction(
+                AcceptedTransaction::new_unchecked(Cow::Owned(retry)),
+                &mut ivm_cache,
+            )
+            .expect("local execution completes");
         retry_result.expect("corrected transaction consumes the unburned claim");
         assert!(block.world.smart_contract_state.get(&marker_path).is_some());
     }

@@ -124,7 +124,7 @@ public final class NumericV1Tests {
 
     final byte[] unassigned = NumericV1.encodeIntEnvelope(NumericV1.IntValue.parse("1"));
     unassigned[0] = 0;
-    unassigned[1] = 0x13;
+    unassigned[1] = 0x0C;
     unassigned[2] = 2;
     assertCode(NumericV1.ErrorCode.UNKNOWN_TYPE, () -> NumericV1.decodeIntEnvelope(unassigned));
 

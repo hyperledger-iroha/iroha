@@ -124,8 +124,8 @@ pub struct FrozenLaneConsensusContextV1 {
     pub protocol_version: u16,
     /// Global carrier whose post-state opened this instance.
     pub opening_global_height: u64,
-    /// Authenticated global height context used by the opening carrier.
-    pub opening_global_context_id: wire::HeightContextId,
+    /// Actual native consensus header hash of the opening carrier, or signed genesis hash.
+    pub opening_consensus_hash: Hash,
     /// Exact oldest unresolved admitted atomic group pinned by this instance.
     pub admitted_binding_hash: Hash,
     /// First canonical carrier position of the pinned group.
@@ -242,7 +242,7 @@ impl FrozenLaneConsensusContextV1 {
     /// Rejects an unsupported revision, zero identities, invalid admission or predecessor
     /// position, malformed committee or proofs, failed proof verification, or invalid policy.
     pub fn validate(&self) -> Result<(), LaneConsensusContextError> {
-        if self.protocol_version != wire::PROTOCOL_VERSION {
+        if self.protocol_version != crate::sumeragi::PROTOCOL_VERSION {
             return Err(LaneConsensusContextError::ProtocolVersion(
                 self.protocol_version,
             ));
@@ -253,7 +253,10 @@ impl FrozenLaneConsensusContextV1 {
         let zero = Hash::prehashed([0; Hash::LENGTH]);
         for (name, identity) in [
             ("network", self.network_id.as_bytes()),
-            ("opening context", self.opening_global_context_id.0.as_ref()),
+            (
+                "opening consensus hash",
+                self.opening_consensus_hash.as_ref(),
+            ),
             ("admitted binding", self.admitted_binding_hash.as_ref()),
             ("incarnation", self.lane_incarnation.as_ref()),
             ("Nexus/AMX", self.nexus_amx_context_hash.as_ref()),
@@ -328,9 +331,25 @@ impl FrozenLaneConsensusContextV1 {
     /// Rejects an invalid frozen context or failure to encode its canonical frame.
     pub fn canonical_hash(&self) -> Result<Hash, LaneConsensusContextError> {
         self.validate()?;
-        let bytes = norito::encode_canonical(self)
-            .map_err(|error| LaneConsensusContextError::Encoding(error.to_string()))?;
-        Ok(Hash::new_from_chunks(&[CONTEXT_HASH_DOMAIN, &bytes]))
+        self.encoding_hash()
+            .map_err(|error| LaneConsensusContextError::Encoding(error.to_string()))
+    }
+
+    /// Hash the exact encoding only. The caller must independently validate its authority;
+    /// this crate-private primitive is also used for equality with an original sealed proof.
+    pub(crate) fn encoding_hash(&self) -> Result<Hash, norito::Error> {
+        let mut encoding_error = None;
+        let hash = Hash::new_from_writer(|writer| {
+            writer.write_all(CONTEXT_HASH_DOMAIN)?;
+            norito::core::write_canonical_to_writer(self, writer).map_err(|error| {
+                encoding_error = Some(error);
+                std::io::Error::other("canonical frozen context encoding failed")
+            })
+        });
+        if let Some(error) = encoding_error {
+            return Err(error);
+        }
+        hash.map_err(norito::Error::from)
     }
 }
 

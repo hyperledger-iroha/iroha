@@ -978,7 +978,7 @@ mod consensus_manifest_tests {
         assert!(manifest.consensus_fingerprint().is_some());
         assert_eq!(
             manifest.wire_protocol_version(),
-            u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)
+            u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION)
         );
     }
     #[test]

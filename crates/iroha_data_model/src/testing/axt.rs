@@ -4,7 +4,7 @@
 //! and exercised by both Rust and SDK tests to catch schema or binding drift.
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
-    nexus::{AxtDescriptor, AxtHandleFragment, AxtProofFragment, AxtTouchFragment},
+    nexus::{AxtAnchoredSpendV1, AxtDescriptor, AxtProofFragment, AxtTouchFragment},
 };
 use hex::decode;
 use iroha_crypto::HashOf;
@@ -46,13 +46,13 @@ impl DescriptorFixture {
         decode(&self.binding_hex).expect("binding hex decodes")
     }
 }
-/// Happy-path and reject fixtures for handles/proofs.
+/// Happy-path and reject fixtures for issuer-signed anchored spends.
 #[derive(Debug, Clone, DeriveJsonDeserialize, DeriveJsonSerialize, PartialEq, Eq, IntoSchema)]
-pub struct HandleFixtures {
-    /// Valid handle fragments.
-    pub happy: Vec<AxtHandleFragment>,
-    /// Deliberately invalid handle fragments.
-    pub rejects: Vec<AxtHandleFragment>,
+pub struct AnchoredSpendFixtures {
+    /// Valid issuer-signed anchored spends.
+    pub happy: Vec<AxtAnchoredSpendV1>,
+    /// Deliberately invalid issuer-signed anchored spends.
+    pub rejects: Vec<AxtAnchoredSpendV1>,
 }
 /// Aggregated AXT envelope fixture.
 #[derive(Debug, Clone, DeriveJsonDeserialize, DeriveJsonSerialize, PartialEq, Eq, IntoSchema)]
@@ -63,8 +63,8 @@ pub struct EnvelopeFixture {
     pub binding_hex: String,
     /// Proof fragments keyed by dataspace.
     pub proofs: Vec<AxtProofFragment>,
-    /// Handle fixtures.
-    pub handles: HandleFixtures,
+    /// Issuer-signed anchored-spend fixtures.
+    pub spends: AnchoredSpendFixtures,
 }
 impl EnvelopeFixture {
     /// Return the canonical binding bytes for the descriptor.

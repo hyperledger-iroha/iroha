@@ -8,7 +8,6 @@ mod journal;
 mod lane_authority;
 mod reservation_journal;
 mod router;
-#[cfg(test)]
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
@@ -13953,17 +13952,59 @@ impl Queue {
             }
         })
     }
-    /// Install governance manifests for Nexus lanes (idempotent).
-    pub fn install_lane_manifests(&self, manifests: &LaneManifestRegistryHandle) {
+    /// Install an arbitrary manifest snapshot into an isolated Queue fixture.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn install_lane_manifests_for_testing(&self, manifests: &LaneManifestRegistryHandle) {
+        self.install_lane_manifests_unchecked_in_queue(manifests);
+    }
+    /// Install an empty Queue projection after entering emergency Fast quarantine.
+    ///
+    /// # Errors
+    /// Refuses an ordinary or not-yet-quarantined Queue. This provisional
+    /// projection cannot authorize transaction admission.
+    pub fn install_provisional_empty_lane_manifests_for_emergency_fast_startup(
+        &self,
+    ) -> std::io::Result<()> {
+        if !self.emergency_fast_startup.load(Ordering::Acquire) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "provisional Queue manifests require emergency Fast quarantine",
+            ));
+        }
+        self.install_lane_manifests_unchecked_in_queue(&Arc::new(
+            LaneManifestRegistry::provisional_empty_for_emergency_fast_startup(),
+        ));
+        Ok(())
+    }
+    fn install_lane_manifests_unchecked_in_queue(&self, manifests: &LaneManifestRegistryHandle) {
         let _ = self.replace_lane_manifests(manifests, false, None);
     }
-    /// Install one manifest snapshot into state and queue while ingress is paused.
-    pub fn install_lane_manifests_with_state(
+    /// Install an arbitrary manifest snapshot into State and Queue test fixtures.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn install_lane_manifests_with_state_for_testing(
         &self,
         manifests: &LaneManifestRegistryHandle,
         state: &State,
     ) {
-        let _ = self.replace_lane_manifests(manifests, false, Some(state));
+        state.install_lane_manifests_for_testing(manifests);
+        self.install_lane_manifests_unchecked_in_queue(manifests);
+    }
+    /// Install a materialized manifest source into State and this queue during
+    /// startup, while ingress is paused.
+    ///
+    /// # Errors
+    /// Rejects a status-only, stale, or incomplete manifest before either
+    /// registry is changed. The caller supplies the authenticated replay catalog.
+    pub fn install_materialized_lane_manifests_with_state(
+        &self,
+        manifests: &LaneManifestRegistryHandle,
+        state: &State,
+        catalog: &LaneCatalog,
+        governance: &GovernanceCatalog,
+    ) -> Result<(), LaneLifecycleError> {
+        state.install_materialized_lane_manifests_for_catalog(manifests, catalog, governance)?;
+        self.install_lane_manifests_unchecked_in_queue(manifests);
+        Ok(())
     }
     fn install_lane_manifests_if_consensus_compatible(
         &self,
@@ -14002,12 +14043,12 @@ impl Queue {
         }
         let previous_missing = guard.missing_aliases();
         if let Some(state) = state {
-            if require_consensus_compatibility {
-                if !state.install_lane_manifests_if_consensus_compatible(manifests) {
-                    return false;
-                }
-            } else {
-                state.install_lane_manifests(manifests);
+            assert!(
+                require_consensus_compatibility,
+                "State hot reload must authenticate the current manifest authority"
+            );
+            if !state.install_lane_manifests_if_consensus_compatible(manifests) {
+                return false;
             }
         }
         *guard = Arc::clone(manifests);
@@ -14128,14 +14169,21 @@ impl Queue {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         authority_eligible_lanes: &BTreeSet<LaneId>,
-    ) -> Result<(Option<LaneManifestStatus>, Option<GovernanceRules>), GovernanceGuardError> {
+    ) -> Result<
+        (
+            LaneManifestRegistryHandle,
+            Option<LaneManifestStatus>,
+            Option<GovernanceRules>,
+        ),
+        GovernanceGuardError,
+    > {
         let guard = self.lane_manifests.read();
         guard.ensure_lane_ready(lane_id)?;
         let status = guard.status(lane_id).cloned();
         let authority_rules = guard
             .dataspace_authority_rules_for_lanes(lane_id, dataspace_id, authority_eligible_lanes)?
             .cloned();
-        Ok((status, authority_rules))
+        Ok((Arc::clone(&*guard), status, authority_rules))
     }
     fn enforcement_error(alias: &str, reason: impl Into<String>) -> Error {
         Error::GovernanceNotPermitted {
@@ -18055,7 +18103,7 @@ impl Queue {
                 ),
             });
         }
-        let (manifest_status, manifest_authority_rules) = match self
+        let (manifest_snapshot, manifest_status, manifest_authority_rules) = match self
             .lane_manifest_admission_snapshot(
                 lane_id,
                 dataspace_id,
@@ -18244,7 +18292,11 @@ impl Queue {
                 }
             }
         }
-        let lane_privacy_registry_handle = self.lane_privacy_registry();
+        // Keep proof verification on the same manifest cut used by this
+        // admission. The separately published privacy handle is a cache.
+        let lane_privacy_registry_handle = Arc::new(LanePrivacyRegistry::from_manifest_registry(
+            &manifest_snapshot,
+        ));
         let privacy_proofs = Self::collect_lane_privacy_proofs(&checked);
         let verified_privacy_commitments = if privacy_proofs.is_empty() {
             BTreeSet::new()
@@ -23163,7 +23215,7 @@ impl Queue {
                 .read()
                 .rebind(&lane_catalog, &nexus.governance),
         );
-        self.install_lane_manifests(&registry);
+        self.install_lane_manifests_unchecked_in_queue(&registry);
     }
     /// Ensure the queue router and cached catalogs match the committed Nexus state.
     ///
@@ -23219,7 +23271,7 @@ impl Queue {
             );
         }
         // Publish fail-closed manifest semantics before exposing new routes.
-        self.install_lane_manifests(&registry);
+        self.install_lane_manifests_unchecked_in_queue(&registry);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
@@ -23268,7 +23320,7 @@ impl Queue {
         }
         // Refresh the Queue projection before routing. Only explicit manifest
         // installation or an authenticated lifecycle may publish State policy.
-        self.install_lane_manifests(&registry);
+        self.install_lane_manifests_unchecked_in_queue(&registry);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
@@ -23804,15 +23856,15 @@ pub mod tests {
         validator_keys: &[iroha_crypto::KeyPair],
     ) {
         let manifests = exact_lane_authority_for_queue_test(state, validator_keys);
-        state.install_lane_manifests(&manifests);
+        state.install_lane_manifests_for_testing(&manifests);
     }
     fn install_single_validator_topology_for_queue_test(state: &mut State, seed: u8) {
         let manifests = exact_f1_lane_authority_for_queue_test(state, seed);
-        state.install_lane_manifests(&manifests);
+        state.install_lane_manifests_for_testing(&manifests);
     }
     fn install_manifest_lane_authority_for_queue_test(state: &mut State, queue: &Queue, seed: u8) {
         let manifests = exact_f1_lane_authority_for_queue_test(state, seed);
-        queue.install_lane_manifests_with_state(&manifests, state);
+        queue.install_lane_manifests_with_state_for_testing(&manifests, state);
     }
     struct GloballyBoundGuardFixture {
         state: State,
@@ -24134,6 +24186,8 @@ pub mod tests {
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: kura_defaults::FSYNC_INTERVAL,
             lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -24149,6 +24203,9 @@ pub mod tests {
         )
         .expect("initialize authenticated future-created autoscale Kura");
         let mut state = State::try_new(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             world_with_test_domains(),
             kura,
             LiveQueryStore::start_test(),
@@ -25848,7 +25905,7 @@ pub mod tests {
                 status(conflicting_lane, "stale-conflict", conflicting_rules),
             ),
         ])));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
 
         PolicyOnlyDataspaceQueueFixture {
             queue,
@@ -26031,7 +26088,9 @@ pub mod tests {
             .expect("active authority source status");
         missing_status.manifest_path = None;
         missing_status.governance_rules = None;
-        queue.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        queue.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+            statuses,
+        )));
 
         let tx = accepted_tx_with(
             primary,
@@ -26194,7 +26253,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let validator_tx = accepted_tx_by(validator_id.clone(), &validator_keypair, &time_source);
         queue
             .push(validator_tx, state.view())
@@ -26249,7 +26308,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let other_tx = accepted_tx_by(other_id.clone(), &other_keypair, &time_source);
         queue
             .push(other_tx, state.view())
@@ -26284,7 +26343,7 @@ pub mod tests {
         let (alice, _) = gen_account_in("wonderland");
         let (bob, _) = gen_account_in("wonderland");
         let baseline = registry("/srv/default.manifest.json", alice.clone(), 1);
-        queue.install_lane_manifests(&baseline);
+        queue.install_lane_manifests_for_testing(&baseline);
         let baseline_digest = baseline.consensus_policy_digest();
         let drift = registry("/srv/default.manifest.json", bob, 2);
         assert!(!queue.install_lane_manifests_if_consensus_compatible(&drift));
@@ -26296,6 +26355,57 @@ pub mod tests {
         let installed = queue.lane_manifests.read().clone();
         assert!(Arc::ptr_eq(&installed, &relocated));
         assert_eq!(installed.consensus_policy_digest(), baseline_digest);
+    }
+    #[test]
+    fn materialized_queue_manifest_handoff_rejects_status_only_without_mutation() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let nexus = state.nexus_snapshot();
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let state_before = state.lane_manifests.read().clone();
+        let state_privacy_before = state.lane_privacy_registry.read().clone();
+        let queue_before = queue.lane_manifests.read().clone();
+        let queue_privacy_before = queue.lane_privacy_registry.read().clone();
+        let status_only = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::new()));
+        let error = queue
+            .install_materialized_lane_manifests_with_state(
+                &status_only,
+                &state,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .expect_err("status-only authority must not reach State or Queue");
+        assert!(error.to_string().contains("materialized frozen source"));
+        assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
+        assert!(Arc::ptr_eq(
+            &*state.lane_privacy_registry.read(),
+            &state_privacy_before
+        ));
+        assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &queue_before));
+        assert!(Arc::ptr_eq(
+            &*queue.lane_privacy_registry.read(),
+            &queue_privacy_before
+        ));
+
+        let source_backed = Arc::new(LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        ));
+        queue
+            .install_materialized_lane_manifests_with_state(
+                &source_backed,
+                &state,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .expect("complete source authority installs into both owners");
+        assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &source_backed));
+        assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &source_backed));
     }
     #[test]
     fn nexus_reconfiguration_revalidates_pending_transaction_without_relocking_transition_index() {
@@ -26364,7 +26474,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -26525,7 +26635,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -26606,7 +26716,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -26696,7 +26806,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -26861,7 +26971,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -27071,7 +27181,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let instruction_contract_address =
             iroha_data_model::smart_contract::ContractAddress::derive(
@@ -27150,7 +27260,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let tx = accepted_tx_with(
             validator.clone(),
             &keypair,
@@ -27228,7 +27338,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
+        queue.install_lane_manifests_for_testing(&manifests);
         let tx_missing_metadata = accepted_tx_with(
             validator.clone(),
             &keypair,
@@ -27542,6 +27652,33 @@ pub mod tests {
         assert!(one > 0, "each incoming tx must carry a non-zero floor");
         assert_eq!(Queue::retained_byte_cost_floor_for_transactions(0), 0);
         assert_eq!(Queue::retained_byte_cost_floor_for_transactions(3), one * 3);
+    }
+    #[test]
+    fn provisional_queue_manifests_require_fast_quarantine() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let original = queue.lane_manifests.read().clone();
+        let error = queue
+            .install_provisional_empty_lane_manifests_for_emergency_fast_startup()
+            .expect_err("an ordinary Queue cannot install provisional manifests");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &original));
+
+        queue
+            .enter_emergency_fast_startup()
+            .expect("a fresh Queue can enter Fast quarantine");
+        queue
+            .install_provisional_empty_lane_manifests_for_emergency_fast_startup()
+            .expect("a quarantined Queue admits only an empty provisional registry");
+        assert!(queue.lane_manifests.read().statuses().is_empty());
+        assert!(
+            queue
+                .lane_manifests
+                .read()
+                .validate_materialized_source_projection()
+                .is_err()
+        );
+        assert!(queue.emergency_fast_startup.load(Ordering::Acquire));
     }
     #[test]
     fn emergency_fast_queue_quarantine_leaves_journals_untouched() {
@@ -28259,7 +28396,7 @@ pub mod tests {
             })
             .collect::<Vec<_>>();
         let manifests = lane_authority_for_queue_test(&mut state, &validator_keys);
-        state.install_lane_manifests(&manifests);
+        state.install_lane_manifests_for_testing(&manifests);
         {
             let mut world_block = state.world.block();
             let first_id = crate::state::derive_validator_key_id(validator_keys[0].public_key());

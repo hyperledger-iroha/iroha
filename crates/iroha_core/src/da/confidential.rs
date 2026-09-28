@@ -37,10 +37,10 @@ pub enum ConfidentialComputeError {
 /// # Errors
 /// Returns [`ConfidentialComputeError`] when the lane is marked confidential but
 /// fails policy, storage-profile, or digest validation.
-pub fn validate_confidential_compute_record(
-    lane_config: &ConfigLaneConfig,
+pub fn validate_confidential_compute_record<'a>(
+    lane_config: &'a ConfigLaneConfig,
     record: &DaCommitmentRecord,
-) -> Result<Option<ConfidentialComputePolicy>, ConfidentialComputeError> {
+) -> Result<Option<&'a ConfidentialComputePolicy>, ConfidentialComputeError> {
     let Some(entry) = lane_config.entry(record.lane_id) else {
         return Ok(None);
     };
@@ -61,7 +61,7 @@ pub fn validate_confidential_compute_record(
     if is_zero_manifest(&record.manifest_hash) {
         return Err(ConfidentialComputeError::ZeroManifestDigest);
     }
-    Ok(Some(policy.clone()))
+    Ok(Some(policy))
 }
 fn is_zero_ticket(ticket: &StorageTicketId) -> bool {
     ticket.as_ref().iter().all(|byte| *byte == 0)
@@ -130,6 +130,13 @@ mod tests {
             .expect("validation should succeed")
             .expect("policy must be returned");
         assert_eq!(policy.key_version.get(), 3);
+        assert!(
+            std::ptr::eq(
+                policy,
+                config.confidential_compute_policy(LaneId::SINGLE).unwrap()
+            ),
+            "validation borrows the original policy and its audience graph"
+        );
     }
     #[test]
     fn rejects_zero_ticket_or_payload() {

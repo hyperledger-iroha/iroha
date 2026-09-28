@@ -12,7 +12,7 @@ use iroha_data_model::{
         InstructionBox, decode_instruction_from_pair, framed_instruction_payload,
         instruction_wire_id,
         musubi::{
-            AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
+            AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1, AdvanceMusubiPinOutboxV1,
             AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
             RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
             RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
@@ -332,6 +332,7 @@ struct FixtureInstructions {
     retarget: RetargetMusubiAliasV1,
     takedown: SetMusubiArtifactTakedownV1,
     register_archive: RegisterMusubiArchiveV1,
+    advance_pin_outbox: AdvanceMusubiPinOutboxV1,
     register_provider_attestation: RegisterMusubiProviderBundleAttestationV1,
     add_location: AddMusubiArchiveLocationV1,
     publish: PublishMusubiReleaseV1,
@@ -358,6 +359,17 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     let publisher = account(INSTRUCTION_PUBLISHER_SEED);
     let (receipt_binding, register_archive) =
         fixture_archive_registration(&commitment, &publication, &publisher);
+    let advance_pin_outbox = AdvanceMusubiPinOutboxV1 {
+        network_id: fixture_network_id(),
+        pin_authority: publisher.clone(),
+        session_id: [0xb7; 32],
+        expected_revision: 0,
+        expected_inventory_digest: [0; 32],
+        inventory_digest: [0xb8; 32],
+    };
+    advance_pin_outbox
+        .validate()
+        .expect("canonical signed pin-outbox inventory fixture");
     let replication_order = fixture_replication_order();
     let provider_attestations = fixture_provider_attestations(
         &commitment,
@@ -427,6 +439,7 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         retarget,
         takedown,
         register_archive,
+        advance_pin_outbox,
         register_provider_attestation,
         add_location,
         publish,
@@ -1398,6 +1411,7 @@ impl FixtureInstructions {
             retarget,
             takedown,
             register_archive,
+            advance_pin_outbox,
             register_provider_attestation,
             add_location,
             publish,
@@ -1440,6 +1454,7 @@ impl FixtureInstructions {
                 "register-archive-max-bounds-signed-receipt",
                 register_archive,
             ),
+            render_instruction_case("advance-signed-pin-outbox-inventory", advance_pin_outbox),
             render_instruction_case(
                 "register-provider-bundle-attestation",
                 register_provider_attestation,

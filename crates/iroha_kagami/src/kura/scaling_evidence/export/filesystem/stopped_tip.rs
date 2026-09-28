@@ -1,4 +1,4 @@
-//! Retained stopped-store height observation, with no later execution or finality authority.
+//! Retained stopped-store height observation, with no later execution or carrier authority.
 
 use super::*;
 use iroha_core::kura::{
@@ -167,7 +167,7 @@ fn admit(
 ///
 /// The raw-pinned genesis must come from the launcher's authenticated generation. The returned
 /// count is the whole published marker, not the number of requested carriers. It is never a
-/// substitute for verifying every later carrier, merge effect and finality certificate.
+/// substitute for verifying every later carrier, merge effect and carrier certificate.
 pub(crate) fn observe_stopped_tip(
     genesis: ProofInputBinding,
     expected_network_id: NetworkId,
@@ -236,10 +236,15 @@ fn observe_with_hook(
         boundary(Boundary::AfterCoreOpen)?;
         boundary(Boundary::BeforeCarrier)?;
         let carrier = reader.read_carrier(1)?;
+        let stored = iroha_data_model::block::decode_versioned_signed_block(&carrier)?;
         ensure!(
-            carrier == bytes,
-            "stopped store differs from original signed genesis"
+            stored.encode_wire()? == carrier
+                && stored.canonical_resultless_proposal().encode_wire()? == bytes,
+            "stopped stored genesis proposal differs from original signed genesis"
         );
+        // Kura retains execution outputs and a result-only certificate. The original
+        // signed file binds their exact proposal; only a real H2 authenticates its R.
+        drop(stored);
         drop(carrier);
         boundary(Boundary::AfterCarrier)?;
         boundary(Boundary::BeforeMergeScan)?;

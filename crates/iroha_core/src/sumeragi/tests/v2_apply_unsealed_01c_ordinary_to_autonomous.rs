@@ -314,6 +314,9 @@ v2_apply_test!(
         // the later cold-restart assertion even if its current bytes matched.
         let mut probe = crate::state::deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             lane_manifests: fixture.state.lane_manifests.read().clone(),
             kura: Arc::clone(&fixture.kura),
             query_handle: LiveQueryStore::start_test(),
@@ -556,6 +559,9 @@ v2_apply_test!(
         let snapshot = norito::json::to_json(fixture.state.as_ref()).unwrap();
         let restored = crate::state::deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             lane_manifests: fixture.state.lane_manifests.read().clone(),
             kura: Arc::clone(&fixture.kura),
             query_handle: LiveQueryStore::start_test(),

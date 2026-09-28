@@ -2,7 +2,10 @@
 //! These tests do not execute callbacks or authenticate a full State root.
 
 use super::*;
-use crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY;
+use crate::smartcontracts::isi::triggers::{
+    TRIGGER_ENABLED_METADATA_KEY, global_data_trigger_scope_metadata_for_testing,
+};
+use crate::state::authority_registry::leaf::{CanonicalTableLeafSet, LeafError, LeafLimits};
 use crate::state::world_projection::{WorldDeltaBuilder, WorldNetDelta, hash_value};
 use iroha_data_model::events::{execute_trigger::ExecuteTriggerEventFilter, time::Schedule};
 use iroha_primitives::json::Json;
@@ -195,42 +198,344 @@ fn borrowed_action_matches_owned_dto_for_all_executable_variants_and_flags() {
 }
 
 #[test]
-fn borrowed_contract_binds_blob_code_hash_and_reference_count() {
+fn semantic_trigger_reader_rejects_changed_action_and_omitted_row() {
+    let set = Set::default();
+    let id: TriggerId = "captured".parse().expect("trigger id");
+    let limits = LeafLimits {
+        max_tables: 1,
+        max_rows: 8,
+        max_payload_bytes: 4 * 1024,
+        max_ordered_table_bytes: 32 * 1024,
+        max_streamed_value_bytes: 8 * 1024 * 1024,
+    };
+    {
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        register_call(
+            &mut tx,
+            "captured",
+            Executable::Instructions(vec![log_instruction()].into()),
+        );
+        tx.apply();
+        block.commit();
+    }
+    let before = set
+        .capture_by_call_authority_table(limits, &capture_budget())
+        .expect("bounded trigger table");
+    assert_eq!(before.row_count(), 1);
+    {
+        let rows = set.by_call_triggers.view();
+        assert!(matches!(
+            CanonicalTableLeafSet::paired_semantic_table_from_rows(
+                "triggers.by_call",
+                "iroha:state:wrong-trigger-action:v1",
+                limits,
+                &capture_budget(),
+                rows.iter(),
+                BorrowedWorldAction::new,
+            ),
+            Err(LeafError::TypeMismatch("triggers.by_call"))
+        ));
+    }
+    let original_proof = before
+        .prove_lookup("triggers.by_call", &id)
+        .expect("trigger inclusion proof");
+    assert!(
+        CanonicalTableLeafSet::verify_paired_lookup(
+            "triggers.by_call",
+            limits,
+            &before.root(),
+            &before.ordered_root(),
+            &id,
+            &original_proof,
+        )
+        .expect("valid scoped inclusion")
+        .is_some()
+    );
+
+    {
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        tx.mod_repeats(&id, |count| Ok(count - 1))
+            .expect("change action repeats");
+        tx.apply();
+        block.commit();
+    }
+    let changed = set
+        .capture_by_call_authority_table(limits, &capture_budget())
+        .expect("bounded changed trigger table");
+    assert_ne!(before.root(), changed.root());
+    let changed_proof = changed
+        .prove_lookup("triggers.by_call", &id)
+        .expect("changed trigger proof");
+    assert!(matches!(
+        CanonicalTableLeafSet::verify_paired_lookup(
+            "triggers.by_call",
+            limits,
+            &before.root(),
+            &changed.ordered_root(),
+            &id,
+            &changed_proof,
+        ),
+        Err(LeafError::RootMismatch)
+    ));
+
+    {
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        assert!(tx.remove(&id));
+        tx.apply();
+        block.commit();
+    }
+    let omitted = set
+        .capture_by_call_authority_table(limits, &capture_budget())
+        .expect("bounded omitted trigger table");
+    assert_eq!(omitted.row_count(), 0);
+    let omitted_proof = omitted
+        .prove_lookup("triggers.by_call", &id)
+        .expect("omitted trigger absence proof");
+    assert!(matches!(
+        CanonicalTableLeafSet::verify_paired_lookup(
+            "triggers.by_call",
+            limits,
+            &before.root(),
+            &omitted.ordered_root(),
+            &id,
+            &omitted_proof,
+        ),
+        Err(LeafError::RootMismatch)
+    ));
+}
+
+#[test]
+fn borrowed_contract_commits_only_bytecode_and_rejects_stale_derived_hash() {
     let blob = halt_blob();
     let entry = IvmBytecodeEntry {
         code_hash: ivm::contract_code_hash(blob.as_ref()),
         original_contract: blob,
         count: NonZeroU64::MIN,
     };
+    #[derive(Encode)]
+    struct OriginalContractOnly {
+        original_contract: IvmBytecode,
+    }
     assert_eq!(
         BorrowedWorldContract::from(&entry).encode(),
-        IvmBytecodeEntryDto::from(&entry).encode()
-    );
-    assert_eq!(
-        hash_world_contract(&entry).unwrap(),
-        hash_value(&IvmBytecodeEntryDto::from(&entry)).unwrap()
+        OriginalContractOnly {
+            original_contract: entry.original_contract.clone(),
+        }
+        .encode()
     );
     let original = hash_world_contract(&entry).unwrap();
-    for changed in [
-        IvmBytecodeEntry {
-            count: NonZeroU64::new(2).unwrap(),
-            ..entry.clone()
-        },
-        IvmBytecodeEntry {
-            code_hash: Hash::new(b"substituted-code"),
-            ..entry.clone()
-        },
-        IvmBytecodeEntry {
-            original_contract: IvmBytecode::from_compiled(vec![1, 2, 3]),
-            ..entry.clone()
-        },
+    for flags in [
+        0,
+        norito::core::default_encode_flags(),
+        norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
     ] {
-        assert_ne!(
-            hash_world_contract(&changed).unwrap(),
-            original,
-            "even an invalid stored identity must not disappear from the diagnostic projection"
-        );
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(hash_world_contract(&entry).unwrap(), original);
     }
+    let different_count = IvmBytecodeEntry {
+        count: NonZeroU64::new(2).unwrap(),
+        ..entry.clone()
+    };
+    assert_eq!(hash_world_contract(&different_count).unwrap(), original);
+    let wrong_code_hash = IvmBytecodeEntry {
+        code_hash: Hash::new(b"substituted-code"),
+        ..entry.clone()
+    };
+    assert!(hash_world_contract(&wrong_code_hash).is_err());
+    let different_blob = IvmBytecode::from_compiled(vec![1, 2, 3]);
+    let different_bytecode = IvmBytecodeEntry {
+        code_hash: ivm::contract_code_hash(different_blob.as_ref()),
+        original_contract: different_blob,
+        ..entry
+    };
+    assert_ne!(hash_world_contract(&different_bytecode).unwrap(), original);
+}
+
+#[test]
+fn trigger_contract_projection_checks_key_hash_and_derived_four_store_count() {
+    let set = Set::default();
+    let mut block = set.block();
+    {
+        let mut tx = block.transaction();
+        let blob = halt_blob();
+        let mut data_action = SpecializedAction::new(
+            Executable::Ivm(blob.clone()),
+            Repeats::Exactly(3),
+            ALICE_ID.clone(),
+            DataEventFilter::Any,
+        )
+        .expect("data action");
+        data_action.metadata = global_data_trigger_scope_metadata_for_testing(&ALICE_ID);
+        tx.add_data_trigger(SpecializedTrigger::new(
+            "bound_data".parse().unwrap(),
+            data_action,
+        ))
+        .expect("data trigger");
+        let pipeline_filter = iroha_data_model::events::pipeline::BlockEventFilter {
+            height: Some(NonZeroU64::new(5).unwrap()),
+            status: Some(iroha_data_model::prelude::BlockStatus::Committed),
+        }
+        .into();
+        tx.add_pipeline_trigger(SpecializedTrigger::new(
+            "bound_pipeline".parse().unwrap(),
+            SpecializedAction::new(
+                Executable::Ivm(blob.clone()),
+                Repeats::Exactly(3),
+                ALICE_ID.clone(),
+                pipeline_filter,
+            )
+            .expect("pipeline action"),
+        ))
+        .expect("pipeline trigger");
+        tx.add_time_trigger(SpecializedTrigger::new(
+            "bound_time".parse().unwrap(),
+            SpecializedAction::new(
+                Executable::Ivm(blob.clone()),
+                Repeats::Exactly(3),
+                ALICE_ID.clone(),
+                TimeEventFilter(ExecutionTime::Schedule(Schedule::starting_at(
+                    Duration::from_millis(5),
+                ))),
+            )
+            .expect("time action"),
+        ))
+        .expect("time trigger");
+        register_call(&mut tx, "bound_call", Executable::Ivm(blob));
+        tx.apply();
+    }
+    let (key, original) = block
+        .contracts
+        .iter()
+        .next()
+        .map(|(key, entry)| (*key, entry.clone()))
+        .expect("registered action has a contract");
+    assert!(block.validate_world_contract_rows().is_ok());
+    assert_eq!(original.count.get(), 4);
+    let valid_delta = project(&block);
+    block.contracts.get_mut(&key).unwrap().count = NonZeroU64::new(5).unwrap();
+    assert!(block.validate_world_contract_rows().is_err());
+    assert!(
+        block
+            .append_world_projection(&mut WorldDeltaBuilder::new())
+            .is_err()
+    );
+    block.contracts.insert(key, original.clone());
+    block.contracts.get_mut(&key).unwrap().code_hash = Hash::new(b"wrong code hash");
+    assert!(block.validate_world_contract_rows().is_err());
+    block.contracts.insert(key, original.clone());
+    block.contracts.remove(key);
+    assert!(
+        block.validate_world_contract_rows().is_err(),
+        "a referenced blob must exist"
+    );
+    let wrong_key = HashOf::new(&IvmBytecode::from_compiled(vec![9]));
+    block.contracts.insert(wrong_key, original.clone());
+    assert!(
+        block.validate_world_contract_rows().is_err(),
+        "the lookup key must bind bytecode"
+    );
+    block.contracts.remove(wrong_key);
+    block.contracts.insert(key, original);
+    assert_eq!(project(&block), valid_delta);
+    block.commit();
+    let captured = set
+        .capture_contracts_authority_table(
+            LeafLimits {
+                max_tables: 1,
+                max_rows: 8,
+                max_payload_bytes: 4 * 1024,
+                max_ordered_table_bytes: 32 * 1024,
+                max_streamed_value_bytes: 8 * 1024 * 1024,
+            },
+            &capture_budget(),
+        )
+        .expect("validated original contract bytecode has semantic table nodes");
+    assert_eq!(captured.row_count(), 1);
+}
+
+#[test]
+fn proved_ivm_trigger_registration_rejects_every_filter_without_mutation() {
+    fn proved_executable() -> Executable {
+        Executable::IvmProved(iroha_data_model::transaction::executable::IvmProved {
+            bytecode: halt_blob(),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"trigger-events"),
+            gas_policy_commitment: Hash::new(b"trigger-gas"),
+        })
+    }
+    let set = Set::default();
+    let mut block = set.block();
+    let empty = project(&block);
+    {
+        let mut tx = block.transaction();
+        let mut data = SpecializedAction::new(
+            proved_executable(),
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            DataEventFilter::Any,
+        )
+        .expect("data action");
+        data.metadata = global_data_trigger_scope_metadata_for_testing(&ALICE_ID);
+        assert!(matches!(
+            tx.add_data_trigger(SpecializedTrigger::new(
+                "proved_data".parse().unwrap(),
+                data,
+            )),
+            Err(Error::ProofBackedTriggerUnavailable)
+        ));
+        let pipeline_filter = iroha_data_model::events::pipeline::BlockEventFilter {
+            height: Some(NonZeroU64::new(5).unwrap()),
+            status: Some(iroha_data_model::prelude::BlockStatus::Committed),
+        }
+        .into();
+        assert!(matches!(
+            tx.add_pipeline_trigger(SpecializedTrigger::new(
+                "proved_pipeline".parse().unwrap(),
+                SpecializedAction::new(
+                    proved_executable(),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    pipeline_filter,
+                )
+                .expect("pipeline action"),
+            )),
+            Err(Error::ProofBackedTriggerUnavailable)
+        ));
+        assert!(matches!(
+            tx.add_time_trigger(SpecializedTrigger::new(
+                "proved_time".parse().unwrap(),
+                SpecializedAction::new(
+                    proved_executable(),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter(ExecutionTime::Schedule(Schedule::starting_at(
+                        Duration::from_millis(5),
+                    ))),
+                )
+                .expect("time action"),
+            )),
+            Err(Error::ProofBackedTriggerUnavailable)
+        ));
+        assert!(matches!(
+            tx.add_by_call_trigger(SpecializedTrigger::new(
+                "proved_call".parse().unwrap(),
+                SpecializedAction::new(
+                    proved_executable(),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new(),
+                )
+                .expect("by-call action"),
+            )),
+            Err(Error::ProofBackedTriggerUnavailable)
+        ));
+        tx.apply();
+    }
+    assert_eq!(project(&block), empty);
+    assert!(block.contracts.iter().next().is_none());
 }
 
 #[test]
@@ -473,4 +778,8 @@ fn net_delta_hook_mentions_every_trigger_block_store() {
             "missing trigger store {field}"
         );
     }
+}
+
+fn capture_budget() -> mv::allocation::AllocationBudget {
+    mv::allocation::AllocationBudget::new(64 * 1024 * 1024)
 }

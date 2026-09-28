@@ -1025,8 +1025,8 @@ impl ConfidentialFeatureDigest {
 pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
 /// Default genesis confidential-policy hash for bundled ZK defaults and the SCCP policy input.
 pub const DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH: [u8; 32] = [
-    0x81, 0x47, 0x1c, 0x29, 0xb8, 0x51, 0x91, 0x9e, 0x63, 0x33, 0x63, 0x0a, 0x0a, 0x3f, 0xa5, 0x54,
-    0x24, 0x97, 0xe0, 0x63, 0x05, 0xe8, 0xe5, 0x7f, 0xa3, 0xa0, 0x28, 0x1c, 0xc4, 0xc1, 0x14, 0x18,
+    0xc7, 0x36, 0xb6, 0x94, 0xd3, 0x98, 0x31, 0x82, 0x92, 0x6e, 0xe2, 0xbd, 0x49, 0x44, 0xbc, 0x87,
+    0xb4, 0x7c, 0xab, 0xbe, 0xea, 0x4f, 0x1e, 0xea, 0x87, 0x4b, 0xab, 0xcb, 0x37, 0xaf, 0xaf, 0x54,
 ];
 /// Default digest advertising the v1 ruleset and canonical genesis confidential policy.
 pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
@@ -1054,6 +1054,8 @@ pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     DeriveFast,
 )]
 #[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::ConfidentialParamsId")]
 pub struct ConfidentialParamsId {
     value: u32,
 }
@@ -1184,6 +1186,31 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_registry_schema_identity_roundtrips() {
+        let value = ConfidentialParamsId::new(17);
+        assert_eq!(
+            <ConfidentialParamsId as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::confidential::ConfidentialParamsId"
+        );
+        let encoded = norito::encode_canonical(&value).expect("canonical owner frame");
+        assert_eq!(
+            encoded[6..22],
+            norito::schema::identity::frame_hash::<ConfidentialParamsId>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<ConfidentialParamsId>(&encoded)
+                .expect("canonical owner roundtrip"),
+            value
+        );
+        let mut wrong_owner = encoded;
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ConfidentialParamsId>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     mod memo_slots;
     use super::*;
     use norito::codec::{decode_adaptive, encode_adaptive};

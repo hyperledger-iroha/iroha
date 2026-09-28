@@ -65,6 +65,7 @@ fn axt(fixture: &QuantityFixture, frame: Vec<u8>) -> FastpqAxtCompactArtifactV1 
         statement: fixture.model(),
         binding: context.binding.clone(),
         metadata: FastpqAxtPublicMetadataV1 {
+            source_transfer_occurrences: metadata.source_transfer_occurrences.to_vec(),
             parameter: metadata.parameter.to_owned(),
             entry_hash: metadata.entry_hash.try_into().unwrap(),
             committed_amount: metadata.committed_amount.map(|b| b.try_into().unwrap()),

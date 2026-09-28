@@ -1,9 +1,7 @@
 //! Relation-confusion and fail-closed coverage for the public verifier API.
 
 use super::*;
-use crate::zk::{
-    IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, ZK_BACKEND_STARK_FRI_V1,
-};
+use crate::zk::{ZK_BACKEND_HALO2_IPA, ZK_BACKEND_STARK_FRI_V1};
 
 fn policy() -> ZkVerifyGuardrails {
     ZkVerifyGuardrails {
@@ -35,30 +33,25 @@ fn admission_rejects_policy_and_size_before_decoding() {
     let mut limits = policy();
     limits.halo2_enabled = false;
     assert_eq!(
-        verify_for_relation(ProofRelation::IvmReplayBinding, &proof, &key, limits),
+        verify_for_relation(ProofRelation::KaigiUsage, &proof, &key, limits),
         Err(ProofVerificationError::BackendDisabled)
     );
     limits.halo2_enabled = true;
     limits.halo2_max_envelope_bytes = 1;
     assert_eq!(
-        verify_for_relation(ProofRelation::IvmReplayBinding, &proof, &key, limits),
+        verify_for_relation(ProofRelation::KaigiUsage, &proof, &key, limits),
         Err(ProofVerificationError::EnvelopeTooLarge {
             actual: 2,
             maximum: 1
         })
     );
     assert_eq!(
-        verify_for_relation(ProofRelation::IvmReplayBinding, &proof, &key, policy()),
+        verify_for_relation(ProofRelation::KaigiUsage, &proof, &key, policy()),
         Err(ProofVerificationError::MalformedEnvelope)
     );
     let unsupported = ProofBox::new("not-a-proof-backend".to_owned(), proof.bytes);
     assert_eq!(
-        verify_for_relation(
-            ProofRelation::IvmReplayBinding,
-            &unsupported,
-            &key,
-            policy()
-        ),
+        verify_for_relation(ProofRelation::KaigiUsage, &unsupported, &key, policy()),
         Err(ProofVerificationError::UnsupportedBackend)
     );
 }
@@ -67,7 +60,6 @@ fn admission_rejects_policy_and_size_before_decoding() {
 fn every_admitted_halo2_circuit_has_one_explicit_relation() {
     use ProofRelation::*;
     let relations = [
-        IvmReplayBinding,
         KaigiAuthorization,
         KaigiUsage,
         ConfidentialTransfer,
@@ -141,18 +133,10 @@ fn backend_confusion_and_unknown_circuits_reject_before_crypto() {
     let key = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
     let wrong_backend = ProofBox::new(
         ZK_BACKEND_HALO2_IPA.to_owned(),
-        envelope(
-            BackendTag::Stark,
-            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        ),
+        envelope(BackendTag::Stark, "halo2/pasta/ipa/kaigi-usage-v1"),
     );
     assert_eq!(
-        verify_for_relation(
-            ProofRelation::IvmReplayBinding,
-            &wrong_backend,
-            &key,
-            policy()
-        ),
+        verify_for_relation(ProofRelation::KaigiUsage, &wrong_backend, &key, policy()),
         Err(ProofVerificationError::MalformedEnvelope)
     );
     let unknown = ProofBox::new(
@@ -160,20 +144,17 @@ fn backend_confusion_and_unknown_circuits_reject_before_crypto() {
         envelope(BackendTag::Halo2IpaPasta, "halo2/pasta/ipa/unreviewed"),
     );
     assert_eq!(
-        verify_for_relation(ProofRelation::IvmReplayBinding, &unknown, &key, policy()),
+        verify_for_relation(ProofRelation::KaigiUsage, &unknown, &key, policy()),
         Err(ProofVerificationError::UnsupportedRelation)
     );
     let oversized = ProofBox::new(
         ZK_BACKEND_HALO2_IPA.to_owned(),
-        envelope(
-            BackendTag::Halo2IpaPasta,
-            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        ),
+        envelope(BackendTag::Halo2IpaPasta, "halo2/pasta/ipa/kaigi-usage-v1"),
     );
     let mut limits = policy();
     limits.halo2_max_proof_bytes = 0;
     assert_eq!(
-        verify_for_relation(ProofRelation::IvmReplayBinding, &oversized, &key, limits),
+        verify_for_relation(ProofRelation::KaigiUsage, &oversized, &key, limits),
         Err(ProofVerificationError::ProofTooLarge {
             actual: 1,
             maximum: 0
@@ -181,83 +162,96 @@ fn backend_confusion_and_unknown_circuits_reject_before_crypto() {
     );
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
-fn native_proof_verifies_only_as_replay_binding_and_rejects_tampering() {
-    use crate::zk::{
-        halo2_ipa_ivm_replay_binding_vk_box, prove_halo2_ipa_ivm_replay_binding_envelope,
-    };
-    use iroha_crypto::Hash;
-
-    let key = halo2_ipa_ivm_replay_binding_vk_box().expect("canonical key");
-    let proof = prove_halo2_ipa_ivm_replay_binding_envelope(
-        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        &key,
-        Hash::new(b"code"),
-        Hash::new(b"overlay"),
-        Hash::new(b"events"),
-        Hash::new(b"gas"),
-        None,
-    )
-    .expect("binding proof");
-    let verified = verify_for_relation(ProofRelation::IvmReplayBinding, &proof, &key, policy())
-        .expect("native proof verifies");
-    assert_eq!(verified.relation(), ProofRelation::IvmReplayBinding);
-    let _ = verified.elapsed();
-    let record = crate::zk::halo2_ipa_ivm_replay_binding_vk_record("core", 1)
-        .expect("canonical registry record");
-    assert_eq!(
-        record.circuit_id,
-        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID
-    );
-    crate::zk::validate_and_prepare_verifying_key_record_v1(
-        &iroha_data_model::proof::VerifyingKeyId::new(key.backend.clone(), "replay-binding"),
-        &record,
-    )
-    .expect("builder emits an admissible complete registry record");
-    for circuit_id in [
+fn retired_ivm_binding_names_cannot_select_any_generic_relation() {
+    for name in [
+        "ivm-execution-v1",
         "ivm-replay-binding-v1",
-        "halo2/pasta/ivm-replay-binding-v1",
-        "halo2/ipa:ivm-replay-binding-v1",
-        "halo2/pasta/ipa/ivm-execution-v1",
+        "ivm-overlay-bind",
     ] {
-        let mut relabelled: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).unwrap();
-        relabelled.circuit_id = circuit_id.to_owned();
-        let relabelled = ProofBox::new(
-            proof.backend.clone(),
-            norito::encode_canonical(&relabelled).unwrap(),
-        );
-        assert_eq!(
-            verify_for_relation(ProofRelation::IvmReplayBinding, &relabelled, &key, policy()),
-            Err(ProofVerificationError::UnsupportedRelation),
-            "accepted {circuit_id}"
-        );
+        for (backend, tag, circuit) in [
+            (
+                ZK_BACKEND_HALO2_IPA,
+                BackendTag::Halo2IpaPasta,
+                format!("halo2/pasta/ipa/{name}"),
+            ),
+            (
+                ZK_BACKEND_STARK_FRI_V1,
+                BackendTag::Stark,
+                format!("{ZK_BACKEND_STARK_FRI_V1}:{name}"),
+            ),
+        ] {
+            let proof = ProofBox::new(backend.to_owned(), envelope(tag, &circuit));
+            let key = VerifyingKeyBox::new(backend.to_owned(), Vec::new());
+            assert_eq!(compiled_relation(backend, &circuit), None);
+            assert_eq!(
+                verify_for_relation(ProofRelation::PublicInputBinding, &proof, &key, policy()),
+                Err(ProofVerificationError::UnsupportedRelation),
+                "retired IVM binding was admitted: {circuit}",
+            );
+        }
     }
-    let wrong_key = VerifyingKeyBox::new(key.backend.clone(), vec![1, 2, 3]);
+}
+
+#[cfg(feature = "zk-stark")]
+#[test]
+fn native_public_binding_verifies_only_its_relation_and_rejects_tampering() {
+    use crate::zk_stark::{
+        STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        STARK_FRI_CONSENSUS_MIN_QUERIES, StarkFriVerifyingKeyV1,
+    };
+    let backend = ZK_BACKEND_STARK_FRI_V1;
+    let circuit = format!("{backend}:purpose-bound-public-inputs-v1");
+    let key = VerifyingKeyBox::new(
+        backend.to_owned(),
+        norito::encode_canonical(&StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit.clone(),
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+        })
+        .expect("canonical native verifier key"),
+    );
+    let proof = crate::zk::prove_stark_fri_open_verify_envelope(
+        backend,
+        &circuit,
+        &key,
+        b"purpose-bound-public-inputs:v1",
+        vec![vec![[0x11; 32]]],
+    )
+    .expect("native public-input proof");
+    let verified = verify_for_relation(ProofRelation::PublicInputBinding, &proof, &key, policy())
+        .expect("native public-input proof verifies");
+    assert_eq!(verified.relation(), ProofRelation::PublicInputBinding);
+    let _ = verified.elapsed();
+    let wrong_key = VerifyingKeyBox::new(backend.to_owned(), vec![1, 2, 3]);
     assert_eq!(
         verify_for_relation(
-            ProofRelation::IvmReplayBinding,
+            ProofRelation::PublicInputBinding,
             &proof,
             &wrong_key,
             policy()
         ),
-        Err(ProofVerificationError::VerifyingKeyMismatch)
+        Err(ProofVerificationError::VerifyingKeyMismatch),
     );
     assert_eq!(
         verify_for_relation(ProofRelation::ConfidentialTransfer, &proof, &key, policy()),
         Err(ProofVerificationError::RelationMismatch {
             expected: ProofRelation::ConfidentialTransfer,
-            actual: ProofRelation::IvmReplayBinding,
-        })
+            actual: ProofRelation::PublicInputBinding,
+        }),
     );
     let mut decoded: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).expect("envelope");
     *decoded.proof_bytes.last_mut().expect("native proof bytes") ^= 1;
     let tampered = ProofBox::new(
-        proof.backend,
-        norito::encode_canonical(&decoded).expect("encode tampered envelope"),
+        backend.to_owned(),
+        norito::encode_canonical(&decoded).expect("tampered envelope"),
     );
     assert_eq!(
-        verify_for_relation(ProofRelation::IvmReplayBinding, &tampered, &key, policy()),
-        Err(ProofVerificationError::InvalidProof)
+        verify_for_relation(ProofRelation::PublicInputBinding, &tampered, &key, policy()),
+        Err(ProofVerificationError::InvalidProof),
     );
 }

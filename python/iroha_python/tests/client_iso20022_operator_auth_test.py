@@ -23,6 +23,7 @@ def response(status: int, payload: object | None = None) -> requests.Response:
     result = requests.Response()
     result.status_code = status
     result._content = b"" if payload is None else json.dumps(payload).encode("utf-8")
+    result._content_consumed = True
     if payload is not None:
         result.headers["Content-Type"] = "application/json"
     return result

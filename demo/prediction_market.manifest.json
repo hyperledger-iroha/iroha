@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "PredictionMarket",
-  "code_hash": "hash:BC9732616051EA4227AABEA4C4EFBA514B271FBE78B217C1FAA5A52D5D71C977#D955",
-  "abi_hash": "hash:DB4259AA28486967F2D8799B4E66E1B919F4D18690DB2D94CD96EFA05EE840A3#4407",
+  "code_hash": "hash:F7A8281423C164FECA0931079D046605F2DC2228C0352804B028BEE72BE954FD#558A",
+  "abi_hash": "hash:4DE60141043F6E9990D9A36EC5049D1FA2400792A72889604A4B2B6F7C6AA0F9#130B",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -178,6 +178,10 @@
         {
           "name": "QuantityUnderflow",
           "code": 9
+        },
+        {
+          "name": "NegativeSquareRoot",
+          "code": 13
         }
       ]
     }

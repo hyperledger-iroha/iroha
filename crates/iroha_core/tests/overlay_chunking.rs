@@ -4,15 +4,13 @@
 #![allow(clippy::cast_possible_truncation)]
 //! `overlay_chunk_instructions` to a tiny value to force many chunks.
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-use std::{borrow::Cow, sync::Arc};
 #[test]
 fn overlay_apply_respects_chunking_and_preserves_effects() {
     // Build world with one domain/account
@@ -21,32 +19,10 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     let domain: Domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = iroha_core::state::World::with([domain], [account], []);
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-        iroha_data_model::block::BlockHeader,
-    >::from_untyped_unchecked(
-        iroha_crypto::Hash::new(b"overlay-chunking-test-network"),
-    ));
-    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura,
-        query,
-        ChainId::from("chain"),
-        network_id,
-    );
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
-    // Configure tiny chunk size (e.g., 2 instructions per chunk)
-    let mut cfg = state.view().pipeline().clone();
-    cfg.overlay_chunk_instructions = 2;
-    state.set_pipeline(cfg);
-    eprintln!("configured pipeline chunk=2");
+    let mut config = TestChainConfig::new(world, 1000);
+    config.chain_id = ChainId::from("overlay-chunking");
+    config.pipeline.overlay_chunk_instructions = 2;
+    let mut chain = CertifiedTestChain::start(config).unwrap();
     // Build one transaction with many SetKeyValue instructions on the same account
     let n_instr = 50usize;
     let mut instrs: Vec<InstructionBox> = Vec::with_capacity(n_instr);
@@ -61,27 +37,10 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
             .into(),
         );
     }
-    let tx = TransactionBuilder::new(
-        network_id,
-        account_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_executable(Executable::from_iter(instrs))
-    .sign(kp.private_key());
-    // Build and apply a block with this transaction
-    let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let new_block = BlockBuilder::new(vec![accepted])
-        .chain(0, Some(&genesis))
-        .sign(kp.private_key())
-        .unpack(|_| {});
-    let mut sb = state.block(new_block.header());
-    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
-    state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("publish all instruction effects");
+    let tx = chain.sign(&kp, instrs, 2000);
+    assert_eq!(chain.commit(vec![tx]), vec![true]);
     // Verify all metadata keys were set on the account
-    let view = state.view();
+    let view = chain.state().view();
     let acc = view
         .world()
         .account(&account_id)

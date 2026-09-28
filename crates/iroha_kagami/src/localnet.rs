@@ -1497,7 +1497,7 @@ fn generate_localnet_for_layout<T: Write>(
         &onboarding_identity.account_id,
     )?;
     if let Some(layout) = scaling {
-        genesis = layout.append_accounts(genesis, &scaling_accounts)?;
+        genesis = layout.append_accounts(genesis, &scaling_accounts, &peers)?;
     }
     genesis = apply_parameter_overrides(
         genesis,
@@ -3755,10 +3755,7 @@ fn apply_localnet_npos_overrides(
     // The signed election ceiling must match the roster used to size ingress capacity.
     // A future larger committee requires an explicit capacity and parameter update.
     npos.max_validators = u32::from(peers.get());
-    // The current signed consensus schedule is the only epoch authority.
-    npos.epoch_length_blocks = parameters.sumeragi().epoch_length_blocks;
-    // Override seat band and bond to prevent validator drops on small localnets.
-    npos.seat_band_pct = 100;
+    // Use an explicit small self bond for disposable localnet allocations.
     npos.min_self_bond = 1_u64.into();
     npos.epoch_seed = localnet_npos_epoch_seed(chain_id);
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));

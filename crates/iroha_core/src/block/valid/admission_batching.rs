@@ -38,7 +38,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, Ke
         State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
     let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();

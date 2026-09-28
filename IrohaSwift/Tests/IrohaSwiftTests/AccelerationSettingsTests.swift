@@ -9,14 +9,13 @@ final class AccelerationSettingsTests: XCTestCase {
         settings.apply()
     }
 
-    func testNegativeValuesAreIgnored() {
-        let settings = AccelerationSettings(enableMetal: true,
-                                            maxGPUs: -1,
-                                            merkleMinLeavesGPU: -42,
-                                            preferCpuSha2MaxLeavesAarch64: -3)
-        XCTAssertNil(settings.maxGPUs)
-        XCTAssertNil(settings.merkleMinLeavesGPU)
-        XCTAssertNil(settings.preferCpuSha2MaxLeavesAarch64)
+    func testNegativeAndOverflowingCountsAreRejected() {
+        for json in [#"{"max_gpus":-1}"#, #"{"merkle_min_leaves_gpu":18446744073709551616}"#,
+                     #"{"resource_limits":{"host_bytes":-1}}"#,
+                     #"{"resource_limits":{"discovery_ordinals":4294967296}}"#,
+                     #"{"resource_limits":{"device_bytes":null}}"#] {
+            XCTAssertThrowsError(try AccelerationSettings.fromJSON(Data(json.utf8)), json)
+        }
     }
 
     func testDecodesFromJSONPayload() throws {
@@ -75,9 +74,9 @@ final class AccelerationSettingsTests: XCTestCase {
         let settings = try AccelerationSettings.fromIrohaConfig(Data(json.utf8))
         XCTAssertFalse(settings.enableMetal)
         XCTAssertTrue(settings.enableCUDA)
-        XCTAssertNil(settings.maxGPUs) // 0 maps to nil/default
+        XCTAssertEqual(settings.maxGPUs, 0)
         XCTAssertEqual(settings.merkleMinLeavesGPU, 16_384)
-        XCTAssertNil(settings.preferCpuSha2MaxLeavesX86)
+        XCTAssertEqual(settings.preferCpuSha2MaxLeavesX86, 0)
     }
 
     func testLoadsEnableSimdOnlyFromIrohaConfigJSON() throws {
@@ -88,27 +87,11 @@ final class AccelerationSettingsTests: XCTestCase {
         XCTAssertFalse(settings.enableSIMD)
     }
 
-    func testLoadsAccelerationFromNestedJSON() throws {
-        let json = """
-        {
-            "client": {
-                "chain": "00000000-0000-0000-0000-000000000000",
-                "telemetry": {},
-                "advanced": {
-                    "acceleration": {
-                        "enable_metal": true,
-                        "enable_cuda": false,
-                        "merkle_min_leaves_cuda": 4096
-                    }
-                }
-            }
+    func testRetiredAliasAndStandaloneShapeAreRejected() {
+        for config in [#"{"acceleration":{"enable_cuda":false}}"#,
+                       #"{"enable_cuda":false}"#, "[acceleration]\nenable_cuda = false"] {
+            XCTAssertThrowsError(try AccelerationSettings.fromIrohaConfig(Data(config.utf8)), config)
         }
-        """
-        let settings = try AccelerationSettings.fromIrohaConfig(Data(json.utf8))
-        XCTAssertTrue(settings.enableMetal)
-        XCTAssertFalse(settings.enableCUDA)
-        XCTAssertNil(settings.maxGPUs)
-        XCTAssertEqual(settings.merkleMinLeavesCUDA, 4096)
     }
 
     func testLoadsFromIrohaConfigToml() throws {
@@ -127,7 +110,7 @@ final class AccelerationSettingsTests: XCTestCase {
         XCTAssertTrue(settings.enableCUDA)
         XCTAssertEqual(settings.maxGPUs, 2)
         XCTAssertEqual(settings.merkleMinLeavesGPU, 8_192)
-        XCTAssertNil(settings.preferCpuSha2MaxLeavesAarch64)
+        XCTAssertEqual(settings.preferCpuSha2MaxLeavesAarch64, 0)
     }
 
     func testIrohaConfigUsesDefaultsWhenSectionMissing() throws {
@@ -139,7 +122,7 @@ final class AccelerationSettingsTests: XCTestCase {
         """
         let settings = try AccelerationSettings.fromIrohaConfig(Data(config.utf8))
         XCTAssertTrue(settings.enableMetal)
-        XCTAssertFalse(settings.enableCUDA)
+        XCTAssertTrue(settings.enableCUDA)
         XCTAssertNil(settings.maxGPUs)
         XCTAssertNil(settings.merkleMinLeavesMetal)
     }

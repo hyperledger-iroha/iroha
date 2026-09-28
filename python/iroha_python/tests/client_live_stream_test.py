@@ -425,6 +425,7 @@ def test_sumeragi_status_stream_uses_fresh_one_shot_operator_auth() -> None:
         "https://torii.example",
         session=session,
         operator_signing_context=operator_context(),
+        default_headers={"Last-Event-ID": "stale-subscription"},
         max_retries=3,
     )
 
@@ -438,6 +439,7 @@ def test_sumeragi_status_stream_uses_fresh_one_shot_operator_auth() -> None:
         assert call["stream"] is True
         assert call["allow_redirects"] is False
         assert headers["accept"] == "text/event-stream"
+        assert "last-event-id" not in headers
         assert headers["x-iroha-operator-public-key"] == StubOperatorKeyPair.public_key_multihash
         assert headers["x-iroha-operator-signature"]
         nonces.append(headers["x-iroha-operator-nonce"])

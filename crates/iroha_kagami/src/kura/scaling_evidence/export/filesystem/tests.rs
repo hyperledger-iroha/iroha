@@ -126,8 +126,8 @@ impl Disk {
                 .iter()
                 .map(|b| HeightInputBinding {
                     height: b.height,
-                    finality_hash: b.finality_hash,
-                    contexts_hash: b.contexts_hash,
+                    carrier_hash: b.carrier_hash,
+                    lane_evidence_hash: b.lane_evidence_hash,
                     query_hashes: b.query_hashes.clone(),
                 })
                 .collect(),
@@ -166,8 +166,8 @@ impl Disk {
             .iter()
             .map(|height| SuppliedHeightEvidence {
                 height: height.block.header().height().get(),
-                finality: norito::encode_canonical(&height.proof).unwrap(),
-                contexts: height.evidence.clone(),
+                carrier: height.block.encode_wire().unwrap(),
+                lane_evidence: height.evidence.clone(),
                 queries: height.queries(),
             })
             .collect()
@@ -177,8 +177,8 @@ impl Disk {
             .iter()
             .map(|row| HeightInputBinding {
                 height: row.height,
-                finality_hash: Hash::new(&row.finality),
-                contexts_hash: Hash::new(&row.contexts),
+                carrier_hash: Hash::new(&row.carrier),
+                lane_evidence_hash: Hash::new(&row.lane_evidence),
                 query_hashes: row.queries.iter().map(Hash::new).collect(),
             })
             .collect()
@@ -233,8 +233,8 @@ impl Disk {
                 .into_iter()
                 .map(|h| SuppliedEvidenceHeightV1 {
                     height: h.height,
-                    finality: h.finality,
-                    contexts: h.contexts,
+                    carrier: h.carrier,
+                    lane_evidence: h.lane_evidence,
                     queries: h.queries,
                 })
                 .collect(),
@@ -886,7 +886,7 @@ fn supplied_bundle_rehash_cannot_change_complete_height_or_leaf_roles() {
     )
     .unwrap();
     assert_eq!(positive.proof.rows().len(), 8);
-    assert!(disk.bundle().heights[1].queries.len() > 1);
+    assert!(disk.bundle().heights[3].queries.len() > 1);
     for change in 0..6 {
         let mut bundle = disk.bundle();
         match change {
@@ -895,11 +895,11 @@ fn supplied_bundle_rehash_cannot_change_complete_height_or_leaf_roles() {
                 bundle.heights.pop();
             }
             2 => {
-                bundle.heights[1].queries.pop();
+                bundle.heights[3].queries.pop();
             }
-            3 => bundle.heights[1].queries.swap(0, 1),
-            4 => bundle.heights[1].finality[0] ^= 1,
-            _ => bundle.heights[1].contexts[0] ^= 1,
+            3 => bundle.heights[3].queries.swap(0, 1),
+            4 => bundle.heights[1].carrier[0] ^= 1,
+            _ => bundle.heights[1].lane_evidence[0] ^= 1,
         }
         let path = disk.bundle_file().path;
         fs::write(&path, norito::encode_canonical(&bundle).unwrap()).unwrap();
@@ -1180,8 +1180,8 @@ fn supplied_evidence_bundle_declares_v1_identity_for_exact_finality_and_queries(
             .iter()
             .map(|height| SuppliedEvidenceHeightV1 {
                 height: height.block.header().height().get(),
-                finality: norito::encode_canonical(&height.proof).unwrap(),
-                contexts: height.evidence.clone(),
+                carrier: height.block.encode_wire().unwrap(),
+                lane_evidence: height.evidence.clone(),
                 queries: height.queries(),
             })
             .collect(),
@@ -1200,9 +1200,12 @@ fn supplied_evidence_bundle_declares_v1_identity_for_exact_finality_and_queries(
     assert_eq!(decoded.heights.len(), fixture.heights.len());
     assert_eq!(decoded.heights[0].height, 1);
     assert_eq!(decoded.heights[1].height, 2);
-    assert_eq!(decoded.heights[0].finality, bundle.heights[0].finality);
-    assert_eq!(decoded.heights[0].contexts, bundle.heights[0].contexts);
-    assert_eq!(decoded.heights[1].queries, bundle.heights[1].queries);
+    assert_eq!(decoded.heights[0].carrier, bundle.heights[0].carrier);
+    assert_eq!(
+        decoded.heights[0].lane_evidence,
+        bundle.heights[0].lane_evidence
+    );
+    assert_eq!(decoded.heights[3].queries, bundle.heights[3].queries);
 }
 
 // Retained launcher authority controls. These use the exact signed fixtures and

@@ -250,12 +250,16 @@ mod tests {
     use iroha_sumeragi::{
         crypto::{NoAttestation, form_qc, form_tc, verify_qc, verify_tc},
         message::{Qc, TimeoutVote, Vote, VoteKind},
-        types::{Committee, ValidatorIndex},
+        types::{Committee, EpochId, ValidatorIndex},
     };
 
     use super::*;
 
     const I: Hash32 = Hash32([0x42; 32]);
+    const EPOCH: EpochId = EpochId {
+        epoch: 7,
+        context: Hash32([0x51; 32]),
+    };
 
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -295,6 +299,7 @@ mod tests {
         let mut vote = Vote {
             kind,
             instance: I,
+            epoch: EPOCH,
             height: 7,
             view,
             block_hash: Hash32([1; 32]),
@@ -349,7 +354,10 @@ mod tests {
     /// message; malformed keys and signatures are rejected without panicking.
     #[test]
     fn signer_signs_deterministically_and_verifies() {
-        let (signers, crypto, _) = validators(2);
+        let signers = (1..=2)
+            .map(|seed| KeyPairSigner::new(&key_pair(seed)).unwrap())
+            .collect::<Vec<_>>();
+        let crypto = BlsCrypto::new();
         let sig = signers[0].sign(b"preimage");
         assert_eq!(sig, signers[0].sign(b"preimage"), "deterministic");
         assert!(crypto.verify(signers[0].public_key(), b"preimage", &sig));
@@ -371,7 +379,9 @@ mod tests {
     /// message they cover; a failed aggregation never verifies.
     #[test]
     fn aggregates_need_admitted_keys() {
-        let (signers, _, _) = validators(3);
+        let signers = (1..=3)
+            .map(|seed| KeyPairSigner::new(&key_pair(seed)).unwrap())
+            .collect::<Vec<_>>();
         let sigs: Vec<Signature> = signers.iter().map(|s| s.sign(b"m")).collect();
         let fresh = BlsCrypto::new();
         let agg = fresh.aggregate(&sigs);
@@ -431,20 +441,45 @@ mod tests {
     /// `iroha_sumeragi::crypto::verify_qc`, and not after tampering.
     #[test]
     fn core_formed_qc_verifies() {
-        for n in [1u8, 4, 7] {
+        for n in [4u8, 7, 10, 31] {
             let (signers, crypto, committee) = validators(n);
             let q = committee.q();
             let chosen: Vec<&KeyPairSigner> = signers.iter().take(q).collect();
             let qc = qc(VoteKind::Commit, 3, &chosen, &committee);
             assert_eq!(
-                verify_qc(&crypto, &NoAttestation, &I, &committee, &qc),
+                verify_qc(&crypto, &NoAttestation, &I, &EPOCH, &committee, &qc),
                 Ok(())
+            );
+            let other_epoch = EpochId {
+                epoch: EPOCH.epoch + 1,
+                ..EPOCH
+            };
+            assert!(verify_qc(&crypto, &NoAttestation, &I, &other_epoch, &committee, &qc).is_err());
+            let other_context = EpochId {
+                context: Hash32([0x52; 32]),
+                ..EPOCH
+            };
+            assert!(
+                verify_qc(&crypto, &NoAttestation, &I, &other_context, &committee, &qc).is_err()
+            );
+            let mut rebound = qc.clone();
+            rebound.epoch = other_context;
+            assert!(
+                verify_qc(
+                    &crypto,
+                    &NoAttestation,
+                    &I,
+                    &other_context,
+                    &committee,
+                    &rebound
+                )
+                .is_err()
             );
             let mut tampered = qc.clone();
             tampered.result = Hash32([9; 32]);
-            assert!(verify_qc(&crypto, &NoAttestation, &I, &committee, &tampered).is_err());
+            assert!(verify_qc(&crypto, &NoAttestation, &I, &EPOCH, &committee, &tampered).is_err());
             let unadmitted = BlsCrypto::new();
-            assert!(verify_qc(&unadmitted, &NoAttestation, &I, &committee, &qc).is_err());
+            assert!(verify_qc(&unadmitted, &NoAttestation, &I, &EPOCH, &committee, &qc).is_err());
         }
     }
 
@@ -459,6 +494,7 @@ mod tests {
         let timeout = |signer: &KeyPairSigner, high_pqc: Option<Qc>| {
             let mut t = TimeoutVote {
                 instance: I,
+                epoch: EPOCH,
                 height: 7,
                 view: 4,
                 high_pqc,
@@ -476,16 +512,24 @@ mod tests {
         ];
         let refs: Vec<&TimeoutVote> = timeouts.iter().collect();
         let tc = form_tc(&crypto, committee.n(), &refs).unwrap();
-        assert_eq!(verify_tc(&crypto, &I, &committee, &tc), Ok(()));
+        assert_eq!(verify_tc(&crypto, &I, &EPOCH, &committee, &tc), Ok(()));
+        let other_context = EpochId {
+            context: Hash32([0x52; 32]),
+            ..EPOCH
+        };
+        assert!(verify_tc(&crypto, &I, &other_context, &committee, &tc).is_err());
+        let mut rebound = tc.clone();
+        rebound.epoch = other_context;
+        assert!(verify_tc(&crypto, &I, &other_context, &committee, &rebound).is_err());
         let mut tampered = tc.clone();
         tampered.view = 5;
-        assert!(verify_tc(&crypto, &I, &committee, &tampered).is_err());
+        assert!(verify_tc(&crypto, &I, &EPOCH, &committee, &tampered).is_err());
         let mut regrouped = tc.clone();
         for entry in &mut regrouped.entries {
             entry.hq = Some(2);
         }
         assert!(
-            verify_tc(&crypto, &I, &committee, &regrouped).is_err(),
+            verify_tc(&crypto, &I, &EPOCH, &committee, &regrouped).is_err(),
             "the signers' groups are bound"
         );
     }

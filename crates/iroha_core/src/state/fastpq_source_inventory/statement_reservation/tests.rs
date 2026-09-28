@@ -423,7 +423,7 @@ fn foreign_equal_inventory_and_late_owner_replacement_fail_before_materializatio
 }
 
 #[test]
-fn missing_failed_stale_and_replay_state_owners_are_not_reservation_authority() {
+fn missing_failed_and_stale_state_owners_are_not_reservation_authority() {
     let _guard = exec_witness::exec_witness_guard();
     exec_witness::start_block();
     let state = state();
@@ -432,10 +432,6 @@ fn missing_failed_stale_and_replay_state_owners_are_not_reservation_authority() 
     let hash = Hash::new(b"source ownership lifecycle");
     let archive = seal(&mut block, &[hash], &[]);
     let mut owner = block.fastpq_source_statement_budget(limits()).unwrap();
-    block.authenticated_replay_commit = true;
-    assert!(block.fastpq_source_statement_budget(limits()).is_err());
-    assert!(owner.prepare(&block, &archive).is_err());
-    block.authenticated_replay_commit = false;
     let original = block.fastpq_source_inventory.clone();
     block.fastpq_source_inventory = Some(Err("original latched source failure".into()));
     assert!(block.fastpq_source_statement_budget(limits()).is_err());

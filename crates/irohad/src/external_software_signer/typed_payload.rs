@@ -21,6 +21,8 @@ pub enum SoftwareSignerPurposeV1 {
     GovernanceKeyTransition = 15,
     /// Immutable Governance DAG qualification archive.
     GovernanceQualificationArchive = 16,
+    /// Exact canonical completed Musubi bundle verification payload.
+    MusubiProviderAttestation = 17,
     /// Unsigned canonical `PoTR` receipt signed by the gateway key.
     PotrGatewayReceipt = 4,
     /// Unsigned canonical `PoTR` receipt signed by the provider key.
@@ -48,6 +50,7 @@ impl SoftwareSignerPurposeV1 {
     }
     pub(super) const fn role(self) -> SignerRoleV1 {
         match self {
+            Self::MusubiProviderAttestation => SignerRoleV1::MusubiProviderAttestation,
             Self::GovernanceLogNode
             | Self::GovernanceDagBlock
             | Self::GovernanceDagHead
@@ -118,6 +121,9 @@ pub(super) fn validated_typed_signing_message(
     {
         return Err(());
     }
+    if typed.purpose == SoftwareSignerPurposeV1::MusubiProviderAttestation {
+        return super::musubi_subject::validated_signing_message(binding, &typed.message);
+    }
     Ok(typed.message.clone())
 }
 fn validate_message(
@@ -126,6 +132,9 @@ fn validate_message(
     message: &[u8],
 ) -> bool {
     match purpose {
+        SoftwareSignerPurposeV1::MusubiProviderAttestation => {
+            super::musubi_subject::validated_signing_message(binding, message).is_ok()
+        }
         SoftwareSignerPurposeV1::GovernanceLogNode => {
             governance_publisher(binding).is_some_and(|peer| {
                 sorafs_manifest::governance::

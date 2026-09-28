@@ -184,6 +184,135 @@ fn replay_prevalidation_retains_original_evidence_preparation_pool() {
 }
 
 #[test]
+fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isolated() {
+    run_runtime_configuration_test(|| {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut pipeline = state.pipeline.clone();
+        pipeline.ivm_execution_max_bytes = 137;
+        state.set_pipeline(pipeline);
+        let prepared = state.pipeline_ivm_prepared_cache.read().clone();
+        let trigger = state.trigger_ivm_cache.lock().prepared_contract_cache();
+        let query = state
+            .contract_query_ivm_cache
+            .lock()
+            .prepared_contract_cache();
+        assert_eq!(prepared.execution_budget().limit_bytes(), 137);
+        let held = prepared.execution_budget().try_reserve_bytes(137).unwrap();
+        assert!(held.belongs_to(trigger.execution_budget()));
+        assert!(held.belongs_to(query.execution_budget()));
+        assert!(matches!(
+            query.execution_budget().try_reserve_bytes(1),
+            Err(mv::allocation::AllocationRefusal::Capacity { .. })
+        ));
+        drop(held);
+        assert_eq!(trigger.execution_budget().reserved_bytes(), 0);
+        assert_eq!(query.execution_budget().reserved_bytes(), 0);
+    });
+}
+
+#[test]
+fn pipeline_reload_keeps_borrowed_execution_pool_across_shrink_and_growth() {
+    run_runtime_configuration_test(|| {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut pipeline = state.pipeline.clone();
+        pipeline.ivm_execution_max_bytes = 137;
+        state.set_pipeline(pipeline.clone());
+        let borrowed_cache = state.pipeline_ivm_prepared_cache.read().clone();
+        let original_budget = borrowed_cache.execution_budget().clone();
+        let held = original_budget.try_reserve_bytes(120).unwrap();
+        assert!(held.belongs_to(&state.ivm_execution_budget()));
+
+        pipeline.ivm_execution_max_bytes = 80;
+        state.set_pipeline(pipeline.clone());
+        assert!(held.belongs_to(&state.ivm_execution_budget()));
+        let fresh_cache = state.pipeline_ivm_prepared_cache.read().clone();
+        let trigger = state.trigger_ivm_cache.lock().prepared_contract_cache();
+        let query = state
+            .contract_query_ivm_cache
+            .lock()
+            .prepared_contract_cache();
+        for budget in [
+            fresh_cache.execution_budget(),
+            trigger.execution_budget(),
+            query.execution_budget(),
+        ] {
+            assert!(held.belongs_to(budget));
+            assert_eq!(budget.limit_bytes(), 80);
+            assert_eq!(budget.reserved_bytes(), 120);
+            assert!(matches!(
+                budget.try_reserve_bytes(1),
+                Err(mv::allocation::AllocationRefusal::Capacity {
+                    requested_bytes: 1,
+                    reserved_bytes: 120,
+                    limit_bytes: 80,
+                    ..
+                })
+            ));
+        }
+        assert_eq!(original_budget.limit_bytes(), 80);
+        drop(held);
+        let within_shrunken_limit = original_budget.try_reserve_bytes(80).unwrap();
+        assert!(within_shrunken_limit.belongs_to(fresh_cache.execution_budget()));
+
+        pipeline.ivm_execution_max_bytes = 160;
+        state.set_pipeline(pipeline);
+        assert!(within_shrunken_limit.belongs_to(&state.ivm_execution_budget()));
+        let enlarged = state.pipeline_ivm_prepared_cache.read().clone();
+        assert!(within_shrunken_limit.belongs_to(enlarged.execution_budget()));
+        let newly_available = enlarged.execution_budget().try_reserve_bytes(80).unwrap();
+        assert_eq!(enlarged.execution_budget().reserved_bytes(), 160);
+        drop(within_shrunken_limit);
+        drop(newly_available);
+        assert_eq!(borrowed_cache.execution_budget().reserved_bytes(), 0);
+    });
+}
+
+#[test]
+fn settlement_setter_rebuilds_the_exact_state_owned_router_engine() {
+    run_runtime_configuration_test(|| {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let original = state.settlement().clone();
+        assert!(
+            state
+                .settlement_engine
+                .matches_router_config(&original.router)
+        );
+
+        let mut changed = original.clone();
+        changed.router.epsilon_bps += 1;
+        changed.router.buffer_halt_pct += 1;
+        assert!(
+            !state
+                .settlement_engine
+                .matches_router_config(&changed.router)
+        );
+        state.set_settlement(changed);
+        assert!(
+            state
+                .settlement_engine
+                .matches_router_config(&state.settlement().router)
+        );
+        assert!(
+            !state
+                .settlement_engine
+                .matches_router_config(&original.router)
+        );
+    });
+}
+
+#[test]
 fn runtime_nexus_setter_preserves_configured_dataspaces_and_rejects_post_genesis_drift() {
     run_runtime_configuration_test(|| {
         let mut state = State::new_for_testing(
@@ -602,5 +731,62 @@ fn configured_dataspace_projection_preserves_description_only_identity() {
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state),
             before
         );
+    });
+}
+
+#[test]
+fn restore_adopts_original_startup_pool_before_runtime_configuration() {
+    run_runtime_configuration_test(|| {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let snapshot = norito::json::to_value(&state).unwrap();
+        let budget = mv::allocation::AllocationBudget::new(137);
+        let held = budget.try_reserve_bytes(120).unwrap();
+        let mut restored = deserialize::KuraSeed {
+            operation_index_budget: state.world.operation_index_budget().clone(),
+            execution_budget: budget.clone(),
+            lane_manifests: state.lane_manifests.read().clone(),
+            kura: state.kura_handle(),
+            query_handle: state.query_handle.clone(),
+            #[cfg(feature = "telemetry")]
+            telemetry: StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot)
+        .unwrap();
+        let prepared = restored.pipeline_ivm_prepared_cache.read().clone();
+        let trigger = restored.trigger_ivm_cache.lock().prepared_contract_cache();
+        let query = restored
+            .contract_query_ivm_cache
+            .lock()
+            .prepared_contract_cache();
+        for owner in [
+            prepared.execution_budget(),
+            trigger.execution_budget(),
+            query.execution_budget(),
+        ] {
+            assert!(held.belongs_to(owner));
+            assert_eq!(owner.reserved_bytes(), 120);
+            assert_eq!(owner.limit_bytes(), 137);
+        }
+        let mut pipeline = restored.pipeline.clone();
+        pipeline.ivm_execution_max_bytes = 80;
+        restored.set_pipeline(pipeline);
+        assert!(held.belongs_to(&restored.ivm_execution_budget()));
+        assert!(
+            restored
+                .ivm_execution_budget()
+                .try_reserve_bytes(1)
+                .is_err()
+        );
+        drop(held);
+        assert_eq!(budget.reserved_bytes(), 0);
+        let retry = restored
+            .ivm_execution_budget()
+            .try_reserve_bytes(80)
+            .unwrap();
+        assert!(retry.belongs_to(&budget));
     });
 }

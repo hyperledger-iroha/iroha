@@ -250,6 +250,8 @@ fn kura_bench_config(dir: &tempfile::TempDir, blocks_in_memory: NonZeroUsize) ->
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -307,6 +309,8 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -321,6 +325,9 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     let query_handle = LiveQueryStore::start_test();
     let state = Box::new(
         State::try_new(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             World::new(),
             kura,
             query_handle,
@@ -331,9 +338,17 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     );
     let nexus = state.nexus_snapshot();
     let network_id = *state.network_id_ref();
-    state.install_lane_manifests(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
+    state
+        .install_materialized_lane_manifests_for_catalog(
+            &Arc::new(LaneManifestRegistry::from_config(
+                &nexus.lane_catalog,
+                &nexus.governance,
+                &nexus.registry,
+            )),
+            &nexus.lane_catalog,
+            &nexus.governance,
+        )
+        .expect("benchmark lane manifest source must be materialized");
     let (alice_id, alice_keypair) = gen_account_in("test");
     let (bob_id, _bob_keypair) = gen_account_in("test");
     let xor_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -371,7 +386,11 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
             .chain(0, state.view().latest_block().as_deref())
             .sign(peer_key_pair.private_key())
             .unpack(|_| {});
-        let mut state_block = Box::new(state.block(unverified_block.header()));
+        let mut state_block = Box::new(
+            state
+                .try_block(unverified_block.header())
+                .expect("benchmark persisted runtime ABI must validate"),
+        );
         let block = unverified_block
             .validate_and_record_transactions(state_block.as_mut())
             .unpack(|_| {});

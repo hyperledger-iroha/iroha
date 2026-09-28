@@ -6,6 +6,7 @@ use crate::{
 };
 use iroha_crypto::Hash;
 pub use iroha_data_model::nexus::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES;
+use iroha_data_model::transaction::signed::TransactionEntrypoint;
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
@@ -15,17 +16,17 @@ use iroha_data_model::{
     },
     nexus::{
         AxtEffectBinding, AxtFastpqBinding, AxtFinalizedSpendAnchorV1, AxtProofEnvelope,
-        AxtRemoteSpendClaimV1, ProofBlob, compute_remote_spend_claim_commitment_v1,
+        AxtRemoteSpendClaimV1, AxtSourceSuccessReceiptV1, AxtSourceTransferOccurrenceV1, ProofBlob,
+        axt_ordered_transaction_set_digest_v1, compute_remote_spend_claim_commitment_v1,
     },
-};
-#[cfg(test)]
-use iroha_data_model::{
-    nexus::axt_ordered_transaction_set_digest_v1, transaction::signed::TransactionEntrypoint,
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::{NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
+#[path = "axt_binding/source_occurrence.rs"]
+pub(crate) mod source_occurrence;
+pub use source_occurrence::set_axt_source_transfer_occurrences;
 /// Metadata key binding the structured AXT FASTPQ payload into the proof trace.
 pub const AXT_FASTPQ_BINDING_METADATA_KEY: &str = "axt_fastpq_binding";
 /// Metadata key binding an optional AXT amount into the `FastPQ` proof trace.
@@ -60,6 +61,10 @@ pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
 /// one concrete transfer transcript. A hash-only commitment cannot establish
 /// this relation because its descriptor binding is not recoverable.
 pub const AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY: &str = "axt_fastpq_remote_spend_claims_v1";
+/// Canonical proof-trace metadata binding a successful source receipt claim to
+/// each exact ordered remote-spend transfer occurrence.
+pub const AXT_FASTPQ_SOURCE_TRANSFER_OCCURRENCES_METADATA_KEY: &str =
+    "axt_fastpq_source_transfer_occurrences_v1";
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
 pub const DEFAULT_PARAMETER: &str = fastpq_isi::FASTPQ_FINAL_V1_ID;
 /// Maximum encoded AXT `FastPQ` batch/proof payload accepted before decoding.
@@ -85,6 +90,9 @@ pub struct AxtVerifiedProof {
     pub tx_set_hash: [u8; 32],
     /// Optional expiry authenticated by the proof-bound batch metadata.
     pub expiry_slot: Option<u64>,
+    /// Proof-bound claimed success-receipt digest, if exact occurrences were supplied.
+    /// Finalized State must authenticate the receipt before admitting a spend.
+    pub source_success_receipt_digest: Option<[u8; 32]>,
 }
 /// Canonicalize a structured AXT FASTPQ binding before proving or verification.
 ///
@@ -205,7 +213,6 @@ impl Prover {
     ) -> Result<Vec<u8>> {
         compact::prove(batch, binding)
     }
-
 }
 
 /// Require a canonical AXT binding to select the witnessed transfer profile.
@@ -263,7 +270,7 @@ pub fn verify_axt_bound_batch(
 pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding> {
     let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
     let binding = decode_canonical_binding(encoded)?;
-    verify_batch_matches_canonical_binding(batch, &binding)?;
+    let _ = verify_batch_matches_canonical_binding(batch, &binding, None, None)?;
     Ok(binding)
 }
 /// Build an AXT proof envelope from an already AXT-bound batch and proof.
@@ -476,7 +483,7 @@ pub fn bind_axt_batch_with_proof_metadata(
 /// binding/payload or when the carried batch does not bind to the AXT statement. Returns
 /// any `FastPQ` proof verification error for invalid proof material.
 pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerifiedProof> {
-    verify_axt_proof_envelope_inner(envelope, None)
+    verify_axt_proof_envelope_inner(envelope, None, None)
 }
 
 /// Verify a transfer proof against an independently authenticated finalized anchor.
@@ -502,11 +509,81 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
 /// TODO: export this entry point again once an admission path resolves the
 /// authoritative finalized anchor; until then it is compiled only for tests.
 #[cfg(test)]
-pub fn verify_axt_proof_envelope_against_anchor_v1(
+fn verify_axt_proof_envelope_against_anchor_v1(
     envelope: &AxtProofEnvelope,
     expiry_slot: Option<u64>,
     authoritative_anchor: &AxtFinalizedSpendAnchorV1,
     ordered_transactions: &[TransactionEntrypoint],
+) -> Result<AxtVerifiedProof> {
+    verify_axt_proof_envelope_against_anchor_inner_v1(
+        envelope,
+        expiry_slot,
+        authoritative_anchor,
+        ordered_transactions,
+        None,
+    )
+}
+
+/// Verify one exact proof-bound transfer and its caller-supplied source receipt claim.
+///
+/// This verifies both the finalized-anchor claim and the full transfer
+/// occurrence, so matching only the common receipt digest cannot
+/// substitute a different transfer from the same source execution. The receipt
+/// and anchor remain caller-supplied claims: a State/Kura/QC/DA owner must
+/// independently authenticate source success, its post-transaction root, the
+/// effect set, and the finalized anchor before this result can be used for
+/// admission. This function does not verify issuer authority or authorize a
+/// remote spend by itself.
+///
+/// # Errors
+/// Rejects malformed or inconsistent source claims, an occurrence absent from
+/// the proof-bound FASTPQ transcript, and every anchored proof error.
+pub fn verify_axt_proof_envelope_against_anchor_and_claimed_source_v1(
+    envelope: &AxtProofEnvelope,
+    expiry_slot: Option<u64>,
+    authoritative_anchor: &AxtFinalizedSpendAnchorV1,
+    ordered_transactions: &[TransactionEntrypoint],
+    claimed_receipt: &AxtSourceSuccessReceiptV1,
+    claimed_occurrence: &AxtSourceTransferOccurrenceV1,
+) -> Result<AxtVerifiedProof> {
+    claimed_occurrence
+        .validate()
+        .map_err(|error| Error::InvalidAxtBinding {
+            details: format!("invalid claimed AXT source transfer occurrence: {error}"),
+        })?;
+    let receipt_digest = claimed_receipt.digest_v1();
+    if claimed_receipt.finalized_anchor_digest != authoritative_anchor.digest_v1()
+        || claimed_receipt.source_tx_commitment != claimed_occurrence.source_tx_commitment
+        || claimed_receipt.source_tx_index != claimed_occurrence.source_tx_index
+        || claimed_receipt.post_transaction_state_root == [0; 32]
+        || claimed_receipt.effect_set_digest == [0; 32]
+        || claimed_occurrence.source_success_receipt_digest != receipt_digest
+    {
+        return Err(Error::InvalidAxtBinding {
+            details: "claimed AXT source success receipt does not match the anchor and transfer occurrence".into(),
+        });
+    }
+    let verified = verify_axt_proof_envelope_against_anchor_inner_v1(
+        envelope,
+        expiry_slot,
+        authoritative_anchor,
+        ordered_transactions,
+        Some(claimed_occurrence),
+    )?;
+    if verified.source_success_receipt_digest != Some(receipt_digest) {
+        return Err(Error::InvalidAxtBinding {
+            details: "claimed AXT source success receipt differs from proof-bound metadata".into(),
+        });
+    }
+    Ok(verified)
+}
+
+fn verify_axt_proof_envelope_against_anchor_inner_v1(
+    envelope: &AxtProofEnvelope,
+    expiry_slot: Option<u64>,
+    authoritative_anchor: &AxtFinalizedSpendAnchorV1,
+    ordered_transactions: &[TransactionEntrypoint],
+    claimed_occurrence: Option<&AxtSourceTransferOccurrenceV1>,
 ) -> Result<AxtVerifiedProof> {
     enforce_axt_fastpq_payload_limit(&envelope.proof)?;
     if ordered_transactions.len() > iroha_data_model::nexus::MAX_AXT_FINALIZED_TRANSACTIONS_V1 {
@@ -556,25 +633,33 @@ pub fn verify_axt_proof_envelope_against_anchor_v1(
     }
     let source_execution =
         decode_hex_digest(&canonical.source_tx_commitment, "source_tx_commitment")?;
-    let occurrences = ordered_transactions
+    let mut source_positions = ordered_transactions
         .iter()
-        .filter(|transaction| transaction.execution_call_hash().as_ref() == &source_execution)
-        .count();
-    if occurrences != 1 {
+        .enumerate()
+        .filter(|(_, transaction)| transaction.execution_call_hash().as_ref() == &source_execution);
+    let source_position = source_positions.next().map(|(index, _)| index);
+    if source_position.is_none() || source_positions.next().is_some() {
         return Err(Error::InvalidAxtBinding {
             details:
                 "AXT source execution must occur exactly once in the finalized transaction set"
                     .into(),
         });
     }
-    verify_axt_proof_envelope_inner(envelope, Some((authoritative_anchor, expiry_slot)))
+    let source_position = u32::try_from(source_position.expect("one source execution exists"))
+        .expect("bounded finalized transaction set fits u32");
+    verify_axt_proof_envelope_inner(
+        envelope,
+        Some((authoritative_anchor, expiry_slot, source_position)),
+        claimed_occurrence,
+    )
 }
 
 fn verify_axt_proof_envelope_inner(
     envelope: &AxtProofEnvelope,
-    finalized: Option<(&AxtFinalizedSpendAnchorV1, Option<u64>)>,
+    finalized: Option<(&AxtFinalizedSpendAnchorV1, Option<u64>, u32)>,
+    claimed_occurrence: Option<&AxtSourceTransferOccurrenceV1>,
 ) -> Result<AxtVerifiedProof> {
-    compact::verify_envelope(envelope, finalized)
+    compact::verify_envelope(envelope, finalized, claimed_occurrence)
 }
 fn require_finalized_public_inputs_v1(
     inputs: &PublicInputs,
@@ -847,7 +932,9 @@ impl<'a> BindingContext<'a> {
 fn verify_batch_matches_canonical_binding(
     batch: &TransitionBatch,
     canonical_binding: &AxtFastpqBinding,
-) -> Result<()> {
+    source_tx_index: Option<u32>,
+    claimed_occurrence: Option<&AxtSourceTransferOccurrenceV1>,
+) -> Result<Option<[u8; 32]>> {
     let context = BindingContext::from_binding(canonical_binding)?;
     require_execution_header(
         &batch.parameter,
@@ -893,7 +980,12 @@ fn verify_batch_matches_canonical_binding(
     require_metadata_eq(batch, AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, &seal)?;
     require_transfer_claim_witnesses(batch, &context, canonical_binding.claim_type.as_str())?;
     require_remote_spend_transcript_linkage(batch, canonical_binding)?;
-    Ok(())
+    source_occurrence::validate_bound_occurrences(
+        batch,
+        canonical_binding,
+        source_tx_index,
+        claimed_occurrence,
+    )
 }
 
 fn axt_proof_semantics(binding: &AxtFastpqBinding) -> Result<ProofSemantics> {
@@ -1328,6 +1420,8 @@ pub struct AxtPublicMetadataBytes<'a> {
     pub(crate) manifest_root: &'a [u8],
     /// Required 33-byte canonical option encoding.
     pub(crate) da_commitment: &'a [u8],
+    /// Complete ordered source occurrence claims committed before proof challenges.
+    pub(crate) source_transfer_occurrences: &'a [AxtSourceTransferOccurrenceV1],
 }
 
 /// Pre-proof outer metadata mirrors; completed-proof commitments are excluded.
@@ -1379,7 +1473,15 @@ pub fn validate_axt_public_transfer_facts<V>(
         prepared.claims().iter().map(|claim| claim.batch_hash),
     )?;
     if !require_remote_spend_claim_presence(binding, claims.is_some())? {
-        return Ok(());
+        return source_occurrence::validate_public_occurrences(
+            binding,
+            prepared.claims(),
+            &[],
+            metadata.source_transfer_occurrences,
+            None,
+            None,
+        )
+        .map(|_| ());
     }
     let claims = claims.ok_or_else(|| Error::MissingMetadata {
         key: AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.to_owned(),
@@ -1398,7 +1500,16 @@ pub fn validate_axt_public_transfer_facts<V>(
                 amount: &delta.amount,
             })
         }),
+    )?;
+    source_occurrence::validate_public_occurrences(
+        binding,
+        prepared.claims(),
+        claims,
+        metadata.source_transfer_occurrences,
+        None,
+        None,
     )
+    .map(|_| ())
 }
 
 /// Parse the exact legacy public encodings and compare their outer mirrors.
@@ -1652,7 +1763,9 @@ fn decode_canonical_binding(encoded: &[u8]) -> Result<AxtFastpqBinding> {
     require_canonical_binding(&binding)
 }
 #[cfg(test)]
-fn decode_axt_fastpq_payload(encoded: &[u8]) -> Result<iroha_data_model::fastpq::FastpqAxtCompactArtifactV1> {
+fn decode_axt_fastpq_payload(
+    encoded: &[u8],
+) -> Result<iroha_data_model::fastpq::FastpqAxtCompactArtifactV1> {
     compact::decode(encoded)
 }
 fn dsid_bytes(source_dsid: u64) -> [u8; 16] {

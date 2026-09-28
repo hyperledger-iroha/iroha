@@ -3,6 +3,9 @@
 
 use core::fmt;
 
+mod control_witness;
+pub use control_witness::{ControlWitness, ControlWitnessError, MAX_CONTROL_WITNESS_BYTES};
+
 /// Length in bytes of every signature and aggregate signature.
 ///
 /// Production uses BLS12-381 in the min-pk setting (`BlsNormal`), whose signatures and aggregates
@@ -394,13 +397,127 @@ impl Default for ChainParams {
     }
 }
 
+/// Scheduling epoch and the digest of its complete authenticated application context.
+/// The application validates the context preimage; consensus binds this identity in every
+/// signature, certificate, durable record and leader permutation.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    norito::Encode,
+    norito::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_sumeragi::EpochId")]
+pub struct EpochId {
+    /// Monotonically increasing scheduling epoch.
+    pub epoch: u64,
+    /// Digest of the complete canonical epoch context, independent of local QC subsets.
+    pub context: Hash32,
+}
+
+/// Authenticated scheduling bounds and leader randomness for one authority generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EpochConfig {
+    /// Exact scheduling authorization and complete context identity.
+    pub id: EpochId,
+    /// Immutable authority-generation identity; retained epochs may share this value.
+    pub authority_generation: Hash32,
+    /// First height authorized by this scheduling epoch, inclusive.
+    pub first_height: u64,
+    /// Final height authorized by this scheduling epoch, inclusive.
+    pub last_height: u64,
+    /// Fresh authenticated boundary randomness used by the actual leader permutation.
+    pub leader_seed: Hash32,
+}
+
+impl EpochConfig {
+    /// Whether this valid, nonempty epoch authorizes `height`.
+    pub fn contains(&self, height: u64) -> bool {
+        self.first_height <= height
+            && height <= self.last_height
+            && self.first_height < self.last_height
+    }
+
+    /// Whether `self` is an exactly contiguous, distinctly authorized successor.
+    pub fn follows(&self, previous: &Self) -> bool {
+        previous.id.epoch.checked_add(1) == Some(self.id.epoch)
+            && previous.last_height.checked_add(1) == Some(self.first_height)
+            && self.contains(self.first_height)
+            && self.id.context != previous.id.context
+    }
+}
+
 /// Height configuration: committee and chain parameters of one height (§10.1).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct HeightConfig {
+    /// Authenticated epoch bounds and context for this height.
+    pub epoch: Box<EpochConfig>,
     /// `C_h`.
     pub committee: Committee,
     /// Chain parameters of `h`.
     pub params: ChainParams,
+}
+
+impl HeightConfig {
+    /// Equal epoch authority with independently lagged chain parameters.
+    pub fn same_authority(&self, other: &Self) -> bool {
+        self.epoch == other.epoch && self.committee == other.committee
+    }
+
+    /// An exact next epoch; retaining a generation must retain its ordered committee.
+    pub fn follows(&self, previous: &Self) -> bool {
+        self.epoch.follows(&previous.epoch)
+            && (self.epoch.authority_generation != previous.epoch.authority_generation
+                || self.committee == previous.committee)
+    }
+}
+
+/// A bounded configuration window entry. A future epoch has no voting authority before its
+/// predecessor boundary is applied; a pending slot never supplies a committee or seed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConfigSlot {
+    /// Installed authority and chain parameters.
+    Ready(HeightConfig),
+    /// The immediate successor of this boundary cannot be entered or used for anchoring yet.
+    PendingBoundary {
+        /// Last height of the current authenticated epoch.
+        boundary_height: u64,
+        /// Current epoch which alone can certify this boundary.
+        predecessor: EpochId,
+    },
+}
+
+impl ConfigSlot {
+    /// Return only installed voting authority; pending boundary slots fail closed.
+    pub fn ready(&self) -> Option<&HeightConfig> {
+        match self {
+            Self::Ready(config) => Some(config),
+            Self::PendingBoundary { .. } => None,
+        }
+    }
+}
+
+/// Atomic configuration output of the original applied certified execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppliedConfig {
+    /// Ordinary application retains epoch authority and installs only lag-2 parameters.
+    Continuation {
+        /// Configuration of the second height after the applied height, or its boundary slot.
+        after_next: ConfigSlot,
+    },
+    /// Only the final height of the current epoch can install its immediate successor.
+    Boundary {
+        /// Authenticated epoch authority and parameters for the immediate next height.
+        next: HeightConfig,
+        /// Parameters of the following height, under the same newly installed epoch.
+        after_next: HeightConfig,
+    },
 }
 
 #[cfg(test)]
@@ -409,6 +526,81 @@ mod tests {
 
     fn key(bytes: &[u8]) -> PublicKey {
         PublicKey::new(bytes.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn authenticated_epoch_bounds_and_retention() {
+        let first = EpochConfig {
+            id: EpochId {
+                epoch: 7,
+                context: Hash32([1; 32]),
+            },
+            authority_generation: Hash32([2; 32]),
+            first_height: 20,
+            last_height: 29,
+            leader_seed: Hash32([3; 32]),
+        };
+        assert!(!first.contains(19));
+        assert!(first.contains(20) && first.contains(29));
+        assert!(!first.contains(30));
+        let next = EpochConfig {
+            id: EpochId {
+                epoch: 8,
+                context: Hash32([4; 32]),
+            },
+            first_height: 30,
+            last_height: 39,
+            ..first
+        };
+        assert!(next.follows(&first));
+        assert!(
+            !EpochConfig {
+                first_height: 31,
+                ..next
+            }
+            .follows(&first)
+        );
+        assert!(
+            !EpochConfig {
+                id: first.id,
+                ..next
+            }
+            .follows(&first)
+        );
+        assert!(
+            !EpochConfig {
+                last_height: 30,
+                ..next
+            }
+            .follows(&first)
+        );
+        let config = HeightConfig {
+            epoch: Box::new(first),
+            committee: Committee::new(vec![key(&[1]), key(&[2]), key(&[3]), key(&[4])]).unwrap(),
+            params: ChainParams::default(),
+        };
+        let mut retained = HeightConfig {
+            epoch: Box::new(next),
+            ..config.clone()
+        };
+        assert!(retained.follows(&config));
+        retained.committee =
+            Committee::new(vec![key(&[5]), key(&[6]), key(&[7]), key(&[8])]).unwrap();
+        assert!(!retained.follows(&config));
+        retained.epoch.authority_generation = Hash32([5; 32]);
+        assert!(retained.follows(&config));
+        assert!(ConfigSlot::Ready(config).ready().is_some());
+        assert!(
+            ConfigSlot::PendingBoundary {
+                boundary_height: 29,
+                predecessor: first.id
+            }
+            .ready()
+            .is_none()
+        );
+        let encoded = norito::encode_canonical(&next.id).unwrap();
+        let decoded: EpochId = norito::decode_canonical(&encoded).unwrap();
+        assert_eq!(decoded, next.id);
     }
 
     #[test]

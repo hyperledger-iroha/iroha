@@ -17,6 +17,8 @@
 //! authenticated caller API. Encoding does not admit a proof or remove replay,
 //! and touched-balance roots do not establish finalized source-state authority.
 
+#[cfg(test)]
+use iroha_data_model::nexus::AxtSourceTransferOccurrenceV1;
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 #[cfg(test)]
 use norito::{NoritoSerialize, codec::Encode};
@@ -50,6 +52,7 @@ struct BoundContext {
     binding: AxtFastpqBinding,
     metadata: AxtProofContextMirrors,
     remote_spend_claims: Option<Vec<AxtRemoteSpendClaimV1>>,
+    source_transfer_occurrences: Vec<AxtSourceTransferOccurrenceV1>,
 }
 
 /// Encode a bounded, canonical public statement without accepting any proof.
@@ -81,6 +84,7 @@ pub(super) fn encode_context<V: CompactTransferValue>(
         public_transfer_context: transfer.statement_bytes().to_vec(),
         binding: binding.clone(),
         metadata: outer,
+        source_transfer_occurrences: metadata.source_transfer_occurrences.to_vec(),
         remote_spend_claims: remote_spend_claims.map(<[AxtRemoteSpendClaimV1]>::to_vec),
     };
     check_limit(norito::core::encoded_frame_len(&context)?, max_bytes)?;
@@ -123,7 +127,18 @@ pub(super) fn preflight_context<V: CompactTransferValue>(
     // Count borrowed values before canonicalization clones binding strings or
     // commitment validation hashes remote preimages. Only public bytes enter
     // these lengths; no metadata map or witness-bearing transcript is accepted.
+    if metadata.source_transfer_occurrences.len() > limits.max_deltas {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_compact_axt_source_occurrences",
+            actual: metadata.source_transfer_occurrences.len(),
+            max: limits.max_deltas,
+        });
+    }
     let mut public_bytes = norito::core::encoded_frame_len(binding)?;
+    for occurrence in metadata.source_transfer_occurrences {
+        public_bytes = checked_sum(public_bytes, norito::core::encoded_frame_len(occurrence)?)?;
+        check_limit(public_bytes, max_bytes)?;
+    }
     check_limit(public_bytes, max_bytes)?;
     for claim in remote_spend_claims.into_iter().flatten() {
         public_bytes = checked_sum(public_bytes, norito::core::encoded_frame_len(claim)?)?;
@@ -200,6 +215,7 @@ pub(super) mod tests {
         da: [u8; 33],
         pub(in crate::backend) outer: AxtProofContextMirrors,
         pub(in crate::backend) remote: Option<Vec<AxtRemoteSpendClaimV1>>,
+        pub(in crate::backend) occurrences: Vec<AxtSourceTransferOccurrenceV1>,
     }
 
     impl Fixture {
@@ -304,6 +320,7 @@ pub(super) mod tests {
                     expiry_slot: Some(456),
                 },
                 remote: None,
+                occurrences: Vec::new(),
             };
             if remote {
                 fixture.remote = Some(vec![AxtRemoteSpendClaimV1::new(
@@ -322,6 +339,10 @@ pub(super) mod tests {
                     delta.amount,
                 )]);
                 fixture.recommit_remote();
+                fixture.occurrences = crate::axt_binding::source_occurrence::test_occurrences(
+                    &fixture.claims,
+                    fixture.remote.as_deref().unwrap(),
+                );
             }
             fixture
         }
@@ -399,6 +420,10 @@ pub(super) mod tests {
             if remote {
                 fixture.remote = Some(remote_claims);
                 fixture.recommit_remote();
+                fixture.occurrences = crate::axt_binding::source_occurrence::test_occurrences(
+                    &fixture.claims,
+                    fixture.remote.as_deref().unwrap(),
+                );
             }
             fixture
         }
@@ -424,6 +449,7 @@ pub(super) mod tests {
                 expiry_slot: &self.expiry,
                 manifest_root: &self.manifest,
                 da_commitment: &self.da,
+                source_transfer_occurrences: &self.occurrences,
             }
         }
 
@@ -491,6 +517,9 @@ pub(super) mod tests {
                 original_count += norito::core::encoded_frame_len(claim).unwrap();
             }
             let metadata = fixture.metadata();
+            for occurrence in metadata.source_transfer_occurrences {
+                original_count += norito::core::encoded_frame_len(occurrence).unwrap();
+            }
             for bytes in [
                 metadata.parameter.as_bytes(),
                 metadata.entry_hash,
@@ -517,11 +546,25 @@ pub(super) mod tests {
                 public_transfer_context: transfer.statement_bytes().to_vec(),
                 binding: fixture.binding.clone(),
                 metadata: fixture.outer,
+                source_transfer_occurrences: fixture.occurrences.clone(),
                 remote_spend_claims: fixture.remote.clone(),
             }
             .encode();
             assert_eq!(fixture.encode().unwrap(), original);
         }
+    }
+
+    #[test]
+    fn source_receipt_and_occurrence_are_bound_before_compact_challenges() {
+        let fixture = Fixture::new(true);
+        let original = fixture.encode().unwrap();
+        let mut changed = fixture.clone();
+        changed.occurrences[0].source_success_receipt_digest[0] ^= 1;
+        assert_ne!(changed.encode().unwrap(), original);
+        changed.occurrences[0].source_tx_index += 1;
+        assert_ne!(changed.encode().unwrap(), original);
+        changed.occurrences.clear();
+        assert!(changed.encode().is_err());
     }
 
     #[test]

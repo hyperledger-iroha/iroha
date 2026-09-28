@@ -1030,6 +1030,8 @@ mod tests {
             blocks_in_memory: defaults::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::LANE_HISTORY_RETENTION,
             replica_advert: defaults::REPLICA_ADVERT_POLICY,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:

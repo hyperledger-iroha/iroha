@@ -41,7 +41,7 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
     fileprivate let exactWireData: Data
     private let requiresExactIntegerEncoding: Bool
 
-    /// Validate one exact ten-kind proposal wire value before it can enter a draft request.
+    /// Validate one exact closed-inventory proposal wire value before it can enter a draft request.
     public init(validating data: Data) throws {
         let validated: GovernanceValidatedProposalJSON
         do {
@@ -699,6 +699,9 @@ public enum ToriiParliamentAPIV1 {
         "ContractLifecycleGovernance",
         "ContractEmergencyHold",
         "GlobalDataTriggerPermissionGovernance",
+        "KagemushaVerifierPolicyInstall",
+        "KagemushaVerifierReleaseInstall",
+        "KagemushaVerifierReleaseActivate",
     ]
 
     /// Closed contract-lifecycle governance action inventory in wire-tag order.

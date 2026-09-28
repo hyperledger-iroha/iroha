@@ -449,7 +449,9 @@ pub enum ExecutionProofRelationV1 {
     IntoSchema,
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::execution_proofs::ExecutionProofProfileV1")]
 pub struct ExecutionProofProfileV1 {
     /// Descriptor schema version, exactly one.
     pub version: u16,
@@ -499,6 +501,39 @@ pub struct ExecutionProofVerificationV1 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_registry_schema_identity_roundtrips() {
+        let value = ExecutionProofProfileV1 {
+            version: 1,
+            profile_id: Hash::new(b"profile"),
+            rules_hash: Hash::new(b"rules"),
+            relation: ExecutionProofRelationV1::RaceV1,
+            target_soundness_bits: 128,
+            maximum_proof_bytes: 4096,
+            qualified: false,
+        };
+        assert_eq!(
+            <ExecutionProofProfileV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::execution_proofs::ExecutionProofProfileV1"
+        );
+        let encoded = norito::encode_canonical(&value).expect("canonical owner frame");
+        assert_eq!(
+            encoded[6..22],
+            norito::schema::identity::frame_hash::<ExecutionProofProfileV1>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<ExecutionProofProfileV1>(&encoded)
+                .expect("canonical owner roundtrip"),
+            value
+        );
+        let mut wrong_owner = encoded;
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ExecutionProofProfileV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     use super::*;
 
     #[test]

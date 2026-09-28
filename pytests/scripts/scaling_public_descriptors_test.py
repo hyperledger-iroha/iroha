@@ -217,7 +217,7 @@ def test_completed_load_borrow_rechecks_file_and_parent_custody(load_setup, role
     elif change == 'parent':
         path.parent.rename(path.parent.with_name('old-evidence'))
         path.parent.mkdir(mode=0o700)
-    elif change == 'stage': s.paths.transaction_trace.with_name('trace.json.collecting').write_bytes(b'partial')
+    elif change == 'stage': s.paths.transaction_trace.with_name('trace.json.publishing').write_bytes(b'partial')
     with pytest.raises(load.NativeLoadError): owner.public_descriptor(role)
 
 

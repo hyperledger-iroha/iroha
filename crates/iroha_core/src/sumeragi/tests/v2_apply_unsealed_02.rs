@@ -7,7 +7,7 @@ fn fixture_reserve_asset_definition() -> AssetDefinitionId {
 fn fixture_queue(state: &State, events_sender: crate::EventsSender) -> Arc<Queue> {
     let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
     let manifests = state.lane_manifests.read().clone();
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
     queue
 }
 type ApplyNativeReceiptBuilder =
@@ -101,7 +101,7 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
             .collect::<BTreeMap<_, _>>()
     };
     statuses.insert(participant_lane, status);
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
     let mut expected = context
         .roster
         .iter()

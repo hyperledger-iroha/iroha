@@ -98,11 +98,11 @@ ahead of the SM rollout moving from preview to production.
 - `specs/crypto/sm_rust_vector_check.md`
 - `specs/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` snapshot.
 - `specs/crypto/attachments/sm_iroha_crypto_metadata.json` — `cargo metadata` export for the `iroha_crypto` crate (locked dependency graph).
-- `specs/crypto/attachments/sm_openssl_smoke.log` — latest `scripts/sm_openssl_smoke.sh` run (skips SM2/SM4 paths when provider support is missing).
+- `specs/crypto/attachments/sm_openssl_smoke.log` — archived smoke output; unavailable capabilities are not current candidate qualification.
 - `specs/crypto/attachments/sm_openssl_provenance.md` — local toolkit provenance (pkg-config/OpenSSL version notes).
 - Fuzz corpus manifest (`fuzz/sm_corpus_manifest.json`).
 
-> **Environment caveat:** The current development snapshot uses the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) but macOS lacks SM3/SM4 CPU intrinsics and the default provider does not expose SM4-GCM, so the OpenSSL smoke harness still skips SM4 coverage and Annex Example SM2 parsing. A workspace dependency cycle (`sorafs_manifest ↔ sorafs_car`) also forces the helper script to skip the run after emitting the `cargo check` failure. Re-run the bundle inside the Linux release build environment (OpenSSL/Tongsuo with SM4 enabled and without the cycle) to capture full parity before the external audit.
+> **Qualification gate:** Run the current candidate with the required OpenSSL SM3/SM4 capabilities and preserve build/test failures. Missing prerequisites or runtime capabilities leave the gate open. SM2 always uses its canonical portable relation; tests with the preview enabled verify the shared current SM2 fixtures and reject ECDSA signatures on the SM2 curve. Archived skipped runs do not establish parity.
 
 # Candidate audit partners & scope
 

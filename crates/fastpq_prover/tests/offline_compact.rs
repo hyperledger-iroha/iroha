@@ -239,6 +239,7 @@ fn binding() -> AxtFastpqBinding {
 
 fn metadata() -> FastpqAxtPublicMetadataV1 {
     FastpqAxtPublicMetadataV1 {
+        source_transfer_occurrences: Vec::new(),
         parameter: AXT_DEFAULT_PARAMETER.into(),
         entry_hash: [0x11; 32],
         committed_amount: None,

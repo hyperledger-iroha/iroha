@@ -1,4 +1,7 @@
-use iroha_data_model::nexus::{AxtHandleReplayKey, AxtPolicyEntry, AxtReplayRecord};
+use iroha_data_model::nexus::{
+    AxtAnchoredSpendReplayKeyV1, AxtHandleReplayKey, AxtPolicyEntry, AxtReplayRecord,
+    AxtSourceTransferReplayKeyV1, AxtSourceTransferReplayRecordV1, AxtSpendNonceV1,
+};
 
 #[test]
 fn tiered_collection_requires_only_json_and_resident_measurement_for_values() {
@@ -458,6 +461,86 @@ fn axt_policy_and_replay_roundtrip_through_persisted_cold_manifest() {
         json::from_slice::<AxtReplayRecord>(&replay_bytes).expect("decode AXT replay payload"),
         replay
     );
+}
+#[test]
+fn anchored_axt_spend_nonce_persists_in_tiered_manifest_and_removal_diff() {
+    let key = AxtAnchoredSpendReplayKeyV1 {
+        issuer_context: AxtHandleIssuerContextV1::default(),
+        nonce: AxtSpendNonceV1::try_new([0x9B; 32]).expect("nonzero nonce"),
+    };
+    let source = AxtSourceTransferReplayKeyV1 {
+        network_id: key.issuer_context.network_id,
+        dataspace_id: key.issuer_context.asset_dsid,
+        lane_id: LaneId::SINGLE,
+        block_header_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"tiered AXT source transfer",
+        )),
+        source_tx_index: 1,
+        transcript_index: 2,
+        delta_index: 3,
+    };
+    let source_record = AxtSourceTransferReplayRecordV1 { issuer_nonce: key, consumed_slot: 42 };
+    let mut world = World::default();
+    world.axt_spend_nonce_ledger.insert(key, 42);
+    world.axt_source_transfer_replay_ledger.insert(source, source_record);
+    let temp = tempdir().expect("temporary tiered spend nonce directory");
+    let mut backend = TieredStateBackend::new(
+        true,
+        0,
+        1,
+        0,
+        Some(temp.path().to_path_buf()),
+        None,
+        0,
+        0,
+    );
+    backend
+        .record_world_snapshot(&world)
+        .expect("persist spend nonce snapshot");
+    let manifest = backend.last_manifest().expect("tiered manifest recorded");
+    let entry = manifest
+        .cold_entries
+        .iter()
+        .find(|entry| entry.segment == TieredSegment::AxtSpendNonceLedger)
+        .expect("permanent spend nonce is present");
+    assert_eq!(entry.key_payload, norito::codec::Encode::encode(&key));
+    let payload = backend
+        .read_cold_payload(manifest.snapshot_index, entry)
+        .expect("read spend nonce cold payload")
+        .expect("spend nonce payload exists");
+    assert_eq!(json::from_slice::<u64>(&payload).expect("decode spend slot"), 42);
+    let source_entry = manifest
+        .cold_entries
+        .iter()
+        .find(|entry| entry.segment == TieredSegment::AxtSourceTransferReplayLedger)
+        .expect("permanent source transfer is present");
+    assert_eq!(source_entry.key_payload, norito::codec::Encode::encode(&source));
+    let source_payload = backend
+        .read_cold_payload(manifest.snapshot_index, source_entry)
+        .expect("read source transfer cold payload")
+        .expect("source transfer payload exists");
+    assert_eq!(
+        json::from_slice::<AxtSourceTransferReplayRecordV1>(&source_payload)
+            .expect("decode source transfer replay record"),
+        source_record
+    );
+
+    let mut removed = world.block();
+    assert_eq!(removed.axt_spend_nonce_ledger.remove(key), Some(42));
+    assert_eq!(
+        removed.axt_source_transfer_replay_ledger.remove(source),
+        Some(source_record)
+    );
+    assert!(removed
+        .tiered_snapshot_diff()
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, TieredKeyHandle::AxtSpendNonce(id) if *id == key)));
+    assert!(removed
+        .tiered_snapshot_diff()
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, TieredKeyHandle::AxtSourceTransferReplay(id) if *id == source)));
 }
 #[test]
 fn axt_policy_and_replay_block_payloads_update_and_remove_entries() {

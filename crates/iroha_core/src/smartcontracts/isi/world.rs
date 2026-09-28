@@ -15,6 +15,35 @@ use crate::{
 use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
 use iroha_model_base::state_path::StatePath;
 use iroha_telemetry::metrics;
+
+fn fastpq_allocation_deferral(
+    error: &fastpq_prover::Error,
+) -> Option<ivm::error::ExecutionDeferral> {
+    matches!(
+        error,
+        fastpq_prover::Error::LocalAllocationUnavailable { .. }
+    )
+    .then_some(ivm::error::ExecutionDeferral::AllocationUnavailable)
+}
+
+#[cfg(test)]
+mod fastpq_allocation_deferral_tests {
+    use super::*;
+
+    #[test]
+    fn only_local_allocation_failure_defers_the_attempt() {
+        assert_eq!(
+            fastpq_allocation_deferral(&fastpq_prover::Error::LocalAllocationUnavailable {
+                context: "test",
+            }),
+            Some(ivm::error::ExecutionDeferral::AllocationUnavailable)
+        );
+        assert_eq!(
+            fastpq_allocation_deferral(&fastpq_prover::Error::CommitmentMismatch),
+            None
+        );
+    }
+}
 /// Iroha Special Instructions that have `World` as their target.
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
@@ -3345,6 +3374,167 @@ pub mod isi {
                 | GlobalDataTriggerPermissionGovernanceActionV1::Revoke => {}
             }
             let kind = ProposalKind::GlobalDataTriggerPermissionGovernance(payload);
+            let id = kind.fingerprint();
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.kind != kind {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+                return Ok(());
+            }
+            let record = crate::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: state_transaction.block_height(),
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            };
+            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+            state_transaction
+                .world
+                .put_governance_proposal(id, record)
+                .map_err(governance_proposal_storage_error)?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+    impl Execute for gov::ProposeKagemushaVerifierPolicyInstallV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose the initial KAGEMUSHA verifier policy"
+                        .into(),
+                ));
+            }
+            let payload = self.proposal;
+            if &payload.proposal_operator != authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "KAGEMUSHA verifier-policy proposal operator differs from the transaction authority"
+                        .into(),
+                ));
+            }
+            ensure_kagemusha_policy_initial_predecessor_v1(&payload, state_transaction)?;
+            let kind = ProposalKind::KagemushaVerifierPolicyInstall(payload);
+            let id = kind.fingerprint();
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.kind != kind {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+                return Ok(());
+            }
+            let record = crate::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: state_transaction.block_height(),
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            };
+            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+            state_transaction
+                .world
+                .put_governance_proposal(id, record)
+                .map_err(governance_proposal_storage_error)?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+    impl Execute for gov::ProposeKagemushaVerifierReleaseInstallV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose the KAGEMUSHA verifier release".into(),
+                ));
+            }
+            let payload = self.proposal;
+            if &payload.proposal_operator != authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "KAGEMUSHA verifier-release proposal operator differs from the transaction authority"
+                        .into(),
+                ));
+            }
+            ensure_kagemusha_release_install_predecessor_v1(&payload, state_transaction)?;
+            let kind = ProposalKind::KagemushaVerifierReleaseInstall(payload);
+            let id = kind.fingerprint();
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.kind != kind {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+                return Ok(());
+            }
+            let record = crate::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: state_transaction.block_height(),
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            };
+            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+            state_transaction
+                .world
+                .put_governance_proposal(id, record)
+                .map_err(governance_proposal_storage_error)?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+    impl Execute for gov::ProposeKagemushaVerifierReleaseActivateV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose KAGEMUSHA verifier release activation"
+                        .into(),
+                ));
+            }
+            let payload = self.proposal;
+            if &payload.proposal_operator != authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "KAGEMUSHA verifier activation operator differs from the transaction authority"
+                        .into(),
+                ));
+            }
+            ensure_kagemusha_release_activate_predecessor_v1(&payload, state_transaction)?;
+            let kind = ProposalKind::KagemushaVerifierReleaseActivate(payload);
             let id = kind.fingerprint();
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
                 if existing.kind != kind {
@@ -8472,8 +8662,6 @@ pub mod isi {
             Ok(())
         }
     }
-    const PARLIAMENT_GOVERNANCE_HEAD_ROOT_V1: &[u8] =
-        b"iroha.governance.parliament.expected_head.root.v1";
     const PARLIAMENT_PAYOUT_LIFECYCLE_BLOCKED_HEAD_V1: &[u8] =
         b"iroha.governance.parliament.validation_fee_payout.blocked_head.v1";
 
@@ -8511,19 +8699,7 @@ pub mod isi {
     }
 
     fn parliament_governance_head_root_v1(value: &impl norito::codec::Encode) -> [u8; 32] {
-        let encoded = norito::codec::Encode::encode(value);
-        let domain_len = u64::try_from(PARLIAMENT_GOVERNANCE_HEAD_ROOT_V1.len())
-            .expect("the protocol-defined Parliament head-root domain fits in u64")
-            .to_le_bytes();
-        let mut hasher = <Blake2bVar as BlakeVariableOutput>::new(32)
-            .expect("the Parliament head-root digest length is valid");
-        BlakeUpdate::update(&mut hasher, &domain_len);
-        BlakeUpdate::update(&mut hasher, PARLIAMENT_GOVERNANCE_HEAD_ROOT_V1);
-        BlakeUpdate::update(&mut hasher, &encoded);
-        let mut root = [0_u8; 32];
-        BlakeVariableOutput::finalize_variable(hasher, &mut root)
-            .expect("the Parliament head-root output has the configured length");
-        root
+        iroha_data_model::governance::types::parliament_expected_head_root_v1(value)
     }
 
     fn parliament_present_head_v1(
@@ -8587,6 +8763,103 @@ pub mod isi {
         BlakeVariableOutput::finalize_variable(hasher, &mut head_root)
             .expect("the Parliament blocked-head output has the configured length");
         parliament_present_head_root_v1(subject_id, 1, head_root)
+    }
+
+    fn validate_kagemusha_policy_proposal_v1(
+        payload: &iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        payload.validate().map_err(|reason| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                reason.to_owned(),
+            ))
+        })?;
+        if payload.network_id != state_transaction.network_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier-policy proposal belongs to a different exact NetworkId".into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_policy_initial_predecessor_v1(
+        payload: &iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        validate_kagemusha_policy_proposal_v1(payload, state_transaction)?;
+        if state_transaction.world.kagemusha_verifier_registry.get()
+            != &payload.expected_predecessor
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier-policy initial predecessor changed before the Parliament attempt"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn validate_kagemusha_release_install_proposal_v1(
+        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseInstallProposalV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        payload.validate().map_err(|reason| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                reason.to_owned(),
+            ))
+        })?;
+        if payload.network_id != state_transaction.network_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier-release proposal belongs to a different exact NetworkId".into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_release_install_predecessor_v1(
+        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseInstallProposalV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        validate_kagemusha_release_install_proposal_v1(payload, state_transaction)?;
+        if state_transaction.world.kagemusha_verifier_registry.get()
+            != &payload.expected_predecessor
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier-release predecessor changed before the Parliament attempt"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_release_activate_predecessor_v1(
+        payload: &iroha_data_model::governance::types::KagemushaVerifierReleaseActivateProposalV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        payload.validate().map_err(|reason| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                reason.to_owned(),
+            ))
+        })?;
+        if payload.network_id != state_transaction.network_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier activation belongs to a different exact NetworkId".into(),
+            )
+            .into());
+        }
+        if state_transaction.world.kagemusha_verifier_registry.get()
+            != &payload.expected_predecessor
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA verifier activation predecessor changed before the Parliament attempt"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
     }
 
     fn parliament_expected_head_v1(
@@ -8683,6 +8956,41 @@ pub mod isi {
                     if is_granted { 2 } else { 1 },
                     &(payload.authority.clone(), is_granted),
                 )
+            }
+            ProposalKind::KagemushaVerifierPolicyInstall(payload) => {
+                validate_kagemusha_policy_proposal_v1(payload, state_transaction)?;
+                let registry = state_transaction.world.kagemusha_verifier_registry.get();
+                registry.validate().map_err(|reason| {
+                    InstructionExecutionError::InvariantViolation(reason.into())
+                })?;
+                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
+            }
+            ProposalKind::KagemushaVerifierReleaseInstall(payload) => {
+                validate_kagemusha_release_install_proposal_v1(payload, state_transaction)?;
+                let registry = state_transaction.world.kagemusha_verifier_registry.get();
+                registry.validate().map_err(|reason| {
+                    InstructionExecutionError::InvariantViolation(reason.into())
+                })?;
+                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
+            }
+            ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
+                payload.validate().map_err(|reason| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(reason.to_owned()),
+                    )
+                })?;
+                if payload.network_id != state_transaction.network_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "KAGEMUSHA verifier activation belongs to a different exact NetworkId"
+                            .into(),
+                    )
+                    .into());
+                }
+                let registry = state_transaction.world.kagemusha_verifier_registry.get();
+                registry.validate().map_err(|reason| {
+                    InstructionExecutionError::InvariantViolation(reason.into())
+                })?;
+                parliament_present_head_v1(subject_id, u64::from(registry.version), registry)
             }
             ProposalKind::MusubiRegistryGovernance(action) => {
                 use iroha_data_model::musubi::MusubiParliamentActionV1;
@@ -8843,6 +9151,37 @@ pub mod isi {
                         .into())
                     }
                 }
+            }
+            ProposalKind::KagemushaVerifierPolicyInstall(payload) => {
+                ensure_kagemusha_policy_initial_predecessor_v1(payload, state_transaction)?;
+                state_transaction
+                    .world
+                    .kagemusha_verifier_registry
+                    .get_mut()
+                    .initialize_authority_policy(payload.authority_policy.clone())
+                    .map_err(|reason| {
+                        InstructionExecutionError::InvariantViolation(reason.into()).into()
+                    })
+            }
+            ProposalKind::KagemushaVerifierReleaseInstall(payload) => {
+                ensure_kagemusha_release_install_predecessor_v1(payload, state_transaction)?;
+                *state_transaction
+                    .world
+                    .kagemusha_verifier_registry
+                    .get_mut() = payload.successor().map_err(|reason| {
+                    InstructionExecutionError::InvariantViolation(reason.into())
+                })?;
+                Ok(())
+            }
+            ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
+                ensure_kagemusha_release_activate_predecessor_v1(payload, state_transaction)?;
+                *state_transaction
+                    .world
+                    .kagemusha_verifier_registry
+                    .get_mut() = payload.successor().map_err(|reason| {
+                    InstructionExecutionError::InvariantViolation(reason.into())
+                })?;
+                Ok(())
             }
             ProposalKind::MusubiRegistryGovernance(action) => {
                 // Musubi's enacted proposal is the action-bound authorization consumed by its
@@ -9059,17 +9398,46 @@ pub mod isi {
             return Ok(DueParliamentCertificateExecutionV1::Applied);
         }
 
+        let kagemusha_registry_authorization = match &proposal.kind {
+            ProposalKind::KagemushaVerifierPolicyInstall(_)
+            | ProposalKind::KagemushaVerifierReleaseInstall(_)
+            | ProposalKind::KagemushaVerifierReleaseActivate(_) => Some(
+                crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
+                    &attempt,
+                    &proposal,
+                    &certificate,
+                    state_transaction.network_id,
+                    current_height,
+                    observed_head,
+                    state_transaction.world.kagemusha_verifier_registry.get(),
+                )
+                .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?,
+            ),
+            _ => None,
+        };
         attempt
             .mark_enacted(governance_attempt_id, current_height)
             .map_err(parliament_reducer_error)?;
-        if apply_parliament_proposal_effect_v1(
-            proposal_id,
-            &proposal,
-            &certificate,
-            state_transaction,
-        )
-        .is_err()
-        {
+        let effect_result: Result<(), Error> = (|| {
+            // The World write remains isolated until transaction apply. Stage
+            // its State authority only after a successful exact effect, so an
+            // EffectFailed result cannot retain a pending registry token.
+            apply_parliament_proposal_effect_v1(
+                proposal_id,
+                &proposal,
+                &certificate,
+                state_transaction,
+            )?;
+            if let Some(authorization) = kagemusha_registry_authorization {
+                state_transaction
+                    .stage_kagemusha_registry_transition(authorization)
+                    .map_err(|reason| {
+                        InstructionExecutionError::InvariantViolation(reason.into())
+                    })?;
+            }
+            Ok(())
+        })();
+        if effect_result.is_err() {
             return Ok(DueParliamentCertificateExecutionV1::EffectFailed {
                 failure_root:
                     iroha_data_model::governance::types::parliament_execution_failure_root_v1(
@@ -9341,6 +9709,15 @@ pub mod isi {
                 expected_proposal_status,
                 state_transaction,
             )?;
+            if let ProposalKind::KagemushaVerifierPolicyInstall(payload) = &self.proposal {
+                ensure_kagemusha_policy_initial_predecessor_v1(payload, state_transaction)?;
+            }
+            if let ProposalKind::KagemushaVerifierReleaseInstall(payload) = &self.proposal {
+                ensure_kagemusha_release_install_predecessor_v1(payload, state_transaction)?;
+            }
+            if let ProposalKind::KagemushaVerifierReleaseActivate(payload) = &self.proposal {
+                ensure_kagemusha_release_activate_predecessor_v1(payload, state_transaction)?;
+            }
             if let ProposalKind::ValidationFeePayoutLifecycle(payload) = &self.proposal {
                 validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                     &payload.payout_binding,
@@ -16095,6 +16472,14 @@ pub mod isi {
                 proof_blob.expiry_slot,
             )
             .map_err(|err| {
+                if let Some(reason) = super::fastpq_allocation_deferral(&err) {
+                    // The model-owned ISI error is a placeholder; the attempt
+                    // owner observes the sticky deferral before any result is published.
+                    state_transaction.defer_execution(reason);
+                    return InstructionExecutionError::InvariantViolation(
+                        "local FASTPQ verification deferred".into(),
+                    );
+                }
                 InstructionExecutionError::InvariantViolation(
                     format!("verified lane relay FASTPQ verification failed: {err}").into(),
                 )
@@ -16269,6 +16654,7 @@ pub mod isi {
                         "verified fee sponsor vault allocation references an unfunded vault",
                     )
                 })?;
+            let vault_balance = vault.balance.clone();
             let verified_at_height = state_transaction.block_height();
             if *self.source_height() == 0
                 || *self.source_height() > verified_at_height
@@ -16287,7 +16673,7 @@ pub mod isi {
                 &program_id,
                 *self.program_revision(),
                 self.asset_definition_id(),
-                &vault.balance,
+                &vault_balance,
                 *self.source_dataspace_id(),
                 *self.source_height(),
             );
@@ -16436,6 +16822,14 @@ pub mod isi {
                 proof_blob.expiry_slot,
             )
             .map_err(|err| {
+                if let Some(reason) = super::fastpq_allocation_deferral(&err) {
+                    // The enclosing attempt discards this placeholder error
+                    // and retains the original local allocation refusal.
+                    state_transaction.defer_execution(reason);
+                    return InstructionExecutionError::InvariantViolation(
+                        "local FASTPQ verification deferred".into(),
+                    );
+                }
                 InstructionExecutionError::InvariantViolation(
                     format!("verified fee sponsor vault FASTPQ verification failed: {err}",).into(),
                 )
@@ -16524,10 +16918,10 @@ pub mod isi {
                         "verified fee sponsor vault allocation lock arithmetic overflow",
                     )
                 })?;
-            if required > vault.balance {
+            if required > vault_balance {
                 return Err(invalid_fee_sponsor_program(format!(
                     "verified fee sponsor vault allocations exceed source capacity: requires {required}, available {}",
-                    vault.balance
+                    vault_balance
                 )));
             }
             state_transaction
@@ -19172,9 +19566,8 @@ pub mod isi {
             str::FromStr,
             sync::Arc,
         };
-        const TEST_HALO2_CIRCUIT_ID: &str = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-        const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-replay-binding-v1";
-        const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-replay-binding-v1";
+        const TEST_HALO2_CIRCUIT_ID: &str =
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
 
         #[test]
@@ -20258,6 +20651,366 @@ pub mod isi {
             assert_eq!(first, parliament_governance_head_root_v1(&41_u64));
             assert_ne!(first, parliament_governance_head_root_v1(&42_u64));
             assert_ne!(first, [0; 32]);
+        }
+
+        #[test]
+        fn kagemusha_policy_proposal_binds_exact_initial_head_and_requires_reducer_token() {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_WIRE_VERSION_V1, KagemushaGovernedVerifierRegistryV1,
+                KagemushaReleaseAuthorityPolicyV1,
+            };
+
+            let state = blank_test_state();
+            let header = first_test_block_header();
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let policy = KagemushaReleaseAuthorityPolicyV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                authority_set_id: [0xA1; 32],
+                threshold: 1,
+                authorized_signers: vec![
+                    iroha_crypto::KeyPair::try_random()
+                        .expect("signer")
+                        .public_key()
+                        .clone(),
+                ],
+            };
+            let payload =
+                iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1 {
+                    proposal_operator: ALICE_ID.clone(),
+                    network_id: state_transaction.network_id.clone(),
+                    expected_predecessor: KagemushaGovernedVerifierRegistryV1::default(),
+                    authority_policy: policy.clone(),
+                };
+            ensure_kagemusha_policy_initial_predecessor_v1(&payload, &state_transaction)
+                .expect("exact empty predecessor");
+            let kind = ProposalKind::KagemushaVerifierPolicyInstall(payload.clone());
+            let initial_head =
+                parliament_expected_head_v1(&kind, &state_transaction).expect("initial head");
+            assert!(matches!(initial_head, GovernanceExpectedHeadV1::Present(_)));
+
+            let mut foreign = payload.clone();
+            foreign.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::new(b"foreign-kagemusha-policy-proposal-network"),
+                ));
+            assert!(validate_kagemusha_policy_proposal_v1(&foreign, &state_transaction).is_err());
+            let mut malformed = payload.clone();
+            malformed.expected_predecessor.version = 0;
+            assert!(validate_kagemusha_policy_proposal_v1(&malformed, &state_transaction).is_err());
+
+            let proposal = crate::state::GovernanceProposalRecord {
+                proposer: ALICE_ID.clone(),
+                kind: kind.clone(),
+                created_height: 1,
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            };
+            let proposal_content_id =
+                iroha_data_model::governance::types::ProposalContentId::new(kind.fingerprint());
+            let certificate = GovernanceCertificateV1 {
+                proposal_content_id,
+                governance_attempt_id:
+                    iroha_data_model::governance::types::GovernanceAttemptId::derive_v1(
+                        proposal_content_id,
+                        0,
+                    ),
+                governance_attempt_sequence: 0,
+                risk_tier: iroha_data_model::governance::types::RiskTierV1::Constitutional,
+                body_bindings: Vec::new(),
+                policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                effect_preimage_hash: kind.effect_preimage_hash_v1(),
+                expected_head: initial_head,
+                certified_at_height: 1,
+                enact_at_height: 2,
+            };
+            apply_parliament_proposal_effect_v1(
+                kind.fingerprint(),
+                &proposal,
+                &certificate,
+                &mut state_transaction,
+            )
+            .expect("isolated effect stages the policy");
+
+            let mut installed = KagemushaGovernedVerifierRegistryV1::default();
+            installed
+                .initialize_authority_policy(policy)
+                .expect("test policy installs");
+            assert_eq!(
+                state_transaction.world.kagemusha_verifier_registry.get(),
+                &installed
+            );
+            assert!(
+                ensure_kagemusha_policy_initial_predecessor_v1(&payload, &state_transaction)
+                    .is_err()
+            );
+            let observed_head =
+                parliament_expected_head_v1(&kind, &state_transaction).expect("changed head");
+            assert_ne!(observed_head, initial_head);
+            assert_eq!(
+                state_transaction.world.kagemusha_verifier_registry.get(),
+                &installed
+            );
+            state_transaction.apply();
+            assert!(matches!(
+                block.commit_empty_block_for_testing(),
+                Err(crate::state::storage_transactions::TransactionsBlockError::KagemushaGovernanceUnavailable)
+            ));
+            assert_eq!(
+                state.world.kagemusha_verifier_registry.view().get(),
+                &KagemushaGovernedVerifierRegistryV1::default()
+            );
+        }
+
+        #[test]
+        fn kagemusha_policy_proposal_requires_bonded_operator_and_exact_predecessor() {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_WIRE_VERSION_V1, KagemushaGovernedVerifierRegistryV1,
+                KagemushaReleaseAuthorityPolicyV1,
+            };
+
+            let state = blank_test_state();
+            let mut block = state.block(first_test_block_header());
+            let mut transaction = block.transaction();
+            let payload =
+                iroha_data_model::governance::types::KagemushaVerifierPolicyInstallProposalV1 {
+                    proposal_operator: ALICE_ID.clone(),
+                    network_id: transaction.network_id,
+                    expected_predecessor: KagemushaGovernedVerifierRegistryV1::default(),
+                    authority_policy: KagemushaReleaseAuthorityPolicyV1 {
+                        version: KAGEMUSHA_WIRE_VERSION_V1,
+                        authority_set_id: [0xB1; 32],
+                        threshold: 1,
+                        authorized_signers: vec![
+                            iroha_crypto::KeyPair::try_random()
+                                .expect("fixture signer")
+                                .public_key()
+                                .clone(),
+                        ],
+                    },
+                };
+            let propose = |proposal| gov::ProposeKagemushaVerifierPolicyInstallV1 { proposal };
+            assert!(
+                propose(payload.clone())
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            assert!(transaction.world.governance_proposals.is_empty());
+
+            transaction.gov.citizenship_bond_amount = Quantity::zero();
+            transaction.world.citizens.insert(
+                ALICE_ID.clone(),
+                crate::state::CitizenshipRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: Quantity::zero(),
+                    bonded_height: 1,
+                },
+            );
+            let mut wrong_operator = payload.clone();
+            wrong_operator.proposal_operator = BOB_ID.clone();
+            assert!(
+                propose(wrong_operator)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut wrong_predecessor = payload.clone();
+            wrong_predecessor.expected_predecessor.version = 0;
+            assert!(
+                propose(wrong_predecessor)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            assert!(transaction.world.governance_proposals.is_empty());
+
+            propose(payload.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("bonded exact proposal admitted");
+            let proposal_id = ProposalKind::KagemushaVerifierPolicyInstall(payload).fingerprint();
+            assert!(
+                transaction
+                    .world
+                    .governance_proposals
+                    .get(&proposal_id)
+                    .is_some()
+            );
+            assert_eq!(
+                transaction.world.kagemusha_verifier_registry.get(),
+                &KagemushaGovernedVerifierRegistryV1::default()
+            );
+        }
+
+        #[test]
+        fn kagemusha_release_proposal_requires_bonded_operator_and_exact_predecessor() {
+            let fixture: gov::ProposeKagemushaVerifierReleaseInstallV1 =
+                norito::decode_canonical(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
+                )))
+                .expect("canonical authenticated release fixture");
+            let state = blank_test_state();
+            let mut block = state.block(first_test_block_header());
+            let mut transaction = block.transaction();
+            let mut payload = fixture.proposal;
+            payload.proposal_operator = ALICE_ID.clone();
+            payload.network_id = transaction.network_id;
+            *transaction.world.kagemusha_verifier_registry.get_mut() =
+                payload.expected_predecessor.clone();
+            let propose = |proposal| gov::ProposeKagemushaVerifierReleaseInstallV1 { proposal };
+            assert!(
+                propose(payload.clone())
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err(),
+                "unbonded authority cannot propose a release"
+            );
+
+            transaction.gov.citizenship_bond_amount = Quantity::zero();
+            transaction.world.citizens.insert(
+                ALICE_ID.clone(),
+                crate::state::CitizenshipRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: Quantity::zero(),
+                    bonded_height: 1,
+                },
+            );
+            let mut wrong_operator = payload.clone();
+            wrong_operator.proposal_operator = BOB_ID.clone();
+            assert!(
+                propose(wrong_operator)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut wrong_network = payload.clone();
+            wrong_network.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([0xEF; 32]),
+                ));
+            assert!(
+                propose(wrong_network)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut wrong_predecessor = payload.clone();
+            wrong_predecessor.expected_predecessor.version = 0;
+            assert!(
+                propose(wrong_predecessor)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut forged_receipt = payload.clone();
+            forged_receipt.receipt.source_tree_digest[0] ^= 1;
+            assert!(
+                propose(forged_receipt)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            assert!(transaction.world.governance_proposals.is_empty());
+
+            propose(payload.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("bonded exact authenticated release proposal admitted");
+            let proposal_id =
+                ProposalKind::KagemushaVerifierReleaseInstall(payload.clone()).fingerprint();
+            assert!(
+                transaction
+                    .world
+                    .governance_proposals
+                    .get(&proposal_id)
+                    .is_some()
+            );
+            assert_eq!(
+                transaction.world.kagemusha_verifier_registry.get(),
+                &payload.expected_predecessor,
+                "proposal admission cannot install before Parliament certification"
+            );
+        }
+
+        #[test]
+        fn kagemusha_activation_proposal_requires_bonded_operator_and_exact_standby() {
+            let fixture: gov::ProposeKagemushaVerifierReleaseActivateV1 =
+                norito::decode_canonical(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
+                )))
+                .expect("canonical verifier activation fixture");
+            let state = blank_test_state();
+            let mut block = state.block(first_test_block_header());
+            let mut transaction = block.transaction();
+            let mut payload = fixture.proposal;
+            payload.proposal_operator = ALICE_ID.clone();
+            payload.network_id = transaction.network_id;
+            *transaction.world.kagemusha_verifier_registry.get_mut() =
+                payload.expected_predecessor.clone();
+            let propose = |proposal| gov::ProposeKagemushaVerifierReleaseActivateV1 { proposal };
+            assert!(
+                propose(payload.clone())
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err(),
+                "unbonded authority cannot propose activation"
+            );
+            transaction.gov.citizenship_bond_amount = Quantity::zero();
+            transaction.world.citizens.insert(
+                ALICE_ID.clone(),
+                crate::state::CitizenshipRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: Quantity::zero(),
+                    bonded_height: 1,
+                },
+            );
+            let mut wrong_operator = payload.clone();
+            wrong_operator.proposal_operator = BOB_ID.clone();
+            assert!(
+                propose(wrong_operator)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut wrong_network = payload.clone();
+            wrong_network.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([0xEF; 32]),
+                ));
+            assert!(
+                propose(wrong_network)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut wrong_predecessor = payload.clone();
+            wrong_predecessor.expected_predecessor.releases.clear();
+            assert!(
+                propose(wrong_predecessor)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            let mut missing_release = payload.clone();
+            missing_release.successor_release_id = [0xEF; 32];
+            assert!(
+                propose(missing_release)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .is_err()
+            );
+            assert!(transaction.world.governance_proposals.is_empty());
+
+            propose(payload.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("bonded exact standby activation admitted");
+            let proposal_id =
+                ProposalKind::KagemushaVerifierReleaseActivate(payload.clone()).fingerprint();
+            assert!(
+                transaction
+                    .world
+                    .governance_proposals
+                    .get(&proposal_id)
+                    .is_some()
+            );
+            assert_eq!(
+                transaction.world.kagemusha_verifier_registry.get(),
+                &payload.expected_predecessor,
+                "proposal admission cannot activate before Parliament certification"
+            );
         }
 
         const PARLIAMENT_DUE_CERTIFICATE_HEIGHT: u64 = 60;
@@ -22308,16 +23061,20 @@ pub mod isi {
         fn canonical_test_halo2_vk_box() -> VerifyingKeyBox {
             #[cfg(feature = "zk-halo2-ipa")]
             {
-                crate::zk::halo2_ipa_ivm_replay_binding_vk_box()
-                    .expect("generate canonical IVM execution verifying key")
+                crate::zk::confidential_v2::confidential_transfer_v2_vk_box()
+                    .expect("generate canonical confidential-transfer verifying key")
             }
             #[cfg(not(feature = "zk-halo2-ipa"))]
             {
                 panic!("canonical Halo2 registry tests require zk-halo2-ipa")
             }
         }
+        fn test_halo2_schema_hash() -> [u8; 32] {
+            Hash::new(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
+                .into()
+        }
         fn test_halo2_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
-            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
+            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
             record
         }
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -25569,6 +26326,12 @@ pub mod isi {
                 abi_version: 1,
             };
             let interface = ivm::EmbeddedContractInterfaceV1 {
+                callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm::call::CallWordV1::Unit],
+            }],
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "world-isi-test".to_owned(),
                 abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -25596,7 +26359,19 @@ pub mod isi {
                 states: Vec::new(),
             };
             let mut code = Vec::new();
-            code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            for instruction in [
+                ivm::encoding::wide::encode_store(
+                    ivm::instruction::wide::memory::STORE64,
+                    12,
+                    0,
+                    0,
+                ),
+                ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+                ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ] {
+                code.extend_from_slice(&instruction.to_le_bytes());
+            }
             let mut artifact = meta.encode();
             artifact.extend_from_slice(&interface.encode_section());
             artifact.extend_from_slice(&code);
@@ -25605,7 +26380,7 @@ pub mod isi {
             (artifact, verified.manifest)
         }
         fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {
-            contract_artifact_with_max_cycles(1)
+            contract_artifact_with_max_cycles(4)
         }
         fn governance_lifecycle_artifact() -> (Vec<u8>, ContractManifest) {
             let (artifact, _) = ivm::KotodamaCompiler::new()
@@ -26217,18 +26992,20 @@ seiyaku GovernanceLifecycle {
             let role_after_revoke = stx.world.roles.get(&role_id).expect("role exists");
             assert_eq!(role_after_revoke.permission_epoch(&perm), None);
         });
-        world_test!(normalize_halo2_circuit_id_and_match_variants {
-            assert_eq!(normalize_halo2_circuit_id(" halo2/pasta/ipa/foo "), None);
+        world_test!(canonical_halo2_circuit_id_rejects_aliases_and_matches_exact_registry_identity {
             assert_eq!(
-                normalize_halo2_circuit_id("halo2/pasta/foo"),
+                normalize_halo2_circuit_id("halo2/pasta/ipa/foo"),
                 Some("halo2/pasta/ipa/foo".to_string())
             );
-            assert_eq!(
-                normalize_halo2_circuit_id("halo2/ipa:foo"),
-                Some("halo2/pasta/ipa/foo".to_string())
-            );
-            assert_eq!(normalize_halo2_circuit_id(""), None);
+            for alias in [" halo2/pasta/ipa/foo ", "halo2/pasta/foo", "halo2/ipa:foo", "foo", ""] {
+                assert_eq!(normalize_halo2_circuit_id(alias), None, "retired alias {alias:?}");
+            }
             assert!(circuit_id_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/kaigi-authorization-v1",
+                "halo2/pasta/ipa/kaigi-authorization-v1"
+            ));
+            assert!(!circuit_id_matches(
                 "halo2/ipa",
                 "halo2/pasta/ipa/ivm-replay-binding-v1",
                 "halo2/ipa:ivm-replay-binding-v1"
@@ -26404,7 +27181,12 @@ seiyaku GovernanceLifecycle {
                     .expect_err("VerifyProof must reject non-portable privacy aliases");
                     assert_contains!(format!("{error:?}"), "bounded portable identifier", "unexpected VerifyProof shape error for {malformed_alias:?}: {error}");
                 }
-                for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+                // Portable unregistered names still use the sole full first-release CID.
+                // Bare names are rejected before registry lookup; they are not aliases.
+                for near_miss in [
+                    format!("halo2/pasta/ipa/generic-{label}"),
+                    format!("halo2/pasta/ipa/{label}-generic"),
+                ] {
                     let error =
                         ensure_open_verify_circuit_id_is_admitted_v1("halo2/ipa", &near_miss)
                             .expect_err("unregistered Halo2 circuit must fail");
@@ -26599,7 +27381,7 @@ seiyaku GovernanceLifecycle {
         world_test!(validate_open_verify_envelope_metadata_checks_circuit_and_commitment {
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
             let commitment = hash_vk(&vk_box);
-            vk_record!(vk_rec, 1, TEST_HALO2_CIRCUIT_FULL_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active);
+            vk_record!(vk_rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active);
             let bad_circuit = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
                 TEST_OTHER_HALO2_CIRCUIT_ID,
@@ -26620,7 +27402,7 @@ seiyaku GovernanceLifecycle {
             bad_hash[0] ^= 0x01;
             let bad_commitment = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 bad_hash,
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
@@ -26636,7 +27418,7 @@ seiyaku GovernanceLifecycle {
             );
             let zero_commitment = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 [0u8; 32],
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
@@ -26651,7 +27433,7 @@ seiyaku GovernanceLifecycle {
             assert_contains!(format!("{err:?}"), "verifier-key hash must be non-zero", "unexpected zero-hash rejection: {err}");
             let mut non_empty_aux = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 commitment,
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
@@ -26668,7 +27450,7 @@ seiyaku GovernanceLifecycle {
             );
             let ok = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 commitment,
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
@@ -26704,7 +27486,7 @@ seiyaku GovernanceLifecycle {
                     "empty_public_inputs",
                     OpenVerifyEnvelope::new(
                         BackendTag::Halo2IpaPasta,
-                        TEST_HALO2_CIRCUIT_ALIAS,
+                        TEST_HALO2_CIRCUIT_ID,
                         commitment,
                         Vec::new(),
                         vec![0xAA],
@@ -26715,7 +27497,7 @@ seiyaku GovernanceLifecycle {
                     "empty_proof_bytes",
                     OpenVerifyEnvelope::new(
                         BackendTag::Halo2IpaPasta,
-                        TEST_HALO2_CIRCUIT_ALIAS,
+                        TEST_HALO2_CIRCUIT_ID,
                         commitment,
                         b"schema:voting:v1".to_vec(),
                         Vec::new(),
@@ -26726,7 +27508,7 @@ seiyaku GovernanceLifecycle {
                     "oversized_public_inputs",
                     OpenVerifyEnvelope::new(
                         BackendTag::Halo2IpaPasta,
-                        TEST_HALO2_CIRCUIT_ALIAS,
+                        TEST_HALO2_CIRCUIT_ID,
                         commitment,
                         vec![
                             0xA5;
@@ -26752,10 +27534,10 @@ seiyaku GovernanceLifecycle {
             let commitment = hash_vk(&vk_box);
             let schema = b"schema:voting:v1".to_vec();
             let schema_hash: [u8; 32] = iroha_crypto::Hash::new(&schema).into();
-            vk_record!(vk_rec, 1, TEST_HALO2_CIRCUIT_FULL_ID, BackendTag::Halo2IpaPasta, "pallas", schema_hash, commitment; status = ConfidentialStatus::Active);
+            vk_record!(vk_rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", schema_hash, commitment; status = ConfidentialStatus::Active);
             let ok = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 commitment,
                 schema.clone(),
                 vec![0xAA],
@@ -26765,7 +27547,7 @@ seiyaku GovernanceLifecycle {
             );
             let bad = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 commitment,
                 b"schema:voting:v2".to_vec(),
                 vec![0xAA],
@@ -27040,7 +27822,7 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Halo2IpaPasta,
                 TEST_HALO2_CIRCUIT_ID,
                 [0x41u8; 32],
-                crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
                 vec![1, 2, 3],
             );
             let proof = ProofBox::new(
@@ -27144,12 +27926,12 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Stark
             ));
         });
-        world_test!(resolve_vk_commitment_accepts_normalized_circuit_id {
+        world_test!(resolve_vk_commitment_accepts_canonical_circuit_id {
             blank_state_transaction!(state, block, state_block, stx);
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_test");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
             let commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_FULL_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active, gas_schedule_id = Some("halo2_default".to_string()), key = Some(vk_box));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active, gas_schedule_id = Some("halo2_default".to_string()), key = Some(vk_box));
             stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
             stx.world
                 .verifying_keys_by_circuit
@@ -27158,7 +27940,7 @@ seiyaku GovernanceLifecycle {
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 commitment,
                 vec![1, 2],
                 vec![3, 4],
@@ -27168,7 +27950,7 @@ seiyaku GovernanceLifecycle {
             assert_eq!(resolved, Some(commitment));
             let zero_commitment_envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ALIAS,
+                TEST_HALO2_CIRCUIT_ID,
                 [0u8; 32],
                 vec![1, 2],
                 vec![3, 4],
@@ -31862,13 +32644,13 @@ seiyaku GovernanceLifecycle {
             );
         });
         #[cfg(feature = "zk-halo2-ipa")]
-        world_test!(register_vk_rejects_parseable_halo2_key_relabelled_as_ivm_execution {
+        world_test!(register_vk_rejects_parseable_halo2_key_relabelled_as_confidential_transfer {
             alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "relabelled-demo-vk");
-            let vk_box = crate::zk::relabelled_halo2_ipa_demo_vk_box_for_test()
-                .expect("generate parseable relabelled demo key");
+            let vk_box = crate::zk::confidential_v2::confidential_unshield_v2_vk_box()
+                .expect("generate parseable key for another circuit");
             let record = test_halo2_vk_record(1, vk_box);
             let mut stx = state_block.transaction();
             let error = Executor::default()
@@ -31883,7 +32665,7 @@ seiyaku GovernanceLifecycle {
                 )
                 .expect_err("a parseable key for another constraint system must not register");
             let message = smart_contract_error_message(error);
-            assert_contains!(message, "canonical compiled circuit key", "unexpected relabelled-key rejection: {message}");
+            assert_contains!(message, "fixed Halo2 IPA verifier-key metadata", "unexpected foreign-circuit key rejection: {message}");
             assert!(stx.world.verifying_keys.get(&id).is_none());
         });
         #[cfg(feature = "zk-halo2-ipa")]
@@ -31906,8 +32688,8 @@ seiyaku GovernanceLifecycle {
                 )
                 .expect("canonical baseline key must register");
             stx.apply();
-            let relabelled = crate::zk::relabelled_halo2_ipa_demo_vk_box_for_test()
-                .expect("generate parseable relabelled demo key");
+            let relabelled = crate::zk::confidential_v2::confidential_unshield_v2_vk_box()
+                .expect("generate parseable key for another circuit");
             let replacement = test_halo2_vk_record(2, relabelled);
             let mut stx = state_block.transaction();
             let error = Executor::default()
@@ -31922,7 +32704,7 @@ seiyaku GovernanceLifecycle {
                 )
                 .expect_err("update must enforce the same compiled-circuit key identity");
             let message = smart_contract_error_message(error);
-            assert_contains!(message, "canonical compiled circuit key", "unexpected relabelled update rejection: {message}");
+            assert_contains!(message, "fixed Halo2 IPA verifier-key metadata", "unexpected foreign-circuit update rejection: {message}");
             assert_eq!(stx.world.verifying_keys.get(&id), Some(&current));
         });
         #[cfg(feature = "zk-halo2-ipa")]
@@ -31938,7 +32720,7 @@ seiyaku GovernanceLifecycle {
                 .position(|window| window == b"IPAK")
                 .expect("canonical key carries IPAK");
             vk_box.bytes[ipa_offset + 8..ipa_offset + 12]
-                .copy_from_slice(&(crate::zk::IVM_REPLAY_BINDING_V1_IPA_K + 1).to_le_bytes());
+                .copy_from_slice(&(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K + 1).to_le_bytes());
             let record = test_halo2_vk_record(1, vk_box);
             let mut stx = state_block.transaction();
             let error = Executor::default()
@@ -32013,7 +32795,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_missing_gas");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -32030,7 +32812,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
             let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -32051,7 +32833,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -32170,7 +32952,7 @@ seiyaku GovernanceLifecycle {
         world_test!(register_vk_reserves_every_exact12_privacy_circuit_label {
             fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 record
             }
             alice_state_transaction!(state, block, state_block, stx);
@@ -32286,7 +33068,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx = state_block.transaction();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_label");
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
                 let err = exec
@@ -33511,7 +34293,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_payload_confusion");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let mut stx = state_block.transaction();
             let err = Executor::default()
                 .execute_instruction(
@@ -33592,7 +34374,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let exec = Executor::default();
             let mut stx = state_block.transaction();
             exec.execute_instruction(
@@ -33646,7 +34428,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -33794,7 +34576,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -33804,7 +34586,7 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction();
-            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let update_instruction: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
                 record: new_rec,
@@ -33875,7 +34657,7 @@ seiyaku GovernanceLifecycle {
             let circuit = TEST_HALO2_CIRCUIT_ID;
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -33929,7 +34711,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -34007,7 +34789,7 @@ seiyaku GovernanceLifecycle {
                 let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
                 let vk_commitment = hash_vk(&vk_box);
-                let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+                let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 vk_record!(rec, 1, circuit_id.clone(), backend_tag, if backend_tag == BackendTag::Stark {
@@ -34090,7 +34872,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -34139,7 +34921,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -34195,7 +34977,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -34280,7 +35062,7 @@ seiyaku GovernanceLifecycle {
                 );
                 let vk_box = canonical_test_halo2_vk_box();
                 let vk_commitment = hash_vk(&vk_box);
-                let expected_public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+                let expected_public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
                 let public_inputs_schema_hash: [u8; 32] =
                     CryptoHash::new(&expected_public_inputs).into();
                 vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = if matches!(tamper, Tamper::InactiveKey) { ConfidentialStatus::Proposed } else { ConfidentialStatus::Active }, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
@@ -34333,7 +35115,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_existing");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let envelope = OpenVerifyEnvelope {
@@ -34417,7 +35199,7 @@ seiyaku GovernanceLifecycle {
                     }
                 };
                 let vk_commitment = hash_vk(&stored_vk);
-                let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+                let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
                 vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(stored_vk.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(stored_vk), gas_schedule_id = Some("halo2_default".into()));
                 let envelope = OpenVerifyEnvelope {
@@ -34464,7 +35246,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,

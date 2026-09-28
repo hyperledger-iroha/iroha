@@ -537,55 +537,10 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     // concurrent in-process State instances cannot contaminate one another.
     let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let mut outcome = PenaltyOutcome::default();
-    if let Some(pulse) = effects.finalized_global_beacon_pulse {
-        if pulse.network_id != tx.network_id
-            || pulse.height != current_height
-            || pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1
-        {
-            return Err(eyre!(
-                "finalized global beacon pulse differs from the applying block"
-            ));
-        }
-        let expected_anchor = expected_beacon_anchor
-            .ok_or_else(|| eyre!("finalized global beacon pulse has no parent anchor"))?;
-        if expected_anchor.height.checked_add(1) != Some(current_height) {
-            return Err(eyre!(
-                "finalized global beacon pulse parent anchor has the wrong height"
-            ));
-        }
-        let key_record = tx
-            .world
-            .global_beacon_key_sessions
-            .get(&pulse.session_id)
-            .cloned()
-            .ok_or_else(|| eyre!("global beacon pulse key session is absent"))?;
-        if !key_record.is_active_at(current_height) {
-            return Err(eyre!(
-                "global beacon pulse key session is not active at the pulse height"
-            ));
-        }
-        let expected_roster_hash =
-            crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
-                &key_record.session,
-                authenticated_roster,
-            )
-            .wrap_err(
-                "pulse-height global beacon key differs from the authenticated height roster",
-            )?;
-        let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
-            network_id: tx.network_id,
-            session_id: pulse.session_id,
-            roster_hash: expected_roster_hash,
-            transcript_hash: key_record.session.transcript_hash,
-        };
-        let session = crate::beacon::validate_global_threshold_beacon_session_v1(
-            key_record.session,
-            &binding,
-        )
-        .wrap_err("pulse-height global beacon public DKG session failed validation")?;
-        tx.world
-            .verify_and_advance_global_beacon_pulse(&session, pulse, expected_anchor)
-            .wrap_err("failed to persist finalized global beacon pulse")?;
+    if effects.finalized_global_beacon_pulse.is_some() {
+        return Err(eyre!(
+            "global beacon control must be consumed by the native pristine schedule capture"
+        ));
     }
     if !evidence_prune_keys.windows(2).all(|pair| pair[0] < pair[1]) {
         return Err(eyre!(
@@ -818,18 +773,14 @@ fn penalty_staking_fixture_ids() -> (
     AccountId,
 ) {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::asset::AssetDefinitionId;
-    use iroha_model_base::domain::DomainId;
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
 
     let account = |seed: u8| {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("deterministic penalty-custody key");
         AccountId::new(key.public_key().clone())
     };
-    let asset_definition = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("penalty", "universal").expect("penalty fixture domain id"),
-        "stake".parse().expect("penalty fixture asset name"),
-    );
+    let asset_definition = SumeragiNposParameters::default().xor_asset_definition_id;
     (asset_definition, account(0xE1), account(0xE2))
 }
 
@@ -1063,6 +1014,67 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         configure_penalty_staking_state_for_tests(&mut state);
+        state
+    }
+
+    /// Execute real signed NPoS genesis before testing a finalized slash operation.
+    /// Component evidence below remains explicit fixture prestate; no retired sidecar
+    /// substitutes for the native committed authority required by monetary execution.
+    fn native_penalty_state() -> State {
+        use crate::sumeragi::{startup, test_chain::signed_genesis_fixture};
+        use iroha_data_model::{
+            IntoKeyValue as _, Registrable as _, account::Account, domain::Domain,
+            parameter::system::ConsensusMode,
+        };
+        use iroha_model_base::chain::ChainId;
+
+        let seed = fresh_state();
+        let nexus = seed.nexus_snapshot();
+        let mut world = seed.world;
+        let key = KeyPair::try_from_seed(vec![0xEF; 32], Algorithm::Ed25519).unwrap();
+        let authority = AccountId::new(key.public_key().clone());
+        let domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+        world.insert_domain_for_testing(domain.clone(), Domain::new(domain).build(&authority));
+        let (id, account) = Account::new(authority.clone())
+            .build(&authority)
+            .into_key_value();
+        world.accounts.insert(id, account);
+        let chain_id = ChainId::from("native-penalty-custody-fixture");
+        let validators = roster_keys()
+            .iter()
+            .map(|key| {
+                (
+                    PeerId::new(key.public_key().clone()),
+                    iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let genesis = signed_genesis_fixture(
+            &chain_id,
+            &key,
+            &validators,
+            Vec::new(),
+            1,
+            ConsensusMode::Npos,
+            Some(SumeragiNposParameters {
+                slashing_delay_blocks: 1,
+                ..SumeragiNposParameters::default()
+            }),
+        )
+        .expect("signed native NPoS genesis");
+        let mut state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain_id,
+            NetworkId::from_genesis_hash(genesis.hash()),
+        );
+        state
+            .set_nexus(nexus)
+            .expect("exact network XOR custody configuration");
+        startup::apply_genesis(&state, genesis, &authority, ConsensusMode::Npos, None)
+            .expect("original executed native genesis and authority");
+        assert_eq!(state.view().height(), 1);
         state
     }
 
@@ -2454,10 +2466,13 @@ mod tests {
     }
     #[test]
     fn penalty_derivation_fails_closed_on_missing_staking_custody_definition() {
-        let state = fresh_state();
-        install_one_block_delay_npos(&state);
+        let state = native_penalty_state();
         let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
+        let source = state
+            .kura()
+            .get_block(core::num::NonZeroUsize::new(1).unwrap())
+            .unwrap();
+        let context = height_one_context(*state.network_id_ref(), &frozen_roster, source.hash());
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
         insert_evidence(&state, phase_vote_evidence(&context, 1, 37), 1);

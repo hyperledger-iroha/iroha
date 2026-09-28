@@ -1,23 +1,25 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
 
-#[test]
-fn captured_codec_schema_identities() {
+const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProofBytesV1>(
         "iroha_data_model::privacy::PrivacyProofBytesV1",
-    )
-    .check();
+    ),
     crate::captured_schema_tests::Case::bidirectional::<super::IrohaZkAmsProofV1>(
         "iroha_data_model::privacy::IrohaZkAmsProofV1",
-    )
-    .check();
+    ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProofV1>(
         "iroha_data_model::privacy::PrivacyProofV1",
-    )
-    .check();
+    ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProofEnvelopeV1>(
         "iroha_data_model::privacy::PrivacyProofEnvelopeV1",
-    )
-    .check();
+    ),
+];
+
+#[test]
+fn captured_codec_schema_identities() {
+    for case in CASES {
+        case.check();
+    }
 }
 
 #[test]
@@ -47,3 +49,5 @@ fn captured_exact12_conformance_frame_identities() {
         "48c8d56dfc59c50888aef4db2279c3b7",
     );
 }
+
+crate::captured_schema_tests::native_capture::owner_printer!(CASES);

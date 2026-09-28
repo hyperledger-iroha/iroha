@@ -45,8 +45,12 @@ pub use small::SmallBls as BlsSmall;
 pub use small::SmallPrivateKey as BlsSmallPrivateKey;
 /// Compact BLS public key (smaller signatures).
 pub use small::SmallPublicKey as BlsSmallPublicKey;
+pub(crate) mod canonical;
+#[cfg(test)]
+mod consolidation_tests;
 mod ethereum;
 mod implementation;
+mod uncached;
 pub use ethereum::{
     ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
     ethereum_bls_pop_validate_public_key,
@@ -174,4 +178,31 @@ pub(crate) fn verify_preaggregated_same_message_normal(
         aggregated_signature,
         public_keys,
     )
+}
+
+/// Use the ordinary exact positive cache around the sole single-signature relation.
+pub(crate) fn verify_signature_bytes(
+    algorithm: crate::Algorithm,
+    public_key: &[u8],
+    signature: &[u8],
+    message: &[u8],
+) -> Result<(), crate::Error> {
+    match algorithm {
+        crate::Algorithm::BlsNormal => BlsNormal::verify_bytes(message, signature, public_key),
+        crate::Algorithm::BlsSmall => BlsSmall::verify_bytes(message, signature, public_key),
+        _ => Err(crate::Error::BadSignature),
+    }
+}
+
+/// Use the same parser/relation with no generic-key, prepared-key or positive cache.
+pub(crate) fn verify_signature_bytes_for_admission(
+    algorithm: crate::Algorithm,
+    public_key: &[u8],
+    signature: &[u8],
+    message: &[u8],
+) -> Result<(), crate::Error> {
+    let orientation =
+        uncached::Orientation::for_algorithm(algorithm).ok_or(crate::Error::BadSignature)?;
+    uncached::verify_facade(orientation, public_key, signature, message)
+        .map_err(uncached::Rejection::into_error)
 }

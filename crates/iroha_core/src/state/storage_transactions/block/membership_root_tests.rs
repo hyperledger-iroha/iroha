@@ -135,7 +135,7 @@ fn cold(
 ) -> CommittedMembershipRoot<u64> {
     storage
         .block()
-        .capture_committed_root(store, workspace)
+        .capture_committed_root(100_000, store, workspace)
         .unwrap()
 }
 fn assert_members(
@@ -150,7 +150,7 @@ fn assert_members(
             .map(|(_, h)| height(*h));
         assert_eq!(root.read(&key(n), store).unwrap(), value, "key {n}");
     }
-    let mut reference = MerkleMap::new();
+    let mut reference = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
     for &(n, h) in expected.iter().rev() {
         reference
             .replace(
@@ -496,7 +496,7 @@ fn failed_cold_capture_keeps_state_and_restoration_requires_its_own_identity() {
             {
                 let block = storage.block();
                 assert!(matches!(
-                    block.capture_committed_root(&mut failed, &mut workspace),
+                    block.capture_committed_root(100_000, &mut failed, &mut workspace),
                     Err(MembershipRootError::Update(_))
                 ));
             }
@@ -648,7 +648,7 @@ fn all_publication_modes_retain_the_exact_original_rollback_cut() {
         );
         let rollback = storage.block_and_revert();
         let cold_from_replacement = rollback
-            .capture_committed_root(&mut store, &mut workspace)
+            .capture_committed_root(100_000, &mut store, &mut workspace)
             .unwrap();
         assert_eq!(
             cold_from_replacement.commitment(),
@@ -804,7 +804,7 @@ fn every_height_write_failure_retains_original_cold_and_prepared_custody() {
         assert!(matches!(
             storage
                 .block()
-                .capture_committed_root(&mut failed, &mut workspace),
+                .capture_committed_root(100_000, &mut failed, &mut workspace),
             Err(MembershipRootError::ValueWrite(
                 "height write refused after persistence"
             ))
@@ -1166,4 +1166,35 @@ fn matching_root_requires_original_physical_preparation_before_publication() {
     assert_eq!(storage.view().get(&key(1)), Some(height(1)));
     drop(retirement);
     assert_members(&after, &mut store, &[(1, 1)]);
+}
+
+#[test]
+fn cold_root_admits_complete_source_work_before_store_io() {
+    let storage = TransactionsStorage::new();
+    commit(&storage, 1, &[1, 2]);
+    commit(&storage, 2, &[2, 3]);
+    let owner = storage.block();
+    let mut store = Store::default();
+    let mut workspace = MerkleMapUpdateWorkspace::new();
+    assert!(matches!(
+        owner.capture_committed_root(5, &mut store, &mut workspace),
+        Err(MembershipRootError::Authority(
+            TransactionMembershipAuthorityError::TraversalRefused {
+                required: 6,
+                limit: 5
+            }
+        ))
+    ));
+    assert_eq!(
+        store.reads + store.writes + store.height_reads + store.height_writes,
+        0
+    );
+    let bounded = owner
+        .capture_committed_root(6, &mut store, &mut workspace)
+        .unwrap();
+    let repeated = owner
+        .capture_committed_root(6, &mut store, &mut workspace)
+        .unwrap();
+    assert_eq!(bounded.commitment(), repeated.commitment());
+    assert!(Identity::ptr_eq(&bounded.identity, &repeated.identity));
 }

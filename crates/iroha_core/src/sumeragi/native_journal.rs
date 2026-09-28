@@ -1,0 +1,373 @@
+//! One bounded native history source for offline evidence and disposable qualification.
+//!
+//! The journal owns original canonical frames; this adapter decodes them once and lends the
+//! existing CertifiedChain verifier their exact contiguous hash cut. No projected context,
+//! fabricated genesis QC, alternate verifier, storage database or mutable World is introduced.
+
+use std::sync::Arc;
+
+use iroha_crypto::HashOf;
+use iroha_data_model::{
+    NetworkId,
+    block::{BlockHeader, SignedBlock},
+    sumeragi::finality::{NativeFinalityJournal, NativeFinalityLimits},
+};
+use iroha_model_base::chain::ChainId;
+use iroha_sumeragi::crypto::AttestationVerifier;
+
+use super::certified_chain::CertifiedChain;
+use crate::state::StateView;
+
+/// Run an offline read against one complete independently pinned native journal.
+///
+/// The configured `network` is the expected signed-genesis hash, supplied independently of
+/// evidence. `chain_id` pins the native instance. Every frame is decoded and every native
+/// certificate/parent/result/epoch link through the tip is verified before `read` executes.
+/// The mandatory explicit attestation verifier must verify each flagged boundary. A single H1
+/// journal still proves only signed-body authority; its unsigned result never acquires a QC.
+///
+/// The same cumulative Norito allocation scope covers decoding and certificate verification.
+/// This is bounded offchain memory admission, not production execution allocation custody.
+///
+/// # Errors
+/// Rejects malformed bounds, excessive source/decoded size, noncanonical frames, noncontiguous
+/// heights, wrong network/instance, altered execution results, quorum or attestation failures.
+pub fn with_verified_native_journal<T>(
+    journal: &NativeFinalityJournal,
+    chain_id: &ChainId,
+    network: &NetworkId,
+    limits: NativeFinalityLimits,
+    attestations: &dyn AttestationVerifier,
+    read: impl FnOnce(&CertifiedChain<'_, StateView<'_>>) -> Result<T, String>,
+) -> Result<T, String> {
+    journal.validate_source(limits)?;
+    norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
+        // Admission precedes each concrete side allocation; canonical blocks themselves use
+        // the same active Norito counters. No per-block scope resets the aggregate counter.
+        let count = journal.blocks.len();
+        let side_bytes = count
+            .checked_mul(
+                core::mem::size_of::<Arc<SignedBlock>>()
+                    + core::mem::size_of::<HashOf<BlockHeader>>(),
+            )
+            .ok_or("native journal index allocation overflow")?;
+        norito::core::reserve_decode_allocation(side_bytes).map_err(|error| error.to_string())?;
+        let mut frames = Vec::new();
+        let mut hashes = Vec::new();
+        frames
+            .try_reserve_exact(count)
+            .map_err(|_| "native journal frame index allocation failed")?;
+        hashes
+            .try_reserve_exact(count)
+            .map_err(|_| "native journal hash index allocation failed")?;
+        for (offset, artifact) in journal.blocks.iter().enumerate() {
+            let block = artifact.decode_block(limits)?;
+            let expected = u64::try_from(offset)
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or("native journal height overflow")?;
+            if block.header().height().get() != expected {
+                return Err("native journal is not a complete consecutive prefix".into());
+            }
+            norito::core::reserve_decode_allocation(
+                core::mem::size_of::<SignedBlock>() + 2 * core::mem::size_of::<usize>(),
+            )
+            .map_err(|error| error.to_string())?;
+            hashes.push(block.hash());
+            frames.push(Arc::new(block));
+        }
+        let reader = CertifiedChain::from_frames(chain_id, network, &hashes, &frames)
+            .map_err(|error| error.to_string())?
+            .with_attestation_verifier(attestations);
+        let height = u64::try_from(count).map_err(|_| "native journal height overflow")?;
+        reader
+            .certified(height)
+            .map_err(|error| error.to_string())?;
+        read(&reader)
+    })
+}
+
+/// One source-owned phase clock for a bounded offline committee operation.
+///
+/// Each advancement is verified by the same native journal reader and production Pasta
+/// verifier. The retained tip is only a continuity pin; it never supplies a new epoch roster.
+/// Refusal leaves the previous tip intact. Initial genesis authority has no finalized receipt:
+/// at least H2 must genuinely certify its parent result before this clock can advance.
+pub struct NativeJournalCursor {
+    chain_id: ChainId,
+    network: NetworkId,
+    limits: NativeFinalityLimits,
+    attestations: super::attestation::NativePastaVerifier,
+    tip: Option<super::certified_chain::CommittedBlock>,
+}
+impl NativeJournalCursor {
+    /// Pin an operation to independently configured chain/network and explicit resource caps.
+    pub fn new(
+        chain_id: ChainId,
+        network: NetworkId,
+        limits: NativeFinalityLimits,
+    ) -> Result<Self, String> {
+        limits.validate()?;
+        let instance = iroha_sumeragi::preimage::instance_id(
+            &super::crypto::BlsCrypto::new(),
+            &iroha_sumeragi::types::Hash32(*network.as_bytes()),
+            chain_id.to_string().as_bytes(),
+            iroha_sumeragi::preimage::InstanceKind::Global,
+            0,
+        );
+        Ok(Self {
+            chain_id,
+            network,
+            limits,
+            attestations: super::attestation::NativePastaVerifier::new(instance, network),
+            tip: None,
+        })
+    }
+    /// Borrow the production verifier pinned to this operation's independent identity.
+    pub fn attestations(&self) -> &super::attestation::NativePastaVerifier {
+        &self.attestations
+    }
+    /// The last genuinely certified ordinary tip, absent before the first H2+ prefix.
+    pub fn tip(&self) -> Option<&super::certified_chain::CommittedBlock> {
+        self.tip.as_ref()
+    }
+    /// Immutable configured chain; never inferred from a remote proof.
+    pub fn chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+    /// Immutable signed-genesis network pin.
+    pub fn network_id(&self) -> NetworkId {
+        self.network
+    }
+    /// Exact operation limits used for every phase frame.
+    pub fn limits(&self) -> NativeFinalityLimits {
+        self.limits
+    }
+
+    /// Authenticate a strictly advancing complete prefix and retain its exact native tip.
+    pub fn advance(
+        &mut self,
+        journal: &NativeFinalityJournal,
+    ) -> Result<&super::certified_chain::CommittedBlock, String> {
+        let height =
+            u64::try_from(journal.blocks.len()).map_err(|_| "native phase height overflow")?;
+        if height < 2 || self.tip.as_ref().is_some_and(|tip| height <= tip.height()) {
+            return Err("native phase journal does not advance a certified ordinary height".into());
+        }
+        let next = with_verified_native_journal(
+            journal,
+            &self.chain_id,
+            &self.network,
+            self.limits,
+            &self.attestations,
+            |reader| {
+                if let Some(tip) = &self.tip {
+                    let retained = reader
+                        .certified(tip.height())
+                        .map_err(|error| error.to_string())?;
+                    if retained.block_hash() != tip.block_hash()
+                        || retained.core_hash() != tip.core_hash()
+                        || retained.result() != tip.result()
+                    {
+                        return Err("native phase journal replaces its retained source tip".into());
+                    }
+                }
+                reader
+                    .certified(height)
+                    .map(|value| value.into_committed())
+                    .map_err(|error| error.to_string())
+            },
+        )?;
+        self.tip = Some(next);
+        self.tip
+            .as_ref()
+            .ok_or_else(|| "native phase tip publication failed".into())
+    }
+}
+
+/// Authenticate only a signed-genesis body and its complete native signing epoch.
+///
+/// No execution preimage or height-one QC is accepted as authority here. This is the initial
+/// DKG authorization root; phase clocks require a genuine H2+ journal before any advancement.
+pub fn authenticate_signed_genesis(
+    wire: &[u8],
+    network: NetworkId,
+    limits: NativeFinalityLimits,
+) -> Result<
+    (
+        SignedBlock,
+        iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
+    ),
+    String,
+> {
+    limits.validate()?;
+    if wire.is_empty() || wire.len() > limits.block_bytes {
+        return Err("signed genesis exceeds its configured source bound".into());
+    }
+    norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
+        let block = iroha_data_model::block::decode_framed_signed_block(wire)
+            .map_err(|error| error.to_string())?;
+        if block.hash() != network.into_genesis_hash() {
+            return Err("foreign signed genesis".into());
+        }
+        let epoch = super::epoch::genesis_epoch(&block)?;
+        Ok((block, epoch))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        state::World,
+        sumeragi::{
+            certified_chain::QcVerification,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        },
+    };
+    use iroha_data_model::sumeragi::finality::NativeFinalityArtifact;
+    use iroha_sumeragi::crypto::NoAttestation;
+
+    fn limits() -> NativeFinalityLimits {
+        NativeFinalityLimits {
+            block_bytes: 1024 * 1024,
+            journal_bytes: 4 * 1024 * 1024,
+            block_count: 16,
+            allocated_bytes: 64 * 1024 * 1024,
+        }
+    }
+    fn fixture() -> (CertifiedTestChain, NativeFinalityJournal) {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1000)).unwrap();
+        chain.commit_at(2000, Vec::new());
+        chain.commit_at(3000, Vec::new());
+        let blocks = (1..=3)
+            .map(|height| {
+                NativeFinalityArtifact::from_block(chain.committed(height).block(), limits())
+                    .unwrap()
+            })
+            .collect();
+        (chain, NativeFinalityJournal { blocks })
+    }
+    #[test]
+    fn actual_native_journal_authenticates_source_and_keeps_genesis_scope_explicit() {
+        let (chain, journal) = fixture();
+        let chain_id = ChainId::from("sumeragi-certified-test-chain");
+        // Permissioned ordinary certificates carry no Pasta requirement; this rejecting verifier
+        // is not a bypass for flagged boundaries (the production caller supplies NativePasta).
+        with_verified_native_journal(
+            &journal,
+            &chain_id,
+            &chain.network_id(),
+            limits(),
+            &NoAttestation,
+            |reader| {
+                assert_eq!(
+                    reader.certified(1).unwrap().verification(),
+                    QcVerification::Genesis
+                );
+                assert_eq!(
+                    reader.certified(3).unwrap().verification(),
+                    QcVerification::Verified
+                );
+                assert_eq!(
+                    reader.certified(3).unwrap().result(),
+                    chain.committed(3).result()
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+    #[test]
+    fn source_caps_foreign_instance_and_truncated_prefix_are_refused_before_callback() {
+        let (chain, journal) = fixture();
+        let chain_id = ChainId::from("sumeragi-certified-test-chain");
+        let verify = |source: &NativeFinalityJournal, id: &ChainId, bounds| {
+            with_verified_native_journal(
+                source,
+                id,
+                &chain.network_id(),
+                bounds,
+                &NoAttestation,
+                |_| Err::<(), _>("callback must not run".into()),
+            )
+            .unwrap_err()
+        };
+        let suffix = NativeFinalityJournal {
+            blocks: journal.blocks[1..].to_vec(),
+        };
+        assert!(verify(&suffix, &chain_id, limits()).contains("complete consecutive prefix"));
+        assert!(!verify(&journal, &ChainId::from("foreign"), limits()).contains("callback"));
+        assert!(
+            !verify(
+                &journal,
+                &chain_id,
+                NativeFinalityLimits {
+                    allocated_bytes: 1,
+                    ..limits()
+                }
+            )
+            .contains("callback")
+        );
+        assert!(
+            !verify(
+                &journal,
+                &chain_id,
+                NativeFinalityLimits {
+                    block_count: 2,
+                    ..limits()
+                }
+            )
+            .contains("callback")
+        );
+        let mut changed = journal;
+        changed.blocks[1].block_wire.push(0);
+        assert!(!verify(&changed, &chain_id, limits()).contains("callback"));
+    }
+    #[test]
+    fn native_cursor_preserves_tip_on_refusal_and_genesis_has_no_finalized_clock() {
+        let (chain, journal) = fixture();
+        let mut cursor = NativeJournalCursor::new(
+            ChainId::from("sumeragi-certified-test-chain"),
+            chain.network_id(),
+            limits(),
+        )
+        .unwrap();
+        let initial = NativeFinalityJournal {
+            blocks: journal.blocks[..1].to_vec(),
+        };
+        assert!(cursor.advance(&initial).is_err());
+        assert!(cursor.tip().is_none());
+        let (_, epoch) = authenticate_signed_genesis(
+            &initial.blocks[0].block_wire,
+            chain.network_id(),
+            limits(),
+        )
+        .unwrap();
+        assert_eq!(epoch.authorization.epoch, 0);
+        let h2 = NativeFinalityJournal {
+            blocks: journal.blocks[..2].to_vec(),
+        };
+        assert_eq!(cursor.advance(&h2).unwrap().height(), 2);
+        let result = cursor.tip().unwrap().result();
+        assert!(cursor.advance(&h2).is_err());
+        let mut malformed = journal.clone();
+        malformed.blocks[2].block_wire.push(0);
+        assert!(cursor.advance(&malformed).is_err());
+        assert_eq!(cursor.tip().unwrap().result(), result);
+        assert_eq!(cursor.advance(&journal).unwrap().height(), 3);
+        assert_eq!(
+            cursor.chain_id(),
+            &ChainId::from("sumeragi-certified-test-chain")
+        );
+        assert_eq!(cursor.network_id(), chain.network_id());
+        assert_eq!(cursor.limits(), limits());
+        let wrong = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"wrong genesis"),
+        ));
+        assert!(
+            authenticate_signed_genesis(&initial.blocks[0].block_wire, wrong, limits()).is_err()
+        );
+    }
+}

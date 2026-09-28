@@ -19,12 +19,11 @@ final class VerifyingKeyRegistryJavaConsumerTest {
         "halo2/ipa",
         "halo2/pasta/kaigi-authorization-v1",
         "halo2/pasta/kaigi-usage-v1",
-        "halo2/pasta/ivm-replay-binding-v1",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
         "stark/fri/poseidon-x7-goldilocks-6x64-v1"));
-    assertEquals(8, expected.size());
+    assertEquals(7, expected.size());
     assertEquals(expected, VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1);
     for (final String label : expected) {
       assertEquals(label, VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(label));

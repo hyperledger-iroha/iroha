@@ -192,7 +192,7 @@ impl ConsensusHandshakeMetadata {
     /// or the signed Sumeragi v2 context/KAGEMUSHA genesis authority is
     /// invalid.
     pub fn validate(&self) -> Result<(), String> {
-        let expected_version = u32::from(crate::block::consensus_v2::PROTOCOL_VERSION);
+        let expected_version = u32::from(crate::sumeragi::PROTOCOL_VERSION);
         if self.wire_protocol_version != expected_version {
             return Err(
                 "wire_protocol_version must equal the first-release protocol version".to_owned(),
@@ -436,12 +436,6 @@ mod model {
         pub min_self_bond: Quantity,
         /// Minimum nomination bond required for delegators.
         pub min_nomination_bond: Quantity,
-        /// Maximum nominator concentration percentage.
-        pub max_nominator_concentration_pct: u8,
-        /// Seat allocation variance band percentage.
-        pub seat_band_pct: u8,
-        /// Maximum correlation percentage across validator entities.
-        pub max_entity_correlation_pct: u8,
         /// Finality margin in blocks before activating a newly elected set.
         pub finality_margin_blocks: u64,
         /// Evidence retention horizon in blocks.
@@ -493,21 +487,6 @@ mod model {
         pub fn min_nomination_bond(&self) -> &Quantity {
             &self.min_nomination_bond
         }
-        /// Maximum percentage of stake concentrated under a single nominator.
-        #[must_use]
-        pub fn max_nominator_concentration_pct(&self) -> u8 {
-            self.max_nominator_concentration_pct
-        }
-        /// Seat band percentage used when selecting validators.
-        #[must_use]
-        pub fn seat_band_pct(&self) -> u8 {
-            self.seat_band_pct
-        }
-        /// Maximum correlation percentage allowed across validator entities.
-        #[must_use]
-        pub fn max_entity_correlation_pct(&self) -> u8 {
-            self.max_entity_correlation_pct
-        }
         /// Finality margin in blocks before activating a newly elected set.
         #[must_use]
         pub fn finality_margin_blocks(&self) -> u64 {
@@ -547,7 +526,7 @@ mod model {
         /// Validate all signed `NPoS` election and reconfiguration invariants.
         ///
         /// # Errors
-        /// Returns a stable diagnostic when a seed, bond, percentage,
+        /// Returns a stable diagnostic when a seed, bond,
         /// or reconfiguration bound is invalid.
         pub fn validate(&self) -> Result<(), &'static str> {
             let synthetic_stake = crate::asset::AssetDefinitionId::derive_from_components(
@@ -573,12 +552,6 @@ mod model {
             }
             if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
                 return Err("NPoS minimum bond values must be greater than zero");
-            }
-            if self.max_nominator_concentration_pct > 100
-                || self.seat_band_pct > 100
-                || self.max_entity_correlation_pct > 100
-            {
-                return Err("NPoS election percentages must be in 0..=100");
             }
             if self.finality_margin_blocks == 0
                 || self.evidence_horizon_blocks == 0
@@ -618,9 +591,6 @@ mod model {
                 max_validators: max_validators(),
                 min_self_bond: min_self_bond(),
                 min_nomination_bond: min_nomination_bond(),
-                max_nominator_concentration_pct: max_nominator_concentration_pct(),
-                seat_band_pct: seat_band_pct(),
-                max_entity_correlation_pct: max_entity_correlation_pct(),
                 finality_margin_blocks: finality_margin_blocks(),
                 evidence_horizon_blocks: evidence_horizon_blocks(),
                 activation_lag_blocks: activation_lag_blocks(),
@@ -906,9 +876,6 @@ struct SumeragiNposParametersJson {
     max_validators: u32,
     min_self_bond: Quantity,
     min_nomination_bond: Quantity,
-    max_nominator_concentration_pct: u8,
-    seat_band_pct: u8,
-    max_entity_correlation_pct: u8,
     finality_margin_blocks: u64,
     evidence_horizon_blocks: u64,
     activation_lag_blocks: u64,
@@ -924,9 +891,6 @@ impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
             max_validators: value.max_validators,
             min_self_bond: value.min_self_bond,
             min_nomination_bond: value.min_nomination_bond,
-            max_nominator_concentration_pct: value.max_nominator_concentration_pct,
-            seat_band_pct: value.seat_band_pct,
-            max_entity_correlation_pct: value.max_entity_correlation_pct,
             finality_margin_blocks: value.finality_margin_blocks,
             evidence_horizon_blocks: value.evidence_horizon_blocks,
             activation_lag_blocks: value.activation_lag_blocks,
@@ -944,9 +908,6 @@ impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
             max_validators: value.max_validators,
             min_self_bond: value.min_self_bond,
             min_nomination_bond: value.min_nomination_bond,
-            max_nominator_concentration_pct: value.max_nominator_concentration_pct,
-            seat_band_pct: value.seat_band_pct,
-            max_entity_correlation_pct: value.max_entity_correlation_pct,
             finality_margin_blocks: value.finality_margin_blocks,
             evidence_horizon_blocks: value.evidence_horizon_blocks,
             activation_lag_blocks: value.activation_lag_blocks,
@@ -981,19 +942,6 @@ impl JsonSerialize for SumeragiNposParameters {
             &mut first,
             "min_nomination_bond",
             &self.min_nomination_bond,
-        )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "max_nominator_concentration_pct",
-            &self.max_nominator_concentration_pct,
-        )?;
-        json_support::write_field_to(out, &mut first, "seat_band_pct", &self.seat_band_pct)?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "max_entity_correlation_pct",
-            &self.max_entity_correlation_pct,
         )?;
         json_support::write_field_to(
             out,
@@ -1557,15 +1505,6 @@ mod defaults {
             }
             pub fn min_nomination_bond() -> Quantity {
                 Quantity::one()
-            }
-            pub const fn max_nominator_concentration_pct() -> u8 {
-                25
-            }
-            pub const fn seat_band_pct() -> u8 {
-                5
-            }
-            pub const fn max_entity_correlation_pct() -> u8 {
-                25
             }
             pub const fn finality_margin_blocks() -> u64 {
                 8
@@ -3044,6 +2983,40 @@ mod tests {
         }
     }
     #[test]
+    fn sumeragi_npos_rejects_retired_unsupported_election_controls() {
+        let expected = SumeragiNposParameters::default();
+        let canonical = norito::json::to_value(&expected).expect("canonical NPoS parameters");
+        let custom = CustomParameter::new(
+            SumeragiNposParameters::parameter_id(),
+            Json::from_norito_value_ref(&canonical).unwrap(),
+        );
+        assert_eq!(
+            SumeragiNposParameters::from_custom_parameter(&custom),
+            Some(expected)
+        );
+        for field in [
+            "max_nominator_concentration_pct",
+            "seat_band_pct",
+            "max_entity_correlation_pct",
+        ] {
+            for value in [0_u64, 25, 100] {
+                let mut retired = canonical.clone();
+                retired
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), value.into());
+                let custom = CustomParameter::new(
+                    SumeragiNposParameters::parameter_id(),
+                    Json::from_norito_value_ref(&retired).unwrap(),
+                );
+                assert!(
+                    SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+                    "unsupported signed policy {field}={value} must not be ignored"
+                );
+            }
+        }
+    }
+    #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_string_wrapped_payload() {
         let expected = SumeragiNposParameters::default();
         let wrapped = Json::new(norito::json::to_json(&expected).expect("serialize npos payload"));
@@ -3063,9 +3036,6 @@ mod tests {
             .expect("npos payload should serialize as object");
         for field in [
             "max_validators",
-            "max_nominator_concentration_pct",
-            "seat_band_pct",
-            "max_entity_correlation_pct",
             "finality_margin_blocks",
             "evidence_horizon_blocks",
             "activation_lag_blocks",
@@ -3152,7 +3122,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600,"xor_asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw"}"#;
+        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","slashing_delay_blocks":3600,"xor_asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw"}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -3221,7 +3191,7 @@ mod tests {
         ConsensusHandshakeMetadata {
             mode: SumeragiConsensusMode::Permissioned,
             block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
-            wire_protocol_version: u32::from(crate::block::consensus_v2::PROTOCOL_VERSION),
+            wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
             kagemusha_mint_finality:
                 crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
@@ -3257,9 +3227,14 @@ mod tests {
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
-        let mut bad_version = baseline.clone();
-        bad_version.wire_protocol_version = 99;
-        assert!(bad_version.validate().is_err());
+        for version in [0, 1, 2, 3, 4, 5, 7, 99] {
+            let mut bad_version = baseline.clone();
+            bad_version.wire_protocol_version = version;
+            assert!(
+                bad_version.validate().is_err(),
+                "retired or unsupported version {version}"
+            );
+        }
         let mut bad_context = baseline;
         bad_context.sumeragi_v2.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
@@ -3293,7 +3268,7 @@ mod tests {
         fields.insert(
             "wire_proto_versions".to_owned(),
             Value::Array(vec![Value::Number(Number::U64(u64::from(
-                crate::block::consensus_v2::PROTOCOL_VERSION,
+                crate::sumeragi::PROTOCOL_VERSION,
             )))]),
         );
         norito::json::value::from_value::<ConsensusHandshakeMetadata>(legacy)
@@ -3310,7 +3285,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"xor_asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":3600,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"xor_asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":3600,"epoch_length_blocks":3600,}"#;
         assert!(
             Json::from_raw_json(payload.to_owned()).is_err(),
             "invalid JSON must be rejected before it can enter a custom parameter"

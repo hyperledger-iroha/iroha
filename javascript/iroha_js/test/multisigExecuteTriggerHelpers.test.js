@@ -78,7 +78,7 @@ test("buildExecuteTriggerInstruction and buildExecuteTriggerNorito round-trip ca
     },
   });
 
-  const encoded = buildExecuteTriggerNorito("staged_mint_request_hbl", {
+  const encoded = buildExecuteTriggerNorito("staged_mint_request_hbl", 753, {
     action: "create",
     request_id: "mr1",
   });

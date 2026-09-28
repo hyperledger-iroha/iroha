@@ -48,7 +48,28 @@ def test_pr_workflow_runs_panic_recovery_guard_and_regressions() -> None:
 @pytest.mark.parametrize(
     "relative",
     (
+        "crates/irohad/src/sorafs_provider_ingest_runtime/https_source.rs",
+        "crates/irohad/src/external_software_signer/musubi_attestation.rs",
+        "crates/irohad/src/musubi_publication_service/private_tls_ingress.rs",
+    ),
+)
+def test_daemon_recoverable_workers_have_no_bare_blocking(relative: str) -> None:
+    module = load_guard_module()
+    assert relative in module.NO_BARE_BLOCKING
+    source = (module.ROOT / relative).read_text(encoding="utf-8")
+    assert module._bare_blocking_lines(source) == []
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
         "crates/iroha_core/src/executor_initial_permission_authority.rs",
+        "crates/iroha_core/src/executor_execution_fee.rs",
+        "crates/iroha_core/src/executor_execution_effects.rs",
+        "crates/iroha_core/src/executor_raw_ivm_work_tests.rs",
+        "crates/iroha_core/src/executor_effect_budget_tests.rs",
+        "crates/iroha_core/src/executor_final_promotion_permission_tests.rs",
+        "crates/iroha_core/src/executor_final_promotion_account_permission_tests.rs",
         "crates/iroha_core/src/executor_stream_token_custody_permission_tests.rs",
     ),
 )
@@ -96,6 +117,36 @@ def test_core_recovery_support_rejects_undeclared_permission_sibling(
         "crates/iroha_core/src/executor.rs:1: include! source path escapes "
         "the audited source roots: executor_unreviewed_permission.rs"
     ]
+
+
+def test_shared_signer_fixture_is_an_exact_audited_source(tmp_path: Path) -> None:
+    module = load_guard_module()
+    relative = (
+        "crates/sorafs_manifest/src/signer/final_promotion/tests/"
+        "statement_fixture_support.rs"
+    )
+    fixture = tmp_path / relative
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text("fn fixture() {}\n", encoding="utf-8")
+    source = (
+        tmp_path
+        / "crates/irohad/src/signer_operation/tests/final_promotion.rs"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        'include!("../../../../sorafs_manifest/src/signer/final_promotion/tests/'
+        'statement_fixture_support.rs");\n',
+        encoding="utf-8",
+    )
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert fixture.resolve() in {source.resolve() for source in sources}
+    expected_records, _, _ = module.torii_boundary_inventory(tmp_path)
+    fixture.write_text("fn changed_fixture() {}\n", encoding="utf-8")
+    errors = module.closed_torii_boundary_inventory_failures(
+        tmp_path, expected_records
+    )
+    assert any("source inventory drifted" in error for error in errors)
 
 
 def test_stable_inventory_read_rejects_hardlinks_and_shared_writes(

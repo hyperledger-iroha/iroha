@@ -100,65 +100,34 @@ mod goldilocks {
     }
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
-    fn core_host_enforces_registered_ipa_curve_policy() {
+    fn core_host_rejects_retired_ivm_ipa_registry_key() {
         use iroha_core::zk;
-        use iroha_data_model::proof::VerifyingKeyId;
+        use iroha_data_model::{
+            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+            zk::BackendTag,
+        };
         use std::collections::BTreeMap;
 
         let authority: AccountId = ALICE_ID.clone();
         let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
-        let record = zk::halo2_ipa_ivm_replay_binding_vk_record("ballot", 1)
-            .expect("canonical registered Pallas key");
         let id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "curve_policy");
-        let proof = zk::prove_halo2_ipa_ivm_replay_binding_envelope(
-            zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            record.key.as_ref().expect("inline verifier key"),
-            iroha_crypto::Hash::new(b"curve-policy-code"),
-            iroha_crypto::Hash::new(b"curve-policy-overlay"),
-            iroha_crypto::Hash::new(b"curve-policy-events"),
-            iroha_crypto::Hash::new(b"curve-policy-gas"),
+        let key = VerifyingKeyBox::new(zk::ZK_BACKEND_HALO2_IPA.into(), vec![0x11; 3]);
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            1,
+            "ivm-execution-v1",
             None,
-        )
-        .expect("valid registered Pallas proof");
-        let tlv = envelope_tlv(&proof.bytes);
-
-        let mut unsupported_record = record.clone();
-        unsupported_record.curve = "goldilocks".to_owned();
-        assert_eq!(
-            host.set_verifying_keys(BTreeMap::from([(id.clone(), unsupported_record)])),
-            Err(ivm::VMError::NoritoInvalid),
-            "Goldilocks is not an admissible IPA group in the verifier registry"
+            "test",
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            iroha_crypto::Hash::new(b"retired-ivm-schema").into(),
+            zk::hash_vk(&key),
         );
-        host.set_verifying_keys(BTreeMap::from([(id, record)]))
-            .expect("install canonical Pallas key");
-
-        for (curve, result, status) in [
-            (iroha_config::parameters::actual::ZkCurve::Pallas, 1, 0),
-            (
-                iroha_config::parameters::actual::ZkCurve::Goldilocks,
-                0,
-                ivm::host::ERR_CURVE,
-            ),
-            (
-                iroha_config::parameters::actual::ZkCurve::Bn254,
-                0,
-                ivm::host::ERR_CURVE,
-            ),
-        ] {
-            let mut cfg = base_config();
-            cfg.curve = curve;
-            host.set_halo2_config(&cfg);
-            let mut vm = ivm::IVM::new(1_000_000);
-            let ptr = vm
-                .alloc_input_tlv(&tlv)
-                .expect("alloc canonical envelope tlv");
-            vm.set_register(10, ptr);
-            let gas = host
-                .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
-                .expect("curve-policy syscall");
-            assert!(gas > 0);
-            assert_eq!(vm.register(10), result);
-            assert_eq!(vm.register(11), status);
-        }
+        record.vk_len = u32::try_from(key.bytes.len()).expect("bounded fixture key");
+        record.key = Some(key);
+        assert_eq!(
+            host.set_verifying_keys(BTreeMap::from([(id, record)])),
+            Err(ivm::VMError::NoritoInvalid),
+            "retired IVM binding circuit cannot enter the production verifier registry"
+        );
     }
 }

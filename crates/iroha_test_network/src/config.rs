@@ -1488,7 +1488,6 @@ fn install_preexec_lane_manifests(
         }
         _ => None,
     };
-    state.install_lane_compliance_engine(lane_compliance);
     let lane_manifests =
         LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
     lane_manifests
@@ -1496,7 +1495,14 @@ fn install_preexec_lane_manifests(
         .map_err(|error| {
             eyre!("validate lane manifest registry for genesis pre-execution: {error}")
         })?;
-    state.install_lane_manifests(&Arc::new(lane_manifests));
+    state
+        .install_materialized_lane_manifests_for_catalog(
+            &Arc::new(lane_manifests),
+            &nexus.lane_catalog,
+            &nexus.governance,
+        )
+        .map_err(|error| eyre!("install genesis lane manifest authority: {error}"))?;
+    state.install_lane_compliance_engine(lane_compliance);
     Ok(())
 }
 fn resign_genesis(

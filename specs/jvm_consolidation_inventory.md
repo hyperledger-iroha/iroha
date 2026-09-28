@@ -114,7 +114,7 @@ JSON/payload/codec tests pass. A wider selection also reached an existing
 required-native assertion and failed without the bridge; the full JVM suite
 has not requalified after this API change.
 
-The canonical CUDA source is migrated; rebuilt native and hardware qualification remain open. These are seven capability groups across eight
+The canonical automatic native source is migrated; rebuilt native and hardware qualification remain open. These are seven capability groups across eight
 queue entries, not eight replacement classes.
 
 | Java queue entry | Concrete gap and canonical destination |
@@ -122,7 +122,7 @@ queue entries, not eight replacement classes.
 | J `client/CanonicalRequestSignatureProvider.java` | Migrated to Kotlin `RequestSigner`, used by canonical request authorization and all signing consumers. Five Java consumer tests cover opaque callbacks and canonical bytes; the full 1,253-test JVM run passes. Java implementation retirement remains. |
 | J `nexus/NexusModelUtils.java` | Invariants now belong to immutable Kotlin `NexusAppModels` values: validated construction, owned arrays and immutable maps/sets, payload-derived hashes and canonical Ed25519. Twenty-seven focused tests, including five Java consumers, pass in the full JVM run. No public utility replacement or data-class copying remains. |
 | J `offline/IrohaPeerNearbySecureChannelV1.java` | Kotlin `IrohaPeerNearbyV1.Session` owns typed verified-IPM1 seal/open, profile/sequence checks, bounded copies and wiping. Seven Kotlin and four Java consumer tests pass; both duplicate Java Nearby facades were removed. Device/radio qualification remains. |
-| J `gpu/CudaAccelerators.java` | Migrated to K `gpu/CudaAccelerators.kt`: one bounded batch API per operation, explicit disabled/injected/native contexts, owned arrays and canonical BN254 limbs. Eight Java consumer tests pass. Seven compiled JVM native declarations match Kotlin-only exports in `platform_jni/gpu.rs`; five hardware tests compile under JDK 8 and the nightly lane selects them. The duplicate Java implementation/tests are removed. Rebuilt native binding execution and CUDA numerical/device qualification remain unverified. |
+| J `gpu/CudaAccelerators.java` | Migrated to K `gpu/Accelerators.kt`: bounded automatic batches, explicit disabled/injected/native contexts, owned arrays and canonical BN254 limbs. JNI snapshots and results use the common process envelope through foreign copy. Retired CUDA-only names have no aliases. Java API controls, host native binding and ordinary Poseidon/BN254 parity suites retain their assertions. Rebuilt native execution, per-family JNI completion receipts and CUDA device qualification remain open. |
 | J `tools/AndroidKeystoreAttestationHarness.java` | Replaced by `kotlin/tools` application `iroha-attestation`, using the byte-identical pure verifier moved to `core-jvm`. All 25 tool tests pass (22 Java consumers, 3 bounded-reader cases), including the original fixture assertions, independently supplied roots/challenge/SPKI/snapshot/time, duplicate/conflicting argument rejection, ZIP/byte bounds and atomic output identity. The shell launcher invokes the installed Kotlin command; old Java command and tests are removed. Physical StrongBox qualification remains separate. |
 | JA `client/okhttp/OkHttpTransportExecutor.java` | Migrated to Kotlin `OkHttpTransportExecutor` and per-client `HttpTransportScope`. Owned defaults, borrowed injection, cancellation, permanent close, bounded framing/decompression and one-shot dispatch pass 29 transport, 8 scope and 8 Java consumer tests. Twelve new SSE lifecycle tests also pass. The full JVM checkpoint is 1,295 tests; Android debug unit suites pass 57 client + 2 wallet tests. Java backend retirement remains. |
 | JA `client/okhttp/OkHttpWebSocketConnector.java` | Kotlin `NettyWebSocketConnector` owns explicit NIO/TLS lifetimes and a single upgrade attempt. Twenty-nine WebSocket tests pass, including two Java consumers, real wire bounds, TLS hostname/trust rejection and concurrent close/send. The 72-test focused selection also covers security, SSE and HTTP scopes. |
@@ -189,14 +189,14 @@ explicit resource ownership. There is one implementation per protocol.
   `client/transport/OkHttpTransportExecutorTest.kt` for the
   existing framing/limit contract. A passing mock connector is insufficient:
   require real connector handshake/message/close tests and Android consumption.
-- **CUDA:** the eight canonical Java consumer tests preserve input validation,
-  null-result, status, ownership and injected-backend behavior. The host native
-  binding test executes all seven JNI declarations with empty batches; execution
-  against a rebuilt bridge is pending. The separate `cudaHardwareTest` compiles
-  five tests with all ten IVM Poseidon CPU goldens and independent BN254 modular
-  arithmetic, including batching and size-one equivalence. Nightly builds the
-  CUDA bridge and runs this task; missing device/results fail. Hardware execution
-  remains unqualified on the current macOS host.
+- **Automatic native computation:** canonical Java consumers preserve validation,
+  null-result, diagnostic status, ownership and injected-backend behavior. The
+  host binding test resolves all seven `Accelerators` JNI declarations. Ordinary
+  native suites retain all ten Poseidon CPU goldens and independent BN254 modular
+  comparisons, batching and size-one equivalence. These suites permit the CPU
+  fallback. Rebuilt JNI execution remains pending. `cudaHardwareTest` reports an
+  open gate until per-family completion receipts can prove physical execution;
+  availability and equal output alone are insufficient.
 - **Attestation command:** all original harness assertions are migrated into
   `kotlin/tools` Java consumer tests. The 25-test suite passes, including both
   shared mock vendor fixtures, directory/ZIP roots, independently supplied
@@ -356,3 +356,51 @@ explicit refusal tests through the canonical Kotlin API. The focused `:core-jvm:
 org.hyperledger.iroha.sdk.sorafs.SorafsCapacityDeclarationJavaConsumerTest` passed with JDK 21
 and the enforced JDK 8 API/source targets. The remaining capacity dispute/pricing/credit Java
 builders are unchanged.
+
+## Kotodama manifest parser ownership (2026-09-23)
+
+The 14 groups in the duplicate Java `ContractManifestTests` harness are covered
+by the Kotlin-owned `ContractManifestTest`: exported and nominal shared fixtures,
+explicit public returns, V1 call-table limits, complete manifest fields, trigger
+names, numeric type grammar, bounded dynamic access, endpoint paths, flat schema
+depth, and reserved projection/page shapes. The Kotlin suite also checks current
+empty-product grammar. In particular, `Transfer{}` is a valid V1 nominal product;
+the old Java rejection was obsolete, and the Kotlin and Java-source consumers
+instead reject the noncanonical `Transfer{ }` spelling. Three Java-source
+`ContractManifestJavaConsumerTest` cases exercise the Kotlin parser and immutable
+model directly, including shared nominal errors, the 8,192-word table bound,
+dynamic access declarations, and empty products. The duplicate Java test class
+and its `GradleHarnessTests` registration are removed. The focused JDK 21 Gradle
+run passes all 16 Kotlin and 3 Java-source tests with JDK 8 API enforcement.
+
+The duplicate Java production manifest parser and models are also removed.
+The Java `HttpClientTransport` exact-read path and `IrohaClient` method now return
+the Kotlin-owned `ContractManifestRecord` and parse through the Kotlin-owned
+`ContractJsonParser`. The syntax generator no longer targets the retired Java
+parser. The configured full Java `:core:test` run passes 415/415 after aligning
+the V1 Parliament transition list, BFV expected-error vector, and canonical
+lowercase UAID parity input. This finishes manifest parser and record ownership;
+broader duplicate Java implementation retirement, Android/device qualification,
+and full release evidence remain open.
+
+## Parliament Java-source consumer ownership (2026-09-24)
+
+`ParliamentApiV1JavaConsumerTest` now compiles Java against the Kotlin-owned
+`ParliamentApiV1` and top-level draft response/instruction models. It exercises
+closed proposal validation, exact attempt-draft fields and retry bound,
+authenticated draft response identifiers and wire ID, rejection of unknown
+fields, and the canonical attempt-read route. The tests use JDK 8 APIs under
+the Kotlin `core-jvm` compile guard. This is an initial Java-source consumer
+slice, not retirement of the duplicate implementation or its test evidence.
+
+The duplicate Java `ParliamentApiV1` and `ParliamentProposalValidatorV1`
+remain coupled to the Java `HttpClientTransport` Parliament methods. The Java
+Android timed-OVN wallet and casting trust anchor also use Java API nested
+proof models. Before deleting those production classes, migrate the remaining
+16 Java API tests and four Java transport tests to Java-source tests of the
+Kotlin API and transport, preserving their assertions. Migrate the nine Java
+Android wallet tests to Java-source consumers of the Kotlin `client-android`
+wallet, and remove the Java transport/wallet callers in the same candidate.
+The Kotlin-owned mirror suites cover 17 API, four transport, and 11 Android
+wallet cases, but they do not replace Java-source compilation evidence. No
+Java compatibility facade or fallback validator belongs in the first release.

@@ -215,7 +215,8 @@ private enum class NumericKind(
 }
 
 private const val MIN_KNOWN_POINTER_TYPE = 0x0001
-private const val MAX_ASSIGNED_POINTER_TYPE = 0x0012
+private const val MAX_ASSIGNED_POINTER_TYPE = 0x0013
+private const val UNASSIGNED_POINTER_TYPE = 0x000C
 // END GENERATED: kotodama-v1-numeric-policy
 
 /** Canonical schema-bound frames and pointer envelopes for Kotodama V1 numerics. */
@@ -416,7 +417,8 @@ object NumericV1Codec {
         }
         val header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN)
         val pointerType = header.short.toInt() and 0xFFFF
-        val knownAllowedType = pointerType in MIN_KNOWN_POINTER_TYPE..MAX_ASSIGNED_POINTER_TYPE
+        val knownAllowedType = pointerType in MIN_KNOWN_POINTER_TYPE..MAX_ASSIGNED_POINTER_TYPE &&
+            pointerType != UNASSIGNED_POINTER_TYPE
         if (!knownAllowedType) fail(NumericV1ErrorCode.UNKNOWN_TYPE, "unknown pointer type")
         if (pointerType != kind.pointerType) fail(NumericV1ErrorCode.WRONG_TYPE, "pointer type does not match")
         if ((header.get().toInt() and 0xFF) != 1) {

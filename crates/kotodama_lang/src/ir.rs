@@ -30,6 +30,8 @@ struct StateMapSpec {
 }
 fn append_value_word_types(ty: &Type, words: &mut Vec<Type>) {
     match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } if fields.is_empty() => words.push(Type::Unit),
+        Type::Tuple(items) if items.is_empty() => words.push(Type::Unit),
         Type::Struct { fields, .. } => {
             for (_, field_ty) in fields.iter() {
                 append_value_word_types(field_ty, words);
@@ -42,7 +44,7 @@ fn append_value_word_types(ty: &Type, words: &mut Vec<Type>) {
         }
         // Sums are compiler-owned heap values. Their complete ABI value is
         // one validated raw handle; inactive branches are never flattened
-        // into public registers or populated with placeholders.
+        // into call-table slots or populated with placeholders.
         handle @ (Type::Option(_) | Type::Result(_, _) | Type::List(_, _)) => {
             words.push(handle);
         }
@@ -68,20 +70,6 @@ fn runtime_value_word_types(ty: &Type) -> Vec<Type> {
     let mut words = Vec::new();
     append_value_word_types(ty, &mut words);
     words
-}
-fn runtime_word_is_pointer(ty: &Type) -> bool {
-    matches!(
-        semantic::resolve_struct_type(ty),
-        Type::Int
-            | Type::Decimal
-            | Type::Quantity
-            | Type::String
-            | Type::Bytes
-            | Type::Json
-            | Type::Option(_)
-            | Type::Result(_, _)
-            | Type::List(_, _)
-    ) || semantic::is_pointer_type(ty)
 }
 fn function_param_word_name(param: &str, index: usize) -> String {
     // `$` is not a source identifier character, so this compiler-owned name
@@ -634,15 +622,15 @@ pub enum Instr {
         value: Temp,
     },
     /// Call a user-defined function by name with positional arguments.
-    /// Arguments are passed in ARG_REGS; return value (if any) in r10.
+    /// Arguments and the optional result use the caller-owned V1 word tables.
     Call {
         callee: String,
         args: Vec<Temp>,
         dest: Option<Temp>,
     },
     /// Call a user-defined function returning multiple scalar values.
-    /// The callee writes results into consecutive return registers starting at r10.
-    /// Codegen moves r10..r(10+n-1) into the provided `dests` temps in order.
+    /// The callee writes results into the caller-owned V1 result word table.
+    /// Codegen loads its initialized words into `dests` in order.
     CallMulti {
         callee: String,
         args: Vec<Temp>,
@@ -836,7 +824,6 @@ pub enum Instr {
         actor: Option<Temp>,
         entrypoint: Temp,
         payload: Temp,
-        returns_pointer: bool,
     },
     /// Test-only runtime call with multiple return values and an optional fixture actor.
     InvokeEntrypointAsMulti {
@@ -844,7 +831,6 @@ pub enum Instr {
         actor: Option<Temp>,
         entrypoint: Temp,
         payload: Temp,
-        return_pointer_mask: u64,
     },
     /// Test-only assertion that a named actor's runtime entrypoint call rejects.
     ExpectRejectAs {
@@ -1047,11 +1033,6 @@ pub enum Instr {
         dest: Temp,
         prefix: Temp,
     },
-    /// Decode a NoritoBytes blob containing an ASCII decimal integer; result in dest.
-    DecodeInt {
-        dest: Temp,
-        blob: Temp,
-    },
     /// Convert a declared/runtime `Name` root into framed `StatePath` bytes.
     StatePathFromName {
         dest: Temp,
@@ -1064,8 +1045,8 @@ pub enum Instr {
         base: Temp,
         key_blob: Temp,
     },
-    /// Encode an int into NoritoBytes (ASCII decimal) using host syscall; result pointer in dest.
-    EncodeInt {
+    /// Encode a Bool StateMap key as canonical Norito i64 0/1 bytes.
+    EncodeBoolKey {
         dest: Temp,
         value: Temp,
     },
@@ -1213,15 +1194,13 @@ pub enum Instr {
         dsid: Temp,
         manifest: Option<Temp>,
     },
+    /// Stage one exact issuer-signed anchored-spend wire in the active AXT.
+    StageAnchoredSpend {
+        spend: Temp,
+    },
     /// Attach or clear a dataspace proof for the active AXT.
     VerifyDsProof {
         dsid: Temp,
-        proof: Option<Temp>,
-    },
-    /// Use an asset handle with a NoritoBytes intent and optional proof.
-    UseAssetHandle {
-        handle: Temp,
-        intent: Temp,
         proof: Option<Temp>,
     },
     /// Commit the active AXT envelope.
@@ -1254,7 +1233,7 @@ pub enum DataRefKind {
     NoritoBytes,
     DataSpaceId,
     AxtDescriptor,
-    AssetHandle,
+    AxtAnchoredSpendV1,
     ProofBlob,
     SoracloudRequest,
     SoracloudResponse,
@@ -1280,7 +1259,7 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         Type::Name => Some(DataRefKind::Name),
         Type::DataSpaceId => Some(DataRefKind::DataSpaceId),
         Type::AxtDescriptor => Some(DataRefKind::AxtDescriptor),
-        Type::AssetHandle => Some(DataRefKind::AssetHandle),
+        Type::AxtAnchoredSpendV1 => Some(DataRefKind::AxtAnchoredSpendV1),
         Type::ProofBlob => Some(DataRefKind::ProofBlob),
         Type::SoracloudRequest => Some(DataRefKind::SoracloudRequest),
         Type::SoracloudResponse => Some(DataRefKind::SoracloudResponse),
@@ -1366,6 +1345,14 @@ fn collect_state_value_words(
     words: &mut Vec<Temp>,
 ) -> bool {
     match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } if fields.is_empty() => {
+            words.push(emit_i64_const(ctx, 0));
+            true
+        }
+        Type::Tuple(items) if items.is_empty() => {
+            words.push(emit_i64_const(ctx, 0));
+            true
+        }
         Type::Struct { fields, .. } => fields.iter().enumerate().all(|(index, (_, field_ty))| {
             let field = emit_tuple_get(ctx, value, index);
             collect_state_value_words(ctx, field, field_ty, words)
@@ -1474,6 +1461,12 @@ fn lower_json_construction(
 }
 fn collect_function_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, words: &mut Vec<Temp>) {
     match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } if fields.is_empty() => {
+            words.push(emit_i64_const(ctx, 0));
+        }
+        Type::Tuple(items) if items.is_empty() => {
+            words.push(emit_i64_const(ctx, 0));
+        }
         Type::Struct { fields, .. } => {
             for (index, (_, field_ty)) in fields.iter().enumerate() {
                 let field = emit_tuple_get(ctx, value, index);
@@ -1527,6 +1520,14 @@ fn rebuild_state_value_from_table(
     index: &mut usize,
 ) -> Option<Temp> {
     match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } if fields.is_empty() => {
+            load_state_value_word(ctx, table, index)?;
+            Some(emit_tuple_pack(ctx, Vec::new()))
+        }
+        Type::Tuple(items) if items.is_empty() => {
+            load_state_value_word(ctx, table, index)?;
+            Some(emit_tuple_pack(ctx, Vec::new()))
+        }
         Type::Struct { fields, .. } => {
             let items = fields
                 .iter()
@@ -1562,6 +1563,16 @@ fn rebuild_function_value_from_words(
     index: &mut usize,
 ) -> Option<Temp> {
     match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } if fields.is_empty() => {
+            let _unit = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            Some(emit_tuple_pack(ctx, Vec::new()))
+        }
+        Type::Tuple(items) if items.is_empty() => {
+            let _unit = *words.get(*index)?;
+            *index = index.saturating_add(1);
+            Some(emit_tuple_pack(ctx, Vec::new()))
+        }
         Type::Struct { fields, .. } => {
             let items = fields
                 .iter()
@@ -1816,6 +1827,7 @@ fn emit_pointer_from_norito(ctx: &mut LowerCtx, blob: Temp, kind: DataRefKind) -
 /// Some internal arithmetic protocols return signed 64-bit words. A Kotodama
 /// `int` is instead a nominal canonical 512-bit TLV value, so a raw word must
 /// never escape from an intrinsic whose semantic result is `int`.
+#[cfg(test)]
 fn emit_int_from_i64(ctx: &mut LowerCtx, value: Temp) -> Temp {
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::IntFromI64 { dest, value });
@@ -2183,7 +2195,7 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
     ctx.start_block(end);
     result
 }
-/// Emit canonical structural equality for one List element schema.
+/// Emit canonical value equality shared by operators and List.contains.
 fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> Temp {
     match semantic::resolve_struct_type(ty) {
         Type::Struct { fields, .. } => emit_product_value_eq(
@@ -2196,36 +2208,18 @@ fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -
         Type::Option(_) | Type::Result(_, _) => emit_sum_value_eq(ctx, left, right, ty),
         Type::List(element, _) => emit_list_value_eq(ctx, left, right, &element),
         leaf => {
-            let equal = ctx.new_temp();
             if let Some(kind) = wide_numeric_kind_for_type(&leaf) {
-                ctx.current_instr(Instr::NumericCompare {
-                    dest: equal,
-                    op: BinaryOp::Eq,
-                    left,
-                    right,
-                    kind,
-                });
+                emit_numeric_compare(ctx, BinaryOp::Eq, left, right, kind)
             } else if is_pointer_eq_type(&leaf) {
-                ctx.current_instr(Instr::PointerEq {
-                    dest: equal,
-                    left,
-                    right,
-                });
-            } else if matches!(leaf, Type::Int | Type::Bool) {
-                ctx.current_instr(Instr::Binary {
-                    dest: equal,
-                    op: BinaryOp::Eq,
-                    left,
-                    right,
-                });
+                emit_pointer_eq(ctx, left, right)
+            } else if matches!(leaf, Type::Unit | Type::ErrorEnum(_) | Type::Bool) {
+                emit_binary(ctx, BinaryOp::Eq, left, right)
             } else {
                 ctx.record_error(format!(
-                    "internal error: List.contains cannot compare `{leaf:?}`"
+                    "internal error: canonical equality cannot compare `{leaf:?}`"
                 ));
-                let false_value = emit_i64_const(ctx, 0);
-                emit_copy(ctx, equal, false_value);
+                emit_i64_const(ctx, 0)
             }
-            equal
         }
     }
 }
@@ -2943,9 +2937,9 @@ fn lower_state_map_set_value(
 #[derive(Debug, PartialEq)]
 pub enum Terminator {
     Return(Option<Temp>),
-    /// Return a 2-tuple via r10 (first) and r11 (second).
+    /// Return two flattened words through the caller-owned result table.
     Return2(Temp, Temp),
-    /// Return N values via r10.. in order.
+    /// Return N flattened words through the caller-owned result table in order.
     ReturnN(Vec<Temp>),
     Jump(Label),
     Branch {
@@ -2985,56 +2979,25 @@ pub(crate) fn lower_with_cap_diagnostics(
     program: &TypedProgram,
     dyn_iter_cap: usize,
 ) -> Result<Program, Vec<LoweringFailure>> {
-    let call_renames = build_entrypoint_call_renames(program);
+    let call_renames = HashMap::new();
     let function_param_specs = build_function_param_specs(program);
     let mut functions = Vec::new();
     let mut failures = Vec::new();
     for item in &program.items {
-        let TypedItem::Function(f) = item;
-        if needs_entrypoint_wrapper(f) {
-            let impl_name = entrypoint_impl_symbol(&f.name);
-            match lower_function_named(
-                f,
-                &impl_name,
-                &program.states,
-                dyn_iter_cap,
-                &call_renames,
-                &function_param_specs,
-            ) {
-                Ok(function) => functions.push(function),
-                Err(message) => failures.push(LoweringFailure {
-                    message,
-                    location: f.location,
-                }),
-            }
-            match lower_entrypoint_wrapper(
-                f,
-                &impl_name,
-                dyn_iter_cap,
-                &call_renames,
-                &function_param_specs,
-            ) {
-                Ok(function) => functions.push(function),
-                Err(message) => failures.push(LoweringFailure {
-                    message,
-                    location: f.location,
-                }),
-            }
-        } else {
-            match lower_function_named(
-                f,
-                &f.name,
-                &program.states,
-                dyn_iter_cap,
-                &call_renames,
-                &function_param_specs,
-            ) {
-                Ok(function) => functions.push(function),
-                Err(message) => failures.push(LoweringFailure {
-                    message,
-                    location: f.location,
-                }),
-            }
+        let TypedItem::Function(function) = item;
+        match lower_function_named(
+            function,
+            &function.name,
+            &program.states,
+            dyn_iter_cap,
+            &call_renames,
+            &function_param_specs,
+        ) {
+            Ok(function) => functions.push(function),
+            Err(message) => failures.push(LoweringFailure {
+                message,
+                location: function.location,
+            }),
         }
     }
     if failures.is_empty() {
@@ -3043,16 +3006,6 @@ pub(crate) fn lower_with_cap_diagnostics(
         Err(failures)
     }
 }
-fn build_entrypoint_call_renames(program: &TypedProgram) -> HashMap<String, String> {
-    let mut renames = HashMap::new();
-    for item in &program.items {
-        let TypedItem::Function(func) = item;
-        if needs_entrypoint_wrapper(func) {
-            renames.insert(func.name.clone(), entrypoint_impl_symbol(&func.name));
-        }
-    }
-    renames
-}
 fn build_function_param_specs(program: &TypedProgram) -> HashMap<String, Vec<TypedParam>> {
     let mut specs = HashMap::new();
     for item in &program.items {
@@ -3060,15 +3013,6 @@ fn build_function_param_specs(program: &TypedProgram) -> HashMap<String, Vec<Typ
         specs.insert(func.name.clone(), func.param_types.clone());
     }
     specs
-}
-fn entrypoint_impl_symbol(name: &str) -> String {
-    format!("__entrypoint_impl__{name}")
-}
-// Zero-argument entrypoints can jump straight into the implementation body
-// because there is no payload-decoding work for a wrapper to perform.
-fn needs_entrypoint_wrapper(func: &TypedFunction) -> bool {
-    !matches!(func.modifiers.kind, super::ast::FunctionKind::Private)
-        && !func.param_types.is_empty()
 }
 fn lower_function_named(
     func: &TypedFunction,
@@ -3198,150 +3142,6 @@ fn lower_function_named(
         Ok(function)
     }
 }
-fn lower_entrypoint_wrapper(
-    func: &TypedFunction,
-    impl_name: &str,
-    dyn_iter_cap: usize,
-    call_renames: &HashMap<String, String>,
-    function_param_specs: &HashMap<String, Vec<TypedParam>>,
-) -> Result<Function, String> {
-    let mut ctx = LowerCtx::new(
-        func.ret_ty.clone().unwrap_or(Type::Unit),
-        dyn_iter_cap,
-        call_renames.clone(),
-        function_param_specs.clone(),
-    );
-    let entry = ctx.new_label();
-    ctx.start_block(entry);
-    let payload = if func.param_types.is_empty() {
-        None
-    } else {
-        Some(load_entrypoint_payload(&mut ctx))
-    };
-    for param in &func.param_types {
-        if param.is_state {
-            return Err(format!(
-                "entrypoint `{}` cannot accept state parameter `{}`",
-                func.name, param.name
-            ));
-        }
-    }
-    let payload = payload.ok_or_else(|| {
-        format!(
-            "internal error: missing payload for parameterized entrypoint `{}`",
-            func.name
-        )
-    })?;
-    let args = {
-        let schema = entrypoint_argument_schema(&func.param_types)?.ok_or_else(|| {
-            format!(
-                "internal error: parameterized entrypoint `{}` has no argument schema",
-                func.name
-            )
-        })?;
-        let encoded_schema = ivm_abi::codec::encode_canonical_norito(&schema)
-            .map_err(|error| format!("failed to encode entrypoint argument schema: {error}"))?;
-        let schema_temp = emit_data_ref(
-            &mut ctx,
-            DataRefKind::NoritoBytes,
-            format!("0x{}", hex::encode(encoded_schema)),
-        );
-        let decoded_table = ctx.new_temp();
-        ctx.current_instr(Instr::DirectHelperSyscall {
-            dest: decoded_table,
-            syscall: ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
-            args: vec![payload, schema_temp],
-        });
-        let mut word_offset = 0_usize;
-        let mut args = Vec::with_capacity(func.param_types.len());
-        for (param, field) in func.param_types.iter().zip(&schema.fields) {
-            let word_count = field.ty.word_count().ok_or_else(|| {
-                format!(
-                    "entrypoint parameter `{}` has an invalid ABI v1 type schema",
-                    param.name
-                )
-            })?;
-            let mut words = Vec::with_capacity(word_count);
-            for _ in 0..word_count {
-                let dest = ctx.new_temp();
-                let index = i16::try_from(word_offset)
-                    .map_err(|_| "entrypoint argument index exceeds i16".to_owned())?;
-                let imm = ivm_abi::entrypoint::DECODED_ARGUMENT_TABLE_OFFSET
-                    .checked_add(
-                        index
-                            .checked_mul(ivm_abi::entrypoint::DECODED_ARGUMENT_WORD_BYTES)
-                            .ok_or_else(|| "entrypoint argument offset overflow".to_owned())?,
-                    )
-                    .ok_or_else(|| "entrypoint argument offset overflow".to_owned())?;
-                ctx.current_instr(Instr::Load64Imm {
-                    dest,
-                    base: decoded_table,
-                    imm,
-                });
-                words.push(dest);
-                word_offset = word_offset.saturating_add(1);
-            }
-            // Aggregate values have no runtime tuple allocation. Carry their
-            // canonical words across the internal call boundary and rebuild
-            // the compiler-only tuple shape in the implementation prologue.
-            args.extend(words);
-        }
-        if Some(word_offset) != schema.word_count() {
-            return Err(format!(
-                "entrypoint `{}` ABI v1 argument table word count mismatch",
-                func.name
-            ));
-        }
-        args
-    };
-    let return_ty = func.ret_ty.as_ref().unwrap_or(&Type::Unit);
-    let term = if *return_ty == Type::Unit {
-        ctx.current_instr(Instr::Call {
-            callee: impl_name.to_string(),
-            args,
-            dest: None,
-        });
-        let unit = emit_i64_const(&mut ctx, 0);
-        Terminator::Return(Some(unit))
-    } else if let Some(word_types) = function_value_word_types(return_ty) {
-        let mut dests = Vec::with_capacity(word_types.len());
-        for _ in word_types {
-            dests.push(ctx.new_temp());
-        }
-        ctx.current_instr(Instr::CallMulti {
-            callee: impl_name.to_string(),
-            args,
-            dests: dests.clone(),
-        });
-        Terminator::ReturnN(dests)
-    } else {
-        let dest = ctx.new_temp();
-        ctx.current_instr(Instr::Call {
-            callee: impl_name.to_string(),
-            args,
-            dest: Some(dest),
-        });
-        Terminator::Return(Some(dest))
-    };
-    ctx.finish_current(term);
-    let function = Function {
-        name: func.name.clone(),
-        params: Vec::new(),
-        blocks: ctx.blocks,
-        entry,
-        location: func.location,
-    };
-    if let Some(err) = ctx.error {
-        Err(err)
-    } else {
-        Ok(function)
-    }
-}
-fn load_entrypoint_payload(ctx: &mut LowerCtx) -> Temp {
-    let payload = ctx.new_temp();
-    ctx.current_instr(Instr::GetTriggerEvent { dest: payload });
-    payload
-}
 fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
     emit_data_ref(ctx, DataRefKind::Blob, value.to_owned())
 }
@@ -3449,7 +3249,7 @@ pub(crate) fn entrypoint_return_schema(
         .ok_or_else(|| format!("entrypoint `{entrypoint_name}` has an invalid return schema"))?;
     if words > ivm_abi::entrypoint::MAX_ENTRYPOINT_RETURN_WORDS {
         return Err(format!(
-            "entrypoint `{entrypoint_name}` returns {words} flattened words, exceeding the ABI v1 public register limit of {}",
+            "entrypoint `{entrypoint_name}` returns {words} flattened words, exceeding the ABI v1 public table limit of {}",
             ivm_abi::entrypoint::MAX_ENTRYPOINT_RETURN_WORDS,
         ));
     }
@@ -4222,10 +4022,21 @@ fn lower_statement(
 fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Option<Temp> {
     match semantic::resolve_struct_type(key_ty) {
         Type::Bool => {
+            // STATE_MAP_KEY_AT has already validated that a returned key is
+            // exactly the canonical 0/1 Norito i64 carrier. Compare it with
+            // the canonical true key without invoking the public Int codec.
+            let true_key = ivm_abi::codec::encode_canonical_norito(&1_i64)
+                .expect("canonical Bool key encodes");
+            let true_blob = emit_data_ref(
+                ctx,
+                DataRefKind::NoritoBytes,
+                format!("0x{}", hex::encode(true_key)),
+            );
             let key = ctx.new_temp();
-            ctx.current_instr(Instr::DecodeInt {
+            ctx.current_instr(Instr::PointerEq {
                 dest: key,
-                blob: key_blob,
+                left: key_blob,
+                right: true_blob,
             });
             Some(key)
         }
@@ -4630,7 +4441,9 @@ fn pointer_constructor_kind_and_type(constructor: PointerConstructor) -> (DataRe
         PointerConstructor::NoritoBytes => (DataRefKind::NoritoBytes, Type::Bytes),
         PointerConstructor::DataSpaceId => (DataRefKind::DataSpaceId, Type::DataSpaceId),
         PointerConstructor::AxtDescriptor => (DataRefKind::AxtDescriptor, Type::AxtDescriptor),
-        PointerConstructor::AssetHandle => (DataRefKind::AssetHandle, Type::AssetHandle),
+        PointerConstructor::AxtAnchoredSpendV1 => {
+            (DataRefKind::AxtAnchoredSpendV1, Type::AxtAnchoredSpendV1)
+        }
         PointerConstructor::ProofBlob => (DataRefKind::ProofBlob, Type::ProofBlob),
         PointerConstructor::SoracloudRequest => {
             (DataRefKind::SoracloudRequest, Type::SoracloudRequest)
@@ -5015,18 +4828,6 @@ fn lower_surface_builtin_call(
             });
             d
         }
-        Builtin::EncodeInt => {
-            let value = lower_expr_as_i64(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::EncodeInt { dest, value });
-            dest
-        }
-        Builtin::DecodeInt => {
-            let blob = lower_expr(ctx, &args[0], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::DecodeInt { dest: scalar, blob });
-            emit_int_from_i64(ctx, scalar)
-        }
         Builtin::EncodeJson => {
             let json = lower_expr(ctx, &args[0], vars);
             let dest = ctx.new_temp();
@@ -5286,57 +5087,13 @@ fn lower_surface_builtin_call(
             });
             dest
         }
-        Builtin::Isqrt => {
-            let src = lower_expr_as_u64(ctx, &args[0], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Isqrt { dest: scalar, src });
-            emit_int_from_u64(ctx, scalar)
-        }
-        Builtin::Abs => {
-            let src = lower_expr_as_i64(ctx, &args[0], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Abs { dest: scalar, src });
-            emit_int_from_u64(ctx, scalar)
-        }
-        Builtin::Min => {
-            let a = lower_expr_as_i64(ctx, &args[0], vars);
-            let b = lower_expr_as_i64(ctx, &args[1], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Min { dest: scalar, a, b });
-            emit_int_from_i64(ctx, scalar)
-        }
-        Builtin::Max => {
-            let a = lower_expr_as_i64(ctx, &args[0], vars);
-            let b = lower_expr_as_i64(ctx, &args[1], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Max { dest: scalar, a, b });
-            emit_int_from_i64(ctx, scalar)
-        }
-        Builtin::DivCeil => {
-            let num = lower_expr_as_i64(ctx, &args[0], vars);
-            let denom = lower_expr_as_i64(ctx, &args[1], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::DivCeil {
-                dest: scalar,
-                num,
-                denom,
-            });
-            emit_int_from_i64(ctx, scalar)
-        }
-        Builtin::Gcd => {
-            let a = lower_expr_as_i64(ctx, &args[0], vars);
-            let b = lower_expr_as_i64(ctx, &args[1], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Gcd { dest: scalar, a, b });
-            emit_int_from_u64(ctx, scalar)
-        }
-        Builtin::Mean => {
-            let a = lower_expr_as_i64(ctx, &args[0], vars);
-            let b = lower_expr_as_i64(ctx, &args[1], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Mean { dest: scalar, a, b });
-            emit_int_from_i64(ctx, scalar)
-        }
+        builtin @ (Builtin::Isqrt
+        | Builtin::Abs
+        | Builtin::Min
+        | Builtin::Max
+        | Builtin::DivCeil
+        | Builtin::Gcd
+        | Builtin::Mean) => lower_direct_helper_call(ctx, builtin, args, vars),
         Builtin::Poseidon2 => {
             let a = lower_expr_as_u64(ctx, &args[0], vars);
             let b = lower_expr_as_u64(ctx, &args[1], vars);
@@ -5607,10 +5364,10 @@ fn lower_surface_builtin_call(
             emit_i64_const(ctx, 0)
         }
         Builtin::Info => {
-            let msg = if semantic::is_numeric_type(&args[0].ty) {
-                let value = lower_expr_as_i64(ctx, &args[0], vars);
+            let msg = if matches!(semantic::resolve_struct_type(&args[0].ty), Type::Int) {
+                let value = lower_expr(ctx, &args[0], vars);
                 let encoded = ctx.new_temp();
-                ctx.current_instr(Instr::EncodeInt {
+                ctx.current_instr(Instr::PointerToNorito {
                     dest: encoded,
                     value,
                 });
@@ -5966,21 +5723,15 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::AxtTouch { dsid, manifest });
             emit_i64_const(ctx, 0)
         }
+        Builtin::StageAnchoredSpend => {
+            let spend = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::StageAnchoredSpend { spend });
+            emit_i64_const(ctx, 0)
+        }
         Builtin::VerifyDsProof => {
             let dsid = lower_expr(ctx, &args[0], vars);
             let proof = args.get(1).map(|p| lower_expr(ctx, p, vars));
             ctx.current_instr(Instr::VerifyDsProof { dsid, proof });
-            emit_i64_const(ctx, 0)
-        }
-        Builtin::UseAssetHandle => {
-            let handle = lower_expr(ctx, &args[0], vars);
-            let intent = lower_expr(ctx, &args[1], vars);
-            let proof = args.get(2).map(|p| lower_expr(ctx, p, vars));
-            ctx.current_instr(Instr::UseAssetHandle {
-                handle,
-                intent,
-                proof,
-            });
             emit_i64_const(ctx, 0)
         }
         Builtin::AxtCommit => {
@@ -6572,11 +6323,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 });
                 return t;
             }
-            if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
-                && is_pointer_eq_type(&left.ty)
-                && is_pointer_eq_type(&right.ty)
-            {
-                let t = emit_pointer_eq(ctx, l, r);
+            if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                let t = emit_typed_value_eq(ctx, l, r, &left.ty);
                 if *op == BinaryOp::Ne {
                     let t2 = emit_unary(ctx, UnaryOp::Not, t);
                     return t2;
@@ -6836,7 +6584,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 actor,
                                 entrypoint,
                                 payload,
-                                returns_pointer: false,
                             });
                             emit_i64_const(ctx, 0)
                         }
@@ -6845,18 +6592,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 .expect("aggregate return word types checked");
                             let dests: Vec<Temp> =
                                 word_types.iter().map(|_| ctx.new_temp()).collect();
-                            let mut return_pointer_mask = 0u64;
-                            for (idx, item_ty) in word_types.iter().enumerate() {
-                                if runtime_word_is_pointer(item_ty) {
-                                    return_pointer_mask |= 1u64 << idx;
-                                }
-                            }
                             ctx.current_instr(Instr::InvokeEntrypointAsMulti {
                                 dests: dests.clone(),
                                 actor,
                                 entrypoint,
                                 payload,
-                                return_pointer_mask,
                             });
                             let mut index = 0_usize;
                             let value = rebuild_function_value_from_words(
@@ -6873,7 +6613,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 actor,
                                 entrypoint,
                                 payload,
-                                returns_pointer: runtime_word_is_pointer(&expr.ty),
                             });
                             dest
                         }
@@ -6967,7 +6706,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         aggregate if function_value_word_types(aggregate).is_some() => {
                             let word_types = function_value_word_types(aggregate)
                                 .expect("aggregate return word types checked");
-                            // Multi-return: move the flattened ABI words from r10 onward, then
+                            // Multi-return: load the flattened ABI words from the result table, then
                             // rebuild the compiler-only aggregate shape.
                             let mut words = Vec::with_capacity(word_types.len());
                             for _ in word_types {
@@ -7500,7 +7239,7 @@ fn build_state_map_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &K
     match key_codec {
         KeyCodec::Int => {
             let key_blob = ctx.new_temp();
-            ctx.current_instr(Instr::EncodeInt {
+            ctx.current_instr(Instr::EncodeBoolKey {
                 dest: key_blob,
                 value: key,
             });
@@ -7737,6 +7476,29 @@ mod tests {
         assert!(!data_refs.contains(&(DataRefKind::Int, "1")));
     }
     #[test]
+    fn bool_state_keys_use_their_own_canonical_codec() {
+        let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
+        let entry = context.new_label();
+        context.start_block(entry);
+        let key = emit_i64_const(&mut context, 1);
+        let _path = build_state_map_path(&mut context, "flags", key, &KeyCodec::Int);
+        let blob = emit_i64_const(&mut context, 8);
+        let decoded = decode_state_map_key(&mut context, blob, &Type::Bool)
+            .expect("Bool StateMap key must decode");
+        context.finish_current(Terminator::Return(Some(decoded)));
+        let instructions = &context.blocks[0].instrs;
+        assert!(instructions.iter().any(|instruction| {
+            matches!(instruction, Instr::EncodeBoolKey { value, .. } if *value == key)
+        }));
+        assert!(instructions.iter().any(|instruction| {
+            matches!(instruction, Instr::PointerEq { dest, left, .. } if *dest == decoded && *left == blob)
+        }));
+        assert!(instructions.iter().all(|instruction| !matches!(
+            instruction,
+            Instr::PointerToNorito { .. } | Instr::PointerFromNorito { .. }
+        )));
+    }
+    #[test]
     fn wide_numeric_state_keys_use_canonical_pointer_norito() {
         assert_eq!(key_codec_for_type(&Type::Bool), Some(KeyCodec::Int));
         for ty in [Type::Int, Type::Decimal, Type::Quantity] {
@@ -7759,12 +7521,6 @@ mod tests {
                     } if *dest == decoded && *actual_blob == blob && *kind == expected_kind
                 )
             }));
-            assert!(
-                context.blocks[0]
-                    .instrs
-                    .iter()
-                    .all(|instruction| !matches!(instruction, Instr::DecodeInt { .. }))
-            );
         }
     }
     #[test]
@@ -7903,7 +7659,7 @@ mod tests {
         assert_eq!(constants.get(&abort_code), Some(&1001));
     }
     #[test]
-    fn entrypoint_wrapper_uses_only_the_host_argument_record() {
+    fn entrypoint_reads_only_the_prepared_host_argument_table() {
         let program = parse(include_str!("ir/fixtures/v1/i005.ko")).unwrap();
         let typed = analyze(&program).unwrap();
         let lowered = lower_with_cap(&typed, 2).unwrap();
@@ -7920,6 +7676,11 @@ mod tests {
         assert!(
             instructions
                 .iter()
+                .any(|instruction| matches!(instruction, Instr::LoadVar { .. }))
+        );
+        assert!(
+            !instructions
+                .iter()
                 .any(|instruction| matches!(instruction, Instr::GetTriggerEvent { .. }))
         );
         assert!(
@@ -7934,7 +7695,7 @@ mod tests {
         );
     }
     #[test]
-    fn single_json_entrypoint_uses_the_same_one_shot_argument_record() {
+    fn single_json_entrypoint_uses_the_same_prepared_argument_table() {
         let src = include_str!("ir/fixtures/v1/i006.ko");
         let prog = parse(src).expect("parse single json entrypoint");
         let typed = analyze(&prog).expect("analyze single json entrypoint");
@@ -7961,8 +7722,14 @@ mod tests {
                 }
             }
         }
-        assert!(saw_get_trigger, "wrapper should load the trigger payload");
-        assert_eq!(record_decodes, 1, "Json must use the canonical record ABI");
+        assert!(
+            !saw_get_trigger,
+            "entrypoint receives already validated table words"
+        );
+        assert_eq!(
+            record_decodes, 0,
+            "host decodes the canonical record before entry"
+        );
         assert_eq!(
             json_field_getters, 0,
             "the wrapper must not decode the transport JSON per parameter"
@@ -7975,7 +7742,7 @@ mod tests {
         let program = parse(src).expect("parse nested aggregate return");
         let typed = analyze(&program).expect("analyze nested aggregate return");
         let ir = lower(&typed).expect("lower nested aggregate return");
-        for name in ["make", "__entrypoint_impl__inspect"] {
+        for name in ["make", "inspect"] {
             let function = ir
                 .functions
                 .iter()
@@ -7989,19 +7756,11 @@ mod tests {
                 "`{name}` must return one active-only sum handle"
             );
         }
-        let wrapper = ir
-            .functions
-            .iter()
-            .find(|function| function.name == "inspect")
-            .expect("entrypoint wrapper");
-        assert!(wrapper.blocks.iter().any(|block| {
-            matches!(&block.terminator, Terminator::ReturnN(words) if words.len() == 1)
-        }));
         let implementation = ir
             .functions
             .iter()
-            .find(|function| function.name == "__entrypoint_impl__inspect")
-            .expect("entrypoint implementation");
+            .find(|function| function.name == "inspect")
+            .expect("direct entrypoint implementation");
         assert!(implementation.blocks.iter().any(|block| {
             block.instrs.iter().any(|instruction| {
                 matches!(
@@ -8647,12 +8406,6 @@ mod tests {
                     if *key_blob == encoded_keys[0].0
             )
         }));
-        assert!(
-            instructions
-                .iter()
-                .all(|instruction| !matches!(instruction, Instr::EncodeInt { .. })),
-            "source int keys must not use the retired scalar/ASCII key codec"
-        );
     }
     #[test]
     fn scalar_state_paths_lower_to_framed_state_path_bytes() {
@@ -9013,16 +8766,16 @@ mod tests {
         assert_eq!(encoded_schemas.len(), 5);
     }
     #[test]
-    fn aggregate_argument_words_over_register_window_fail_during_lowering() {
-        let src = include_str!("ir/fixtures/v1/i025.ko");
-        let prog = parse(src).expect("parse oversized aggregate call");
-        let typed = analyze(&prog).expect("analyze oversized aggregate call");
-        let failure = lower(&typed).expect_err("lowering must reject an oversized call ABI");
+    fn aggregate_argument_words_beyond_thirteen_lower_to_one_table_signature() {
+        let source = include_str!("ir/fixtures/v1/i025.ko");
+        let program = parse(source).expect("parse wide aggregate call");
+        let typed = analyze(&program).expect("analyze wide aggregate call");
+        let lowered = lower(&typed).expect("lowering supports bounded call tables");
         assert!(
-            failure.contains(
-                "requires 14 flattened argument words, exceeding the Kotodama V1 limit of 13"
-            ),
-            "unexpected lowering failure: {failure}"
+            lowered
+                .functions
+                .iter()
+                .any(|function| function.params.len() == 14)
         );
     }
     #[test]
@@ -9044,11 +8797,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(instructions.iter().any(|instruction| matches!(
             instruction,
-            Instr::InvokeEntrypointAs {
-                actor: None,
-                returns_pointer: true,
-                ..
-            }
+            Instr::InvokeEntrypointAs { actor: None, .. }
         )));
         assert!(
             !instructions.iter().any(|instruction| matches!(
@@ -9112,16 +8861,8 @@ mod tests {
         for block in &test_fn.blocks {
             for instr in &block.instrs {
                 match instr {
-                    Instr::InvokeEntrypointAs {
-                        dest: Some(_),
-                        returns_pointer,
-                        ..
-                    } => {
+                    Instr::InvokeEntrypointAs { dest: Some(_), .. } => {
                         saw_invoke = true;
-                        assert!(
-                            *returns_pointer,
-                            "adaptive int returns through its canonical pointer ABI"
-                        );
                     }
                     Instr::ExpectRejectAs { .. } => saw_expect_reject = true,
                     _ => {}
@@ -10014,7 +9755,7 @@ mod tests {
         assert!(saw_transfer, "expected TransferDomain in lowered IR");
     }
     #[test]
-    fn lower_info_int_encodes_to_norito() {
+    fn lower_info_int_preserves_full_width_pointer() {
         let src = "fn f() { debug::info(7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
@@ -10025,13 +9766,16 @@ mod tests {
         for bb in &f.blocks {
             for instr in &bb.instrs {
                 match instr {
-                    Instr::EncodeInt { .. } => saw_encode = true,
+                    Instr::PointerToNorito { .. } => saw_encode = true,
                     Instr::Info { .. } => saw_info = true,
                     _ => {}
                 }
             }
         }
-        assert!(saw_encode, "expected EncodeInt before Info");
+        assert!(
+            saw_encode,
+            "expected full-width pointer encoding before Info"
+        );
         assert!(saw_info, "expected Info instruction");
     }
     #[test]

@@ -101,7 +101,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
                     (LaneId::SINGLE, status),
                 ])),
             );
-            state.install_lane_manifests(&registry);
+            state.install_lane_manifests_for_testing(&registry);
         };
         // This authorization regression uses the configured zero-fee unit-test schedule.
         // Nonzero-fee registration and upload require funded explicit fee intents for each signer.

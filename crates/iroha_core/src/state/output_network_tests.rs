@@ -2,6 +2,7 @@
 //! These unit fixtures establish execution behavior, not carrier finality or DA.
 
 use super::*;
+use crate::exec_witness;
 use crate::{
     governance::manifest::{LaneManifestRegistry, LaneManifestStatus},
     state::WorldReadOnly,
@@ -42,7 +43,9 @@ fn install_routes(state: &State) {
             )
         })
         .collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+        statuses,
+    )));
 }
 
 fn fixture(row_bytes: u64, callback_bytes: Option<usize>) -> State {
@@ -174,7 +177,10 @@ fn carrier(inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
     builder.build_with_signature(0, ALICE_KEYPAIR.private_key())
 }
 
-fn execute(block: &mut StateBlock<'_>, source: &SignedBlock) -> Result<(), String> {
+fn execute(
+    block: &mut StateBlock<'_>,
+    source: &SignedBlock,
+) -> Result<(), ExecutionAttemptError<String>> {
     block.reserve_ordinary_execution_outputs(source)?;
     block.produce_ordinary_execution_outputs(source, |producer| {
         producer.execute_network_sources(None)?;
@@ -776,9 +782,7 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
     };
     use iroha_primitives::numeric::Quantity;
     let _guard = crate::exec_witness::exec_witness_guard();
-    let _fee_guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("network-fee", "universal").unwrap(),
@@ -855,5 +859,127 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
         mandatory,
         crate::fastpq::source_reservation::SourceUsage::ZERO
     );
-    assert!(crate::exec_witness::drain_exec_witness().fastpq_transcripts.is_empty());
+    assert!(
+        crate::exec_witness::drain_exec_witness()
+            .fastpq_transcripts
+            .is_empty()
+    );
+}
+
+#[test]
+fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
+    use crate::{smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction};
+    use iroha_data_model::{isi::Grant, transaction::IvmBytecode};
+    use ivm::error::ExecutionDeferral;
+    let _guard = exec_witness::exec_witness_guard();
+    let state = fixture(65_536, None);
+    let id: TriggerId = "direct_deferred_callback".parse().unwrap();
+    let key: Name = "deferred_native_write".parse().unwrap();
+    let mut program = ivm::ProgramMetadata {
+        max_cycles: 100,
+        ..Default::default()
+    }
+    .encode();
+    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    {
+        let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
+        let mut tx = setup.transaction();
+        Grant::account_permission(
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: ALICE_ID.clone(),
+            },
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        Register::trigger(Trigger::new(
+            id.clone(),
+            Action::new(
+                Executable::Ivm(IvmBytecode::from_compiled(program)),
+                Repeats::Exactly(2),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        tx.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
+    }
+    let entry = input(
+        &state,
+        vec![
+            SetKeyValue::account(ALICE_ID.clone(), key.clone(), Json::new(7)).into(),
+            ExecuteTrigger::new(id.clone()).into(),
+        ],
+        FeePaymentIntent::authority(vec![], None),
+        false,
+    );
+    let source = carrier(vec![entry.clone()]);
+    let cache_owner = state.trigger_ivm_cache.lock().prepared_contract_cache();
+    let reason = ExecutionDeferral::AllocationUnavailable;
+    cache_owner.set_checkout_refusal_for_test(Some(reason));
+    exec_witness::start_block();
+    let mut block = state.block(source.header());
+    let mut cache =
+        IvmCache::with_prepared_contract_cache(block.pipeline.cache_size, cache_owner.clone());
+    let before = exec_witness::snapshot_exec_witness();
+    let accepted =
+        AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(entry.clone()));
+    assert_eq!(
+        block.validate_transaction(accepted, &mut cache),
+        Err(reason.into())
+    );
+    assert_eq!(exec_witness::snapshot_exec_witness(), before);
+    assert_eq!(block.gas_used_in_block, 0);
+    assert!(
+        block
+            .world
+            .account(&ALICE_ID)
+            .unwrap()
+            .metadata()
+            .get(&key)
+            .is_none()
+    );
+    assert_eq!(
+        block
+            .world
+            .triggers
+            .by_call_triggers()
+            .get(&id)
+            .unwrap()
+            .repeats,
+        Repeats::Exactly(2)
+    );
+    cache_owner.set_checkout_refusal_for_test(None);
+    let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(entry));
+    let callbacks = block
+        .validate_transaction(accepted, &mut cache)
+        .expect("local recovery")
+        .1
+        .expect("same source succeeds");
+    assert_eq!(
+        callbacks.len(),
+        1,
+        "direct replay retains the by-call trace"
+    );
+    assert_eq!(callbacks[0].id, id);
+    assert!(block.gas_used_in_block > 0);
+    assert_eq!(
+        block.world.account(&ALICE_ID).unwrap().metadata().get(&key),
+        Some(&Json::new(7))
+    );
+    assert_eq!(
+        block
+            .world
+            .triggers
+            .by_call_triggers()
+            .get(&id)
+            .unwrap()
+            .repeats,
+        Repeats::Exactly(1)
+    );
 }

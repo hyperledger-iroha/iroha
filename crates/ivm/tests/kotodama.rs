@@ -1,9 +1,6 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
-use iroha_crypto as _;
-use iroha_data_model::prelude::Quantity;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use ivm::{
-    ProgramMetadata, axt, encoding, instruction,
+    ProgramMetadata, encoding, instruction,
     kotodama::{
         ast as kd_ast,
         ast::{BinaryOp, Expr, Function, Item, Statement},
@@ -18,14 +15,6 @@ use std::convert::TryInto;
 mod common;
 fn parse_meta_offset(code: &[u8]) -> Result<(ProgramMetadata, usize), ivm::VMError> {
     ProgramMetadata::parse(code).map(|parsed| (parsed.metadata, parsed.code_offset))
-}
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(&mut s, "{b:02x}");
-    }
-    s
 }
 fn test_compiler() -> Compiler {
     Compiler::new_with_options(CompilerOptions {
@@ -44,27 +33,23 @@ fn select_test_entrypoint(
         parsed.contract_interface.is_none(),
         "test-mode artifacts must not embed a deployable CNTR section"
     );
-    let implementation = format!("__entrypoint_impl__{name}");
     let function = report
         .budget_report
         .iter()
-        .find(|function| function.function_name == implementation)
-        .or_else(|| {
-            report
-                .budget_report
-                .iter()
-                .find(|function| function.function_name == name)
-        })
+        .find(|function| function.function_name == name)
         .unwrap_or_else(|| panic!("missing test entrypoint `{name}`"));
-    let return_offset = program
-        .len()
-        .checked_sub(parsed.header_len + core::mem::size_of::<u32>())
-        .expect("test artifact contains compiler-owned terminal HALT");
-    assert_eq!(
-        program[program.len() - core::mem::size_of::<u32>()..],
-        encoding::wide::encode_halt().to_le_bytes(),
-        "test artifact must end with the compiler-owned terminal HALT"
-    );
+    // This opcode-level assertion fixture supplies its own caller and terminal instruction.
+    // The production/test-suite owners instead authenticate the complete callable sidecar.
+    let mut caller_program = program.to_vec();
+    let return_offset = caller_program.len() - parsed.header_len;
+    caller_program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    vm.load_program(&caller_program)
+        .expect("load assertion opcode fixture");
+    let result = vm.alloc_heap(8).expect("caller-owned Unit result table");
+    vm.set_register(10, 0);
+    vm.set_register(11, 0);
+    vm.set_register(12, result);
+    vm.set_register(13, 1);
     vm.set_register(
         1,
         u64::try_from(return_offset).expect("test return PC fits u64"),
@@ -576,7 +561,7 @@ fn run_vm_result_cases(cases: &[VmResultCase]) {
         vm.run()
             .unwrap_or_else(|error| panic!("{} should execute: {error:?}", case.id));
         assert_eq!(
-            common::decode_i64_register(&vm, 10),
+            common::decode_i64_return_word(&vm, 0),
             case.expected,
             "{} result",
             case.id,
@@ -1069,7 +1054,7 @@ fn compile_and_run_add() {
     vm.load_program(&code).unwrap();
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execution failed");
-    assert_eq!(common::decode_i64_register(&vm, 10), 11);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 11);
 }
 #[test]
 fn compile_builtin_create_nfts_and_set_detail() {
@@ -1441,7 +1426,7 @@ fn branch_lowering_uses_compact_conditional_and_one_relaxed_transfer() {
     let branch = report
         .budget_report
         .iter()
-        .find(|entry| entry.function_name == "__entrypoint_impl__branch")
+        .find(|entry| entry.function_name == "branch")
         .expect("branch budget report");
     let words = code[metadata.code_offset + branch.pc_start as usize
         ..metadata.code_offset + branch.pc_end as usize]
@@ -1556,8 +1541,8 @@ fn typed_json_access_spills_are_handled() {
             let func = ir
                 .functions
                 .iter()
-                .find(|f| f.name == "__entrypoint_impl__main")
-                .expect("main implementation lowered");
+                .find(|f| f.name == "main")
+                .expect("main function lowered");
             assert!(func.blocks.iter().any(|block| {
                 block.instrs.iter().any(|instruction| {
                     matches!(
@@ -1955,77 +1940,33 @@ fn typed_vrf_syscalls_are_present() {
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
 }
 #[test]
-fn raw_axt_intrinsics_are_rejected() {
-    use norito::to_bytes;
-    let dsid = DataSpaceId::new(7);
-    let desc = axt::AxtDescriptor {
-        dsids: vec![dsid],
-        touches: vec![axt::AxtTouchSpec {
-            dsid,
-            read: vec![],
-            write: vec![],
-        }],
-    };
-    let handle = axt::AssetHandle {
-        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-        ])
-        .expect("valid AXT fixture asset id"),
-        scope: vec!["transfer".to_string()],
-        subject: axt::HandleSubject {
-            account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_string(),
-            origin_dsid: Some(dsid),
-        },
-        budget: axt::HandleBudget {
-            remaining: Quantity::from(10_u64),
-            per_use: None,
-        },
-        handle_era: 1,
-        sub_nonce: 2,
-        group_binding: axt::GroupBinding {
-            composability_group_id: vec![1, 2, 3],
-            epoch_id: 3,
-        },
-        target_lane: LaneId::new(1),
-        axt_binding: vec![0; 32],
-        manifest_view_root: vec![0; 32],
-        expiry_slot: 42,
-        max_clock_skew_ms: Some(5),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
-    let proof = axt::ProofBlob {
-        payload: vec![1, 2, 3, 4],
-        expiry_slot: None,
-    };
-    let desc_hex = hex(&to_bytes(&desc).expect("encode descriptor"));
-    let handle_hex = hex(&to_bytes(&handle).expect("encode handle"));
-    let proof_hex = hex(&to_bytes(&proof).expect("encode proof"));
-    let src = format!(
-        r#"
-        seiyaku RemovedAxtSurface {{
-          kotoage fn main() authorize("UseAxt") {{
-            let ds = DataSpaceId::parse("{dsid}");
-            let desc = axt_descriptor("0x{desc_hex}");
-            let handle = asset_handle("0x{handle_hex}");
-            let proof = proof_blob("0x{proof_hex}");
-            axt::begin(desc);
-            axt::touch(ds, norito_bytes("manifest"));
-            axt::verify_proof(ds, proof);
-            axt::use_asset_handle(handle: handle, operation: norito_bytes("intent"), proof: proof);
-            axt::commit();
-          }}
-        }}
-    "#
-    );
-    let error = test_compiler()
-        .compile_source(&src)
-        .expect_err("raw AXT pointer construction is not part of Kotodama V1");
-    assert!(
-        error.contains("axt_descriptor")
-            || error.contains("AssetHandle")
-            || error.contains("raw pointer")
-            || error.contains("unknown"),
-        "unexpected error: {error}"
-    );
+fn retired_axt_handle_intrinsics_are_rejected() {
+    for (retired, source) in [
+        (
+            "asset_handle",
+            r#"seiyaku RemovedAxtSurface {
+                 kotoage fn main() authorize("UseAxt") {
+                   let handle = asset_handle("0x00");
+                 }
+               }"#,
+        ),
+        (
+            "axt::use_asset_handle",
+            r#"seiyaku RemovedAxtSurface {
+                 kotoage fn main() authorize("UseAxt") {
+                   axt::use_asset_handle(handle: norito_bytes("h"), operation: norito_bytes("i"), proof: norito_bytes("p"));
+                 }
+               }"#,
+        ),
+    ] {
+        let error = test_compiler()
+            .compile_source(source)
+            .expect_err("retired AXT pointer operation is not in V1");
+        assert!(
+            error.contains("unknown")
+                || error.contains("not supported")
+                || error.contains("undefined"),
+            "{retired} unexpectedly failed for a different reason: {error}"
+        );
+    }
 }

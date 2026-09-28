@@ -532,7 +532,8 @@ public static class NumericV1
         }
 
         var pointerType = BinaryPrimitives.ReadUInt16BigEndian(envelope);
-        var knownAllowedType = pointerType is >= MinKnownPointerType and <= MaxAssignedPointerType;
+        var knownAllowedType = pointerType is >= MinKnownPointerType and <= MaxAssignedPointerType
+            && pointerType != UnassignedPointerType;
         if (!knownAllowedType)
         {
             Fail(ErrorCode.UnknownType, "unknown pointer type");
@@ -787,7 +788,8 @@ public static class NumericV1
         true);
 
     private const ushort MinKnownPointerType = 0x0001;
-    private const ushort MaxAssignedPointerType = 0x0012;
+    private const ushort MaxAssignedPointerType = 0x0013;
+    private const ushort UnassignedPointerType = 0x000C;
     // END GENERATED: kotodama-v1-numeric-policy
 
     private const int MaxMantissaBytes = 64;

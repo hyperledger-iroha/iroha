@@ -8,14 +8,18 @@ from pathlib import Path
 
 import pytest
 from client_test_support import CANONICAL_OWNER
+from iroha_torii_client.governance_kagemusha_release_schema_v1 import SCHEMAS_V1
 from iroha_torii_client.governance_proposals import (
     GovernanceContractLifecycleActionKind,
     GovernanceContractLifecycleEmergencyHoldRetrospective,
     GovernanceGlobalDataTriggerPermissionAction,
     GovernanceProposalContractEmergencyHold,
     GovernanceProposalContractLifecycleGovernance,
-    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalDeployContract,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
+    GovernanceProposalKagemushaVerifierPolicyInstall,
+    GovernanceProposalKagemushaVerifierReleaseActivate,
+    GovernanceProposalKagemushaVerifierReleaseInstall,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
     GovernanceProposalMusubiRegistryGovernance,
@@ -44,6 +48,46 @@ PUBLIC_SIGNAL_SCHEMA_HASH = (
 TAIRA_CHAIN_ID_HASH = (
     "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
 )
+KAGEMUSHA_SIGNER = (
+    "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+)
+KAGEMUSHA_SIGNER_B = (
+    "ed012017CB79FB2B4120F2B1EC65E4198D6E08B28E813FEB01E4A400839B85E18080CE"
+)
+OTHER_PROPOSER = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+
+
+def _kagemusha_multihash(code: int, payload: bytes) -> str:
+    def varint(value: int) -> bytes:
+        encoded = bytearray()
+        while True:
+            part = value & 0x7F
+            value >>= 7
+            encoded.append(part | (0x80 if value else 0))
+            if value == 0:
+                return bytes(encoded)
+
+    return (varint(code) + varint(len(payload))).hex() + payload.hex().upper()
+
+
+def _release_install_fixture() -> dict[str, object]:
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "governance"
+        / "kagemusha_verifier_release_install_v1.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _release_activate_fixture() -> dict[str, object]:
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "governance"
+        / "kagemusha_verifier_release_activate_v1.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _lane() -> dict[str, object]:
@@ -359,6 +403,36 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
             },
             GovernanceProposalGlobalDataTriggerPermissionGovernance,
         ),
+        (
+            "KagemushaVerifierPolicyInstall",
+            {
+                "proposal_operator": CANONICAL_OWNER,
+                "network_id": NETWORK_ID,
+                "expected_predecessor": {
+                    "version": 1,
+                    "authority_policy": None,
+                    "active_release_id": None,
+                    "releases": [],
+                },
+                "authority_policy": {
+                    "version": 1,
+                    "authority_set_id": [0x40] * 32,
+                    "threshold": 1,
+                    "authorized_signers": [KAGEMUSHA_SIGNER],
+                },
+            },
+            GovernanceProposalKagemushaVerifierPolicyInstall,
+        ),
+        (
+            "KagemushaVerifierReleaseInstall",
+            _release_install_fixture()["payload"],
+            GovernanceProposalKagemushaVerifierReleaseInstall,
+        ),
+        (
+            "KagemushaVerifierReleaseActivate",
+            _release_activate_fixture()["payload"],
+            GovernanceProposalKagemushaVerifierReleaseActivate,
+        ),
     ]
 
 
@@ -425,6 +499,224 @@ def test_proposal_kind_accepts_each_closed_v1_variant(
 
     assert proposal.kind is GovernanceProposalKindTag(tag)
     assert isinstance(proposal.payload, payload_type)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "error"),
+    [
+        (("expected_predecessor", "releases"), [{}], "exact empty V1 verifier registry"),
+        (("expected_predecessor", "authority_policy"), {}, "exact empty V1 verifier registry"),
+        (("authority_policy", "authority_set_id"), [0] * 32, "non-zero"),
+        (("authority_policy", "threshold"), 0, "integer in 1"),
+        (("authority_policy", "threshold"), 2, "must not exceed signer count"),
+        (("authority_policy", "authorized_signers"), [], "1..32 keys"),
+        (("authority_policy", "authorized_signers"), [KAGEMUSHA_SIGNER] * 2, "strictly ordered"),
+        (("authority_policy", "authorized_signers"), [KAGEMUSHA_SIGNER_B, KAGEMUSHA_SIGNER], "strictly ordered"),
+        (("authority_policy", "authorized_signers"), [KAGEMUSHA_SIGNER.lower()], "canonical public-key multihash"),
+        (("authority_policy", "authorized_signers"), ["ed0120" + "00" * 32], "prime-order Ed25519"),
+    ],
+)
+def test_kagemusha_policy_install_rejects_invalid_initial_policy(
+    path: tuple[str, str], value: object, error: str
+) -> None:
+    payload = copy.deepcopy(_variants()[10][1])
+    payload[path[0]][path[1]] = value  # type: ignore[index]
+    with pytest.raises(TypeError, match=error):
+        GovernanceProposalKind.from_payload(
+            {"kind": "KagemushaVerifierPolicyInstall", "payload": payload}
+        )
+
+
+def test_kagemusha_policy_install_rejects_unknown_and_missing_fields() -> None:
+    payload = copy.deepcopy(_variants()[10][1])
+    payload["authority_policy"]["legacy"] = True  # type: ignore[index]
+    with pytest.raises(TypeError, match="unknown field `legacy`"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "KagemushaVerifierPolicyInstall", "payload": payload}
+        )
+    del payload["authority_policy"]["legacy"]  # type: ignore[index]
+    del payload["proposal_operator"]
+    with pytest.raises(TypeError, match="missing required field `proposal_operator`"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "KagemushaVerifierPolicyInstall", "payload": payload}
+        )
+
+
+def test_kagemusha_policy_install_read_binds_operator_to_retained_proposer() -> None:
+    record = {
+        "proposer": CANONICAL_OWNER,
+        "kind": {"kind": "KagemushaVerifierPolicyInstall", "payload": _variants()[10][1]},
+        "created_height": 1,
+        "status": "Proposed",
+    }
+    assert isinstance(
+        GovernanceProposalRecord.from_payload(record).kind.payload,
+        GovernanceProposalKagemushaVerifierPolicyInstall,
+    )
+    record["proposer"] = OTHER_PROPOSER
+    with pytest.raises(TypeError, match="operator must match the retained proposer"):
+        GovernanceProposalRecord.from_payload(record)
+
+
+def test_kagemusha_release_schema_matches_the_canonical_openapi_closure() -> None:
+    root = Path(__file__).resolve().parents[3]
+    schemas = json.loads(
+        (root / "artifacts" / "openapi" / "torii.json").read_text(encoding="utf-8")
+    )["components"]["schemas"]
+    roots = (
+        "GovernanceKagemushaGovernedVerifierRegistryV1",
+        "GovernanceKagemushaReleaseManifestV1",
+        "GovernanceKagemushaInternalValidationReceiptV1",
+        "GovernanceKagemushaReleaseAttestationV1",
+    )
+    closure: set[str] = set()
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            reference = node.get("$ref")
+            if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
+                name = reference.rsplit("/", 1)[-1]
+                if name not in closure:
+                    closure.add(name)
+                    visit(schemas[name])
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    def project(node: object) -> object:
+        if isinstance(node, dict):
+            return {
+                key: project(child)
+                for key, child in node.items()
+                if key not in {"description", "title", "example"}
+            }
+        if isinstance(node, list):
+            return [project(child) for child in node]
+        return node
+
+    for name in roots:
+        closure.add(name)
+        visit(schemas[name])
+    assert set(SCHEMAS_V1) == closure
+    assert SCHEMAS_V1 == {name: project(schemas[name]) for name in sorted(closure)}
+
+
+def test_kagemusha_release_install_accepts_exact_fixture_and_freezes_nested_records() -> None:
+    fixture = _release_install_fixture()
+    proposal = GovernanceProposalKind.from_payload(fixture)
+    assert isinstance(proposal.payload, GovernanceProposalKagemushaVerifierReleaseInstall)
+    assert proposal.payload.manifest["version"] == 1
+    assert len(proposal.payload.manifest["artifacts"]) == 50
+    with pytest.raises(TypeError):
+        proposal.payload.manifest["version"] = 2  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        (lambda p: p.pop("proposal_operator"), "missing required field"),
+        (lambda p: p["manifest"].update({"retired": True}), "unknown field"),
+        (lambda p: p["manifest"].update({"version": 2}), "wrong V1 constant"),
+        (lambda p: p["manifest"].update({"release_id": [1] * 31}), "invalid array length"),
+        (lambda p: p["receipt"].update({"fuzz_cases": 1 << 53}), "integer range"),
+        (lambda p: p["expected_predecessor"].update({"authority_policy": None}), "governed signer policy"),
+        (lambda p: p["attestation"]["subject"].update({"release_id": [2] * 32}), "must match manifest"),
+        (lambda p: p["manifest"]["enabled_profiles"][0]["hardware_profile"].update({"capability_mask": True}), "must be an integer"),
+        (lambda p: p["receipt"]["profile_qualifications"][0]["thermal"].update({"retired": 0}), "unknown field"),
+    ],
+)
+def test_kagemusha_release_install_rejects_malformed_nested_json(
+    mutation: object, error: str
+) -> None:
+    payload = copy.deepcopy(_release_install_fixture()["payload"])
+    mutation(payload)  # type: ignore[operator]
+    with pytest.raises(TypeError, match=error):
+        GovernanceProposalKind.from_payload(
+            {"kind": "KagemushaVerifierReleaseInstall", "payload": payload}
+        )
+
+
+def test_kagemusha_release_activate_accepts_exact_fixture_and_freezes_predecessor() -> None:
+    proposal = GovernanceProposalKind.from_payload(_release_activate_fixture())
+    assert isinstance(proposal.payload, GovernanceProposalKagemushaVerifierReleaseActivate)
+    assert len(proposal.payload.expected_predecessor["releases"]) == 1
+    assert len(proposal.payload.successor_release_id) == 32
+    with pytest.raises(TypeError):
+        proposal.payload.expected_predecessor["version"] = 2  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        (lambda p: p.pop("successor_release_id"), "missing required field"),
+        (lambda p: p.update({"retired": True}), "unknown field"),
+        (lambda p: p.update({"successor_release_id": [1] * 31}), "invalid array length"),
+        (lambda p: p["expected_predecessor"].update({"active_release_id": "AA" * 32}), "must be inactive"),
+        (lambda p: p["expected_predecessor"].update({"releases": []}), "exactly one standby"),
+        (lambda p: p["expected_predecessor"]["releases"].append(copy.deepcopy(p["expected_predecessor"]["releases"][0])), "exactly one standby"),
+        (lambda p: p["expected_predecessor"]["releases"][0].update({"status": 1}), "sole standby"),
+        (lambda p: p.update({"successor_release_id": [2] * 32}), "sole standby"),
+    ],
+)
+def test_kagemusha_release_activate_rejects_invalid_first_transition(
+    mutation: object, error: str
+) -> None:
+    payload = copy.deepcopy(_release_activate_fixture()["payload"])
+    mutation(payload)  # type: ignore[operator]
+    with pytest.raises(TypeError, match=error):
+        GovernanceProposalKind.from_payload(
+            {"kind": "KagemushaVerifierReleaseActivate", "payload": payload}
+        )
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_length"),
+    [
+        (0xE7, 33),
+        (0xEA, 48),
+        (0xEB, 96),
+        (0xEE, 1952),
+        (0x1200, 64),
+        (0x1201, 64),
+        (0x1202, 64),
+        (0x1203, 128),
+        (0x1204, 128),
+    ],
+)
+def test_kagemusha_policy_install_rejects_wrong_signer_algorithm_lengths(
+    code: int, expected_length: int
+) -> None:
+    payload = copy.deepcopy(_variants()[10][1])
+    payload["authority_policy"]["authorized_signers"] = [  # type: ignore[index]
+        _kagemusha_multihash(code, bytes([1]) * (expected_length - 1))
+    ]
+    with pytest.raises(TypeError, match="public-key payload length"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "KagemushaVerifierPolicyInstall", "payload": payload}
+        )
+
+
+@pytest.mark.parametrize(
+    ("signer", "error"),
+    [
+        (_kagemusha_multihash(0xE7, bytes([4]) * 33), "secp256k1 public-key envelope"),
+        (_kagemusha_multihash(0xEE, bytes(1952)), "all-zero ML-DSA public key"),
+        (_kagemusha_multihash(0x1306, bytes([4]) * 65), "SM2 public-key payload"),
+        (_kagemusha_multihash(0x1306, b"\x00\x02\xff\xff" + bytes([4]) * 65), "UTF-8 SM2 distinguished ID"),
+        (_kagemusha_multihash(0x1306, b"\x00\x00" + bytes([2]) * 65), "SM2 public-key payload"),
+    ],
+)
+def test_kagemusha_policy_install_rejects_bad_signer_envelopes(
+    signer: str, error: str
+) -> None:
+    payload = copy.deepcopy(_variants()[10][1])
+    payload["authority_policy"]["authorized_signers"] = [signer]  # type: ignore[index]
+    with pytest.raises(TypeError, match=error):
+        GovernanceProposalKind.from_payload(
+            {"kind": "KagemushaVerifierPolicyInstall", "payload": payload}
+        )
 
 
 @pytest.mark.parametrize(

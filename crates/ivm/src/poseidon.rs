@@ -46,7 +46,7 @@ fn to_u64(f: Fr) -> u64 {
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ])
 }
-fn poseidon2_params() -> (&'static Vec<[FieldElem; 3]>, &'static [[FieldElem; 3]; 3]) {
+pub(crate) fn poseidon2_params() -> (&'static Vec<[FieldElem; 3]>, &'static [[FieldElem; 3]; 3]) {
     static PARAMS: OnceLock<(Vec<[FieldElem; 3]>, [[FieldElem; 3]; 3])> = OnceLock::new();
     let params = PARAMS.get_or_init(|| {
         let (rc, m, _) = <FrSpec as Spec<Fr, 3, 2>>::constants();
@@ -56,7 +56,7 @@ fn poseidon2_params() -> (&'static Vec<[FieldElem; 3]>, &'static [[FieldElem; 3]
     });
     (&params.0, &params.1)
 }
-fn poseidon6_params() -> (&'static Vec<[FieldElem; 6]>, &'static [[FieldElem; 6]; 6]) {
+pub(crate) fn poseidon6_params() -> (&'static Vec<[FieldElem; 6]>, &'static [[FieldElem; 6]; 6]) {
     static PARAMS: OnceLock<(Vec<[FieldElem; 6]>, [[FieldElem; 6]; 6])> = OnceLock::new();
     let params = PARAMS.get_or_init(|| {
         let (rc, m, _) = <FrSpec as Spec<Fr, 6, 5>>::constants();
@@ -66,78 +66,25 @@ fn poseidon6_params() -> (&'static Vec<[FieldElem; 6]>, &'static [[FieldElem; 6]
     });
     (&params.0, &params.1)
 }
-/// Round constants for Poseidon2 expressed as BN254 limbs.
-#[cfg(feature = "cuda")]
-pub(crate) fn poseidon2_round_constants_words() -> &'static Vec<[[u64; 4]; 3]> {
-    static WORDS: OnceLock<Vec<[[u64; 4]; 3]>> = OnceLock::new();
-    WORDS.get_or_init(|| {
-        poseidon2_params()
-            .0
-            .iter()
-            .map(|row| row.map(|fe| fe.0))
-            .collect()
-    })
-}
-/// MDS matrix for Poseidon2 expressed as BN254 limbs.
-#[cfg(feature = "cuda")]
-pub(crate) fn poseidon2_mds_words() -> &'static [[[u64; 4]; 3]; 3] {
-    static WORDS: OnceLock<[[[u64; 4]; 3]; 3]> = OnceLock::new();
-    WORDS.get_or_init(|| {
-        let (_, mds) = poseidon2_params();
-        let mut out = [[[0u64; 4]; 3]; 3];
-        for (row_idx, row) in mds.iter().enumerate() {
-            for (col_idx, elem) in row.iter().enumerate() {
-                out[row_idx][col_idx] = elem.0;
-            }
-        }
-        out
-    })
-}
-/// Round constants for Poseidon6 expressed as BN254 limbs.
-#[cfg(feature = "cuda")]
-pub(crate) fn poseidon6_round_constants_words() -> &'static Vec<[[u64; 4]; 6]> {
-    static WORDS: OnceLock<Vec<[[u64; 4]; 6]>> = OnceLock::new();
-    WORDS.get_or_init(|| {
-        poseidon6_params()
-            .0
-            .iter()
-            .map(|row| row.map(|fe| fe.0))
-            .collect()
-    })
-}
-/// MDS matrix for Poseidon6 expressed as BN254 limbs.
-#[cfg(feature = "cuda")]
-pub(crate) fn poseidon6_mds_words() -> &'static [[[u64; 4]; 6]; 6] {
-    static WORDS: OnceLock<[[[u64; 4]; 6]; 6]> = OnceLock::new();
-    WORDS.get_or_init(|| {
-        let (_, mds) = poseidon6_params();
-        let mut out = [[[0u64; 4]; 6]; 6];
-        for (row_idx, row) in mds.iter().enumerate() {
-            for (col_idx, elem) in row.iter().enumerate() {
-                out[row_idx][col_idx] = elem.0;
-            }
-        }
-        out
-    })
-}
 pub fn poseidon2(a: u64, b: u64) -> u64 {
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::poseidon2_cuda(a, b) {
-        return res;
-    }
     poseidon2_impl(a, b)
 }
 /// Hash a batch of Poseidon2 inputs in order, using CUDA acceleration when available.
-pub fn poseidon2_many(inputs: &[(u64, u64)]) -> Vec<u64> {
-    if inputs.is_empty() {
-        return Vec::new();
+pub fn poseidon2_many_into(inputs: &[(u64, u64)], destination: &mut [u64]) -> bool {
+    if inputs.len() != destination.len() {
+        return false;
     }
-    if let Some(outputs) = crate::cuda::poseidon2_cuda_many(inputs)
-        && outputs.len() == inputs.len()
+    // TODO: use qualified CUDA profiles when signed artifacts and physical
+    // calibration are available. Selection depends only on public geometry.
+    if crate::vector::gpu_launch_eligible(inputs.len().saturating_mul(24))
+        && crate::cuda::poseidon2_cuda_many_into(inputs, destination)
     {
-        return outputs;
+        return true;
     }
-    inputs.iter().map(|&(a, b)| poseidon2_impl(a, b)).collect()
+    for (result, &(a, b)) in destination.iter_mut().zip(inputs) {
+        *result = poseidon2_impl(a, b);
+    }
+    true
 }
 #[doc(hidden)]
 pub fn poseidon2_simd(a: u64, b: u64) -> u64 {
@@ -192,23 +139,22 @@ fn poseidon2_impl(a: u64, b: u64) -> u64 {
     to_u64(state[0].to_fr())
 }
 pub fn poseidon6(inputs: [u64; 6]) -> u64 {
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::poseidon6_cuda(inputs) {
-        return res;
-    }
     poseidon6_impl(inputs)
 }
 /// Hash a batch of Poseidon6 inputs in order, using CUDA acceleration when available.
-pub fn poseidon6_many(inputs: &[[u64; 6]]) -> Vec<u64> {
-    if inputs.is_empty() {
-        return Vec::new();
+pub fn poseidon6_many_into(inputs: &[[u64; 6]], destination: &mut [u64]) -> bool {
+    if inputs.len() != destination.len() {
+        return false;
     }
-    if let Some(outputs) = crate::cuda::poseidon6_cuda_many(inputs)
-        && outputs.len() == inputs.len()
+    if crate::vector::gpu_launch_eligible(inputs.len().saturating_mul(56))
+        && crate::cuda::poseidon6_cuda_many_into(inputs, destination)
     {
-        return outputs;
+        return true;
     }
-    inputs.iter().map(|&value| poseidon6_impl(value)).collect()
+    for (result, &input) in destination.iter_mut().zip(inputs) {
+        *result = poseidon6_impl(input);
+    }
+    true
 }
 #[doc(hidden)]
 pub fn poseidon6_simd(inputs: [u64; 6]) -> u64 {

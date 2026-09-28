@@ -211,7 +211,7 @@ class FixedTrial:
                     and plan.generator.lane_count=={'one_lane':1,'four_lane':4}[paths.variant])
             self._scheduled,_=plan.load.validate(plan.generator.account_count,allocation)
             # The first-release complete ledger has fifteen named roles; no support bucket.
-            mapping={'finality':'native_finality','queries':'native_queries','facts':'native_facts',
+            mapping={'carrier':'native_carrier','queries':'native_queries','facts':'native_facts',
                      'request':'native_request','bundle':'native_bundle','proof':'canonical_proof'}
             caps=tuple(getattr(allocation.run,mapping[name]).max_bytes for name in mapping)
             require(tuple(getattr(plan.native_outputs,name) for name in mapping)==caps
@@ -358,7 +358,7 @@ class FixedTrial:
                     self._plan.facts,runtime.kagami,self._reader,end,self._native_guard)
                 tip=self._facts.observe_tip()
                 self._vectors=NativeVectorCollection(native,self._outputs,tip.reader,self._plan.collection,
-                    runtime.cli,self._reader,end,self._native_guard)
+                    runtime.kagami,self._reader,end,self._native_guard)
                 vectors=self._vectors.run()
                 return tip,vectors
             tip,vectors=self._launch.collect_inputs(collect)

@@ -36,6 +36,7 @@ use iroha_model_base::topology::DataSpaceId;
 use std::env;
 mod fastpq_balance_keys;
 mod multisig_accounts;
+mod native_sumeragi_status;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -48,7 +49,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!(
-            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program|multisig-accounts-v1|fastpq-balance-keys-v1>",
+            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program|multisig-accounts-v1|fastpq-balance-keys-v1|native-sumeragi-status-v1>",
             args[0]
         );
         std::process::exit(1);
@@ -62,6 +63,7 @@ fn main() {
         "hidden-ram-fhe-program" => emit_hidden_ram_fhe_program(),
         "multisig-accounts-v1" => multisig_accounts::emit(),
         "fastpq-balance-keys-v1" => fastpq_balance_keys::emit(),
+        "native-sumeragi-status-v1" => native_sumeragi_status::emit(),
         other => {
             eprintln!("Unknown fixture: {other}");
             std::process::exit(1);

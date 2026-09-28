@@ -978,6 +978,8 @@ impl StrictReplayFixture {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -1090,7 +1092,9 @@ impl StrictReplayFixture {
                 privacy_commitments: Vec::new(),
             },
         );
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+            statuses,
+        )));
         {
             let mut parameters = state.world.parameters.block();
             parameters.sumeragi.block_cadence_ms =
@@ -1403,7 +1407,7 @@ strict_replay_test!(
             signed_policy,
             "the installed fixture registry must match signed genesis policy"
         );
-        replay_state.install_lane_manifests(&Arc::new(LaneManifestRegistry::empty()));
+        replay_state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::empty()));
         let missing_registry_policy =
             Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap());
         assert_ne!(missing_registry_policy, signed_policy);
@@ -1421,7 +1425,7 @@ strict_replay_test!(
             "replay rejection must bind the missing registry to signed genesis policy: {diagnostic}"
         );
         before.assert_unchanged(&replay_state);
-        replay_state.install_lane_manifests(&frozen);
+        replay_state.install_lane_manifests_for_testing(&frozen);
         assert_eq!(
             Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap()),
             signed_policy,

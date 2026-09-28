@@ -44,7 +44,6 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset { key: "G_nft_mint_asset", asset_id: "asset:gas/G_nft_mint_asset@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_nft_set_metadata", asset_id: "asset:gas/G_nft_set_metadata@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_nft_transfer_asset", asset_id: "asset:gas/G_nft_transfer_asset@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
-    GasAsset { key: "G_numeric", asset_id: "asset:gas/G_numeric@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_numeric_staged", asset_id: "asset:gas/G_numeric_staged@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_path", asset_id: "asset:gas/G_path@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_pointer", asset_id: "asset:gas/G_pointer@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },

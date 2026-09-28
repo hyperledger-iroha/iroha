@@ -466,45 +466,6 @@ mod explorer_asset_definitions_query_tests {
 }
 
 #[cfg(test)]
-mod zk_ivm_request_dto_json_tests {
-    use super::*;
-    #[test]
-    fn closed_zk_ivm_requests_reject_unknown_json_fields() {
-        for error in [
-            norito::json::from_str::<ZkIvmDeriveRequestDto>(r#"{"unexpected":true}"#)
-                .expect_err("derive request must reject unknown fields"),
-            norito::json::from_str::<ZkIvmProveRequestDto>(r#"{"unexpected":true}"#)
-                .expect_err("prove request must reject unknown fields"),
-        ] {
-            match error {
-                norito::json::Error::UnknownField { field } => assert_eq!(field, "unexpected"),
-                other => panic!("expected unknown field error, got {other:?}"),
-            }
-        }
-    }
-}
-
-#[cfg(all(test, feature = "app_api", any(unix, windows)))]
-mod zk_key_file_security_tests {
-    use super::read_zk_key_file_bounded;
-
-    #[test]
-    fn bounded_key_reader_accepts_the_exact_limit_and_rejects_hard_links() {
-        let directory = tempfile::tempdir().expect("create key reader fixture directory");
-        let path = directory.path().join("fixture.key");
-        let link = directory.path().join("fixture.link.key");
-        std::fs::write(&path, b"key!").expect("write key reader fixture");
-
-        assert_eq!(
-            read_zk_key_file_bounded(&path, "verifying key", 4).expect("read exact-size key"),
-            b"key!"
-        );
-        std::fs::hard_link(&path, &link).expect("create key fixture hard link");
-        assert!(read_zk_key_file_bounded(&path, "verifying key", 4).is_err());
-    }
-}
-
-#[cfg(test)]
 mod transaction_ingress_decode_tests {
     use super::*;
     use iroha_data_model::{
@@ -2080,7 +2041,7 @@ mod musubi_search_initialization_tests {
 
 #[cfg(test)]
 mod semaphore_capacity_validation_tests {
-    use super::{ToriiBuildError, checked_semaphore_permit_sum, validate_semaphore_permits};
+    use super::{ToriiBuildError, validate_semaphore_permits};
 
     #[test]
     fn accepts_exact_runtime_limit_and_rejects_larger_values() {
@@ -2093,17 +2054,6 @@ mod semaphore_capacity_validation_tests {
             validate_semaphore_permits("test", limit + 1),
             Err(ToriiBuildError::InvalidConfiguration {
                 component: "test",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn rejects_overflow_before_constructing_a_semaphore() {
-        assert!(matches!(
-            checked_semaphore_permit_sum("test.sum", usize::MAX, 1),
-            Err(ToriiBuildError::InvalidConfiguration {
-                component: "test.sum",
                 ..
             })
         ));

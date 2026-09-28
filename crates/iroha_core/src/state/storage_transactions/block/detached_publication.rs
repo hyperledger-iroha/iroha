@@ -225,6 +225,11 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
         }
     }
 
+    /// Test readiness before an enclosing original field moves this owner.
+    pub(super) fn is_prepared(&self) -> bool {
+        self.complete && !self.released
+    }
+
     /// Transfer a complete owner and its original observation notification.
     pub(crate) fn into_prepared(
         mut self,

@@ -30,7 +30,16 @@ impl MusubiArchiveCommitmentV1 {
                 "Musubi archive chunk count is out of bounds",
             ));
         }
-        if self.chunker.to_handle().len() > 128
+        // The canonical handle contains exactly two ASCII separators. Count
+        // borrowed UTF-8 bytes before formatting or allocating any handle.
+        let handle_len = self
+            .chunker
+            .namespace
+            .len()
+            .checked_add(self.chunker.name.len())
+            .and_then(|length| length.checked_add(self.chunker.semver.len()))
+            .and_then(|length| length.checked_add(2));
+        if handle_len.is_none_or(|length| length > 128)
             || [
                 self.chunk_plan_digest,
                 self.por_root,

@@ -41,7 +41,7 @@ fn executed_wire_budget_ignores_an_attached_commit_certificate() {
     fixture::install(&mut block, outputs, 3).unwrap();
     let executed_hash = block.executed_block_wire_hash().unwrap();
     let executed_len = block.encode_wire().unwrap().len() as u64;
-    block.set_commit_certificate(Some(CommitCertificate::new(
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
         vec![1; 64],
         vec![2; 256],
         vec![3; 512],

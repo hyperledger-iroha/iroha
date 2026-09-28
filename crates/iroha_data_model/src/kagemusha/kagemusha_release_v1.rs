@@ -1690,10 +1690,6 @@ pub struct KagemushaReleaseManifestV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAuthorityPolicyV1"
-)]
 pub struct KagemushaReleaseAuthorityPolicyV1 {
     /// Policy format version.
     pub version: u16,
@@ -1704,6 +1700,19 @@ pub struct KagemushaReleaseAuthorityPolicyV1 {
     pub threshold: u16,
     /// Strictly ordered, unique trusted signing keys.
     pub authorized_signers: Vec<PublicKey>,
+}
+
+const AUTHORITY_POLICY_FRAME_NAME: &str =
+    "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAuthorityPolicyV1";
+
+impl norito::NoritoSchema for KagemushaReleaseAuthorityPolicyV1 {
+    fn nominal_name() -> String {
+        AUTHORITY_POLICY_FRAME_NAME.to_owned()
+    }
+
+    fn static_frame_name() -> Option<&'static str> {
+        Some(AUTHORITY_POLICY_FRAME_NAME)
+    }
 }
 
 /// Immutable release subject approved by every KAGEMUSHA V1 authority.
@@ -1971,6 +1980,38 @@ fn digest_encoded<T: norito::NoritoSerialize>(
     hasher.update([0]);
     hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
+    Ok(hasher.finalize().into())
+}
+
+/// Hash the bounded signer policy without materializing its canonical frame.
+///
+/// The policy has a literal Norito frame identity and its canonical serializer
+/// traverses scalar fields and the un-packed signer sequence without scratch
+/// allocation. This keeps registry validation allocation-free on success.
+fn digest_authority_policy_streaming(
+    policy: &KagemushaReleaseAuthorityPolicyV1,
+) -> Result<[u8; 32], KagemushaReleaseErrorV1> {
+    struct HashWriter<'a>(&'a mut Sha256);
+
+    impl std::io::Write for HashWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let frame_len =
+        norito::canonical_frame_len(policy).map_err(|_| KagemushaReleaseErrorV1::Encode)?;
+    let mut hasher = Sha256::new();
+    hasher.update(AUTHORITY_POLICY_DIGEST_DOMAIN);
+    hasher.update([0]);
+    hasher.update(u64::try_from(frame_len).unwrap_or(u64::MAX).to_le_bytes());
+    norito::core::write_canonical_to_writer(policy, &mut HashWriter(&mut hasher))
+        .map_err(|_| KagemushaReleaseErrorV1::Encode)?;
     Ok(hasher.finalize().into())
 }
 
@@ -3163,6 +3204,11 @@ impl KagemushaReleaseAuthorityPolicyV1 {
         {
             return Err(KagemushaReleaseErrorV1::InvalidAuthorityPolicy);
         }
+        let canonical_bytes = norito::canonical_frame_len(self)
+            .map_err(|_| KagemushaReleaseErrorV1::InvalidAuthorityPolicy)?;
+        if canonical_bytes > KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1 {
+            return Err(KagemushaReleaseErrorV1::InvalidAuthorityPolicy);
+        }
         Ok(())
     }
 
@@ -3173,7 +3219,7 @@ impl KagemushaReleaseAuthorityPolicyV1 {
     /// Returns an error when the policy is invalid or cannot be encoded.
     pub fn canonical_digest(&self) -> Result<[u8; 32], KagemushaReleaseErrorV1> {
         self.validate()?;
-        digest_encoded(AUTHORITY_POLICY_DIGEST_DOMAIN, self)
+        digest_authority_policy_streaming(self)
     }
 }
 

@@ -11,7 +11,7 @@ fn insert_borrowed<K, V, P, E>(
     key: K,
     value: V,
     admit: impl FnOnce(AllocationDemand, &K) -> Result<P, E>,
-) -> Result<Option<V>, ((K, V), PairInsertError<E>)>
+) -> PairEditResult<K, V, E>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -93,7 +93,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand, &K) -> Result<P, E>,
-    ) -> Result<Option<V>, ((K, V), PairInsertError<E>)> {
+    ) -> PairEditResult<K, V, E> {
         insert_borrowed(
             self.inner.as_mut(),
             None,
@@ -134,7 +134,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand, &K) -> Result<P, E>,
-    ) -> Result<Option<V>, ((K, V), PairInsertError<E>)> {
+    ) -> PairEditResult<K, V, E> {
         let (current, current_parent) = self.inner.joined_edit_parts();
         let (undo, undo_parent) = undo.inner.joined_edit_parts();
         insert_borrowed(

@@ -415,7 +415,9 @@ public final class NumericV1 {
     final ByteBuffer header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN);
     final int pointerType = header.getShort() & 0xFFFF;
     final boolean knownAllowedType =
-        pointerType >= MIN_KNOWN_POINTER_TYPE && pointerType <= MAX_ASSIGNED_POINTER_TYPE;
+        pointerType >= MIN_KNOWN_POINTER_TYPE
+            && pointerType <= MAX_ASSIGNED_POINTER_TYPE
+            && pointerType != UNASSIGNED_POINTER_TYPE;
     if (!knownAllowedType) fail(ErrorCode.UNKNOWN_TYPE, "unknown pointer type");
     if (pointerType != kind.pointerType) fail(ErrorCode.WRONG_TYPE, "pointer type does not match");
     if ((header.get() & 0xFF) != 1) fail(ErrorCode.INVALID_ENVELOPE_VERSION, "version must be 1");
@@ -593,7 +595,8 @@ public final class NumericV1 {
   }
 
   private static final int MIN_KNOWN_POINTER_TYPE = 0x0001;
-  private static final int MAX_ASSIGNED_POINTER_TYPE = 0x0012;
+  private static final int MAX_ASSIGNED_POINTER_TYPE = 0x0013;
+  private static final int UNASSIGNED_POINTER_TYPE = 0x000C;
   // END GENERATED: kotodama-v1-numeric-policy
 
   private static final class Scaled {

@@ -62,7 +62,7 @@ async fn configuration_endpoint_includes_transport_summary() {
     };
     assert_eq!(
         dto.consensus.protocol_version,
-        u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+        u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         "the fixed first-release consensus protocol should be surfaced"
     );
     assert_eq!(

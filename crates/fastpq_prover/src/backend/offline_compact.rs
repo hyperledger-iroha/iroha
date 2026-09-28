@@ -158,6 +158,7 @@ impl<'a> ExpectedAxtContext<'a> {
                 expiry_slot: &self.metadata.expiry_slot,
                 manifest_root: &self.metadata.manifest_root,
                 da_commitment: &self.metadata.da_commitment,
+                source_transfer_occurrences: &self.metadata.source_transfer_occurrences,
             },
             mirrors: AxtProofContextMirrors {
                 dsid: self.mirrors.dsid,

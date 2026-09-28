@@ -34,8 +34,48 @@ public final class HttpClientTransportExactReadTests {
 
   public static void main(final String[] args) {
     retryPolicyRecognizesRetryableStatus();
+    contractManifestUsesKotlinOwnedParserAndModel();
     ledgerExecutedBlockWireIsExactBoundedAndFailClosed();
     privacyCapabilitiesAreTypedAndExact();
+  }
+
+  private static void contractManifestUsesKotlinOwnedParserAndModel() {
+    final String codeHash = "b".repeat(64);
+    final byte[] body = "{\"manifest\":{\"seiyaku_name\":\"Vault\"}}"
+        .getBytes(StandardCharsets.UTF_8);
+    final OneResponseExecutor success =
+        new OneResponseExecutor(new TransportResponse(200, body, "ok", Map.of(), null, false));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            success,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final org.hyperledger.iroha.sdk.client.ContractManifestRecord record =
+        client.getContractManifest(codeHash).join();
+    assert "Vault".equals(record.manifest.seiyakuName);
+    assert ("https://torii.example/api/v1/contracts/code/" + codeHash)
+        .equals(success.lastRequest.uri().toString());
+    assert success.requestCount == 1;
+    try {
+      client.getContractManifest("abc");
+      throw new AssertionError("invalid code hash must fail before dispatch");
+    } catch (final IllegalArgumentException expected) {
+      assert success.requestCount == 1;
+    }
+
+    final byte[] malformed = "{\"manifest\":{\"seiyaku_name\":\"Vault!\"}}"
+        .getBytes(StandardCharsets.UTF_8);
+    final HttpClientTransport rejectingClient =
+        HttpClientTransport.withExecutor(
+            new OneResponseExecutor(
+                new TransportResponse(200, malformed, "ok", Map.of(), null, false)),
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+    try {
+      rejectingClient.getContractManifest(codeHash).join();
+      throw new AssertionError("invalid Kotlin-owned manifest must fail closed");
+    } catch (final CompletionException expected) {
+      assert expected.getCause() instanceof IllegalStateException;
+    }
   }
 
   static String noncanonicalStandardBase64PadBitAlias(final String encoded) {

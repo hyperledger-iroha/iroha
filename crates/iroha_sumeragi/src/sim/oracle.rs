@@ -150,6 +150,9 @@ pub fn covers(record: &SafetyRecord, slot: &SigSlot) -> bool {
     if record.height > slot.height {
         return true;
     }
+    if record.epoch != slot.epoch {
+        return false;
+    }
     match slot.kind {
         KIND_PROPOSAL => record
             .proposal
@@ -162,7 +165,8 @@ pub fn covers(record: &SafetyRecord, slot: &SigSlot) -> bool {
     }
 }
 
-/// Build a committed chain of `len` transaction blocks at view 0 signed by `signers` (F17).
+/// Build a committed chain of `len` transaction blocks at view 0 using one exact quorum
+/// from `signers` at each height (F17), selected in canonical committee order.
 pub fn build_chain(
     inst: &Inst,
     signers: &[SimSigner],
@@ -173,9 +177,20 @@ pub fn build_chain(
     let (mut parent_hash, mut parent_result) = (inst.genesis_hash, inst.genesis_result);
     for h in 1..=len {
         let committee = inst.committee(h);
-        let topo = Topology::compute(crypto, &inst.id, committee, h, 0, inst.window, &[]);
+        let topo = Topology::compute(
+            crypto,
+            &inst.id,
+            &inst.config(h).epoch,
+            committee,
+            h,
+            0,
+            inst.window,
+            &[],
+        );
         let payload = encode_tx(u64::MAX - h, false, 0);
         let header = BlockHeader {
+            control_witness: crate::types::ControlWitness::empty(),
+            epoch: inst.config(h).epoch.id,
             instance: inst.id,
             height: h,
             origin_view: 0,
@@ -185,22 +200,47 @@ pub fn build_chain(
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(0),
             skipped_leaders: Vec::new(),
-            attest: false,
+            attest: h == inst.config(h).epoch.last_height,
         };
         let bh = preimage::block_hash(crypto, &header);
         let ExecOutcome::Valid(result) = reference_exec(&parent_result, &payload) else {
             break;
         };
-        let msg = preimage::vote_preimage(VoteKind::Commit, &inst.id, h, 0, &bh, &result, false);
+        let msg = preimage::vote_preimage(
+            VoteKind::Commit,
+            &inst.id,
+            &inst.config(h).epoch.id,
+            h,
+            0,
+            &bh,
+            &result,
+            header.attest,
+        );
         let mut indices = Vec::new();
         let mut sigs = Vec::new();
-        for signer in signers {
-            if let Some(index) = committee.index_of(signer.public_key()) {
-                indices.push(index);
-                sigs.push(signer.sign(&msg));
-            }
+        let members: BTreeMap<_, _> = signers
+            .iter()
+            .filter_map(|signer| {
+                committee
+                    .index_of(signer.public_key())
+                    .map(|index| (index, signer))
+            })
+            .collect();
+        for (index, signer) in members.into_iter().take(committee.q()) {
+            indices.push(index);
+            sigs.push(signer.sign(&msg));
         }
+        assert_eq!(
+            indices.len(),
+            committee.q(),
+            "prebuilt history needs a complete quorum"
+        );
+        let statement = preimage::att_preimage(&inst.id, &header.epoch, h, &bh, &result);
         let qc = Qc {
+            attestation_witness: header
+                .attest
+                .then(|| crate::message::ResultWitness::from_untrusted(statement.clone()).unwrap()),
+            epoch: inst.config(h).epoch.id,
             kind: VoteKind::Commit,
             instance: inst.id,
             height: h,
@@ -210,8 +250,22 @@ pub fn build_chain(
             signers: Bitmap::from_indices(committee.n(), indices.iter().copied())
                 .unwrap_or_else(|| Bitmap::new(committee.n())),
             agg_sig: aggregate(&sigs),
-            attest: false,
-            attestations: Vec::new(),
+            attest: h == inst.config(h).epoch.last_height,
+            attestations: if header.attest {
+                indices
+                    .iter()
+                    .map(|index| {
+                        crate::testing::fake_attestation(
+                            committee.get(*index).unwrap(),
+                            h,
+                            &statement,
+                        )
+                        .signature
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         };
         chain.push((Block { header, payload }, qc));
         parent_hash = bh;
@@ -787,6 +841,14 @@ impl World {
     fn validity(&self, inst: usize, block: &Block, qc: &Qc) -> Result<(), String> {
         let instance = &self.instances[inst];
         let h = block.header.height;
+        if block.header.epoch != instance.config(h).epoch.id || qc.epoch != block.header.epoch {
+            return Err(
+                "block or certificate epoch context differs from authenticated schedule".into(),
+            );
+        }
+        if h == instance.config(h).epoch.last_height && !block.header.attest {
+            return Err("boundary execution lacks current-authority attestation".into());
+        }
         if qc.kind != VoteKind::Commit || qc.height != h {
             return Err("not a CommitQC of the block's height".to_owned());
         }
@@ -810,7 +872,7 @@ impl World {
         if block.header.instance != instance.id {
             return Err("foreign instance".to_owned());
         }
-        match block_exec(&parent_result, block) {
+        match block_exec(&parent_result, block, &instance.config(h).epoch) {
             ExecOutcome::Valid(expected) if expected == qc.result => {}
             other => return Err(format!("result {:?} but reference {other:?}", qc.result)),
         }
@@ -822,6 +884,7 @@ impl World {
         let topo = Topology::compute(
             &self.hasher,
             &instance.id,
+            &instance.config(h).epoch,
             instance.committee(h),
             h,
             0,
@@ -898,9 +961,9 @@ impl World {
         let keys = committee
             .keys_of(&qc.signers)
             .ok_or_else(|| format!("a malformed bitmap at h {}", qc.height))?;
-        if keys.len() < committee.q() {
+        if keys.len() != committee.q() {
             return Err(format!(
-                "a {:?}QC with {} < q signers at h {} v {}",
+                "a {:?}QC with {} != q signers at h {} v {}",
                 qc.kind,
                 keys.len(),
                 qc.height,
@@ -952,12 +1015,17 @@ impl World {
     /// A description of the first ground-truth defect.
     pub fn cert_tc(&self, inst: usize, tc: &TimeoutCert) -> Result<(), String> {
         let instance = &self.instances[inst];
+        if tc.epoch != instance.config(tc.height).epoch.id {
+            return Err(
+                "timeout certificate epoch context differs from authenticated schedule".into(),
+            );
+        }
         if tc.instance != instance.id {
             return Err("a TC of another instance".to_owned());
         }
         let committee = instance.committee(tc.height);
         let distinct: BTreeSet<u32> = tc.entries.iter().map(|e| e.signer).collect();
-        if distinct.len() < committee.q() || distinct.len() != tc.entries.len() {
+        if distinct.len() != committee.q() || distinct.len() != tc.entries.len() {
             return Err(format!(
                 "a TC h {} v {} without q distinct entries",
                 tc.height, tc.view
@@ -969,7 +1037,8 @@ impl World {
                 let key = committee
                     .get(entry.signer)
                     .ok_or("a TC entry outside the committee")?;
-                let msg = preimage::tmo_preimage(&tc.instance, tc.height, tc.view, entry.hq);
+                let msg =
+                    preimage::tmo_preimage(&tc.instance, &tc.epoch, tc.height, tc.view, entry.hq);
                 if !log.was_signed(key, &msg) {
                     return Err(format!(
                         "a TC h {} v {} with a timeout never signed by #{}",
@@ -1138,7 +1207,7 @@ impl World {
             if let Some(entry) = tc.entries.iter().find(|e| e.signer == index) {
                 out.push((
                     key,
-                    preimage::tmo_preimage(&tc.instance, tc.height, tc.view, entry.hq),
+                    preimage::tmo_preimage(&tc.instance, &tc.epoch, tc.height, tc.view, entry.hq),
                 ));
             }
         }
@@ -1202,7 +1271,8 @@ impl World {
             }
             WireMessage::SyncRequest(_)
             | WireMessage::BlockRequest(_)
-            | WireMessage::BlockResponse(_) => {}
+            | WireMessage::BlockResponse(_)
+            | WireMessage::ApplicationControl(_) => {}
         }
     }
 

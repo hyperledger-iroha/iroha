@@ -11,8 +11,9 @@
 //! predecessor restoration and aggregate resource admission into this owner
 //! before it can publish a complete State commitment.
 
-use super::world_projection::WorldStateBaseline;
+use super::world_projection::{WorldBaselineError, WorldStateBaseline};
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError;
 
 /// One finalized World overlay and its derived DA cache publication records.
 pub(in crate::state) struct PreparedWorldCommit<'state> {
@@ -55,9 +56,10 @@ impl<'state> PreparedWorldCommit<'state> {
         activation_heights: &BTreeMap<LaneId, u64>,
         pending_pins: Option<&PendingDaPinIntentBundle>,
         pending_lifecycle: Option<&PendingAutoscaleLaneLifecycle>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ExecutionAttemptError<String>> {
         let effects = Self::prepare_overlay(
             &mut world,
+            &state.ivm_execution_budget(),
             block_height,
             nexus,
             activation_heights,
@@ -76,12 +78,35 @@ impl<'state> PreparedWorldCommit<'state> {
     /// read-only owner; they cannot publish or make an unprepared World valid.
     pub(in crate::state) fn prepare_overlay(
         world: &mut WorldBlock<'state>,
+        execution_budget: &mv::allocation::AllocationBudget,
         block_height: u64,
         nexus: &iroha_config::parameters::actual::Nexus,
         activation_heights: &BTreeMap<LaneId, u64>,
         pending_pins: Option<&PendingDaPinIntentBundle>,
         pending_lifecycle: Option<&PendingAutoscaleLaneLifecycle>,
-    ) -> Result<PreparedWorldEffects, String> {
+    ) -> Result<PreparedWorldEffects, ExecutionAttemptError<String>> {
+        let effects = Self::prepare_overlay_mutations(
+            world,
+            block_height,
+            nexus,
+            activation_heights,
+            pending_pins,
+            pending_lifecycle,
+        )?;
+        Self::validate_prepared_overlay(world, execution_budget)?;
+        Ok(effects)
+    }
+
+    /// Complete the deterministic private tail exactly once; retain the returned original
+    /// effects before running any validation that may defer for local resources.
+    pub(in crate::state) fn prepare_overlay_mutations(
+        world: &mut WorldBlock<'state>,
+        block_height: u64,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        pending_pins: Option<&PendingDaPinIntentBundle>,
+        pending_lifecycle: Option<&PendingAutoscaleLaneLifecycle>,
+    ) -> Result<PreparedWorldEffects, ExecutionAttemptError<String>> {
         if pending_pins.is_some_and(|pending| pending.block_height != block_height) {
             return Err("prepared DA pin bundle belongs to a different block height".into());
         }
@@ -108,8 +133,52 @@ impl<'state> PreparedWorldCommit<'state> {
             );
             Self::prune_emergency_validators(world, &pending.catalog_update);
         }
-        super::retail_daily_limit_state::validate_immutable_policy_transition(world)?;
         Ok(PreparedWorldEffects { da_pins })
+    }
+
+    /// Validate the same completed immutable World. A local capacity refusal does not
+    /// recreate quota writes, pin records, lifecycle pruning or their allocations.
+    pub(in crate::state) fn validate_prepared_overlay(
+        world: &WorldBlock<'state>,
+        execution_budget: &mv::allocation::AllocationBudget,
+    ) -> Result<(), ExecutionAttemptError<String>> {
+        super::retail_daily_limit_state::validate_immutable_policy_transition(world)
+            .map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)?;
+        // A previously admitted World cut remains exact until one of these
+        // predicate inputs changes. Validate the completed overlay before it
+        // can publish; the same path checks replacement-block rollback cuts.
+        if world.musubi_archives.is_dirty()
+            || world.musubi_archive_locations.is_dirty()
+            || world.musubi_provider_bundle_attestations.is_dirty()
+            || world.musubi_locations_by_pin.is_dirty()
+            || world.musubi_locations_by_replication_order.is_dirty()
+            || world.musubi_locations_by_provider.is_dirty()
+            || world.pin_manifests.is_dirty()
+            || world.replication_orders.is_dirty()
+            || world.provider_owners.is_dirty()
+            || world.musubi_archive_availability.is_dirty()
+            || world.musubi_packages.is_dirty()
+            || world.musubi_releases.is_dirty()
+            || world.musubi_resolver_index.is_dirty()
+            || world.musubi_public_directory.is_dirty()
+            || world.musubi_resolver_index_revision.is_dirty()
+        {
+            deserialize::validate_musubi_live_projection_cut(world, execution_budget).map_err(
+                |error| {
+                    error
+                        .map_rejection(|error| format!("Musubi World publication refused: {error}"))
+                },
+            )?;
+            deserialize::musubi_universal::validate_musubi_universal_projection_cut(
+                world,
+                "candidate",
+                execution_budget,
+            )
+            .map_err(|error| {
+                error.map_rejection(|error| format!("Musubi World publication refused: {error}"))
+            })?;
+        }
+        Ok(())
     }
 
     /// Read the completed overlay; no subsequent caller mutation is possible.
@@ -130,7 +199,7 @@ impl<'state> PreparedWorldCommit<'state> {
     pub(in crate::state) fn baseline_after(
         &self,
         parent: &WorldStateBaseline,
-    ) -> Result<WorldStateBaseline, String> {
+    ) -> Result<WorldStateBaseline, WorldBaselineError> {
         parent.apply_block(&self.world)
     }
 

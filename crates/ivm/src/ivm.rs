@@ -10,10 +10,17 @@
 //! deterministic logical lane count capped by the ABI, with hardware helpers
 //! kept behind byte-identical fallbacks.
 use crate::{
-    SyscallPolicy, decoder,
+    SyscallPolicy,
+    contract_return_stack::{ContractReturnStack, MAX_CONTRACT_CALL_DEPTH},
+    decoder,
     error::{
         Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
         VmSourceLocation, VmTrapKind,
+    },
+    execution_memory_recorder::{DiagnosticMemoryAccessKind, DiagnosticMemoryAccessRecorder},
+    execution_step_recorder::{
+        DiagnosticRunEnd, DiagnosticStepOutcome, DiagnosticStepRecorder, DiagnosticStepState,
+        PendingDiagnosticStep,
     },
     execution_summary::{EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
     gas,
@@ -26,6 +33,7 @@ use crate::{
     },
     pointer_abi::PointerPolicyGuard,
     prepared::PreparedContract,
+    private_memory_ranges::PrivateMemoryRanges,
     registers::Registers,
     stack_policy::IvmStackPolicy,
     syscall_metering::{
@@ -36,7 +44,12 @@ use crate::{
     vector::SimdChoice,
     zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState},
 };
+#[path = "call_runtime.rs"]
+mod call_runtime;
+#[cfg(test)]
+mod snapshot;
 use likely_stable::unlikely;
+use mv::allocation::AllocationBudget;
 #[cfg(feature = "beep")]
 use rodio::{
     OutputStream, OutputStreamBuilder, Sink, Source, StreamError, mixer::Mixer, source::SineWave,
@@ -45,7 +58,7 @@ use sha2::{Digest, Sha256};
 #[cfg(feature = "beep")]
 use std::time::Duration;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{HashMap, VecDeque},
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, OnceLock,
@@ -54,6 +67,13 @@ use std::{
 };
 static SUPPRESS_BANNER: AtomicBool = AtomicBool::new(false);
 static HARDWARE_CAPABILITIES: OnceLock<HardwareCapabilities> = OnceLock::new();
+#[cfg(test)]
+thread_local! {
+    static REFUSE_WORKER_SNAPSHOT_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REFUSE_TRACE_SNAPSHOT_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REFUSE_DIAGNOSTIC_SNAPSHOT_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REFUSE_CALL_RETURN_RESERVATION_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 /// Upper bound on logical vector length supported by the VM.
 const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
 /// Default logical vector length when not specified by metadata.
@@ -62,8 +82,6 @@ const DEFAULT_VECTOR_LENGTH: usize = 4;
 const WIDE_INSTRUCTION_LEN: u64 = 4;
 /// Number of prepared instruction streams retained outside the decode cache.
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
-/// Approximate byte budget for cached prepared instruction streams.
-const PREPARED_PROGRAM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 #[cfg(feature = "beep")]
 fn with_audio_mixer(
     open_stream: impl FnOnce() -> Result<OutputStream, StreamError>,
@@ -101,110 +119,6 @@ fn resolve_syscall_metering(
         .then_some(SyscallMetering::Reserved)
         .ok_or(VMError::UnknownSyscall(number))
 }
-/// Maximum protected direct-call depth for deployable contract artifacts.
-///
-/// Kotodama V1 rejects recursion, so legitimate programs remain well below
-/// this bound. The cap makes malicious cyclic call graphs fail deterministically
-/// without allowing an unbounded host-side shadow stack.
-const MAX_CONTRACT_CALL_DEPTH: usize = 1024;
-/// Canonical disjoint half-open ranges containing private guest-memory bytes.
-///
-/// Range lookup and updates depend only on address ordering. They never scan a
-/// public payload byte-by-byte, so privacy preflight remains logarithmic in the
-/// number of private ranges rather than linear in attacker-controlled length.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct PrivateMemoryRanges {
-    ranges: BTreeMap<u64, u64>,
-}
-impl PrivateMemoryRanges {
-    fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
-    }
-    fn clear(&mut self) {
-        self.ranges.clear();
-    }
-    fn insert(&mut self, range: std::ops::Range<u64>) {
-        if range.start >= range.end {
-            return;
-        }
-        let mut start = range.start;
-        let mut end = range.end;
-        if let Some((&previous_start, &previous_end)) = self.ranges.range(..=start).next_back()
-            && previous_end >= start
-        {
-            start = previous_start;
-            end = end.max(previous_end);
-            self.ranges.remove(&previous_start);
-        }
-        loop {
-            let next = self
-                .ranges
-                .range(start..=end)
-                .next()
-                .map(|(&next_start, &next_end)| (next_start, next_end));
-            let Some((next_start, next_end)) = next else {
-                break;
-            };
-            end = end.max(next_end);
-            self.ranges.remove(&next_start);
-        }
-        self.ranges.insert(start, end);
-    }
-    fn remove(&mut self, range: std::ops::Range<u64>) {
-        if range.start >= range.end || self.ranges.is_empty() {
-            return;
-        }
-        let scan_start = self
-            .ranges
-            .range(..=range.start)
-            .next_back()
-            .map_or(range.start, |(&start, _)| start);
-        let overlaps: Vec<_> = self
-            .ranges
-            .range(scan_start..range.end)
-            .filter_map(|(&start, &end)| (end > range.start).then_some((start, end)))
-            .collect();
-        for (start, end) in overlaps {
-            self.ranges.remove(&start);
-            if start < range.start {
-                self.ranges.insert(start, range.start);
-            }
-            if end > range.end {
-                self.ranges.insert(range.end, end);
-            }
-        }
-    }
-    fn intersection_len(&self, range: std::ops::Range<u64>) -> u64 {
-        if range.start >= range.end || self.ranges.is_empty() {
-            return 0;
-        }
-        let scan_start = self
-            .ranges
-            .range(..=range.start)
-            .next_back()
-            .map_or(range.start, |(&start, _)| start);
-        self.ranges
-            .range(scan_start..range.end)
-            .map(|(&start, &end)| end.min(range.end).saturating_sub(start.max(range.start)))
-            .fold(0_u64, u64::saturating_add)
-    }
-    fn intersects(&self, range: std::ops::Range<u64>) -> bool {
-        if range.start >= range.end || self.ranges.is_empty() {
-            return false;
-        }
-        let scan_start = self
-            .ranges
-            .range(..=range.start)
-            .next_back()
-            .map_or(range.start, |(&start, _)| start);
-        self.ranges
-            .range(scan_start..range.end)
-            .any(|(&start, &end)| end > range.start && start < range.end)
-    }
-    fn take(&mut self) -> BTreeMap<u64, u64> {
-        std::mem::take(&mut self.ranges)
-    }
-}
 const SYSCALL_ARGS_0: &[usize] = &[];
 const SYSCALL_ARGS_1: &[usize] = &[10];
 const SYSCALL_ARGS_2: &[usize] = &[10, 11];
@@ -241,14 +155,14 @@ pub(crate) enum DecodedLiteral {
 /// Immutable indexed literal values and the pointer-only provenance index.
 #[derive(Clone, Debug)]
 pub(crate) struct DecodedLiteralTable {
-    entries: Arc<[DecodedLiteral]>,
-    pointer_starts: Arc<[u64]>,
+    entries: crate::cache_memory::SharedAllocation<DecodedLiteral>,
+    pointer_starts: crate::cache_memory::SharedAllocation<u64>,
 }
 impl DecodedLiteralTable {
     fn empty() -> Self {
         Self {
-            entries: Arc::from(Vec::<DecodedLiteral>::new().into_boxed_slice()),
-            pointer_starts: Arc::from(Vec::<u64>::new().into_boxed_slice()),
+            entries: Vec::<DecodedLiteral>::new().into(),
+            pointer_starts: Vec::<u64>::new().into(),
         }
     }
     /// Return values in their authenticated table-index order.
@@ -257,6 +171,9 @@ impl DecodedLiteralTable {
     }
     fn pointer_starts(&self) -> &[u64] {
         &self.pointer_starts
+    }
+    pub(crate) fn try_retain(&self) -> bool {
+        self.entries.try_retain() && self.pointer_starts.try_retain()
     }
 }
 /// Decode and fully validate an ABI-v1 indexed literal table.
@@ -352,8 +269,8 @@ pub(crate) fn decode_literal_table(
         }
     }
     Ok(DecodedLiteralTable {
-        entries: Arc::from(entries.into_boxed_slice()),
-        pointer_starts: Arc::from(pointer_starts.into_boxed_slice()),
+        entries: entries.into(),
+        pointer_starts: pointer_starts.into(),
     })
 }
 fn setvl_length(raw: usize) -> Result<usize, VMError> {
@@ -882,7 +799,7 @@ impl From<IvmConfigBuilder> for IvmBuilder {
         IvmBuilder::from_config_builder(builder)
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct PreparedOp {
     inst: u32,
     wide_op: u8,
@@ -915,28 +832,29 @@ impl PreparedOp {
 pub(crate) struct PreparedProgram {
     first_pc: u64,
     end_pc: u64,
-    ops: Arc<[PreparedOp]>,
+    ops: crate::cache_memory::SharedAllocation<PreparedOp>,
 }
 impl PreparedProgram {
     fn prepare_ops(
         decoded: &[crate::ivm_cache::DecodedOp],
         instruction_len: usize,
-    ) -> Result<Arc<[PreparedOp]>, VMError> {
+    ) -> Result<crate::cache_memory::SharedAllocation<PreparedOp>, VMError> {
         let expected_len = decoded.len().saturating_mul(WIDE_INSTRUCTION_LEN as usize);
         if instruction_len != expected_len {
             return Err(VMError::DecodeError);
         }
-        let mut ops = Vec::with_capacity(decoded.len());
-        for (idx, op) in decoded.iter().enumerate() {
-            if op.pc != (idx as u64).saturating_mul(WIDE_INSTRUCTION_LEN) {
-                return Err(VMError::DecodeError);
-            }
-            ops.push(PreparedOp::from_decoded(op)?);
-        }
-        Ok(Arc::from(ops.into_boxed_slice()))
+        crate::cache_memory::SharedAllocation::try_from_iter(decoded.iter().enumerate().map(
+            |(idx, op)| {
+                if op.pc != (idx as u64).saturating_mul(WIDE_INSTRUCTION_LEN) {
+                    return Err(VMError::DecodeError);
+                }
+                PreparedOp::from_decoded(op)
+            },
+        ))
     }
+
     fn from_prepared_ops(
-        ops: Arc<[PreparedOp]>,
+        ops: crate::cache_memory::SharedAllocation<PreparedOp>,
         first_pc: u64,
         instruction_len: usize,
     ) -> Result<Self, VMError> {
@@ -967,16 +885,21 @@ impl PreparedProgram {
     fn contains_pc(&self, pc: u64) -> bool {
         self.op_at(pc).is_some()
     }
+    pub(crate) fn try_retain(&self) -> bool {
+        self.ops.try_retain()
+    }
 }
 type PreparedProgramCacheKey = [u8; 32];
 struct PreparedProgramCache {
-    map: HashMap<PreparedProgramCacheKey, Arc<[PreparedOp]>>,
+    map: HashMap<PreparedProgramCacheKey, crate::cache_memory::SharedAllocation<PreparedOp>>,
     order: VecDeque<PreparedProgramCacheKey>,
     bytes: usize,
+    index_memory: crate::cache_memory::MemoryReservation,
 }
 impl PreparedProgramCache {
     fn new() -> Self {
         Self {
+            index_memory: crate::cache_memory::MemoryReservation::active(0),
             map: HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
@@ -994,35 +917,77 @@ impl PreparedProgramCache {
         &mut self,
         code: &[u8],
         decoded: &[crate::ivm_cache::DecodedOp],
-    ) -> Result<Arc<[PreparedOp]>, VMError> {
+    ) -> Result<crate::cache_memory::SharedAllocation<PreparedOp>, VMError> {
+        if crate::ivm_cache::cache_limits().capacity == 0
+            || crate::cache_memory::memory_stats().limit_bytes == 0
+        {
+            self.clear_storage();
+            return PreparedProgram::prepare_ops(decoded, code.len());
+        }
         let key = Self::key_for(code);
         if let Some(hit) = self.map.get(&key).cloned() {
             self.touch(key);
             return Ok(hit);
         }
         let prepared = PreparedProgram::prepare_ops(decoded, code.len())?;
-        let size = Self::entry_size(&prepared);
-        if size <= PREPARED_PROGRAM_CACHE_MAX_BYTES {
-            self.bytes = self.bytes.saturating_add(size);
-            self.map.insert(key, Arc::clone(&prepared));
-            self.touch(key);
-            self.enforce_capacity();
+        // Both instruction caches share one allocation-owned byte budget.
+        // Evicted borrowers can keep it full; never wait for their execution.
+        while !prepared.try_retain() {
+            let Some(old) = self.order.pop_front() else {
+                self.clear_storage();
+                return Ok(prepared);
+            };
+            self.remove_entry(old);
         }
+        let size = Self::entry_size(&prepared);
+        self.bytes = self.bytes.saturating_add(size);
+        self.map.insert(key, prepared.cache_clone());
+        self.touch(key);
+        self.enforce_capacity();
         Ok(prepared)
     }
-    fn entry_size(prepared: &Arc<[PreparedOp]>) -> usize {
-        core::mem::size_of::<PreparedOp>() * prepared.len()
+    fn clear_storage(&mut self) {
+        self.map = HashMap::new();
+        self.order = VecDeque::new();
+        self.bytes = 0;
+        self.index_memory.set_known_bytes(0);
+    }
+    fn retain_index_or_clear(&mut self) {
+        if self.map.is_empty() {
+            self.clear_storage();
+            return;
+        }
+        let bytes = norito::core::owned_hash_table_allocation_bytes::<(
+            PreparedProgramCacheKey,
+            crate::cache_memory::SharedAllocation<PreparedOp>,
+        )>(self.map.capacity())
+        .ok()
+        .and_then(|bytes| {
+            bytes
+                .checked_add(self.order.capacity() * std::mem::size_of::<PreparedProgramCacheKey>())
+        });
+        let Some(bytes) = bytes else {
+            self.clear_storage();
+            return;
+        };
+        self.index_memory
+            .set_known_bytes(bytes.max(self.index_memory.bytes()));
+        if !self.index_memory.try_retain() {
+            self.clear_storage();
+        }
+    }
+    fn entry_size(prepared: &crate::cache_memory::SharedAllocation<PreparedOp>) -> usize {
+        prepared.allocation_bytes()
     }
     fn touch(&mut self, key: PreparedProgramCacheKey) {
         if let Some(pos) = self.order.iter().position(|candidate| *candidate == key) {
             self.order.remove(pos);
         }
         self.order.push_back(key);
+        self.retain_index_or_clear();
     }
     fn enforce_capacity(&mut self) {
-        while self.order.len() > PREPARED_PROGRAM_CACHE_CAPACITY
-            || self.bytes > PREPARED_PROGRAM_CACHE_MAX_BYTES
-        {
+        while self.order.len() > PREPARED_PROGRAM_CACHE_CAPACITY {
             if let Some(old) = self.order.pop_front() {
                 self.remove_entry(old);
             } else {
@@ -1035,6 +1000,12 @@ impl PreparedProgramCache {
             self.bytes = self.bytes.saturating_sub(Self::entry_size(&prepared));
         }
     }
+}
+pub(crate) fn clear_prepared_program_cache() {
+    let mut cache = prepared_program_cache()
+        .lock()
+        .expect("prepared cache lock");
+    *cache = PreparedProgramCache::new();
 }
 fn prepared_program_cache() -> &'static Mutex<PreparedProgramCache> {
     static CACHE: OnceLock<Mutex<PreparedProgramCache>> = OnceLock::new();
@@ -1080,12 +1051,36 @@ fn validate_generic_program_syscalls(
     }
     Ok(())
 }
+fn validate_prepared_instruction_bytes(
+    code: &[u8],
+    decoded: &[crate::ivm_cache::DecodedOp],
+) -> Result<(), VMError> {
+    let words = code.chunks_exact(WIDE_INSTRUCTION_LEN as usize);
+    if !words.remainder().is_empty() || words.len() != decoded.len() {
+        return Err(VMError::DecodeError);
+    }
+    for (index, (bytes, op)) in words.zip(decoded).enumerate() {
+        let expected_pc = u64::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(WIDE_INSTRUCTION_LEN))
+            .ok_or(VMError::DecodeError)?;
+        let expected_word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        if op.pc != expected_pc || op.inst != expected_word {
+            return Err(VMError::DecodeError);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn prepare_instruction_stream(
     code: &[u8],
     decoded: &[crate::ivm_cache::DecodedOp],
     first_pc: u64,
     literals: &[DecodedLiteral],
 ) -> Result<PreparedProgram, VMError> {
+    // A prepared-cache hit is keyed by code bytes, so validate the caller's
+    // decoded stream against those bytes before looking up or sharing any ops.
+    validate_prepared_instruction_bytes(code, decoded)?;
     validate_indexed_literal_instructions(decoded, literals)?;
     let prepared_ops = {
         let mut guard = prepared_program_cache()
@@ -1098,10 +1093,11 @@ pub(crate) fn prepare_instruction_stream(
 struct ProgramLoadImage<'a> {
     code_region: &'a [u8],
     metadata: ProgramMetadata,
-    contract_interface: Option<Arc<crate::metadata::EmbeddedContractInterfaceV1>>,
+    contract_interface:
+        Option<crate::cache_memory::SharedValue<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     literal_table: DecodedLiteralTable,
-    predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
+    predecoded: Option<crate::ivm_cache::DecodedStream>,
     prepared: Option<PreparedProgram>,
     code_hash: [u8; 32],
     entry_pc: u64,
@@ -1120,25 +1116,9 @@ pub enum TraceMode {
     PcOnly,
     DeltaRegisters,
 }
-/// Immutable baseline used to return a warmed VM to its post-load state.
-///
-/// The baseline owns one pristine memory image. Resetting from it copies only
-/// memory chunks dirtied by the preceding invocation; decoded instructions,
-/// literal tables, and the loaded program remain attached to the VM.
-pub struct RuntimeTemplate {
-    memory: Memory,
-    registers: Registers,
-    private_memory_bytes: PrivateMemoryRanges,
-    code_hash: [u8; 32],
-    pc: u64,
-    gas_limit: u64,
-    max_cycles: u64,
-    trace_mode: TraceMode,
-    zk_mode: bool,
-    zk_trace_enabled: bool,
-    entrypoint_pc: Option<u64>,
-    input_bump_next: u64,
-}
+mod runtime_template;
+pub use runtime_template::RuntimeTemplate;
+use runtime_template::RuntimeTemplateData;
 /// A warmed VM cannot be reset from a different program or memory baseline.
 ///
 /// Runtime pools must discard the mismatched VM instead of replacing its full
@@ -1149,6 +1129,7 @@ pub struct RuntimeTemplateResetError {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeTemplateResetErrorKind {
+    AllocationUnavailable,
     ProgramIdentity {
         current: [u8; 32],
         template: [u8; 32],
@@ -1172,6 +1153,11 @@ enum RuntimeTemplateResetErrorKind {
     },
 }
 impl RuntimeTemplateResetError {
+    fn from_allocation_unavailable(_: VMError) -> Self {
+        Self {
+            kind: RuntimeTemplateResetErrorKind::AllocationUnavailable,
+        }
+    }
     fn from_program_identity(current: [u8; 32], template: [u8; 32]) -> Self {
         Self {
             kind: RuntimeTemplateResetErrorKind::ProgramIdentity { current, template },
@@ -1210,6 +1196,9 @@ impl RuntimeTemplateResetError {
 impl std::fmt::Display for RuntimeTemplateResetError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.kind {
+            RuntimeTemplateResetErrorKind::AllocationUnavailable => formatter.write_str(
+                "runtime-template copy could not reserve memory before resetting the VM",
+            ),
             RuntimeTemplateResetErrorKind::ProgramIdentity { current, template } => write!(
                 formatter,
                 "runtime-template program mismatch: VM has code hash {}, template has code hash {}",
@@ -1437,10 +1426,11 @@ pub struct IVM {
     max_cycles: u64,
     metadata: ProgramMetadata,
     code_hash: [u8; 32],
-    contract_interface: Option<Arc<crate::metadata::EmbeddedContractInterfaceV1>>,
+    contract_interface:
+        Option<crate::cache_memory::SharedValue<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     literal_table: DecodedLiteralTable,
-    predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
+    predecoded: Option<crate::ivm_cache::DecodedStream>,
     prepared: Option<PreparedProgram>,
     prepared_required: bool,
     /// Unforgeable local capability installed only by the crate-private Kotodama test-suite loader.
@@ -1448,7 +1438,7 @@ pub struct IVM {
     /// Whether the loaded image is a deployable contract with protected calls.
     strict_return_integrity: bool,
     /// Host-protected return PCs for direct contract calls.
-    contract_return_stack: Vec<u64>,
+    contract_return_stack: ContractReturnStack,
     /// Aligned outer-return sentinel captured from r1 at invocation start.
     contract_outer_return_pc: Option<u64>,
     #[cfg(test)]
@@ -1477,75 +1467,8 @@ pub struct IVM {
     input_bump_next: u64,
     acceleration_policy: AccelerationPolicy,
     hardware_capabilities: HardwareCapabilities,
-}
-impl Clone for IVM {
-    fn clone(&self) -> Self {
-        Self {
-            registers: self.registers.clone(),
-            memory: self.memory.clone(),
-            private_memory_bytes: self.private_memory_bytes.clone(),
-            pc: self.pc,
-            host: None,
-            gas_limit: self.gas_limit,
-            gas_remaining: self.remaining_gas(),
-            // A clone is an independent VM, not a continuation of an active
-            // host call, so fold any transient reserve into ordinary gas.
-            syscall_gas_reserve: 0,
-            staged_syscall: None,
-            last_staged_syscall: None,
-            argument_decode_prepaid_gas: None,
-            cycles: self.cycles,
-            active_cycle_budget: self.active_cycle_budget.clone(),
-            halted: self.halted,
-            constraint_failed: self.constraint_failed,
-            contract_abort_error: self.contract_abort_error.clone(),
-            constraints: self.constraints.clone(),
-            mem_log: self.mem_log.clone(),
-            reg_log: Arc::new(parking_lot::Mutex::new(self.reg_log.lock().clone())),
-            host_trace_log_detached: false,
-            host_trace_invocation_log: None,
-            proof_state_epoch: self.proof_state_epoch,
-            trace_log: self.trace_log.clone(),
-            step_log: self.step_log.clone(),
-            trace_mode: self.trace_mode,
-            pc_trace: self.pc_trace.clone(),
-            delta_trace: self.delta_trace.clone(),
-            vector_enabled: self.vector_enabled,
-            max_vector_lanes: self.max_vector_lanes,
-            vector_length: self.vector_length,
-            max_cycles: self.max_cycles,
-            metadata: self.metadata.clone(),
-            code_hash: self.code_hash,
-            contract_interface: self.contract_interface.clone(),
-            contract_debug: self.contract_debug.clone(),
-            literal_table: self.literal_table.clone(),
-            predecoded: self.predecoded.clone(),
-            prepared: self.prepared.clone(),
-            prepared_required: self.prepared_required,
-            allow_koto_test_syscalls: self.allow_koto_test_syscalls,
-            strict_return_integrity: self.strict_return_integrity,
-            contract_return_stack: self.contract_return_stack.clone(),
-            contract_outer_return_pc: self.contract_outer_return_pc,
-            #[cfg(test)]
-            predecoded_misses: 0,
-            #[cfg(test)]
-            program_parse_attempts: 0,
-            #[cfg(test)]
-            prepared_loads: 0,
-            scheduler_limits: self.scheduler_limits,
-            use_metal: self.use_metal,
-            use_cuda: self.use_cuda,
-            zk_mode: self.zk_mode,
-            zk_trace_enabled: self.zk_trace_enabled,
-            entrypoint_pc: self.entrypoint_pc,
-            program_prefix_len: self.program_prefix_len,
-            last_diagnostic: self.last_diagnostic.clone(),
-            pc_alignment: self.pc_alignment,
-            input_bump_next: self.input_bump_next,
-            acceleration_policy: self.acceleration_policy,
-            hardware_capabilities: self.hardware_capabilities,
-        }
-    }
+    // Release aggregate charges after every owned allocation above is destroyed.
+    cache_reservation: crate::cache_memory::MemoryReservation,
 }
 impl IVM {
     /// Construct a builder for configuring VM creation.
@@ -1565,6 +1488,29 @@ impl IVM {
     /// Create a new VM using the default adaptive acceleration policy.
     pub fn new(gas_limit: u64) -> Self {
         IvmBuilder::new(gas_limit).suppress_startup_banner().build()
+    }
+    /// Create a VM with the default adaptive policy, deferring on local allocation refusal.
+    ///
+    /// # Errors
+    /// Returns a local execution deferral if the VM memory image or Merkle backing
+    /// cannot be reserved and allocated. This error does not change transaction validity.
+    pub fn try_new(gas_limit: u64) -> Result<Self, VMError> {
+        Self::try_new_from_config(IvmConfig::adaptive(gas_limit))
+    }
+
+    /// Construct a VM with its fixed guest memory image prepaid by a local pool.
+    ///
+    /// This funds the fixed image backing, memory and register Merkle nodes.
+    /// Root and nested frame initialization bitmaps are admitted before call
+    /// entry. Runtime templates, frame-vector growth, and host scratch still
+    /// require separate admission.
+    /// Capacity refusal is an operational deferral and never consumes guest gas.
+    /// TODO: Extend one parent plan across those remaining allocation owners.
+    pub fn try_new_with_memory_budget(
+        gas_limit: u64,
+        budget: &AllocationBudget,
+    ) -> Result<Self, VMError> {
+        Self::try_new_from_config_with_memory_budget(IvmConfig::adaptive(gas_limit), Some(budget))
     }
     /// Create a new VM using the provided configuration.
     pub fn new_with_config(config: IvmConfig) -> Self {
@@ -1737,10 +1683,29 @@ impl IVM {
     }
     /// Create a new IVM instance with default host and no program loaded.
     fn new_from_config(config: IvmConfig) -> Self {
+        Self::try_new_from_config(config).expect("VM construction requires local memory")
+    }
+    /// Construct a VM with fallible, allocation-charged memory and Merkle leaves.
+    fn try_new_from_config(config: IvmConfig) -> Result<Self, VMError> {
+        Self::try_new_from_config_with_memory_budget(config, None)
+    }
+
+    fn try_new_from_config_with_memory_budget(
+        config: IvmConfig,
+        memory_budget: Option<&AllocationBudget>,
+    ) -> Result<Self, VMError> {
         // Initially allocate memory for a reasonable code size (can be adjusted upon loading).
         let gas_limit = config.gas_limit();
-        let mem = Memory::new_with_stack_limit(config.stack_limit_for_gas())
-            .expect("IvmConfig derives a valid ABI V1 stack limit");
+        let mem = match memory_budget {
+            Some(budget) => {
+                Memory::new_with_stack_limit_funded(config.stack_limit_for_gas(), budget)?
+            }
+            None => Memory::new_with_stack_limit(config.stack_limit_for_gas())?,
+        };
+        let registers = match memory_budget {
+            Some(budget) => Registers::try_new_with_memory_budget(budget)?,
+            None => Registers::try_new()?,
+        };
         vector::set_thread_forced_simd(config.acceleration().forced_simd());
         let max_vector_lanes = {
             #[cfg(target_arch = "x86_64")]
@@ -1769,7 +1734,8 @@ impl IVM {
         // reduce oversubscription when multiple thread pools coexist.
         let scheduler_limits = crate::parallel::default_scheduler_limits();
         let mut vm = IVM {
-            registers: Registers::new(),
+            cache_reservation: crate::cache_memory::MemoryReservation::active_unmeasured(0),
+            registers,
             memory: mem,
             private_memory_bytes: PrivateMemoryRanges::default(),
             pc: 0,
@@ -1812,7 +1778,10 @@ impl IVM {
             prepared_required: false,
             allow_koto_test_syscalls: false,
             strict_return_integrity: false,
-            contract_return_stack: Vec::new(),
+            contract_return_stack: memory_budget.map_or_else(
+                ContractReturnStack::default,
+                ContractReturnStack::with_memory_budget,
+            ),
             contract_outer_return_pc: None,
             #[cfg(test)]
             predecoded_misses: 0,
@@ -1835,7 +1804,7 @@ impl IVM {
         };
         vm.set_hardware_capabilities(config.capabilities());
         vm.set_acceleration_policy(config.acceleration());
-        vm
+        Ok(vm)
     }
     fn apply_acceleration_policy(&mut self, policy: AccelerationPolicy) {
         let caps = self.hardware_capabilities;
@@ -1915,9 +1884,10 @@ impl IVM {
         self.max_cycles = 0;
         self.zk_mode = false;
         // Preserve INPUT/STACK contents but reset HEAP/OUTPUT for a clean run.
-        self.memory.clear_program_heap();
+        self.memory.preflight_diagnostic_program_load(code.len())?;
+        self.memory.clear_program_heap()?;
         self.memory.load_code(code)?;
-        self.memory.clear_output();
+        self.memory.clear_output()?;
         self.pc = 0;
         self.entrypoint_pc = Some(0);
         self.program_prefix_len = 0;
@@ -1996,7 +1966,13 @@ impl IVM {
         self.install_program(ProgramLoadImage {
             code_region,
             metadata: meta,
-            contract_interface: parsed.contract_interface.map(Arc::new),
+            contract_interface: parsed.contract_interface.map(|interface| {
+                let exclusively_owned = interface
+                    .entrypoints
+                    .iter()
+                    .all(|entry| entry.triggers.is_empty());
+                crate::prepared::shared_metadata(interface, exclusively_owned)
+            }),
             contract_debug: parsed.contract_debug,
             literal_table,
             predecoded,
@@ -2040,7 +2016,7 @@ impl IVM {
             contract_interface: Some(contract.shared_contract_interface()),
             contract_debug: None,
             literal_table: contract.literal_table().clone(),
-            predecoded: Some(Arc::clone(contract.decoded())),
+            predecoded: Some(contract.decoded().clone()),
             prepared: Some(contract.prepared_program().clone()),
             code_hash: contract.code_hash().into(),
             entry_pc: contract.instruction_entry_pc(),
@@ -2054,6 +2030,7 @@ impl IVM {
         if code_len > Memory::HEAP_START || image.entry_pc > code_len {
             return Err(VMError::InvalidMetadata);
         }
+        self.memory.call_frames.clear();
         if !self.scrub_private_state() {
             return Err(VMError::PrivacyViolation);
         }
@@ -2081,9 +2058,11 @@ impl IVM {
         self.strict_return_integrity = image.strict_return_integrity;
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
-        self.memory.clear_program_heap();
+        self.memory
+            .preflight_diagnostic_program_load(image.code_region.len())?;
+        self.memory.clear_program_heap()?;
         self.memory.load_code(image.code_region)?;
-        self.memory.clear_output();
+        self.memory.clear_output()?;
         self.registers.set(31, self.memory.stack_top());
         self.code_hash = image.code_hash;
         self.pc = image.entry_pc;
@@ -2168,21 +2147,25 @@ impl IVM {
             .as_ref()
             .is_some_and(|prepared| prepared.contains_pc(pc))
     }
-    fn prepared_pc_is_halt(&self, pc: u64) -> bool {
-        self.prepared
-            .as_ref()
-            .and_then(|prepared| prepared.op_at(pc))
-            .is_some_and(|op| op.wide_op == instruction::wide::control::HALT)
-    }
-    fn push_contract_return(&mut self, return_pc: u64) -> Result<(), VMError> {
+    fn preflight_contract_return(&mut self) -> Result<(), VMError> {
         if !self.strict_return_integrity {
             return Ok(());
         }
         if self.contract_return_stack.len() >= MAX_CONTRACT_CALL_DEPTH {
             return Err(VMError::AssertionFailed);
         }
-        self.contract_return_stack.push(return_pc);
-        Ok(())
+        #[cfg(test)]
+        if REFUSE_CALL_RETURN_RESERVATION_FOR_TEST.with(|refuse| refuse.replace(false)) {
+            return Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ));
+        }
+        self.contract_return_stack.preflight_one()
+    }
+    fn push_contract_return(&mut self, return_pc: u64) {
+        if self.strict_return_integrity {
+            self.contract_return_stack.push_reserved(return_pc);
+        }
     }
     fn fetch_instruction(&mut self) -> Result<FetchedOp, VMError> {
         if let Some(op) = self
@@ -2190,7 +2173,10 @@ impl IVM {
             .as_ref()
             .and_then(|prepared| prepared.op_at(self.pc))
         {
-            return Ok(op.fetched());
+            let fetched = op.fetched();
+            self.memory
+                .diagnostic_record_prepared_fetch(self.pc, fetched.inst)?;
+            return Ok(fetched);
         }
         #[cfg(test)]
         {
@@ -2259,6 +2245,7 @@ impl IVM {
             VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
             VMError::HostOutputBudgetExceeded { .. } => VmTrapKind::HostOutputBudgetExceeded,
             VMError::AmxBudgetExceeded { .. } => VmTrapKind::AmxBudgetExceeded,
+            VMError::ExecutionDeferred(_) | VMError::AllocationDeferred(_) => VmTrapKind::Other,
             VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
         }
     }
@@ -2450,28 +2437,43 @@ impl IVM {
         Ok(())
     }
     fn record_memory_store_privacy(&mut self, addr: u64, len: u64, private: bool) {
+        self.memory.diagnostic_classify_last_access(
+            addr,
+            len,
+            DiagnosticMemoryAccessKind::Write,
+            private,
+        );
         let Ok(range) = Self::memory_privacy_range(addr, len) else {
             return;
         };
-        if self.zk_mode && private {
-            self.private_memory_bytes.insert(range);
-        } else {
-            self.private_memory_bytes.remove(range);
-        }
+        self.private_memory_bytes
+            .apply_prepared_update(range, self.zk_mode && private);
+    }
+    fn preflight_memory_store_privacy(
+        &mut self,
+        addr: u64,
+        len: u64,
+        private: bool,
+    ) -> Result<(), VMError> {
+        let range = Self::memory_privacy_range(addr, len)?;
+        self.private_memory_bytes
+            .try_prepare_update(&range, self.zk_mode && private)
     }
     /// Zero private stack bytes before a reset or program replacement.
     fn scrub_private_memory(&mut self) -> bool {
-        for (start, end) in self.private_memory_bytes.take() {
+        let mut previous = None;
+        while let Some((start, end)) = self.private_memory_bytes.next_after(previous) {
             for addr in start..end {
                 if self.memory.store_u8(addr, 0).is_err() {
-                    // Fail closed if an invariant is violated: retaining the tag is
-                    // safer than making an uncleared byte publicly readable.
-                    self.private_memory_bytes
-                        .insert(addr..addr.saturating_add(1));
+                    // Preserve all tags when a corrupted memory invariant stops
+                    // the scrub, including bytes not visited yet.
+                    return false;
                 }
             }
+            previous = Some(start);
         }
-        self.private_memory_bytes.is_empty()
+        self.private_memory_bytes.clear();
+        true
     }
     /// Scrub every private value before a mode transition or program replacement.
     fn scrub_private_state(&mut self) -> bool {
@@ -2568,6 +2570,7 @@ impl IVM {
             self.entrypoint_pc = Some(pc);
             self.contract_return_stack.clear();
             self.contract_outer_return_pc = None;
+            self.memory.call_frames.clear();
             Ok(())
         } else {
             Err(VMError::DecodeError)
@@ -2619,6 +2622,10 @@ impl IVM {
             return Err(VMError::PrivacyViolation);
         }
         let len = u64::try_from(tlv.len()).map_err(|_| VMError::OutOfMemory)?;
+        let address = Memory::HEAP_START
+            .checked_add(self.memory.heap_allocated_len())
+            .ok_or(VMError::OutOfMemory)?;
+        self.preflight_memory_store_privacy(address, len, true)?;
         let address = self.alloc_heap(len)?;
         self.memory.store_bytes(address, tlv)?;
         self.record_memory_store_privacy(address, len, true);
@@ -2997,12 +3004,13 @@ impl IVM {
     }
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
+        self.memory.call_frames.clear();
         let _ = self.scrub_private_state();
         let resume_pc = self
             .entrypoint_pc
             .or_else(|| self.prepared.as_ref().map(|prepared| prepared.first_pc))
             .unwrap_or(0);
-        self.registers = Registers::new();
+        self.registers.reset_to_zero();
         self.registers.set(31, self.memory.stack_top());
         self.pc = resume_pc;
         self.cycles = 0;
@@ -3022,6 +3030,7 @@ impl IVM {
         self.delta_trace = zk::DeltaTraceLog::default();
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
+        self.memory.call_frames.clear();
         // Gas remaining is not reset here; set_gas_limit should be called if needed.
         self.gas_remaining = self.remaining_gas();
         self.syscall_gas_reserve = 0;
@@ -3038,12 +3047,50 @@ impl IVM {
     ///
     /// Hosts should call this after loading and configuring an immutable
     /// program, before attaching an invocation-specific host or arguments.
-    #[must_use]
-    pub fn runtime_template(&self) -> RuntimeTemplate {
-        RuntimeTemplate {
-            memory: self.memory.clone_for_runtime_template(),
-            registers: self.registers.clone(),
-            private_memory_bytes: self.private_memory_bytes.clone(),
+    /// Exclusive access keeps allocation geometry fixed during funded capture.
+    /// State-owned VMs prepay the complete private snapshot through their
+    /// original allocation pool before constructing any cloned payload.
+    ///
+    /// # Errors
+    /// Defers locally if the baseline owns live call frames or any owned
+    /// memory/register snapshot cannot be reserved.
+    pub fn try_runtime_template(&mut self) -> Result<RuntimeTemplate, VMError> {
+        // Exclusive access prevents interior read-log or Merkle-cache growth
+        // between the allocation plan and the copy. No caller-supplied pool can
+        // substitute equal-looking limits for the original State pool.
+        let owner_bytes = norito::core::owned_arc_allocation_bytes::<RuntimeTemplateData>()
+            .map_err(|_| {
+                VMError::AllocationDeferred(mv::allocation::AllocationRefusal::DemandOverflow)
+            })?;
+        let mut allocation_lease = self
+            .memory
+            .allocation_budget()
+            .map(|budget| {
+                let mut plan =
+                    crate::execution_memory::ExecutionMemoryPlan::array::<u8>(owner_bytes)
+                        .map_err(VMError::AllocationDeferred)?;
+                plan.include_child(self.memory.runtime_template_memory_plan()?)
+                    .map_err(VMError::AllocationDeferred)?;
+                plan.include_child(self.registers.runtime_template_memory_plan()?)
+                    .map_err(VMError::AllocationDeferred)?;
+                plan.include_child(self.private_memory_bytes.runtime_template_memory_plan()?)
+                    .map_err(VMError::AllocationDeferred)?;
+                crate::execution_memory::ExecutionMemoryLease::reserve(budget, plan)
+                    .map_err(VMError::AllocationDeferred)
+            })
+            .transpose()?;
+        let cache_reservation = crate::cache_memory::MemoryReservation::active(owner_bytes);
+        let memory = self
+            .memory
+            .try_clone_for_runtime_template(allocation_lease.as_mut())?;
+        let registers = self.registers.try_clone_for_runtime_template()?;
+        let private_memory_bytes = self.private_memory_bytes.try_clone()?;
+        Ok(RuntimeTemplate::new(RuntimeTemplateData {
+            cache_reservation,
+            _allocation_lease: allocation_lease,
+            memory,
+            registers,
+            private_memory_bytes,
             code_hash: self.code_hash,
             pc: self.pc,
             gas_limit: self.gas_limit,
@@ -3053,7 +3100,7 @@ impl IVM {
             zk_trace_enabled: self.zk_trace_enabled,
             entrypoint_pc: self.entrypoint_pc,
             input_bump_next: self.input_bump_next,
-        }
+        }))
     }
     /// Restore a warmed VM to a previously captured post-load baseline.
     ///
@@ -3064,13 +3111,14 @@ impl IVM {
     /// # Errors
     ///
     /// Returns [`RuntimeTemplateResetError`] when the VM and template refer to
-    /// different programs or memory baselines, or their memory geometries
-    /// differ. The VM is left unchanged so a runtime pool can discard it
-    /// without performing a full-memory clone.
+    /// different programs or memory baselines, their memory geometries differ,
+    /// or a bounded private-range copy cannot be reserved. The VM is
+    /// left unchanged so a runtime pool can discard it without a full reload.
     pub fn reset_from_runtime_template(
         &mut self,
         template: &RuntimeTemplate,
     ) -> Result<(), RuntimeTemplateResetError> {
+        let template = template.data();
         if self.code_hash != template.code_hash {
             return Err(RuntimeTemplateResetError::from_program_identity(
                 self.code_hash,
@@ -3091,6 +3139,10 @@ impl IVM {
         if !self.memory.shares_baseline_lineage(&template.memory) {
             return Err(RuntimeTemplateResetError::from_memory_baseline_identity());
         }
+        let private_memory_bytes = template
+            .private_memory_bytes
+            .try_clone()
+            .map_err(RuntimeTemplateResetError::from_allocation_unavailable)?;
         // The template restores dirty memory chunks, so stale tags must not
         // cause reset() to scrub bytes restored from that baseline.
         self.memory
@@ -3109,11 +3161,74 @@ impl IVM {
         self.set_host(DefaultHost::default());
         self.reset();
         self.zk_mode = template.zk_mode;
-        self.registers = template.registers.clone();
-        self.private_memory_bytes = template.private_memory_bytes.clone();
+        self.registers.restore_from_template(&template.registers);
+        self.private_memory_bytes = private_memory_bytes;
         self.pc = template.pc;
         self.last_diagnostic = None;
         Ok(())
+    }
+    /// Prepare a reset runtime for nonblocking retention by a runtime pool.
+    ///
+    /// Call after `reset_from_runtime_template`. Active invocation owners are
+    /// removed before measuring idle storage. Failure means the caller must
+    /// discard this runtime; it never changes a completed execution's outcome.
+    pub fn try_retain_cache_allocations(&mut self) -> bool {
+        if self.contract_debug.is_some()
+            || self.last_diagnostic.is_some()
+            || !matches!(self.constraints.allocated_bytes(), Ok(0))
+            || !matches!(self.mem_log.allocated_bytes(), Ok(0))
+            || !matches!(self.trace_log.allocated_bytes(), Ok(0))
+            || !matches!(self.step_log.allocated_bytes(), Ok(0))
+            || !matches!(self.delta_trace.allocated_bytes(), Ok(0))
+        {
+            return false;
+        }
+        self.host = None;
+        self.active_cycle_budget = None;
+        self.pc_trace = Vec::new();
+        self.contract_return_stack.compact_for_cache();
+        self.reg_log = Arc::new(parking_lot::Mutex::new(zk::RegLog::default()));
+        if !self.memory.prepare_for_cache() {
+            return false;
+        }
+        let Ok(reg_log_bytes) =
+            norito::core::owned_arc_allocation_bytes::<parking_lot::Mutex<zk::RegLog>>()
+        else {
+            return false;
+        };
+        self.cache_reservation.set_known_bytes(reg_log_bytes);
+        self.cache_reservation.try_retain()
+            && self.memory.try_retain()
+            && self.registers.try_retain()
+            && self.private_memory_bytes.try_retain()
+            && self.contract_return_stack.try_retain()
+            && self
+                .contract_interface
+                .as_ref()
+                .is_none_or(|value| value.try_retain())
+            && self.literal_table.try_retain()
+            && self
+                .predecoded
+                .as_ref()
+                .is_none_or(|value| value.try_retain())
+            && self
+                .prepared
+                .as_ref()
+                .is_none_or(|value| value.try_retain())
+    }
+
+    /// Transfer a uniquely owned pooled runtime back into active execution.
+    ///
+    /// Shared immutable program allocations remain charged to retention while
+    /// borrowed. Invocation scratch storage is reported as unmeasured active
+    /// ownership until reset, so it cannot be mistaken for a complete heap cap.
+    pub fn activate_cached_runtime(&mut self) {
+        self.cache_reservation.mark_unmeasured();
+        self.memory.activate_cache_accounting();
+        self.registers.make_active();
+        self.private_memory_bytes.make_active();
+        self.contract_return_stack.make_active();
+        self.set_host(DefaultHost::default());
     }
     /// Get the value of a general-purpose register.
     pub fn register(&self, idx: usize) -> u64 {
@@ -3121,8 +3236,8 @@ impl IVM {
     }
     /// Reject a private-tagged register before its value crosses a public host boundary.
     ///
-    /// Hosts must call this for contract return registers and other values they expose outside the
-    /// VM. Non-ZK programs have no private register tags and therefore always pass this check.
+    /// Hosts must call this for syscall registers and other register values they expose outside the
+    /// VM. Contract results use [`Self::public_call_result_word`]. Non-ZK programs have no private register tags and therefore always pass this check.
     ///
     /// # Errors
     /// Returns [`VMError::PrivacyViolation`] when `idx` contains a private value in ZK mode.
@@ -3136,8 +3251,8 @@ impl IVM {
     /// guest memory before the envelope crosses a public host boundary.
     ///
     /// This validates the complete pointer-ABI envelope as well as the
-    /// register tag. It is intended for pointer-valued contract returns; a
-    /// scalar return should use [`Self::ensure_public_register`].
+    /// register tag. It is intended for pointer-valued syscall arguments; a
+    /// scalar syscall argument should use [`Self::ensure_public_register`].
     ///
     /// # Errors
     /// Returns a structured VM error when the register is private, the TLV is
@@ -3601,7 +3716,7 @@ impl IVM {
         }
     }
     #[inline]
-    fn debit_gas(&mut self, gas: u64) -> Result<(), VMError> {
+    pub(crate) fn debit_gas(&mut self, gas: u64) -> Result<(), VMError> {
         if unlikely(self.gas_remaining < gas) {
             return Err(VMError::OutOfGas);
         }
@@ -3694,7 +3809,11 @@ impl IVM {
         Ok(())
     }
     #[inline]
-    fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
+    pub(crate) fn execute_syscall(
+        &mut self,
+        host: &mut dyn IVMHost,
+        number: u32,
+    ) -> Result<(), VMError> {
         if crate::syscalls::is_koto_test_syscall(number) && !self.allow_koto_test_syscalls {
             return Err(VMError::UnknownSyscall(number));
         }
@@ -4000,8 +4119,9 @@ impl IVM {
         let Some(mut host) = self.host.take() else {
             return Err(VMError::HostUnavailable);
         };
-        let outcome =
-            std::panic::catch_unwind(AssertUnwindSafe(|| self.run_with_host_ref(host.as_mut())));
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            self.run_with_host_ref(host.as_mut(), None)
+        }));
         self.host = Some(host);
         match outcome {
             Ok(result) => result,
@@ -4010,7 +4130,53 @@ impl IVM {
     }
     /// Execute the loaded program using a borrowed host without storing it in the VM.
     pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
-        self.run_with_host_ref(host)
+        self.run_with_host_ref(host, None)
+    }
+    /// Run with a prepaid, local-only diagnostic step recorder.
+    ///
+    /// Captured register snapshots can contain private values. The recorder
+    /// does not witness all memory or host accesses and cannot authorize an
+    /// execution proof or a consensus transaction.
+    pub fn run_with_host_diagnostic_steps(
+        &mut self,
+        host: &mut dyn IVMHost,
+        recorder: &mut DiagnosticStepRecorder,
+    ) -> Result<(), VMError> {
+        recorder.begin_run()?;
+        let result = self.run_with_host_ref(host, Some(recorder));
+        if recorder.end().is_none() {
+            recorder.finish_run(DiagnosticRunEnd {
+                state: self.diagnostic_step_state(),
+                padding_cycles: 0,
+                outcome: result.as_ref().map(|_| ()).map_err(Self::classify_trap),
+            });
+        }
+        result
+    }
+    /// Run with separate prepaid local step and ordered memory-byte diagnostics.
+    ///
+    /// This deliberately incomplete diagnostic pair cannot authorize a proof
+    /// or a transaction. The memory recorder is detached even if a host panics.
+    pub fn run_with_host_diagnostic_steps_and_memory(
+        &mut self,
+        host: &mut dyn IVMHost,
+        steps: &mut DiagnosticStepRecorder,
+        memory_accesses: &DiagnosticMemoryAccessRecorder,
+    ) -> Result<(), VMError> {
+        steps.begin_run()?;
+        memory_accesses.begin_run(self.zk_mode)?;
+        self.memory
+            .capture_diagnostic_initial_image(memory_accesses)?;
+        self.memory
+            .install_diagnostic_access_recorder(memory_accesses.shared())?;
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            self.run_with_host_diagnostic_steps(host, steps)
+        }));
+        self.memory.clear_diagnostic_access_recorder();
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
     /// Run with the caller's single finite allowance for completed architectural cycles.
     ///
@@ -4072,7 +4238,23 @@ impl IVM {
             self.memory.commit();
         }
     }
-    fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+    fn diagnostic_step_state(&self) -> DiagnosticStepState {
+        DiagnosticStepState {
+            pc: self.pc,
+            gas_remaining: self.gas_remaining,
+            cycles: self.cycles,
+            vector_length: self.vector_length,
+            halted: self.halted,
+            constraint_failed: self.constraint_failed,
+            registers: self.registers.snapshot(),
+            tags: self.registers.snapshot_tags(),
+        }
+    }
+    fn run_with_host_ref(
+        &mut self,
+        host: &mut dyn IVMHost,
+        mut recorder: Option<&mut DiagnosticStepRecorder>,
+    ) -> Result<(), VMError> {
         // Keep a local reference through host callbacks/lifecycle changes. This
         // owner never comes from program bytes or a warmed runtime template.
         let cycle_budget = self.active_cycle_budget.clone();
@@ -4119,13 +4301,13 @@ impl IVM {
         // A run is one invocation. Never retain protected return state after a
         // prior trap or across a pooled-runtime reuse boundary.
         self.contract_return_stack.clear();
-        self.contract_outer_return_pc = self.strict_return_integrity.then(|| {
-            let raw_target = self.registers.get(1);
-            ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment
-        });
+        self.contract_outer_return_pc = None;
+        self.memory.call_frames.clear();
+        let mut pending_step: Option<PendingDiagnosticStep> = None;
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _pointer_policy_guard =
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
+            self.begin_root_call(host)?;
             self.pc_trace.clear();
             self.delta_trace = zk::DeltaTraceLog::default();
             let mut last_logged_cycle = 0;
@@ -4134,6 +4316,16 @@ impl IVM {
             loop {
                 if let Some((before, reservation)) = pending_cycles.take() {
                     reservation.complete(self.cycles.checked_sub(before))?;
+                }
+                if let Some(step) = pending_step.take() {
+                    recorder
+                        .as_deref_mut()
+                        .expect("diagnostic step has recorder")
+                        .finish_step(
+                            step,
+                            self.diagnostic_step_state(),
+                            DiagnosticStepOutcome::Completed,
+                        )?;
                 }
                 self.flush_cycle_logs(&mut last_logged_cycle);
                 // Stop the loop if HALT was executed. When a cycle limit is set we
@@ -4149,8 +4341,16 @@ impl IVM {
                     return Err(VMError::ExceededMaxCycles);
                 }
                 self.record_runtime_trace();
+                if let Some(recorder) = recorder.as_deref_mut() {
+                    pending_step = Some(recorder.begin_step(self.diagnostic_step_state())?);
+                    self.memory
+                        .diagnostic_step_ordinal(recorder.records().len() as u64);
+                }
                 let fetched = self.fetch_instruction()?;
                 let instr = fetched.inst;
+                if let Some(step) = pending_step.as_mut() {
+                    step.fetched(instr);
+                }
                 let length = WIDE_INSTRUCTION_LEN;
                 let wide_op = fetched.wide_op;
                 if crate::dev_env::decode_trace_enabled() {
@@ -4169,6 +4369,9 @@ impl IVM {
                 // Scale vector op costs by the current logical vector length.
                 let cost = gas::cost_from_parts(fetched.base_gas, wide_op, self.vector_length)
                     .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
+                if let Some(step) = pending_step.as_mut() {
+                    step.priced(cost);
+                }
                 if unlikely(self.gas_remaining < cost) {
                     return Err(VMError::OutOfGas);
                 }
@@ -4826,6 +5029,12 @@ impl IVM {
                         let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
                         let value = self.memory.load_u64(addr)?;
                         let tag = self.memory_load_privacy_tag(addr, 8)?;
+                        self.memory.diagnostic_classify_last_access(
+                            addr,
+                            8,
+                            DiagnosticMemoryAccessKind::Read,
+                            tag,
+                        );
                         self.registers.set(rd, value);
                         if self.zk_mode {
                             self.registers.set_tag(rd, tag);
@@ -4853,6 +5062,12 @@ impl IVM {
                         }
                         let value = self.memory.load_u128(addr)?;
                         let tag = self.memory_load_privacy_tag(addr, 16)?;
+                        self.memory.diagnostic_classify_last_access(
+                            addr,
+                            16,
+                            DiagnosticMemoryAccessKind::Read,
+                            tag,
+                        );
                         self.registers.set(rd_lo, value as u64);
                         self.registers.set(rd_hi, (value >> 64) as u64);
                         if self.zk_mode {
@@ -4874,6 +5089,7 @@ impl IVM {
                         let value = self.registers.get(rs);
                         let tag = self.zk_mode && self.registers.tag(rs);
                         self.validate_memory_store_privacy(addr, 8, tag)?;
+                        self.preflight_memory_store_privacy(addr, 8, tag)?;
                         self.memory.store_u64(addr, value)?;
                         self.record_memory_store_privacy(addr, 8, tag);
                         self.pc = self.pc.wrapping_add(length);
@@ -4901,6 +5117,7 @@ impl IVM {
                         let hi = self.registers.get(rs_hi);
                         let tag = self.zk_match_tags(rs_lo, rs_hi)?.unwrap_or(false);
                         self.validate_memory_store_privacy(addr, 16, tag)?;
+                        self.preflight_memory_store_privacy(addr, 16, tag)?;
                         let value = ((hi as u128) << 64) | lo as u128;
                         self.memory.store_u128(addr, value)?;
                         self.record_memory_store_privacy(addr, 16, tag);
@@ -4909,6 +5126,9 @@ impl IVM {
                         continue;
                     }
                     instruction::wide::control::HALT => {
+                        if self.strict_return_integrity {
+                            return Err(VMError::AssertionFailed);
+                        }
                         self.halted = true;
                         self.cycles += 1;
                         self.pc = self.pc.wrapping_add(length);
@@ -5192,19 +5412,16 @@ impl IVM {
                                 if target != expected {
                                     return Err(VMError::AssertionFailed);
                                 }
-                                self.contract_return_stack.pop();
                             } else {
                                 if self.contract_outer_return_pc != Some(target) {
                                     return Err(VMError::AssertionFailed);
                                 }
-                                if target != self.memory.code_len()
-                                    && !self.prepared_pc_is_halt(target)
-                                {
-                                    // Direct test/internal-entry execution may use
-                                    // an appended HALT as its trusted outer return.
+                                if target != self.memory.code_len() {
                                     return Err(VMError::AssertionFailed);
                                 }
                             }
+                            self.finish_call()?;
+                            self.contract_return_stack.pop();
                             if target == self.memory.code_len() {
                                 // Contract hosts use end-of-code as the trusted
                                 // outer-invocation return sentinel.
@@ -5229,7 +5446,8 @@ impl IVM {
                                 return Err(VMError::AssertionFailed);
                             }
                             if rd == 1 {
-                                self.push_contract_return(return_pc)?;
+                                self.begin_child_call(((self.pc as i64) + (imm * 4)) as u64)?;
+                                self.push_contract_return(return_pc);
                             }
                         }
                         self.registers.set(rd, return_pc);
@@ -5249,7 +5467,8 @@ impl IVM {
                     instruction::wide::control::JALS => {
                         let imm = i64::from(instruction::wide::imm24(instr));
                         let return_pc = self.pc.wrapping_add(length);
-                        self.push_contract_return(return_pc)?;
+                        self.begin_child_call(((self.pc as i64) + (imm * 4)) as u64)?;
+                        self.push_contract_return(return_pc);
                         self.registers.set(1, return_pc);
                         if self.zk_mode {
                             self.registers.set_tag(1, false);
@@ -5562,6 +5781,11 @@ impl IVM {
                         for i in 0..25 {
                             out_bytes[i * 8..(i + 1) * 8].copy_from_slice(&state[i].to_le_bytes());
                         }
+                        self.preflight_memory_store_privacy(
+                            out_ptr,
+                            out_bytes.len() as u64,
+                            false,
+                        )?;
                         self.memory.store_bytes(out_ptr, &out_bytes)?;
                         self.record_memory_store_privacy(out_ptr, out_bytes.len() as u64, false);
                         self.pc = self.pc.wrapping_add(length);
@@ -6143,6 +6367,16 @@ impl IVM {
             if let Some((before, reservation)) = pending_cycles.take() {
                 reservation.complete(self.cycles.checked_sub(before))?;
             }
+            if let Some(step) = pending_step.take() {
+                recorder
+                    .as_deref_mut()
+                    .expect("diagnostic step has recorder")
+                    .finish_step(
+                        step,
+                        self.diagnostic_step_state(),
+                        DiagnosticStepOutcome::Completed,
+                    )?;
+            }
             // If we exit the loop early, pad the trace so that prover and verifier
             // observe exactly `max_cycles` steps when zero‑knowledge mode is enabled.
             if self.zk_mode && self.max_cycles != 0 && self.cycles < self.max_cycles {
@@ -6169,6 +6403,9 @@ impl IVM {
             } else if self.constraint_failed {
                 Err(VMError::AssertionFailed)
             } else {
+                if self.strict_return_integrity {
+                    self.call_result_word_count()?;
+                }
                 Ok(())
             }
         })) {
@@ -6179,6 +6416,7 @@ impl IVM {
                 // partial invocation proof before preserving the original
                 // unwind behavior for the caller.
                 self.abort_host_register_log_isolation(None);
+                self.memory.call_frames.clear();
                 std::panic::resume_unwind(payload);
             }
         };
@@ -6189,7 +6427,36 @@ impl IVM {
                 .as_ref()
                 .map_or(Ok(()), |budget| budget.ensure_healthy())
         });
+        if let Some(recorder) = recorder {
+            if let Some(step) = pending_step.take() {
+                let trap = result
+                    .as_ref()
+                    .err()
+                    .map(Self::classify_trap)
+                    .unwrap_or(VmTrapKind::Other);
+                recorder.finish_step(
+                    step,
+                    self.diagnostic_step_state(),
+                    DiagnosticStepOutcome::Trapped(trap),
+                )?;
+            }
+            let state = self.diagnostic_step_state();
+            let last_instruction_cycles = recorder
+                .records()
+                .last()
+                .map_or(0, |step| step.after.cycles);
+            recorder.finish_run(DiagnosticRunEnd {
+                state,
+                padding_cycles: if result.is_ok() {
+                    state.cycles.saturating_sub(last_instruction_cycles)
+                } else {
+                    0
+                },
+                outcome: result.as_ref().map(|_| ()).map_err(Self::classify_trap),
+            });
+        }
         if let Err(err) = &result {
+            self.memory.call_frames.clear();
             // Diagnostics are outside the guest execution trace. In
             // particular, an isolation failure may already have scrubbed an
             // invocation log retained by a replaced VM; diagnostic register
@@ -6207,30 +6474,35 @@ impl IVM {
     /// Convenience wrapper that forwards to the memory subsystem.
     #[inline]
     pub fn store_u8(&mut self, addr: u64, byte: u8) -> Result<(), VMError> {
+        self.preflight_memory_store_privacy(addr, 1, false)?;
         self.memory.store_u8(addr, byte)?;
         self.record_memory_store_privacy(addr, 1, false);
         Ok(())
     }
     #[inline]
     pub fn store_u32(&mut self, addr: u64, value: u32) -> Result<(), VMError> {
+        self.preflight_memory_store_privacy(addr, 4, false)?;
         self.memory.store_u32(addr, value)?;
         self.record_memory_store_privacy(addr, 4, false);
         Ok(())
     }
     #[inline]
     pub fn store_u64(&mut self, addr: u64, value: u64) -> Result<(), VMError> {
+        self.preflight_memory_store_privacy(addr, 8, false)?;
         self.memory.store_u64(addr, value)?;
         self.record_memory_store_privacy(addr, 8, false);
         Ok(())
     }
     #[inline]
     pub fn store_u128(&mut self, addr: u64, value: u128) -> Result<(), VMError> {
+        self.preflight_memory_store_privacy(addr, 16, false)?;
         self.memory.store_u128(addr, value)?;
         self.record_memory_store_privacy(addr, 16, false);
         Ok(())
     }
     #[inline]
     pub fn store_bytes(&mut self, addr: u64, bytes: &[u8]) -> Result<(), VMError> {
+        self.preflight_memory_store_privacy(addr, bytes.len() as u64, false)?;
         self.memory.store_bytes(addr, bytes)?;
         self.record_memory_store_privacy(addr, bytes.len() as u64, false);
         Ok(())
@@ -6238,7 +6510,14 @@ impl IVM {
     #[inline]
     pub fn load_u32(&self, addr: u64) -> Result<u32, VMError> {
         self.ensure_public_memory(addr, 4)?;
-        self.memory.load_u32(addr)
+        let value = self.memory.load_u32(addr)?;
+        self.memory.diagnostic_classify_last_access(
+            addr,
+            4,
+            DiagnosticMemoryAccessKind::Read,
+            false,
+        );
+        Ok(value)
     }
     #[inline]
     /// Load a 64-bit value from memory.
@@ -6248,17 +6527,38 @@ impl IVM {
     /// that interact with VM memory via the VM handle.
     pub fn load_u64(&self, addr: u64) -> Result<u64, VMError> {
         self.ensure_public_memory(addr, 8)?;
-        self.memory.load_u64(addr)
+        let value = self.memory.load_u64(addr)?;
+        self.memory.diagnostic_classify_last_access(
+            addr,
+            8,
+            DiagnosticMemoryAccessKind::Read,
+            false,
+        );
+        Ok(value)
     }
     #[inline]
     pub fn load_u128(&self, addr: u64) -> Result<u128, VMError> {
         self.ensure_public_memory(addr, 16)?;
-        self.memory.load_u128(addr)
+        let value = self.memory.load_u128(addr)?;
+        self.memory.diagnostic_classify_last_access(
+            addr,
+            16,
+            DiagnosticMemoryAccessKind::Read,
+            false,
+        );
+        Ok(value)
     }
     #[inline]
     pub fn load_bytes(&self, addr: u64, out: &mut [u8]) -> Result<(), VMError> {
         self.ensure_public_memory(addr, out.len() as u64)?;
-        self.memory.load_bytes(addr, out)
+        self.memory.load_bytes(addr, out)?;
+        self.memory.diagnostic_classify_last_access(
+            addr,
+            out.len() as u64,
+            DiagnosticMemoryAccessKind::HostRead,
+            false,
+        );
+        Ok(())
     }
     #[inline]
     pub fn preload_input(&mut self, offset: u64, data: &[u8]) -> Result<(), VMError> {
@@ -6427,25 +6727,41 @@ mod tests {
     #[test]
     fn private_memory_ranges_merge_split_and_respect_half_open_boundaries() {
         let mut ranges = PrivateMemoryRanges::default();
-        ranges.insert(10..20);
-        ranges.insert(20..24);
-        ranges.insert(4..10);
-        assert_eq!(ranges.ranges, BTreeMap::from([(4, 24)]));
+        ranges.try_insert(10..20).unwrap();
+        ranges.try_insert(20..24).unwrap();
+        ranges.try_insert(4..10).unwrap();
+        assert_eq!(ranges.pairs_for_testing(), &[(4, 24)]);
         assert!(!ranges.intersects(0..4));
         assert!(!ranges.intersects(24..40));
         assert!(!ranges.intersects(12..12));
         assert!(ranges.intersects(3..5));
         assert!(ranges.intersects(23..24));
         assert_eq!(ranges.intersection_len(0..40), 20);
-        ranges.remove(8..20);
-        assert_eq!(ranges.ranges, BTreeMap::from([(4, 8), (20, 24)]));
+        ranges.try_remove(8..20).unwrap();
+        assert_eq!(ranges.pairs_for_testing(), &[(4, 8), (20, 24)]);
         assert_eq!(ranges.intersection_len(4..24), 8);
         assert!(!ranges.intersects(8..20));
     }
     #[test]
+    fn private_memory_ranges_remove_mixed_overlaps_and_adjacent_boundaries() {
+        let mut ranges = PrivateMemoryRanges::default();
+        for range in [1..3, 5..7, 9..11, 13..15] {
+            ranges.try_insert(range).unwrap();
+        }
+        ranges.try_remove(2..14).unwrap();
+        assert_eq!(ranges.pairs_for_testing(), &[(1, 2), (14, 15)]);
+        ranges.try_remove(2..14).unwrap();
+        assert_eq!(ranges.pairs_for_testing(), &[(1, 2), (14, 15)]);
+        ranges.try_remove(3..13).unwrap();
+        assert_eq!(ranges.pairs_for_testing(), &[(1, 2), (14, 15)]);
+        ranges.try_remove(1..2).unwrap();
+        ranges.try_remove(14..15).unwrap();
+        assert!(ranges.is_empty());
+    }
+    #[test]
     fn private_memory_range_lookup_ignores_large_unrelated_public_span() {
         let mut ranges = PrivateMemoryRanges::default();
-        ranges.insert(2_000_000..2_000_001);
+        ranges.try_insert(2_000_000..2_000_001).unwrap();
         assert!(!ranges.intersects(0..1_048_576));
         assert_eq!(ranges.intersection_len(0..1_048_576), 0);
         assert!(ranges.intersects(1_999_999..2_000_001));
@@ -6466,9 +6782,9 @@ mod tests {
         let mut bytes = [false; 64];
         for (private, range) in operations {
             if private {
-                ranges.insert(range.clone());
+                ranges.try_insert(range.clone()).unwrap();
             } else {
-                ranges.remove(range.clone());
+                ranges.try_remove(range.clone()).unwrap();
             }
             for byte in range {
                 bytes[usize::try_from(byte).expect("test byte fits usize")] = private;
@@ -6485,6 +6801,77 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn private_range_growth_refusal_precedes_guest_store() {
+        let mut vm = quiet_vm(1_000);
+        vm.zk_mode = true;
+        let start = Memory::STACK_START;
+        vm.memory.store_u32(start + 4, 0xAABB_CCDD).unwrap();
+        for range in [
+            start..start + 16,
+            start + 32..start + 40,
+            start + 48..start + 56,
+            start + 64..start + 72,
+        ] {
+            vm.private_memory_bytes.try_insert(range).unwrap();
+        }
+        let before = vm.private_memory_bytes.try_clone().unwrap();
+        let gas = vm.remaining_gas();
+        PrivateMemoryRanges::refuse_next_growth_for_testing();
+        assert!(matches!(
+            vm.store_u32(start + 4, 7),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(vm.memory.load_u32(start + 4).unwrap(), 0xAABB_CCDD);
+        assert_eq!(vm.private_memory_bytes, before);
+        assert_eq!(vm.remaining_gas(), gas);
+        vm.store_u32(start + 4, 7).unwrap();
+        assert_eq!(
+            vm.private_memory_bytes.pairs_for_testing()[0],
+            (start, start + 4)
+        );
+        assert_eq!(vm.memory.load_u32(start + 4).unwrap(), 7);
+    }
+    #[test]
+    fn private_tlv_growth_refusal_preserves_heap_cursor() {
+        let mut vm = quiet_vm(1_000);
+        vm.zk_mode = true;
+        let heap = vm.memory.heap_allocated_len();
+        PrivateMemoryRanges::refuse_next_growth_for_testing();
+        assert!(matches!(
+            vm.alloc_host_private_tlv(&[1, 2, 3]),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(vm.memory.heap_allocated_len(), heap);
+        assert!(vm.private_memory_bytes.is_empty());
+        let address = vm.alloc_host_private_tlv(&[1, 2, 3]).unwrap();
+        assert_eq!(address, Memory::HEAP_START + heap);
+        assert_eq!(
+            vm.private_memory_bytes.pairs_for_testing(),
+            &[(address, address + 3)]
+        );
+    }
+    #[test]
+    fn failed_private_scrub_retains_all_range_tags() {
+        let mut vm = quiet_vm(1_000);
+        let start = Memory::STACK_START;
+        vm.memory.store_u8(start, 0xA5).unwrap();
+        vm.private_memory_bytes
+            .try_insert(start..start + 1)
+            .unwrap();
+        let invalid = vm.memory.stack_top();
+        vm.private_memory_bytes
+            .try_insert(invalid..invalid + 1)
+            .unwrap();
+        let before = vm.private_memory_bytes.try_clone().unwrap();
+        assert!(!vm.scrub_private_memory());
+        assert_eq!(vm.private_memory_bytes, before);
+        assert_eq!(vm.memory.load_u8(start).unwrap(), 0);
     }
     #[test]
     fn missing_allowed_syscall_metering_entry_fails_closed() {
@@ -6886,7 +7273,7 @@ mod tests {
         let config = IvmConfig::deterministic(u64::MAX);
         let mut first = IVM::new_with_config(config);
         first.load_program(&program).expect("first program loads");
-        let mut second = first.clone();
+        let mut second = first.try_clone_snapshot().expect("fund VM snapshot");
         second.host = Some(Box::new(crate::runtime::SyscallDispatcher::new(
             DefaultHost::new(),
         )));
@@ -7063,6 +7450,12 @@ mod tests {
     }
     fn program_with_unaligned_contract_prefix() -> (Vec<u8>, usize) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
+            callables: vec![ivm_abi::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm_abi::call::CallWordV1::Unit],
+            }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "ivm-runtime-tests".to_owned(),
             abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
@@ -7101,9 +7494,46 @@ mod tests {
         let mut bytes = ProgramMetadata::default().encode();
         let prefix_len = prefix.len();
         bytes.extend_from_slice(&prefix);
-        bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+        for word in [
+            crate::encoding::wide::encode_store(instruction::wide::memory::STORE64, 12, 0, 0),
+            crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 12, 0),
+            crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 11, 0, 1),
+            crate::encoding::wide::encode_ri(instruction::wide::control::JALR, 0, 1, 0),
+        ] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
         (bytes, prefix_len)
     }
+    #[test]
+    fn prepared_instruction_stream_requires_exact_code_words_and_offsets() {
+        let halt = crate::encoding::wide::encode_halt();
+        let code = halt.to_le_bytes();
+        let valid = [crate::ivm_cache::DecodedOp { pc: 0, inst: halt }];
+        let wrong_word = [crate::ivm_cache::DecodedOp {
+            pc: 0,
+            inst: crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 7),
+        }];
+        let wrong_pc = [crate::ivm_cache::DecodedOp { pc: 4, inst: halt }];
+
+        // Reject inconsistency both before preparation and after a valid call
+        // may have warmed the code-keyed prepared cache.
+        assert!(matches!(
+            prepare_instruction_stream(&code, &wrong_word, 0, &[]),
+            Err(VMError::DecodeError)
+        ));
+        assert!(prepare_instruction_stream(&code, &valid, 0, &[]).is_ok());
+        for decoded in [&wrong_word[..], &wrong_pc[..], &[][..]] {
+            assert!(matches!(
+                prepare_instruction_stream(&code, decoded, 0, &[]),
+                Err(VMError::DecodeError)
+            ));
+        }
+        assert!(matches!(
+            prepare_instruction_stream(&code[..3], &[], 0, &[]),
+            Err(VMError::DecodeError)
+        ));
+    }
+
     #[test]
     fn load_program_predecodes_instructions() {
         set_banner_enabled(false);
@@ -7316,255 +7746,8 @@ mod tests {
         vm.run().expect("negative compact jump reaches halt");
         assert_eq!(vm.register(7), 9);
     }
-    #[test]
-    fn load_program_reuses_cached_prepared_ops() {
-        set_banner_enabled(false);
-        ivm_cache::init_global_with_capacity(64);
-        let program = program_with_imm(7);
-        let mut first_vm = IVM::new(u64::MAX);
-        first_vm
-            .load_program(&program)
-            .expect("first load succeeds");
-        let first_ops = first_vm.prepared.as_ref().expect("prepared").ops.clone();
-        let mut second_vm = IVM::new(u64::MAX);
-        second_vm
-            .load_program(&program)
-            .expect("second load succeeds");
-        let second_ops = second_vm.prepared.as_ref().expect("prepared").ops.clone();
-        assert!(Arc::ptr_eq(&first_ops, &second_ops));
-    }
-    #[test]
-    fn warm_runtime_template_reset_does_not_clone_reload_or_reparse() {
-        set_banner_enabled(false);
-        let program = program_with_imm(7);
-        let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&program).expect("program loads");
-        let code_allocation = vm
-            .memory
-            .load_region(0, 1)
-            .expect("loaded code is readable")
-            .as_ptr();
-        let parse_attempts = vm.program_parse_attempts();
-        let prepared_loads = vm.prepared_loads();
-        // Building the immutable template is the one cold full-memory clone.
-        let template = vm.runtime_template();
-        crate::memory::reset_memory_clone_count();
-        vm.set_register(7, 99);
-        vm.preload_input(0, &[0xA5])
-            .expect("invocation input is writable before execution");
-        vm.reset_from_runtime_template(&template)
-            .expect("warm VM retains its runtime-template geometry");
-        assert_eq!(crate::memory::memory_clone_count(), 0);
-        assert!(
-            std::ptr::eq(
-                vm.memory
-                    .load_region(0, 1)
-                    .expect("loaded code remains readable")
-                    .as_ptr(),
-                code_allocation,
-            ),
-            "warm reset must preserve the VM memory allocation"
-        );
-        assert_eq!(vm.program_parse_attempts(), parse_attempts);
-        assert_eq!(vm.prepared_loads(), prepared_loads);
-        assert_eq!(vm.register(7), 0);
-        assert_eq!(
-            vm.memory
-                .load_region(Memory::INPUT_START, 1)
-                .expect("input baseline is readable"),
-            [0]
-        );
-    }
-    #[test]
-    fn runtime_template_rejects_same_program_reloaded_after_memory_writes() {
-        let program = program_with_imm(7);
-        let mut vm = quiet_vm(u64::MAX);
-        vm.load_program(&program).expect("template program loads");
-        let template = vm.runtime_template();
-        vm.memory
-            .store_u64(Memory::STACK_START, 0xDEAD_BEEF)
-            .expect("write invocation stack");
-        vm.load_program(&program)
-            .expect("same program can be reloaded by lifecycle API");
-        assert_eq!(vm.code_hash(), template.code_hash);
+    mod runtime_memory;
 
-        let error = vm
-            .reset_from_runtime_template(&template)
-            .expect_err("same-hash lifecycle change must reject warm reset");
-
-        assert!(error.to_string().contains("lifecycle mismatch"));
-        assert_eq!(
-            vm.memory.load_u64(Memory::STACK_START),
-            Ok(0xDEAD_BEEF),
-            "failed reset must leave the VM unchanged for pool discard"
-        );
-    }
-    #[test]
-    fn runtime_template_rejects_independent_same_generation_memory_image() {
-        let program = program_with_imm(7);
-        let mut target = quiet_vm(u64::MAX);
-        target.load_program(&program).expect("target program loads");
-        let template = target.runtime_template();
-
-        let mut replacement = quiet_vm(u64::MAX);
-        replacement
-            .preload_input(0, &[0xA5])
-            .expect("replacement input is writable");
-        replacement
-            .load_program(&program)
-            .expect("same program loads into replacement memory");
-        assert_eq!(
-            replacement.memory.template_generation(),
-            target.memory.template_generation()
-        );
-        target.memory = replacement.memory;
-
-        let error = target
-            .reset_from_runtime_template(&template)
-            .expect_err("independent same-generation memory must not match the template");
-
-        assert!(error.to_string().contains("baseline identity mismatch"));
-        assert_eq!(
-            target
-                .memory
-                .load_region(Memory::INPUT_START, 1)
-                .expect("replacement input remains readable"),
-            [0xA5],
-            "a rejected reset must leave the replacement memory unchanged"
-        );
-    }
-    #[test]
-    fn loading_a_program_clears_prior_heap_and_allocator_state() {
-        let first = program_with_imm(7);
-        let second = program_with_imm(8);
-        let mut vm = quiet_vm(u64::MAX);
-        vm.load_program(&first).expect("first program loads");
-        vm.memory
-            .store_u64(Memory::HEAP_START, 0xDEAD_BEEF)
-            .expect("dirty first program heap");
-        assert_eq!(vm.alloc_heap(16), Ok(Memory::HEAP_START));
-
-        vm.load_program(&second).expect("replacement program loads");
-
-        assert_eq!(vm.memory.load_u64(Memory::HEAP_START), Ok(0));
-        assert_eq!(vm.alloc_heap(8), Ok(Memory::HEAP_START));
-    }
-    #[test]
-    fn runtime_template_geometry_mismatch_never_replaces_the_memory_image() {
-        let mut vm = quiet_vm(u64::MAX);
-        vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
-            .expect("template program loads");
-        let template = vm.runtime_template();
-        vm.memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
-        vm.set_register(7, 99);
-        let mismatched_allocation = vm
-            .memory
-            .load_region(Memory::HEAP_START, 1)
-            .expect("mismatched memory is readable")
-            .as_ptr();
-        crate::memory::reset_memory_clone_count();
-        let error = vm
-            .reset_from_runtime_template(&template)
-            .expect_err("different memory geometry must reject warm reset");
-        assert!(error.to_string().contains("memory geometry mismatch"));
-        assert_eq!(crate::memory::memory_clone_count(), 0);
-        assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
-        assert_eq!(vm.memory.stack_limit(), Memory::MIN_STACK_SIZE);
-        assert!(std::ptr::eq(
-            vm.memory
-                .load_region(Memory::HEAP_START, 1)
-                .expect("mismatched memory remains readable")
-                .as_ptr(),
-            mismatched_allocation
-        ));
-    }
-    #[test]
-    fn runtime_template_rejects_a_different_program_before_mutating_the_vm() {
-        let mut template_vm = quiet_vm(u64::MAX);
-        template_vm
-            .load_program(&program_with_imm(7))
-            .expect("template program loads");
-        let template = template_vm.runtime_template();
-
-        let mut vm = quiet_vm(u64::MAX);
-        vm.load_program(&program_with_imm(8))
-            .expect("worker program loads");
-        vm.set_register(7, 99);
-        let code_hash = vm.code_hash();
-
-        let error = vm
-            .reset_from_runtime_template(&template)
-            .expect_err("a template for another program must be rejected");
-
-        assert!(error.to_string().contains("program mismatch"));
-        assert_eq!(vm.code_hash(), code_hash);
-        assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
-    }
-    #[test]
-    fn runtime_template_rejects_a_different_heap_authority() {
-        let mut vm = quiet_vm(u64::MAX);
-        vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
-            .expect("template program loads");
-        let template = vm.runtime_template();
-        vm.memory
-            .set_heap_max_limit(Memory::HEAP_MAX_SIZE - Memory::STACK_ALIGNMENT)
-            .expect("smaller heap authority is valid");
-        vm.set_register(7, 99);
-        let error = vm
-            .reset_from_runtime_template(&template)
-            .expect_err("different heap authority must reject warm reset");
-        assert!(error.to_string().contains("heap-ceiling bytes"));
-        assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
-        assert_eq!(
-            vm.memory.heap_max_limit(),
-            Memory::HEAP_MAX_SIZE - Memory::STACK_ALIGNMENT,
-        );
-    }
-    #[test]
-    fn load_program_runs_unaligned_contract_prefix_from_prepared_ops() {
-        set_banner_enabled(false);
-        let (program, prefix_len) = program_with_unaligned_contract_prefix();
-        assert_ne!(prefix_len as u64 & 0b11, 0);
-        let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&program).expect("program loads");
-        assert_eq!(vm.pc(), prefix_len as u64);
-        assert!(vm.prepared_contains_pc(vm.pc()));
-        vm.reset_predecode_misses();
-        vm.run().expect("unaligned prefix program runs");
-        assert_eq!(vm.predecode_misses(), 0);
-    }
-    #[test]
-    fn contract_return_integrity_is_cloned_and_cleared_at_reuse_boundaries() {
-        set_banner_enabled(false);
-        let (program, _) = program_with_unaligned_contract_prefix();
-        let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&program).expect("contract program loads");
-        assert!(vm.strict_return_integrity);
-        vm.contract_return_stack.extend([4, 8]);
-        vm.contract_outer_return_pc = Some(12);
-        let cloned = vm.clone();
-        assert!(cloned.strict_return_integrity);
-        assert_eq!(cloned.contract_return_stack, [4, 8]);
-        assert_eq!(cloned.contract_outer_return_pc, Some(12));
-        vm.reset();
-        assert!(vm.contract_return_stack.is_empty());
-        assert_eq!(vm.contract_outer_return_pc, None);
-        vm.contract_return_stack.push(12);
-        vm.contract_outer_return_pc = Some(16);
-        let template = vm.runtime_template();
-        vm.reset_from_runtime_template(&template)
-            .expect("warm VM retains its runtime-template geometry");
-        assert!(vm.strict_return_integrity);
-        assert!(vm.contract_return_stack.is_empty());
-        assert_eq!(vm.contract_outer_return_pc, None);
-        vm.contract_return_stack.push(16);
-        vm.contract_outer_return_pc = Some(20);
-        vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
-            .expect("raw code loads");
-        assert!(!vm.strict_return_integrity);
-        assert!(vm.contract_return_stack.is_empty());
-        assert_eq!(vm.contract_outer_return_pc, None);
-    }
     #[test]
     fn raw_code_resets_the_prior_program_execution_profile() {
         set_banner_enabled(false);

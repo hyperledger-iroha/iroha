@@ -85,14 +85,24 @@ struct Rig {
 impl Rig {
     fn new(local: LocalParams, pick: impl Fn(&Topology) -> ValidatorIndex) -> Self {
         let v = FakeValidators::new(N, 7, Some(SignLog::new()));
-        let topo = Topology::compute(&v.crypto, &I, &v.committee, 1, 0, W, &[]);
+        let topo = Topology::compute(
+            &v.crypto,
+            &I,
+            &crate::testing::TEST_EPOCH,
+            &v.committee,
+            1,
+            0,
+            W,
+            &[],
+        );
         let me = pick(&topo);
         let signer = v.signer(me).clone();
         let key = signer.public_key().clone();
-        let record = SafetyRecord::fresh(I, key.clone(), 0, None)
+        let record = SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, key.clone(), 0, None)
             .encode(&v.crypto)
             .expect("encode the initial record");
         let config = HeightConfig {
+            epoch: Box::new(crate::testing::TEST_EPOCH),
             committee: v.committee.clone(),
             params: ChainParams::default(),
         };
@@ -109,7 +119,10 @@ impl Rig {
                 header: None,
                 commit_qc: None,
             },
-            configs: vec![(1, config.clone()), (2, config)],
+            configs: vec![
+                (1, crate::types::ConfigSlot::Ready(config.clone())),
+                (2, crate::types::ConfigSlot::Ready(config)),
+            ],
             recent_headers: Vec::new(),
         };
         let (core, actions) = Core::new(
@@ -194,6 +207,8 @@ impl Rig {
     /// A fresh block of height 1 first proposed in `view` by its leader.
     fn block(&self, view: u64, payload: &[u8]) -> Block {
         let header = BlockHeader {
+            control_witness: crate::types::ControlWitness::empty(),
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: I,
             height: 1,
             origin_view: view,

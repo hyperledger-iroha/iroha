@@ -133,6 +133,8 @@ pub struct Root {
     pub torii: Torii,
     /// Embedded Soracloud runtime-manager configuration.
     pub soracloud_runtime: SoracloudRuntime,
+    /// Non-secret local custody root for the injected private Musubi publisher.
+    pub musubi_publication: MusubiPublication,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
     /// Consensus (Sumeragi) configuration.
@@ -491,6 +493,92 @@ mod data_dir_tests {
         assert!(!Lifecycle::default().exit_on_stdin_close);
     }
 }
+/// Non-secret private Musubi publication custody and TLS listener settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusubiPublication {
+    /// Parent directory for the separately locked journal, seed and clock owners.
+    pub custody_root: PathBuf,
+    /// Private TLS bind address; no certificate or key material is stored here.
+    pub private_tls_bind: std::net::SocketAddr,
+    /// Exact path prefix stripped before dispatching the three closed service routes.
+    pub private_mount_prefix: String,
+    /// Maximum simultaneously admitted private TLS requests.
+    pub max_inflight_requests: u16,
+    /// Lifetime operation capacity of the durable publication journal.
+    pub journal_max_operations: u32,
+    /// Unexpired authorization capacity of the durable publication journal.
+    pub journal_max_authorizations: u32,
+    /// Total durable response bytes, including in-flight terminal reservations.
+    pub journal_max_total_response_bytes: u64,
+    /// Maximum complete canonical journal snapshot size.
+    pub journal_max_snapshot_bytes: u64,
+    /// Maximum number of exact CAR seed records retained in local custody.
+    pub max_seed_records: u32,
+    /// Maximum total bytes of exact CAR seed records retained in local custody.
+    pub max_seed_bytes: u64,
+    /// Maximum publisher-clock lead accepted by publication authorization.
+    pub max_future_clock_skew_ms: u64,
+    /// Lifetime assigned to a broker-signed seed-ingress receipt.
+    pub receipt_lifetime_ms: u64,
+    /// Exact paid-pin storage tier selected by the operator.
+    pub pin_storage_class: SorafsStorageClass,
+    /// Requested paid-pin lifetime beyond submission, in seconds.
+    pub pin_retention_horizon_secs: u64,
+    /// Public identity expected to sign and pay for the pin transaction.
+    pub pin_transaction_authority: MusubiPinTransactionAuthority,
+}
+/// First-release selection of the public account expected to sign and fund a Musubi paid pin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MusubiPinTransactionAuthority {
+    /// Resolve to the runtime-qualified seed-ingress broker account.
+    IngressBroker,
+    /// Use one exact canonical domainless account identity.
+    Account(AccountId),
+}
+/// Non-secret paid-pin inputs resolved against the live publication service identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusubiPublicationPaidPinPolicy {
+    /// Storage tier in the canonical SoraFS manifest.
+    pub storage_class: SorafsStorageClass,
+    /// Lifetime beyond the finalized submission epoch, in seconds.
+    pub retention_horizon_secs: u64,
+    /// Exact account whose runtime signer and fee balance must be qualified before submission.
+    pub transaction_authority: AccountId,
+}
+impl MusubiPublication {
+    /// Resolve the configured public pin account against the live broker identity.
+    #[must_use]
+    pub fn paid_pin_policy(&self, ingress_broker: &AccountId) -> MusubiPublicationPaidPinPolicy {
+        let transaction_authority = match &self.pin_transaction_authority {
+            MusubiPinTransactionAuthority::IngressBroker => ingress_broker.clone(),
+            MusubiPinTransactionAuthority::Account(account) => account.clone(),
+        };
+        MusubiPublicationPaidPinPolicy {
+            storage_class: self.pin_storage_class,
+            retention_horizon_secs: self.pin_retention_horizon_secs,
+            transaction_authority,
+        }
+    }
+}
+impl_default!(MusubiPublication => {
+    Self {
+        custody_root: PathBuf::from(defaults::musubi_publication::CUSTODY_ROOT),
+        private_tls_bind: defaults::musubi_publication::private_tls_bind(),
+        private_mount_prefix: defaults::musubi_publication::PRIVATE_MOUNT_PREFIX.to_owned(),
+        max_inflight_requests: defaults::musubi_publication::MAX_INFLIGHT_REQUESTS,
+        journal_max_operations: defaults::musubi_publication::JOURNAL_MAX_OPERATIONS,
+        journal_max_authorizations: defaults::musubi_publication::JOURNAL_MAX_AUTHORIZATIONS,
+        journal_max_total_response_bytes: defaults::musubi_publication::JOURNAL_MAX_TOTAL_RESPONSE_BYTES,
+        journal_max_snapshot_bytes: defaults::musubi_publication::JOURNAL_MAX_SNAPSHOT_BYTES,
+        max_seed_records: defaults::musubi_publication::MAX_SEED_RECORDS,
+        max_seed_bytes: defaults::musubi_publication::MAX_SEED_BYTES,
+        max_future_clock_skew_ms: defaults::musubi_publication::MAX_FUTURE_CLOCK_SKEW_MS,
+        receipt_lifetime_ms: defaults::musubi_publication::RECEIPT_LIFETIME_MS,
+        pin_storage_class: SorafsStorageClass::Hot,
+        pin_retention_horizon_secs: defaults::musubi_publication::PIN_RETENTION_HORIZON_SECS,
+        pin_transaction_authority: MusubiPinTransactionAuthority::IngressBroker,
+    }
+});
 /// Embedded Soracloud runtime-manager configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoracloudRuntime {
@@ -1330,7 +1418,7 @@ impl SmIntrinsicsPolicy {
 /// Cryptography defaults surfaced via configuration.
 #[derive(Debug, Clone)]
 pub struct Crypto {
-    /// Toggle for the optional OpenSSL-backed SM preview helpers.
+    /// Toggle for optional OpenSSL SM3/SM4 helpers; SM2 uses its canonical portable verifier.
     pub enable_sm_openssl_preview: bool,
     /// Intrinsic dispatch policy applied to SM acceleration.
     pub sm_intrinsics: SmIntrinsicsPolicy,
@@ -2090,6 +2178,9 @@ pub struct Acceleration {
     pub prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
     /// Prefer CPU SHA2 threshold (`x86/x86_64`). If None, use defaults.
     pub prefer_cpu_sha2_max_leaves_x86: Option<usize>,
+    /// Finite file-only process attempt envelope shared by physical backends.
+    /// Resource limits do not assert benchmark qualification or driver-private byte accounting.
+    pub resource_limits: iroha_accel::RegistryLimits,
 }
 /// Execution mode for the FASTPQ prover backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3671,8 +3762,33 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
     const DOMAIN: &[u8] = b"iroha:nexus:consensus-policy:v1\0";
+    let encoded = nexus_consensus_policy_preimage_with_runtime_policies(
+        nexus,
+        compliance_policy_digest,
+        lane_manifest_policy_digest,
+    )?;
+    Ok(Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into())
+}
+/// Return the exact bare Norito V1 preimage used by the Nexus consensus-policy digest.
+///
+/// This makes the complete static policy value available to the State authority
+/// owner without duplicating the digest's field selection. Encoding fixes the
+/// V1 flags, so ambient codec settings cannot alter peer policy identity.
+/// Dynamic effective lanes, committed dataspaces, and autoscale history remain
+/// separate canonical runtime/World authority.
+///
+/// # Errors
+/// Rejects invalid floating-point policy or an enabled compliance policy with
+/// no authenticated policy-set digest.
+pub fn nexus_consensus_policy_preimage_with_runtime_policies(
+    nexus: &Nexus,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
+) -> core::result::Result<Vec<u8>, NexusConsensusPolicyDigestError> {
     const CONFIGURED_LANE_CATALOG_DOMAIN: &[u8] = b"iroha:nexus:configured-lane-catalog:v1\0";
     const VERSION: u8 = 1;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     if nexus.compliance.enabled && compliance_policy_digest.is_none() {
         return Err(NexusConsensusPolicyDigestError::MissingCompliancePolicyDigest);
     }
@@ -3908,8 +4024,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             )?,
         },
     };
-    let encoded = preimage.encode();
-    Ok(Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into())
+    Ok(preimage.encode())
 }
 #[derive(Encode)]
 struct ExecutionPolicyFieldV1 {
@@ -4885,6 +5000,36 @@ pub struct LaneConfigEntry {
     pub settlement_buffer: Option<LaneSettlementBufferPolicy>,
 }
 impl LaneConfigEntry {
+    /// Check this derived entry against its catalog metadata without allocating.
+    ///
+    /// Every derived field is checked, including normalized namespace strings and
+    /// complete confidential-compute and settlement policies. This is suitable
+    /// for borrowed validation of an immutable execution snapshot.
+    #[must_use]
+    pub fn matches_metadata(&self, meta: &LaneConfigMetadata) -> bool {
+        use std::fmt::Write as _;
+        self.lane_id == meta.id
+            && self.shard_id == meta.effective_shard_id().as_u32()
+            && self.dataspace_id == meta.dataspace_id
+            && self.visibility == meta.visibility
+            && self.storage_profile == meta.storage
+            && self.proof_scheme == meta.proof_scheme
+            && self.alias == meta.alias
+            && lane_rendering_matches(&self.slug, |out| {
+                Self::write_slug(&meta.alias, meta.id, out)
+            })
+            && lane_rendering_matches(&self.kura_segment, |out| {
+                write!(out, "lane_{:03}_{}", meta.id.as_u32(), self.slug)
+            })
+            && lane_rendering_matches(&self.merge_segment, |out| {
+                write!(out, "lane_{:03}_{}_merge", meta.id.as_u32(), self.slug)
+            })
+            && self.key_prefix == meta.id.as_u32().to_be_bytes()
+            && self.manifest_policy == meta.manifest_policy
+            && self.confidential_compute == meta.confidential_compute
+            && self.scheduler == meta.scheduler
+            && self.settlement_buffer == meta.settlement_buffer
+    }
     fn from_metadata(meta: &LaneConfigMetadata) -> Self {
         let slug = Self::slugify(&meta.alias, meta.id);
         let lane_numeric = meta.id.as_u32();
@@ -4913,31 +5058,55 @@ impl LaneConfigEntry {
     }
     fn slugify(alias: &str, lane_id: LaneId) -> String {
         let mut slug = String::with_capacity(alias.len());
-        let mut underscore_written = false;
+        Self::write_slug(alias, lane_id, &mut slug).expect("String writes are infallible");
+        slug
+    }
+    fn write_slug(
+        alias: &str,
+        lane_id: LaneId,
+        out: &mut impl std::fmt::Write,
+    ) -> std::fmt::Result {
+        let mut written = false;
+        let mut separator = false;
         for ch in alias.chars() {
             if ch.is_ascii_alphanumeric() {
-                slug.push(ch.to_ascii_lowercase());
-                underscore_written = false;
-            } else if matches!(ch, '-' | ' ' | '_' | '.') {
-                if !underscore_written {
-                    slug.push('_');
-                    underscore_written = true;
+                if separator {
+                    out.write_char('_')?;
                 }
-            } else if !underscore_written {
-                slug.push('_');
-                underscore_written = true;
+                out.write_char(ch.to_ascii_lowercase())?;
+                written = true;
+                separator = false;
+            } else if written {
+                separator = true;
             }
         }
-        let slug = slug.trim_matches('_').to_string();
-        if slug.is_empty() {
-            format!("lane{}", lane_id.as_u32())
-        } else {
-            slug
+        if !written {
+            write!(out, "lane{}", lane_id.as_u32())?;
         }
+        Ok(())
     }
     // Lane aliases and cache labels do not identify consensus storage. Core owns
     // physical addresses derived from authenticated network/route/incarnation/activation.
 }
+// Streaming comparison shares the exact renderer with construction. The writer
+// only advances through borrowed expected bytes and never builds a second string.
+struct LaneRenderingComparison<'a>(&'a str);
+impl std::fmt::Write for LaneRenderingComparison<'_> {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        self.0 = self.0.strip_prefix(value).ok_or(std::fmt::Error)?;
+        Ok(())
+    }
+}
+fn lane_rendering_matches(
+    expected: &str,
+    render: impl FnOnce(&mut LaneRenderingComparison<'_>) -> std::fmt::Result,
+) -> bool {
+    let mut out = LaneRenderingComparison(expected);
+    render(&mut out).is_ok() && out.0.is_empty()
+}
+#[cfg(test)]
+#[path = "actual/lane_metadata_tests.rs"]
+mod lane_metadata_tests;
 /// Lane-fusion tuning parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fusion {
@@ -5249,8 +5418,10 @@ pub struct Pipeline {
     pub cache_size: usize,
     /// Maximum decoded instructions retained per cached entry (0 = unlimited).
     pub ivm_cache_max_decoded_ops: usize,
-    /// Approximate byte budget for cached pre-decode entries (bytes).
+    /// Aggregate IVM preparation/runtime allocation retention budget (bytes; 0 disables).
     pub ivm_cache_max_bytes: usize,
+    /// Finite active IVM allocation budget, distinct from idle retention (zero denies allocation).
+    pub ivm_execution_max_bytes: usize,
     /// Rayon worker cap for prover/trace verification (0 = physical cores).
     pub ivm_prover_threads: usize,
     /// Maximum instructions allowed per overlay (0 = unlimited).
@@ -5307,6 +5478,7 @@ impl_default!(Pipeline => {
             cache_size: defaults::pipeline::CACHE_SIZE,
             ivm_cache_max_decoded_ops: defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
             ivm_cache_max_bytes: defaults::pipeline::IVM_CACHE_MAX_BYTES,
+            ivm_execution_max_bytes: defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ivm_prover_threads: defaults::pipeline::IVM_PROVER_THREADS,
             overlay_max_instructions: defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
             overlay_max_bytes: defaults::pipeline::OVERLAY_MAX_BYTES,
@@ -6258,6 +6430,8 @@ pub struct Kura {
     pub store_dir: WithOrigin<PathBuf>,
     /// Maximum on-disk footprint for Kura (bytes, 0 = unlimited).
     pub max_disk_usage_bytes: Bytes,
+    /// Maximum canonical complete native context projection bytes per committed carrier.
+    pub native_context_archive_max_bytes: NonZeroUsize,
     /// Number of recent blocks kept in memory.
     pub blocks_in_memory: NonZeroUsize,
     /// Finite requested-allocation limit for State's shared block-hash generations.
@@ -8599,32 +8773,10 @@ pub struct Torii {
     pub zk_prover_allowed_backends: Vec<String>,
     /// Allowlisted circuit identifiers for the background prover (empty = allow all).
     pub zk_prover_allowed_circuits: Vec<String>,
-    /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
-    ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
-    pub zk_ivm_prove_max_inflight: usize,
-    /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
-    ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
-    pub zk_ivm_prove_max_queue: usize,
-    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
-    pub zk_ivm_tooling_timeout_ms: u64,
-    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
-    pub zk_ivm_prove_job_ttl_secs: u64,
-    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
-    ///
-    /// Set to 0 to disable the cap (not recommended).
-    pub zk_ivm_prove_job_max_entries: usize,
-    /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
-    pub zk_ivm_prove_job_max_retained_bytes: Bytes,
-    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one authenticated account.
-    ///
-    /// Set to 0 to disable the per-account count cap (not recommended).
-    pub zk_ivm_prove_job_max_entries_per_owner: usize,
-    /// Maximum bytes retained by `/v1/zk/ivm/prove` for one authenticated account.
-    ///
-    /// Set to 0 to disable the per-account byte cap (not recommended).
-    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes,
+    /// Maximum concurrent IVM contract simulation and view workers.
+    pub ivm_tooling_max_inflight: usize,
+    /// Wall-clock timeout for synchronous IVM simulation and view tooling.
+    pub ivm_tooling_timeout_ms: u64,
     /// Iroha Connect configuration.
     pub connect: Connect,
     /// ISO 20022 bridge configuration.

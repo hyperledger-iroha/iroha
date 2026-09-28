@@ -3,7 +3,6 @@
 
 package org.hyperledger.iroha.sdk.client;
 
-import static org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsKt.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES;
 import static org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsKt.SUMERAGI_STATUS_JSON_MAX_BYTES;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -46,7 +45,7 @@ public final class SumeragiHttpTransportTests {
     final OneResponseExecutor executor = new OneResponseExecutor(jsonResponse(body));
     final HttpClientTransport transport = transport(executor);
 
-    assertEquals(4, transport.getSumeragiStatus().join().protocolVersion);
+    assertEquals(8, transport.getSumeragiStatus().join().protocolVersion);
     assertEquals(1, executor.requests);
     assertEquals("https://torii.example/api/v1/sumeragi/status", executor.last.uri.toString());
     assertEquals("GET", executor.last.method);
@@ -58,25 +57,6 @@ public final class SumeragiHttpTransportTests {
     assertTrue(executor.last.getHeaders().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
     assertEquals(
         Long.valueOf(SUMERAGI_STATUS_JSON_MAX_BYTES),
-        executor.last.maximumResponseBytes);
-  }
-
-  @Test
-  public void diagnosticsUsesItsSeparateLargerExactJsonGet() {
-    final byte[] body = diagnosticsJson().getBytes(StandardCharsets.UTF_8);
-    final OneResponseExecutor executor = new OneResponseExecutor(jsonResponse(body));
-    final HttpClientTransport transport = transport(executor);
-
-    assertEquals(1, transport.getSumeragiDiagnostics().join().getTxQueueCapacity().intValueExact());
-    assertEquals("https://torii.example/api/v1/sumeragi/diagnostics", executor.last.uri.toString());
-    assertEquals("GET", executor.last.method);
-    assertEquals(Arrays.asList("application/json"), executor.last.getHeaders().get("Accept"));
-    assertEquals(
-        org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy.ONE_SHOT,
-        executor.last.replayPolicy);
-    assertTrue(executor.last.getHeaders().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
-    assertEquals(
-        Long.valueOf(SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES),
         executor.last.maximumResponseBytes);
   }
 
@@ -93,13 +73,6 @@ public final class SumeragiHttpTransportTests {
                 .getSumeragiStatus()
                 .join(),
         "status endpoint must reject a diagnostics-shaped payload");
-    assertThrows(
-        RuntimeException.class,
-        () ->
-            transport(new OneResponseExecutor(jsonResponse(body)))
-                .getSumeragiDiagnostics()
-                .join(),
-        "diagnostics endpoint must reject a status-shaped payload");
 
     for (final Map<String, List<String>> headers :
         Arrays.<Map<String, List<String>>>asList(
@@ -110,19 +83,12 @@ public final class SumeragiHttpTransportTests {
       final TransportResponse statusResponse =
           new TransportResponse(200, body, "", headers, null, false);
       assertEquals(
-          4,
+          8,
           transport(new OneResponseExecutor(statusResponse))
               .getSumeragiStatus()
               .join()
               .protocolVersion);
-      final TransportResponse diagnosticsResponse =
-          new TransportResponse(200, diagnosticsBody, "", headers, null, false);
-      assertEquals(
-          BigInteger.ONE,
-          transport(new OneResponseExecutor(diagnosticsResponse))
-              .getSumeragiDiagnostics()
-              .join()
-              .getTxQueueCapacity());
+
     }
 
     for (final Map<String, List<String>> headers :
@@ -139,14 +105,7 @@ public final class SumeragiHttpTransportTests {
       assertThrows(
           RuntimeException.class,
           () -> transport(new OneResponseExecutor(statusResponse)).getSumeragiStatus().join());
-      final TransportResponse diagnosticsResponse =
-          new TransportResponse(200, diagnosticsBody, "", headers, null, false);
-      assertThrows(
-          RuntimeException.class,
-          () ->
-              transport(new OneResponseExecutor(diagnosticsResponse))
-                  .getSumeragiDiagnostics()
-                  .join());
+
     }
     for (final List<String> lengths :
         Arrays.<List<String>>asList(
@@ -273,7 +232,6 @@ public final class SumeragiHttpTransportTests {
           }
         };
     assertThrows(RuntimeException.class, () -> defaultClient.getSumeragiStatus().join());
-    assertThrows(RuntimeException.class, () -> defaultClient.getSumeragiDiagnostics().join());
 
     final OneResponseExecutor executor =
         new OneResponseExecutor(jsonResponse(statusJson().getBytes(StandardCharsets.UTF_8)));
@@ -373,37 +331,7 @@ public final class SumeragiHttpTransportTests {
   }
 
   private static String statusJson() {
-    return "{"
-        + "\"protocol_version\":4,"
-        + "\"node_fingerprint\":\"" + hash(0x11) + "\","
-        + "\"build_fingerprint\":\"" + hash(0x12) + "\","
-        + "\"config_fingerprint\":\"" + hash(0x13) + "\","
-        + "\"restart_required\":false,"
-        + "\"height_context_id\":[\"" + hash(0x14) + "\"],"
-        + "\"height\":1,\"view\":0,"
-        + "\"phase\":{\"phase\":\"awaiting_proposal\",\"details\":null},"
-        + "\"leader\":0,"
-        + "\"locked_prepare_qc\":null,\"highest_prepare_qc\":null,"
-        + "\"last_timeout_certificate\":null,"
-        + "\"body_state\":{\"state\":\"missing\",\"details\":null},"
-        + "\"pending_persistence_id\":null,"
-        + "\"last_committed_height\":0,\"last_committed_subject\":null,"
-        + "\"height_context\":{\"epoch\":0,\"epoch_end_height\":1,"
-        + "\"mode\":{\"mode\":\"permissioned\",\"details\":null},"
-        + "\"epoch_seed\":\"" + repeat("00", 32) + "\","
-        + "\"validator_count\":4,\"quorum\":{\"min_signers\":3,\"total_power\":4}},"
-        + "\"last_commit_qc\":null,"
-        + "\"liveness\":{\"generation\":0,\"prepare_quorums\":[],"
-        + "\"commit_quorums\":[],\"timeout_quorums\":[],\"outbound_intents\":[],"
-        + "\"work\":{"
-        + "\"candidate\":{\"stage\":\"idle\",\"details\":null},"
-        + "\"body_recovery\":{\"stage\":\"idle\",\"details\":null},"
-        + "\"body_store\":{\"stage\":\"idle\",\"details\":null},"
-        + "\"validation\":{\"stage\":\"idle\",\"details\":null},"
-        + "\"application\":{\"stage\":\"idle\",\"details\":null},"
-        + "\"successor_height\":{\"stage\":\"idle\",\"details\":null}},"
-        + "\"queues\":[],\"last_progress\":null,\"no_progress_age_ms\":0,"
-        + "\"blocker\":null,\"ignore_counts\":[]}}";
+    return org.hyperledger.iroha.sdk.consensus.NativeStatusFixtures.json("observer");
   }
 
   private static String diagnosticsJson() {

@@ -9,8 +9,19 @@ struct SeatAttemptJournalV1 {
     schema: String,
     session: GlobalThresholdBeaconDkgSessionV1,
     signer_index: u16,
-    trusted_instance_id: Hash,
-    anchor_height: u64,
+    chain_id: ChainId,
+    network_id: NetworkId,
+    /// Absent only for signed-genesis body bootstrap, before genuine H2 finality.
+    native_source: Option<SeatNativeSourceV1>,
+}
+
+#[derive(JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SeatNativeSourceV1 {
+    height: u64,
+    block_hash: Hash,
+    consensus_hash: [u8; 32],
+    result: [u8; 32],
 }
 
 fn read_public_frame<T>(fd: BorrowedFd<'_>, deadline: Instant) -> Result<T>
@@ -38,7 +49,7 @@ fn write_public_frame<T: NoritoSerialize>(output: &Directory, name: &str, value:
 fn advance_verified_phase(
     fd: BorrowedFd<'_>,
     deadline: Instant,
-    verifier: &mut SumeragiFinalityVerifier,
+    verifier: &mut NativeJournalCursor,
     last_height: &mut u64,
     target_height: u64,
     cutoff_height: u64,
@@ -58,7 +69,7 @@ fn exact_rotation_seat_session(
 ) -> Result<(GlobalThresholdBeaconDkgSessionV1, Vec<PeerId>, u64)> {
     let preparation = selected.preparation();
     let roster = preparation
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
@@ -247,8 +258,6 @@ pub(super) fn provision_rotation_seat_command(
         finality_input,
         verifier,
         cutoff,
-        proof.trusted_context_id,
-        proof.anchor_height,
         provider_handle,
         provider_revision,
         output,
@@ -267,10 +276,8 @@ pub(super) fn run_seat_dkg(
     signer: KeyPair,
     public_input: BorrowedFd<'_>,
     finality_input: BorrowedFd<'_>,
-    mut verifier: SumeragiFinalityVerifier,
+    mut verifier: NativeJournalCursor,
     cutoff: u64,
-    trusted_instance_id: Hash,
-    anchor_height: u64,
     provider_handle: &str,
     provider_revision: u64,
     output: Directory,
@@ -282,8 +289,14 @@ pub(super) fn run_seat_dkg(
             schema: "iroha.global-beacon.dkg-seat-attempt.v1".into(),
             session,
             signer_index,
-            trusted_instance_id,
-            anchor_height,
+            chain_id: verifier.chain_id().clone(),
+            network_id: verifier.network_id(),
+            native_source: verifier.tip().map(|tip| SeatNativeSourceV1 {
+                height: tip.height(),
+                block_hash: tip.block_hash().into(),
+                consensus_hash: tip.core_hash().0,
+                result: tip.result().0,
+            }),
         })?,
         true,
     )?;
@@ -455,23 +468,20 @@ pub(super) fn assemble_rotation_dkg_command(
     let finalized_height = public.adaptive_dkg.finalized_at_height;
     if public.adaptive_dkg.session != expected_session
         || finalized_height != expected_session.acceptances_end_height
-        || provider_paths.len() != preparation.roster.len()
+        || provider_paths.len() != preparation.committee.len()
         || certificate_height <= finalized_height
         || certificate_height >= cutoff
     {
         return Err(Error::InvalidInput);
     }
+    let limits = proof.finality_limits.checked()?;
     let phase_proofs = phase_proof_paths
         .iter()
         .map(|path| {
-            let bytes = read_public_bytes_bounded(path, MAX_ROTATION_PHASE_PROOF_BYTES)?;
-            norito::decode_canonical_with_limits(
-                &bytes,
-                norito::canonical_decode_limits(bytes.len()),
-            )
-            .map_err(|_| Error::Crypto)
+            let bytes = read_public_bytes_bounded(path, limits.journal_bytes)?;
+            NativeFinalityJournal::decode(&bytes, limits).map_err(|_| Error::Crypto)
         })
-        .collect::<Result<Vec<SumeragiFinalityProof>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     validate_rotation_phase_chain(
         proof,
         &evidence,

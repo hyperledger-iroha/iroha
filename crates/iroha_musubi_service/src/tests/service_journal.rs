@@ -152,6 +152,21 @@ impl MusubiSeedIngressBackendV1 for RecordingSeedIngress {
             Ok(())
         }
     }
+    fn verify_staged_car(
+        &self,
+        _operation_id: [u8; 32],
+        binding: &MusubiSeedIngressReceiptBindingV1,
+        _commitment: &MusubiArchiveCommitmentV1,
+        _plan: &CarBuildPlan,
+        _car: &[u8],
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        if binding.seed_provider != self.provider
+            || *self.calls.lock().expect("seed call counter") == 0
+        {
+            return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Copy)]
 enum TestSigningBehavior {
@@ -530,6 +545,13 @@ fn commit_capacity_releases_the_attempt_before_returning_unavailable() {
 }
 struct UnusedStorage;
 impl MusubiStorageCoordinationBackendV1 for UnusedStorage {
+    fn verify_current_registration(
+        &self,
+        _request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        Err(MusubiPublicationServiceBackendErrorV1::Permanent)
+    }
+
     fn coordinate_storage(
         &mut self,
         _request: &MusubiStorageCoordinationRequestV1,
@@ -539,6 +561,12 @@ impl MusubiStorageCoordinationBackendV1 for UnusedStorage {
 }
 struct UnusedReadback;
 impl MusubiProviderReadbackBackendV1 for UnusedReadback {
+    fn verify_current_target(
+        &self,
+        _request: &MusubiProviderReadbackRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        Err(MusubiPublicationServiceBackendErrorV1::Permanent)
+    }
     fn readback_provider(
         &mut self,
         _request: &MusubiProviderReadbackRequestV1,
@@ -551,6 +579,13 @@ struct FixedStorage {
     substitute: bool,
 }
 impl MusubiStorageCoordinationBackendV1 for FixedStorage {
+    fn verify_current_registration(
+        &self,
+        _request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        Ok(())
+    }
+
     fn coordinate_storage(
         &mut self,
         _request: &MusubiStorageCoordinationRequestV1,
@@ -577,6 +612,12 @@ struct RecordingExactReadback {
 }
 #[cfg(unix)]
 impl MusubiProviderReadbackBackendV1 for RecordingExactReadback {
+    fn verify_current_target(
+        &self,
+        _request: &MusubiProviderReadbackRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        Ok(())
+    }
     fn readback_provider(
         &mut self,
         request: &MusubiProviderReadbackRequestV1,
@@ -598,6 +639,12 @@ impl MusubiProviderReadbackBackendV1 for RecordingExactReadback {
     }
 }
 impl MusubiProviderReadbackBackendV1 for FixedReadback {
+    fn verify_current_target(
+        &self,
+        _request: &MusubiProviderReadbackRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        Ok(())
+    }
     fn readback_provider(
         &mut self,
         _request: &MusubiProviderReadbackRequestV1,
@@ -834,6 +881,8 @@ fn control_service_fixture(
         operation_id,
         network_id,
         publisher: client.account().clone(),
+        expected_policy_revision: storage_request.expected_policy_revision,
+        finalized_registration: storage_request.finalized_registration.clone(),
         location,
         provider,
         commitment: commitment.clone(),
@@ -901,6 +950,32 @@ fn control_service_fixture(
         readback_response,
         clock,
     }
+}
+#[test]
+fn readback_request_rejects_substituted_finalized_registration_fields() {
+    let fixture = control_service_fixture(false, false);
+    let mut substituted = fixture.readback_request.clone();
+    substituted.expected_policy_revision = 0;
+    assert!(substituted.validate().is_err());
+    substituted = fixture.readback_request.clone();
+    substituted
+        .finalized_registration
+        .registration
+        .registered_by = substituted
+        .finalized_registration
+        .registration
+        .staging_receipt
+        .payload
+        .binding
+        .ingress_broker
+        .clone();
+    assert!(substituted.validate().is_err());
+    substituted = fixture.readback_request.clone();
+    substituted.semantic_release_digest = MusubiSemanticReleaseDigestV1::new([0x73; 32]);
+    assert!(substituted.validate().is_err());
+    substituted = fixture.readback_request.clone();
+    substituted.location.finalized_height = 1;
+    assert!(substituted.validate().is_err());
 }
 #[expect(
     clippy::too_many_lines,
@@ -1222,6 +1297,33 @@ fn control_authorization_header(
         .expect("authorization");
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(norito::encode_canonical(&authorization).expect("canonical authorization"))
+}
+fn control_storage_response(
+    fixture: &mut ControlServiceFixture,
+    request: &MusubiStorageCoordinationRequestV1,
+    issued_at_ms: u64,
+) -> MusubiPublicationPrivateHttpResponseV1 {
+    let body = norito::encode_canonical(request).expect("storage request bytes");
+    let authorization = control_authorization_header(
+        &fixture.runtime,
+        MusubiPublicationRuntimeOperationV1::StorageCoordination,
+        request.operation_id,
+        &body,
+        issued_at_ms,
+    );
+    fixture
+        .clock
+        .store(issued_at_ms.saturating_add(1), Ordering::SeqCst);
+    fixture
+        .service
+        .handle(MusubiPublicationPrivateHttpRequestV1 {
+            method: "POST",
+            path: MUSUBI_PUBLICATION_STORAGE_COORDINATION_PATH_V1,
+            content_type: APPLICATION_NORITO,
+            authorization: Some(&authorization),
+            seed_ingress_metadata: None,
+            body: &body,
+        })
 }
 fn control_readback_response(
     fixture: &mut ControlServiceFixture,

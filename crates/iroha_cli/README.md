@@ -724,7 +724,7 @@ Here are some examples of filtering:
 # Filter domains by id
 iroha ledger domain list filter '{"Atom": {"Id": {"Atom": {"Equals": "wonderland"}}}}'
 # Filter accounts by domain
-iroha account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}' 
+iroha account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}'
 # Filter asset by domain
 iroha ledger asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}, {"Atom": {"Id": {"Account": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}]}'
 ```
@@ -822,11 +822,19 @@ hexadecimal bytes followed by EOF. The descriptor is consumed before native
 output generation; the seed never enters process arguments or public receipts.
 Generic localnet development generation has its own independent input policy.
 
-`iroha tx collect-scaling-inputs` requires the independently retained complete
-Native context archive via `--native-contexts`, `--native-contexts-sha256`, and
-`--native-contexts-max-bytes`. Its canonical `Vec<NativeLaneContextsEvidenceV1>`
-contains one post-carrier context witness per height, including empty sets, in
-height order from genesis through the exact stopped tip. The collector verifies
-that archive against the anchored finality chain and exact Kura carriers before
-publishing `Vec<FinalizedNativeContextV1>` and committed Network output queries.
-A genesis context alone cannot supply this historical execution evidence.
+`kagami advanced kura scaling-evidence collect` reads the original stopped Kura
+store and its finalized native context archive. It requires independently pinned
+original signed-genesis and epoch-context files, chain/network/epoch identity and
+finite file/work bounds. It publishes the complete canonical
+`Vec<NativeHeightEvidenceV1>` and actual `Vec<CommittedTransaction>` query vector;
+it does not need a client signing key or a live Torii connection.
+
+Each height retains one complete canonical `SignedBlockWire` and the original
+`NativeContextProjectionV1` values bound by that carrier's mandatory
+`R.native_contexts` proof. The native verifier authenticates the actual
+genesis-to-tip chain, including the H2 anchor for genesis execution, and each
+committed Network input/output inclusion. An absent original context record
+fails collection. The two outputs use retained `.publishing` files and separate
+NOREPLACE publications; failures preserve surviving artifacts without returning
+a successful pair. Facts, export and independent replay still authenticate the
+complete original workload schedule before reporting useful work.

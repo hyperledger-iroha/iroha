@@ -41,6 +41,11 @@ pub trait BlockAcquisition: Sized {
     fn initialize(&mut self, mode: BlockMode);
     /// Unlock all physical owners in place, retaining cleanup until slot drop.
     fn release(&mut self);
+    /// Whether all original participants can transfer without further work.
+    fn is_initialized(&self) -> bool;
+    /// Move the completed original Block while its acquisition slot stays owned.
+    /// A precondition failure leaves the original slot available for joint release.
+    fn take_block(&mut self) -> Self::Block;
     /// Transfer a successfully initialized slot without cloning or allocation.
     fn into_block(self) -> Self::Block;
 }
@@ -90,3 +95,25 @@ pub trait BlockPublication: BlockRetirement {
 
 #[cfg(test)]
 mod attached_publication_tests;
+
+#[cfg(test)]
+mod original_acquisition_transfer_tests;
+
+/// Reacquire an original frozen field inside its existing publication owner.
+///
+/// An aggregate installs every slot before attempting any acquisition. Normal
+/// refusal permits recovery of the same original journal, while the slot keeps
+/// its actual cleanup until every sibling and enclosing fence has unlocked.
+/// A caught unwind or terminal release never grants this recovery authority.
+pub trait FrozenBlockPublication: BlockPublication {
+    /// Original private current/undo generations, without physical writers.
+    type Frozen;
+    /// Prepare the original pair without cloning, allocation or new authority.
+    /// This is one-shot for each installed slot, including after refusal.
+    fn try_prepare_frozen(
+        &mut self,
+    ) -> Result<(), PublicationPreparationError<core::convert::Infallible>>;
+    /// Return the same original pair after normal refusal or complete abort.
+    /// All release notices remain in this slot, which must stay aggregate-owned.
+    fn recover_frozen(&mut self) -> Self::Frozen;
+}

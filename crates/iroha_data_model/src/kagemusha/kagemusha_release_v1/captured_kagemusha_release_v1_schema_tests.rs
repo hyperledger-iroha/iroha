@@ -134,3 +134,5 @@ fn experimental_release_schema_identities() {
         "0832c83fa53142b7a13be5cab6cdc8a5",
     );
 }
+
+crate::captured_schema_tests::native_capture::owner_printer!(CASES);

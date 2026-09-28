@@ -70,8 +70,8 @@
     },
     {
       "path": "http_service_release.sh",
-      "byte_length": 569,
-      "sha256": "5c6b4ea141cd10ced54ea2d18573a2c0d46f6666156e85bdd8fcd2726ce1adab",
+      "byte_length": 756,
+      "sha256": "3c51c53f6e51fd9dd14cd69dd49b8f10b7730979c82c02ac40aae6643f3af607",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
@@ -81,8 +81,8 @@
     },
     {
       "path": "http_service_deploy.sh",
-      "byte_length": 579,
-      "sha256": "21cd884eeda01115fea7aebe8880cdd1b72b35d3337bb134e6e55d864d72b8cb",
+      "byte_length": 766,
+      "sha256": "c81fa92c109d2164774608b787844be71039bca68d4b2c263750c88f3386f3fe",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
@@ -92,8 +92,8 @@
     },
     {
       "path": "http_service_upgrade.sh",
-      "byte_length": 580,
-      "sha256": "e1691de5510aeaa7c3ecc76ea44f6fb35e6ff1293c0ad6edb6f8151def1eeec5",
+      "byte_length": 767,
+      "sha256": "a3b21e68a368963b1b4d9c6f65cd79a46c42219af0fb3642fa877b08edead8a4",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
@@ -136,8 +136,8 @@
     },
     {
       "path": "split_app_release.sh",
-      "byte_length": 422,
-      "sha256": "2e42e49de2317e4c3674ca0d6a446c175f1168284343605caad85a7c5374c111",
+      "byte_length": 609,
+      "sha256": "6535b7ad696346d1e6130ecf8cbf26d028bb99017ddca78b0e946f36940d830b",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
@@ -169,8 +169,8 @@
     },
     {
       "path": "single_api_release.sh",
-      "byte_length": 422,
-      "sha256": "2e42e49de2317e4c3674ca0d6a446c175f1168284343605caad85a7c5374c111",
+      "byte_length": 609,
+      "sha256": "6535b7ad696346d1e6130ecf8cbf26d028bb99017ddca78b0e946f36940d830b",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {

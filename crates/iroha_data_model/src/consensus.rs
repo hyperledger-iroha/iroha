@@ -244,12 +244,6 @@ pub struct ValidatorElectionParameters {
     pub min_self_bond: Quantity,
     /// Minimum nomination bond required for delegators (stake units).
     pub min_nomination_bond: Quantity,
-    /// Maximum percentage of total stake a single nominator may contribute to one validator.
-    pub max_nominator_concentration_pct: u8,
-    /// Seat band (percentage) for tie-breaking near the cut line.
-    pub seat_band_pct: u8,
-    /// Maximum percentage of validators that may share a common entity.
-    pub max_entity_correlation_pct: u8,
     /// Finality margin (blocks) required when activating a newly elected set.
     pub finality_margin_blocks: u64,
 }
@@ -327,9 +321,6 @@ impl ValidatorElectionOutcome {
                 max_validators: 0,
                 min_self_bond: Quantity::zero(),
                 min_nomination_bond: Quantity::zero(),
-                max_nominator_concentration_pct: 0,
-                seat_band_pct: 0,
-                max_entity_correlation_pct: 0,
                 finality_margin_blocks: 0,
             },
             rejection_reason: Some("validator election failed".to_owned()),
@@ -378,6 +369,8 @@ pub enum ConsensusKeyRole {
     DeriveJsonDeserialize,
 )]
 #[display("{role}:{name}")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::consensus::ConsensusKeyId")]
 pub struct ConsensusKeyId {
     /// Logical role served by this key.
     pub role: ConsensusKeyRole,
@@ -837,6 +830,15 @@ pub struct GlobalThresholdBeaconPartialSignatureV1 {
     pub proof: GlobalThresholdBeaconPartialSignatureProofV1,
 }
 
+impl norito::NoritoSchema for GlobalThresholdBeaconPartialSignatureV1 {
+    fn nominal_name() -> String {
+        "iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1".to_owned()
+    }
+    fn static_frame_name() -> Option<&'static str> {
+        Some("iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1")
+    }
+}
+
 /// Complete public commitment for one global threshold-beacon key session.
 ///
 /// This DTO deliberately contains the complete ordered public-share transcript.
@@ -912,6 +914,62 @@ pub struct GlobalThresholdBeaconChainAnchorV1 {
     pub block_hash: HashOf<crate::block::BlockHeader>,
 }
 
+/// Complete native signing context for a threshold pulse, independent of proposal views.
+/// Its context ID commits the complete authenticated authority generation and scheduling epoch.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1")]
+#[norito(deny_unknown_fields)]
+pub struct GlobalThresholdBeaconPulseContextV1 {
+    /// Exact native consensus instance derived from signed genesis and the configured chain.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub instance: [u8; 32],
+    /// Scheduling epoch number, including the signed genesis epoch zero.
+    pub epoch: u64,
+    /// Complete authenticated native epoch context digest.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub epoch_context_id: [u8; 32],
+    /// Exact consensus hash of the immediately applied native parent.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub parent_consensus_hash: [u8; 32],
+    /// Original execution result of that same applied parent.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub parent_result: [u8; 32],
+}
+impl GlobalThresholdBeaconPulseContextV1 {
+    /// Reject inert identities; authority equality is checked against the independent native source.
+    ///
+    /// # Errors
+    /// Returns an error when an instance, epoch context or parent identity is zero.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if [
+            &self.instance,
+            &self.epoch_context_id,
+            &self.parent_consensus_hash,
+            &self.parent_result,
+        ]
+        .into_iter()
+        .any(|value| value.iter().all(|byte| *byte == 0))
+        {
+            return Err("global beacon pulse has an inert native context identity");
+        }
+        Ok(())
+    }
+}
+
 /// One finalized pulse from the canonical global threshold beacon.
 ///
 /// There is intentionally no signer bitmap, share list, or reconstruction
@@ -919,8 +977,6 @@ pub struct GlobalThresholdBeaconChainAnchorV1 {
 /// key, so the public result cannot vary with the subset used internally to
 /// reconstruct it. `seed` and `pulse_id` are redundant audit fields which must
 /// be recomputed from the verified final signature.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1")]
 #[derive(
     Debug,
     Clone,
@@ -950,6 +1006,8 @@ pub struct FinalizedGlobalThresholdBeaconPulseV1 {
     /// Recomputed public-transcript commitment inherited from the key session.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub transcript_hash: [u8; 32],
+    /// Complete native context covered by every proof-carrying threshold share.
+    pub context: GlobalThresholdBeaconPulseContextV1,
     /// Consensus height at which this pulse is finalized.
     pub height: u64,
     /// Canonical fixed protocol round (zero in V1), independent of consensus view.
@@ -967,8 +1025,43 @@ pub struct FinalizedGlobalThresholdBeaconPulseV1 {
     pub pulse_id: [u8; 32],
 }
 
+impl norito::NoritoSchema for FinalizedGlobalThresholdBeaconPulseV1 {
+    fn nominal_name() -> String {
+        "iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1".to_owned()
+    }
+    fn static_frame_name() -> Option<&'static str> {
+        // Fixed-capacity header production does not allocate a schema-name String.
+        Some("iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_registry_schema_identity_roundtrips() {
+        let value = ConsensusKeyId::new(ConsensusKeyRole::Validator, "state-key");
+        assert_eq!(
+            <ConsensusKeyId as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::consensus::ConsensusKeyId"
+        );
+        let encoded = norito::encode_canonical(&value).expect("canonical owner frame");
+        assert_eq!(
+            encoded[6..22],
+            norito::schema::identity::frame_hash::<ConsensusKeyId>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<ConsensusKeyId>(&encoded)
+                .expect("canonical owner roundtrip"),
+            value
+        );
+        let mut wrong_owner = encoded;
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ConsensusKeyId>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
@@ -1077,6 +1170,13 @@ mod tests {
             session_id: session.session_id,
             roster_hash: session.roster_hash,
             transcript_hash: session.transcript_hash,
+            context: GlobalThresholdBeaconPulseContextV1 {
+                instance: [0x91; 32],
+                epoch: 0,
+                epoch_context_id: [0x92; 32],
+                parent_consensus_hash: [0x93; 32],
+                parent_result: [0x94; 32],
+            },
             height: 42,
             round: 0,
             finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {
@@ -1090,6 +1190,28 @@ mod tests {
             pulse_id: [0xDD; 32],
         }
     }
+    #[test]
+    fn native_pulse_context_requires_every_native_identity() {
+        let original = threshold_beacon_pulse_fixture().context;
+        original.validate().unwrap();
+        assert_eq!(original.epoch, 0, "signed genesis epoch zero is valid");
+        for index in 0..4 {
+            let mut malformed = original;
+            match index {
+                0 => malformed.instance = [0; 32],
+                1 => malformed.epoch_context_id = [0; 32],
+                2 => malformed.parent_consensus_hash = [0; 32],
+                _ => malformed.parent_result = [0; 32],
+            }
+            assert!(malformed.validate().is_err());
+        }
+        let encoded = norito::encode_canonical(&original).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<GlobalThresholdBeaconPulseContextV1>(&encoded).unwrap(),
+            original
+        );
+    }
+
     #[test]
     fn threshold_beacon_session_and_pulse_norito_roundtrip() {
         let session = threshold_beacon_session_fixture();
@@ -1123,6 +1245,35 @@ mod tests {
             GlobalThresholdBeaconPartialSignatureV1::decode(&mut encoded_partial.as_slice())
                 .expect("decode adaptive partial signature");
         assert_eq!(decoded_partial, partial);
+        // Schema-only codec fixtures: cryptographic acceptance is covered by the Core tests.
+        for (nominal, declared) in [
+            (<GlobalThresholdBeaconPartialSignatureV1 as norito::NoritoSchema>::nominal_name(),
+             <GlobalThresholdBeaconPartialSignatureV1 as norito::NoritoSchema>::static_frame_name()),
+            (<FinalizedGlobalThresholdBeaconPulseV1 as norito::NoritoSchema>::nominal_name(),
+             <FinalizedGlobalThresholdBeaconPulseV1 as norito::NoritoSchema>::static_frame_name()),
+        ] {
+            assert_eq!(declared, Some(nominal.as_str()));
+        }
+        let pulse_frame = norito::encode_canonical(&pulse).unwrap();
+        let partial_frame = norito::encode_canonical(&partial).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<FinalizedGlobalThresholdBeaconPulseV1>(&pulse_frame)
+                .unwrap(),
+            pulse
+        );
+        assert_eq!(
+            norito::decode_canonical::<GlobalThresholdBeaconPartialSignatureV1>(&partial_frame)
+                .unwrap(),
+            partial
+        );
+        assert!(
+            norito::decode_canonical::<FinalizedGlobalThresholdBeaconPulseV1>(&partial_frame)
+                .is_err()
+        );
+        assert!(
+            norito::decode_canonical::<GlobalThresholdBeaconPartialSignatureV1>(&pulse_frame)
+                .is_err()
+        );
     }
 
     #[test]

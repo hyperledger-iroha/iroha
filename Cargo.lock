@@ -1791,6 +1791,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "hex",
+ "iroha_accel",
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
@@ -2349,10 +2350,9 @@ dependencies = [
 [[package]]
 name = "cust_raw"
 version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbf40d6ade12cb9828bbc844b9875c7b93d25e67a3c9bf61c7aa3ae09e402bf8"
 dependencies = [
- "find_cuda_helper",
+ "cust",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -2588,6 +2588,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.0",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.4",
 ]
 
@@ -3196,9 +3198,6 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 [[package]]
 name = "find_cuda_helper"
 version = "0.2.0"
-dependencies = [
- "glob",
-]
 
 [[package]]
 name = "findshlibs"
@@ -4730,6 +4729,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_accel"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "cust",
+ "mv",
+ "parking_lot",
+]
+
+[[package]]
 name = "iroha_audio"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -4811,6 +4819,7 @@ dependencies = [
  "expect-test",
  "fastpq_isi",
  "hex",
+ "iroha_accel",
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
@@ -4884,6 +4893,7 @@ dependencies = [
  "ciborium",
  "concread",
  "criterion",
+ "crossbeam-epoch",
  "crossbeam-queue",
  "curve25519-dalek",
  "dashmap",
@@ -4924,6 +4934,7 @@ dependencies = [
  "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",
+ "iroha_zkp_poseidon",
  "ivm",
  "kaigi_zk",
  "mv",
@@ -4962,6 +4973,7 @@ dependencies = [
  "aead 0.6.0-rc.10",
  "amcl",
  "argon2",
+ "ark-serialize",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -4986,6 +4998,7 @@ dependencies = [
  "iroha_schema",
  "k256",
  "lazy_static",
+ "mv",
  "norito",
  "num-bigint 0.4.6",
  "num-traits",
@@ -5280,6 +5293,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_schema",
  "iroha_schema_gen",
+ "iroha_sumeragi",
  "iroha_swarm",
  "iroha_test_samples",
  "libc",
@@ -5368,6 +5382,7 @@ dependencies = [
  "iroha_telemetry",
  "norito",
  "reqwest",
+ "rustix 1.1.4",
  "sorafs_car",
  "sorafs_manifest",
  "tempfile",
@@ -5616,6 +5631,7 @@ dependencies = [
 name = "iroha_sumeragi"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "mv",
  "norito",
 ]
 
@@ -5897,11 +5913,15 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "build-support",
+ "bytes",
  "clap",
  "error-stack",
  "eyre",
  "fastpq_prover",
  "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "iroha_config",
  "iroha_config_base",
  "iroha_core",
@@ -5912,19 +5932,23 @@ dependencies = [
  "iroha_i18n",
  "iroha_logger",
  "iroha_model_base",
+ "iroha_musubi_service",
  "iroha_p2p",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_sccp_rpc",
+ "iroha_storage_client",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",
  "iroha_torii_shared",
+ "iroha_version",
  "ivm",
  "mv",
  "norito",
  "parking_lot",
  "rand 0.9.4",
+ "rcgen",
  "reqwest",
  "rustix 1.1.4",
  "serial_test",
@@ -5937,6 +5961,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "zeroize",
@@ -6015,6 +6040,7 @@ dependencies = [
  "crypto-bigint 0.6.1",
  "curve25519-dalek",
  "cust",
+ "dispatch2",
  "ed25519-dalek",
  "ff",
  "group",
@@ -6022,6 +6048,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "indexmap 2.14.0",
+ "iroha_accel",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_i18n",
@@ -6034,6 +6061,7 @@ dependencies = [
  "k256",
  "kotodama_lang",
  "likely_stable",
+ "mv",
  "nonzero_ext",
  "norito",
  "num_cpus",
@@ -6061,6 +6089,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_model_base",
+ "mv",
  "norito",
 ]
 
@@ -6075,6 +6104,7 @@ dependencies = [
  "iroha_model_base",
  "ivm_abi",
  "kotodama_lang",
+ "mv",
  "norito",
 ]
 

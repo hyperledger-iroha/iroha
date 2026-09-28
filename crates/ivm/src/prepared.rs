@@ -1,6 +1,7 @@
 //! Immutable, validated contract programs prepared for repeated IVM execution.
 use crate::{
     ProgramMetadata, VMError,
+    cache_memory::{MemoryReservation, SharedValue},
     instruction::wide,
     ivm::{DecodedLiteralTable, PreparedProgram},
     ivm_cache::DecodedOp,
@@ -50,8 +51,8 @@ impl PreparedControlFlowNode {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedControlFlow {
-    boundaries: Arc<[u64]>,
-    nodes: Arc<[PreparedControlFlowNode]>,
+    boundaries: crate::cache_memory::SharedAllocation<u64>,
+    nodes: crate::cache_memory::SharedAllocation<PreparedControlFlowNode>,
 }
 impl PreparedControlFlow {
     pub(crate) fn from_decoded(decoded: &[DecodedOp]) -> Result<Self, VMError> {
@@ -126,8 +127,8 @@ impl PreparedControlFlow {
             nodes.push(node);
         }
         Ok(Self {
-            boundaries: Arc::from(boundaries.into_boxed_slice()),
-            nodes: Arc::from(nodes.into_boxed_slice()),
+            boundaries: boundaries.into(),
+            nodes: nodes.into(),
         })
     }
     fn node(&self, pc: u64) -> Option<&PreparedControlFlowNode> {
@@ -185,32 +186,33 @@ fn entrypoint_reaches_private_input(
     Ok(false)
 }
 pub(crate) struct PreparedContractParts {
-    pub(crate) artifact: Arc<[u8]>,
+    pub(crate) artifact: crate::cache_memory::SharedAllocation<u8>,
     pub(crate) metadata: ProgramMetadata,
     pub(crate) manifest: ContractManifest,
     pub(crate) header_len: usize,
     pub(crate) code_offset: usize,
     pub(crate) code_hash: Hash,
-    pub(crate) contract_interface: Arc<EmbeddedContractInterfaceV1>,
+    pub(crate) contract_interface: SharedValue<EmbeddedContractInterfaceV1>,
     pub(crate) literal_table: DecodedLiteralTable,
-    pub(crate) decoded: Arc<[DecodedOp]>,
+    pub(crate) decoded: crate::ivm_cache::DecodedStream,
     pub(crate) prepared_program: PreparedProgram,
     pub(crate) control_flow: PreparedControlFlow,
 }
 struct PreparedContractInner {
-    artifact: Arc<[u8]>,
+    artifact: crate::cache_memory::SharedAllocation<u8>,
     metadata: ProgramMetadata,
-    manifest: ContractManifest,
+    manifest: SharedValue<ContractManifest>,
     header_len: usize,
     code_offset: usize,
     instruction_entry_pc: u64,
     code_hash: Hash,
-    contract_interface: Arc<EmbeddedContractInterfaceV1>,
+    contract_interface: SharedValue<EmbeddedContractInterfaceV1>,
     entrypoints: BTreeMap<String, PreparedEntrypointIndex>,
     literal_table: DecodedLiteralTable,
-    decoded: Arc<[DecodedOp]>,
+    decoded: crate::ivm_cache::DecodedStream,
     prepared_program: PreparedProgram,
     control_flow: PreparedControlFlow,
+    reservation: MemoryReservation,
 }
 /// Immutable validated contract artifact ready for repeated IVM loading.
 ///
@@ -220,6 +222,42 @@ struct PreparedContractInner {
 #[derive(Clone)]
 pub struct PreparedContract {
     inner: Arc<PreparedContractInner>,
+}
+/// Normalize native metadata into a measured, immutable allocation owner.
+///
+/// Norito reports cumulative allocator requests, including temporary decode
+/// storage. Keeping that conservative charge until the last owner drops avoids
+/// estimating native metadata from encoded byte lengths. A local normalization
+/// failure makes the original admitted value uncacheable; it cannot invalidate it.
+pub(crate) fn shared_metadata<T>(value: T, exclusively_owned: bool) -> SharedValue<T>
+where
+    T: norito::NoritoSerialize + PartialEq,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    // TODO: Give trigger Json/other independently shared backing allocations
+    // their own lifetime reservations. Cloning a child must not escape a charge
+    // attached only to this aggregate owner; until then these values stay cold.
+    if !exclusively_owned {
+        return SharedValue::new(value, None);
+    }
+    let limits =
+        norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
+    let measured = norito::to_bytes(&value).ok().and_then(|bytes| {
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
+            norito::decode_from_bytes_with_limits::<T>(&bytes, limits)
+        });
+        decoded
+            .ok()
+            .map(|decoded| (decoded, usage.total_allocated_bytes()))
+    });
+    match measured {
+        Some((decoded, heap_bytes)) if decoded == value => {
+            SharedValue::new(decoded, Some(heap_bytes))
+        }
+        // The reservation marks unknown active owners explicitly; they can
+        // never consume an unmeasured share of the retention budget.
+        _ => SharedValue::new(value, None),
+    }
 }
 impl PreparedContract {
     pub(crate) fn from_parts(parts: PreparedContractParts) -> Result<Self, VMError> {
@@ -254,11 +292,28 @@ impl PreparedContract {
                 return Err(VMError::DecodeError);
             }
         }
+        let index_bytes = norito::core::owned_btree_allocation_bytes::<
+            String,
+            PreparedEntrypointIndex,
+        >(entrypoints.len())
+        .expect("validated entrypoint index fits host allocation limits")
+            + entrypoints.keys().map(String::capacity).sum::<usize>();
+        let reservation = MemoryReservation::active(
+            std::mem::size_of::<PreparedContractInner>()
+                + 2 * std::mem::size_of::<usize>()
+                + index_bytes,
+        );
         Ok(Self {
             inner: Arc::new(PreparedContractInner {
                 artifact: parts.artifact,
                 metadata: parts.metadata,
-                manifest: parts.manifest,
+                manifest: {
+                    let exclusively_owned =
+                        parts.manifest.entrypoints.as_ref().is_none_or(|entries| {
+                            entries.iter().all(|entry| entry.triggers.is_empty())
+                        });
+                    shared_metadata(parts.manifest, exclusively_owned)
+                },
                 header_len: parts.header_len,
                 code_offset: parts.code_offset,
                 instruction_entry_pc,
@@ -269,8 +324,28 @@ impl PreparedContract {
                 decoded: parts.decoded,
                 prepared_program: parts.prepared_program,
                 control_flow: parts.control_flow,
+                reservation,
             }),
         })
+    }
+    /// Whether two prepared handles share the same immutable allocation owner.
+    #[must_use]
+    pub fn ptr_eq(this: &Self, other: &Self) -> bool {
+        Arc::ptr_eq(&this.inner, &other.inner)
+    }
+    /// Attempt nonblocking retention of the prepared program's shared allocations.
+    ///
+    /// A false result only disables caching; the program remains valid and executable.
+    pub fn try_retain_allocations(&self) -> bool {
+        self.inner.contract_interface.try_retain()
+            && self.inner.manifest.try_retain()
+            && self.inner.reservation.try_retain()
+            && self.inner.artifact.try_retain()
+            && self.inner.decoded.try_retain()
+            && self.inner.prepared_program.try_retain()
+            && self.inner.literal_table.try_retain()
+            && self.inner.control_flow.boundaries.try_retain()
+            && self.inner.control_flow.nodes.try_retain()
     }
     /// Return the canonical full-artifact hash used as the preparation key.
     #[must_use]
@@ -286,10 +361,10 @@ impl PreparedContract {
     ///
     /// This is intended for asynchronous consumers that must retain the
     /// artifact after the prepared-contract borrow ends. Cloning the returned
-    /// [`Arc`] does not copy the artifact bytes.
+    /// handle does not copy the artifact bytes and keeps their memory charge alive.
     #[must_use]
-    pub fn shared_artifact(&self) -> Arc<[u8]> {
-        Arc::clone(&self.inner.artifact)
+    pub fn shared_artifact(&self) -> crate::cache_memory::SharedAllocation<u8> {
+        self.inner.artifact.clone()
     }
     /// Return the parsed execution metadata.
     #[must_use]
@@ -319,8 +394,8 @@ impl PreparedContract {
     pub fn contract_interface(&self) -> &EmbeddedContractInterfaceV1 {
         &self.inner.contract_interface
     }
-    pub(crate) fn shared_contract_interface(&self) -> Arc<EmbeddedContractInterfaceV1> {
-        Arc::clone(&self.inner.contract_interface)
+    pub(crate) fn shared_contract_interface(&self) -> SharedValue<EmbeddedContractInterfaceV1> {
+        self.inner.contract_interface.clone()
     }
     /// Resolve an entrypoint to its absolute PC in IVM code memory.
     #[must_use]
@@ -388,11 +463,16 @@ impl PreparedContract {
     pub(crate) fn literal_table(&self) -> &DecodedLiteralTable {
         &self.inner.literal_table
     }
-    pub(crate) fn decoded(&self) -> &Arc<[DecodedOp]> {
+    pub(crate) fn decoded(&self) -> &crate::ivm_cache::DecodedStream {
         &self.inner.decoded
     }
     pub(crate) fn prepared_program(&self) -> &PreparedProgram {
         &self.inner.prepared_program
+    }
+}
+impl AsRef<PreparedContract> for PreparedContract {
+    fn as_ref(&self) -> &PreparedContract {
+        self
     }
 }
 impl fmt::Debug for PreparedContract {
@@ -406,5 +486,43 @@ impl fmt::Debug for PreparedContract {
             .field("entrypoints", &self.inner.entrypoints.keys())
             .field("instructions", &self.inner.decoded.len())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::shared_metadata;
+
+    #[test]
+    fn independently_shared_metadata_cannot_enter_aggregate_retention() {
+        let source = vec!["shared child".to_owned()];
+        let owner = shared_metadata(source.clone(), false);
+        assert_eq!(&*owner, &source);
+        assert_eq!(owner.allocation_bytes(), None);
+        assert!(!owner.try_retain());
+    }
+    #[test]
+    fn metadata_normalization_measures_native_storage_and_preserves_values() {
+        let mut nested = String::with_capacity(16_384);
+        nested.push_str("retained interface");
+        let mut source = Vec::with_capacity(1024);
+        source.push(nested);
+        let normalized = shared_metadata(source, true);
+        assert_eq!(normalized.as_ref(), &["retained interface".to_owned()]);
+        let native_bytes = normalized.capacity() * std::mem::size_of::<String>()
+            + normalized.iter().map(String::capacity).sum::<usize>();
+        assert!(
+            normalized
+                .allocation_bytes()
+                .expect("measured Norito allocations")
+                >= native_bytes
+        );
+        // Normalizing removes producer spare capacity without deriving the
+        // retained footprint from the wire encoding's byte length.
+        assert!(normalized.capacity() < 1024);
+        assert!(normalized[0].capacity() < 16_384);
+        let borrower = normalized.clone();
+        drop(normalized);
+        assert_eq!(borrower[0], "retained interface");
     }
 }

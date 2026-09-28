@@ -360,7 +360,7 @@ fn applied_accumulator_seal_failure_publishes_no_owned_inventory_or_caches() {
 }
 
 #[test]
-fn authenticated_replay_clears_active_witness_without_fabricating_inventory() {
+fn unowned_capture_rejects_without_consuming_the_active_recorder() {
     let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for failed_inventory in [false, true] {
@@ -372,14 +372,13 @@ fn authenticated_replay_clears_active_witness_without_fabricating_inventory() {
             block.fastpq_source_inventory = Some(Err("retained local construction error".into()));
         }
         let original_inventory = block.fastpq_source_inventory.clone();
-        block.authenticated_replay_commit = true;
-        block.capture_exec_witness().unwrap();
+        assert!(block.capture_exec_witness().is_err());
         assert_no_cached_capture(&mut block);
         assert_eq!(block.fastpq_source_inventory, original_inventory);
         let active = crate::exec_witness::drain_exec_witness();
         assert!(active.reads.is_empty());
         assert!(active.writes.is_empty());
-        assert!(active.fastpq_transcripts.is_empty());
+        assert!(!active.fastpq_transcripts.is_empty());
     }
 }
 
@@ -447,7 +446,7 @@ fn each_extraction_accessor_first_rejects_late_applies_without_recapture() {
 }
 
 #[test]
-fn authenticated_replay_capture_discards_all_previously_cached_outputs() {
+fn repeat_capture_preserves_original_cached_outputs() {
     let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for order in CAPTURE_EXTRACTION_ORDERS {
@@ -456,14 +455,13 @@ fn authenticated_replay_capture_discards_all_previously_cached_outputs() {
         cache_canonical_test_transaction_set(&mut block, &[]);
         cache_transfer_capture(&mut block, Hash::new(b"cached before replay transition"));
         let original_inventory = block.fastpq_source_inventory.clone();
-        block.authenticated_replay_commit = true;
         block.capture_exec_witness().unwrap();
-        // Inspect raw fields before calling guarded getters, so getters cannot mask a
-        // replay capture that forgot to discard an old ordinary witness or its context.
-        assert_eq!(cached_output_presence(&block), [false; 3]);
+        assert_eq!(cached_output_presence(&block), [true; 3]);
+        let mut remaining = [true; 3];
         for output in order {
-            assert!(!take_capture_output(&mut block, output), "order {order:?}");
-            assert_eq!(cached_output_presence(&block), [false; 3]);
+            assert!(take_capture_output(&mut block, output), "order {order:?}");
+            remaining[output] = false;
+            assert_eq!(cached_output_presence(&block), remaining);
         }
         assert_eq!(block.fastpq_source_inventory, original_inventory);
         let active = crate::exec_witness::drain_exec_witness();

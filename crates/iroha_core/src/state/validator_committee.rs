@@ -52,7 +52,7 @@ pub(crate) fn peer_has_committee_obligation<'a>(
                 transition.outcome.is_none()
                     && transition
                         .preparation
-                        .roster
+                        .committee
                         .iter()
                         .any(|seat| &seat.validator == peer)
             })
@@ -72,21 +72,21 @@ struct StakingBoundaryUpdates {
 /// Compute all custody extensions before publishing any part of a committee decision.
 fn prepare_staking_obligations(
     world: &impl WorldReadOnly,
-    snapshot: &iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot,
+    boundary: &iroha_data_model::sumeragi::epoch::ValidatorEpochBoundaryV1,
 ) -> Result<StakingBoundaryUpdates, String> {
     let mut updates = StakingBoundaryUpdates {
         validators: Vec::new(),
         shares: Vec::new(),
     };
-    if snapshot.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos {
+    if boundary.next.mode != iroha_data_model::parameter::system::ConsensusMode::Npos {
         return Ok(updates);
     }
     let parameters = world
         .sumeragi_npos_parameters()
         .ok_or("staking boundary lacks signed NPoS parameters")?;
-    let outcome = &snapshot.kagemusha_mint_finality_authorization;
+    let outcome = &boundary.next.authorization;
     let mut obligations = std::collections::BTreeMap::<PeerId, u64>::new();
-    for seat in &snapshot.roster {
+    for seat in &boundary.next.committee {
         obligations.insert(seat.validator.clone(), outcome.last_height);
     }
     for preparation in world
@@ -94,9 +94,9 @@ fn prepare_staking_obligations(
         .iter()
         .filter(|(epoch, transition)| **epoch != outcome.epoch && transition.outcome.is_none())
         .map(|(_, transition)| &transition.preparation)
-        .chain(snapshot.committee_preparation.iter())
+        .chain(boundary.preparation.iter())
     {
-        for seat in &preparation.roster {
+        for seat in &preparation.committee {
             let through = obligations.entry(seat.validator.clone()).or_default();
             *through = (*through).max(preparation.last_height);
         }
@@ -246,33 +246,6 @@ pub(crate) fn validate_persisted_progress(world: &impl WorldReadOnly) -> Result<
     Ok(())
 }
 
-/// Read one exact authenticated artifact at the snapshot's committed chain cut.
-fn committed_artifact(
-    kura: &crate::kura::Kura,
-    network: iroha_data_model::NetworkId,
-    hashes: &[iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>],
-    height: u64,
-) -> Result<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact, String> {
-    let index = usize::try_from(height)
-        .ok()
-        .and_then(|height| height.checked_sub(1))
-        .ok_or("invalid committee finality height")?;
-    let expected = hashes
-        .get(index)
-        .ok_or("committee finality exceeds the committed cut")?;
-    let artifact = kura
-        .v2_finality_artifact(height)
-        .map_err(|error| error.to_string())?
-        .ok_or("committee snapshot requires retained latest and epoch-boundary finality")?;
-    if artifact.height != height
-        || artifact.block_hash != *expected
-        || artifact.height_context.network_id != network
-    {
-        return Err("committee finality differs from the exact committed chain cut".to_owned());
-    }
-    Ok(artifact)
-}
-
 /// Match the currently effective authorization to the exact persisted signing session.
 fn validate_current_beacon(
     world: &impl WorldReadOnly,
@@ -342,56 +315,215 @@ fn validate_current_beacon(
     Ok(())
 }
 
-/// Authenticate both presence and absence at every retained epoch boundary.
+/// Authenticate both presence and absence from the exact snapshot cut with the same native
+/// verifier used by recovery. World supplies no authority to that reader. Genesis-only checks
+/// authenticate its signed authority, not its execution roots; startup must reexecute genesis.
 pub(crate) fn validate_committed_progress(
     world: &impl WorldReadOnly,
+    chain_id: &iroha_model_base::chain::ChainId,
     network: iroha_data_model::NetworkId,
     hashes: &[iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>],
     kura: &crate::kura::Kura,
 ) -> Result<(), String> {
+    use crate::sumeragi::{certified_chain::CertifiedChain, schedule::ConsensusSchedule};
+    use iroha_data_model::parameter::system::ConsensusMode;
     validate_persisted_progress(world)?;
     for (_, candidate) in world.validator_candidate_keys().iter() {
         if candidate.network_id != network {
-            return Err("candidate snapshot names another network".to_owned());
+            return Err("candidate snapshot names another network".into());
         }
     }
     let height = u64::try_from(hashes.len()).map_err(|_| "committed height overflows")?;
     if height == 0 {
-        if world.validator_candidate_keys().iter().next().is_some()
+        if !world.consensus_schedule().entries().is_empty()
+            || world.validator_candidate_keys().iter().next().is_some()
             || world
                 .validator_committee_transitions()
                 .iter()
                 .next()
                 .is_some()
+            || world.global_beacon_pulses().iter().next().is_some()
+            || world.global_beacon_pulse_slots().iter().next().is_some()
+            || world.global_beacon_latest_pulse().iter().next().is_some()
             || world.global_beacon_key_sessions().iter().next().is_some()
             || world.active_global_beacon_key_session().is_some()
         {
-            return Err("uncommitted State invents committee or beacon progress".to_owned());
+            return Err("uncommitted State invents native authority or preparation".into());
         }
         return Ok(());
     }
-    let mut cursor = committed_artifact(kura, network, hashes, height)?;
-    let (authority, authorization) = match &cursor.height_context.next_epoch_snapshot {
-        Some(snapshot) => (
-            &snapshot.kagemusha_mint_finality_authority,
-            &snapshot.kagemusha_mint_finality_authorization,
-        ),
-        None => (
-            &cursor.height_context.kagemusha_mint_finality_authority,
-            &cursor.height_context.kagemusha_mint_finality_authorization,
-        ),
-    };
-    validate_current_beacon(world, authority, authorization, height)?;
+    let reader = CertifiedChain::from_pinned(chain_id, &network, hashes, kura)
+        .map_err(|error| error.to_string())?;
+    let mut graph: Option<ConsensusSchedule> = None;
     let mut historical_obligations = std::collections::BTreeMap::new();
+    let mut observed = std::collections::BTreeSet::new();
+    let mut observed_pulses = 0_usize;
+    let mut latest_pulse = None;
+    for certified in reader.walk(1, height) {
+        let certified = certified.map_err(|error| error.to_string())?;
+        if let Some(pulse) = &certified.commitment().beacon {
+            let slot = (
+                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&network),
+                certified.height(),
+            );
+            if world.global_beacon_pulses().get(&pulse.pulse_id) != Some(pulse)
+                || world.global_beacon_pulse_slots().get(&slot) != Some(&pulse.pulse_id)
+            {
+                return Err(
+                    "restored beacon pulse differs from its exact certified native result".into(),
+                );
+            }
+            observed_pulses = observed_pulses
+                .checked_add(1)
+                .ok_or("pulse count overflows")?;
+            latest_pulse = Some(
+                crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(pulse)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        let schedule = &certified.commitment().schedule;
+        let current = &schedule.current;
+        graph = Some(
+            match graph {
+                None => ConsensusSchedule::from_genesis_outcome(schedule),
+                Some(previous) => previous.advanced(schedule),
+            }
+            .map_err(|error| error.to_string())?,
+        );
+        if current.mode == ConsensusMode::Npos {
+            add_obligations(
+                &mut historical_obligations,
+                current.committee.iter().map(|seat| seat.validator.clone()),
+                current.authorization.last_height,
+            );
+        }
+        let Some(boundary) = &schedule.boundary else {
+            continue;
+        };
+        let outcome = &boundary.next.authorization;
+        if let Some(preparation) = &boundary.preparation {
+            let transition = world
+                .validator_committee_transitions()
+                .get(&preparation.target_epoch)
+                .ok_or("committee snapshot omits an incumbent-certified preparation")?;
+            if &transition.preparation != preparation
+                || preparation.selection_height != certified.height()
+                || certified.block().header().prev_block_hash()
+                    != Some(preparation.selection_anchor)
+                || !observed.insert(preparation.target_epoch)
+            {
+                return Err(
+                    "committee snapshot changes or duplicates a certified preparation".into(),
+                );
+            }
+            preparation.validate_against_preparing_authorization(outcome)?;
+            add_obligations(
+                &mut historical_obligations,
+                preparation
+                    .committee
+                    .iter()
+                    .map(|seat| seat.validator.clone()),
+                preparation.last_height,
+            );
+            if preparation
+                .first_height
+                .checked_sub(1)
+                .ok_or("preparation cutoff underflows")?
+                > height
+                && transition.outcome.is_some()
+            {
+                return Err("committee snapshot invents a future terminal decision".into());
+            }
+        }
+        match outcome.decision {
+            KagemushaMintFinalityEpochDecisionV1::Activate
+            | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel => {
+                let transition = world
+                    .validator_committee_transitions()
+                    .get(&outcome.epoch)
+                    .ok_or("committee snapshot omits a certified terminal attempt")?;
+                if transition.outcome.as_ref() != Some(outcome) {
+                    return Err(
+                        "committee terminal decision differs from native certified history".into(),
+                    );
+                }
+                if outcome.decision == KagemushaMintFinalityEpochDecisionV1::Activate {
+                    let BeaconEpochBindingV1::Installed(previous) = current.authorization.beacon
+                    else {
+                        return Err("activation lacks the incumbent installed beacon".into());
+                    };
+                    let BeaconEpochBindingV1::Installed(next) = outcome.beacon else {
+                        return Err("activation lacks its target installed beacon".into());
+                    };
+                    let old = world
+                        .global_beacon_key_sessions()
+                        .get(&previous.session_id)
+                        .ok_or("activation snapshot omits incumbent beacon history")?;
+                    let new = world
+                        .global_beacon_key_sessions()
+                        .get(&next.session_id)
+                        .ok_or("activation snapshot omits target beacon history")?;
+                    if old.session.transcript_hash != previous.transcript_hash
+                        || old.retired_at_height != Some(outcome.first_height)
+                        || new.session.transcript_hash != next.transcript_hash
+                        || new.activated_at_height != Some(outcome.first_height)
+                    {
+                        return Err(
+                            "beacon lifecycle differs from certified native activation".into()
+                        );
+                    }
+                }
+            }
+            KagemushaMintFinalityEpochDecisionV1::Retain => {
+                if world
+                    .validator_committee_transitions()
+                    .get(&outcome.epoch)
+                    .is_some()
+                {
+                    return Err("retention omitted cancellation of a frozen attempt".into());
+                }
+            }
+            KagemushaMintFinalityEpochDecisionV1::Genesis => {
+                return Err("epoch boundary resets genesis authorization".into());
+            }
+        }
+    }
+    if world.global_beacon_pulses().iter().count() != observed_pulses
+        || world.global_beacon_pulse_slots().iter().count() != observed_pulses
+        || world.global_beacon_latest_pulse().iter().count() != usize::from(latest_pulse.is_some())
+        || world
+            .global_beacon_latest_pulse()
+            .get(&super::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+            != latest_pulse.as_ref()
+    {
+        return Err("restored beacon history adds or omits certified native pulse work".into());
+    }
+    let graph = graph.ok_or("committed native prefix is empty")?;
+    if world.consensus_schedule().canonical() != &graph {
+        return Err("restored native schedule differs from the exact certified cut".into());
+    }
+    let next = graph
+        .ready(
+            height
+                .checked_add(1)
+                .ok_or("next authority height overflows")?,
+        )
+        .map_err(|error| error.to_string())?;
+    validate_current_beacon(
+        world,
+        &next.epoch.authority,
+        &next.epoch.authorization,
+        height,
+    )?;
     let mut live_obligations = std::collections::BTreeMap::new();
-    if cursor.height_context.mode == iroha_data_model::block::consensus_v2::ConsensusMode::Npos {
+    if next.epoch.mode == ConsensusMode::Npos {
         add_obligations(
             &mut live_obligations,
-            authority
-                .validators
+            next.epoch
+                .committee
                 .iter()
-                .map(|keys| keys.validator.clone()),
-            authorization.last_height,
+                .map(|seat| seat.validator.clone()),
+            next.epoch.authorization.last_height,
         );
         for (_, transition) in world
             .validator_committee_transitions()
@@ -402,152 +534,26 @@ pub(crate) fn validate_committed_progress(
                 &mut live_obligations,
                 transition
                     .preparation
-                    .roster
+                    .committee
                     .iter()
                     .map(|seat| seat.validator.clone()),
                 transition.preparation.last_height,
             );
         }
-        historical_obligations.clone_from(&live_obligations);
     }
-    let mut observed = std::collections::BTreeSet::new();
-    loop {
-        let context = &cursor.height_context;
-        if context.mode == iroha_data_model::block::consensus_v2::ConsensusMode::Npos {
-            add_obligations(
-                &mut historical_obligations,
-                context.roster.iter().map(|seat| seat.validator.clone()),
-                context.kagemusha_mint_finality_authorization.last_height,
-            );
-        }
-        if let Some(snapshot) = &context.next_epoch_snapshot {
-            let outcome = &snapshot.kagemusha_mint_finality_authorization;
-            outcome
-                .validate_successor(&context.kagemusha_mint_finality_authorization)
-                .map_err(|error| error.to_string())?;
-            if let Some(preparation) = &snapshot.committee_preparation {
-                let transition = world
-                    .validator_committee_transitions()
-                    .get(&preparation.target_epoch)
-                    .ok_or("committee snapshot omits an incumbent-certified preparation")?;
-                if &transition.preparation != preparation
-                    || preparation.selection_height != cursor.height
-                    || cursor.subject.parent_block_hash != Some(preparation.selection_anchor)
-                    || !observed.insert(preparation.target_epoch)
-                {
-                    return Err(
-                        "committee snapshot changes or duplicates a certified preparation"
-                            .to_owned(),
-                    );
-                }
-                preparation.validate_against_preparing_authorization(outcome)?;
-                add_obligations(
-                    &mut historical_obligations,
-                    preparation.roster.iter().map(|seat| seat.validator.clone()),
-                    preparation.last_height,
-                );
-                if preparation.first_height - 1 > height && transition.outcome.is_some() {
-                    return Err("committee snapshot invents a future terminal decision".to_owned());
-                }
-            }
-            match outcome.decision {
-                KagemushaMintFinalityEpochDecisionV1::Activate
-                | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel => {
-                    let transition = world
-                        .validator_committee_transitions()
-                        .get(&outcome.epoch)
-                        .ok_or("committee snapshot omits a certified terminal attempt")?;
-                    if transition.outcome.as_ref() != Some(outcome) {
-                        return Err("committee snapshot terminal decision differs from authenticated finality".to_owned());
-                    }
-                    if outcome.decision == KagemushaMintFinalityEpochDecisionV1::Activate {
-                        let BeaconEpochBindingV1::Installed(previous) =
-                            context.kagemusha_mint_finality_authorization.beacon
-                        else {
-                            return Err("activation finality lacks an installed incumbent beacon"
-                                .to_owned());
-                        };
-                        let BeaconEpochBindingV1::Installed(next) = outcome.beacon else {
-                            return Err("activation finality lacks its target beacon".to_owned());
-                        };
-                        let old = world
-                            .global_beacon_key_sessions()
-                            .get(&previous.session_id)
-                            .ok_or("activation snapshot omits incumbent beacon history")?;
-                        let new = world
-                            .global_beacon_key_sessions()
-                            .get(&next.session_id)
-                            .ok_or("activation snapshot omits target beacon history")?;
-                        if old.session.transcript_hash != previous.transcript_hash
-                            || old.retired_at_height != Some(outcome.first_height)
-                            || new.session.transcript_hash != next.transcript_hash
-                            || new.activated_at_height != Some(outcome.first_height)
-                        {
-                            return Err(
-                                "beacon lifecycle does not match the certified activation cut"
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                }
-                KagemushaMintFinalityEpochDecisionV1::Retain => {
-                    if world
-                        .validator_committee_transitions()
-                        .get(&outcome.epoch)
-                        .is_some()
-                    {
-                        return Err(
-                            "retention finality omitted cancellation of a frozen attempt"
-                                .to_owned(),
-                        );
-                    }
-                }
-                KagemushaMintFinalityEpochDecisionV1::Genesis => {
-                    return Err("epoch boundary resets genesis authorization".to_owned());
-                }
-            }
-        }
-        let authorization = context.kagemusha_mint_finality_authorization;
-        if authorization.first_height == 1 {
-            if authorization.decision != KagemushaMintFinalityEpochDecisionV1::Genesis {
-                return Err(
-                    "boundary history does not terminate at genesis authorization".to_owned(),
-                );
-            }
-            break;
-        }
-        let previous_height = authorization
-            .first_height
-            .checked_sub(1)
-            .filter(|previous| *previous < cursor.height)
-            .ok_or("epoch authorization does not advance its boundary height")?;
-        let previous = committed_artifact(kura, network, hashes, previous_height)?;
-        if previous
-            .height_context
-            .next_epoch_snapshot
-            .as_ref()
-            .map(|snapshot| &snapshot.kagemusha_mint_finality_authorization)
-            != Some(&authorization)
-        {
-            return Err("epoch boundary history changes the following authorization".to_owned());
-        }
-        cursor = previous;
+    for (peer, through) in &live_obligations {
+        let retained = historical_obligations.entry(peer.clone()).or_default();
+        *retained = (*retained).max(*through);
     }
     if observed.len() != world.validator_committee_transitions().iter().count() {
-        return Err("committee snapshot contains an uncertified preparation".to_owned());
+        return Err("committee snapshot contains an uncertified preparation".into());
     }
     validate_retained_staking_obligations(world, &historical_obligations, &live_obligations)
 }
 
-/// Resolve the incumbent KAGEMUSHA signing authority from committed World state.
-///
-/// Execution calls this, so it reads only state every node shares, never a node's own
-/// certificates. The authority is the signed genesis generation
-/// (`ConsensusHandshakeMetadata::kagemusha_mint_finality`, immutable after genesis) bound to this
-/// chain's network id. The Sumeragi node certifies no epoch successor, so the genesis
-/// authorization governs every height and its interval is open-ended.
-// TODO(F8): once F8.3 keeps the authorization chain in World (`KagemushaMintFinalityWorldV1`),
-// read the chain head here; generation handoffs (F8-R) and elections (S8) then advance it.
+/// Resolve the incumbent KAGEMUSHA signing authority from the authenticated committed result.
+/// The next-height World schedule must agree with the certified boundary decision; mutable
+/// registrations and local certificate caches cannot supply replacement authority.
 pub(crate) fn current_authority(
     state: &impl StateReadOnly,
 ) -> Result<
@@ -557,96 +563,30 @@ pub(crate) fn current_authority(
     ),
     String,
 > {
-    let authority = signed_genesis_authority(state.world(), *state.network_id())?;
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, u64::MAX)
+    let height = u64::try_from(state.height()).map_err(|_| "committed height overflows")?;
+    let block = crate::sumeragi::certified_chain::committed_block(state, height)
         .map_err(|error| error.to_string())?;
-    Ok((authority, authorization))
-}
-
-/// The signed generation-zero authority of World's genesis handshake metadata, bound to
-/// `network`, with every roster key checked to decode.
-fn signed_genesis_authority(
-    world: &impl WorldReadOnly,
-    network: iroha_data_model::NetworkId,
-) -> Result<KagemushaMintFinalityAuthorityGenerationV1, String> {
-    let metadata = world
-        .parameters()
-        .custom()
-        .get(&iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id())
-        .ok_or("validator preparation requires the signed genesis consensus metadata")?
-        .payload()
-        .try_into_any::<iroha_data_model::parameter::system::ConsensusHandshakeMetadata>()
-        .map_err(|error| format!("signed genesis consensus metadata does not decode: {error}"))?;
-    let parameters = &metadata.kagemusha_mint_finality;
-    parameters.validate().map_err(|error| error.to_string())?;
-    let authority = parameters
-        .authority_generation
-        .bind_network_id(network)
+    let outcome = &block.commitment().schedule;
+    outcome.validate().map_err(|error| error.to_string())?;
+    let context = outcome
+        .boundary
+        .as_ref()
+        .map_or(&outcome.current, |boundary| &boundary.next);
+    let scheduled = state
+        .world()
+        .consensus_schedule()
+        .ready(
+            height
+                .checked_add(1)
+                .ok_or("next authority height overflows")?,
+        )
         .map_err(|error| error.to_string())?;
-    crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(&authority)
-        .map_err(|error| error.to_string())?;
-    Ok(authority)
-}
-
-/// One NPoS scheduling epoch `e`: the heights `[e·L + 1, (e + 1)·L]` for the committed epoch
-/// length `L` (`SumeragiNposParameters::epoch_length_blocks`, immutable after its signed
-/// installation). Every node derives it from the same committed parameters, so validator
-/// tenure scheduling is deterministic. A frozen committee preparation may still fix its own
-/// target interval; see [`SchedulingEpoch::validate_prepared_successor`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SchedulingEpoch {
-    /// Epoch index, starting at zero.
-    pub(crate) epoch: u64,
-    /// First height of the epoch, inclusive.
-    pub(crate) first_height: u64,
-    /// Last height of the epoch, inclusive.
-    pub(crate) last_height: u64,
-}
-
-impl SchedulingEpoch {
-    /// The epoch containing `height` for epoch length `length`.
-    ///
-    /// # Errors
-    /// `height` or `length` is zero, or the epoch's last height overflows.
-    pub(crate) fn containing(height: u64, length: u64) -> Result<Self, String> {
-        if height == 0 || length == 0 {
-            return Err("scheduling epochs need a positive height and epoch length".to_owned());
-        }
-        let epoch = (height - 1) / length;
-        let first_height = epoch * length + 1;
-        let last_height = first_height
-            .checked_add(length - 1)
-            .ok_or("scheduling epoch end overflows")?;
-        Ok(Self {
-            epoch,
-            first_height,
-            last_height,
-        })
+    if context.network_id != *state.network_id() || scheduled.epoch != *context {
+        return Err("native incumbent result differs from the applied State authority".into());
     }
-
-    /// Check that `preparation`, frozen for epoch `self.epoch + 1`, was selected at the end of
-    /// the preceding epoch and starts right after this one: the interval form of
-    /// `ValidatorCommitteePreparationV1::validate_against_preparing_authorization`.
-    ///
-    /// # Errors
-    /// The preparation is malformed or does not follow this epoch on `network`.
-    pub(crate) fn validate_prepared_successor(
-        &self,
-        network: iroha_data_model::NetworkId,
-        preparation: &iroha_data_model::nexus::ValidatorCommitteePreparationV1,
-    ) -> Result<(), String> {
-        preparation.validate()?;
-        if preparation.network_id != network
-            || preparation.selection_epoch.checked_add(1) != Some(self.epoch)
-            || preparation.selection_height.checked_add(1) != Some(self.first_height)
-            || self.last_height.checked_add(1) != Some(preparation.first_height)
-        {
-            return Err(
-                "frozen preparation does not follow the current scheduling epoch".to_owned(),
-            );
-        }
-        Ok(())
-    }
+    // This deterministic reader deliberately does not decode the per-node QC. Its State cut
+    // was admitted by original execution/publication, or by authenticated startup recovery.
+    Ok((context.authority.clone(), context.authorization))
 }
 
 /// Admit a finalized public transcript without giving it independent rotation authority.
@@ -740,7 +680,7 @@ fn validate_beacon_preparation(
         );
     }
     let target_roster = preparation
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
@@ -754,18 +694,38 @@ impl StateBlock<'_> {
     /// Publication of this overlay is still gated by the current committee's exact finality.
     pub(crate) fn finalize_validator_committee_boundary(
         &mut self,
-        context: &iroha_data_model::block::consensus_v2::HeightContext,
+        frozen: &crate::sumeragi::epoch_election::FrozenEpochBoundary,
     ) -> Result<(), String> {
-        context.validate().map_err(|error| error.to_string())?;
-        let Some(snapshot) = &context.next_epoch_snapshot else {
-            return Ok(());
-        };
-        if context.height != self._curr_block.height().get()
+        let context = frozen.current();
+        let boundary = frozen.boundary();
+        boundary.validate_against(context)?;
+        let snapshot = &boundary.next;
+        if boundary.height != self._curr_block.height().get()
             || context.network_id != self.network_id
         {
             return Err("committee boundary belongs to another execution context".to_owned());
         }
-        let outcome = &snapshot.kagemusha_mint_finality_authorization;
+        let anchor_index = boundary
+            .height
+            .checked_sub(2)
+            .and_then(|height| usize::try_from(height).ok())
+            .ok_or("boundary lacks its exact pretransaction State anchor")?;
+        if self.block_hashes().hash_at(anchor_index) != Some(&boundary.selection_anchor)
+            || self.block_hashes().hash_count() != anchor_index + 1
+            || self
+                .world
+                .consensus_schedule()
+                .ready(boundary.height)
+                .map_err(|error| error.to_string())?
+                .epoch
+                != *context
+        {
+            return Err("frozen boundary source differs from the original State cut".into());
+        }
+        // The sealed capability proved all target custody and preparation readiness before B
+        // transactions. Mandatory authorized slashing remains an execution effect; transaction
+        // guards prevent voluntary release/rebinding of those exact original obligations.
+        let outcome = &snapshot.authorization;
         let mut completed = None;
         let mut beacon_rotation = None;
         match outcome.decision {
@@ -774,7 +734,7 @@ impl StateBlock<'_> {
                 let mut transition = self
                     .world
                     .validator_committee_transitions
-                    .get(&snapshot.epoch)
+                    .get(&snapshot.authorization.epoch)
                     .cloned()
                     .ok_or("boundary decision lacks its frozen committee attempt")?;
                 if transition.outcome.is_some() {
@@ -782,9 +742,7 @@ impl StateBlock<'_> {
                 }
                 transition
                     .preparation
-                    .validate_against_preparing_authorization(
-                        &context.kagemusha_mint_finality_authorization,
-                    )?;
+                    .validate_against_preparing_authorization(&context.authorization)?;
                 verify_progress(&self.world, &transition)?;
                 transition.outcome = Some(*outcome);
                 transition.validate()?;
@@ -793,17 +751,15 @@ impl StateBlock<'_> {
                         .credentials
                         .as_ref()
                         .ok_or("activated committee lacks prepared credentials")?;
-                    if credentials.authority != snapshot.kagemusha_mint_finality_authority
-                        || transition.preparation.roster != snapshot.roster
-                        || transition.preparation.validator_set_pops != snapshot.validator_set_pops
+                    if credentials.authority != snapshot.authority
+                        || transition.preparation.committee != snapshot.committee
                     {
                         return Err(
                             "activation substitutes the frozen committee or its exact credentials"
                                 .to_owned(),
                         );
                     }
-                    let BeaconEpochBindingV1::Installed(previous) =
-                        context.kagemusha_mint_finality_authorization.beacon
+                    let BeaconEpochBindingV1::Installed(previous) = context.authorization.beacon
                     else {
                         return Err(
                             "committee activation requires an installed incumbent beacon"
@@ -847,7 +803,7 @@ impl StateBlock<'_> {
                 if self
                     .world
                     .validator_committee_transitions
-                    .get(&snapshot.epoch)
+                    .get(&snapshot.authorization.epoch)
                     .is_some()
                 {
                     return Err("retention must cancel the exact frozen attempt".to_owned());
@@ -857,13 +813,13 @@ impl StateBlock<'_> {
                 return Err("boundary cannot reset scheduling authorization".to_owned());
             }
         }
-        let future = snapshot
-            .committee_preparation
+        let future = boundary
+            .preparation
             .as_ref()
             .map(
                 |preparation| -> Result<ValidatorCommitteeTransitionV1, String> {
                     preparation.validate_against_preparing_authorization(outcome)?;
-                    let anchor_index = context
+                    let anchor_index = boundary
                         .height
                         .checked_sub(2)
                         .and_then(|n| usize::try_from(n).ok())
@@ -891,7 +847,7 @@ impl StateBlock<'_> {
                 },
             )
             .transpose()?;
-        let staking = prepare_staking_obligations(&self.world, snapshot)?;
+        let staking = prepare_staking_obligations(&self.world, boundary)?;
         // All checks precede these writes; the carrier publishes membership, Pasta authorization,
         // the beacon pointer and this same World journal only after exact incumbent finality.
         if let Some((old, next)) = beacon_rotation {
@@ -958,11 +914,7 @@ pub(crate) fn verify_progress(
     transition: &ValidatorCommitteeTransitionV1,
 ) -> Result<(), String> {
     transition.validate()?;
-    iroha_data_model::block::consensus_v2::finality::verify_validator_power_roster_pops(
-        &transition.preparation.roster,
-        &transition.preparation.validator_set_pops,
-    )
-    .map_err(|error| error.to_string())?;
+    // Canonical preparation validation verifies every ordered BLS proof directly.
     let Some(credentials) = &transition.credentials else {
         return Ok(());
     };
@@ -1000,7 +952,7 @@ pub(crate) fn verify_progress(
         );
     }
     let peers = preparation
-        .roster
+        .committee
         .iter()
         .map(|voter| voter.validator.clone())
         .collect::<Vec<_>>();
@@ -1097,7 +1049,7 @@ impl StateTransaction<'_, '_> {
                 }
                 if !transition
                     .preparation
-                    .roster
+                    .committee
                     .iter()
                     .any(|voter| owns_validator(&self.world, owner, &voter.validator))
                 {
@@ -1129,7 +1081,7 @@ impl StateTransaction<'_, '_> {
                     .map_err(|_| "invalid target seat")?;
                 let seat = transition
                     .preparation
-                    .roster
+                    .committee
                     .get(index)
                     .ok_or("invalid target seat")?;
                 if !owns_validator(&self.world, owner, &seat.validator) {

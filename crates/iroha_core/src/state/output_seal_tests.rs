@@ -228,7 +228,9 @@ fn foreign_proposal_and_partial_mock_sources_cannot_enter_the_finalizer() {
                     producer.execute_network_sources(None)?;
                     // Fixture-only skipping resolves budget slots but never owns actual invocations.
                     producer.skip_uninvoked(ExecutionOutputPhase::Pipeline, 2)?;
-                    producer.skip_uninvoked(ExecutionOutputPhase::Time, 1)
+                    producer
+                        .skip_uninvoked(ExecutionOutputPhase::Time, 1)
+                        .map_err(Into::into)
                 })
                 .unwrap();
         } else {

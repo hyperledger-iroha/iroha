@@ -60,7 +60,7 @@ impl ConsensusGenesisParams {
     /// Returns a diagnostic for unsupported protocol revisions, invalid v2
     /// context geometry, or invalid `NPoS` election parameters.
     pub fn validate(&self) -> Result<(), String> {
-        if self.protocol_version != u32::from(super::consensus_v2::PROTOCOL_VERSION) {
+        if self.protocol_version != u32::from(crate::sumeragi::PROTOCOL_VERSION) {
             return Err(format!(
                 "unsupported consensus protocol version {}",
                 self.protocol_version
@@ -89,12 +89,6 @@ pub struct NposGenesisParams {
     pub min_self_bond: Quantity,
     /// Minimum nomination bond required for delegators.
     pub min_nomination_bond: Quantity,
-    /// Maximum nominator concentration percentage.
-    pub max_nominator_concentration_pct: u8,
-    /// Seat allocation variance band percentage.
-    pub seat_band_pct: u8,
-    /// Maximum correlation percentage across validator entities.
-    pub max_entity_correlation_pct: u8,
     /// Finality margin in blocks before activating a newly elected set.
     pub finality_margin_blocks: u64,
     /// Evidence retention horizon in blocks.
@@ -108,7 +102,7 @@ impl NposGenesisParams {
     /// Validate signed `NPoS` election and reconfiguration inputs.
     ///
     /// # Errors
-    /// Returns a stable diagnostic when a seed, bond, percentage, or
+    /// Returns a stable diagnostic when a seed, bond, or
     /// reconfiguration bound is invalid.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.epoch_seed == [0; 32] {
@@ -122,12 +116,6 @@ impl NposGenesisParams {
         }
         if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
             return Err("NPoS minimum bond values must be greater than zero");
-        }
-        if self.max_nominator_concentration_pct > 100
-            || self.seat_band_pct > 100
-            || self.max_entity_correlation_pct > 100
-        {
-            return Err("NPoS election percentages must be in 0..=100");
         }
         if self.finality_margin_blocks == 0
             || self.evidence_horizon_blocks == 0
@@ -3238,7 +3226,7 @@ pub struct SumeragiConsensusCapsStatus {
     pub nexus_policy_digest: [u8; 32],
     /// Canonical digest of the complete shared Sumeragi v2 runtime projection.
     #[norito(default)]
-    pub v2_config_fingerprint: [u8; 32],
+    pub native_config_fingerprint: [u8; 32],
 }
 /// Queue depth snapshot for Sumeragi worker-loop channels.
 #[derive(

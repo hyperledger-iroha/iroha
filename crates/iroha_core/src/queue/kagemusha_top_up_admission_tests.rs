@@ -1,5 +1,5 @@
 // KAGEMUSHA V1 payer-signed top-up admission regressions.
-mod kagemusha_top_up_admission_tests {
+pub(crate) mod kagemusha_top_up_admission_tests {
     use super::*;
     use crate::state::StateBlock;
     use iroha_data_model::{
@@ -29,8 +29,11 @@ mod kagemusha_top_up_admission_tests {
             .expect("canonical device signature")
     }
 
-    fn fixture_top_up_request(payer: AccountId) -> KagemushaTopUpRequestV1 {
-        let network_id = queue_test_network_id();
+    /// Shape-valid negative fixture with opaque proofs; never a valid monetary authorization.
+    pub(crate) fn fixture_top_up_request(
+        payer: AccountId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> KagemushaTopUpRequestV1 {
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("fixture domain"),
             "xor".parse().expect("fixture asset name"),
@@ -233,7 +236,7 @@ mod kagemusha_top_up_admission_tests {
         let transaction = accepted_top_up(
             foreign_authority,
             &foreign_keypair,
-            fixture_top_up_request(payer),
+            fixture_top_up_request(payer, queue_test_network_id()),
             TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
@@ -257,7 +260,7 @@ mod kagemusha_top_up_admission_tests {
         let transaction = accepted_top_up(
             payer.clone(),
             &payer_keypair,
-            fixture_top_up_request(payer),
+            fixture_top_up_request(payer, queue_test_network_id()),
             TransactionAdmissionIntent::Ordinary,
             &time_source,
         );
@@ -282,7 +285,7 @@ mod kagemusha_top_up_admission_tests {
         let transaction = accepted_top_up(
             payer.clone(),
             &payer_keypair,
-            fixture_top_up_request(payer.clone()),
+            fixture_top_up_request(payer.clone(), queue_test_network_id()),
             TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
@@ -306,14 +309,14 @@ mod kagemusha_top_up_admission_tests {
         let foreign = accepted_top_up(
             foreign_authority,
             &foreign_keypair,
-            fixture_top_up_request(payer.clone()),
+            fixture_top_up_request(payer.clone(), queue_test_network_id()),
             TransactionAdmissionIntent::QueuePlanSynced,
             &time_source,
         );
         let ordinary = accepted_top_up(
             payer.clone(),
             &payer_keypair,
-            fixture_top_up_request(payer),
+            fixture_top_up_request(payer, queue_test_network_id()),
             TransactionAdmissionIntent::Ordinary,
             &time_source,
         );
@@ -341,8 +344,11 @@ mod kagemusha_top_up_admission_tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let (payer, payer_keypair) = fixture_account(0x47);
         let top_up = InstructionBox::from(
-            TopUpKagemushaV1::new(fixture_top_up_request(payer.clone()))
-                .expect("valid top-up instruction"),
+            TopUpKagemushaV1::new(fixture_top_up_request(
+                payer.clone(),
+                queue_test_network_id(),
+            ))
+            .expect("valid top-up instruction"),
         );
         let transaction = signed_top_up_carrier(
             payer,
@@ -369,8 +375,11 @@ mod kagemusha_top_up_admission_tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let (payer, payer_keypair) = fixture_account(0x49);
         let top_up = InstructionBox::from(
-            TopUpKagemushaV1::new(fixture_top_up_request(payer.clone()))
-                .expect("valid top-up instruction"),
+            TopUpKagemushaV1::new(fixture_top_up_request(
+                payer.clone(),
+                queue_test_network_id(),
+            ))
+            .expect("valid top-up instruction"),
         );
         let transaction = signed_top_up_carrier(
             payer,
@@ -400,8 +409,11 @@ mod kagemusha_top_up_admission_tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let (payer, payer_keypair) = fixture_account(0x48);
         let top_up = InstructionBox::from(
-            TopUpKagemushaV1::new(fixture_top_up_request(payer.clone()))
-                .expect("valid top-up instruction"),
+            TopUpKagemushaV1::new(fixture_top_up_request(
+                payer.clone(),
+                queue_test_network_id(),
+            ))
+            .expect("valid top-up instruction"),
         );
         let transaction = signed_top_up_carrier(
             payer,

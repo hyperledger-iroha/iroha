@@ -25,6 +25,44 @@ macro_rules! record {
         }
     };
 }
+
+macro_rules! kaigi_record {
+    ($test:ident, $ty:ty, $nominal:literal, $private_case:literal) => {
+        #[test]
+        fn $test() {
+            super::kaigi_records::check::<$ty>($nominal, $private_case);
+        }
+    };
+}
+
+macro_rules! record_inventory {
+    ($($kind:ident!($test:ident, $ty:ty, $nominal:literal $(, $private_case:literal)?);)*) => {
+        $($kind!($test, $ty, $nominal $(, $private_case)?);)*
+
+        pub(super) fn private_case_index(nominal: &str) -> Option<usize> {
+            match nominal {
+                $($nominal => record_inventory!(@replacement $($private_case)?),)*
+                _ => None,
+            }
+        }
+
+        #[test]
+        #[ignore = "explicit maintenance capture of every current populated instruction record"]
+        fn print_native_record_capture_v1() {
+            const RECORDS: &[super::native_capture::Record] = &[
+                $(super::native_capture::Record::new::<$ty>(
+                    $nominal,
+                    record_inventory!(@replacement $($private_case)?),
+                ),)*
+            ];
+            super::native_capture::print_all(RECORDS);
+        }
+    };
+    (@replacement $private_case:literal) => { Some($private_case) };
+    (@replacement) => { None };
+}
+
+record_inventory! {
 record!(
     sorafs_assert_publication_v1,
     crate::isi::sorafs::AssertSorafsPublicationV1,
@@ -37,14 +75,7 @@ record!(
 );
 // These five records retain the original public frames, reject the retired
 // hash-shaped scalar payloads, and pin populated canonical private frames.
-macro_rules! kaigi_record {
-    ($test:ident, $ty:ty, $nominal:literal, $retired_case:literal) => {
-        #[test]
-        fn $test() {
-            super::kaigi_records::check::<$ty>($nominal, $retired_case);
-        }
-    };
-}
+
 record!(
     account_recovery_approve_account_recovery,
     crate::isi::account_recovery::ApproveAccountRecovery,
@@ -433,6 +464,11 @@ record!(
     musubi_register_musubi_archive_v1,
     crate::isi::musubi::RegisterMusubiArchiveV1,
     "iroha_data_model::isi::musubi::RegisterMusubiArchiveV1"
+);
+record!(
+    musubi_advance_musubi_pin_outbox_v1,
+    crate::isi::musubi::AdvanceMusubiPinOutboxV1,
+    "iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1"
 );
 record!(
     musubi_register_musubi_namespace_binding_v1,
@@ -1633,3 +1669,4 @@ record!(
     crate::isi::staking::RegisterPublicLaneCandidate,
     "iroha_data_model::isi::staking::RegisterPublicLaneCandidate"
 );
+}

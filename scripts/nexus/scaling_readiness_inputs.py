@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from resource_process import _directory_identity, _file_identity
 
-ANCHORS_SCHEMA = 'iroha.sumeragi_v2.scaling.genesis_anchors.v1'
+ANCHORS_SCHEMA = 'iroha.native_consensus.scaling.genesis_anchors.v1'
 MAX_ANCHORS_BYTES = 32768
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_TOTAL_INPUT_BYTES = 512 * 1024 * 1024
@@ -154,7 +154,7 @@ class GenerationFacts:
 @dataclass(frozen=True, slots=True)
 class _Anchors:
     genesis_hash: str
-    context_id: str
+    genesis_epoch_context_id: str
     network_id: str
     lane_count: int
     roles: tuple[ReadinessRole, ...]
@@ -186,14 +186,14 @@ class ReadinessInputs:
             _require(raw.startswith(b'{') and raw.endswith(b'}\n') and b'\n' not in raw[:-1], 'readiness_anchor_framing')
             value = json.loads(raw.decode('utf-8'), object_pairs_hook=_object, parse_int=_number,
                                parse_float=_invalid_number, parse_constant=_invalid_number)
-            _fields(value, ('schema', 'version', 'lane_count', 'genesis_hash', 'context_id', 'network_id',
+            _fields(value, ('schema', 'version', 'lane_count', 'genesis_hash', 'genesis_epoch_context_id', 'network_id',
                             'consensus_mode', 'chain_id', 'genesis_public_key', 'chain_discriminant',
                             'peers', 'accounts', 'artifacts'))
             _require(value['schema'] == ANCHORS_SCHEMA and type(value['version']) is int
                      and value['version'] == 1 and type(value['lane_count']) is int
                      and value['lane_count'] == lane_count and value['consensus_mode'] == 'npos'
                      and type(value['chain_id']) is str and 0 < len(value['chain_id']) <= 2048, 'readiness_anchor_scope')
-            genesis, context, network = (_hash(value[name]) for name in ('genesis_hash', 'context_id', 'network_id'))
+            genesis, context, network = (_hash(value[name]) for name in ('genesis_hash', 'genesis_epoch_context_id', 'network_id'))
             _require(network == genesis, 'readiness_anchor_network')
             genesis_key = value['genesis_public_key']
             _require(type(genesis_key) is str and _ED25519.fullmatch(genesis_key),
@@ -287,7 +287,7 @@ class ReadinessInputs:
     def genesis_hash(self): return self._anchors.genesis_hash
 
     @property
-    def context_id(self): return self._anchors.context_id
+    def genesis_epoch_context_id(self): return self._anchors.genesis_epoch_context_id
 
     @property
     def network_id(self): return self._anchors.network_id

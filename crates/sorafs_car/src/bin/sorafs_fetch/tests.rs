@@ -1308,7 +1308,10 @@ fn fetch_cli_persists_scoreboard() {
     fs::write(&advert_path, advert_bytes).expect("write advert");
     let telemetry_path = temp_path.join("telemetry.json");
     let mut telemetry_entry = Map::new();
-    telemetry_entry.insert("provider_id".into(), Value::String(hex::encode(provider_id)));
+    telemetry_entry.insert(
+        "provider_id".into(),
+        Value::String(hex::encode(&provider_id)),
+    );
     telemetry_entry.insert("qos_score".into(), Value::from(92.0));
     telemetry_entry.insert("latency_p95_ms".into(), Value::from(180.0));
     telemetry_entry.insert("failure_rate_ewma".into(), Value::from(0.03));
@@ -1608,7 +1611,10 @@ fn fetch_cli_verifies_car_when_manifest_available() {
             obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
             obj.insert("offset".into(), Value::from(spec.offset));
             obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(hex::encode(spec.digest)));
+            obj.insert(
+                "digest_blake3".into(),
+                Value::from(hex::encode(&spec.digest)),
+            );
             Value::Object(obj)
         })
         .collect();
@@ -1705,7 +1711,10 @@ fn fetch_cli_rejects_corrupted_payload_when_manifest_provided() {
             obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
             obj.insert("offset".into(), Value::from(spec.offset));
             obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(hex::encode(spec.digest)));
+            obj.insert(
+                "digest_blake3".into(),
+                Value::from(hex::encode(&spec.digest)),
+            );
             Value::Object(obj)
         })
         .collect();
@@ -1731,7 +1740,10 @@ fn fetch_cli_rejects_corrupted_payload_when_manifest_provided() {
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
     let mut manifest_obj = Map::new();
     manifest_obj.insert("version".into(), Value::from(1_u64));
-    manifest_obj.insert("manifest_hex".into(), Value::from(hex::encode(&manifest_bytes)));
+    manifest_obj.insert(
+        "manifest_hex".into(),
+        Value::from(hex::encode(&manifest_bytes)),
+    );
     manifest_obj.insert(
         "car_digest_hex".into(),
         Value::from(hex::encode(stats.car_archive_digest.as_bytes())),

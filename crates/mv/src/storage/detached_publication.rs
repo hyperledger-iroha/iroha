@@ -108,7 +108,7 @@ impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> Role<'a, K, V, M> {
 
 #[expect(
     clippy::large_enum_variant,
-    reason = "phases change in place; boxing a variant would allocate on the allocation-free path"
+    reason = "publication phases reuse inline storage to retain original journals and deferred cleanup without allocating"
 )]
 enum Phase<'a, K: Key, V: Value, A, I, M: StorageMode<K, V>> {
     Original(Detached<K, V, A, M>),
@@ -237,6 +237,10 @@ impl<'a, K: Key, V: Value, A, I, M: StorageMode<K, V>>
         prepared
             .writers
             .prepare(&prepared.metadata.predecessor, prepared.metadata.dirty)
+    }
+    /// Inspect readiness without consuming or dropping the original custody.
+    pub(super) fn is_prepared(&self) -> bool {
+        self.complete && !self.released
     }
     pub(super) fn release_writers(&mut self) {
         if self.released {

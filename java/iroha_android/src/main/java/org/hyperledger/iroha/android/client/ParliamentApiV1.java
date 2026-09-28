@@ -127,7 +127,8 @@ public final class ParliamentApiV1 {
           new TransitionLayout(17, "RecordInvitationResponse", true, 20),
           new TransitionLayout(18, "RegisterBallotParticipant", true, 21),
           new TransitionLayout(19, "RecordBallotDropout", true, 22),
-          new TransitionLayout(20, "FailPublicFindingNoResult", true, 23));
+          new TransitionLayout(20, "FailPublicFindingNoResult", true, 23),
+          new TransitionLayout(21, "RegisterInitialSortition", false, 24));
 
   public static final List<AutomaticOutcomeLayout> AUTOMATIC_EXECUTION_OUTCOMES =
       listOf(

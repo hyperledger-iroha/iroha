@@ -14,5 +14,8 @@ in this directory using the repository toolchain, then install it alongside the
 pure `iroha-python` wheel.
 The build setting omits the CPython shared-library link used by Rust test
 executables; packaged extensions resolve Python symbols from their interpreter.
+The workspace preserves the extension's symbols in dev, release and deploy
+profiles because stripping this Mach-O library on the pinned macOS toolchain
+produces a LINKEDIT string pool that dyld refuses to load.
 The Rust crate remains at `../iroha_python/iroha_python_rs`; no transport package
 is imported by this native boundary.

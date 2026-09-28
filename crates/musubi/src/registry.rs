@@ -1272,6 +1272,7 @@ pub trait PublicationRuntimeServicesV1 {
         &mut self,
         operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
         location: &MusubiArchiveLocationV1,
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError>;
@@ -1332,6 +1333,7 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
         &mut self,
         _operation_id: PublicationOperationIdV1,
         _request: &PublicationRequestV1,
+        _registered: &PublicationRegisteredArchiveV1,
         _location: &MusubiArchiveLocationV1,
         _provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
@@ -2093,13 +2095,14 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         &mut self,
         operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
         location: &MusubiArchiveLocationV1,
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
         self.check_operation(operation_id)?;
         self.check_request(request)?;
         self.services
-            .readback_provider(operation_id, request, location, provider)
+            .readback_provider(operation_id, request, registered, location, provider)
     }
     fn prepare_release_submission_intent(
         &mut self,

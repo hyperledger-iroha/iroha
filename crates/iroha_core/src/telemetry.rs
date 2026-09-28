@@ -5755,10 +5755,6 @@ impl Telemetry {
     [set_torii_zk_prover_inflight(inflight: u64) => .torii_zk_prover_inflight.set(inflight);]
     /// Set the number of background prover attachments pending processing.
     [set_torii_zk_prover_pending(pending: u64) => .torii_zk_prover_pending.set(pending);]
-    /// Set the number of IVM prove helper jobs currently proving.
-    [set_torii_zk_ivm_prove_inflight(inflight: u64) => .torii_zk_ivm_prove_inflight.set(inflight);]
-    /// Set the number of IVM prove helper jobs queued (waiting for an inflight slot).
-    [set_torii_zk_ivm_prove_queued(queued: u64) => .torii_zk_ivm_prove_queued.set(queued);]
     }
     /// Record bytes processed and duration for the last background prover scan.
     pub fn record_torii_zk_prover_scan(&self, bytes: u64, millis: u64) {
@@ -6256,6 +6252,7 @@ impl Actor {
             return Err(StatusSnapshotError::Disabled);
         }
         refresh_sumeragi_mode(&self.metrics);
+        refresh_ivm_execution_budget_metrics(&self.metrics, &self.state.ivm_execution_budget());
         let local_removed = {
             let world = self.state.world_view();
             !world.peers().iter().any(|peer| peer == &self.local_peer_id)
@@ -6703,6 +6700,50 @@ fn refresh_ivm_cache_metrics(metrics: &Metrics) {
     metrics
         .ivm_cache_decode_time_ns_total
         .set(stats.decode_time_ns_total);
+    let memory = ivm::cache_memory::memory_stats();
+    let as_metric = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
+    metrics
+        .ivm_cache_memory_resident_bytes
+        .set(as_metric(memory.measured_resident_bytes()));
+    metrics
+        .ivm_cache_memory_active_bytes
+        .set(as_metric(memory.active_bytes));
+    metrics
+        .ivm_cache_memory_retained_bytes
+        .set(as_metric(memory.retained_bytes));
+    metrics
+        .ivm_cache_memory_shared_reclaimable_bytes
+        .set(as_metric(memory.shared_reclaimable_bytes));
+    metrics
+        .ivm_cache_memory_shared_borrowed_bytes
+        .set(as_metric(memory.shared_borrowed_bytes));
+    metrics
+        .ivm_cache_memory_shared_evicted_live_bytes
+        .set(as_metric(memory.shared_evicted_live_bytes));
+    metrics
+        .ivm_cache_memory_unclassified_retained_bytes
+        .set(as_metric(memory.unclassified_retained_bytes()));
+    metrics
+        .ivm_cache_memory_peak_bytes
+        .set(as_metric(memory.peak_reserved_bytes));
+    metrics
+        .ivm_cache_memory_unmeasured_owners
+        .set(as_metric(memory.unmeasured_active_owners));
+}
+fn refresh_ivm_execution_budget_metrics(
+    metrics: &Metrics,
+    budget: &mv::allocation::AllocationBudget,
+) {
+    let as_metric = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
+    metrics
+        .ivm_execution_memory_reserved_bytes
+        .set(as_metric(budget.reserved_bytes()));
+    metrics
+        .ivm_execution_memory_peak_bytes
+        .set(as_metric(budget.peak_reserved_bytes()));
+    metrics
+        .ivm_execution_memory_limit_bytes
+        .set(as_metric(budget.limit_bytes()));
 }
 fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bool {
     !block.is_empty() || block.header().is_genesis()
@@ -10585,6 +10626,38 @@ mod tests {
             stats0.decode_failures,
             "decode failures should not increase on successful decode"
         );
+    }
+    #[test]
+    fn ivm_cache_memory_metrics_preserve_snapshot_accounting() {
+        let metrics = Metrics::default();
+        refresh_ivm_cache_metrics(&metrics);
+        let active = metrics.ivm_cache_memory_active_bytes.get();
+        let retained = metrics.ivm_cache_memory_retained_bytes.get();
+        let resident = metrics.ivm_cache_memory_resident_bytes.get();
+        assert_eq!(resident, active.saturating_add(retained));
+        assert_eq!(
+            retained,
+            metrics.ivm_cache_memory_shared_reclaimable_bytes.get()
+                + metrics.ivm_cache_memory_shared_borrowed_bytes.get()
+                + metrics.ivm_cache_memory_shared_evicted_live_bytes.get()
+                + metrics.ivm_cache_memory_unclassified_retained_bytes.get()
+        );
+        assert!(metrics.ivm_cache_memory_peak_bytes.get() >= resident);
+    }
+    #[test]
+    fn ivm_execution_memory_metrics_follow_original_pool_through_shrink_and_release() {
+        let metrics = Metrics::default();
+        let budget = mv::allocation::AllocationBudget::new(128);
+        let held = budget.try_reserve_bytes(80).expect("initial reservation");
+        budget.set_limit_bytes(64);
+        refresh_ivm_execution_budget_metrics(&metrics, &budget);
+        assert_eq!(metrics.ivm_execution_memory_reserved_bytes.get(), 80);
+        assert_eq!(metrics.ivm_execution_memory_peak_bytes.get(), 80);
+        assert_eq!(metrics.ivm_execution_memory_limit_bytes.get(), 64);
+        drop(held);
+        refresh_ivm_execution_budget_metrics(&metrics, &budget);
+        assert_eq!(metrics.ivm_execution_memory_reserved_bytes.get(), 0);
+        assert_eq!(metrics.ivm_execution_memory_peak_bytes.get(), 80);
     }
     #[tokio::test]
     async fn sumeragi_backpressure_counters_increment() {

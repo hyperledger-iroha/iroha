@@ -19,7 +19,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
-import org.hyperledger.iroha.sdk.consensus.NativeAmxV2
+import org.hyperledger.iroha.sdk.crypto.BlsNormalPublicKeyAdmission
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 /** Authentication class required by an atomic-private-settlement Torii operation. */
@@ -863,7 +863,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 typedBody["network_id"] == localSigningContext.networkId().literal &&
                 typedBody["payload_digest"] == expectedPayloadDigest.jsonLiteral() &&
                 typedBody["responder"] is String &&
-                NativeAmxV2.isCanonicalBlsNormalPeerId(typedBody["responder"] as String),
+                BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(typedBody["responder"] as String),
         ) { "settlement auditor capsule responder attestation is invalid" }
         requireCanonicalBlsSignature(
             attestation["signature"],
@@ -947,7 +947,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 parsed["payload_digest"] == expectedPayloadDigest.jsonLiteral() &&
                 integer(typedBody["lifecycle_code"]) == BigInteger.valueOf(lifecycleCode.toLong()) &&
                 typedBody["responder"] is String &&
-                NativeAmxV2.isCanonicalBlsNormalPeerId(typedBody["responder"] as String),
+                BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(typedBody["responder"] as String),
         ) { "settlement approval acknowledgement responder attestation is invalid" }
         requireCanonicalHashLiteral(
             parsed["bundle_id"],

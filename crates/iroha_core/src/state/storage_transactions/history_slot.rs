@@ -25,6 +25,8 @@ pub(super) struct Cleanup {
     _reader: Option<DeferredRelease>,
     _writer: Option<DeferredRelease>,
     _loan: Option<DeferredRelease>,
+    _retry_readers: Option<concread::release::DeferredReleaseBatch>,
+    _retry_writers: Option<concread::release::DeferredReleaseBatch>,
 }
 
 pub(super) struct Slot<'a> {
@@ -35,6 +37,8 @@ pub(super) struct Slot<'a> {
     reader_release: Option<DeferredRelease>,
     writer_release: Option<DeferredRelease>,
     loan_release: Option<DeferredRelease>,
+    retry_readers: Option<concread::release::DeferredReleaseBatch>,
+    retry_writers: Option<concread::release::DeferredReleaseBatch>,
 }
 impl<'a> Slot<'a> {
     pub(super) fn new(target: &'a TransactionsStorage, mut pending: Pending) -> Self {
@@ -50,6 +54,8 @@ impl<'a> Slot<'a> {
             reader_release: None,
             writer_release: None,
             loan_release: None,
+            retry_readers: Some(target.blocks.reader_release_batch()),
+            retry_writers: Some(target.released.deferred_batch()),
         }
     }
     pub(super) fn next_sequence(&self) -> u64 {
@@ -167,6 +173,33 @@ impl<'a> Slot<'a> {
         pending.work = Some(work);
         pending
     }
+    /// Release only temporary publication locks and reinstall the exact same private
+    /// successor in this slot. Its logical membership writer and pool charges remain.
+    /// Repeated attempts coalesce actual notices; no earlier notice wakes under a
+    /// sibling execution writer and no payload is rebuilt or admitted again.
+    pub(super) fn release_for_retry(&mut self) {
+        let mut pending = self.recover();
+        self.phase = Some(Phase::Original(
+            pending.work.take().expect("original retry work"),
+        ));
+        self.pending = Some(pending);
+        if let Some(notice) = self.reader_release.take() {
+            assert!(
+                notice
+                    .try_merge_into(self.retry_readers.as_mut().expect("original reader batch"))
+                    .is_ok(),
+                "original membership reader source"
+            );
+        }
+        if let Some(notice) = self.writer_release.take() {
+            assert!(
+                notice
+                    .try_merge_into(self.retry_writers.as_mut().expect("original writer batch"))
+                    .is_ok(),
+                "original membership writer source"
+            );
+        }
+    }
     /// A detached semantic journal owns its cursor independently; it releases
     /// only the preparation-slot loan, retaining the actual notice in cleanup.
     pub(super) fn recover_detached(&mut self) -> Pending {
@@ -195,6 +228,8 @@ impl<'a> Slot<'a> {
             _reader: self.reader_release.take(),
             _writer: self.writer_release.take(),
             _loan: self.loan_release.take(),
+            _retry_readers: self.retry_readers.take(),
+            _retry_writers: self.retry_writers.take(),
         }
     }
 }

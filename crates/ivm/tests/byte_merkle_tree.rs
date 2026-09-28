@@ -1,3 +1,5 @@
+//! Canonical byte-Merkle roots, public leaf updates and acceleration parity.
+
 use ivm::{
     AccelerationConfig, ByteMerkleTree, acceleration_runtime_status, set_acceleration_config,
 };
@@ -59,17 +61,19 @@ fn parallel_updates_thread_safe() {
     assert_eq!(tree.root(), seq.root());
 }
 #[test]
-fn batch_parallel_update_matches_canonical() {
+fn complete_public_leaf_updates_match_canonical() {
     // Build baseline data and compute canonical root via from_bytes
     let mut data = vec![0u8; 32 * 8];
     for (i, b) in data.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(31).wrapping_add(7);
     }
     let canonical = ByteMerkleTree::from_bytes(&data, 32).unwrap().root();
-    // Create a tree of matching size and update a batch of leaves in parallel
+    // Public leaf updates cover the complete image; the private memory bitmap
+    // batch path has independent sparse/dense, duplicate and cache controls.
     let tree = ByteMerkleTree::new(8, 32).unwrap();
-    let indices: Vec<usize> = (0..8).collect();
-    tree.update_leaves_from_bytes_parallel(&data, &indices);
+    for (index, leaf) in data.chunks_exact(32).enumerate() {
+        tree.update_leaf(index, leaf).unwrap();
+    }
     assert_eq!(canonical, tree.root());
 }
 #[test]

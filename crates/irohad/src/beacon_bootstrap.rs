@@ -25,8 +25,10 @@ use iroha_core::state::{
     THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
     threshold_key_lifecycle_certificate_preimage_v1, verify_threshold_key_lifecycle_certificate_v1,
 };
+use iroha_core::sumeragi::native_journal::{NativeJournalCursor, authenticate_signed_genesis};
 use iroha_core::validator_committee_evidence::{
     ValidatorCommitteeSelectionEvidenceV1, VerifiedValidatorCommitteeSelectionV1,
+    verify_validator_committee_selection_evidence_v1,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
@@ -43,9 +45,12 @@ use iroha_data_model::{
         },
     },
     nexus::ValidatorCommitteePreparationV1,
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
+    sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT,
+        NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityJournal, NativeFinalityLimits,
+    },
 };
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::{chain::ChainId, peer::PeerId};
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use std::{
     collections::BTreeSet,
@@ -63,14 +68,13 @@ mod rotation_seat;
 use rotation_seat::provision_rotation_seat_command;
 
 const MAX_PUBLIC_BYTES: usize = 32 * 1024 * 1024;
-const MAX_ROTATION_PHASE_PROOF_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ROTATION_PHASE_PROOF_BYTES: usize = NATIVE_FINALITY_MAX_JOURNAL_BYTES;
 const MAX_TIMEOUT_MS: u64 = 3_600_000;
 const ROTATION_PENDING_SHARE_NAME: &str = "pending-share.bin";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Error {
     InvalidInput,
-    UnsupportedRotationEvidence,
     InvalidCustody,
     Crypto,
     Height,
@@ -81,7 +85,6 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::InvalidInput => "beacon bootstrap public input is invalid",
-            Self::UnsupportedRotationEvidence => "rotation requires current authenticated committee state evidence, which is unavailable",
             Self::InvalidCustody => "beacon bootstrap custody path is invalid",
             Self::Crypto => "beacon bootstrap cryptographic validation failed",
             Self::Height => "beacon bootstrap committed-height observation is invalid or closed",
@@ -144,6 +147,10 @@ enum Command {
     /// Sign one signed-genesis-roster FinalizeGlobalBeaconKey draft.
     SignGenesisInstall {
         #[arg(long)]
+        chain_id: ChainId,
+        #[command(flatten)]
+        finality_limits: FinalityLimitsArgs,
+        #[arg(long)]
         network_id: NetworkId,
         #[arg(long)]
         chain_discriminant: u16,
@@ -164,6 +171,10 @@ enum Command {
     },
     /// Verify the exact genesis quorum and emit only the native install instruction.
     AssembleGenesisInstall {
+        #[arg(long)]
+        chain_id: ChainId,
+        #[command(flatten)]
+        finality_limits: FinalityLimitsArgs,
         #[arg(long)]
         network_id: NetworkId,
         #[arg(long)]
@@ -251,8 +262,37 @@ enum Command {
     },
 }
 
+/// Explicit transport and cumulative decoded-allocation admission for one journal.
+#[derive(Clone, Copy, clap::Args)]
+pub(crate) struct FinalityLimitsArgs {
+    #[arg(long, default_value_t = NATIVE_FINALITY_MAX_BLOCK_BYTES)]
+    finality_block_bytes: usize,
+    #[arg(long, default_value_t = MAX_ROTATION_PHASE_PROOF_BYTES)]
+    finality_journal_bytes: usize,
+    #[arg(long, default_value_t = NATIVE_FINALITY_MAX_BLOCK_COUNT)]
+    finality_block_count: usize,
+    #[arg(long, default_value_t = 128 * 1024 * 1024)]
+    finality_allocated_bytes: usize,
+}
+impl FinalityLimitsArgs {
+    pub(crate) fn checked(self) -> Result<NativeFinalityLimits> {
+        let limits = NativeFinalityLimits {
+            block_bytes: self.finality_block_bytes,
+            journal_bytes: self.finality_journal_bytes,
+            block_count: self.finality_block_count,
+            allocated_bytes: self.finality_allocated_bytes,
+        };
+        limits.validate().map_err(|_| Error::InvalidInput)?;
+        Ok(limits)
+    }
+}
+
 #[derive(clap::Args)]
 struct GenesisProofArgs {
+    #[arg(long)]
+    chain_id: ChainId,
+    #[command(flatten)]
+    finality_limits: FinalityLimitsArgs,
     #[arg(long)]
     network_id: NetworkId,
     #[arg(long)]
@@ -265,8 +305,6 @@ struct GenesisProofArgs {
     genesis_signed: PathBuf,
     #[arg(long)]
     genesis_public_key: PathBuf,
-    #[arg(long)]
-    genesis_finality: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -276,9 +314,9 @@ struct RotationProofArgs {
     #[arg(long)]
     network_id: NetworkId,
     #[arg(long)]
-    trusted_context_id: Hash,
-    #[arg(long)]
-    anchor_height: u64,
+    chain_id: ChainId,
+    #[command(flatten)]
+    finality_limits: FinalityLimitsArgs,
     #[arg(long)]
     target_epoch: u64,
     #[arg(long)]
@@ -301,7 +339,7 @@ struct RotationPublicBundle {
     preparation: ValidatorCommitteePreparationV1,
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
     finalized_observed_height: u64,
-    phase_proofs: Vec<SumeragiFinalityProof>,
+    phase_proofs: Vec<NativeFinalityJournal>,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     finalization_draft: ThresholdKeyLifecycleCertificateV1,
     providers: Vec<Provider>,
@@ -329,13 +367,14 @@ pub(crate) fn dispatch_if_requested() -> bool {
             attempt_root,
             timeout_ms,
         } => genesis_seat::provision_genesis_seat_command(
+            &genesis.chain_id,
+            genesis.finality_limits,
             genesis.network_id,
             genesis.chain_discriminant,
             &genesis.request,
             &genesis.genesis_manifest,
             &genesis.genesis_signed,
             &genesis.genesis_public_key,
-            &genesis.genesis_finality,
             signer_index,
             key_fd,
             config_fd,
@@ -352,13 +391,14 @@ pub(crate) fn dispatch_if_requested() -> bool {
             certificate_height,
             output,
         } => genesis_seat::assemble_genesis_dkg_command(
+            &genesis.chain_id,
+            genesis.finality_limits,
             genesis.network_id,
             genesis.chain_discriminant,
             &genesis.request,
             &genesis.genesis_manifest,
             &genesis.genesis_signed,
             &genesis.genesis_public_key,
-            &genesis.genesis_finality,
             &phase_proof,
             &public_session,
             &provider,
@@ -366,6 +406,8 @@ pub(crate) fn dispatch_if_requested() -> bool {
             &output,
         ),
         Command::SignGenesisInstall {
+            chain_id,
+            finality_limits,
             network_id,
             chain_discriminant,
             bundle,
@@ -374,6 +416,8 @@ pub(crate) fn dispatch_if_requested() -> bool {
             config_fd,
             output,
         } => genesis_seat::sign_genesis_install_command(
+            &chain_id,
+            finality_limits,
             network_id,
             chain_discriminant,
             &bundle,
@@ -383,12 +427,16 @@ pub(crate) fn dispatch_if_requested() -> bool {
             &output,
         ),
         Command::AssembleGenesisInstall {
+            chain_id,
+            finality_limits,
             network_id,
             chain_discriminant,
             bundle,
             signature,
             output,
         } => genesis_seat::assemble_genesis_install_command(
+            &chain_id,
+            finality_limits,
             network_id,
             chain_discriminant,
             &bundle,
@@ -765,46 +813,33 @@ fn read_exact_until(fd: BorrowedFd<'_>, deadline: Instant, bytes: &mut [u8]) -> 
 fn read_rotation_phase_height(
     fd: BorrowedFd<'_>,
     deadline: Instant,
-    verifier: &mut SumeragiFinalityVerifier,
+    verifier: &mut NativeJournalCursor,
     last_height: &mut u64,
     cutoff_height: u64,
 ) -> Result<u64> {
-    // Each FIFO frame is a big-endian u32 byte length followed by one canonical
-    // SumeragiFinalityProof. The proof chain, never the controller's claimed height,
-    // advances the DKG phase clock.
+    // Each FIFO frame carries one bounded complete canonical native journal.
+    // Signed genesis alone never advances the finality clock.
     let mut length = [0_u8; 4];
     read_exact_until(fd, deadline, &mut length)?;
     let length = usize::try_from(u32::from_be_bytes(length)).map_err(|_| Error::Height)?;
-    if length == 0 || length > MAX_ROTATION_PHASE_PROOF_BYTES {
+    if length == 0 || length > verifier.limits().journal_bytes {
         return Err(Error::Height);
     }
-    let mut encoded = vec![0_u8; length];
+    let mut encoded = Vec::new();
+    encoded.try_reserve_exact(length).map_err(|_| Error::Io)?;
+    encoded.resize(length, 0);
     read_exact_until(fd, deadline, &mut encoded)?;
-    let proof: SumeragiFinalityProof = norito::decode_canonical_with_limits(
-        &encoded,
-        norito::canonical_decode_limits(encoded.len()),
-    )
-    .map_err(|_| Error::Crypto)?;
-    let height = proof.height();
-    check_rotation_phase_height(
-        *last_height,
-        height,
-        proof.block_header.height().get(),
-        cutoff_height,
-    )?;
-    verifier.verify(&proof).map_err(|_| Error::Crypto)?;
-    *last_height = height;
-    Ok(height)
+    let journal =
+        NativeFinalityJournal::decode(&encoded, verifier.limits()).map_err(|_| Error::Crypto)?;
+    advance_phase_journal(verifier, &journal, last_height, cutoff_height)
 }
 
 fn check_rotation_phase_height(
     last_height: u64,
     proof_height: u64,
-    header_height: u64,
     cutoff_height: u64,
 ) -> Result<()> {
     if proof_height != last_height.checked_add(1).ok_or(Error::Height)?
-        || header_height != proof_height
         || proof_height >= cutoff_height
     {
         return Err(Error::Height);
@@ -812,13 +847,39 @@ fn check_rotation_phase_height(
     Ok(())
 }
 
+/// Advance only after both the phase rule and every actual source frame authenticate.
+fn advance_phase_journal(
+    verifier: &mut NativeJournalCursor,
+    journal: &NativeFinalityJournal,
+    last_height: &mut u64,
+    cutoff_height: u64,
+) -> Result<u64> {
+    let height = u64::try_from(journal.blocks.len()).map_err(|_| Error::Height)?;
+    check_rotation_phase_height(*last_height, height, cutoff_height)?;
+    if verifier.tip().map(|tip| tip.height()).unwrap_or(1) != *last_height {
+        return Err(Error::Height);
+    }
+    let verified = verifier.advance(journal).map_err(|_| Error::Crypto)?;
+    // The sole verifier checks actual height, source order and the prior receipt.
+    debug_assert_eq!(verified.height(), height);
+    *last_height = verified.height();
+    Ok(*last_height)
+}
+
 fn rotation_phase_verifier(
-    _proof: &RotationProofArgs,
-    _evidence: &ValidatorCommitteeSelectionEvidenceV1,
-) -> Result<SumeragiFinalityVerifier> {
-    // Current certificates bind a state root, not the retired epoch-context object.
-    // No status observation may substitute for the missing committee-state witness.
-    Err(Error::UnsupportedRotationEvidence)
+    proof: &RotationProofArgs,
+    evidence: &ValidatorCommitteeSelectionEvidenceV1,
+) -> Result<NativeJournalCursor> {
+    let mut verifier = NativeJournalCursor::new(
+        proof.chain_id.clone(),
+        proof.network_id,
+        proof.finality_limits.checked()?,
+    )
+    .map_err(|_| Error::Crypto)?;
+    verifier
+        .advance(&evidence.finality_journal)
+        .map_err(|_| Error::Crypto)?;
+    Ok(verifier)
 }
 
 fn validate_rotation_phase_chain(
@@ -827,7 +888,7 @@ fn validate_rotation_phase_chain(
     start_height: u64,
     final_height: u64,
     cutoff_height: u64,
-    chain: &[SumeragiFinalityProof],
+    chain: &[NativeFinalityJournal],
 ) -> Result<()> {
     let expected_count = usize::try_from(
         final_height
@@ -841,15 +902,7 @@ fn validate_rotation_phase_chain(
     let mut verifier = rotation_phase_verifier(proof, evidence)?;
     let mut last_height = start_height;
     for phase in chain {
-        let height = phase.height();
-        check_rotation_phase_height(
-            last_height,
-            height,
-            phase.block_header.height().get(),
-            cutoff_height,
-        )?;
-        verifier.verify(phase).map_err(|_| Error::Crypto)?;
-        last_height = height;
+        advance_phase_journal(&mut verifier, phase, &mut last_height, cutoff_height)?;
     }
     if last_height != final_height {
         return Err(Error::Height);
@@ -892,13 +945,36 @@ fn draft_rotation_certificate(
 }
 
 fn read_verified_rotation_selection(
-    _proof: &RotationProofArgs,
+    proof: &RotationProofArgs,
 ) -> Result<(
     ValidatorCommitteeSelectionEvidenceV1,
     VerifiedValidatorCommitteeSelectionV1,
 )> {
-    // Reject before opening an evidence file, signer descriptor, or private attempt root.
-    Err(Error::UnsupportedRotationEvidence)
+    let limits = proof.finality_limits.checked()?;
+    let bytes = read_public_bytes_bounded(
+        &proof.selection_evidence,
+        limits
+            .journal_bytes
+            .min(COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1),
+    )?;
+    let evidence: ValidatorCommitteeSelectionEvidenceV1 = norito::decode_canonical_with_limits(
+        &bytes,
+        limits.decode_limits().map_err(|_| Error::InvalidInput)?,
+    )
+    .map_err(|_| Error::InvalidInput)?;
+    let verifier = NativeJournalCursor::new(proof.chain_id.clone(), proof.network_id, limits)
+        .map_err(|_| Error::Crypto)?;
+    let selected = verify_validator_committee_selection_evidence_v1(
+        &evidence,
+        &proof.chain_id,
+        proof.network_id,
+        proof.target_epoch,
+        proof.transition_id.into(),
+        limits,
+        verifier.attestations(),
+    )
+    .map_err(|_| Error::Crypto)?;
+    Ok((evidence, selected))
 }
 
 fn validate_rotation_bundle(
@@ -909,7 +985,7 @@ fn validate_rotation_bundle(
 ) -> Result<Vec<PeerId>> {
     let preparation = selected.preparation();
     let target_roster = preparation
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();

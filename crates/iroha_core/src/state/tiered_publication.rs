@@ -44,10 +44,7 @@ impl PreparedTieredSnapshot {
         self.payload.as_ref()
     }
 
-    pub(super) fn publish(self, state_ref: &State, replay_prevalidation: bool) {
-        if replay_prevalidation {
-            return;
-        }
+    pub(super) fn publish(self, state_ref: &State) {
         let Some(payload) = self.payload else {
             return;
         };
@@ -185,7 +182,7 @@ mod tests {
         block.smart_contract_state.insert(b.clone(), vec![92_u8]);
         block.smart_contract_state.insert(later, vec![93_u8]);
         block.commit();
-        cold.publish(&state, false);
+        cold.publish(&state);
         {
             let backend = state.tiered_backend.lock();
             assert!(backend.snapshot_baseline_ready());
@@ -208,7 +205,7 @@ mod tests {
         let mut block = state.world.block();
         block.smart_contract_state.insert(b, vec![94_u8]);
         block.commit();
-        incremental.publish(&state, false);
+        incremental.publish(&state);
         let backend = state.tiered_backend.lock();
         let manifest = backend.last_manifest().unwrap();
         assert_eq!(manifest.total_entries, captured_entry_count);
@@ -217,6 +214,107 @@ mod tests {
         assert!(encoded.contains(&manifest_value_hash(&[3])));
         assert!(!encoded.contains(&manifest_value_hash(&[94])));
         assert!(!encoded.contains(&manifest_value_hash(&[93])));
+    }
+
+    #[test]
+    fn frozen_cold_and_incremental_capture_retains_updates_and_deletions() {
+        for initialized in [false, true] {
+            let unchanged: StatePath = "frozen-unchanged".parse().unwrap();
+            let updated: StatePath = "frozen-updated".parse().unwrap();
+            let deleted: StatePath = "frozen-deleted".parse().unwrap();
+            let inserted: StatePath = "frozen-inserted".parse().unwrap();
+            let mut world = World::new();
+            for (key, value) in [(&unchanged, 1_u8), (&updated, 2), (&deleted, 3)] {
+                world.smart_contract_state.insert(key.clone(), vec![value]);
+            }
+            let mut state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            // Include canonical rows seeded by State construction in the full
+            // baseline, then apply exactly this overlay's insertion/deletion.
+            let mut complete_keys: BTreeSet<_> = state
+                .world
+                .smart_contract_state
+                .view()
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect();
+            assert!(complete_keys.contains(&unchanged));
+            assert!(complete_keys.contains(&updated));
+            assert!(complete_keys.remove(&deleted));
+            assert!(complete_keys.insert(inserted.clone()));
+            let temp = tempfile::tempdir().unwrap();
+            *state.tiered_backend.lock() =
+                TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+            state.tiered_snapshot_worker = TieredSnapshotWorker::inert(
+                Arc::clone(&state.tiered_backend),
+                #[cfg(feature = "telemetry")]
+                None,
+            );
+            if initialized {
+                state
+                    .tiered_backend
+                    .lock()
+                    .record_world_snapshot(&state.world)
+                    .unwrap();
+            }
+
+            let mut block = state.world.block();
+            block.smart_contract_state.insert(updated.clone(), vec![4]);
+            block.smart_contract_state.insert(inserted.clone(), vec![5]);
+            block.smart_contract_state.remove(deleted.clone());
+            block.begin_freeze();
+            block.finish_freeze();
+            let prepared = PreparedTieredSnapshot::prepare(&block, &state.tiered_snapshot_worker);
+            let diff = TieredSnapshotDiff::from(prepared.payload_for_test().unwrap());
+            let captured_keys: BTreeSet<_> = diff
+                .entries()
+                .iter()
+                .filter_map(|key| match key {
+                    TieredKeyHandle::SmartContractState(key) => Some(key.clone()),
+                    _ => None,
+                })
+                .collect();
+            let expected_keys = if initialized {
+                BTreeSet::from([updated.clone(), inserted.clone(), deleted.clone()])
+            } else {
+                complete_keys
+            };
+            assert_eq!(captured_keys, expected_keys);
+            drop(block);
+            // Abandon the frozen overlay and change live values. Persistence
+            // still owns its captured updates and deletion, not live state.
+            let mut block = state.world.block();
+            block.smart_contract_state.insert(updated, vec![99]);
+            block.commit();
+            assert!(
+                state
+                    .world
+                    .smart_contract_state
+                    .view()
+                    .get(&deleted)
+                    .is_some()
+            );
+            assert!(
+                state
+                    .world
+                    .smart_contract_state
+                    .view()
+                    .get(&inserted)
+                    .is_none()
+            );
+            prepared.publish(&state);
+            let backend = state.tiered_backend.lock();
+            let encoded = norito::json::to_json(backend.last_manifest().unwrap()).unwrap();
+            for retained in [1, 4, 5] {
+                assert!(encoded.contains(&manifest_value_hash(&[retained])));
+            }
+            for discarded in [2, 3, 99] {
+                assert!(!encoded.contains(&manifest_value_hash(&[discarded])));
+            }
+        }
     }
 
     #[test]
@@ -249,8 +347,8 @@ mod tests {
         assert!(!state.tiered_backend.lock().snapshot_baseline_ready());
         drop(world);
         assert!(state.world.smart_contract_state.view().get(&key).is_none());
-        // Disposable replay neither schedules nor writes a persistence artifact.
-        prepared.publish(&state, true);
+        // Abandonment drops the original captured payload without publishing it.
+        drop(prepared);
         assert!(!state.tiered_backend.lock().snapshot_baseline_ready());
         assert!(state.world.smart_contract_state.view().get(&key).is_none());
     }

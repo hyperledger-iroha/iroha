@@ -486,7 +486,7 @@ fn facts_reject_wrong_raw_pin_for_every_original_before_assembly_or_stage() {
                 2..=5 => &mut bindings.peer_configs[index - 2],
                 6 => &mut bindings.context,
                 7 => &mut bindings.journal,
-                8 => &mut bindings.finality,
+                8 => &mut bindings.carrier,
                 9 => &mut bindings.queries,
                 _ => unreachable!(),
             };

@@ -8,9 +8,12 @@
 //! journal, including signed bytes retained before submission. The parent owns
 //! executable/runtime admission, terminal status and release qualification.
 
+pub(crate) mod collect_command;
+pub(crate) mod collector;
 pub(crate) mod facts_command;
 pub(crate) mod filesystem;
 pub(crate) mod launcher;
+mod sdk_fixture;
 pub(crate) mod stopped_tip_command;
 
 use super::*;
@@ -20,17 +23,29 @@ use iroha_core::kura::{
 };
 use std::path::Path;
 
-/// Exact externally owned finality and query bytes for one global height.
+/// Original complete native carriers with their complete context projections.
+/// This untrusted transport has no certificate or proof sidecar; each carrier's
+/// embedded native certificate is authenticated by the consuming execution owner.
+#[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_kagami::scaling_evidence::NativeHeightEvidenceV1")]
+pub(crate) struct NativeHeightEvidenceV1 {
+    /// Exact canonical SignedBlockWire, including its native certificate.
+    pub(crate) carrier: Vec<u8>,
+    /// Complete values bound by the proof in this carrier's R.
+    pub(crate) lane_evidence: LaneMergeEvidenceV1,
+}
+
+/// Exact externally retained native carrier, context values and query bytes for one height.
 ///
 /// These bytes and their separate bindings must be retained independently of the
 /// exported artifact. The adapter neither reads paths nor infers trusted hashes.
 pub struct SuppliedHeightEvidence {
     /// Next height in the independently selected contiguous interval.
     pub height: u64,
-    /// Canonical framed BridgeFinalityProof bytes.
-    pub finality: Vec<u8>,
-    /// Complete post-context set and its exact authenticated ordinary-write witness.
-    pub contexts: Vec<u8>,
+    /// Complete canonical SignedBlockWire with its sole embedded native certificate.
+    pub carrier: Vec<u8>,
+    /// Canonical LaneMergeEvidenceV1: exact R-bound lane state and original ordered lane frames.
+    pub lane_evidence: Vec<u8>,
     /// Canonical CommittedTransaction bytes in complete Native input order.
     pub queries: Vec<Vec<u8>>,
 }
@@ -39,10 +54,10 @@ pub struct SuppliedHeightEvidence {
 pub struct HeightInputBinding {
     /// Exact height, in strictly increasing interval order.
     pub height: u64,
-    /// Iroha Hash of the retained canonical finality bytes.
-    pub finality_hash: Hash,
+    /// Iroha Hash of the retained complete SignedBlockWire bytes.
+    pub carrier_hash: Hash,
     /// Iroha Hash of the complete retained context evidence.
-    pub contexts_hash: Hash,
+    pub lane_evidence_hash: Hash,
     /// Iroha Hash of each retained canonical query, in exact leaf order.
     pub query_hashes: Vec<Hash>,
 }
@@ -60,9 +75,8 @@ pub struct ExportRowV1 {
 #[derive(norito::Encode, norito::Decode)]
 struct HeightProofV1 {
     height: u64,
-    finality: Vec<u8>,
     carrier: Vec<u8>,
-    contexts: Vec<u8>,
+    lane_evidence: Vec<u8>,
     queries: Vec<Vec<u8>>,
 }
 
@@ -156,13 +170,22 @@ fn projection_row(row: &ExportRowV1) -> Result<String> {
         "entrypoint_hash": (r.entrypoint_hash.to_string()),
         "carrier_height": (r.carrier_height),
         "carrier_hash": (r.carrier_hash.to_string()),
-        "admission_carrier_hash": (r.admission_carrier_hash.to_string()),
-        "input_descriptor_hash": (r.input_descriptor_hash.to_string()),
-        "instance_id": (r.instance_id.to_string()),
+        "lane_source": (match &r.lane_source {
+            None => norito::json::Value::Null,
+            Some(source) => norito::json!({
+                "incarnation": (hex::encode(source.incarnation)),
+                "instance": (hex::encode(source.instance)),
+                "height": (source.height),
+                "block_hash": (hex::encode(source.block_hash)),
+                "result": (hex::encode(source.result)),
+                "batch_index": (source.batch_index),
+                "anchor_height": (source.anchor_height),
+                "anchor_hash": (source.anchor_hash.to_string()),
+            }),
+        }),
         "leaf_index": (r.leaf_index),
         "lane_id": (r.lane_id.as_u32()),
         "dataspace_id": (r.dataspace_id.as_u64()),
-        "incarnation": (r.incarnation.to_string()),
     });
     Ok(norito::json::to_json_bounded(
         &value,
@@ -225,8 +248,8 @@ fn export_with_finish_hook(
     for (height, binding) in supplied.iter().zip(bindings) {
         input_bytes = check_supplied(
             height.height,
-            &height.finality,
-            &height.contexts,
+            &height.carrier,
+            &height.lane_evidence,
             &height.queries,
             binding,
             input_bytes,
@@ -255,6 +278,10 @@ fn export_with_finish_hook(
     for input in supplied {
         let wire = reader.read_carrier(input.height)?;
         input_bytes = charged(input_bytes, wire.len(), limits.input_bytes)?;
+        ensure!(
+            wire == input.carrier,
+            "disk carrier differs from independently retained native wire"
+        );
         let block = norito::with_decode_limits_scope(decode_limits(wire.len()), || {
             decode_versioned_signed_block(&wire)
         })?;
@@ -266,9 +293,8 @@ fn export_with_finish_hook(
         );
         heights.push(HeightProofV1 {
             height: input.height,
-            finality: input.finality,
             carrier: wire,
-            contexts: input.contexts,
+            lane_evidence: input.lane_evidence,
             queries: input.queries,
         });
     }
@@ -361,16 +387,14 @@ pub fn replay_export(
     for (height, binding) in envelope.heights.iter().zip(bindings) {
         input_bytes = check_supplied(
             height.height,
-            &height.finality,
-            &height.contexts,
+            &height.carrier,
+            &height.lane_evidence,
             &height.queries,
             binding,
             input_bytes,
             limits,
             &mut query_count,
         )?;
-        bounded(&height.carrier, MAX_CARRIER_BYTES)?;
-        input_bytes = charged(input_bytes, height.carrier.len(), limits.input_bytes)?;
     }
     let authenticated = authenticate(verifier, &envelope.heights)?;
     let AuthenticatedRun {
@@ -438,8 +462,8 @@ fn admit(
 #[allow(clippy::too_many_arguments)]
 fn check_supplied(
     height: u64,
-    finality: &[u8],
-    contexts: &[u8],
+    carrier: &[u8],
+    lane_evidence: &[u8],
     queries: &[Vec<u8>],
     binding: &HeightInputBinding,
     mut input_bytes: u64,
@@ -450,10 +474,10 @@ fn check_supplied(
         height == binding.height && queries.len() == binding.query_hashes.len(),
         "supplied input shape differs from binding"
     );
-    bounded(finality, MAX_FINALITY_BYTES)?;
-    input_bytes = charged(input_bytes, finality.len(), limits.input_bytes)?;
-    bounded(contexts, MAX_FINALITY_BYTES)?;
-    input_bytes = charged(input_bytes, contexts.len(), limits.input_bytes)?;
+    bounded(carrier, MAX_CARRIER_BYTES)?;
+    input_bytes = charged(input_bytes, carrier.len(), limits.input_bytes)?;
+    bounded(lane_evidence, MAX_CONTEXT_BYTES)?;
+    input_bytes = charged(input_bytes, lane_evidence.len(), limits.input_bytes)?;
     *query_count = query_count
         .checked_add(queries.len())
         .ok_or_else(|| eyre!("query count overflow"))?;
@@ -467,9 +491,9 @@ fn check_supplied(
         input_bytes = charged(input_bytes, query.len(), limits.input_bytes)?;
     }
     ensure!(
-        Hash::new(finality) == binding.finality_hash
-            && Hash::new(contexts) == binding.contexts_hash,
-        "finality/context input digest mismatch"
+        Hash::new(carrier) == binding.carrier_hash
+            && Hash::new(lane_evidence) == binding.lane_evidence_hash,
+        "carrier/context input digest mismatch"
     );
     for (query, digest) in queries.iter().zip(&binding.query_hashes) {
         ensure!(Hash::new(query) == *digest, "query input digest mismatch");
@@ -483,12 +507,7 @@ fn authenticate(
 ) -> Result<AuthenticatedRun> {
     for height in heights {
         let queries: Vec<_> = height.queries.iter().map(Vec::as_slice).collect();
-        verifier.push_height(
-            &height.finality,
-            &height.carrier,
-            &height.contexts,
-            &queries,
-        )?;
+        verifier.push_height(&height.carrier, &height.lane_evidence, &queries)?;
     }
     verifier.finish()
 }
@@ -524,13 +543,10 @@ fn same_rows(left: &[ExportRowV1], right: &[ExportRowV1]) -> bool {
                 && a.entrypoint_hash == b.entrypoint_hash
                 && a.carrier_height == b.carrier_height
                 && a.carrier_hash == b.carrier_hash
-                && a.admission_carrier_hash == b.admission_carrier_hash
-                && a.input_descriptor_hash == b.input_descriptor_hash
-                && a.instance_id == b.instance_id
+                && a.lane_source == b.lane_source
                 && a.leaf_index == b.leaf_index
                 && a.lane_id == b.lane_id
                 && a.dataspace_id == b.dataspace_id
-                && a.incarnation == b.incarnation
         })
 }
 
@@ -547,9 +563,8 @@ fn seal(
     drop(row_bytes);
     let mut raw_bytes = 0u64;
     for height in &heights {
-        for bytes in std::iter::once(&height.finality)
-            .chain(std::iter::once(&height.carrier))
-            .chain(std::iter::once(&height.contexts))
+        for bytes in std::iter::once(&height.carrier)
+            .chain(std::iter::once(&height.lane_evidence))
             .chain(height.queries.iter())
         {
             raw_bytes = charged(raw_bytes, bytes.len(), limits.input_bytes)?;

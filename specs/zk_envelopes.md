@@ -271,18 +271,17 @@ Verifier behavior (native STARK)
   coefficients. The verifier also reconstructs the canonical full-domain trace
   root with a streaming Merkle accumulator and requires exact equality. It also
   reconstructs and exactly matches the Merkle root of the all-zero composition
-  vector. Generic and IVM execution binding domains are therefore capped at
-  `n_log2 = 12`; larger binding proofs and verifying keys fail closed. Explicit full-material
+  vector. Generic binding domains are therefore capped at `n_log2 = 12`;
+  larger binding proofs and verifying keys fail closed. Explicit full-material
   AIR verification instead recomputes both roots from every supplied row and
-  composition value; private profiles without that material still require a
-  separately qualified degree argument.
+  composition value. This generic binding path is not an IVM execution proof;
+  private profiles still require a separately qualified degree argument.
 - `OpenVerifyEnvelope` STARK verification rejects inner `comp_root`/`comp_values`
   sidecars. The high-level verifier reconstructs the V1 binding-AIR digest from
   backend, circuit id, VK hash, schema descriptor, and public input columns.
-  The reserved canonical `ivm-replay-binding-v1` circuit uses a dedicated IVM binding
-  context with that reconstructed digest and the same full-root, AIR-opening and
-  FRI checks. Generic binding verification rejects reserved IVM circuits, and
-  IVM admission still requires deterministic execution replay.
+  The former dedicated IVM binding context is retired. Generic binding
+  verification rejects reserved IVM circuits, and `IvmProved` admission is
+  closed until a complete native execution relation is qualified.
   ZK-ACE uses its dedicated typed `SubmitPrivacyProofV1` relation and DEEP/FRI
   verifier; generic Binding AIR cannot target that relation. Local ZK-ACE proving
   and verification are implemented, while governed production activation remains
@@ -337,10 +336,10 @@ Verifier behavior (native STARK)
   the selected production verifier family before dispatch. Halo2-family
   guardrails additionally bind decoded `OpenVerifyEnvelope.circuit_id` values to
   the requested backend label: concrete native Halo2 labels must normalize to the
-  same circuit. The generic `halo2/ipa` entry point uses a closed v1 circuit
-	  registry containing only IVM execution, Kaigi roster/usage, the
-	  protocol-private confidential transfer/unshield circuits used by native
-	  escrow, plus the authenticated KAGEMUSHA V1 artifact set. Tiny arithmetic,
+  same circuit. The generic `halo2/ipa` entry point uses a closed V1 circuit
+  registry containing Kaigi roster/usage, the protocol-private confidential
+  transfer/unshield circuits used by native escrow, and the authenticated
+  KAGEMUSHA V1 artifact set. Tiny arithmetic,
   anonymous-transfer demos, vote-bool demos, the historical IVM overlay-binding
   stand-in, retired recursive-spend labels, cross-family ids, and trusted-setup
   ids all fail before verifier dispatch. Prefixing or otherwise normalizing a
@@ -351,8 +350,8 @@ Verifier behavior (native STARK)
 - Production Halo2 `ProofBox.bytes` is a canonical data-model
   `OpenVerifyEnvelope`. Its `public_inputs` field contains a schema descriptor,
   not the concrete instance columns. Every admitted circuit id normalizes to one
-  closed, authoritative descriptor (IVM execution, Kaigi roster/usage,
-  confidential transfer/full-unshield/change-unshield, or an authenticated
+  closed, authoritative descriptor (Kaigi roster/usage, confidential
+  transfer/full-unshield/change-unshield, or an authenticated
   KAGEMUSHA V1 artifact role).
   Preverification, guardrails, final dispatch, and verifying-key record
   preparation require exact descriptor bytes or the Iroha hash of those bytes;

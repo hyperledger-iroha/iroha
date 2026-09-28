@@ -1,6 +1,11 @@
 //! Kagemusha V1 pooled-reserve instruction execution.
 
+mod authority;
 pub(crate) mod kagemusha_v1_reserve;
+
+pub(crate) use authority::{
+    KagemushaVerifierAuthorityV1, runtime_matches_governed_registry, runtime_verifier_authority,
+};
 
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
@@ -240,7 +245,7 @@ impl VerifiedKagemushaRedemptionDebitV1 {
 /// Implementations must resolve the request's `release_id` to threshold-authenticated release
 /// metadata and content-addressed artifact bytes. Redemption must return only the opaque token
 /// produced by the paired recursive verifier; structural request validation is insufficient.
-pub trait KagemushaV1RuntimeVerifier: Send + Sync {
+pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
     /// Return all installed authenticated releases in canonical identifier order.
     fn mint_release_ids(&self) -> Vec<[u8; 32]>;
 
@@ -353,6 +358,10 @@ struct AuthenticatedKagemushaV1ReleaseRuntime {
     eq_mint_hash_prover: KagemushaLoadedEqMintHashArtifactsV1,
     ep_mint_hash_prover: KagemushaLoadedEpMintHashArtifactsV1,
     enabled_profiles: Vec<KagemushaEnabledProfileV1>,
+    release_receipt_digest: [u8; 32],
+    release_attestation_digest: [u8; 32],
+    release_authority_policy_digest: [u8; 32],
+    release_hardware_policy_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy)]
@@ -654,6 +663,10 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
                 eq_mint_hash_prover,
                 ep_mint_hash_prover,
                 enabled_profiles: release.enabled_profiles().to_vec(),
+                release_receipt_digest: release.receipt_digest(),
+                release_attestation_digest: release.attestation_digest(),
+                release_authority_policy_digest: release.authority_policy_digest(),
+                release_hardware_policy_digest: release.hardware_policy_digest(),
             },
         );
         Ok(())
@@ -736,6 +749,10 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
                 eq_mint_hash_prover,
                 ep_mint_hash_prover,
                 enabled_profiles: release.enabled_profiles().to_vec(),
+                release_receipt_digest: release.receipt_digest(),
+                release_attestation_digest: release.attestation_digest(),
+                release_authority_policy_digest: release.authority_policy_digest(),
+                release_hardware_policy_digest: release.hardware_policy_digest(),
             },
         );
         Ok(())

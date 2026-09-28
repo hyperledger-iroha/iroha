@@ -64,7 +64,7 @@ fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
         SYSCALL_AXT_TOUCH,
         SYSCALL_AXT_COMMIT,
         SYSCALL_VERIFY_DS_PROOF,
-        SYSCALL_USE_ASSET_HANDLE,
+        SYSCALL_AXT_STAGE_ANCHORED_SPEND,
     ] {
         assert!(is_generic_program_syscall_allowed(
             crate::SyscallPolicy::AbiV1,
@@ -83,11 +83,11 @@ fn axt_syscall_classifier_is_exact() {
         SYSCALL_AXT_TOUCH,
         SYSCALL_AXT_COMMIT,
         SYSCALL_VERIFY_DS_PROOF,
-        SYSCALL_USE_ASSET_HANDLE,
+        SYSCALL_AXT_STAGE_ANCHORED_SPEND,
     ] {
         assert!(is_axt_syscall(syscall));
     }
-    for syscall in [SYSCALL_ESCROW_OPEN_OFFER, SYSCALL_STATE_GET, u32::MAX] {
+    for syscall in [0xB4, SYSCALL_ESCROW_OPEN_OFFER, SYSCALL_STATE_GET, u32::MAX] {
         assert!(!is_axt_syscall(syscall));
     }
 }

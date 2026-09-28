@@ -10,7 +10,7 @@ use iroha_data_model::nexus::{
 fn genesis_monetary_scope_requires_exact_height_without_npos_parameters() {
     let state = setup_state();
     let mut genesis = state.block(block_header_with_height(1));
-    let mut stx = genesis.transaction();
+    let mut stx = genesis.transaction_for_callback_testing();
     stx.world
         .parameters
         .get_mut()
@@ -42,7 +42,7 @@ fn genesis_monetary_scope_requires_exact_height_without_npos_parameters() {
     drop(stx);
     drop(genesis);
     let mut next_block = state.block(block_header_with_height(2));
-    let next_stx = next_block.transaction();
+    let next_stx = next_block.transaction_for_callback_testing();
     let error = effects::validate_plan_context(&next_stx, &PublicLaneMonetaryScopeV1::Genesis, 2)
         .expect_err("genesis scope must not authorize a later block");
     assert!(
@@ -257,6 +257,9 @@ fn fixture_reward_claim_plan(
         {
             continue;
         }
+        if records.len() == iroha_data_model::nexus::MAX_PUBLIC_LANE_REWARD_CLAIM_RECORDS {
+            break;
+        }
         records.push(PublicLaneRewardRecordRefV1 {
             epoch: *epoch,
             record_hash: public_lane_reward_record_commitment(record)
@@ -315,9 +318,7 @@ fn fixture_reward_claim_plan(
 fn registration_rejects_changed_signed_monetary_fields_without_custody_writes() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction_for_fastpq_testing(Hash::new(
-        b"registration_rejects_changed_signed_monetary_fields_without_custody_writes",
-    ));
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, recipient, escrow, definition) = prepare_accounts(&mut stx);
     let lane = LaneId::new(42);
     let instruction = RegisterPublicLaneValidator::new(

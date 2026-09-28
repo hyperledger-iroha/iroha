@@ -14,7 +14,7 @@ use crate::{
         RecordState, RestartPlan, SafetyRecord, check_recommit, read_record, recommit_candidate,
     },
     topology::Topology,
-    types::{Hash32, HeightConfig, Millis},
+    types::{ConfigSlot, Hash32, HeightConfig, Millis},
 };
 
 impl Core {
@@ -41,18 +41,19 @@ impl Core {
         if init.demotion_window < 1 {
             return Err(ConfigError::DemotionWindowZero);
         }
-        let configs: BTreeMap<u64, HeightConfig> = init.configs.iter().cloned().collect();
+        let configs: BTreeMap<u64, ConfigSlot> = init.configs.iter().cloned().collect();
         let mut required = vec![t.saturating_add(1), t.saturating_add(2)];
         if t > g {
             required.push(t);
         }
         let mut initial = Vec::new();
         for height in &required {
-            initial.push(
-                configs
-                    .get(height)
-                    .ok_or(ConfigError::MissingConfig(*height))?,
-            );
+            let slot = configs
+                .get(height)
+                .ok_or(ConfigError::MissingConfig(*height))?;
+            if let Some(config) = slot.ready() {
+                initial.push(config);
+            }
         }
         validate_local(&local, &initial)?;
         // SPEC: §9.4 leaves the chain-parameter rules to the application; the core also checks
@@ -65,6 +66,7 @@ impl Core {
         let (keys, states) = local_keys(&init, signers)?;
         let first = configs
             .get(&t.saturating_add(1))
+            .and_then(ConfigSlot::ready)
             .cloned()
             .ok_or_else(|| ConfigError::MissingConfig(t.saturating_add(1)))?;
         let mut core = Self::blank(
@@ -102,13 +104,14 @@ impl Core {
             let config_height = t.saturating_add(1);
             #[cfg(sumeragi_mutation = "MS15")]
             let config_height = t;
-            let Some(config) = self.configs.get(&config_height) else {
+            let Some(config) = self.config(&config_height) else {
                 return self.halt(HaltReason::SafetyRecordInconsistent);
             };
             match check_recommit(
                 &*self.crypto,
                 &*self.attestation.verifier,
                 &config.committee,
+                &config.epoch,
                 t,
                 record,
             ) {
@@ -153,7 +156,7 @@ impl Core {
         keys: Vec<LocalKey>,
         (crypto, attestation): (Box<dyn Crypto>, Attestation),
         now: Millis,
-        configs: BTreeMap<u64, HeightConfig>,
+        configs: BTreeMap<u64, ConfigSlot>,
         first: HeightConfig,
     ) -> Self {
         let tip = &init.tip;
@@ -178,7 +181,16 @@ impl Core {
         let pm = Pacemaker::new(&local, effective_t_max(&local, &first));
         let n = first.committee.n();
         let topo = Topology::from_parts(vec![0], &[], u64::MAX).unwrap_or_else(|| {
-            Topology::compute(&*crypto, &init.instance, &first.committee, 0, 0, 1, &[])
+            Topology::compute(
+                &*crypto,
+                &init.instance,
+                &first.epoch,
+                &first.committee,
+                0,
+                0,
+                1,
+                &[],
+            )
         });
         let rnd = topo.round(0);
         Self {
@@ -194,6 +206,7 @@ impl Core {
             keys,
             nonce: init.nonce,
             probe: BTreeMap::new(),
+            probe_epoch: None,
             last_probe: now,
             halted: None,
             now,
@@ -235,6 +248,9 @@ impl Core {
             mine: Mine::default(),
             retx: [None, None],
             build: Build::Idle,
+            fresh_build: None,
+            control_drive: None,
+            control_received: BTreeMap::new(),
             repropose: false,
             resend_recorded: None,
             proposal_sent_at: None,
@@ -356,6 +372,9 @@ impl Core {
     // for the record of every key (configured or retired, signing or not) when the node
     // reaches its height, not only for the signing key's (found by review).
     pub(super) fn record_matches_tip(&mut self, record: &SafetyRecord) -> bool {
+        if record.epoch != self.cfg.epoch.id || !self.cfg.epoch.contains(record.height) {
+            return false;
+        }
         if cfg!(sumeragi_mutation = "ME2") {
             return true;
         }
@@ -381,6 +400,7 @@ impl Core {
         let msg = preimage::vote_preimage(
             kind,
             &self.instance,
+            &self.cfg.epoch.id,
             self.height,
             self.view,
             &bh,
@@ -391,6 +411,7 @@ impl Core {
         let vote = Vote {
             kind,
             instance: self.instance,
+            epoch: self.cfg.epoch.id,
             height: self.height,
             view: self.view,
             block_hash: bh,
@@ -493,9 +514,73 @@ fn check_init(init: &Init, crypto: &dyn Crypto) -> Result<(), ConfigError> {
             "a configuration for a height other than t, t + 1 and t + 2",
         ));
     }
+    let get = |height| {
+        init.configs
+            .iter()
+            .find(|(h, _)| *h == height)
+            .map(|(_, slot)| slot)
+    };
+    let next_height = tip
+        .height
+        .checked_add(1)
+        .ok_or(ConfigError::InvalidInit("height overflow"))?;
+    let later_height = tip
+        .height
+        .checked_add(2)
+        .ok_or(ConfigError::InvalidInit("height overflow"))?;
+    let first = get(next_height)
+        .and_then(ConfigSlot::ready)
+        .ok_or(ConfigError::MissingConfig(next_height))?;
+    if !first.epoch.contains(next_height) {
+        return Err(ConfigError::InvalidInit(
+            "next height outside authenticated epoch",
+        ));
+    }
+    if !at_genesis {
+        let current = get(tip.height)
+            .and_then(ConfigSlot::ready)
+            .ok_or(ConfigError::MissingConfig(tip.height))?;
+        if !current.epoch.contains(tip.height)
+            || tip
+                .header
+                .as_ref()
+                .is_none_or(|header| header.epoch != current.epoch.id)
+            || (current.epoch.contains(next_height) && !first.same_authority(current))
+            || (!current.epoch.contains(next_height) && !first.follows(current))
+        {
+            return Err(ConfigError::InvalidInit(
+                "noncontiguous authenticated epoch window",
+            ));
+        }
+    }
+    let later_valid = match get(later_height) {
+        Some(ConfigSlot::Ready(later)) => {
+            first.epoch.contains(later_height) && later.same_authority(first)
+        }
+        Some(ConfigSlot::PendingBoundary {
+            boundary_height,
+            predecessor,
+        }) => {
+            first.epoch.last_height.checked_add(1) == Some(later_height)
+                && *boundary_height == first.epoch.last_height
+                && *predecessor == first.epoch.id
+        }
+        None => false,
+    };
+    if !later_valid {
+        return Err(ConfigError::InvalidInit(
+            "next epoch must await its applied boundary",
+        ));
+    }
     if let Some(qc) = &tip.commit_qc
         && (qc.kind != VoteKind::Commit
             || qc.height != tip.height
+            || get(tip.height)
+                .and_then(ConfigSlot::ready)
+                .is_none_or(|config| {
+                    qc.epoch != config.epoch.id
+                        || (qc.height == config.epoch.last_height && !qc.attest)
+                })
             || qc.value() != (tip.block_hash, tip.result))
     {
         return Err(ConfigError::InvalidInit(

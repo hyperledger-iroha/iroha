@@ -12,6 +12,8 @@ documentation = "https://docs.rs/ivm"
 build = "build.rs"
 
 [dependencies]
+iroha_accel = { workspace = true }
+mv = { workspace = true }
 iroha_model_base = { workspace = true }
 poseidon-primitives = "0.2.0"
 sha2 = { version = "0.10.9" }
@@ -64,9 +66,10 @@ pqcrypto-mldsa = { version = "0.1.2" }
 sha2 = { version = "0.10.9", features = ["asm"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-metal = { version = "0.3.2", optional = true }
+objc2-metal = { version = "0.3.2", optional = true, features = ["dispatch2"] }
 objc2 = { version = "0.6.3", optional = true }
 objc2-foundation = { version = "0.3.2", optional = true }
+dispatch2 = { version = "0.3.1", optional = true }
 
 
 [dev-dependencies]
@@ -74,12 +77,18 @@ criterion = { workspace = true }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 hex-literal = "1.1.0"
 
+[build-dependencies]
+# Reuse the production Rust crypto libraries in the build-script context.
+# Ordinary builds do not perform CUDA verification or load CUDA tooling.
+ed25519-dalek = "2.2.0"
+sha2 = "0.10.9"
+
 [features]
-# Compile-time toggles remain only for external acceleration backends that pull
-# in platform-specific dependencies. CPU SIMD backends are always built and
-# selected at runtime based on hardware capabilities.
-# - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
-# - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
+# Ordinary builds include Metal on macOS; its dependencies are target-scoped and
+# the same feature is inert on other targets. CPU SIMD is always compiled and
+# selected by hardware capability. CUDA enters the ordinary build only after
+# its complete bundled PTX inventory and signed provenance are qualified.
+default = ["metal"]
 dev-tools = []
 # TODO: remove once `iroha_core`'s `telemetry` feature stops forwarding to it;
 # IVM no longer gates any code on this feature.
@@ -88,7 +97,11 @@ telemetry = []
 # this disabled so field dispatch is immutable after hardware selection.
 bench = []
 beep = ["dep:rodio"]
-cuda = ["dep:cust"]
+cuda = ["dep:cust", "iroha_accel/cuda"]
+# Opt-in qualification requires real CUDA work; absent hardware is a test failure.
+cuda-hardware-tests = ["cuda"]
+# Opt-in qualification fails unless every production Metal pipeline executes.
+metal-hardware-tests = ["metal"]
 # JSON parsing in tests and host helpers should use `norito::json` wrappers,
 # avoiding direct serde usage. No feature gating is required.
 metal = [
@@ -96,6 +109,7 @@ metal = [
     "dep:objc2-metal",
     "dep:objc2",
     "dep:objc2-foundation",
+    "dep:dispatch2",
 ]
 ## Dev-only test gate used by poseidon_simd.rs; declared to silence unexpected-cfg warnings.
 ivm_zk_tests = []
@@ -279,3 +293,12 @@ path = "tests/grouped/group_09.rs"
 [[test]]
 name = "ivm_group_10"
 path = "tests/grouped/group_10.rs"
+
+[[test]]
+name = "cuda_hardware"
+path = "tests/cuda_hardware.rs"
+required-features = ["cuda-hardware-tests"]
+
+[[test]]
+name = "shared_owner_custody"
+path = "tests/shared_owner_custody.rs"

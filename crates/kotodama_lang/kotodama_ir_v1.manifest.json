@@ -7,7 +7,6 @@
     "declaration": "pub mod ir;"
   },
   "public_api": [
-    "TEST_TRIGGER_EVENT_OVERRIDE_KEY",
     "Temp",
     "Label",
     "Program",
@@ -22,9 +21,8 @@
     "Terminator",
     "lower",
     "lower_with_cap",
-    "lower_with_cap_and_test_mode",
     "LoweringFailure",
-    "lower_with_cap_and_test_mode_diagnostics",
+    "lower_with_cap_diagnostics",
     "entrypoint_return_schema",
     "entrypoint_argument_schema"
   ],
@@ -189,10 +187,9 @@
     "StateHas",
     "StateLen",
     "StateCount",
-    "DecodeInt",
     "StatePathFromName",
     "PathMapKeyNorito",
-    "EncodeInt",
+    "EncodeBoolKey",
     "PointerToNorito",
     "PointerFromNorito",
     "JsonEncode",
@@ -218,8 +215,8 @@
     "VrfVerifyBatch",
     "AxtBegin",
     "AxtTouch",
+    "StageAnchoredSpend",
     "VerifyDsProof",
-    "UseAssetHandle",
     "AxtCommit",
     "SoracloudHostCall"
   ],
@@ -241,9 +238,6 @@
     "\"StateMap.remove receiver is not a durable state map\"",
     "\"StateMap.remove value type is not lowerable\"",
     "\"\\n\"",
-    "\"__entrypoint_impl__{name}\"",
-    "\"__invoke_entrypoint__\"",
-    "\"__koto_test_trigger_event_json\"",
     "\"actor_account actor must be a literal string\"",
     "\"actor_account\"",
     "\"actor_public_key actor must be a literal string\"",
@@ -251,6 +245,7 @@
     "\"actor_sign actor must be a literal string\"",
     "\"actor_sign\"",
     "\"aggregate return word types checked\"",
+    "\"canonical Bool key encodes\"",
     "\"canonical sum tag fits int\"",
     "\"checked state parameter\"",
     "\"compiler could not allocate the bounded stack required to lower source nesting\"",
@@ -264,13 +259,8 @@
     "\"durable state value is not encodable\"",
     "\"entry env must contain variable\"",
     "\"entrypoint `{entrypoint_name}` has an invalid return schema\"",
-    "\"entrypoint `{entrypoint_name}` returns {words} flattened words, exceeding the ABI v1 public register limit of {}\"",
-    "\"entrypoint `{}` ABI v1 argument table word count mismatch\"",
-    "\"entrypoint `{}` cannot accept state parameter `{}`\"",
-    "\"entrypoint argument index exceeds i16\"",
-    "\"entrypoint argument offset overflow\"",
+    "\"entrypoint `{entrypoint_name}` returns {words} flattened words, exceeding the ABI v1 public table limit of {}\"",
     "\"entrypoint exceeds the ABI v1 limit of {} source parameters and {} flattened words\"",
-    "\"entrypoint parameter `{}` has an invalid ABI v1 type schema\"",
     "\"entrypoint value `{value_name}` exceeds ABI v1 type depth, node, or word limits\"",
     "\"entrypoint value `{value_name}` tuple arity exceeds u16\"",
     "\"entrypoint value `{value_name}` uses unsupported public type {:?}\"",
@@ -279,7 +269,6 @@
     "\"expect_reject_as entrypoint must be a literal string\"",
     "\"expect_reject_as\"",
     "\"failed to encode durable StatePath `{literal}`: {error}\"",
-    "\"failed to encode entrypoint argument schema: {error}\"",
     "\"function `{}` requires {} flattened argument words, exceeding the Kotodama V1 limit of {}\"",
     "\"integer literal reached lowering with non-numeric type {}\"",
     "\"internal error: List allocation exceeds V1 limits\"",
@@ -289,7 +278,6 @@
     "\"internal error: List element word count mismatch\"",
     "\"internal error: List initial length exceeds capacity\"",
     "\"internal error: List word offset exceeds V1 limits\"",
-    "\"internal error: List.contains cannot compare `{leaf:?}`\"",
     "\"internal error: List.contains receiver lost List type\"",
     "\"internal error: List.enumerate receiver lost List type\"",
     "\"internal error: List.enumerate result lost List type\"",
@@ -308,6 +296,7 @@
     "\"internal error: cannot rebuild aggregate parameter `{}`\"",
     "\"internal error: cannot rebuild branch result\"",
     "\"internal error: cannot rebuild sum payload\"",
+    "\"internal error: canonical equality cannot compare `{leaf:?}`\"",
     "\"internal error: current block not finished\"",
     "\"internal error: invalid List layout\"",
     "\"internal error: invalid propagation return layout\"",
@@ -317,13 +306,11 @@
     "\"internal error: missing ABI word {index} for parameter `{}`\"",
     "\"internal error: missing lowered parameter `{}`\"",
     "\"internal error: missing lowered state parameter `{}`\"",
-    "\"internal error: missing payload for parameterized entrypoint `{}`\"",
     "\"internal error: named call `{name}` has an invalid source evaluation order\"",
     "\"internal error: named call `{name}` omits ABI argument slot {index} from its source evaluation order\"",
     "\"internal error: native JSON value-word schema mismatch\"",
     "\"internal error: no current block\"",
     "\"internal error: numeric fault payload must be NumericError\"",
-    "\"internal error: parameterized entrypoint `{}` has no argument schema\"",
     "\"internal error: propagation changed Option/Result family\"",
     "\"internal error: propagation operand is not a sum\"",
     "\"internal error: recoverable numeric cast has non-Result type\"",
@@ -337,8 +324,8 @@
     "\"internal error: typed List literal lacks List type\"",
     "\"internal error: {error}\"",
     "\"invalid durable StatePath `{literal}`: {error}\"",
+    "\"invoke_entrypoint\"",
     "\"invoke_entrypoint_as actor must be a literal string\"",
-    "\"invoke_entrypoint_as entrypoint must be a literal string\"",
     "\"invoke_entrypoint_as\"",
     "\"is_err\"",
     "\"is_none\"",
@@ -375,6 +362,7 @@
     "\"recoverable numeric cast destination has an ABI kind\"",
     "\"recoverable numeric cast source has an ABI kind\"",
     "\"resolved error variant\"",
+    "\"runtime entrypoint must be a literal string\"",
     "\"semantic analysis guarantees the tag-one arm\"",
     "\"semantic analysis guarantees the tag-zero arm\"",
     "\"short-circuit lowering only accepts logical operators\"",
@@ -392,7 +380,6 @@
     "\"validated StateMap value decoder\"",
     "\"validated StatePage result\"",
     "\"validated aggregate return must rebuild from ABI words\"",
-    "\"validated aggregate return type must rebuild from ABI words\"",
     "\"validated declared StateMap scan\"",
     "\"validated nominal error schema encodes\"",
     "\"wide numeric comparison has a nominal ABI kind\"",
@@ -405,6 +392,7 @@
     "malformed_typed_member_access_fails_closed_during_lowering",
     "source_int_and_internal_scalar_have_an_explicit_ir_boundary",
     "contextually_typed_integer_quantity_literal_lowers_as_quantity_data",
+    "bool_state_keys_use_their_own_canonical_codec",
     "wide_numeric_state_keys_use_canonical_pointer_norito",
     "direct_syscall_lowering_is_exhaustively_registry_driven_and_fail_closed",
     "lower_simple_function",
@@ -412,8 +400,8 @@
     "named_list_intrinsic_evaluates_source_order_before_abi_slots",
     "named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order",
     "require_lowers_declared_error_code_into_abort_ir",
-    "test_mode_entrypoint_wrapper_checks_override_state_first",
-    "single_json_entrypoint_uses_the_same_one_shot_argument_record",
+    "entrypoint_reads_only_the_prepared_host_argument_table",
+    "single_json_entrypoint_uses_the_same_prepared_argument_table",
     "nested_aggregate_returns_use_every_flattened_abi_word",
     "inactive_sum_has_no_payload_construction_or_store",
     "tail_expression_lowers_identically_to_explicit_return",
@@ -438,9 +426,9 @@
     "multiword_failed_list_mutation_branches_have_no_stores_or_allocations",
     "entrypoint_list_schema_is_recursive_and_capacity_bound",
     "query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views",
-    "aggregate_argument_words_over_register_window_fail_during_lowering",
-    "invoke_entrypoint_lowers_to_wrapper_call_with_override_restore",
-    "invoke_entrypoint_tuple_return_uses_wrapper_callmulti",
+    "aggregate_argument_words_beyond_thirteen_lower_to_one_table_signature",
+    "invoke_entrypoint_lowers_to_current_caller_host_intrinsic",
+    "invoke_entrypoint_tuple_return_uses_current_caller_host_intrinsic",
     "invoke_entrypoint_as_lowers_to_test_host_intrinsics",
     "invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic",
     "actor_helpers_lower_to_test_host_intrinsics",
@@ -477,7 +465,7 @@
     "lower_bytes_literal_to_blob_dataref",
     "lower_canonical_trigger_operations",
     "lower_struct_fields_for_transfer_domain",
-    "lower_info_int_encodes_to_norito",
+    "lower_info_int_preserves_full_width_pointer",
     "source_cannot_lower_internal_encode_i64_builtin",
     "lower_bytes_equality_uses_pointer_eq",
     "lower_get_or_on_state_map_reads_without_writing",
@@ -504,6 +492,7 @@
     "malformed_typed_member_access_fails_closed_during_lowering",
     "source_int_and_internal_scalar_have_an_explicit_ir_boundary",
     "contextually_typed_integer_quantity_literal_lowers_as_quantity_data",
+    "bool_state_keys_use_their_own_canonical_codec",
     "wide_numeric_state_keys_use_canonical_pointer_norito",
     "direct_syscall_lowering_is_exhaustively_registry_driven_and_fail_closed",
     "lower_simple_function",
@@ -511,9 +500,9 @@
     "named_list_intrinsic_evaluates_source_order_before_abi_slots",
     "named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order",
     "require_lowers_declared_error_code_into_abort_ir",
-    "test_mode_entrypoint_wrapper_checks_override_state_first",
-    "single_json_entrypoint_uses_the_same_one_shot_argument_record",
-    "public_wrapper_decodes_one_complete_norito_argument_record",
+    "entrypoint_reads_only_the_prepared_host_argument_table",
+    "single_json_entrypoint_uses_the_same_prepared_argument_table",
+    "public_entrypoint_loads_one_prepared_table_word_per_parameter",
     "public_aggregate_arguments_cross_internal_calls_as_flat_words",
     "nested_aggregate_returns_use_every_flattened_abi_word",
     "inactive_sum_has_no_payload_construction_or_store",
@@ -539,9 +528,9 @@
     "multiword_failed_list_mutation_branches_have_no_stores_or_allocations",
     "entrypoint_list_schema_is_recursive_and_capacity_bound",
     "query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views",
-    "aggregate_argument_words_over_register_window_fail_during_lowering",
-    "invoke_entrypoint_lowers_to_wrapper_call_with_override_restore",
-    "invoke_entrypoint_tuple_return_uses_wrapper_callmulti",
+    "aggregate_argument_words_beyond_thirteen_lower_to_one_table_signature",
+    "invoke_entrypoint_lowers_to_current_caller_host_intrinsic",
+    "invoke_entrypoint_tuple_return_uses_current_caller_host_intrinsic",
     "invoke_entrypoint_as_lowers_to_test_host_intrinsics",
     "invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic",
     "actor_helpers_lower_to_test_host_intrinsics",
@@ -578,7 +567,7 @@
     "lower_bytes_literal_to_blob_dataref",
     "lower_canonical_trigger_operations",
     "lower_struct_fields_for_transfer_domain",
-    "lower_info_int_encodes_to_norito",
+    "lower_info_int_preserves_full_width_pointer",
     "source_cannot_lower_internal_encode_i64_builtin",
     "lower_bytes_equality_uses_pointer_eq",
     "lower_get_or_on_state_map_reads_without_writing",
@@ -603,7 +592,7 @@
     "wrapping_builtins_have_distinct_ir"
   ],
   "test_leaves": {
-    "public": "9e7a57eb9ac866072caee317f2b5af503c300de58729e184305ba000e511c16b",
+    "public": "24f6a0eedb839c3996ebf8e91dd0c005d79b5e0534dfcecd0e01aebc3fcececf",
     "tail": "57a81a87cdf5a70ea8a8235c369cb42689a508c428f182d16e0f75b909e3b801"
   },
   "assets": [
@@ -946,17 +935,17 @@
     {
       "name": "emit_copy",
       "sha256": "a5109c1511321132db077541cee39330079718fe053cab00c4b1a7ad8abc8db4",
-      "calls": 32
+      "calls": 29
     },
     {
       "name": "emit_binary",
       "sha256": "04a2e9ab78acf52c1644010273eb4b56bff00bc6b74ad6abdf5d1afea44ca55c",
-      "calls": 40
+      "calls": 39
     },
     {
       "name": "emit_numeric_compare",
       "sha256": "3869280b42593923ed5ec12f07d053626451537cd09446c957f8c699bc79a5f6",
-      "calls": 2
+      "calls": 3
     },
     {
       "name": "emit_pointer_eq",
@@ -986,12 +975,12 @@
     {
       "name": "emit_tuple_pack",
       "sha256": "9916b7dd39fbe5825b00f8f469a1bf9b97bcdadbed92e3f91e9aa898553dfd0e",
-      "calls": 11
+      "calls": 15
     },
     {
       "name": "emit_state_get",
       "sha256": "707bced04359183231a86d2a7d399a1d1377bc9e0121679ed378c09d76a2e193",
-      "calls": 5
+      "calls": 3
     },
     {
       "name": "emit_alloc",
@@ -1010,7 +999,7 @@
     },
     {
       "name": "append_value_word_types",
-      "sha256": "b453c793ec4a43c19ef335fc30e832c9e689f3d39a539c46c4091fa695f6b4e9",
+      "sha256": "722228c40975cbb7b296f993384a34a064dce38ad95061a140a09b4116c69585",
       "calls": 4
     },
     {
@@ -1093,12 +1082,32 @@
     [
       "rebuild_state_value_from_table",
       "emit_tuple_pack",
+      "emit_tuple_pack(ctx,Vec::new())"
+    ],
+    [
+      "rebuild_state_value_from_table",
+      "emit_tuple_pack",
+      "emit_tuple_pack(ctx,Vec::new())"
+    ],
+    [
+      "rebuild_state_value_from_table",
+      "emit_tuple_pack",
       "emit_tuple_pack(ctx,items)"
     ],
     [
       "rebuild_state_value_from_table",
       "emit_tuple_pack",
       "emit_tuple_pack(ctx,items)"
+    ],
+    [
+      "rebuild_function_value_from_words",
+      "emit_tuple_pack",
+      "emit_tuple_pack(ctx,Vec::new())"
+    ],
+    [
+      "rebuild_function_value_from_words",
+      "emit_tuple_pack",
+      "emit_tuple_pack(ctx,Vec::new())"
     ],
     [
       "rebuild_function_value_from_words",
@@ -1282,8 +1291,18 @@
     ],
     [
       "emit_typed_value_eq",
-      "emit_copy",
-      "emit_copy(ctx,equal,false_value)"
+      "emit_numeric_compare",
+      "emit_numeric_compare(ctx,BinaryOp::Eq,left,right,kind)"
+    ],
+    [
+      "emit_typed_value_eq",
+      "emit_pointer_eq",
+      "emit_pointer_eq(ctx,left,right)"
+    ],
+    [
+      "emit_typed_value_eq",
+      "emit_binary",
+      "emit_binary(ctx,BinaryOp::Eq,left,right)"
     ],
     [
       "lower_list_get",
@@ -1491,41 +1510,6 @@
       "seal_unreachable_continuation(&mutctx)"
     ],
     [
-      "lower_entrypoint_wrapper",
-      "emit_data_ref",
-      "emit_data_ref(&mutctx,DataRefKind::NoritoBytes,format!(\"0x{}\",hex::encode(encoded_schema)),)"
-    ],
-    [
-      "load_entrypoint_payload",
-      "emit_state_get",
-      "emit_state_get(ctx,override_path)"
-    ],
-    [
-      "load_entrypoint_payload",
-      "emit_binary",
-      "emit_binary(ctx,BinaryOp::Ne,override_payload,zero)"
-    ],
-    [
-      "load_entrypoint_payload",
-      "emit_copy",
-      "emit_copy(ctx,payload,decoded_override)"
-    ],
-    [
-      "load_entrypoint_payload",
-      "emit_copy",
-      "emit_copy(ctx,payload,host_payload)"
-    ],
-    [
-      "lower_invoke_entrypoint_call",
-      "emit_state_get",
-      "emit_state_get(ctx,override_path)"
-    ],
-    [
-      "lower_invoke_entrypoint_call",
-      "emit_binary",
-      "emit_binary(ctx,BinaryOp::Ne,previous_payload,zero)"
-    ],
-    [
       "lower_blob_literal",
       "emit_data_ref",
       "emit_data_ref(ctx,DataRefKind::Blob,value.to_owned())"
@@ -1549,6 +1533,11 @@
       "lower_statement",
       "emit_binary",
       "emit_binary(ctx,BinaryOp::Lt,index,limit)"
+    ],
+    [
+      "decode_state_map_key",
+      "emit_data_ref",
+      "emit_data_ref(ctx,DataRefKind::NoritoBytes,format!(\"0x{}\",hex::encode(true_key)),)"
     ],
     [
       "decode_state_map_key",
@@ -1822,11 +1811,6 @@
     ],
     [
       "lower_expr",
-      "emit_pointer_eq",
-      "emit_pointer_eq(ctx,l,r)"
-    ],
-    [
-      "lower_expr",
       "emit_unary",
       "emit_unary(ctx,UnaryOp::Not,t)"
     ],
@@ -1907,7 +1891,7 @@
   ],
   "take2_routing_sha256": "2d5f3d141b1f8fd640547ae19dba829cc68b8fd972c90d940831a0c2d742fa14",
   "source": {
-    "bytes": 411338,
-    "sha256": "3d56fe7f8380e38e7095d749721681e5f47a600c69cf99f46d8b143b584ba562"
+    "bytes": 395558,
+    "sha256": "de5694df8d64984e2927eda2a1ef31ed78b40125a8f4ae4568655731277f86ef"
   }
 }

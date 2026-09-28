@@ -73,7 +73,7 @@ fn zk_attachment_calls_sign_the_exact_method_path_and_body_once() {
     assert_eq!(nonces.len(), snapshots.len(), "each call is one-shot");
 }
 #[test]
-fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
+fn zk_verify_batch_calls_sign_the_exact_network_method_path_and_body_once() {
     use std::collections::HashSet;
     let client = client_with_base_url(base_url());
     let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -83,9 +83,6 @@ fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
             let response = match snapshot.url.path() {
                 "/v1/zk/verify-batch" => {
                     json_response(StatusCode::OK, r#"{"ok":true,"statuses":[]}"#)
-                }
-                "/v1/zk/ivm/derive" => {
-                    json_response(StatusCode::OK, r#"{"proved":{"placeholder":true}}"#)
                 }
                 path => panic!("unexpected ZK compute request {path}"),
             };
@@ -106,19 +103,10 @@ fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
             client
                 .post_zk_verify_batch_json(&norito::json!([]))
                 .expect("signed JSON verify batch");
-            client
-                .post_zk_ivm_derive_json(&norito::json!({
-                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
-                    "authority": { "placeholder": true },
-                    "fee_payment": { "placeholder": true },
-                    "metadata": {},
-                    "bytecode": { "placeholder": true }
-                }))
-                .expect("signed IVM derive");
         },
     );
     let snapshots = store.lock().expect("ZK compute snapshots");
-    assert_eq!(snapshots.len(), 3);
+    assert_eq!(snapshots.len(), 2);
     for snapshot in snapshots.iter() {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_canonical_account_signed_request(&client, snapshot);
@@ -136,10 +124,7 @@ fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
                 .as_str()
         })
         .collect();
-    assert_eq!(
-        content_types,
-        ["application/x-norito", APPLICATION_JSON, APPLICATION_JSON]
-    );
+    assert_eq!(content_types, ["application/x-norito", APPLICATION_JSON]);
     let nonces: HashSet<_> = snapshots
         .iter()
         .map(|snapshot| {

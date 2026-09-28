@@ -3,8 +3,9 @@
 //! This boundary reads one committed block of a read-only State view through the certified-chain
 //! reader ([`crate::sumeragi::certified_chain`]): the block must be the one the view committed at
 //! the height, stored in Kura with a commit certificate whose core header and result preimage
-//! certify it, and whose `CommitQC` verifies under the committee of its height. It does not
-//! establish custody, the freshness of a selected head, or an independently certified
+//! certify it, and whose `CommitQC` verifies under the committee of its height. Genesis execution
+//! requires a verified successor whose signed `parent_result` authenticates the genesis result;
+//! genesis signatures alone authenticate only its proposal body. This does not establish custody, the freshness of a selected head, or an independently certified
 //! application-state root.
 //!
 //! Instruction execution must not use this read: a block's `CommitQC` is node-local. Deterministic
@@ -14,7 +15,7 @@ use iroha_data_model::block::consensus_v2::HeightContextId;
 
 use crate::{
     state::StateReadOnly,
-    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, ChainReadError},
+    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, ChainReadError, QcVerification},
 };
 
 /// Runtime evidence that an exact block belonged to the supplied native State view and its
@@ -58,10 +59,10 @@ pub struct SignerFinalityErrorV1;
 ///
 /// The view's genesis must be its network's genesis (the network id is the genesis hash), the
 /// block at `height` must be the one the view committed with hash `block_hash`, and its Kura
-/// frame must carry a commit certificate that certifies it and verifies under the committee of
-/// its height (or, for a height whose historical committee the retained chain no longer holds,
-/// that the driver verified before storing it; see the reader's trust model). A height/hash
-/// supplied by a remote observer is not authority.
+/// frame must carry a commit certificate that certifies it and verifies under the committee
+/// authenticated by its historical prefix. Genesis execution additionally requires a verified
+/// successor anchoring its result; a genesis-only view cannot export independent execution
+/// finality. A height/hash supplied by a remote observer is not authority.
 ///
 /// # Errors
 ///
@@ -99,6 +100,15 @@ pub fn certified_block_v1<V: StateReadOnly + ?Sized>(
         .map_err(|_: ChainReadError| SignerFinalityErrorV1)?;
     if *block.block_hash().as_ref() != block_hash {
         return Err(SignerFinalityErrorV1);
+    }
+    if block.verification() == QcVerification::Genesis {
+        let successor_height = height.checked_add(1).ok_or(SignerFinalityErrorV1)?;
+        let successor = chain
+            .certified(successor_height)
+            .map_err(|_| SignerFinalityErrorV1)?;
+        if successor.verification() != QcVerification::Verified || !successor.extends(&block) {
+            return Err(SignerFinalityErrorV1);
+        }
     }
     Ok(block)
 }

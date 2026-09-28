@@ -2,10 +2,14 @@ package org.hyperledger.iroha.sdk.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /** Java consumers use the Kotlin-owned exact nominal manifest parser and immutable models. */
@@ -46,5 +50,68 @@ final class ContractManifestJavaConsumerTest {
       assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(payload.replace(
           "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", forged).getBytes(StandardCharsets.UTF_8)));
     }
+  }
+
+  @Test
+  void javaConsumerUsesTheV1CallTableWithoutTheRetiredRegisterWindow() {
+    List<String> parameters = new ArrayList<>();
+    List<String> fields = new ArrayList<>();
+    List<String> resultNodes = new ArrayList<>();
+    resultNodes.add("{\"kind\":\"Tuple\",\"value\":14}");
+    String intNode = "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"Int\",\"value\":null}}";
+    for (int index = 0; index < 14; index++) {
+      String name = "p" + index;
+      parameters.add("{\"name\":\"" + name + "\",\"type_name\":\"int\"}");
+      fields.add("{\"name\":\"" + name + "\",\"ty\":{\"nodes\":[" + intNode + "]}}");
+      resultNodes.add(intNode);
+    }
+    String tupleType = "(" + String.join(", ", Collections.nCopies(14, "int")) + ")";
+    String payload = "{\"manifest\":{\"entrypoints\":[{\"name\":\"wide\",\"kind\":{\"kind\":\"View\",\"value\":null},\"params\":["
+        + String.join(",", parameters) + "],\"argument_schema\":{\"fields\":["
+        + String.join(",", fields) + "]},\"return_type\":\"" + tupleType
+        + "\",\"return_schema\":{\"nodes\":[" + String.join(",", resultNodes) + "]}}]}}";
+    ContractEntrypointDescriptor entrypoint = ContractJsonParser.parseManifestRecord(
+        payload.getBytes(StandardCharsets.UTF_8)).manifest.entrypoints.get(0);
+    assertEquals(14, entrypoint.parameters.size());
+    assertEquals(14, entrypoint.argumentSchema.wordCount);
+    assertEquals(14, entrypoint.returnSchema.wordCount);
+
+    StringBuilder overLimitParameters = new StringBuilder(8_193 * 36);
+    for (int index = 0; index < 8_193; index++) {
+      if (index > 0) overLimitParameters.append(',');
+      overLimitParameters.append("{\"name\":\"p").append(index).append("\",\"type_name\":\"int\"}");
+    }
+    String overLimit = "{\"manifest\":{\"entrypoints\":[{\"name\":\"wide\",\"kind\":{\"kind\":\"View\",\"value\":null},\"params\":["
+        + overLimitParameters + "],\"return_type\":\"()\",\"return_schema\":{\"nodes\":[{\"kind\":\"Unit\",\"value\":null}]}}]}}";
+    IllegalStateException error = assertThrows(IllegalStateException.class, () ->
+        ContractJsonParser.parseManifestRecord(overLimit.getBytes(StandardCharsets.UTF_8)));
+    assertTrue(error.getMessage().contains("V1 argument limit"));
+  }
+
+  @Test
+  void javaConsumerUsesExactDynamicHintsAndEmptyProductGrammar() {
+    String hint = "{\"base_key\":\"state:Balances\",\"key_type\":\"AccountId\","
+        + "\"bound_kind\":\"take\",\"max_keys\":1}";
+    String prefix = "{\"manifest\":{\"access_set_hints\":{\"read_keys\":[],\"write_keys\":[],"
+        + "\"dynamic_reads\":[";
+    String suffix = "],\"dynamic_writes\":[]},\"states\":[{\"name\":\"Balances\","
+        + "\"type_name\":\"StateMap<AccountId, quantity>\"}]}}";
+    ContractManifest manifest = ContractJsonParser.parseManifestRecord(
+        (prefix + hint + suffix).getBytes(StandardCharsets.UTF_8)).manifest;
+    assertEquals("state:Balances", manifest.accessSetHints.dynamicReads.get(0).baseKey);
+    assertEquals(1L, manifest.accessSetHints.dynamicReads.get(0).maxKeys);
+    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+        (prefix + hint + "," + hint + suffix).getBytes(StandardCharsets.UTF_8)));
+    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+        (prefix + hint.replace("state:Balances", "state:Missing") + suffix)
+            .getBytes(StandardCharsets.UTF_8)));
+
+    String statePrefix = "{\"manifest\":{\"states\":[{\"name\":\"Stored\",\"type_name\":\"";
+    String stateSuffix = "\"}]}}";
+    ContractManifest emptyProduct = ContractJsonParser.parseManifestRecord(
+        (statePrefix + "Transfer{}" + stateSuffix).getBytes(StandardCharsets.UTF_8)).manifest;
+    assertEquals("Transfer{}", emptyProduct.states.get(0).typeName);
+    assertThrows(IllegalStateException.class, () -> ContractJsonParser.parseManifestRecord(
+        (statePrefix + "Transfer{ }" + stateSuffix).getBytes(StandardCharsets.UTF_8)));
   }
 }

@@ -1,15 +1,12 @@
+//! Native Poseidon parity probes; mandatory physical qualification uses cuda_hardware.
 #![cfg(feature = "cuda")]
 use ivm::{
-    poseidon2_cuda, poseidon2_cuda_many, poseidon2_simd, poseidon6_cuda, poseidon6_cuda_many,
-    poseidon6_simd,
+    poseidon2_cuda, poseidon2_cuda_many_into, poseidon2_simd, poseidon6_cuda,
+    poseidon6_cuda_many_into, poseidon6_simd,
 };
 fn ensure_cuda_backend() -> bool {
     if !ivm::cuda_available() {
         eprintln!("CUDA hardware unavailable; skipping Poseidon CUDA parity tests");
-        return false;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to initialize GpuManager; skipping Poseidon CUDA parity tests");
         return false;
     }
     true
@@ -91,9 +88,15 @@ fn poseidon2_cuda_many_matches_scalar_vectors() {
         (0xfeed_beef_dead_cafe, 0xc0de_cafe_dead_beef),
     ];
     let expected: Vec<u64> = samples.iter().map(|&(a, b)| poseidon2_simd(a, b)).collect();
-    let Some(actual) = unwrap_or_skip("Poseidon2 CUDA batch", poseidon2_cuda_many(&samples)) else {
+    let mut actual = vec![0; samples.len()];
+    let before = ivm::cuda_completed_dispatches();
+    if !poseidon2_cuda_many_into(&samples, &mut actual) {
         return;
-    };
+    }
+    assert!(
+        ivm::cuda_completed_dispatches() > before,
+        "native batch parity requires a completed CUDA kernel"
+    );
     assert_eq!(actual, expected, "Poseidon2 CUDA batch mismatch");
 }
 #[test]
@@ -117,8 +120,14 @@ fn poseidon6_cuda_many_matches_scalar_vectors() {
         .iter()
         .map(|&inputs| poseidon6_simd(inputs))
         .collect();
-    let Some(actual) = unwrap_or_skip("Poseidon6 CUDA batch", poseidon6_cuda_many(&samples)) else {
+    let mut actual = vec![0; samples.len()];
+    let before = ivm::cuda_completed_dispatches();
+    if !poseidon6_cuda_many_into(&samples, &mut actual) {
         return;
-    };
+    }
+    assert!(
+        ivm::cuda_completed_dispatches() > before,
+        "native batch parity requires a completed CUDA kernel"
+    );
     assert_eq!(actual, expected, "Poseidon6 CUDA batch mismatch");
 }

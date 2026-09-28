@@ -1,3 +1,6 @@
+//! Deterministic AES rounds, key expansion, and caller-owned batch execution.
+
+/// AES substitution table.
 pub const SBOX: [u8; 256] = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -16,6 +19,7 @@ pub const SBOX: [u8; 256] = [
     0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 ];
+/// Inverse AES substitution table.
 pub const INV_SBOX: [u8; 256] = [
     0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
     0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
@@ -120,19 +124,13 @@ fn add_round_key(state: &mut [u8; 16], rk: &[u8; 16]) {
         state[i] ^= rk[i];
     }
 }
+/// Apply one AES encryption round using a qualified CPU implementation.
 pub fn aesenc(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some(res) = crate::vector::metal_aesenc_round(state, rk) {
-        return res;
-    }
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::aesenc_cuda(state, rk) {
-        return res;
-    }
+    // One round is cheaper on the CPU than a GPU upload and launch.
     // AArch64 AES acceleration (detected at runtime)
     #[cfg(target_arch = "aarch64")]
     {
-        if is_aarch64_aes_available() {
+        if crate::vector::simd_policy_enabled() && is_aarch64_aes_available() {
             // SAFETY: guarded by runtime feature detection for `aes`.
             return unsafe { aesenc_armv8(state, rk) };
         }
@@ -140,13 +138,14 @@ pub fn aesenc(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     // x86/x86_64 AES-NI acceleration (detected at runtime)
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        if is_x86_aes_available() {
+        if crate::vector::simd_policy_enabled() && is_x86_aes_available() {
             // SAFETY: guarded by runtime feature detection for `aes`.
             return unsafe { aesenc_aesni(state, rk) };
         }
     }
     aesenc_impl(state, rk)
 }
+/// Apply one AES encryption round using the canonical scalar operations.
 pub fn aesenc_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     sub_bytes(&mut state);
     shift_rows(&mut state);
@@ -154,19 +153,13 @@ pub fn aesenc_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     add_round_key(&mut state, &rk);
     state
 }
+/// Invert one AES encryption round using a qualified CPU implementation.
 pub fn aesdec(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some(res) = crate::vector::metal_aesdec_round(state, rk) {
-        return res;
-    }
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::aesdec_cuda(state, rk) {
-        return res;
-    }
+    // One round is cheaper on the CPU than a GPU upload and launch.
     // AArch64 AES acceleration (detected at runtime)
     #[cfg(target_arch = "aarch64")]
     {
-        if is_aarch64_aes_available() {
+        if crate::vector::simd_policy_enabled() && is_aarch64_aes_available() {
             // SAFETY: guarded by runtime feature detection for `aes`.
             return unsafe { aesdec_armv8(state, rk) };
         }
@@ -174,13 +167,14 @@ pub fn aesdec(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     // x86/x86_64 AES-NI acceleration (detected at runtime)
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        if is_x86_aes_available() {
+        if crate::vector::simd_policy_enabled() && is_x86_aes_available() {
             // SAFETY: guarded by runtime feature detection for `aes`.
             return unsafe { aesdec_aesni(state, rk) };
         }
     }
     aesdec_impl(state, rk)
 }
+/// Invert one AES encryption round using the canonical scalar operations.
 pub fn aesdec_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     add_round_key(&mut state, &rk);
     inv_mix_columns(&mut state);
@@ -188,8 +182,128 @@ pub fn aesdec_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     inv_sub_bytes(&mut state);
     state
 }
+/// Substitute one byte through the AES substitution table.
 pub fn sbox(byte: u8) -> u8 {
     SBOX[byte as usize]
+}
+#[path = "aes/batch.rs"]
+mod batch;
+pub use batch::{
+    aes128_decrypt_many_into, aes128_encrypt_many_into, aesdec_many_into,
+    aesdec_n_rounds_many_into, aesenc_many_into, aesenc_n_rounds_many_into,
+};
+/// AES "last" round for encryption (no MixColumns): SubBytes → ShiftRows → AddRoundKey.
+#[allow(dead_code)]
+pub fn aesenc_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
+    sub_bytes(&mut state);
+    shift_rows(&mut state);
+    add_round_key(&mut state, &rk);
+    state
+}
+/// AES "last" round for decryption (no InvMixColumns): AddRoundKey → InvShiftRows → InvSubBytes.
+#[allow(dead_code)]
+pub fn aesdec_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
+    add_round_key(&mut state, &rk);
+    inv_shift_rows(&mut state);
+    inv_sub_bytes(&mut state);
+    state
+}
+// --- AES-128 key expansion (pre-expanded schedule helpers) ---
+#[allow(dead_code)]
+const RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36];
+#[inline]
+#[allow(dead_code)]
+fn rot_word(w: [u8; 4]) -> [u8; 4] {
+    [w[1], w[2], w[3], w[0]]
+}
+#[inline]
+#[allow(dead_code)]
+fn sub_word(mut w: [u8; 4]) -> [u8; 4] {
+    w[0] = SBOX[w[0] as usize];
+    w[1] = SBOX[w[1] as usize];
+    w[2] = SBOX[w[2] as usize];
+    w[3] = SBOX[w[3] as usize];
+    w
+}
+/// Expand a 128-bit AES key into 11 round keys (initial + 10 rounds).
+#[allow(dead_code)]
+pub fn aes128_expand_key(key: [u8; 16]) -> [[u8; 16]; 11] {
+    let mut w = [[0u8; 4]; 44];
+    for i in 0..4 {
+        w[i][0] = key[i * 4];
+        w[i][1] = key[i * 4 + 1];
+        w[i][2] = key[i * 4 + 2];
+        w[i][3] = key[i * 4 + 3];
+    }
+    for i in 4..44 {
+        let mut temp = w[i - 1];
+        if i % 4 == 0 {
+            temp = sub_word(rot_word(temp));
+            temp[0] ^= RCON[(i / 4) - 1];
+        }
+        for (j, t) in temp.iter().enumerate() {
+            w[i][j] = w[i - 4][j] ^ *t;
+        }
+    }
+    // Collect into 11 round keys
+    let mut rks = [[0u8; 16]; 11];
+    for r in 0..11 {
+        for (j, word) in w[r * 4..r * 4 + 4].iter().enumerate() {
+            rks[r][j * 4] = word[0];
+            rks[r][j * 4 + 1] = word[1];
+            rks[r][j * 4 + 2] = word[2];
+            rks[r][j * 4 + 3] = word[3];
+        }
+    }
+    rks
+}
+#[cfg(test)]
+mod key_schedule_tests {
+    use super::*;
+    #[test]
+    fn full_cipher_matches_fips_197_with_the_same_expanded_schedule() {
+        let key = std::array::from_fn(|index| index as u8);
+        let plaintext = [std::array::from_fn(|index| (index * 17) as u8)];
+        let ciphertext = [[
+            0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4,
+            0xc5, 0x5a,
+        ]];
+        let keys = aes128_expand_key(key);
+        let mut encrypted = [[0; 16]];
+        assert!(aes128_encrypt_many_into(&plaintext, &keys, &mut encrypted));
+        assert_eq!(encrypted, ciphertext);
+        let mut decrypted = [[0xff; 16]];
+        assert!(aes128_decrypt_many_into(&ciphertext, &keys, &mut decrypted));
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn expand_key_matches_known_vector() {
+        // FIPS-197 Appendix A.1 test vector
+        let key: [u8; 16] = [
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
+            0x4f, 0x3c,
+        ];
+        let rks = aes128_expand_key(key);
+        // Check first, second and last round key bytes (spot-check)
+        assert_eq!(rks[0], key);
+        // Round 1 expected: 0xa0fafe1788542cb123a339392a6c7605
+        assert_eq!(
+            rks[1],
+            [
+                0xa0, 0xfa, 0xfe, 0x17, 0x88, 0x54, 0x2c, 0xb1, 0x23, 0xa3, 0x39, 0x39, 0x2a, 0x6c,
+                0x76, 0x05,
+            ]
+        );
+        // Round 10 expected: 0xd014f9a8c9ee2589e13f0cc8b6630ca6
+        assert_eq!(
+            rks[10],
+            [
+                0xd0, 0x14, 0xf9, 0xa8, 0xc9, 0xee, 0x25, 0x89, 0xe1, 0x3f, 0x0c, 0xc8, 0xb6, 0x63,
+                0x0c, 0xa6,
+            ]
+        );
+    }
 }
 // --- CPU acceleration helpers (x86 AES-NI) ---
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -251,12 +365,11 @@ unsafe fn aesenc_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     use core::arch::aarch64::*;
     let s = unsafe { vld1q_u8(state.as_ptr()) };
     let k = unsafe { vld1q_u8(rk.as_ptr()) };
-    // NOTE: The arm64 AESE intrinsic performs one AES encryption round.
-    // If the specific micro-architecture requires explicit MixColumns, we
-    // apply AESMC as part of the round. This ordering matches AESENC
-    // semantics on supported platforms.
-    let r = vaeseq_u8(s, k);
+    // AESE consumes its round key before SubBytes/ShiftRows, whereas our
+    // AESENC contract adds the key after MixColumns. Keep the order exact.
+    let r = vaeseq_u8(s, vdupq_n_u8(0));
     let r = vaesmcq_u8(r);
+    let r = veorq_u8(r, k);
     let mut out = [0u8; 16];
     unsafe { vst1q_u8(out.as_mut_ptr(), r) };
     out
@@ -319,6 +432,56 @@ unsafe fn aesdec_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
 #[cfg(test)]
 mod tests_accel {
     use super::*;
+    #[test]
+    fn public_batch_paths_match_independent_round_sequences() {
+        let blocks: Vec<[u8; 16]> = (0u16..256)
+            .map(|index| std::array::from_fn(|lane| index as u8 ^ (lane as u8).wrapping_mul(13)))
+            .collect();
+        let keys: Vec<[u8; 16]> = (0u8..10)
+            .map(|round| std::array::from_fn(|lane| round.wrapping_mul(17) ^ lane as u8))
+            .collect();
+        for subset in [&blocks[..3], &blocks[..]] {
+            let expected_enc: Vec<_> = subset
+                .iter()
+                .map(|&block| aesenc_impl(block, keys[0]))
+                .collect();
+            let expected_dec: Vec<_> = subset
+                .iter()
+                .map(|&block| aesdec_impl(block, keys[0]))
+                .collect();
+            let mut output = vec![[0; 16]; subset.len()];
+            assert!(aesenc_many_into(subset, keys[0], &mut output));
+            assert_eq!(output, expected_enc);
+            assert!(aesdec_many_into(subset, keys[0], &mut output));
+            assert_eq!(output, expected_dec);
+            let expected_rounds = |round: fn([u8; 16], [u8; 16]) -> [u8; 16]| {
+                subset
+                    .iter()
+                    .map(|&block| keys.iter().copied().fold(block, round))
+                    .collect::<Vec<_>>()
+            };
+            assert!(aesenc_n_rounds_many_into(subset, &keys, &mut output));
+            assert_eq!(output, expected_rounds(aesenc_impl));
+            assert!(aesdec_n_rounds_many_into(subset, &keys, &mut output));
+            assert_eq!(output, expected_rounds(aesdec_impl));
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn arm_aes_rounds_match_scalar_across_keys_and_inputs() {
+        if !std::arch::is_aarch64_feature_detected!("aes") {
+            return;
+        }
+        assert!(is_aarch64_aes_available(), "ARM AES self-test must qualify");
+        for index in 0u8..=255 {
+            let state = std::array::from_fn(|lane| index.wrapping_add(lane as u8 * 13));
+            let key = std::array::from_fn(|lane| index.wrapping_mul(7).wrapping_add(lane as u8));
+            // SAFETY: this test only enters after runtime AES feature detection.
+            assert_eq!(unsafe { aesenc_armv8(state, key) }, aesenc_impl(state, key));
+            // SAFETY: this test only enters after runtime AES feature detection.
+            assert_eq!(unsafe { aesdec_armv8(state, key) }, aesdec_impl(state, key));
+        }
+    }
     #[test]
     fn aesenc_parity_with_scalar() {
         // Fixed test vectors (arbitrary but deterministic)

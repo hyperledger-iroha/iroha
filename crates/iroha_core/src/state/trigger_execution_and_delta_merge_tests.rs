@@ -1052,6 +1052,7 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
     let state = State::new(World::default(), kura, query_handle);
     let mut program = ivm::ProgramMetadata::default().encode();
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![crate::ivm_test_support::unit_callable(0)],
         seiyaku_name: "QueryCacheFixture".to_owned(),
         compiler_fingerprint: "iroha-core-state-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -1079,7 +1080,7 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
         states: Vec::new(),
     };
     program.extend_from_slice(&interface.encode_section());
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&crate::ivm_test_support::unit_return());
     let code_hash = ivm::contract_code_hash(&program);
     let first = state
         .prepare_contract_query_program(code_hash, &program)

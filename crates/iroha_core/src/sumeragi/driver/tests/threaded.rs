@@ -90,6 +90,7 @@ fn spawn_instance<C: Clock + 'static>(
     let crypto: SharedCrypto = Arc::new(FakeCrypto::new());
     let instance = Hash32([tag; 32]);
     let config = HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
         committee: Committee::new(vec![key.clone()]).unwrap(),
         params: params(),
     };
@@ -104,6 +105,7 @@ fn spawn_instance<C: Clock + 'static>(
         &*records,
         &*crypto,
         &instance,
+        iroha_sumeragi::testing::TEST_EPOCH.id,
         &[(key.clone(), false)],
         0,
         false,
@@ -120,7 +122,10 @@ fn spawn_instance<C: Clock + 'static>(
         genesis,
         128,
         found,
-        vec![(1, config.clone()), (2, config.clone())],
+        vec![
+            (1, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+            (2, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+        ],
         u64::from(tag),
     )
     .unwrap();
@@ -147,6 +152,7 @@ fn spawn_instance<C: Clock + 'static>(
         .spawn(
             DriverConfig::default(),
             DriverStart {
+                allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
                 local: LocalParams::default(),
                 init,
                 signers: vec![Box::new(signer)],
@@ -342,6 +348,7 @@ fn frame_limit_below_parameters_is_refused() {
     let signer = FakeSigner::from_seed(&[6], None);
     let key = signer.public_key().clone();
     let config = HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
         committee: Committee::new(vec![key.clone()]).unwrap(),
         params: params(),
     };
@@ -353,7 +360,10 @@ fn frame_limit_below_parameters_is_refused() {
         (Hash32([1; 32]), Hash32([2; 32])),
         128,
         vec![(key, RecordState::Absent, false)],
-        vec![(1, config.clone()), (2, config.clone())],
+        vec![
+            (1, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+            (2, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+        ],
         1,
     )
     .unwrap();
@@ -374,6 +384,7 @@ fn frame_limit_below_parameters_is_refused() {
     let refused = driver.spawn(
         config,
         DriverStart {
+            allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
             local: LocalParams::default(),
             init,
             signers: vec![Box::new(signer)],
@@ -535,6 +546,7 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
     let instance = Hash32([5; 32]);
     let crypto: SharedCrypto = Arc::new(vals.crypto.clone());
     let config = HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
         committee: vals.committee.clone(),
         params: params(),
     };
@@ -549,6 +561,7 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
         &*records,
         &*crypto,
         &instance,
+        iroha_sumeragi::testing::TEST_EPOCH.id,
         &[(key.clone(), false)],
         0,
         false,
@@ -564,7 +577,10 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
         genesis,
         128,
         found,
-        vec![(1, config.clone()), (2, config.clone())],
+        vec![
+            (1, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+            (2, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+        ],
         3,
     )
     .unwrap();
@@ -584,6 +600,7 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
         .spawn(
             DriverConfig::default(),
             DriverStart {
+                allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
                 local: LocalParams::default(),
                 init,
                 signers: vec![Box::new(vals.signer(0).clone())],
@@ -608,7 +625,8 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
     }
     std::thread::sleep(Duration::from_millis(100));
     let b1 = block(1, genesis.0, genesis.1, vec![4; 64]);
-    let ExecOutcome::Valid(r1) = block_exec(&genesis.1, &b1) else {
+    let ExecOutcome::Valid(r1) = block_exec(&genesis.1, &b1, &iroha_sumeragi::testing::TEST_EPOCH)
+    else {
         panic!("the block executes")
     };
     let qc = vals.qc(
@@ -702,7 +720,10 @@ fn frame_limit_follows_committed_configurations() {
         !node.fakes.observer.frame_limits.lock().is_empty()
     });
     let exceeded = node.fakes.observer.frame_limits.lock()[0];
-    assert_eq!(exceeded.needed, (32 << 20) + 64 * 1024);
+    assert_eq!(
+        exceeded.needed,
+        (32 << 20) + u64::from(iroha_sumeragi::pacemaker::FRAME_OVERHEAD)
+    );
     assert_eq!(exceeded.limit, DriverConfig::default().frame_limit);
     node.running.shutdown();
 }

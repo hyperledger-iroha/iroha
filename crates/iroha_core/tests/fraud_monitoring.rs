@@ -51,7 +51,7 @@ fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id.clone());
     let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     (state, network_id, account_id, key_pair)
@@ -158,7 +158,9 @@ fn admission_allows_when_fraud_disabled() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(tx, &mut cache);
+    let (_, result) = block
+        .validate_transaction(tx, &mut cache)
+        .expect("local execution completes");
     assert!(
         result.is_ok(),
         "disabled fraud monitoring should permit tx: {result:?}"
@@ -178,7 +180,9 @@ fn admission_rejects_missing_assessment_when_required() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(tx, &mut cache);
+    let (_, result) = block
+        .validate_transaction(tx, &mut cache)
+        .expect("local execution completes");
     let err = result.expect_err("missing assessment must reject");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -251,7 +255,9 @@ fn admission_rejects_when_band_insufficient() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(tx, &mut cache);
+    let (_, result) = block
+        .validate_transaction(tx, &mut cache)
+        .expect("local execution completes");
     let err = result.expect_err("insufficient band must reject");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -279,7 +285,9 @@ fn admission_allows_when_band_sufficient() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(tx, &mut cache);
+    let (_, result) = block
+        .validate_transaction(tx, &mut cache)
+        .expect("local execution completes");
     assert!(
         result.is_ok(),
         "sufficient band should permit tx: {result:?}"
@@ -307,7 +315,9 @@ fn admission_rejects_missing_attestation_when_required() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(tx, &mut cache);
+    let (_, result) = block
+        .validate_transaction(tx, &mut cache)
+        .expect("local execution completes");
     let err = result.expect_err("attestation metadata must be required");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -366,7 +376,9 @@ fn admission_rejects_attestation_signature_mismatch() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(tx, &mut cache);
+    let (_, result) = block
+        .validate_transaction(tx, &mut cache)
+        .expect("local execution completes");
     let err = result.expect_err("tampered signature must reject");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -403,6 +415,8 @@ fn admission_allows_with_valid_attestation() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(tx, &mut cache);
+    let (_, result) = block
+        .validate_transaction(tx, &mut cache)
+        .expect("local execution completes");
     assert!(result.is_ok(), "valid attestation must be accepted");
 }

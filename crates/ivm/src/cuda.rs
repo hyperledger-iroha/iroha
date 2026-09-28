@@ -1,88 +1,116 @@
 #![cfg_attr(not(feature = "cuda"), allow(dead_code))]
-fn ed25519_public_key_bytes_are_invalid(pk: &[u8; 32]) -> bool {
-    crate::signature::ed25519_public_key_bytes_are_invalid(pk)
-}
+#[cfg(any(feature = "cuda", test))]
+#[path = "cuda_policy.rs"]
+pub(crate) mod policy;
+#[cfg(feature = "cuda")]
+#[path = "cuda/vector_api.rs"]
+mod vectors;
+#[cfg(feature = "cuda")]
+pub use vectors::{
+    vadd32_cuda_into, vadd64_cuda_into, vand_cuda_into, vor_cuda_into, vxor_cuda_into,
+};
+#[cfg(feature = "cuda")]
+#[path = "cuda/hash_api.rs"]
+mod hashes;
+#[cfg(feature = "cuda")]
+pub use hashes::{keccak_f1600_cuda, sha256_compress_cuda};
+#[cfg(feature = "cuda")]
+#[path = "cuda/aes_api.rs"]
+mod aes_batches;
+#[cfg(feature = "cuda")]
+pub(crate) use aes_batches::attempt as aes_batch_attempt;
+#[cfg(feature = "cuda")]
+pub use aes_batches::{
+    aesdec_batch_cuda_into, aesdec_cuda, aesdec_rounds_batch_cuda_into, aesenc_batch_cuda_into,
+    aesenc_cuda, aesenc_rounds_batch_cuda_into,
+};
+#[cfg(feature = "cuda")]
+#[path = "cuda/merkle_api.rs"]
+mod merkle;
+#[cfg(feature = "cuda")]
+pub(crate) use merkle::{sha256_leaf_chunks_cuda_attempt, sha256_merkle_root_cuda};
+#[cfg(feature = "cuda")]
+pub use merkle::{sha256_leaves_cuda_into, sha256_pairs_reduce_cuda};
+#[cfg(feature = "cuda")]
+#[path = "cuda/poseidon_api.rs"]
+mod poseidons;
+#[cfg(feature = "cuda")]
+pub use poseidons::{
+    poseidon2_cuda, poseidon2_cuda_many_into, poseidon6_cuda, poseidon6_cuda_many_into,
+};
+#[cfg(feature = "cuda")]
+#[path = "cuda/bn254_api.rs"]
+mod bn254_batches;
+#[cfg(feature = "cuda")]
+pub use bn254_batches::{
+    bn254_add_batch_cuda_into, bn254_add_cuda, bn254_mul_batch_cuda_into, bn254_mul_cuda,
+    bn254_sub_batch_cuda_into, bn254_sub_cuda,
+};
+#[cfg(feature = "cuda")]
+#[path = "cuda/signature_api.rs"]
+mod signatures;
+#[cfg(feature = "cuda")]
+pub(crate) use signatures::ed25519_items_cuda_into;
+#[cfg(feature = "cuda")]
+pub use signatures::{ed25519_verify_batch_cuda_into, ed25519_verify_cuda};
+#[cfg(feature = "cuda")]
+#[path = "cuda/bitonic_api.rs"]
+mod bitonic;
+#[cfg(feature = "cuda")]
+pub use bitonic::bitonic_sort_pairs;
 #[cfg(feature = "cuda")]
 mod imp {
-    use crate::bn254_vec::FieldElem;
-    use crate::sha256_ref::sha256_compress_scalar_ref as sha256_scalar_ref;
-    use cust::{
-        context::CurrentContext,
-        memory::{AsyncCopyDestination, CopyDestination, DeviceCopy, LockedBuffer},
-        prelude::*,
-        sys::{cuStreamQuery, cudaError_enum},
+    #[cfg(test)]
+    use super::aes_batches::{
+        aesdec_batch_cuda_into, aesdec_cuda, aesdec_rounds_batch_cuda_into, aesenc_batch_cuda_into,
+        aesenc_cuda, aesenc_rounds_batch_cuda_into,
     };
+    #[cfg(test)]
+    use super::bitonic::bitonic_sort_pairs;
+    #[cfg(test)]
+    use super::bn254_batches::{
+        bn254_add_batch_cuda_into, bn254_add_cuda, bn254_mul_batch_cuda_into, bn254_mul_cuda,
+        bn254_sub_batch_cuda_into, bn254_sub_cuda,
+    };
+    #[cfg(test)]
+    use super::hashes::{keccak_f1600_cuda, sha256_compress_cuda};
+    #[cfg(test)]
+    use super::merkle::{sha256_leaves_cuda_into, sha256_pairs_reduce_cuda};
+    use super::policy::Kernel;
+    #[cfg(test)]
+    use super::poseidons::{
+        poseidon2_cuda, poseidon2_cuda_many_into, poseidon6_cuda, poseidon6_cuda_many_into,
+    };
+    #[cfg(test)]
+    use super::signatures::{ed25519_verify_batch_cuda_into, ed25519_verify_cuda};
+    #[cfg(test)]
+    use super::vectors::{
+        vadd32_cuda_into, vadd64_cuda_into, vand_cuda_into, vor_cuda_into, vxor_cuda_into,
+    };
+    #[cfg(test)]
+    use crate::sha256_ref::sha256_compress_scalar_ref as sha256_scalar_ref;
     use std::cell::Cell;
-    use std::mem::ManuallyDrop;
-    use std::ops::{Deref, DerefMut};
     use std::sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     };
-    use std::{
-        thread,
-        time::{Duration, Instant},
-    };
-    static PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/add.ptx"));
-    static VEC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/vector.ptx"));
-    static SHA_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/sha256.ptx"));
-    static SHA_LEAVES_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/sha256_leaves.ptx"));
-    static POSEIDON_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/poseidon.ptx"));
-    static SHA3_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/sha3.ptx"));
-    static AES_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/aes.ptx"));
-    static BN254_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bn254.ptx"));
-    static SIG_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/signature.ptx"));
-    static SHA_PAIRS_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/sha256_pairs_reduce.ptx"));
-    #[allow(dead_code)]
-    static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));
-    static POSEIDON2_RC_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
-    static POSEIDON2_MDS_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
-    static POSEIDON6_RC_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
-    static POSEIDON6_MDS_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
     static CUDA_DISABLED: AtomicBool = AtomicBool::new(false);
     static CUDA_FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
-    static CUDA_ABANDON_DEVICE_ALLOCS: AtomicBool = AtomicBool::new(false);
-    static CUDA_SELFTEST_OK: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
     static CUDA_LAST_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     thread_local! {
         static CUDA_SELFTEST_RUNNING: Cell<bool> = const { Cell::new(false) };
+        static CUDA_COMPLETED_DISPATCHES: Cell<u64> = const { Cell::new(0) };
+        static CUDA_EXECUTION_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
     }
     fn cuda_error_slot() -> &'static Mutex<Option<String>> {
         CUDA_LAST_ERROR.get_or_init(|| Mutex::new(None))
     }
-    fn cuda_selftest_cache() -> &'static Mutex<Option<bool>> {
-        CUDA_SELFTEST_OK.get_or_init(|| Mutex::new(None))
-    }
     fn cuda_selftest_running() -> bool {
         CUDA_SELFTEST_RUNNING.with(Cell::get)
     }
-    fn bind_cuda_context_for_current_thread() -> bool {
-        let Some(mgr) = crate::GpuManager::shared() else {
-            set_cuda_status_message(Some(
-                "CUDA driver init or GPU manager setup failed".to_owned(),
-            ));
-            return false;
-        };
-        if mgr.device_count() == 0 {
-            set_cuda_status_message(Some("no CUDA devices detected".to_owned()));
-            return false;
-        }
-        let task_id = cuda_task_id(TASK_BIND_CONTEXT, &[mgr.device_count() as u64]);
-        let rebound = with_cuda_task_scope(task_id, || {
-            mgr.with_gpu_for_task(0, |gpu| CurrentContext::set_current(&gpu.context).ok())
-                .flatten()
-                .is_some()
-        });
-        if !rebound {
-            set_cuda_status_message(Some(
-                "failed to bind CUDA context on the current thread".to_owned(),
-            ));
-        }
-        rebound
-    }
-    struct SelftestRunningGuard;
+    pub(super) struct SelftestRunningGuard;
     impl SelftestRunningGuard {
-        fn enter() -> Option<Self> {
+        pub(super) fn enter() -> Option<Self> {
             let already_running = CUDA_SELFTEST_RUNNING.with(|running| {
                 let was_running = running.get();
                 if !was_running {
@@ -98,6 +126,7 @@ mod imp {
             CUDA_SELFTEST_RUNNING.with(|running| running.set(false));
         }
     }
+    #[cfg(test)]
     fn trace_cuda_selftest(step: &str) {
         if std::env::var_os("IVM_CUDA_SELFTEST_TRACE").is_some() {
             eprintln!("ivm cuda selftest: {step}");
@@ -110,971 +139,84 @@ mod imp {
     }
     fn record_cuda_disable(reason: impl Into<String>) {
         let message = reason.into();
-        CUDA_DISABLED.store(true, Ordering::SeqCst);
+        let scoped = crate::cuda_dispatch::quarantine_current_kernel();
+        if !scoped {
+            CUDA_DISABLED.store(true, Ordering::SeqCst);
+        }
         if let Ok(mut guard) = cuda_error_slot().lock() {
             *guard = Some(message.clone());
         }
-        eprintln!("ivm: cuda backend disabled: {message}");
+        eprintln!("ivm: cuda acceleration quarantined: {message}");
     }
-    const CUDA_STREAM_TIMEOUT: Duration = Duration::from_secs(120);
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    enum CudaWaitStatus {
-        Ready,
-        TimedOut,
-        Failed(cudaError_enum),
+    /// Completed CUDA kernel batches on this thread, excluding admission self-tests.
+    ///
+    /// This diagnostic counts successfully completed operation batches, not individual launches.
+    /// Qualification must also compare each returned result with its scalar reference.
+    pub fn cuda_completed_dispatches() -> u64 {
+        CUDA_COMPLETED_DISPATCHES.with(Cell::get)
     }
-    fn wait_until_cuda_ready(
-        timeout: Duration,
-        mut query: impl FnMut() -> cudaError_enum,
-    ) -> CudaWaitStatus {
-        let started = Instant::now();
-        loop {
-            match query() {
-                cudaError_enum::CUDA_SUCCESS => return CudaWaitStatus::Ready,
-                cudaError_enum::CUDA_ERROR_NOT_READY => {
-                    if started.elapsed() >= timeout {
-                        return CudaWaitStatus::TimedOut;
-                    }
-                    thread::sleep(Duration::from_millis(1));
-                }
-                status => return CudaWaitStatus::Failed(status),
-            }
+    pub(super) fn record_completed_cuda_dispatch() {
+        if !cuda_selftest_running() {
+            CUDA_COMPLETED_DISPATCHES.with(|count| count.set(count.get().saturating_add(1)));
         }
     }
-    fn wait_for_cuda_stream(stream: &Stream, context: &str) -> Option<()> {
-        finish_cuda_wait(
-            wait_until_cuda_ready(CUDA_STREAM_TIMEOUT, || unsafe {
-                cuStreamQuery(stream.as_inner())
-            }),
-            context,
-        )
-    }
-    fn finish_cuda_wait(status: CudaWaitStatus, context: &str) -> Option<()> {
-        match status {
-            CudaWaitStatus::Ready => Some(()),
-            CudaWaitStatus::TimedOut => {
-                CUDA_ABANDON_DEVICE_ALLOCS.store(true, Ordering::SeqCst);
-                record_cuda_disable(format!(
-                    "{context} CUDA stream timed out after {CUDA_STREAM_TIMEOUT:?}; abandoning device allocations"
-                ));
-                None
-            }
-            CudaWaitStatus::Failed(status) => {
-                record_cuda_disable(format!("{context} CUDA stream query failed: {status:?}"));
-                None
-            }
+    pub(crate) fn record_cuda_attempt() {
+        if !cuda_selftest_running() {
+            CUDA_EXECUTION_ATTEMPTS.with(|count| count.set(count.get().saturating_add(1)));
         }
     }
-    pub(crate) fn cuda_should_abandon_device_allocations() -> bool {
-        CUDA_ABANDON_DEVICE_ALLOCS.load(Ordering::SeqCst)
-    }
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct KernelStatus {
-        code: u32,
-        detail: u32,
-    }
-    unsafe impl DeviceCopy for KernelStatus {}
-    struct CudaDeviceBuffer<T: DeviceCopy> {
-        inner: ManuallyDrop<DeviceBuffer<T>>,
-    }
-    impl<T: DeviceCopy> CudaDeviceBuffer<T> {
-        fn new(buffer: DeviceBuffer<T>) -> Self {
-            Self {
-                inner: ManuallyDrop::new(buffer),
-            }
-        }
-    }
-    impl<T: DeviceCopy> Deref for CudaDeviceBuffer<T> {
-        type Target = DeviceBuffer<T>;
-        fn deref(&self) -> &Self::Target {
-            &self.inner
-        }
-    }
-    impl<T: DeviceCopy> DerefMut for CudaDeviceBuffer<T> {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.inner
-        }
-    }
-    impl<T: DeviceCopy> Drop for CudaDeviceBuffer<T> {
-        fn drop(&mut self) {
-            if !cuda_should_abandon_device_allocations() {
-                unsafe {
-                    ManuallyDrop::drop(&mut self.inner);
-                }
-            }
-        }
-    }
-    fn cuda_buffer_from_slice<T: DeviceCopy>(slice: &[T]) -> Option<CudaDeviceBuffer<T>> {
-        DeviceBuffer::from_slice(slice)
-            .ok()
-            .map(CudaDeviceBuffer::new)
-    }
-    fn cuda_buffer_from_slice_async<T: DeviceCopy + Clone>(
-        slice: &[T],
-        stream: &Stream,
-        context: &str,
-    ) -> Option<CudaDeviceBuffer<T>> {
-        let mut device = device_buffer_uninitialized::<T>(slice.len())?;
-        let staging = LockedBuffer::from_slice(slice).ok()?;
-        // SAFETY: `staging` is page-locked host memory and stays alive until the
-        // queued copy has completed or the stream timeout path intentionally leaks it.
-        unsafe {
-            device.async_copy_from(&staging, stream).ok()?;
-        }
-        if wait_for_cuda_stream(stream, context).is_none() {
-            std::mem::forget(staging);
-            return None;
-        }
-        Some(device)
-    }
-    fn copy_device_to_host_bounded<T: DeviceCopy + Copy>(
-        device: &DeviceBuffer<T>,
-        dest: &mut [T],
-        stream: &Stream,
-        context: &str,
-    ) -> Option<()> {
-        let mut staging = unsafe { LockedBuffer::<T>::uninitialized(dest.len()).ok()? };
-        // SAFETY: `staging` is page-locked host memory and is not read until the
-        // bounded stream wait below reports that the async copy has completed.
-        unsafe {
-            device.async_copy_to(&mut staging, stream).ok()?;
-        }
-        if wait_for_cuda_stream(stream, context).is_none() {
-            std::mem::forget(staging);
-            return None;
-        }
-        dest.copy_from_slice(&staging);
-        Some(())
-    }
-    fn device_buffer_uninitialized<T: DeviceCopy>(len: usize) -> Option<CudaDeviceBuffer<T>> {
-        unsafe { DeviceBuffer::<T>::uninitialized(len).ok() }.map(CudaDeviceBuffer::new)
-    }
-    const BN254_LIMBS: usize = 4;
-    const POSEIDON2_WIDTH: usize = 3;
-    const POSEIDON6_WIDTH: usize = 6;
-    const POSEIDON2_STATE_WORDS: usize = POSEIDON2_WIDTH * BN254_LIMBS;
-    const POSEIDON6_STATE_WORDS: usize = POSEIDON6_WIDTH * BN254_LIMBS;
-    const POSEIDON_FULL_ROUNDS: u32 = 8;
-    const POSEIDON_PARTIAL_ROUNDS: u32 = 56;
     #[cfg(test)]
-    const POSEIDON_STATUS_ERR_STRIDE: u32 = 2; // keep in sync with poseidon.cu STATUS_ERR_STRIDE
-    const POSEIDON_STATUS_ERR_ROUNDS: u32 = 3; // keep in sync with poseidon.cu STATUS_ERR_ROUNDS
-    const TASK_BIND_CONTEXT: u64 = 0x0f0f_0f0f_0000_0001;
-    const TASK_BITONIC: u64 = 0x0f0f_0f0f_0000_0002;
-    const TASK_VECTOR_F32: u64 = 0x0f0f_0f0f_0000_0010;
-    const TASK_VECTOR_U32: u64 = 0x0f0f_0f0f_0000_0011;
-    const TASK_VECTOR_U64: u64 = 0x0f0f_0f0f_0000_0012;
-    const TASK_SHA256_BLOCK: u64 = 0x0f0f_0f0f_0000_0020;
-    const TASK_SHA256_LEAVES: u64 = 0x0f0f_0f0f_0000_0021;
-    const TASK_SHA256_PAIRS: u64 = 0x0f0f_0f0f_0000_0022;
-    const TASK_SELFTEST: u64 = 0x0f0f_0f0f_0000_002f;
-    const TASK_POSEIDON2: u64 = 0x0f0f_0f0f_0000_0030;
-    const TASK_POSEIDON6: u64 = 0x0f0f_0f0f_0000_0031;
-    const TASK_KECCAK: u64 = 0x0f0f_0f0f_0000_0040;
-    const TASK_AES_ROUND: u64 = 0x0f0f_0f0f_0000_0050;
-    const TASK_AES_BATCH: u64 = 0x0f0f_0f0f_0000_0051;
-    const TASK_AES_FUSED: u64 = 0x0f0f_0f0f_0000_0052;
-    const TASK_BN254: u64 = 0x0f0f_0f0f_0000_0060;
-    const TASK_ED25519_SINGLE: u64 = 0x0f0f_0f0f_0000_0070;
-    const TASK_ED25519_BATCH: u64 = 0x0f0f_0f0f_0000_0071;
-    const MODULE_BN254: &str = "bn254";
-    const MODULE_BITONIC: &str = "bitonic";
-    const MODULE_SHA256_BLOCK: &str = "sha256";
-    const MODULE_SHA256_LEAVES: &str = "sha256_leaves";
-    const MODULE_SHA256_PAIRS: &str = "sha256_pairs_reduce";
-    const MODULE_SHA3: &str = "sha3";
-    const MODULE_AES: &str = "aes";
-    const MODULE_SIGNATURE: &str = "signature";
-    const MODULE_VECTOR_SUM: &str = "vector_sum";
-    const MODULE_VECTOR: &str = "vector";
-    const MODULE_POSEIDON: &str = "poseidon";
-    const BUFFER_POSEIDON2_RC: &str = "poseidon2_rc";
-    const BUFFER_POSEIDON2_MDS: &str = "poseidon2_mds";
-    const BUFFER_POSEIDON6_RC: &str = "poseidon6_rc";
-    const BUFFER_POSEIDON6_MDS: &str = "poseidon6_mds";
-    fn mix_task_id(mut state: u64, value: u64) -> u64 {
-        state ^= value.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        state = state.rotate_left(27);
-        state = state.wrapping_mul(0x94d0_49bb_1331_11eb);
-        state ^ (state >> 31)
-    }
-    fn cuda_task_id(seed: u64, dims: &[u64]) -> u64 {
-        dims.iter().copied().fold(seed, mix_task_id)
-    }
-    fn with_cuda_task_scope<T>(task_id: u64, func: impl FnOnce() -> T) -> T {
-        crate::gpu_manager::with_task_scope(task_id, func)
-    }
-    fn kernel_name_tag(name: &str) -> u64 {
-        let mut tag = 0u64;
-        for &byte in name.as_bytes().iter().take(8) {
-            tag = (tag << 8) | u64::from(byte);
-        }
-        tag
-    }
-    fn flatten_round_constants<const WIDTH: usize>(
-        rc: &Vec<[[u64; BN254_LIMBS]; WIDTH]>,
-    ) -> Vec<u64> {
-        let mut flat = Vec::with_capacity(rc.len() * WIDTH * BN254_LIMBS);
-        for round in rc.iter() {
-            for lane in round.iter() {
-                flat.extend_from_slice(lane);
-            }
-        }
-        flat
-    }
-    fn flatten_mds<const WIDTH: usize>(mds: &[[[u64; BN254_LIMBS]; WIDTH]; WIDTH]) -> Vec<u64> {
-        let mut flat = Vec::with_capacity(WIDTH * WIDTH * BN254_LIMBS);
-        for row in mds.iter() {
-            for elem in row.iter() {
-                flat.extend_from_slice(elem);
-            }
-        }
-        flat
-    }
-    #[allow(dead_code)]
-    pub(super) fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
-        if hi.len() != lo.len() {
-            return None;
-        }
-        if hi.is_empty() {
-            return Some(());
-        }
-        if !ensure_cuda_selftest() {
-            return None;
-        }
-        let len = hi.len();
-        let pow2 = len.next_power_of_two();
-        if pow2 > u32::MAX as usize {
-            return None;
-        }
-        let mut hi_pad = Vec::with_capacity(pow2);
-        hi_pad.extend_from_slice(hi);
-        hi_pad.resize(pow2, u64::MAX);
-        let mut lo_pad = Vec::with_capacity(pow2);
-        lo_pad.extend_from_slice(lo);
-        lo_pad.resize(pow2, u64::MAX);
-        let task_id = cuda_task_id(TASK_BITONIC, &[len as u64, pow2 as u64]);
-        with_cuda_task_scope(task_id, || {
-            let mgr = crate::GpuManager::shared()?;
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_BITONIC, BITONIC_PTX)?;
-                    let function = module.get_function("bitonic_step").ok()?;
-                    let d_hi = cuda_buffer_from_slice(&hi_pad)?;
-                    let d_lo = cuda_buffer_from_slice(&lo_pad)?;
-                    let threads: u32 = 256;
-                    let blocks: u32 = (pow2 as u32).div_ceil(threads);
-                    let mut k = 2usize;
-                    while k <= pow2 {
-                        let mut j = k >> 1;
-                        while j > 0 {
-                            unsafe {
-                                launch!(function<<<blocks, threads, 0, stream>>>(
-                                    d_hi.as_device_ptr(),
-                                    d_lo.as_device_ptr(),
-                                    pow2 as u32,
-                                    j as u32,
-                                    k as u32
-                                ))
-                                .ok()?;
-                            }
-                            j >>= 1;
-                        }
-                        k <<= 1;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut hi_out = vec![0u64; pow2];
-                    let mut lo_out = vec![0u64; pow2];
-                    d_hi.copy_to(&mut hi_out).ok()?;
-                    d_lo.copy_to(&mut lo_out).ok()?;
-                    hi[..len].copy_from_slice(&hi_out[..len]);
-                    lo[..len].copy_from_slice(&lo_out[..len]);
-                    Some(())
-                })
-            })?
-        })
-    }
-    fn flatten_bn254_operands(elements: &[[u64; BN254_LIMBS]]) -> Vec<u64> {
-        let mut flat = Vec::with_capacity(elements.len() * BN254_LIMBS);
-        for element in elements {
-            flat.extend_from_slice(element);
-        }
-        flat
-    }
-    fn collect_bn254_outputs(words: &[u64], elem_count: usize) -> Option<Vec<[u64; BN254_LIMBS]>> {
-        if words.len() != elem_count.checked_mul(BN254_LIMBS)? {
-            return None;
-        }
-        let mut out = Vec::with_capacity(elem_count);
-        for chunk in words.chunks_exact(BN254_LIMBS) {
-            let mut element = [0u64; BN254_LIMBS];
-            element.copy_from_slice(chunk);
-            out.push(element);
-        }
-        Some(out)
-    }
-    fn bn254_launch_kernel_words(
-        kernel_name: &str,
-        lhs_words: &[u64],
-        rhs_words: &[u64],
-        out_words: &mut [u64],
-        elem_count: usize,
-    ) -> Option<()> {
-        let word_count = elem_count.checked_mul(BN254_LIMBS)?;
-        if lhs_words.len() != word_count
-            || rhs_words.len() != word_count
-            || out_words.len() != word_count
-        {
-            return None;
-        }
-        if elem_count == 0 || elem_count > u32::MAX as usize {
-            return None;
-        }
-        let task_id = cuda_task_id(
-            TASK_BN254,
-            &[
-                kernel_name_tag(kernel_name),
-                elem_count as u64,
-                lhs_words[0],
-                rhs_words[0],
-            ],
-        );
-        with_cuda_task_scope(task_id, || {
-            let mgr = crate::GpuManager::shared()?;
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_BN254, BN254_PTX)?;
-                    let function = module.get_function(kernel_name).ok()?;
-                    let d_lhs = cuda_buffer_from_slice(lhs_words)?;
-                    let d_rhs = cuda_buffer_from_slice(rhs_words)?;
-                    let d_out = device_buffer_uninitialized::<u64>(word_count)?;
-                    let threads: u32 = 128;
-                    let grid: u32 = (elem_count as u32).div_ceil(threads);
-                    let launch_res = unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_lhs.as_device_ptr(),
-                            d_rhs.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            elem_count as u32,
-                            BN254_LIMBS as u32
-                        ))
-                    };
-                    if launch_res.is_err() {
-                        record_cuda_disable(format!(
-                            "kernel {kernel_name} launch failed; falling back to scalar backend"
-                        ));
-                        return None;
-                    }
-                    wait_for_cuda_stream(stream, kernel_name)?;
-                    if d_out.copy_to(out_words).is_err() {
-                        record_cuda_disable(format!("{kernel_name} copy failed"));
-                        return None;
-                    }
-                    Some(())
-                })
-            })?
-        })
-    }
-    fn bn254_launch_kernel(
-        kernel_name: &str,
-        lhs: &[u64; BN254_LIMBS],
-        rhs: &[u64; BN254_LIMBS],
-    ) -> Option<[u64; BN254_LIMBS]> {
-        let mut out = [0u64; BN254_LIMBS];
-        bn254_launch_kernel_words(kernel_name, lhs, rhs, &mut out, 1)?;
-        Some(out)
-    }
-    fn bn254_launch_kernel_batch(
-        kernel_name: &str,
-        lhs: &[[u64; BN254_LIMBS]],
-        rhs: &[[u64; BN254_LIMBS]],
-    ) -> Option<Vec<[u64; BN254_LIMBS]>> {
-        if lhs.len() != rhs.len() {
-            return None;
-        }
-        if lhs.is_empty() {
-            return Some(Vec::new());
-        }
-        let flat_lhs = flatten_bn254_operands(lhs);
-        let flat_rhs = flatten_bn254_operands(rhs);
-        let mut flat_out = vec![0u64; lhs.len() * BN254_LIMBS];
-        bn254_launch_kernel_words(kernel_name, &flat_lhs, &flat_rhs, &mut flat_out, lhs.len())?;
-        collect_bn254_outputs(&flat_out, lhs.len())
-    }
-    fn sha256_pairs_reduce_device_buffer(
-        function: &Function,
-        stream: &Stream,
-        initial_digests: &CudaDeviceBuffer<u8>,
-        digest_count: usize,
-    ) -> Option<[u8; 32]> {
-        if digest_count == 0 || digest_count > u32::MAX as usize {
-            return None;
-        }
-        let max_len = digest_count.checked_mul(32)?;
-        let scratch = device_buffer_uninitialized::<u8>(max_len)?;
-        let mut current_count = digest_count as u32;
-        let mut current_is_initial = true;
-        while current_count > 1 {
-            let next_count = current_count.div_ceil(2);
-            let threads: u32 = 256;
-            let grid: u32 = next_count.div_ceil(threads).max(1);
-            let (input, output) = if current_is_initial {
-                (initial_digests, &scratch)
-            } else {
-                (&scratch, initial_digests)
-            };
-            unsafe {
-                launch!(function<<<grid, threads, 0, stream>>>(
-                    input.as_device_ptr(),
-                    output.as_device_ptr(),
-                    current_count
-                ))
-                .ok()?;
-            }
-            current_count = next_count;
-            current_is_initial = !current_is_initial;
-        }
-        wait_for_cuda_stream(stream, "cuda kernel")?;
-        let final_buf = if current_is_initial {
-            initial_digests
-        } else {
-            &scratch
-        };
-        let mut root = [0u8; 32];
-        final_buf.index(0..32).copy_to(&mut root).ok()?;
-        Some(root)
-    }
-    fn sha256_pairs_reduce_on_gpu(
-        function: &Function,
-        gpu: &crate::gpu_manager::GpuContext,
-        flat_digests: &[u8],
-        digest_count: usize,
-    ) -> Option<[u8; 32]> {
-        if digest_count == 0 || flat_digests.len() != digest_count.checked_mul(32)? {
-            return None;
-        }
-        gpu.with_stream(|stream| {
-            let current = cuda_buffer_from_slice(flat_digests)?;
-            sha256_pairs_reduce_device_buffer(function, stream, &current, digest_count)
-        })
-    }
-    fn poseidon_cuda_selftest() -> bool {
-        let sample2 = (1u64, 2u64);
-        let expected2 = crate::poseidon::poseidon2_simd(sample2.0, sample2.1);
-        let Some((outputs2, status2)) = poseidon2_cuda_many_impl(
-            &[sample2],
-            POSEIDON_FULL_ROUNDS,
-            POSEIDON_PARTIAL_ROUNDS,
-            true,
-            true,
-        ) else {
-            record_cuda_disable("poseidon2 CUDA self-test launch failed");
-            return false;
-        };
-        if status2.code != 0 || outputs2.first().copied() != Some(expected2) {
-            record_cuda_disable("poseidon2 CUDA self-test mismatch");
-            return false;
-        }
-        let sample6 = [1u64, 2, 3, 4, 5, 6];
-        let expected6 = crate::poseidon::poseidon6_simd(sample6);
-        let Some((outputs6, status6)) = poseidon6_cuda_many_impl(
-            &[sample6],
-            POSEIDON_FULL_ROUNDS,
-            POSEIDON_PARTIAL_ROUNDS,
-            true,
-            true,
-        ) else {
-            record_cuda_disable("poseidon6 CUDA self-test launch failed");
-            return false;
-        };
-        if status6.code != 0 || outputs6.first().copied() != Some(expected6) {
-            record_cuda_disable("poseidon6 CUDA self-test mismatch");
-            return false;
-        }
-        true
-    }
     fn ed25519_cuda_selftest() -> bool {
-        use ed25519_dalek::{Signer, SigningKey};
-        let key = SigningKey::from_bytes(&[9u8; 32]);
-        let pk = key.verifying_key();
-        let msg = b"ivm-cuda-ed25519-selftest";
-        let sig = key.sign(msg).to_bytes();
-        let hram = crate::signature::ed25519_challenge_scalar_bytes(&sig, pk.as_bytes(), msg);
-        let mgr = match crate::GpuManager::shared() {
-            Some(mgr) => mgr,
-            None => {
-                record_cuda_disable("ed25519 CUDA self-test could not acquire GPU manager");
-                return false;
-            }
-        };
-        let single_task = cuda_task_id(
-            TASK_ED25519_SINGLE,
-            &[msg.len() as u64, u64::from(sig[0]), TASK_SELFTEST],
-        );
-        let single_ok = with_cuda_task_scope(single_task, || {
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_SIGNATURE, SIG_PTX)?;
-                    let function = module.get_function("signature_kernel").ok()?;
-                    let d_sig = cuda_buffer_from_slice(sig.as_ref())?;
-                    let d_pk = cuda_buffer_from_slice(pk.as_bytes())?;
-                    let d_hram = cuda_buffer_from_slice(hram.as_ref())?;
-                    let d_out = device_buffer_uninitialized::<u8>(1)?;
-                    unsafe {
-                        launch!(function<<<1, 32, 0, stream>>>(
-                            d_sig.as_device_ptr(),
-                            d_pk.as_device_ptr(),
-                            d_hram.as_device_ptr(),
-                            1u32,
-                            d_out.as_device_ptr()
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut out = [0u8; 1];
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(out[0] == 1)
-                })
-            })
-        });
-        if single_ok != Some(Some(true)) {
-            record_cuda_disable("golden self-test mismatch: ed25519 single");
-            return false;
-        }
-        let mut bad_sig = sig;
-        bad_sig[0] ^= 0x80;
-        let sigs = [sig, bad_sig];
-        let pks = [pk.to_bytes(), pk.to_bytes()];
-        let hrams = [hram, hram];
-        let flat_sigs: Vec<u8> = sigs
-            .iter()
-            .flat_map(|value| value.iter())
-            .copied()
-            .collect();
-        let flat_pks: Vec<u8> = pks.iter().flat_map(|value| value.iter()).copied().collect();
-        let flat_hrams: Vec<u8> = hrams
-            .iter()
-            .flat_map(|value| value.iter())
-            .copied()
-            .collect();
-        let batch_task = cuda_task_id(TASK_ED25519_BATCH, &[2, TASK_SELFTEST]);
-        let batch_ok = with_cuda_task_scope(batch_task, || {
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_SIGNATURE, SIG_PTX)?;
-                    let function = module.get_function("signature_kernel").ok()?;
-                    let d_sig = cuda_buffer_from_slice(&flat_sigs)?;
-                    let d_pk = cuda_buffer_from_slice(&flat_pks)?;
-                    let d_hram = cuda_buffer_from_slice(&flat_hrams)?;
-                    let d_out = device_buffer_uninitialized::<u8>(2)?;
-                    unsafe {
-                        launch!(function<<<1, 128, 0, stream>>>(
-                            d_sig.as_device_ptr(),
-                            d_pk.as_device_ptr(),
-                            d_hram.as_device_ptr(),
-                            2u32,
-                            d_out.as_device_ptr()
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut out = [0u8; 2];
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(out == [1u8, 0u8])
-                })
-            })
-        });
-        if batch_ok != Some(Some(true)) {
-            record_cuda_disable("golden self-test mismatch: ed25519 batch");
-            return false;
-        }
-        true
+        super::signatures::admit()
     }
+    #[cfg(test)]
     fn bn254_cuda_selftest() -> bool {
-        let add_lhs = FieldElem::from_u64(3);
-        let add_rhs = FieldElem::from_u64(4);
-        let add_expected = crate::bn254_vec::add_scalar(add_lhs, add_rhs).0;
-        let Some(add_out) = bn254_launch_kernel("bn254_add_kernel", &add_lhs.0, &add_rhs.0) else {
-            record_cuda_disable("bn254 CUDA self-test launch failed: add");
-            return false;
-        };
-        if add_out != add_expected {
-            record_cuda_disable("golden self-test mismatch: bn254 add");
-            return false;
-        }
-        let sub_lhs = FieldElem::from_u64(2);
-        let sub_rhs = FieldElem::from_u64(5);
-        let sub_expected = crate::bn254_vec::sub_scalar(sub_lhs, sub_rhs).0;
-        let Some(sub_out) = bn254_launch_kernel("bn254_sub_kernel", &sub_lhs.0, &sub_rhs.0) else {
-            record_cuda_disable("bn254 CUDA self-test launch failed: sub");
-            return false;
-        };
-        if sub_out != sub_expected {
-            record_cuda_disable("golden self-test mismatch: bn254 sub");
-            return false;
-        }
-        let mul_lhs = FieldElem::from_u64(u32::MAX as u64 + 17);
-        let mul_rhs = FieldElem::from_u64(11);
-        let mul_expected = crate::bn254_vec::mul_scalar(mul_lhs, mul_rhs).0;
-        let Some(mul_out) = bn254_launch_kernel("bn254_mul_kernel", &mul_lhs.0, &mul_rhs.0) else {
-            record_cuda_disable("bn254 CUDA self-test launch failed: mul");
-            return false;
-        };
-        if mul_out != mul_expected {
-            record_cuda_disable("golden self-test mismatch: bn254 mul");
-            return false;
-        }
-        true
+        crate::cuda_dispatch::with_task_scope(0x0f0f_0f0f_0000_0060, || {
+            [Kernel::BnAdd, Kernel::BnSub, Kernel::BnMul]
+                .into_iter()
+                .all(super::bn254_batches::admit)
+        })
     }
-    fn ensure_cuda_selftest() -> bool {
+    pub(super) fn ensure_cuda_kernel(kernel: Kernel) -> bool {
         if CUDA_FORCED_DISABLED.load(Ordering::SeqCst) || CUDA_DISABLED.load(Ordering::SeqCst) {
             return false;
         }
         if cuda_selftest_running() {
-            return false;
+            return crate::cuda_dispatch::current_kernel() == Some(kernel);
         }
-        if let Ok(guard) = cuda_selftest_cache().lock()
-            && let Some(cached) = *guard
-        {
-            return cached && bind_cuda_context_for_current_thread();
-        }
-        let Some(_selftest_guard) = SelftestRunningGuard::enter() else {
-            return false;
-        };
-        let result = {
-            if CUDA_FORCED_DISABLED.load(Ordering::SeqCst)
-                || (crate::dev_env::dev_env_flag("IVM_DISABLE_CUDA")
-                    && std::env::var("IVM_DISABLE_CUDA")
-                        .map(|v| v == "1")
-                        .unwrap_or(false))
-            {
-                CUDA_DISABLED.store(true, Ordering::SeqCst);
-                set_cuda_status_message(Some(
-                    "disabled by IVM_DISABLE_CUDA environment override".to_owned(),
+        for name in ["IVM_DISABLE_CUDA", "IVM_FORCE_CUDA_SELFTEST_FAIL"] {
+            if crate::dev_env::dev_env_flag(name) && std::env::var(name).as_deref() == Ok("1") {
+                record_cuda_disable(format!(
+                    "CUDA disabled by developer self-test override {name}"
                 ));
                 return false;
             }
-            if crate::dev_env::dev_env_flag("IVM_FORCE_CUDA_SELFTEST_FAIL")
-                && std::env::var("IVM_FORCE_CUDA_SELFTEST_FAIL")
-                    .map(|v| v == "1")
-                    .unwrap_or(false)
-            {
-                CUDA_DISABLED.store(true, Ordering::SeqCst);
-                set_cuda_status_message(Some(
-                    "self-test failure forced via IVM_FORCE_CUDA_SELFTEST_FAIL".to_owned(),
-                ));
-                return false;
-            }
-            let mgr = match crate::GpuManager::shared() {
-                Some(mgr) => mgr,
-                None => {
-                    set_cuda_status_message(Some(
-                        "CUDA driver init or GPU manager setup failed".to_owned(),
-                    ));
-                    return false;
-                }
-            };
-            if mgr.device_count() == 0 {
-                set_cuda_status_message(Some("no CUDA devices detected".to_owned()));
-                return false;
-            }
-            trace_cuda_selftest("vadd32");
-            // vadd32 parity
-            let a = [1u32, 2, 3, 4];
-            let b = [4u32, 3, 2, 1];
-            let expect = [5u32, 5, 5, 5];
-            let add_ok = match launch_u32_kernel("vadd32", &a, &b) {
-                Some(out) if out.len() == 4 => out.as_slice() == expect,
-                _ => false,
-            };
-            if !add_ok {
-                record_cuda_disable("golden self-test mismatch: vadd32");
-                return false;
-            }
-            trace_cuda_selftest("vadd64");
-            if !vadd64_cuda_selftest() {
-                record_cuda_disable("golden self-test mismatch: vadd64");
-                return false;
-            }
-            trace_cuda_selftest("bit_ops");
-            if !bit_ops_cuda_selftest() {
-                record_cuda_disable("golden self-test mismatch: vector bit kernels");
-                return false;
-            }
-            trace_cuda_selftest("sha256_compress");
-            // sha256 parity on single block ("abc")
-            let mut st_scalar = [
-                0x6a09e667u32,
-                0xbb67ae85,
-                0x3c6ef372,
-                0xa54ff53a,
-                0x510e527f,
-                0x9b05688c,
-                0x1f83d9ab,
-                0x5be0cd19,
-            ];
-            let mut st_cuda = st_scalar;
-            let mut block = [0u8; 64];
-            block[0] = b'a';
-            block[1] = b'b';
-            block[2] = b'c';
-            block[3] = 0x80;
-            block[63] = 24;
-            sha256_scalar_ref(&mut st_scalar, &block);
-            let ok = if let Some(mgr) = crate::GpuManager::shared() {
-                let task_id =
-                    cuda_task_id(TASK_SHA256_BLOCK, &[u64::from(block[0]), TASK_SELFTEST]);
-                let result = with_cuda_task_scope(task_id, || {
-                    mgr.with_gpu_for_task(0, |gpu| {
-                        gpu.with_stream(|stream| {
-                            let module = gpu.cached_module(MODULE_SHA256_BLOCK, SHA_PTX)?;
-                            let function = module.get_function("sha256_compress").ok()?;
-                            let d_state = cuda_buffer_from_slice(&st_cuda)?;
-                            let d_block = cuda_buffer_from_slice(&block)?;
-                            unsafe {
-                                launch!(function<<<1, 1, 0, stream>>>(
-                                    d_state.as_device_ptr(), d_block.as_device_ptr()
-                                ))
-                                .ok()?;
-                            }
-                            wait_for_cuda_stream(stream, "cuda kernel")?;
-                            d_state.copy_to(&mut st_cuda).ok()?;
-                            Some(())
-                        })
-                    })
-                });
-                result.is_some()
-            } else {
-                false
-            };
-            if !ok || st_cuda != st_scalar {
-                record_cuda_disable("golden self-test mismatch: sha256");
-                return false;
-            }
-            trace_cuda_selftest("sha256_leaves");
-            if !sha256_leaves_cuda_selftest() {
-                record_cuda_disable("golden self-test mismatch: sha256 leaves");
-                return false;
-            }
-            trace_cuda_selftest("sha256_pairs");
-            if !sha256_pairs_reduce_cuda_selftest() {
-                record_cuda_disable("golden self-test mismatch: sha256 pairs");
-                return false;
-            }
-            trace_cuda_selftest("keccak");
-            // keccak_f1600 parity on a simple patterned state
-            let mut k_scalar = [0u64; 25];
-            for (idx, slot) in k_scalar.iter_mut().enumerate() {
-                *slot = (idx as u64) * 0x0101_0101_0101_0101u64;
-            }
-            let mut k_cuda = k_scalar;
-            crate::sha3::keccak_f1600_impl(&mut k_scalar);
-            let ok = if let Some(mgr) = crate::GpuManager::shared() {
-                let task_id = cuda_task_id(TASK_KECCAK, &[k_cuda[0], TASK_SELFTEST]);
-                let result = with_cuda_task_scope(task_id, || {
-                    mgr.with_gpu_for_task(0, |gpu| {
-                        gpu.with_stream(|stream| {
-                            let module = gpu.cached_module(MODULE_SHA3, SHA3_PTX)?;
-                            let function = module.get_function("keccak_f1600_cuda").ok()?;
-                            let d_state = cuda_buffer_from_slice(&k_cuda)?;
-                            unsafe {
-                                launch!(function<<<1, 1, 0, stream>>>(d_state.as_device_ptr()))
-                                    .ok()?;
-                            }
-                            wait_for_cuda_stream(stream, "cuda kernel")?;
-                            d_state.copy_to(&mut k_cuda).ok()?;
-                            Some(())
-                        })
-                    })
-                });
-                result.is_some()
-            } else {
-                false
-            };
-            if !ok || k_cuda != k_scalar {
-                record_cuda_disable("golden self-test mismatch: keccak");
-                return false;
-            }
-            trace_cuda_selftest("aes_round");
-            // AES round parity (ENC and DEC) using one block + rk
-            let state = [
-                0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
-                0xdd, 0xee, 0xff,
-            ];
-            let rk = [
-                0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf, 0x7f,
-                0x67, 0x98,
-            ];
-            let cpu_enc = crate::aes::aesenc_impl(state, rk);
-            let cpu_dec = crate::aes::aesdec_impl(cpu_enc, rk);
-            let ok = if let Some(mgr) = crate::GpuManager::shared() {
-                let task_id = cuda_task_id(TASK_AES_ROUND, &[u64::from(state[0]), TASK_SELFTEST]);
-                let result = with_cuda_task_scope(task_id, || {
-                    mgr.with_gpu_for_task(0, |gpu| {
-                        gpu.with_stream(|stream| {
-                            let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
-                            // AESENC
-                            let enc_fn = module.get_function("aesenc_round").ok()?;
-                            let d_state = cuda_buffer_from_slice(&state)?;
-                            let d_rk = cuda_buffer_from_slice(&rk)?;
-                            let d_out = device_buffer_uninitialized::<u8>(16)?;
-                            unsafe {
-                                launch!(enc_fn<<<1, 1, 0, stream>>>(
-                                    d_state.as_device_ptr(),
-                                    d_rk.as_device_ptr(),
-                                    d_out.as_device_ptr()
-                                ))
-                                .ok()?;
-                            }
-                            wait_for_cuda_stream(stream, "cuda kernel")?;
-                            let mut enc_out = [0u8; 16];
-                            d_out.copy_to(&mut enc_out).ok()?;
-                            if enc_out != cpu_enc {
-                                return None;
-                            }
-                            // AESDEC on the encoded block
-                            let dec_fn = module.get_function("aesdec_round").ok()?;
-                            let d_state2 = cuda_buffer_from_slice(&enc_out)?;
-                            let d_out2 = device_buffer_uninitialized::<u8>(16)?;
-                            unsafe {
-                                launch!(dec_fn<<<1, 1, 0, stream>>>(
-                                    d_state2.as_device_ptr(),
-                                    d_rk.as_device_ptr(),
-                                    d_out2.as_device_ptr()
-                                ))
-                                .ok()?;
-                            }
-                            wait_for_cuda_stream(stream, "cuda kernel")?;
-                            let mut dec_out = [0u8; 16];
-                            d_out2.copy_to(&mut dec_out).ok()?;
-                            if dec_out != cpu_dec {
-                                return None;
-                            }
-                            Some(())
-                        })
-                    })
-                });
-                result.is_some()
-            } else {
-                false
-            };
-            if !ok {
-                record_cuda_disable("golden self-test mismatch: aes round");
-                return false;
-            }
-            trace_cuda_selftest("aes_batch");
-            if !aes_batch_cuda_selftest() {
-                record_cuda_disable("golden self-test mismatch: aes batch");
-                return false;
-            }
-            trace_cuda_selftest("aes_fused");
-            // AES fused two-round parity (ENC and DEC) to validate fused kernels
-            let state = [
-                0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
-                0xdd, 0xee, 0xff,
-            ];
-            let rk1 = [
-                0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf, 0x7f,
-                0x67, 0x98,
-            ];
-            let mut rk2 = rk1; // derive a different key deterministically
-            rk2[0] ^= 0xAA;
-            rk2[1] ^= 0x55;
-            let cpu_enc2 = {
-                let r1 = crate::aes::aesenc_impl(state, rk1);
-                crate::aes::aesenc_impl(r1, rk2)
-            };
-            let cpu_dec2 = {
-                let r1 = crate::aes::aesdec_impl(cpu_enc2, rk1);
-                crate::aes::aesdec_impl(r1, rk2)
-            };
-            let ok = if let Some(mgr) = crate::GpuManager::shared() {
-                let task_id =
-                    cuda_task_id(TASK_AES_FUSED, &[1, 2, TASK_SELFTEST, u64::from(state[0])]);
-                let result = with_cuda_task_scope(task_id, || {
-                    mgr.with_gpu_for_task(0, |gpu| {
-                        gpu.with_stream(|stream| {
-                            let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
-                            // Encrypt 2 rounds
-                            let enc_fn = module.get_function("aesenc_rounds_batch").ok()?;
-                            let d_states = cuda_buffer_from_slice(&state)?;
-                            let rks: [u8; 32] = {
-                                let mut buf = [0u8; 32];
-                                buf[..16].copy_from_slice(&rk1);
-                                buf[16..].copy_from_slice(&rk2);
-                                buf
-                            };
-                            let d_rks = cuda_buffer_from_slice(&rks)?;
-                            let d_out = device_buffer_uninitialized::<u8>(16)?;
-                            unsafe {
-                                launch!(enc_fn<<<1, 1, 0, stream>>>(
-                                    d_states.as_device_ptr(),
-                                    d_rks.as_device_ptr(),
-                                    2u32,
-                                    d_out.as_device_ptr(),
-                                    1u32
-                                ))
-                                .ok()?;
-                            }
-                            wait_for_cuda_stream(stream, "cuda kernel")?;
-                            let mut enc2 = [0u8; 16];
-                            d_out.copy_to(&mut enc2).ok()?;
-                            if enc2 != cpu_enc2 {
-                                return None;
-                            }
-                            // Decrypt 2 rounds on enc2
-                            let dec_fn = module.get_function("aesdec_rounds_batch").ok()?;
-                            let d_states2 = cuda_buffer_from_slice(&enc2)?;
-                            let d_out2 = device_buffer_uninitialized::<u8>(16)?;
-                            unsafe {
-                                launch!(dec_fn<<<1, 1, 0, stream>>>(
-                                    d_states2.as_device_ptr(),
-                                    d_rks.as_device_ptr(),
-                                    2u32,
-                                    d_out2.as_device_ptr(),
-                                    1u32
-                                ))
-                                .ok()?;
-                            }
-                            wait_for_cuda_stream(stream, "cuda kernel")?;
-                            let mut dec2 = [0u8; 16];
-                            d_out2.copy_to(&mut dec2).ok()?;
-                            if dec2 != cpu_dec2 {
-                                return None;
-                            }
-                            Some(())
-                        })
-                    })
-                });
-                result.is_some()
-            } else {
-                false
-            };
-            if !ok {
-                record_cuda_disable("golden self-test mismatch: aes fused-round");
-                return false;
-            }
-            trace_cuda_selftest("poseidon");
-            if !poseidon_cuda_selftest() {
-                return false;
-            }
-            trace_cuda_selftest("ed25519");
-            if !ed25519_cuda_selftest() {
-                return false;
-            }
-            trace_cuda_selftest("bn254");
-            if !bn254_cuda_selftest() {
-                return false;
-            }
-            set_cuda_status_message(None);
-            true
-        };
-        if let Ok(mut guard) = cuda_selftest_cache().lock() {
-            *guard = Some(result);
         }
-        result
+        match kernel {
+            Kernel::BnAdd | Kernel::BnSub | Kernel::BnMul => super::bn254_batches::admit(kernel),
+            Kernel::AesEnc | Kernel::AesDec | Kernel::AesEncFused | Kernel::AesDecFused => {
+                super::aes_batches::admit(kernel)
+            }
+            Kernel::Ed25519 => super::signatures::admit(),
+            Kernel::ShaLeaves | Kernel::ShaPairs => super::merkle::admit(kernel),
+            Kernel::Poseidon2 | Kernel::Poseidon6 => super::poseidons::admit(kernel),
+            Kernel::Sha256 | Kernel::Keccak => super::hashes::admit(kernel),
+            Kernel::Add32 | Kernel::Add64 | Kernel::And | Kernel::Xor | Kernel::Or => {
+                super::vectors::admit(kernel)
+            }
+            Kernel::Bitonic => super::bitonic::admit(),
+        }
     }
+
+    // Availability means at least one admitted kernel on a usable device. Every
+    // actual operation independently admits its own kernel on the selected device.
+    fn ensure_cuda_selftest() -> bool {
+        if cuda_selftest_running() {
+            return false;
+        }
+        crate::cuda_dispatch::with_task_scope(0, || Kernel::ALL.into_iter().any(ensure_cuda_kernel))
+    }
+
     pub fn cuda_last_error_message() -> Option<String> {
         cuda_error_slot()
             .lock()
@@ -1088,9 +230,7 @@ mod imp {
         if !ensure_cuda_selftest() {
             return false;
         }
-        crate::GpuManager::shared()
-            .map(|mgr| mgr.device_count() > 0)
-            .unwrap_or(false)
+        crate::cuda_dispatch::usable_device_count() > 0
             && !CUDA_FORCED_DISABLED.load(Ordering::SeqCst)
             && !CUDA_DISABLED.load(Ordering::SeqCst)
     }
@@ -1098,179 +238,46 @@ mod imp {
         CUDA_FORCED_DISABLED.store(!enabled, Ordering::SeqCst);
         if enabled {
             CUDA_DISABLED.store(false, Ordering::SeqCst);
-            CUDA_ABANDON_DEVICE_ALLOCS.store(false, Ordering::SeqCst);
-            if let Ok(mut guard) = cuda_selftest_cache().lock() {
-                *guard = None;
-            }
+
             set_cuda_status_message(None);
         } else {
             CUDA_DISABLED.store(true, Ordering::SeqCst);
             set_cuda_status_message(Some("disabled by configuration".to_owned()));
         }
-        crate::gpu_manager::GpuManager::invalidate_cache();
+        let config = crate::acceleration_config();
+        crate::cuda_dispatch::configure(!cuda_disabled() && config.enable_cuda, config.max_gpus);
     }
     #[doc(hidden)]
     pub fn reset_cuda_backend_for_tests() {
         CUDA_DISABLED.store(false, Ordering::SeqCst);
         CUDA_FORCED_DISABLED.store(false, Ordering::SeqCst);
-        CUDA_ABANDON_DEVICE_ALLOCS.store(false, Ordering::SeqCst);
-        if let Ok(mut guard) = cuda_selftest_cache().lock() {
-            *guard = None;
-        }
+
         set_cuda_status_message(None);
-        crate::gpu_manager::GpuManager::invalidate_cache();
+        let config = crate::acceleration_config();
+        crate::cuda_dispatch::configure(!cuda_disabled() && config.enable_cuda, config.max_gpus);
     }
-    pub fn vector_add_f32(a: &[f32], b: &[f32]) -> Option<Vec<f32>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        if a.is_empty() {
-            return Some(Vec::new());
-        }
-        let len = a.len();
-        let task_id = cuda_task_id(TASK_VECTOR_F32, &[len as u64]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            let mgr = crate::GpuManager::shared()?;
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_VECTOR_SUM, PTX)?;
-                    let function = module.get_function("sum").ok()?;
-                    let d_a = cuda_buffer_from_slice(a)?;
-                    let d_b = cuda_buffer_from_slice(b)?;
-                    let d_out = device_buffer_uninitialized::<f32>(len)?;
-                    unsafe {
-                        launch!(function<<<(len as u32).div_ceil(256), 256, 0, stream>>>(
-                            d_a.as_device_ptr(),
-                            d_b.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            len as u32
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut out = vec![0f32; len];
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(out)
-                })
-            })?
-        })
-    }
-    fn launch_u32_kernel(name: &str, a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        let len = a.len();
-        let task_id = cuda_task_id(TASK_VECTOR_U32, &[kernel_name_tag(name), len as u64]);
-        with_cuda_task_scope(task_id, || {
-            let mgr = crate::GpuManager::shared()?;
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_VECTOR, VEC_PTX)?;
-                    let function = module.get_function(name).ok()?;
-                    let d_a = cuda_buffer_from_slice(a)?;
-                    let d_b = cuda_buffer_from_slice(b)?;
-                    let d_out = device_buffer_uninitialized::<u32>(len)?;
-                    unsafe {
-                        launch!(function<<<(len as u32).div_ceil(256), 256, 0, stream>>> (
-                            d_a.as_device_ptr(),
-                            d_b.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            len as u32
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut out = vec![0u32; len];
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(out)
-                })
-            })?
-        })
-    }
-    fn launch_u64_kernel(name: &str, a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        let len = a.len();
-        let task_id = cuda_task_id(TASK_VECTOR_U64, &[kernel_name_tag(name), len as u64]);
-        with_cuda_task_scope(task_id, || {
-            let mgr = crate::GpuManager::shared()?;
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_VECTOR, VEC_PTX)?;
-                    let function = module.get_function(name).ok()?;
-                    let d_a = cuda_buffer_from_slice(a)?;
-                    let d_b = cuda_buffer_from_slice(b)?;
-                    let d_out = device_buffer_uninitialized::<u64>(len)?;
-                    unsafe {
-                        launch!(function<<<(len as u32).div_ceil(256), 256, 0, stream>>> (
-                            d_a.as_device_ptr(),
-                            d_b.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            len as u32
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut out = vec![0u64; len];
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(out)
-                })
-            })?
-        })
-    }
+
+    #[cfg(test)]
     fn vadd64_cuda_selftest() -> bool {
-        let a = [0xffff_ffff, (0x8000_0000u64 << 32) | 0x0000_0001];
-        let b = [
-            (0x0000_0001u64 << 32) | 0x0000_0001,
-            (0x7fff_ffffu64 << 32) | 0xffff_ffff,
-        ];
-        let expected = vec![a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
-        launch_u64_kernel("vadd64", &a, &b)
-            .map(|actual| actual == expected)
-            .unwrap_or(false)
+        let a = [0xffff_ffff, (0x8000_0000u64 << 32) | 1];
+        let b = [(1u64 << 32) | 1, (0x7fff_ffffu64 << 32) | 0xffff_ffff];
+        let expected = [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
+        let mut output = [0; 2];
+        vadd64_cuda_into(&a, &b, &mut output) && output == expected
     }
+    #[cfg(test)]
     fn bit_ops_cuda_selftest() -> bool {
         let lhs = [0xffff_0000u32, 0x1234_5678, 0x0f0f_0f0f, 0xaaaa_5555];
         let rhs = [0x00ff_ff00u32, 0xf0f0_f0f0, 0x3333_cccc, 0x5555_aaaa];
-        let and_ok = launch_u32_kernel("vand", &lhs, &rhs)
-            .map(|actual| {
-                actual
-                    == vec![
-                        lhs[0] & rhs[0],
-                        lhs[1] & rhs[1],
-                        lhs[2] & rhs[2],
-                        lhs[3] & rhs[3],
-                    ]
-            })
-            .unwrap_or(false);
-        let xor_ok = launch_u32_kernel("vxor", &lhs, &rhs)
-            .map(|actual| {
-                actual
-                    == vec![
-                        lhs[0] ^ rhs[0],
-                        lhs[1] ^ rhs[1],
-                        lhs[2] ^ rhs[2],
-                        lhs[3] ^ rhs[3],
-                    ]
-            })
-            .unwrap_or(false);
-        let or_ok = launch_u32_kernel("vor", &lhs, &rhs)
-            .map(|actual| {
-                actual
-                    == vec![
-                        lhs[0] | rhs[0],
-                        lhs[1] | rhs[1],
-                        lhs[2] | rhs[2],
-                        lhs[3] | rhs[3],
-                    ]
-            })
-            .unwrap_or(false);
-        and_ok && xor_ok && or_ok
+        let mut output = [0; 4];
+        vand_cuda_into(&lhs, &rhs, &mut output)
+            && output == std::array::from_fn(|i| lhs[i] & rhs[i])
+            && vxor_cuda_into(&lhs, &rhs, &mut output)
+            && output == std::array::from_fn(|i| lhs[i] ^ rhs[i])
+            && vor_cuda_into(&lhs, &rhs, &mut output)
+            && output == std::array::from_fn(|i| lhs[i] | rhs[i])
     }
+    #[cfg(test)]
     fn aes_batch_cuda_selftest() -> bool {
         let states = [
             [
@@ -1294,192 +301,14 @@ mod imp {
             .iter()
             .map(|&state| crate::aes::aesdec_impl(state, rk))
             .collect();
-        let mgr = match crate::GpuManager::shared() {
-            Some(mgr) => mgr,
-            None => return false,
-        };
-        let flat: Vec<u8> = states
-            .iter()
-            .flat_map(|state| state.iter())
-            .copied()
-            .collect();
-        let count = states.len() as u32;
-        let run_batch = |function_name: &str, expected: &[[u8; 16]]| -> Option<bool> {
-            let mut out = vec![0u8; flat.len()];
-            let task_id = cuda_task_id(
-                TASK_AES_BATCH,
-                &[count as u64, kernel_name_tag(function_name), TASK_SELFTEST],
-            );
-            let result = with_cuda_task_scope(task_id, || {
-                mgr.with_gpu_for_task(0, |gpu| {
-                    gpu.with_stream(|stream| {
-                        let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
-                        let function = module.get_function(function_name).ok()?;
-                        let d_states = cuda_buffer_from_slice(&flat)?;
-                        let d_rk = cuda_buffer_from_slice(&rk)?;
-                        let d_out = device_buffer_uninitialized::<u8>(out.len())?;
-                        let threads: u32 = 256;
-                        let grid: u32 = count.div_ceil(threads).max(1);
-                        unsafe {
-                            launch!(function<<<grid, threads, 0, stream>>>(
-                                d_states.as_device_ptr(),
-                                d_rk.as_device_ptr(),
-                                d_out.as_device_ptr(),
-                                count
-                            ))
-                            .ok()?;
-                        }
-                        wait_for_cuda_stream(stream, "cuda kernel")?;
-                        d_out.copy_to(&mut out).ok()?;
-                        Some(())
-                    })
-                })
-            });
-            result??;
-            let actual: Vec<[u8; 16]> = out
-                .chunks_exact(16)
-                .map(|chunk| {
-                    let mut block = [0u8; 16];
-                    block.copy_from_slice(chunk);
-                    block
-                })
-                .collect();
-            Some(actual == expected)
-        };
-        run_batch("aesenc_round_batch", &expected_enc).unwrap_or(false)
-            && run_batch("aesdec_round_batch", &expected_dec).unwrap_or(false)
+        let mut output = [[0; 16]; 2];
+        aesenc_batch_cuda_into(&states, rk, &mut output)
+            && output.as_slice() == expected_enc
+            && aesdec_batch_cuda_into(&states, rk, &mut output)
+            && output.as_slice() == expected_dec
     }
-    pub fn vadd32_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        if a.is_empty() {
-            return Some(Vec::new());
-        }
-        let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 0].as_slice());
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            launch_u32_kernel("vadd32", a, b)
-        })
-    }
-    pub fn vand_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        if a.is_empty() {
-            return Some(Vec::new());
-        }
-        let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 1].as_slice());
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            launch_u32_kernel("vand", a, b)
-        })
-    }
-    pub fn vxor_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        if a.is_empty() {
-            return Some(Vec::new());
-        }
-        let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 2].as_slice());
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            launch_u32_kernel("vxor", a, b)
-        })
-    }
-    pub fn vor_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        if a.is_empty() {
-            return Some(Vec::new());
-        }
-        let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 3].as_slice());
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            launch_u32_kernel("vor", a, b)
-        })
-    }
-    pub fn vadd64_cuda(a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
-        if a.len() != b.len() {
-            return None;
-        }
-        if a.is_empty() {
-            return Some(Vec::new());
-        }
-        let task_id = cuda_task_id(TASK_VECTOR_U64, &[a.len() as u64]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            launch_u64_kernel("vadd64", a, b)
-        })
-    }
-    /// Attempt to perform a SHA-256 compression round on the GPU.
-    /// Returns true on success, false if the CUDA path failed.
-    pub fn sha256_compress_cuda(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
-        let task_id = cuda_task_id(TASK_SHA256_BLOCK, &[u64::from(block[0])]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return false;
-            }
-            let mgr = match crate::GpuManager::shared() {
-                Some(m) => m,
-                None => return false,
-            };
-            let result = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = match gpu.cached_module(MODULE_SHA256_BLOCK, SHA_PTX) {
-                        Some(module) => module,
-                        None => return Some(false),
-                    };
-                    let function = match module.get_function("sha256_compress") {
-                        Ok(function) => function,
-                        Err(_) => return Some(false),
-                    };
-                    let d_state = match cuda_buffer_from_slice(state) {
-                        Some(b) => b,
-                        None => return Some(false),
-                    };
-                    let d_block = match cuda_buffer_from_slice(block) {
-                        Some(b) => b,
-                        None => return Some(false),
-                    };
-                    unsafe {
-                        if launch!(function<<<1, 1, 0, stream>>>(
-                            d_state.as_device_ptr(),
-                            d_block.as_device_ptr()
-                        ))
-                        .is_err()
-                        {
-                            return Some(false);
-                        }
-                    }
-                    if wait_for_cuda_stream(stream, "sha256_compress").is_none() {
-                        return Some(false);
-                    }
-                    if d_state.copy_to(state).is_err() {
-                        return Some(false);
-                    }
-                    Some(true)
-                })
-            });
-            match result {
-                Some(Some(r)) => r,
-                None => false,
-                Some(None) => false,
-            }
-        })
-    }
+
+    #[cfg(test)]
     fn sha256_leaves_cuda_selftest() -> bool {
         let mut block_a = [0u8; 64];
         block_a[0] = b'a';
@@ -1518,54 +347,10 @@ mod imp {
                 digest
             })
             .collect();
-        let mgr = match crate::GpuManager::shared() {
-            Some(mgr) => mgr,
-            None => return false,
-        };
-        let flat: Vec<u8> = blocks
-            .iter()
-            .flat_map(|block| block.iter())
-            .copied()
-            .collect();
-        let mut out = vec![0u8; blocks.len() * 32];
-        let count = blocks.len() as u32;
-        let task_id = cuda_task_id(TASK_SHA256_LEAVES, &[count as u64, TASK_SELFTEST]);
-        let result = with_cuda_task_scope(task_id, || {
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_SHA256_LEAVES, SHA_LEAVES_PTX)?;
-                    let function = module.get_function("sha256_leaves").ok()?;
-                    let d_blocks = cuda_buffer_from_slice(&flat)?;
-                    let d_out = device_buffer_uninitialized::<u8>(out.len())?;
-                    let threads: u32 = 256;
-                    let grid: u32 = count.div_ceil(threads).max(1);
-                    unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_blocks.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            count
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(())
-                })
-            })
-        });
-        if result.is_none() || result.flatten().is_none() {
-            return false;
-        }
-        let actual: Vec<[u8; 32]> = out
-            .chunks_exact(32)
-            .map(|chunk| {
-                let mut digest = [0u8; 32];
-                digest.copy_from_slice(chunk);
-                digest
-            })
-            .collect();
-        actual == expected
+        let mut output = [[0; 32]; 2];
+        sha256_leaves_cuda_into(&blocks, &mut output) && output.as_slice() == expected
     }
+    #[cfg(test)]
     fn sha256_pairs_reduce_cuda_selftest() -> bool {
         fn cpu_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
             let mut state = [
@@ -1608,793 +393,7 @@ mod imp {
         let digests = [d0, d1, d2];
         let first = cpu_pair(&digests[0], &digests[1]);
         let expected = cpu_pair(&first, &digests[2]);
-        let mgr = match crate::GpuManager::shared() {
-            Some(mgr) => mgr,
-            None => return false,
-        };
-        let selftest_task = cuda_task_id(TASK_SHA256_PAIRS, &[digests.len() as u64, TASK_SELFTEST]);
-        let result = with_cuda_task_scope(selftest_task, || {
-            let flat: Vec<u8> = digests
-                .iter()
-                .flat_map(|digest| digest.iter())
-                .copied()
-                .collect();
-            mgr.with_gpu_for_task(0, |gpu| {
-                let module = gpu.cached_module(MODULE_SHA256_PAIRS, SHA_PAIRS_PTX)?;
-                let function = module.get_function("sha256_pairs_reduce").ok()?;
-                sha256_pairs_reduce_on_gpu(&function, gpu, &flat, digests.len())
-            })
-            .flatten()
-        });
-        matches!(result, Some(root) if root == expected)
-    }
-    /// Compute SHA-256 digests for many 64-byte blocks in parallel on the GPU. Each block must be a
-    /// fully padded single-block message. Returns digest bytes (big-endian) per block on success.
-    pub fn sha256_leaves_cuda(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
-        let count = blocks.len() as u32;
-        if count == 0 {
-            return Some(Vec::new());
-        }
-        let task_id = cuda_task_id(TASK_SHA256_LEAVES, &[count as u64]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            let mgr = crate::GpuManager::shared()?;
-            // Flatten input blocks
-            let flat: Vec<u8> = blocks.iter().flat_map(|b| b.iter()).copied().collect();
-            let mut out = vec![0u8; (count as usize) * 32];
-            let result = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_SHA256_LEAVES, SHA_LEAVES_PTX)?;
-                    let function = module.get_function("sha256_leaves").ok()?;
-                    let d_blocks = cuda_buffer_from_slice(&flat)?;
-                    let d_out = device_buffer_uninitialized::<u8>(out.len())?;
-                    let threads: u32 = 256;
-                    let grid: u32 = count.div_ceil(threads).max(1);
-                    unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_blocks.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            count
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(())
-                })
-            });
-            result??;
-            Some(
-                out.chunks_exact(32)
-                    .map(|chunk| {
-                        let mut digest = [0u8; 32];
-                        digest.copy_from_slice(chunk);
-                        digest
-                    })
-                    .collect(),
-            )
-        })
-    }
-    /// Compute a SHA-256 Merkle root by hashing padded leaves and reducing
-    /// parents entirely on the GPU before copying back the final digest.
-    pub(crate) fn sha256_merkle_root_cuda(blocks: &[[u8; 64]]) -> Option<[u8; 32]> {
-        let count = blocks.len();
-        if count == 0 {
-            return None;
-        }
-        let task_id = cuda_task_id(TASK_SHA256_PAIRS, &[count as u64, 0x6d65_726b_6c65_726f]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            let mgr = crate::GpuManager::shared()?;
-            let flat_blocks: Vec<u8> = blocks
-                .iter()
-                .flat_map(|block| block.iter())
-                .copied()
-                .collect();
-            mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let leaves_module = gpu.cached_module(MODULE_SHA256_LEAVES, SHA_LEAVES_PTX)?;
-                    let leaves_function = leaves_module.get_function("sha256_leaves").ok()?;
-                    let pairs_module = gpu.cached_module(MODULE_SHA256_PAIRS, SHA_PAIRS_PTX)?;
-                    let pairs_function = pairs_module.get_function("sha256_pairs_reduce").ok()?;
-                    let d_blocks = cuda_buffer_from_slice(&flat_blocks)?;
-                    let d_digests = device_buffer_uninitialized::<u8>(count * 32)?;
-                    let threads: u32 = 256;
-                    let grid: u32 = (count as u32).div_ceil(threads).max(1);
-                    unsafe {
-                        launch!(leaves_function<<<grid, threads, 0, stream>>>(
-                            d_blocks.as_device_ptr(),
-                            d_digests.as_device_ptr(),
-                            count as u32
-                        ))
-                        .ok()?;
-                    }
-                    sha256_pairs_reduce_device_buffer(&pairs_function, stream, &d_digests, count)
-                })
-            })?
-        })
-    }
-    /// Reduce a vector of digests by hashing pairs (left||right) using GPU until one remains.
-    /// Left-promotion when right is absent. Returns the root digest.
-    pub fn sha256_pairs_reduce_cuda(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
-        let n0 = digests.len();
-        if n0 == 0 {
-            return None;
-        }
-        if n0 == 1 {
-            return Some(digests[0]);
-        }
-        let task_id = cuda_task_id(TASK_SHA256_PAIRS, &[n0 as u64]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            let mgr = crate::GpuManager::shared()?;
-            let flat: Vec<u8> = digests.iter().flat_map(|d| d.iter()).copied().collect();
-            mgr.with_gpu_for_task(0, |gpu| {
-                let module = gpu.cached_module(MODULE_SHA256_PAIRS, SHA_PAIRS_PTX)?;
-                let function = module.get_function("sha256_pairs_reduce").ok()?;
-                sha256_pairs_reduce_on_gpu(&function, gpu, &flat, n0)
-            })
-            .flatten()
-        })
-    }
-    #[derive(Clone, Copy)]
-    enum PoseidonKernel {
-        Poseidon2,
-        Poseidon6,
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn launch_poseidon_kernel(
-        kernel: PoseidonKernel,
-        state_words: &mut [u64],
-        state_stride_words: u32,
-        batch_len: u32,
-        rc_key: &'static str,
-        rc_flat: &[u64],
-        mds_key: &'static str,
-        mds_flat: &[u64],
-        full_rounds: u32,
-        partial_rounds: u32,
-        disable_on_error: bool,
-        skip_selftest: bool,
-    ) -> Option<KernelStatus> {
-        if !skip_selftest && !ensure_cuda_selftest() {
-            return None;
-        }
-        let kernel_name = match kernel {
-            PoseidonKernel::Poseidon2 => "poseidon2_permute_kernel",
-            PoseidonKernel::Poseidon6 => "poseidon6_permute_kernel",
-        };
-        let mut status = [KernelStatus::default(); 1];
-        let task_id = cuda_task_id(
-            match kernel {
-                PoseidonKernel::Poseidon2 => TASK_POSEIDON2,
-                PoseidonKernel::Poseidon6 => TASK_POSEIDON6,
-            },
-            &[batch_len as u64, state_stride_words as u64],
-        );
-        with_cuda_task_scope(task_id, || {
-            let manager = crate::GpuManager::shared()?;
-            manager.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    trace_cuda_selftest("poseidon module");
-                    let module = gpu.cached_module(MODULE_POSEIDON, POSEIDON_PTX)?;
-                    let function = module.get_function(kernel_name).ok()?;
-                    trace_cuda_selftest("poseidon state buffers");
-                    let d_state =
-                        cuda_buffer_from_slice_async(state_words, stream, "poseidon state upload")?;
-                    let d_status =
-                        cuda_buffer_from_slice_async(&status, stream, "poseidon status upload")?;
-                    trace_cuda_selftest("poseidon round constants");
-                    let d_rc =
-                        cuda_buffer_from_slice_async(rc_flat, stream, "poseidon constants upload")?;
-                    let _ = rc_key;
-                    trace_cuda_selftest("poseidon mds constants");
-                    let d_mds =
-                        cuda_buffer_from_slice_async(mds_flat, stream, "poseidon mds upload")?;
-                    let _ = mds_key;
-                    let threads: u32 = 32;
-                    let blocks = batch_len.div_ceil(threads).max(1);
-                    let grid = blocks.max(1);
-                    trace_cuda_selftest("poseidon launch");
-                    unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_state.as_device_ptr(),
-                            state_stride_words,
-                            batch_len,
-                            0u32,
-                            d_rc.as_device_ptr(),
-                            d_mds.as_device_ptr(),
-                            full_rounds,
-                            partial_rounds,
-                            d_status.as_device_ptr()
-                        ))
-                        .ok()?;
-                    }
-                    trace_cuda_selftest("poseidon wait");
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    trace_cuda_selftest("poseidon copy state");
-                    copy_device_to_host_bounded(
-                        &d_state,
-                        state_words,
-                        stream,
-                        "poseidon state download",
-                    )?;
-                    trace_cuda_selftest("poseidon copy status");
-                    copy_device_to_host_bounded(
-                        &d_status,
-                        &mut status,
-                        stream,
-                        "poseidon status download",
-                    )?;
-                    if status[0].code != 0 {
-                        let message = if status[0].code == POSEIDON_STATUS_ERR_ROUNDS {
-                            format!(
-                                "{kernel_name} reported invalid round configuration (detail={})",
-                                status[0].detail
-                            )
-                        } else {
-                            format!(
-                                "{kernel_name} reported error code {} (detail={})",
-                                status[0].code, status[0].detail
-                            )
-                        };
-                        if disable_on_error {
-                            record_cuda_disable(message);
-                        } else {
-                            set_cuda_status_message(Some(message));
-                        }
-                    }
-                    Some(())
-                })
-            })?;
-            Some(())
-        })?;
-        Some(status[0])
-    }
-    fn poseidon2_cuda_many_impl(
-        inputs: &[(u64, u64)],
-        full_rounds: u32,
-        partial_rounds: u32,
-        skip_selftest: bool,
-        disable_on_error: bool,
-    ) -> Option<(Vec<u64>, KernelStatus)> {
-        if inputs.is_empty() {
-            return Some((Vec::new(), KernelStatus::default()));
-        }
-        if inputs.len() > u32::MAX as usize {
-            return None;
-        }
-        inputs.len().checked_mul(POSEIDON2_STATE_WORDS)?;
-        let rc = crate::poseidon::poseidon2_round_constants_words();
-        let mds = crate::poseidon::poseidon2_mds_words();
-        debug_assert_eq!(
-            rc.len() as u32,
-            POSEIDON_FULL_ROUNDS + POSEIDON_PARTIAL_ROUNDS
-        );
-        let rc_flat =
-            POSEIDON2_RC_FLAT.get_or_init(|| flatten_round_constants::<POSEIDON2_WIDTH>(rc));
-        let mds_flat = POSEIDON2_MDS_FLAT.get_or_init(|| flatten_mds::<POSEIDON2_WIDTH>(mds));
-        let mut state_words = vec![0u64; inputs.len() * POSEIDON2_STATE_WORDS];
-        for (idx, &(a, b)) in inputs.iter().enumerate() {
-            let lanes = [
-                FieldElem::from_u64(a),
-                FieldElem::from_u64(b),
-                FieldElem::from_u64(0),
-            ];
-            for (lane_idx, lane) in lanes.iter().enumerate() {
-                let start = idx * POSEIDON2_STATE_WORDS + lane_idx * BN254_LIMBS;
-                state_words[start..start + BN254_LIMBS].copy_from_slice(&lane.0);
-            }
-        }
-        let status = launch_poseidon_kernel(
-            PoseidonKernel::Poseidon2,
-            &mut state_words,
-            POSEIDON2_STATE_WORDS as u32,
-            inputs.len() as u32,
-            BUFFER_POSEIDON2_RC,
-            rc_flat,
-            BUFFER_POSEIDON2_MDS,
-            mds_flat,
-            full_rounds,
-            partial_rounds,
-            disable_on_error,
-            skip_selftest,
-        )?;
-        let mut outputs = Vec::new();
-        if status.code == 0 {
-            outputs.reserve_exact(inputs.len());
-            for idx in 0..inputs.len() {
-                let start = idx * POSEIDON2_STATE_WORDS;
-                let mut elem = FieldElem([0u64; BN254_LIMBS]);
-                elem.0
-                    .copy_from_slice(&state_words[start..start + BN254_LIMBS]);
-                outputs.push(elem.to_u64());
-            }
-        }
-        Some((outputs, status))
-    }
-    fn poseidon6_cuda_many_impl(
-        inputs: &[[u64; 6]],
-        full_rounds: u32,
-        partial_rounds: u32,
-        skip_selftest: bool,
-        disable_on_error: bool,
-    ) -> Option<(Vec<u64>, KernelStatus)> {
-        if inputs.is_empty() {
-            return Some((Vec::new(), KernelStatus::default()));
-        }
-        if inputs.len() > u32::MAX as usize {
-            return None;
-        }
-        inputs.len().checked_mul(POSEIDON6_STATE_WORDS)?;
-        let rc = crate::poseidon::poseidon6_round_constants_words();
-        let mds = crate::poseidon::poseidon6_mds_words();
-        debug_assert_eq!(
-            rc.len() as u32,
-            POSEIDON_FULL_ROUNDS + POSEIDON_PARTIAL_ROUNDS
-        );
-        let rc_flat =
-            POSEIDON6_RC_FLAT.get_or_init(|| flatten_round_constants::<POSEIDON6_WIDTH>(rc));
-        let mds_flat = POSEIDON6_MDS_FLAT.get_or_init(|| flatten_mds::<POSEIDON6_WIDTH>(mds));
-        let mut state_words = vec![0u64; inputs.len() * POSEIDON6_STATE_WORDS];
-        for (idx, values) in inputs.iter().enumerate() {
-            for (lane_idx, value) in values.iter().enumerate() {
-                let elem = FieldElem::from_u64(*value);
-                let start = idx * POSEIDON6_STATE_WORDS + lane_idx * BN254_LIMBS;
-                state_words[start..start + BN254_LIMBS].copy_from_slice(&elem.0);
-            }
-        }
-        let status = launch_poseidon_kernel(
-            PoseidonKernel::Poseidon6,
-            &mut state_words,
-            POSEIDON6_STATE_WORDS as u32,
-            inputs.len() as u32,
-            BUFFER_POSEIDON6_RC,
-            rc_flat,
-            BUFFER_POSEIDON6_MDS,
-            mds_flat,
-            full_rounds,
-            partial_rounds,
-            disable_on_error,
-            skip_selftest,
-        )?;
-        let mut outputs = Vec::new();
-        if status.code == 0 {
-            outputs.reserve_exact(inputs.len());
-            for idx in 0..inputs.len() {
-                let start = idx * POSEIDON6_STATE_WORDS;
-                let mut elem = FieldElem([0u64; BN254_LIMBS]);
-                elem.0
-                    .copy_from_slice(&state_words[start..start + BN254_LIMBS]);
-                outputs.push(elem.to_u64());
-            }
-        }
-        Some((outputs, status))
-    }
-    pub fn poseidon2_cuda(a: u64, b: u64) -> Option<u64> {
-        poseidon2_cuda_many(&[(a, b)]).and_then(|mut outputs| outputs.pop())
-    }
-    pub fn poseidon2_cuda_many(inputs: &[(u64, u64)]) -> Option<Vec<u64>> {
-        let task_id = cuda_task_id(TASK_POSEIDON2, &[inputs.len() as u64]);
-        with_cuda_task_scope(task_id, || {
-            let (outputs, status) = poseidon2_cuda_many_impl(
-                inputs,
-                POSEIDON_FULL_ROUNDS,
-                POSEIDON_PARTIAL_ROUNDS,
-                false,
-                true,
-            )?;
-            if status.code != 0 {
-                return None;
-            }
-            Some(outputs)
-        })
-    }
-    pub fn poseidon6_cuda(inputs: [u64; 6]) -> Option<u64> {
-        poseidon6_cuda_many(&[inputs]).and_then(|mut outputs| outputs.pop())
-    }
-    pub fn poseidon6_cuda_many(inputs: &[[u64; 6]]) -> Option<Vec<u64>> {
-        let task_id = cuda_task_id(TASK_POSEIDON6, &[inputs.len() as u64]);
-        with_cuda_task_scope(task_id, || {
-            let (outputs, status) = poseidon6_cuda_many_impl(
-                inputs,
-                POSEIDON_FULL_ROUNDS,
-                POSEIDON_PARTIAL_ROUNDS,
-                false,
-                true,
-            )?;
-            if status.code != 0 {
-                return None;
-            }
-            Some(outputs)
-        })
-    }
-    pub fn keccak_f1600_cuda(state: &mut [u64; 25]) -> bool {
-        let task_id = cuda_task_id(TASK_KECCAK, &[state[0]]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return false;
-            }
-            let mgr = match crate::GpuManager::shared() {
-                Some(m) => m,
-                None => return false,
-            };
-            let result = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = match gpu.cached_module(MODULE_SHA3, SHA3_PTX) {
-                        Some(module) => module,
-                        None => return Some(false),
-                    };
-                    let function = match module.get_function("keccak_f1600_cuda") {
-                        Ok(function) => function,
-                        Err(_) => return Some(false),
-                    };
-                    let d_state = match cuda_buffer_from_slice(state) {
-                        Some(b) => b,
-                        None => return Some(false),
-                    };
-                    unsafe {
-                        if launch!(function<<<1, 1, 0, stream>>>(d_state.as_device_ptr())).is_err()
-                        {
-                            return Some(false);
-                        }
-                    }
-                    if wait_for_cuda_stream(stream, "keccak_f1600_cuda").is_none() {
-                        return Some(false);
-                    }
-                    if d_state.copy_to(state).is_err() {
-                        return Some(false);
-                    }
-                    Some(true)
-                })
-            });
-            match result {
-                Some(Some(r)) => r,
-                None => false,
-                Some(None) => false,
-            }
-        })
-    }
-    pub fn aesenc_cuda(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
-        let task_id = cuda_task_id(TASK_AES_ROUND, &[u64::from(state[0]), 0]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return Some(crate::aes::aesenc_impl(state, rk));
-            }
-            aesenc_batch_cuda(&[state], rk)
-                .and_then(|mut out| out.pop())
-                .or_else(|| Some(crate::aes::aesenc_impl(state, rk)))
-        })
-    }
-    pub fn aesdec_cuda(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
-        let task_id = cuda_task_id(TASK_AES_ROUND, &[u64::from(state[0]), 1]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return Some(crate::aes::aesdec_impl(state, rk));
-            }
-            aesdec_batch_cuda(&[state], rk)
-                .and_then(|mut out| out.pop())
-                .or_else(|| Some(crate::aes::aesdec_impl(state, rk)))
-        })
-    }
-    /// Batch AESENC round: process N blocks with a single launch. Common round key for all.
-    pub fn aesenc_batch_cuda(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-        if states.is_empty() {
-            return Some(Vec::new());
-        }
-        let count = states.len() as u32;
-        let task_id = cuda_task_id(TASK_AES_BATCH, &[count as u64, 0]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return Some(
-                    states
-                        .iter()
-                        .map(|&s| crate::aes::aesenc_impl(s, rk))
-                        .collect(),
-                );
-            }
-            let mgr = crate::GpuManager::shared()?;
-            let flat: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let mut out = vec![0u8; states.len() * 16];
-            let ok = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
-                    let function = module.get_function("aesenc_round_batch").ok()?;
-                    let d_states = cuda_buffer_from_slice(&flat)?;
-                    let d_rk = cuda_buffer_from_slice(&rk)?;
-                    let d_out = device_buffer_uninitialized::<u8>(out.len())?;
-                    let threads: u32 = 256;
-                    let grid: u32 = count.div_ceil(threads).max(1);
-                    unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_states.as_device_ptr(),
-                            d_rk.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            count
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(())
-                })
-            });
-            ok??;
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    }
-    /// Batch AESDEC round.
-    pub fn aesdec_batch_cuda(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-        if states.is_empty() {
-            return Some(Vec::new());
-        }
-        let count = states.len() as u32;
-        let task_id = cuda_task_id(TASK_AES_BATCH, &[count as u64, 1]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return Some(
-                    states
-                        .iter()
-                        .map(|&s| crate::aes::aesdec_impl(s, rk))
-                        .collect(),
-                );
-            }
-            let mgr = crate::GpuManager::shared()?;
-            let flat: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let mut out = vec![0u8; states.len() * 16];
-            let ok = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
-                    let function = module.get_function("aesdec_round_batch").ok()?;
-                    let d_states = cuda_buffer_from_slice(&flat)?;
-                    let d_rk = cuda_buffer_from_slice(&rk)?;
-                    let d_out = device_buffer_uninitialized::<u8>(out.len())?;
-                    let threads: u32 = 256;
-                    let grid: u32 = count.div_ceil(threads).max(1);
-                    unsafe {
-                        launch!(function<<<grid, threads, 0, stream>>>(
-                            d_states.as_device_ptr(),
-                            d_rk.as_device_ptr(),
-                            d_out.as_device_ptr(),
-                            count
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(())
-                })
-            });
-            ok??;
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    }
-    /// Batch BN254 add: process many field-element pairs with one CUDA launch.
-    ///
-    /// Returns `None` when CUDA is unavailable, disabled, or the input slices differ in length.
-    pub fn bn254_add_batch_cuda(
-        lhs: &[[u64; BN254_LIMBS]],
-        rhs: &[[u64; BN254_LIMBS]],
-    ) -> Option<Vec<[u64; BN254_LIMBS]>> {
-        let lhs_tag = lhs.first().map_or(0, |element| element[0]);
-        let rhs_tag = rhs.first().map_or(0, |element| element[0]);
-        let task_id = cuda_task_id(TASK_BN254, &[0, lhs.len() as u64, lhs_tag, rhs_tag]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            bn254_launch_kernel_batch("bn254_add_kernel", lhs, rhs)
-        })
-    }
-    /// Batch BN254 subtract: process many field-element pairs with one CUDA launch.
-    ///
-    /// Returns `None` when CUDA is unavailable, disabled, or the input slices differ in length.
-    pub fn bn254_sub_batch_cuda(
-        lhs: &[[u64; BN254_LIMBS]],
-        rhs: &[[u64; BN254_LIMBS]],
-    ) -> Option<Vec<[u64; BN254_LIMBS]>> {
-        let lhs_tag = lhs.first().map_or(0, |element| element[0]);
-        let rhs_tag = rhs.first().map_or(0, |element| element[0]);
-        let task_id = cuda_task_id(TASK_BN254, &[1, lhs.len() as u64, lhs_tag, rhs_tag]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            bn254_launch_kernel_batch("bn254_sub_kernel", lhs, rhs)
-        })
-    }
-    /// Batch BN254 multiply: process many field-element pairs with one CUDA launch.
-    ///
-    /// Returns `None` when CUDA is unavailable, disabled, or the input slices differ in length.
-    pub fn bn254_mul_batch_cuda(
-        lhs: &[[u64; BN254_LIMBS]],
-        rhs: &[[u64; BN254_LIMBS]],
-    ) -> Option<Vec<[u64; BN254_LIMBS]>> {
-        let lhs_tag = lhs.first().map_or(0, |element| element[0]);
-        let rhs_tag = rhs.first().map_or(0, |element| element[0]);
-        let task_id = cuda_task_id(TASK_BN254, &[2, lhs.len() as u64, lhs_tag, rhs_tag]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            bn254_launch_kernel_batch("bn254_mul_kernel", lhs, rhs)
-        })
-    }
-    /// Attempt to add one BN254 field-element pair on the GPU.
-    pub fn bn254_add_cuda(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
-        let task_id = cuda_task_id(TASK_BN254, &[0, a[0], b[0]]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            // Language bindings query `ivm::cuda_available` / `ivm::cuda_disabled` at runtime so SDKs
-            // can surface BN254 acceleration status without compile-time cfg guards.
-            bn254_launch_kernel("bn254_add_kernel", &a, &b)
-        })
-    }
-    /// Attempt to subtract one BN254 field-element pair on the GPU.
-    pub fn bn254_sub_cuda(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
-        let task_id = cuda_task_id(TASK_BN254, &[1, a[0], b[0]]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            bn254_launch_kernel("bn254_sub_kernel", &a, &b)
-        })
-    }
-    /// Attempt to multiply one BN254 field-element pair on the GPU.
-    pub fn bn254_mul_cuda(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
-        let task_id = cuda_task_id(TASK_BN254, &[2, a[0], b[0]]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            bn254_launch_kernel("bn254_mul_kernel", &a, &b)
-        })
-    }
-    pub fn ed25519_verify_cuda(msg: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> Option<bool> {
-        if crate::signature::signature_bytes_are_all_zero(sig) {
-            return Some(false);
-        }
-        if super::ed25519_public_key_bytes_are_invalid(pk) {
-            return Some(false);
-        }
-        if crate::signature::signature_has_invalid_ed25519_r(sig) {
-            return Some(false);
-        }
-        let task_id = cuda_task_id(TASK_ED25519_SINGLE, &[msg.len() as u64, u64::from(sig[0])]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            use ed25519_dalek::Signature;
-            let signature = Signature::from_slice(sig).ok()?;
-            let sig_bytes = signature.to_bytes();
-            let verifying_key = crate::signature::parse_ed25519_public_key_for_verification(pk)?;
-            let pk_bytes = verifying_key.to_bytes();
-            let hram_bytes =
-                crate::signature::ed25519_challenge_scalar_bytes(&sig_bytes, &pk_bytes, msg);
-            let signatures = [sig_bytes];
-            let public_keys = [pk_bytes];
-            let hrams = [hram_bytes];
-            match ed25519_verify_batch_cuda(&signatures, &public_keys, &hrams) {
-                Some(mut result) => result.pop(),
-                None => Some(verifying_key.verify_strict(msg, &signature).is_ok()),
-            }
-        })
-    }
-    pub fn ed25519_verify_batch_cuda(
-        signatures: &[[u8; 64]],
-        public_keys: &[[u8; 32]],
-        hrams: &[[u8; 32]],
-    ) -> Option<Vec<bool>> {
-        if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
-            return None;
-        }
-        if signatures.is_empty() {
-            return Some(Vec::new());
-        }
-        if signatures.len() > u32::MAX as usize {
-            return None;
-        }
-        let count = signatures.len();
-        let invalid_inputs = signatures
-            .iter()
-            .zip(public_keys)
-            .map(|(sig, pk)| {
-                crate::signature::signature_bytes_are_all_zero(sig)
-                    || super::ed25519_public_key_bytes_are_invalid(pk)
-                    || crate::signature::signature_has_invalid_ed25519_r(sig)
-            })
-            .collect::<Vec<_>>();
-        let valid_count = invalid_inputs
-            .iter()
-            .filter(|&&is_invalid| !is_invalid)
-            .count();
-        if valid_count == 0 {
-            return Some(vec![false; count]);
-        }
-        let task_id = cuda_task_id(TASK_ED25519_BATCH, &[valid_count as u64]);
-        with_cuda_task_scope(task_id, || {
-            if !ensure_cuda_selftest() {
-                return None;
-            }
-            let mut valid_indices = Vec::with_capacity(valid_count);
-            let mut flat_sigs = Vec::with_capacity(valid_count * 64);
-            let mut flat_pks = Vec::with_capacity(valid_count * 32);
-            let mut flat_hrams = Vec::with_capacity(valid_count * 32);
-            for (index, ((sig, pk), hram)) in
-                signatures.iter().zip(public_keys).zip(hrams).enumerate()
-            {
-                if invalid_inputs[index] {
-                    continue;
-                }
-                valid_indices.push(index);
-                flat_sigs.extend_from_slice(sig);
-                flat_pks.extend_from_slice(pk);
-                flat_hrams.extend_from_slice(hram);
-            }
-            let mgr = crate::GpuManager::shared()?;
-            let gpu_result = mgr.with_gpu_for_task(0, |gpu| {
-                gpu.with_stream(|stream| {
-                    let module = gpu.cached_module(MODULE_SIGNATURE, SIG_PTX)?;
-                    let function = module.get_function("signature_kernel").ok()?;
-                    let d_sig = cuda_buffer_from_slice(&flat_sigs)?;
-                    let d_pk = cuda_buffer_from_slice(&flat_pks)?;
-                    let d_hram = cuda_buffer_from_slice(&flat_hrams)?;
-                    let d_out = device_buffer_uninitialized::<u8>(valid_count)?;
-                    let threads: u32 = 128;
-                    let blocks: u32 = (valid_count as u32).div_ceil(threads);
-                    unsafe {
-                        launch!(function<<<blocks.max(1), threads, 0, stream>>>(
-                            d_sig.as_device_ptr(),
-                            d_pk.as_device_ptr(),
-                            d_hram.as_device_ptr(),
-                            valid_count as u32,
-                            d_out.as_device_ptr()
-                        ))
-                        .ok()?;
-                    }
-                    wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut out = vec![0u8; valid_count];
-                    d_out.copy_to(&mut out).ok()?;
-                    Some(out.into_iter().map(|b| b != 0).collect::<Vec<_>>())
-                })
-            });
-            match gpu_result {
-                Some(Some(result)) if result.len() == valid_count => {
-                    let mut merged = vec![false; count];
-                    for (index, verified) in valid_indices.into_iter().zip(result) {
-                        merged[index] = verified;
-                    }
-                    Some(merged)
-                }
-                _ => {
-                    record_cuda_disable(
-                        "ed25519 batch signature kernel unavailable; falling back to CPU path",
-                    );
-                    None
-                }
-            }
-        })
+        sha256_pairs_reduce_cuda(&digests) == Some(expected)
     }
     #[cfg(all(test, feature = "cuda"))]
     mod tests {
@@ -2416,33 +415,33 @@ mod imp {
             func()
         }
         #[test]
+        fn cuda_dispatch_receipts_exclude_selftests_and_other_threads() {
+            let before = cuda_completed_dispatches();
+            with_cuda_selftest_running_for_tests(record_completed_cuda_dispatch);
+            assert_eq!(cuda_completed_dispatches(), before);
+            std::thread::spawn(record_completed_cuda_dispatch)
+                .join()
+                .unwrap();
+            assert_eq!(cuda_completed_dispatches(), before);
+            record_completed_cuda_dispatch();
+            assert_eq!(cuda_completed_dispatches(), before.saturating_add(1));
+        }
+        #[test]
         fn poseidon_kernel_reports_round_errors_without_disabling_backend() {
             let disabled_before = CUDA_DISABLED.load(Ordering::SeqCst);
             if !ensure_cuda_selftest() {
-                // On non-CUDA hosts the kernel helper should decline cleanly.
-                assert!(
-                    poseidon2_cuda_many_impl(&[(0u64, 1u64)], 0, 0, true, false).is_none(),
-                    "cuda self-test must fail closed on unsupported hosts"
-                );
-                assert_eq!(
-                    CUDA_DISABLED.load(Ordering::SeqCst),
-                    disabled_before,
-                    "probing unsupported hosts must not mutate disable flag"
-                );
+                assert!(super::super::poseidons::fault_probe(false).is_none());
+                assert_eq!(CUDA_DISABLED.load(Ordering::SeqCst), disabled_before);
                 return;
             }
-            let Some((_, status)) = poseidon2_cuda_many_impl(&[(0u64, 1u64)], 0, 0, true, false)
-            else {
+            let Some(status) = super::super::poseidons::fault_probe(false) else {
                 return;
             };
-            assert_eq!(
-                status.code, POSEIDON_STATUS_ERR_ROUNDS,
-                "expected round count error from poseidon2 kernel"
-            );
+            assert_eq!(status[0], 3, "kernel must report invalid round count");
             assert_eq!(
                 CUDA_DISABLED.load(Ordering::SeqCst),
                 disabled_before,
-                "fault injection must not disable CUDA backend"
+                "fault probe must not disable the backend"
             );
         }
         #[test]
@@ -2454,81 +453,14 @@ mod imp {
                     !keccak_f1600_cuda(&mut state),
                     "nested keccak probe should fail closed during self-test",
                 );
+                let mut output = [0xa5];
+                assert!(!poseidon2_cuda_many_into(&[(0, 1)], &mut output));
                 assert_eq!(
-                    poseidon2_cuda_many(&[(0u64, 1u64)]),
-                    None,
-                    "nested poseidon probe should fail closed during self-test",
+                    output,
+                    [0xa5],
+                    "nested probe must preserve the caller output"
                 );
             });
-        }
-        #[test]
-        fn cuda_wait_timeout_fails_closed_and_abandons_device_allocations() {
-            reset_cuda_backend_for_tests();
-            let status = wait_until_cuda_ready(std::time::Duration::from_millis(1), || {
-                cudaError_enum::CUDA_ERROR_NOT_READY
-            });
-            assert_eq!(status, CudaWaitStatus::TimedOut);
-            assert_eq!(
-                finish_cuda_wait(status, "test timeout path"),
-                None,
-                "timeout waits must fail closed"
-            );
-            assert!(
-                CUDA_DISABLED.load(Ordering::SeqCst),
-                "timeout waits should disable the CUDA backend"
-            );
-            assert!(
-                cuda_should_abandon_device_allocations(),
-                "timeout waits should abandon DeviceBuffer drops instead of calling cuMemFree"
-            );
-            reset_cuda_backend_for_tests();
-        }
-        #[test]
-        fn cuda_wait_ready_after_retries_preserves_backend_flags() {
-            reset_cuda_backend_for_tests();
-            let polls = std::cell::Cell::new(0);
-            let status = wait_until_cuda_ready(std::time::Duration::from_millis(50), || {
-                let previous = polls.get();
-                polls.set(previous + 1);
-                if previous < 2 {
-                    cudaError_enum::CUDA_ERROR_NOT_READY
-                } else {
-                    cudaError_enum::CUDA_SUCCESS
-                }
-            });
-            assert_eq!(status, CudaWaitStatus::Ready);
-            assert_eq!(polls.get(), 3);
-            assert_eq!(finish_cuda_wait(status, "test ready path"), Some(()));
-            assert!(
-                !CUDA_DISABLED.load(Ordering::SeqCst),
-                "ready waits should not disable CUDA"
-            );
-            assert!(
-                !cuda_should_abandon_device_allocations(),
-                "ready waits should not abandon device allocations"
-            );
-            reset_cuda_backend_for_tests();
-        }
-        #[test]
-        fn cuda_wait_query_failure_disables_without_abandoning_allocations() {
-            reset_cuda_backend_for_tests();
-            let status = wait_until_cuda_ready(std::time::Duration::from_millis(50), || {
-                cudaError_enum::CUDA_ERROR_INVALID_VALUE
-            });
-            assert_eq!(
-                status,
-                CudaWaitStatus::Failed(cudaError_enum::CUDA_ERROR_INVALID_VALUE)
-            );
-            assert_eq!(finish_cuda_wait(status, "test failure path"), None);
-            assert!(
-                CUDA_DISABLED.load(Ordering::SeqCst),
-                "query failures should disable CUDA"
-            );
-            assert!(
-                !cuda_should_abandon_device_allocations(),
-                "only timeouts should abandon device allocations"
-            );
-            reset_cuda_backend_for_tests();
         }
         #[test]
         fn cuda_enable_disable_and_reset_update_status_flags() {
@@ -2539,22 +471,17 @@ mod imp {
                 cuda_last_error_message().as_deref(),
                 Some("disabled by configuration")
             );
-            assert!(!cuda_should_abandon_device_allocations());
+            assert!(!cuda_available());
             set_cuda_enabled(true);
             assert!(!cuda_disabled());
             assert_eq!(cuda_last_error_message(), None);
-            assert!(!cuda_should_abandon_device_allocations());
-            let timeout = wait_until_cuda_ready(std::time::Duration::from_millis(1), || {
-                cudaError_enum::CUDA_ERROR_NOT_READY
-            });
-            assert_eq!(finish_cuda_wait(timeout, "reset coverage timeout"), None);
+            // Only local policy resets. Physical uncertain custody belongs to
+            // the process owner and cannot be cleared by this operation.
+            record_cuda_disable("coverage explicit disable");
             assert!(cuda_disabled());
-            assert!(cuda_should_abandon_device_allocations());
-            assert!(cuda_last_error_message().is_some());
             reset_cuda_backend_for_tests();
             assert!(!cuda_disabled());
             assert_eq!(cuda_last_error_message(), None);
-            assert!(!cuda_should_abandon_device_allocations());
         }
         #[test]
         fn explicit_cuda_disable_records_message_and_reset_clears_it() {
@@ -2565,77 +492,30 @@ mod imp {
                 cuda_last_error_message().as_deref(),
                 Some("coverage explicit disable")
             );
-            assert!(
-                !cuda_should_abandon_device_allocations(),
-                "explicit non-timeout disable should not abandon allocations"
-            );
             reset_cuda_backend_for_tests();
             assert!(!cuda_disabled());
             assert_eq!(cuda_last_error_message(), None);
         }
         #[test]
         fn poseidon_kernel_reports_stride_errors_without_disabling_backend() {
-            let rc = crate::poseidon::poseidon2_round_constants_words();
-            let mds = crate::poseidon::poseidon2_mds_words();
-            let rc_flat =
-                POSEIDON2_RC_FLAT.get_or_init(|| flatten_round_constants::<POSEIDON2_WIDTH>(rc));
-            let mds_flat = POSEIDON2_MDS_FLAT.get_or_init(|| flatten_mds::<POSEIDON2_WIDTH>(mds));
-            let mut state = vec![0u64; POSEIDON2_STATE_WORDS];
             let disabled_before = CUDA_DISABLED.load(Ordering::SeqCst);
             if !ensure_cuda_selftest() {
-                assert!(
-                    launch_poseidon_kernel(
-                        PoseidonKernel::Poseidon2,
-                        &mut state,
-                        1,
-                        1,
-                        BUFFER_POSEIDON2_RC,
-                        rc_flat,
-                        BUFFER_POSEIDON2_MDS,
-                        mds_flat,
-                        POSEIDON_FULL_ROUNDS,
-                        POSEIDON_PARTIAL_ROUNDS,
-                        false,
-                        true,
-                    )
-                    .is_none(),
-                    "cuda kernel launch must fail closed on unsupported hosts"
-                );
-                assert_eq!(
-                    CUDA_DISABLED.load(Ordering::SeqCst),
-                    disabled_before,
-                    "probing unsupported hosts must not mutate disable flag"
-                );
+                assert!(super::super::poseidons::fault_probe(true).is_none());
+                assert_eq!(CUDA_DISABLED.load(Ordering::SeqCst), disabled_before);
                 return;
             }
-            let Some(status) = launch_poseidon_kernel(
-                PoseidonKernel::Poseidon2,
-                &mut state,
-                1,
-                1,
-                BUFFER_POSEIDON2_RC,
-                rc_flat,
-                BUFFER_POSEIDON2_MDS,
-                mds_flat,
-                POSEIDON_FULL_ROUNDS,
-                POSEIDON_PARTIAL_ROUNDS,
-                false,
-                true,
-            ) else {
+            let Some(status) = super::super::poseidons::fault_probe(true) else {
                 return;
             };
+            assert_eq!(status[0], 2, "kernel must report invalid stride");
             assert_eq!(
-                status.code, POSEIDON_STATUS_ERR_STRIDE,
-                "expected stride error from poseidon2 kernel"
-            );
-            assert_eq!(
-                status.detail, 1,
-                "stride error detail should surface the provided stride"
+                status[1], 1,
+                "reported detail must preserve the supplied stride"
             );
             assert_eq!(
                 CUDA_DISABLED.load(Ordering::SeqCst),
                 disabled_before,
-                "fault injection must not disable CUDA backend"
+                "fault probe must not disable the backend"
             );
         }
         #[test]
@@ -2740,12 +620,12 @@ mod imp {
                 block_b[5] = b'o';
                 block_b[6] = 0x80;
                 block_b[63] = 48;
-                sha256_leaves_cuda(&[block_a, block_b])
+                sha256_leaves_cuda_into(&[block_a, block_b], &mut [[0; 32]; 2])
             })
             .join()
             .expect("worker thread must complete");
             assert!(
-                blocks.is_some(),
+                blocks,
                 "cached self-test should rebind a CUDA context on fresh worker threads",
             );
         }
@@ -2795,10 +675,18 @@ mod imp {
                 .zip(b32.iter())
                 .map(|(&lhs, &rhs)| lhs | rhs)
                 .collect();
-            assert_eq!(vadd32_cuda(&a32, &b32), Some(expected_add32));
-            assert_eq!(vand_cuda(&a32, &b32), Some(expected_and));
-            assert_eq!(vxor_cuda(&a32, &b32), Some(expected_xor));
-            assert_eq!(vor_cuda(&a32, &b32), Some(expected_or));
+            let mut output = vec![0; a32.len()];
+            assert!(vadd32_cuda_into(&a32, &b32, &mut output));
+            assert_eq!(output, expected_add32);
+            let mut output = vec![0; a32.len()];
+            assert!(vand_cuda_into(&a32, &b32, &mut output));
+            assert_eq!(output, expected_and);
+            let mut output = vec![0; a32.len()];
+            assert!(vxor_cuda_into(&a32, &b32, &mut output));
+            assert_eq!(output, expected_xor);
+            let mut output = vec![0; a32.len()];
+            assert!(vor_cuda_into(&a32, &b32, &mut output));
+            assert_eq!(output, expected_or);
             let a64 = [0xffff_ffff_ffff_ff00u64, 0x1234_5678_9abc_def0];
             let b64 = [0x0000_0000_0000_0201u64, 0x0fed_cba9_8765_4321];
             let expected_add64: Vec<u64> = a64
@@ -2806,15 +694,9 @@ mod imp {
                 .zip(b64.iter())
                 .map(|(&lhs, &rhs)| lhs.wrapping_add(rhs))
                 .collect();
-            assert_eq!(vadd64_cuda(&a64, &b64), Some(expected_add64));
-            let fa = [1.0f32, -2.5, 3.25, 4.5];
-            let fb = [2.0f32, 0.5, -1.25, 3.5];
-            let expected_f32: Vec<f32> = fa
-                .iter()
-                .zip(fb.iter())
-                .map(|(&lhs, &rhs)| lhs + rhs)
-                .collect();
-            assert_eq!(vector_add_f32(&fa, &fb), Some(expected_f32));
+            let mut output = vec![0; a64.len()];
+            assert!(vadd64_cuda_into(&a64, &b64, &mut output));
+            assert_eq!(output, expected_add64);
         }
         #[test]
         fn public_sha256_compress_matches_scalar_when_cuda_available() {
@@ -2879,7 +761,9 @@ mod imp {
                 .iter()
                 .map(|&(lhs, rhs)| crate::poseidon::poseidon2_simd(lhs, rhs))
                 .collect();
-            assert_eq!(poseidon2_cuda_many(&many2), Some(expected_many2));
+            let mut output = vec![0; many2.len()];
+            assert!(poseidon2_cuda_many_into(&many2, &mut output));
+            assert_eq!(output, expected_many2);
             let many6 = [
                 [1u64, 2, 3, 4, 5, 6],
                 [7u64, 8, 9, 10, 11, 12],
@@ -2890,7 +774,9 @@ mod imp {
                 .copied()
                 .map(crate::poseidon::poseidon6_simd)
                 .collect();
-            assert_eq!(poseidon6_cuda_many(&many6), Some(expected_many6));
+            let mut output = vec![0; many6.len()];
+            assert!(poseidon6_cuda_many_into(&many6, &mut output));
+            assert_eq!(output, expected_many6);
         }
         #[test]
         fn public_aes_round_helpers_match_scalar_when_cuda_available() {
@@ -2954,7 +840,9 @@ mod imp {
                     digest
                 })
                 .collect();
-            assert_eq!(sha256_leaves_cuda(&blocks), Some(expected));
+            let mut output = [[0; 32]; 2];
+            assert!(sha256_leaves_cuda_into(&blocks, &mut output));
+            assert_eq!(output.as_slice(), expected);
         }
         #[test]
         fn public_sha256_pairs_reduce_matches_scalar_when_cuda_available() {
@@ -3033,8 +921,11 @@ mod imp {
                 .iter()
                 .map(|&state| crate::aes::aesdec_impl(state, rk))
                 .collect();
-            assert_eq!(aesenc_batch_cuda(&states, rk), Some(expected_enc));
-            assert_eq!(aesdec_batch_cuda(&states, rk), Some(expected_dec));
+            let mut output = vec![[0; 16]; states.len()];
+            assert!(aesenc_batch_cuda_into(&states, rk, &mut output));
+            assert_eq!(output, expected_enc);
+            assert!(aesdec_batch_cuda_into(&states, rk, &mut output));
+            assert_eq!(output, expected_dec);
         }
         #[test]
         fn public_bn254_helpers_match_scalar_when_cuda_available() {
@@ -3097,53 +988,59 @@ mod imp {
                 crate::bn254_vec::FieldElem::from_u64(0x0102_0304_0506_0708),
                 crate::bn254_vec::FieldElem::from_u64(0x3334_3536_3738_393a),
             ];
-            let add_lhs_words: Vec<[u64; BN254_LIMBS]> =
-                add_lhs.iter().map(|elem| elem.0).collect();
-            let add_rhs_words: Vec<[u64; BN254_LIMBS]> =
-                add_rhs.iter().map(|elem| elem.0).collect();
-            let sub_lhs_words: Vec<[u64; BN254_LIMBS]> =
-                sub_lhs.iter().map(|elem| elem.0).collect();
-            let sub_rhs_words: Vec<[u64; BN254_LIMBS]> =
-                sub_rhs.iter().map(|elem| elem.0).collect();
-            let mul_lhs_words: Vec<[u64; BN254_LIMBS]> =
-                mul_lhs.iter().map(|elem| elem.0).collect();
-            let mul_rhs_words: Vec<[u64; BN254_LIMBS]> =
-                mul_rhs.iter().map(|elem| elem.0).collect();
-            let expected_add: Vec<[u64; BN254_LIMBS]> = add_lhs
+            let add_lhs_words: Vec<[u64; 4]> = add_lhs.iter().map(|elem| elem.0).collect();
+            let add_rhs_words: Vec<[u64; 4]> = add_rhs.iter().map(|elem| elem.0).collect();
+            let sub_lhs_words: Vec<[u64; 4]> = sub_lhs.iter().map(|elem| elem.0).collect();
+            let sub_rhs_words: Vec<[u64; 4]> = sub_rhs.iter().map(|elem| elem.0).collect();
+            let mul_lhs_words: Vec<[u64; 4]> = mul_lhs.iter().map(|elem| elem.0).collect();
+            let mul_rhs_words: Vec<[u64; 4]> = mul_rhs.iter().map(|elem| elem.0).collect();
+            let expected_add: Vec<[u64; 4]> = add_lhs
                 .iter()
                 .copied()
                 .zip(add_rhs.iter().copied())
                 .map(|(lhs, rhs)| crate::bn254_vec::add_scalar(lhs, rhs).0)
                 .collect();
-            let expected_sub: Vec<[u64; BN254_LIMBS]> = sub_lhs
+            let expected_sub: Vec<[u64; 4]> = sub_lhs
                 .iter()
                 .copied()
                 .zip(sub_rhs.iter().copied())
                 .map(|(lhs, rhs)| crate::bn254_vec::sub_scalar(lhs, rhs).0)
                 .collect();
-            let expected_mul: Vec<[u64; BN254_LIMBS]> = mul_lhs
+            let expected_mul: Vec<[u64; 4]> = mul_lhs
                 .iter()
                 .copied()
                 .zip(mul_rhs.iter().copied())
                 .map(|(lhs, rhs)| crate::bn254_vec::mul_scalar(lhs, rhs).0)
                 .collect();
-            assert_eq!(
-                bn254_add_batch_cuda(&add_lhs_words, &add_rhs_words),
-                Some(expected_add)
-            );
-            assert_eq!(
-                bn254_sub_batch_cuda(&sub_lhs_words, &sub_rhs_words),
-                Some(expected_sub)
-            );
-            assert_eq!(
-                bn254_mul_batch_cuda(&mul_lhs_words, &mul_rhs_words),
-                Some(expected_mul)
-            );
-            assert_eq!(bn254_add_batch_cuda(&[], &[]), Some(Vec::new()));
-            assert_eq!(
-                bn254_add_batch_cuda(&add_lhs_words, &add_rhs_words[..2]),
-                None
-            );
+            let mut add_output = vec![[0; 4]; add_lhs_words.len()];
+            assert!(bn254_add_batch_cuda_into(
+                &add_lhs_words,
+                &add_rhs_words,
+                &mut add_output
+            ));
+            assert_eq!(add_output, expected_add);
+            let mut sub_output = vec![[0; 4]; sub_lhs_words.len()];
+            assert!(bn254_sub_batch_cuda_into(
+                &sub_lhs_words,
+                &sub_rhs_words,
+                &mut sub_output
+            ));
+            assert_eq!(sub_output, expected_sub);
+            let mut mul_output = vec![[0; 4]; mul_lhs_words.len()];
+            assert!(bn254_mul_batch_cuda_into(
+                &mul_lhs_words,
+                &mul_rhs_words,
+                &mut mul_output
+            ));
+            assert_eq!(mul_output, expected_mul);
+            assert!(bn254_add_batch_cuda_into(&[], &[], &mut []));
+            let previous = add_output.clone();
+            assert!(!bn254_add_batch_cuda_into(
+                &add_lhs_words,
+                &add_rhs_words[..2],
+                &mut add_output
+            ));
+            assert_eq!(add_output, previous);
         }
         #[test]
         fn public_ed25519_verify_helpers_match_cpu_when_cuda_available() {
@@ -3177,7 +1074,21 @@ mod imp {
             let singleton_hram =
                 crate::signature::ed25519_challenge_scalar_bytes(&sig, &pk_bytes, msg);
             assert_eq!(
-                ed25519_verify_batch_cuda(&[sig], &[pk_bytes], &[singleton_hram]),
+                {
+                    let signatures = &[sig];
+                    let public_keys = &[pk_bytes];
+                    let hrams = &[singleton_hram];
+                    let mut output = vec![true; signatures.len()];
+                    if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                        Some(output)
+                    } else {
+                        assert!(
+                            output.iter().all(|value| *value),
+                            "refusal must preserve destination"
+                        );
+                        None
+                    }
+                },
                 Some(vec![expected_good])
             );
             let key1 = SigningKey::from_bytes(&[0x22; 32]);
@@ -3206,12 +1117,30 @@ mod imp {
                     .is_ok(),
             ];
             assert_eq!(
-                ed25519_verify_batch_cuda(&sigs, &pks, &hrams),
+                {
+                    let signatures = &sigs;
+                    let public_keys = &pks;
+                    let hrams = &hrams;
+                    let mut output = vec![true; signatures.len()];
+                    if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                        Some(output)
+                    } else {
+                        assert!(
+                            output.iter().all(|value| *value),
+                            "refusal must preserve destination"
+                        );
+                        None
+                    }
+                },
                 Some(expected_batch)
             );
         }
         #[test]
         fn public_ed25519_verify_helpers_reject_all_zero_signature_and_public_key_material() {
+            if !ensure_cuda_kernel(Kernel::Ed25519) {
+                eprintln!("CUDA unavailable; invalid-input native parity remains unqualified");
+                return;
+            }
             let zero_sig = [0_u8; 64];
             let nonzero_sig = [0x11_u8; 64];
             let mut small_order_r_sig = [0x22_u8; 64];
@@ -3235,15 +1164,57 @@ mod imp {
                 Some(false)
             );
             assert_eq!(
-                ed25519_verify_batch_cuda(&[zero_sig], &[public_key], &[hram]),
+                {
+                    let signatures = &[zero_sig];
+                    let public_keys = &[public_key];
+                    let hrams = &[hram];
+                    let mut output = vec![true; signatures.len()];
+                    if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                        Some(output)
+                    } else {
+                        assert!(
+                            output.iter().all(|value| *value),
+                            "refusal must preserve destination"
+                        );
+                        None
+                    }
+                },
                 Some(vec![false])
             );
             assert_eq!(
-                ed25519_verify_batch_cuda(&[nonzero_sig], &[zero_public_key], &[hram]),
+                {
+                    let signatures = &[nonzero_sig];
+                    let public_keys = &[zero_public_key];
+                    let hrams = &[hram];
+                    let mut output = vec![true; signatures.len()];
+                    if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                        Some(output)
+                    } else {
+                        assert!(
+                            output.iter().all(|value| *value),
+                            "refusal must preserve destination"
+                        );
+                        None
+                    }
+                },
                 Some(vec![false])
             );
             assert_eq!(
-                ed25519_verify_batch_cuda(&[small_order_r_sig], &[public_key], &[hram]),
+                {
+                    let signatures = &[small_order_r_sig];
+                    let public_keys = &[public_key];
+                    let hrams = &[hram];
+                    let mut output = vec![true; signatures.len()];
+                    if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                        Some(output)
+                    } else {
+                        assert!(
+                            output.iter().all(|value| *value),
+                            "refusal must preserve destination"
+                        );
+                        None
+                    }
+                },
                 Some(vec![false])
             );
         }
@@ -3260,8 +1231,22 @@ mod imp {
             let pk_bytes = signing_key.verifying_key().to_bytes();
             let hram = crate::signature::ed25519_challenge_scalar_bytes(&sig, &pk_bytes, msg);
             let single = ed25519_verify_cuda(msg, &sig, &pk_bytes);
-            let batch = ed25519_verify_batch_cuda(&[sig], &[pk_bytes], &[hram])
-                .and_then(|mut out| out.pop());
+            let batch = {
+                let signatures = &[sig];
+                let public_keys = &[pk_bytes];
+                let hrams = &[hram];
+                let mut output = vec![true; signatures.len()];
+                if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                    Some(output)
+                } else {
+                    assert!(
+                        output.iter().all(|value| *value),
+                        "refusal must preserve destination"
+                    );
+                    None
+                }
+            }
+            .and_then(|mut out| out.pop());
             assert_eq!(single, batch);
         }
         #[test]
@@ -3324,7 +1309,8 @@ mod imp {
                 if iteration == 0 {
                     trace_cuda_selftest("determinism vadd32");
                 }
-                let add32 = vadd32_cuda(&a32, &b32).expect("vadd32 cuda");
+                let mut add32 = vec![0; a32.len()];
+                assert!(vadd32_cuda_into(&a32, &b32, &mut add32));
                 assert_eq!(add32, expected_add32);
                 if iteration == 0 {
                     trace_cuda_selftest("determinism sha256");
@@ -3380,22 +1366,19 @@ mod imp {
     }
 }
 #[cfg(feature = "cuda")]
-pub(crate) use imp::sha256_merkle_root_cuda;
-#[cfg(feature = "cuda")]
 pub use imp::*;
-#[cfg(feature = "cuda")]
-/// Sort `(hi, lo)` key pairs lexicographically with the CUDA bitonic kernel.
-///
-/// Returns `None` when CUDA is unavailable, disabled, or the input slices have different lengths.
-#[allow(dead_code)]
-pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
-    imp::bitonic_sort_pairs(hi, lo)
+/// Number of completed CUDA kernel dispatches; zero without the CUDA backend.
+#[cfg(not(feature = "cuda"))]
+pub fn cuda_completed_dispatches() -> u64 {
+    0
 }
 #[cfg(not(feature = "cuda"))]
 pub fn cuda_available() -> bool {
     false
 }
 #[cfg(not(feature = "cuda"))]
+/// Whether policy or an unscoped fatal error disables the entire CUDA backend.
+/// Individual kernel/device quarantine is reflected by operation availability.
 pub fn cuda_disabled() -> bool {
     false
 }
@@ -3410,40 +1393,37 @@ pub fn reset_cuda_backend_for_tests() {}
 /// Sort `(hi, lo)` key pairs lexicographically with the CUDA bitonic kernel.
 ///
 /// Returns `None` when the crate is built without CUDA support.
-pub fn bitonic_sort_pairs(_hi: &mut [u64], _lo: &mut [u64]) -> Option<()> {
-    None
+pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
+    (hi.len() == lo.len() && hi.len() < 2).then_some(())
 }
 #[cfg(not(feature = "cuda"))]
-pub fn vector_add_f32(_a: &[f32], _b: &[f32]) -> Option<Vec<f32>> {
-    None
+pub fn vadd32_cuda_into(_a: &[u32], _b: &[u32], _destination: &mut [u32]) -> bool {
+    false
 }
 #[cfg(not(feature = "cuda"))]
-pub fn vadd32_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
-    None
+pub fn vadd64_cuda_into(_a: &[u64], _b: &[u64], _destination: &mut [u64]) -> bool {
+    false
 }
 #[cfg(not(feature = "cuda"))]
-pub fn vadd64_cuda(_a: &[u64], _b: &[u64]) -> Option<Vec<u64>> {
-    None
+pub fn vand_cuda_into(_a: &[u32], _b: &[u32], _destination: &mut [u32]) -> bool {
+    false
 }
 #[cfg(not(feature = "cuda"))]
-pub fn vand_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
-    None
+pub fn vxor_cuda_into(_a: &[u32], _b: &[u32], _destination: &mut [u32]) -> bool {
+    false
 }
 #[cfg(not(feature = "cuda"))]
-pub fn vxor_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
-    None
-}
-#[cfg(not(feature = "cuda"))]
-pub fn vor_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
-    None
+pub fn vor_cuda_into(_a: &[u32], _b: &[u32], _destination: &mut [u32]) -> bool {
+    false
 }
 #[cfg(not(feature = "cuda"))]
 pub fn sha256_compress_cuda(_state: &mut [u32; 8], _block: &[u8; 64]) -> bool {
     false
 }
 #[cfg(not(feature = "cuda"))]
-pub fn sha256_leaves_cuda(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
-    None
+/// Empty leaf batches need no device; nonempty CUDA attempts are unavailable.
+pub fn sha256_leaves_cuda_into(blocks: &[[u8; 64]], destination: &mut [[u8; 32]]) -> bool {
+    blocks.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
 pub fn sha256_pairs_reduce_cuda(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
@@ -3454,16 +1434,18 @@ pub fn poseidon2_cuda(_a: u64, _b: u64) -> Option<u64> {
     None
 }
 #[cfg(not(feature = "cuda"))]
-pub fn poseidon2_cuda_many(_inputs: &[(u64, u64)]) -> Option<Vec<u64>> {
-    None
+/// Empty Poseidon batches need no device; nonempty CUDA attempts are unavailable.
+pub fn poseidon2_cuda_many_into(inputs: &[(u64, u64)], destination: &mut [u64]) -> bool {
+    inputs.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
 pub fn poseidon6_cuda(_inputs: [u64; 6]) -> Option<u64> {
     None
 }
 #[cfg(not(feature = "cuda"))]
-pub fn poseidon6_cuda_many(_inputs: &[[u64; 6]]) -> Option<Vec<u64>> {
-    None
+/// Empty Poseidon batches need no device; nonempty CUDA attempts are unavailable.
+pub fn poseidon6_cuda_many_into(inputs: &[[u64; 6]], destination: &mut [u64]) -> bool {
+    inputs.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
 pub fn keccak_f1600_cuda(_state: &mut [u64; 25]) -> bool {
@@ -3478,27 +1460,49 @@ pub fn aesdec_cuda(_state: [u8; 16], _rk: [u8; 16]) -> Option<[u8; 16]> {
     None
 }
 #[cfg(not(feature = "cuda"))]
-pub fn aesenc_batch_cuda(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-    None
+/// An empty AES batch completes without a device; a nonempty CUDA attempt is unavailable.
+pub fn aesenc_batch_cuda_into(
+    states: &[[u8; 16]],
+    _rk: [u8; 16],
+    destination: &mut [[u8; 16]],
+) -> bool {
+    states.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
-pub fn aesdec_batch_cuda(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-    None
+/// An empty AES batch completes without a device; a nonempty CUDA attempt is unavailable.
+pub fn aesdec_batch_cuda_into(
+    states: &[[u8; 16]],
+    _rk: [u8; 16],
+    destination: &mut [[u8; 16]],
+) -> bool {
+    states.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
-/// Batch BN254 add: unavailable when the crate is built without CUDA support.
-pub fn bn254_add_batch_cuda(_lhs: &[[u64; 4]], _rhs: &[[u64; 4]]) -> Option<Vec<[u64; 4]>> {
-    None
+/// Empty BN254 batches succeed without hardware; nonempty CUDA attempts refuse.
+pub fn bn254_add_batch_cuda_into(
+    lhs: &[[u64; 4]],
+    rhs: &[[u64; 4]],
+    destination: &mut [[u64; 4]],
+) -> bool {
+    lhs.is_empty() && rhs.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
-/// Batch BN254 subtract: unavailable when the crate is built without CUDA support.
-pub fn bn254_sub_batch_cuda(_lhs: &[[u64; 4]], _rhs: &[[u64; 4]]) -> Option<Vec<[u64; 4]>> {
-    None
+/// Empty BN254 batches succeed without hardware; nonempty CUDA attempts refuse.
+pub fn bn254_sub_batch_cuda_into(
+    lhs: &[[u64; 4]],
+    rhs: &[[u64; 4]],
+    destination: &mut [[u64; 4]],
+) -> bool {
+    lhs.is_empty() && rhs.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
-/// Batch BN254 multiply: unavailable when the crate is built without CUDA support.
-pub fn bn254_mul_batch_cuda(_lhs: &[[u64; 4]], _rhs: &[[u64; 4]]) -> Option<Vec<[u64; 4]>> {
-    None
+/// Empty BN254 batches succeed without hardware; nonempty CUDA attempts refuse.
+pub fn bn254_mul_batch_cuda_into(
+    lhs: &[[u64; 4]],
+    rhs: &[[u64; 4]],
+    destination: &mut [[u64; 4]],
+) -> bool {
+    lhs.is_empty() && rhs.is_empty() && destination.is_empty()
 }
 #[cfg(not(feature = "cuda"))]
 pub fn bn254_add_cuda(_a: [u64; 4], _b: [u64; 4]) -> Option<[u64; 4]> {
@@ -3513,37 +1517,27 @@ pub fn bn254_mul_cuda(_a: [u64; 4], _b: [u64; 4]) -> Option<[u64; 4]> {
     None
 }
 #[cfg(not(feature = "cuda"))]
-pub fn ed25519_verify_cuda(_msg: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> Option<bool> {
-    (crate::signature::signature_bytes_are_all_zero(sig)
-        || crate::signature::signature_has_invalid_ed25519_r(sig)
-        || ed25519_public_key_bytes_are_invalid(pk))
-    .then_some(false)
+/// Native signature execution is unavailable without CUDA.
+pub fn ed25519_verify_cuda(
+    _message: &[u8],
+    _signature: &[u8; 64],
+    _public_key: &[u8; 32],
+) -> Option<bool> {
+    None
 }
 #[cfg(not(feature = "cuda"))]
-pub fn ed25519_verify_batch_cuda(
+/// Empty batches need no device; nonempty native attempts preserve the destination.
+pub fn ed25519_verify_batch_cuda_into(
     signatures: &[[u8; 64]],
     public_keys: &[[u8; 32]],
     hrams: &[[u8; 32]],
-) -> Option<Vec<bool>> {
-    if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
-        return None;
-    }
-    if signatures.is_empty() {
-        return Some(Vec::new());
-    }
-    signatures
-        .iter()
-        .zip(public_keys)
-        .all(|(sig, pk)| {
-            crate::signature::signature_bytes_are_all_zero(sig)
-                || crate::signature::signature_has_invalid_ed25519_r(sig)
-                || ed25519_public_key_bytes_are_invalid(pk)
-        })
-        .then(|| vec![false; signatures.len()])
+    destination: &mut [bool],
+) -> bool {
+    signatures.is_empty() && public_keys.is_empty() && hrams.is_empty() && destination.is_empty()
 }
 #[cfg(all(test, not(feature = "cuda")))]
 mod tests {
-    use super::{ed25519_verify_batch_cuda, ed25519_verify_cuda};
+    use super::{ed25519_verify_batch_cuda_into, ed25519_verify_cuda};
     use ed25519_dalek::{Signer as _, SigningKey};
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -3583,19 +1577,19 @@ mod tests {
         let hram = [0x24_u8; 32];
         assert_eq!(
             ed25519_verify_cuda(b"message", &zero_sig, &public_key),
-            Some(false)
+            None
         );
         assert_eq!(
             ed25519_verify_cuda(b"message", &valid_sig, &zero_public_key),
-            Some(false)
+            None
         );
         assert_eq!(
             ed25519_verify_cuda(b"message", &valid_sig, &weak_public_key),
-            Some(false)
+            None
         );
         assert_eq!(
             ed25519_verify_cuda(b"message", &valid_sig, &malformed_public_key),
-            Some(false)
+            None
         );
         assert_eq!(
             ed25519_verify_cuda(
@@ -3603,7 +1597,7 @@ mod tests {
                 &valid_sig,
                 &NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY,
             ),
-            Some(false)
+            None
         );
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
@@ -3612,33 +1606,99 @@ mod tests {
             let malformed_sig = signature_with_replacement_r(&valid_sig, &replacement_r);
             assert_eq!(
                 ed25519_verify_cuda(b"message", &malformed_sig, &public_key),
-                Some(false),
-                "{label} signature R must reject in the single stub"
+                None,
+                "{label} signature R must be unavailable in the single stub"
             );
         }
         assert_eq!(
-            ed25519_verify_batch_cuda(&[zero_sig], &[public_key], &[hram]),
-            Some(vec![false])
+            {
+                let signatures = &[zero_sig];
+                let public_keys = &[public_key];
+                let hrams = &[hram];
+                let mut output = vec![true; signatures.len()];
+                if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                    Some(output)
+                } else {
+                    assert!(
+                        output.iter().all(|value| *value),
+                        "refusal must preserve destination"
+                    );
+                    None
+                }
+            },
+            None
         );
         assert_eq!(
-            ed25519_verify_batch_cuda(&[valid_sig], &[zero_public_key], &[hram]),
-            Some(vec![false])
+            {
+                let signatures = &[valid_sig];
+                let public_keys = &[zero_public_key];
+                let hrams = &[hram];
+                let mut output = vec![true; signatures.len()];
+                if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                    Some(output)
+                } else {
+                    assert!(
+                        output.iter().all(|value| *value),
+                        "refusal must preserve destination"
+                    );
+                    None
+                }
+            },
+            None
         );
         assert_eq!(
-            ed25519_verify_batch_cuda(&[valid_sig], &[weak_public_key], &[hram]),
-            Some(vec![false])
+            {
+                let signatures = &[valid_sig];
+                let public_keys = &[weak_public_key];
+                let hrams = &[hram];
+                let mut output = vec![true; signatures.len()];
+                if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                    Some(output)
+                } else {
+                    assert!(
+                        output.iter().all(|value| *value),
+                        "refusal must preserve destination"
+                    );
+                    None
+                }
+            },
+            None
         );
         assert_eq!(
-            ed25519_verify_batch_cuda(&[valid_sig], &[malformed_public_key], &[hram]),
-            Some(vec![false])
+            {
+                let signatures = &[valid_sig];
+                let public_keys = &[malformed_public_key];
+                let hrams = &[hram];
+                let mut output = vec![true; signatures.len()];
+                if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                    Some(output)
+                } else {
+                    assert!(
+                        output.iter().all(|value| *value),
+                        "refusal must preserve destination"
+                    );
+                    None
+                }
+            },
+            None
         );
         assert_eq!(
-            ed25519_verify_batch_cuda(
-                &[valid_sig],
-                &[NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY],
-                &[hram],
-            ),
-            Some(vec![false])
+            {
+                let signatures = &[valid_sig];
+                let public_keys = &[NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY];
+                let hrams = &[hram];
+                let mut output = vec![true; signatures.len()];
+                if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                    Some(output)
+                } else {
+                    assert!(
+                        output.iter().all(|value| *value),
+                        "refusal must preserve destination"
+                    );
+                    None
+                }
+            },
+            None
         );
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
@@ -3646,10 +1706,85 @@ mod tests {
         ] {
             let malformed_sig = signature_with_replacement_r(&valid_sig, &replacement_r);
             assert_eq!(
-                ed25519_verify_batch_cuda(&[malformed_sig], &[public_key], &[hram]),
-                Some(vec![false]),
-                "{label} signature R must reject in the batch stub"
+                {
+                    let signatures = &[malformed_sig];
+                    let public_keys = &[public_key];
+                    let hrams = &[hram];
+                    let mut output = vec![true; signatures.len()];
+                    if ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                        Some(output)
+                    } else {
+                        assert!(
+                            output.iter().all(|value| *value),
+                            "refusal must preserve destination"
+                        );
+                        None
+                    }
+                },
+                None,
+                "{label} signature R must be unavailable in the batch stub"
             );
         }
     }
+}
+
+#[cfg(not(feature = "cuda"))]
+/// Fused AESENC rounds are unavailable without CUDA; callers use scalar execution.
+pub fn aesenc_rounds_batch_cuda_into(
+    states: &[[u8; 16]],
+    keys: &[[u8; 16]],
+    destination: &mut [[u8; 16]],
+) -> bool {
+    if states.len() != destination.len() {
+        return false;
+    }
+    if states.is_empty() {
+        return true;
+    }
+    if keys.is_empty() {
+        destination.copy_from_slice(states);
+        return true;
+    }
+    false
+}
+#[cfg(not(feature = "cuda"))]
+/// Fused AESDEC rounds are unavailable without CUDA; callers use scalar execution.
+pub fn aesdec_rounds_batch_cuda_into(
+    states: &[[u8; 16]],
+    keys: &[[u8; 16]],
+    destination: &mut [[u8; 16]],
+) -> bool {
+    if states.len() != destination.len() {
+        return false;
+    }
+    if states.is_empty() {
+        return true;
+    }
+    if keys.is_empty() {
+        destination.copy_from_slice(states);
+        return true;
+    }
+    false
+}
+
+/// Observed physical device slots eligible under IVM's current configured cap.
+/// A slot can remain quarantined; qualification must require each selected slot.
+#[cfg(feature = "cuda")]
+pub fn cuda_device_slots() -> usize {
+    crate::cuda_dispatch::device_slots()
+}
+/// CPU-only builds expose no CUDA device slots.
+#[cfg(not(feature = "cuda"))]
+pub fn cuda_device_slots() -> usize {
+    0
+}
+/// Execute a required hardware control on one persistent physical device.
+#[cfg(feature = "cuda-hardware-tests")]
+pub fn with_cuda_device_for_qualification<T>(index: usize, call: impl FnOnce() -> T) -> Option<T> {
+    crate::cuda_dispatch::with_device_for_qualification(index, call)
+}
+/// Current qualification pin, for exact nested/unwind restoration controls.
+#[cfg(feature = "cuda-hardware-tests")]
+pub fn cuda_qualification_device() -> Option<usize> {
+    crate::cuda_dispatch::qualification_device()
 }

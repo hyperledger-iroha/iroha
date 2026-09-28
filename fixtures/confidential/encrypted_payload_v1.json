@@ -14,6 +14,14 @@
         "ciphertext_plaintext": "ConfidentialPayloadV1",
         "ciphertext_hex": "436f6e666964656e7469616c5061796c6f61645631",
         "serialized_hex": "01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b715436f6e666964656e7469616c5061796c6f61645631"
+      },
+      {
+        "case_id": "v1-three-byte-ciphertext",
+        "version": 1,
+        "ephemeral_public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "nonce_hex": "222222222222222222222222222222222222222222222222",
+        "ciphertext_hex": "aabbcc",
+        "serialized_hex": "01111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222203aabbcc"
       }
     ],
     "negative": [
@@ -31,6 +39,23 @@
         "case_id": "truncated-ciphertext",
         "note": "Payload ends before ciphertext completes.",
         "serialized_hex": "01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b715436f6e666964656e7469616c5061796c6f6164",
+        "expected_error": {
+          "mode": "decode_error",
+          "kind": "TruncatedPayload"
+        }
+      },
+      {
+        "case_id": "unsupported-version",
+        "serialized_hex": "02111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222203aabbcc",
+        "expected_error": {
+          "mode": "unsupported_version",
+          "kind": "UnsupportedVersion",
+          "version": 2
+        }
+      },
+      {
+        "case_id": "truncated-payload",
+        "serialized_hex": "01",
         "expected_error": {
           "mode": "decode_error",
           "kind": "TruncatedPayload"

@@ -452,7 +452,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             )
             XCTAssertNotNil(request.value(forHTTPHeaderField: "X-Iroha-Signature"))
             XCTAssertEqual(
-                request.httpBody,
+                toriiClientTestBodyData(from: request),
                 try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
                     trustedCheckpointHeight: 17
                 )
@@ -512,7 +512,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             let requestIndex = recorder.recordRequest()
             let expectedHeight: UInt64 = requestIndex == 0 ? 7 : 70
             XCTAssertEqual(
-                request.httpBody,
+                toriiClientTestBodyData(from: request),
                 try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
                     trustedCheckpointHeight: expectedHeight
                 )

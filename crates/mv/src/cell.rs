@@ -8,6 +8,20 @@ use crate::{
     publication::{CapturedPublication, NextPublication, Publication},
 };
 
+#[path = "cell/initial.rs"]
+mod initial;
+pub use initial::{CellInitialization, CellInitializationError};
+
+#[path = "cell/generations.rs"]
+mod generations;
+pub use generations::{CellGenerationBacking, CellGenerationBackingError};
+
+#[path = "cell/frozen_read.rs"]
+mod frozen_read;
+#[path = "cell/successor.rs"]
+mod successor;
+pub use successor::{CellPublicationSuccessor, CellPublicationSuccessorError};
+
 #[path = "cell/detached_publication.rs"]
 mod detached_publication;
 #[path = "cell/physical.rs"]
@@ -101,6 +115,32 @@ impl<V: Value> Cell<V> {
     }
 }
 
+impl<V: Value> Cell<V, crate::allocation::AllocationCharge> {
+    /// Attach both original physical generation shells and the exact successor.
+    /// Every owner must originate from the enclosing execution pool. Refusal
+    /// returns all three unchanged before acquiring any physical writer.
+    pub fn try_block_acquisition_with_backing(
+        &self,
+        backing: CellGenerationBacking<V>,
+        successor: CellPublicationSuccessor,
+        budget: &crate::allocation::AllocationBudget,
+    ) -> Result<
+        BlockAcquisitionSlot<'_, V, crate::allocation::AllocationCharge>,
+        (CellGenerationBacking<V>, CellPublicationSuccessor),
+    > {
+        if !backing.belongs_to(budget) || !successor.belongs_to(budget) {
+            return Err((backing, successor));
+        }
+        let (current, undo) = backing.into_original();
+        Ok(BlockAcquisitionSlot::with_backing(
+            self,
+            current,
+            undo,
+            successor.into_original(),
+        ))
+    }
+}
+
 impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
     /// Exact requested EBR allocation layouts, in current/undo order.
     ///
@@ -120,8 +160,11 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
     }
 
     /// Move exact decoded current/undo values into their prepaid EBR allocations.
-    /// Payload decoding and nested storage are the caller's separate obligation.
-    pub(crate) fn from_values_charged(
+    /// Payload decoding and nested storage are the caller's separate obligation. Supplied
+    /// charges cover only the concrete EBR current/undo layouts actually admitted by the
+    /// caller. Publication identity, release notifications and epoch bookkeeping remain
+    /// separate obligations; this constructor does not infer or acquire their funding.
+    pub fn from_values_charged(
         current_value: V,
         undo_value: Option<V>,
         charges: CellAllocationCharges<Charge>,
@@ -172,13 +215,41 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
         }
     }
 
-    /// Retain both original charges in an inert caller-owned acquisition slot.
+    /// Retain both original EBR charges in an inert caller-owned acquisition slot.
     /// No mutex, payload clone or generation allocation occurs until initialize.
+    /// This API leaves the successor identity explicitly untracked; native
+    /// admission uses [`Self::try_block_acquisition_with_successor`] instead.
     pub fn block_acquisition_charged(
         &self,
         charges: CellAllocationCharges<Charge>,
     ) -> BlockAcquisitionSlot<'_, V, Charge> {
         BlockAcquisitionSlot::new(self, charges)
+    }
+
+    /// Retain an exact prepaid successor before acquiring either physical writer.
+    ///
+    /// The token must belong to the original aggregate's execution pool. This
+    /// inert transfer allocates and clones nothing. Refusal returns both original
+    /// EBR charges and the successor token; equal pool limits are not authority.
+    /// The EBR payload/outer charges and notification controls remain separately
+    /// admitted obligations; this token funds only the next publication identity.
+    pub fn try_block_acquisition_with_successor(
+        &self,
+        charges: CellAllocationCharges<Charge>,
+        successor: CellPublicationSuccessor,
+        budget: &crate::allocation::AllocationBudget,
+    ) -> Result<
+        BlockAcquisitionSlot<'_, V, Charge>,
+        (CellAllocationCharges<Charge>, CellPublicationSuccessor),
+    > {
+        if !successor.belongs_to(budget) {
+            return Err((charges, successor));
+        }
+        Ok(BlockAcquisitionSlot::with_successor(
+            self,
+            charges,
+            successor.into_original(),
+        ))
     }
 
     /// Create a block using the same caller-owned acquisition kernel.
@@ -357,7 +428,7 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
     /// before invoking any component's publish.
     #[expect(
         clippy::result_large_err,
-        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+        reason = "refusal returns original current/undo allocations and deferred cleanup inline; boxing would allocate during local resource failure"
     )]
     pub fn try_prepare_publication<'target, Installation, E>(
         self,
@@ -515,6 +586,8 @@ mod block {
         pub(super) publication: &'storage Publication,
         pub(super) predecessor: CapturedPublication,
         pub(super) mode: BlockMode,
+        // Retained before original physical acquisition; capture/publication never allocate it.
+        pub(super) next: Option<NextPublication>,
     }
     impl<'storage, V: Value, Charge: Send + Sync + 'static> Block<'storage, V, Charge> {
         pub(super) fn new(
@@ -523,6 +596,7 @@ mod block {
             publication: &'storage Publication,
             predecessor: CapturedPublication,
             mode: BlockMode,
+            next: NextPublication,
         ) -> Self {
             Self {
                 writers,
@@ -530,6 +604,7 @@ mod block {
                 publication,
                 predecessor,
                 mode,
+                next: Some(next),
             }
         }
         /// Create transaction for the block
@@ -553,8 +628,8 @@ mod block {
         /// Admit metadata retention, then release writers around their original allocations.
         ///
         /// Both successor payloads and charges move into the detached owner
-        /// without cloning. The next publication identity is allocated after
-        /// admission and retained across installation retries. Payload allocation
+        /// without cloning. The next publication identity was retained before
+        /// original writer acquisition and survives installation retries. Payload allocation
         /// custody was already required before this block's original acquisition;
         /// this callback cannot retroactively fund execution or nested values.
         pub fn try_detach<Admission, E>(
@@ -922,8 +997,10 @@ mod partial_acquisition_tests;
 
 impl<V: Value, Charge: Send + Sync + 'static> Block<'_, V, Charge> {
     pub(super) fn prepare_attached_publication(&mut self) {
+        self.writers.as_ref();
+        let next = self.next.take().expect("original Cell successor identity");
         self.writers
-            .prepare_publication(self.publication, &self.predecessor, self.dirty);
+            .prepare_publication(self.publication, &self.predecessor, self.dirty, next);
     }
 
     pub(super) fn publish_attached_prepared(&mut self) {

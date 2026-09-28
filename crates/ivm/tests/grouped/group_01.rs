@@ -32,6 +32,8 @@ mod beep_test;
 mod bit_ops;
 #[path = "../bn254_backend.rs"]
 mod bn254_backend;
+#[path = "../bn254_batch.rs"]
+mod bn254_batch;
 #[path = "../bn254_vec.rs"]
 mod bn254_vec;
 #[path = "../branch_cycles.rs"]

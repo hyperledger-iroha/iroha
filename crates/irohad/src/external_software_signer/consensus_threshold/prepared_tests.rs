@@ -4,7 +4,6 @@
 fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restart() {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        block::consensus_v2::ValidatorPower,
         isi::kagemusha_v1::{
             InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
             KagemushaMintFinalityAuthorityGenerationV1,
@@ -52,17 +51,22 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
         authority_generation: 1,
         preparing_authorization_id: [0x91; 32],
         election_seed: [0x92; 32],
-        roster: peers
+        eligibility: iroha_data_model::nexus::ValidatorElectionPolicyV1 {
+            epoch_length_blocks: 100,
+            ..iroha_data_model::nexus::ValidatorElectionPolicyV1::from_npos_parameters(
+                &iroha_data_model::parameter::system::SumeragiNposParameters::default(),
+            )
+            .unwrap()
+        },
+        committee: keys
             .iter()
-            .cloned()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect(),
-        validator_set_pops: keys
-            .iter()
-            .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
+            .map(
+                |key| iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1 {
+                    validator: PeerId::new(key.public_key().clone()),
+                    proof_of_possession: iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .unwrap(),
+                },
+            )
             .collect(),
     };
     let (pending_record, pending_components) =

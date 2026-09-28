@@ -1,7 +1,7 @@
 """Join a fixed native proof replay to the original complete Applied workload.
 
 The compiled Kagami verifier authenticates canonical Norito, signed requests,
-genesis authority, contiguous finality, routing, incarnations and useful effects.
+genesis authority, contiguous carrier, routing, incarnations and useful effects.
 This owner invokes that verifier and joins every projected row to independently
 admitted accounts, the seeded schedule and both Applied observations. A parsed
 JSON row alone is never a verification result. Original file and runtime custody
@@ -27,7 +27,7 @@ from scaling_command import BoundedCommand
 
 MAX_BYTES = 256 * 1024 * 1024
 MAX_CHUNK_BYTES = 65536
-MAX_OBJECT_BYTES = 1024
+MAX_OBJECT_BYTES = 2048
 MAX_TRIAL_NS = 7200 * 1_000_000_000
 MAX_U64 = (1 << 64) - 1
 _HEX = re.compile(r'[0-9a-f]{64}')
@@ -35,8 +35,10 @@ _NUMBER = re.compile(r'0|[1-9][0-9]{0,19}')
 _HEADER_FIELDS = frozenset(('version', 'operation', 'invocation_id', 'request_sha256',
     'input_sha256', 'proof_sha256', 'proof_iroha_hash', 'proof_bytes'))
 _ROW_FIELDS = frozenset(('logical_id', 'phase', 'sequence', 'authority', 'entrypoint_hash',
-    'carrier_height', 'carrier_hash', 'merge_entry_hash', 'merge_epoch', 'leaf_index',
-    'lane_id', 'dataspace_id', 'incarnation'))
+    'carrier_height', 'carrier_hash', 'lane_source', 'leaf_index',
+    'lane_id', 'dataspace_id'))
+_SOURCE_FIELDS = frozenset(('incarnation', 'instance', 'height', 'block_hash', 'result',
+    'batch_index', 'anchor_height', 'anchor_hash'))
 _MARKER = b',"rows":'
 
 
@@ -185,9 +187,10 @@ def _invalid_number(_):
 
 
 def _object_end(raw):
-    """Find one bounded flat object without allocating or parsing nested values."""
+    """Find one bounded object with at most one source-record nesting level."""
     _require(bool(raw) and raw[0] == 123, 'canonical_object_framing')
     quoted = escaped = False
+    depth = 1
     for index in range(1, min(len(raw), MAX_OBJECT_BYTES + 1)):
         byte = raw[index]
         if quoted:
@@ -195,8 +198,13 @@ def _object_end(raw):
             elif byte == 92: escaped = True
             elif byte == 34: quoted = False
         elif byte == 34: quoted = True
-        elif byte == 125: return index + 1
-        elif byte in (123, 91, 93): raise CanonicalProofError('canonical_nested_value')
+        elif byte == 125:
+            depth -= 1
+            if depth == 0: return index + 1
+        elif byte == 123:
+            depth += 1
+            _require(depth <= 2, 'canonical_nested_value')
+        elif byte in (91, 93): raise CanonicalProofError('canonical_nested_value')
     _require(len(raw) < MAX_OBJECT_BYTES, 'canonical_object_bound')
     return None
 
@@ -208,6 +216,8 @@ def _object(raw, fields):
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs, parse_int=_number,
                        parse_float=_invalid_number, parse_constant=_invalid_number)
     _require(type(value) is dict and value.keys() == fields, 'canonical_fields_invalid')
+    _require(all(type(item) is not dict or (fields == _ROW_FIELDS and key == 'lane_source')
+                 for key, item in value.items()), 'canonical_nested_value')
     return value
 
 
@@ -309,13 +319,23 @@ class _ProjectionJoiner:
             'lane_id': account % lanes, 'dataspace_id': 0}
         _require(all(type(row[k]) is type(v) and row[k] == v for k, v in expected.items()),
                  'canonical_row_join_mismatch')
-        for field in ('carrier_hash', 'merge_entry_hash', 'incarnation'):
-            _digest(row[field], marked=True)
-        _integer(row['merge_epoch'])
+        _digest(row['carrier_hash'], marked=True)
         _integer(row['leaf_index'], 0, (1 << 32) - 1)
-        # Carrier/QC/merge/leaf/incarnation authenticity is established by the
-        # native verifier against original genesis authority and signed requests.
-        # Python never learns expected authority from these projected fields.
+        source = row['lane_source']
+        if row['lane_id'] == 0:
+            _require(source is None, 'canonical_global_lane_source')
+        else:
+            _require(type(source) is dict and source.keys() == _SOURCE_FIELDS,
+                     'canonical_lane_source_fields')
+            for field in ('incarnation', 'instance', 'block_hash', 'result'):
+                _digest(source[field])
+            _digest(source['anchor_hash'], marked=True)
+            _integer(source['height'], 1)
+            _integer(source['anchor_height'], 1, row['carrier_height'] - 1)
+            _integer(source['batch_index'], 0, (1 << 32) - 1)
+        # The native verifier authenticates exact original lane QCs, admission,
+        # merge ordering and actual Network execution. Python joins that completed
+        # projection to the independent request journal; it creates no authority.
 
     def finish(self):
         """Complete parser agreement; the caller must first require native exit zero."""

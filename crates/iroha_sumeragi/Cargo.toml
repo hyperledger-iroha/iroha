@@ -25,3 +25,6 @@ mutation-testing = []
 
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
+
+# Shared original-pool custody of canonical application-result witnesses.
+mv = { workspace = true }

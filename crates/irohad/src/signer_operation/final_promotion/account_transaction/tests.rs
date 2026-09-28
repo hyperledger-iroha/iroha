@@ -51,10 +51,9 @@ mod software_key;
 
 mod statements {
     use sorafs_manifest as manifest;
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../sorafs_manifest/src/signer/final_promotion/tests/statement_fixture_support.rs"
-    ));
+    include!(
+        "../../../../../sorafs_manifest/src/signer/final_promotion/tests/statement_fixture_support.rs"
+    );
 }
 const DEPLOYMENT: &str = "promotion-primary";
 const NOW: u64 = 3_000;

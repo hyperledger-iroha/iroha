@@ -1,21 +1,13 @@
-//! Multi-peer STARK integration coverage for governance voting and shielded IVM admission.
+//! Multi-peer STARK integration coverage for governance voting.
 #![cfg(feature = "zk-stark")]
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::blocking::Client;
-use iroha_crypto::{
-    Signature,
-    blake2::{Blake2b512, Digest as _},
-};
+use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
     isi::{Grant, InstructionBox},
     permission::Permission,
-    proof::{
-        ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
-    },
-    transaction::{
-        Executable, FeePaymentIntent, IvmBytecode, IvmProved, signed::TransactionBuilder,
-    },
+    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
 use iroha_executor_data_model::permission::governance::{
@@ -25,47 +17,6 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
-use iroha_torii::{
-    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_network_request_signature_message, signature_header_value,
-};
-use reqwest::{Client as HttpClient, StatusCode};
-use std::{
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-#[derive(norito::JsonSerialize)]
-struct ZkIvmDeriveRequest {
-    vk_ref: VerifyingKeyId,
-    authority: iroha_data_model::account::AccountId,
-    fee_payment: FeePaymentIntent,
-    metadata: Metadata,
-    bytecode: IvmBytecode,
-}
-#[derive(norito::JsonDeserialize)]
-struct ZkIvmDeriveResponse {
-    proved: IvmProved,
-}
-#[derive(norito::JsonSerialize)]
-struct ZkIvmProveRequest {
-    vk_ref: VerifyingKeyId,
-    authority: iroha_data_model::account::AccountId,
-    fee_payment: FeePaymentIntent,
-    metadata: Metadata,
-    bytecode: IvmBytecode,
-    proved: Option<IvmProved>,
-}
-#[derive(norito::JsonDeserialize)]
-struct ZkIvmProveJobCreated {
-    job_id: String,
-}
-#[derive(norito::JsonDeserialize)]
-struct ZkIvmProveJob {
-    status: String,
-    error: Option<String>,
-    attachment: Option<ProofAttachment>,
-}
 fn has_test_network_feature(feature: &str) -> bool {
     std::env::var("TEST_NETWORK_IROHAD_FEATURES")
         .ok()
@@ -150,174 +101,11 @@ where
         .wrap_err_with(|| format!("wait for commit after {context}"))?;
     Ok(())
 }
-fn torii_v2_url(client: &Client, segments: &[&str]) -> reqwest::Url {
-    let mut url = client.client().endpoint().clone();
-    let mut path_segments = url
-        .path_segments_mut()
-        .expect("torii_url must be a base URL");
-    path_segments.clear();
-    path_segments.extend(segments.iter().copied());
-    drop(path_segments);
-    url
-}
-fn signing_uri(url: &reqwest::Url) -> Result<Uri> {
-    match url.query() {
-        Some(query) => Ok(format!("{}?{query}", url.path()).parse()?),
-        None => Ok(url.path().parse()?),
-    }
-}
-fn add_canonical_prove_headers(
-    request: reqwest::RequestBuilder,
-    client: &Client,
-    method: Method,
-    url: &reqwest::Url,
-    body: &[u8],
-) -> Result<reqwest::RequestBuilder> {
-    static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    let timestamp_ms: u64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
-    let nonce = format!(
-        "zk-stark-prove-{timestamp_ms}-{}",
-        NONCE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    );
-    let uri = signing_uri(url)?;
-    let message = canonical_network_request_signature_message(
-        client.client().network_id(),
-        &method,
-        &uri,
-        body,
-        timestamp_ms,
-        &nonce,
-    )?;
-    let signature = Signature::try_new(client.client().key_pair().private_key(), &message)?;
-    Ok(request
-        .header(
-            HEADER_ACCOUNT,
-            client.client().account().to_canonical_hex()?,
-        )
-        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
-        .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
-        .header(HEADER_NONCE, nonce))
-}
-async fn post_torii_json_v2(
-    client: &Client,
-    segments: &[&str],
-    payload: &norito::json::Value,
-    context: &str,
-) -> Result<norito::json::Value> {
-    let url = torii_v2_url(client, segments);
-    let body = norito::json::to_vec(payload)?;
-    let response = HttpClient::builder()
-        .timeout(Duration::from_secs(20))
-        .build()?
-        .post(url)
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .await?;
-    let status = response.status();
-    let bytes = response.bytes().await?.to_vec();
-    if status != StatusCode::OK {
-        let body = String::from_utf8_lossy(&bytes);
-        return Err(eyre!("{context}: HTTP {status}. {body}"));
-    }
-    Ok(norito::json::from_slice(&bytes)?)
-}
-async fn post_torii_json_v2_signed(
-    client: &Client,
-    segments: &[&str],
-    payload: &norito::json::Value,
-    context: &str,
-) -> Result<norito::json::Value> {
-    let url = torii_v2_url(client, segments);
-    let body = norito::json::to_vec(payload)?;
-    let http = HttpClient::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(20))
-        .build()?;
-    let request = add_canonical_prove_headers(
-        http.post(url.clone())
-            .header("Content-Type", "application/json")
-            .body(body.clone()),
-        client,
-        Method::POST,
-        &url,
-        &body,
-    )?;
-    let response = request.send().await?;
-    let status = response.status();
-    let bytes = response.bytes().await?.to_vec();
-    if status != StatusCode::OK {
-        let body = String::from_utf8_lossy(&bytes);
-        return Err(eyre!("{context}: HTTP {status}. {body}"));
-    }
-    Ok(norito::json::from_slice(&bytes)?)
-}
-async fn get_torii_json_v2_signed(
-    client: &Client,
-    segments: &[&str],
-    context: &str,
-) -> Result<norito::json::Value> {
-    let url = torii_v2_url(client, segments);
-    let http = HttpClient::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(20))
-        .build()?;
-    let request =
-        add_canonical_prove_headers(http.get(url.clone()), client, Method::GET, &url, &[])?;
-    let response = request.send().await?;
-    let status = response.status();
-    let bytes = response.bytes().await?.to_vec();
-    if status != StatusCode::OK {
-        let body = String::from_utf8_lossy(&bytes);
-        return Err(eyre!("{context}: HTTP {status}. {body}"));
-    }
-    Ok(norito::json::from_slice(&bytes)?)
-}
-async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<ProofAttachment> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-    loop {
-        let value = get_torii_json_v2_signed(
-            client,
-            &["v2", "zk", "ivm", "prove", job_id],
-            "fetch /v1/zk/ivm/prove/{job_id}",
-        )
-        .await?;
-        let dto: ZkIvmProveJob =
-            norito::json::from_value(value).wrap_err("decode prove job dto")?;
-        match dto.status.as_str() {
-            "pending" | "running" => {}
-            "done" => {
-                return dto
-                    .attachment
-                    .ok_or_else(|| eyre!("prove job completed without attachment"));
-            }
-            "error" => {
-                let message = dto
-                    .error
-                    .unwrap_or_else(|| "unknown prove error".to_owned());
-                return Err(eyre!("prove job failed: {message}"));
-            }
-            other => return Err(eyre!("unexpected prove job status: {other}")),
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(eyre!("timed out waiting for prove job completion"));
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
 #[tokio::test]
 #[ignore = "no audited semantic governance STARK AIR is registered; generic Binding role labels fail closed"]
-async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
-    require_test_network_feature(
-        "zk-stark",
-        stringify!(stark_governance_and_shielded_ivm_paths),
-    )?;
+async fn stark_governance_paths() -> Result<()> {
+    require_test_network_feature("zk-stark", stringify!(stark_governance_paths))?;
     let backend = "stark/fri";
-    let ivm_circuit_id = "ivm-replay-binding-v1";
     let ballot_circuit_id = "vote-ballot";
     let tally_circuit_id = "vote-tally";
     let builder = NetworkBuilder::new()
@@ -326,11 +114,8 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(stark_governance_and_shielded_ivm_paths),
-    )
-    .await?
+    let Some(network) =
+        sandbox::start_network_async_or_skip(builder, stringify!(stark_governance_paths)).await?
     else {
         return Ok(());
     };
@@ -376,32 +161,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         Grant::account_permission(Permission::from(CanEnactGovernance), ALICE_ID.clone()),
         &mut expected_height,
         "grant CanEnactGovernance",
-    )
-    .await?;
-    let ivm_vk_id = VerifyingKeyId::new(backend, "ivm_exec_stark");
-    let ivm_vk_box = sample_stark_vk_box(backend, ivm_circuit_id);
-    let mut ivm_vk_record = VerifyingKeyRecord::new(
-        1,
-        ivm_circuit_id,
-        BackendTag::Stark,
-        "goldilocks",
-        iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash(),
-        iroha_core::zk::hash_vk(&ivm_vk_box),
-    );
-    ivm_vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-    ivm_vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    ivm_vk_record.vk_len = ivm_vk_box.bytes.len() as u32;
-    ivm_vk_record.max_proof_bytes = 8 * 1024 * 1024;
-    ivm_vk_record.key = Some(ivm_vk_box.clone());
-    submit_and_wait_next_block(
-        &client,
-        &network,
-        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-            id: ivm_vk_id.clone(),
-            record: ivm_vk_record,
-        },
-        &mut expected_height,
-        "register ivm verifying key",
     )
     .await?;
     let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
@@ -566,84 +325,5 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "finalize election",
     )
     .await?;
-    let meta = ivm::ProgramMetadata {
-        mode: ivm::ivm_mode::ZK,
-        ..Default::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
-    let tx_meta = Metadata::default();
-    let fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(50_000_000));
-    let derive_req = ZkIvmDeriveRequest {
-        vk_ref: ivm_vk_id.clone(),
-        authority: client.client().account().clone(),
-        fee_payment: fee_payment.clone(),
-        metadata: tx_meta.clone(),
-        bytecode: bytecode.clone(),
-    };
-    let derive_req_json = norito::json::to_value(&derive_req)?;
-    let derive_resp_json = post_torii_json_v2(
-        &client,
-        &["v2", "zk", "ivm", "derive"],
-        &derive_req_json,
-        "post /v1/zk/ivm/derive",
-    )
-    .await?;
-    let derive_resp: ZkIvmDeriveResponse =
-        norito::json::from_value(derive_resp_json).wrap_err("decode derive response")?;
-    let prove_req = ZkIvmProveRequest {
-        vk_ref: ivm_vk_id.clone(),
-        authority: client.client().account().clone(),
-        fee_payment: fee_payment.clone(),
-        metadata: tx_meta.clone(),
-        bytecode,
-        proved: Some(derive_resp.proved.clone()),
-    };
-    let prove_req_json = norito::json::to_value(&prove_req)?;
-    let prove_created_json = post_torii_json_v2_signed(
-        &client,
-        &["v2", "zk", "ivm", "prove"],
-        &prove_req_json,
-        "post /v1/zk/ivm/prove",
-    )
-    .await?;
-    let prove_created: ZkIvmProveJobCreated =
-        norito::json::from_value(prove_created_json).wrap_err("decode prove created response")?;
-    let attachment = wait_for_prove_attachment(&client, &prove_created.job_id).await?;
-    let tx_valid = TransactionBuilder::new(
-        *client.client().network_id(),
-        client.client().account().clone(),
-        fee_payment.clone(),
-    )
-    .with_executable(Executable::IvmProved(derive_resp.proved.clone()))
-    .with_metadata(tx_meta.clone())
-    .with_attachments(
-        ProofAttachmentList::try_from(vec![attachment.clone()])
-            .expect("one attachment is a valid bounded proof list"),
-    )
-    .sign(client.client().key_pair().private_key());
-    client
-        .submit_transaction_and_wait(&tx_valid)
-        .wrap_err("submit STARK IvmProved tx after AIR proving is re-enabled")?;
-    let bad_attachment =
-        ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);
-    let tx_bad = TransactionBuilder::new(
-        *client.client().network_id(),
-        client.client().account().clone(),
-        fee_payment,
-    )
-    .with_executable(Executable::IvmProved(derive_resp.proved))
-    .with_metadata(tx_meta)
-    .with_attachments(
-        ProofAttachmentList::try_from(vec![bad_attachment])
-            .expect("one attachment is a valid bounded proof list"),
-    )
-    .sign(client.client().key_pair().private_key());
-    let bad = client.submit_transaction_and_wait(&tx_bad);
-    assert!(
-        bad.is_err(),
-        "mismatched backend/circuit attachment should be rejected"
-    );
     Ok(())
 }

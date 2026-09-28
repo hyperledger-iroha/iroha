@@ -7,6 +7,9 @@
 //! the transport `N` (P2P in the node, in-memory in tests), the file record and body stores,
 //! Kura, the system clock and the State executor.
 
+mod configuration;
+pub use configuration::consensus_configuration_fingerprint;
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use iroha_config::parameters::actual::SumeragiLocalOverrides;
@@ -23,7 +26,6 @@ use iroha_model_base::peer::PeerId;
 pub use iroha_sumeragi::message::PROTOCOL_VERSION;
 use iroha_sumeragi::{
     api::{CoreStatus, HaltReason, LocalParams},
-    crypto::NoAttestation,
     preimage::{InstanceKind, instance_id},
     types::{Hash32, PublicKey},
 };
@@ -95,14 +97,18 @@ pub struct StartInputs<N> {
     pub queue: Arc<Queue>,
     /// The node's consensus key pair (BLS normal).
     pub key_pair: KeyPair,
+    /// Runtime-only custody for current and pending beacon sessions; never serialized.
+    pub beacon_signer: Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    /// Runtime-only original Pasta seed owner. It retains generation-specific current and
+    /// pending derivation across restart; every use must match the authenticated full roster.
+    pub mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     /// Files and operator choices.
     pub config: NodeConfig,
     /// Reports of the instance.
     pub observer: Arc<dyn Observer>,
     /// Driver limits.
     pub driver: DriverConfig,
-    /// Runtime-only threshold share custody installed by the node's signer broker.
-    pub beacon_signer: Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
 }
 
 /// Everything [`start`] needs from the node.
@@ -127,6 +133,12 @@ pub struct NodeInputs<N> {
     pub genesis_account: AccountId,
     /// The consensus mode.
     pub consensus_mode: ConsensusMode,
+    /// Runtime-only custody for current and pending beacon sessions; never serialized.
+    pub beacon_signer: Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    /// Runtime-only original Pasta seed owner. It retains generation-specific current and
+    /// pending derivation across restart; every use must match the authenticated full roster.
+    pub mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     /// Files and operator choices.
     pub config: NodeConfig,
     /// Reports of the instance.
@@ -137,6 +149,9 @@ pub struct NodeInputs<N> {
 
 /// A running Sumeragi instance.
 pub struct RunningNode {
+    state: Arc<State>,
+    config_fingerprint: iroha_crypto::Hash,
+    beacon_readiness: super::epoch_beacon::producer::NativeBeaconReadiness,
     /// The driver.
     pub driver: RunningDriver,
     /// The instance id (`I`).
@@ -144,7 +159,6 @@ pub struct RunningNode {
     /// The instance's cryptography.
     pub crypto: Arc<BlsCrypto>,
     identity: NodeIdentity,
-    beacon: Arc<super::beacon::BeaconService>,
     /// The node's lane instances.
     pub lanes: super::lanes::runner::LaneRunner,
     /// Routes inbound frames to the node's instances.
@@ -159,6 +173,9 @@ impl RunningNode {
             instance: self.instance,
             identity: self.identity.clone(),
             lanes: self.lanes.handle(),
+            state: Arc::clone(&self.state),
+            config_fingerprint: self.config_fingerprint,
+            beacon_readiness: self.beacon_readiness.clone(),
         }
     }
 }
@@ -170,6 +187,9 @@ pub struct NodeHandle {
     instance: Hash32,
     identity: NodeIdentity,
     lanes: super::lanes::runner::LaneRunnerHandle,
+    state: Arc<State>,
+    config_fingerprint: iroha_crypto::Hash,
+    beacon_readiness: super::epoch_beacon::producer::NativeBeaconReadiness,
 }
 
 /// Immutable identity and resolved configuration of the running consensus instance.
@@ -212,7 +232,12 @@ impl NodeHandle {
 
     /// The status the node serves (`/v1/sumeragi/status`; `None` before the core started).
     pub fn status_dto(&self) -> Option<SumeragiStatus> {
-        status_dto(&self.driver)
+        let status = self.status()?;
+        status_dto(
+            &self.driver,
+            self.config_fingerprint,
+            self.beacon_observation(&status).map(|(horizon, _)| horizon),
+        )
     }
 
     /// Every lane of the committed state with the node's instance of it
@@ -223,12 +248,19 @@ impl NodeHandle {
 }
 
 /// The served status of the instance `driver` runs (`None` before its core started).
-pub(crate) fn status_dto(driver: &DriverHandle) -> Option<SumeragiStatus> {
+pub(crate) fn status_dto(
+    driver: &DriverHandle,
+    config_fingerprint: Hash,
+    beacon_horizon: Option<iroha_data_model::sumeragi::BeaconHorizonStatusV1>,
+) -> Option<SumeragiStatus> {
     let status = driver.status()?;
     let key = |key: &PublicKey| iroha_key(key).ok();
     let widen = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
     let footprint = &status.footprint;
     Some(SumeragiStatus {
+        protocol_version: PROTOCOL_VERSION,
+        config_fingerprint,
+        beacon_horizon,
         instance: status.instance.0,
         height: status.height,
         view: status.view,
@@ -250,6 +282,9 @@ pub(crate) fn status_dto(driver: &DriverHandle) -> Option<SumeragiStatus> {
             HaltReason::SafetyRecordInconsistent => SumeragiHaltReason::SafetyRecordInconsistent,
             HaltReason::SafetyViolation { height } => SumeragiHaltReason::SafetyViolation(height),
             HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
+            HaltReason::PublicationRecoveryRequired { height } => {
+                SumeragiHaltReason::PublicationRecoveryRequired(height)
+            }
             HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
         }),
         footprint: SumeragiFootprint {
@@ -276,12 +311,31 @@ impl NodeHandle {
     pub fn restart_required(&self) -> bool {
         // A clean shutdown retains diagnostics without recording a halt. Once
         // initialized, a non-running driver cannot serve live attestations.
-        self.halted().is_some() || (self.status().is_some() && !self.ready())
+        self.halted().is_some() || (self.status().is_some() && !self.driver.ready())
     }
 
     /// The core started, has not halted, and the instance runs.
     pub fn ready(&self) -> bool {
         self.driver.ready()
+            && self.status().is_some_and(|status| {
+                // Observers have no signing obligation and the core does not drive their
+                // partial producer. An unanchored local validator cannot use this exemption.
+                (status.abstaining && !status.unanchored)
+                    || self
+                        .beacon_observation(&status)
+                        .is_some_and(|(_, ready)| ready)
+            })
+    }
+
+    fn beacon_observation(
+        &self,
+        status: &CoreStatus,
+    ) -> Option<(iroha_data_model::sumeragi::BeaconHorizonStatusV1, bool)> {
+        let generation = self.state.state_view_generation();
+        let observed =
+            self.beacon_readiness
+                .read(generation, status.height, status.applied_height)?;
+        (self.state.state_view_generation() == generation).then_some(observed)
     }
 
     /// An includable transaction entered the queue (the leader's `PayloadReady`).
@@ -352,6 +406,8 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
         genesis,
         genesis_account,
         consensus_mode,
+        beacon_signer,
+        mint_finality_authority,
         config,
         observer,
         driver,
@@ -366,10 +422,11 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
         consensus_mode,
     })?
     .start(StartInputs {
-        beacon_signer: None,
         net,
         queue,
         key_pair,
+        beacon_signer,
+        mint_finality_authority,
         config,
         observer,
         driver,
@@ -382,6 +439,9 @@ pub struct Prepared {
     crypto: Arc<BlsCrypto>,
     instance: Hash32,
     tip: GenesisTip,
+    /// Original signed and independently executed genesis epoch for fresh safety records.
+    genesis_epoch: iroha_sumeragi::types::EpochId,
+    config_fingerprint: iroha_crypto::Hash,
     blocks: Arc<KuraBlockStore>,
     executor: StateExecutor,
     consensus_mode: ConsensusMode,
@@ -422,30 +482,55 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         ));
     }
     // Genesis: re-execute the stored one, or apply the supplied one.
-    let tip: GenesisTip = match startup::stored_genesis(&state) {
-        Some((block, certificate, stored)) => {
-            if let Some(supplied) = &genesis
-                && startup::core_hash_of(supplied) != stored.block_hash
-            {
-                return Err(NodeError::Input(
-                    "the supplied genesis differs from the one Kura holds".into(),
-                ));
+    let (tip, config_fingerprint): (GenesisTip, iroha_crypto::Hash) =
+        match startup::stored_genesis(&state) {
+            Some((block, certificate, stored)) => {
+                if let Some(supplied) = &genesis
+                    && startup::core_hash_of(supplied) != stored.block_hash
+                {
+                    return Err(NodeError::Input(
+                        "the supplied genesis differs from the one Kura holds".into(),
+                    ));
+                }
+                let fingerprint =
+                    consensus_configuration_fingerprint(&block).map_err(NodeError::Input)?;
+                (
+                    startup::apply_genesis(
+                        &state,
+                        block,
+                        &genesis_account,
+                        consensus_mode,
+                        Some(&certificate),
+                    )?,
+                    fingerprint,
+                )
             }
-            startup::apply_genesis(
-                &state,
-                block,
-                &genesis_account,
-                consensus_mode,
-                Some(&certificate),
-            )?
-        }
-        None => startup::apply_genesis(
-            &state,
-            genesis.ok_or(NodeError::NoGenesis)?,
-            &genesis_account,
-            consensus_mode,
-            None,
-        )?,
+            None => {
+                let genesis = genesis.ok_or(NodeError::NoGenesis)?;
+                let fingerprint =
+                    consensus_configuration_fingerprint(&genesis).map_err(NodeError::Input)?;
+                (
+                    startup::apply_genesis(
+                        &state,
+                        genesis,
+                        &genesis_account,
+                        consensus_mode,
+                        None,
+                    )?,
+                    fingerprint,
+                )
+            }
+        };
+    let genesis_epoch = {
+        let view = state.view();
+        let config = view
+            .world()
+            .consensus_schedule()
+            .ready(GENESIS_HEIGHT)
+            .map_err(|error| NodeError::Input(error.to_string()))?;
+        schedule::core_epoch(&config.epoch)
+            .map_err(|error| NodeError::Input(error.to_string()))?
+            .id
     };
     let crypto = Arc::new(BlsCrypto::new());
     let shared: SharedCrypto = crypto.clone();
@@ -462,6 +547,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         Arc::clone(&shared),
         GENESIS_HEIGHT,
         staging.clone(),
+        state.ivm_execution_budget(),
     ));
     let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
         GENESIS_HEIGHT,
@@ -476,6 +562,14 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     ));
     let mut executor = StateExecutor::spawn(ExecutorContext {
         state: Arc::clone(&state),
+        native_context_archive: Arc::new(
+            crate::query::native_context_archive::NativeContextArchive::open(
+                state.kura(),
+                state.ivm_execution_budget(),
+                state.kura().native_context_archive_max_bytes(),
+            )
+            .map_err(|error| NodeError::Input(error.to_string()))?,
+        ),
         queue: None,
         staging,
         events,
@@ -487,7 +581,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         lane_blocks: lane_stores.clone(),
     })
     .map_err(|error| NodeError::Driver(error.to_string()))?;
-    admit_window(&state, &crypto, GENESIS_HEIGHT);
+    admit_window(&state, &crypto, GENESIS_HEIGHT).map_err(NodeError::Input)?;
     // Replay what Kura holds above genesis.
     let stored = blocks.height();
     for height in GENESIS_HEIGHT.saturating_add(1)..=stored {
@@ -499,12 +593,14 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             .replay(&entry.block, &entry.commit_qc)
             .map_err(|reason| NodeError::Replay { height, reason })?;
     }
-    admit_window(&state, &crypto, stored.max(GENESIS_HEIGHT));
+    admit_window(&state, &crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
     Ok(Prepared {
         state,
         crypto,
         instance,
         tip,
+        genesis_epoch,
+        config_fingerprint,
         blocks,
         executor,
         consensus_mode,
@@ -533,6 +629,11 @@ impl Prepared {
         self.instance
     }
 
+    /// The independently verified signed-genesis native consensus configuration fingerprint.
+    pub fn config_fingerprint(&self) -> iroha_crypto::Hash {
+        self.config_fingerprint
+    }
+
     /// Install the safety records of the node's keys, assemble the core's `Init` and spawn the
     /// driver over `inputs.net`.
     ///
@@ -544,6 +645,8 @@ impl Prepared {
             crypto,
             instance,
             tip,
+            genesis_epoch,
+            config_fingerprint,
             blocks,
             executor,
             consensus_mode,
@@ -555,26 +658,45 @@ impl Prepared {
             net,
             queue,
             key_pair,
+            beacon_signer,
+            mint_finality_authority,
             config,
             observer,
             driver,
-            beacon_signer,
         } = inputs;
         executor.attach_queue(Arc::clone(&queue));
-        let beacon = super::beacon::BeaconService::spawn(
-            Arc::clone(&state),
-            instance,
-            PeerId::new(key_pair.public_key().clone()),
-            beacon_signer,
-            net.clone(),
-            consensus_mode,
-        )
-        .map_err(|error| NodeError::Driver(error.to_string()))?;
-        executor.attach_beacon(Arc::clone(&beacon));
         let shared: SharedCrypto = crypto.clone();
         // Records of the node's keys.
         let key =
             core_key(key_pair.public_key()).map_err(|error| NodeError::Key(error.to_string()))?;
+        {
+            let view = state.view();
+            for slot in view.world().consensus_schedule().entries() {
+                let schedule::ScheduledSlot::Ready(scheduled) = slot else {
+                    continue;
+                };
+                if scheduled
+                    .epoch
+                    .committee
+                    .iter()
+                    .any(|member| member.validator.public_key() == key_pair.public_key())
+                {
+                    mint_finality_authority.as_ref()
+                        .ok_or_else(|| NodeError::Key("authenticated current validator requires original Pasta seed custody".into()))?
+                        .signer_for_authority(&scheduled.epoch.authority)
+                        .map_err(|error| NodeError::Key(error.to_string()))?;
+                }
+            }
+        }
+        let budget = state.ivm_execution_budget();
+        let verifier =
+            super::attestation::NativePastaVerifier::new(instance, *state.view().network_id());
+        let (attestor, publisher) =
+            super::attestation::channel(instance, &key, mint_finality_authority.is_some(), &budget)
+                .map_err(|error| NodeError::Key(error.to_string()))?;
+        executor
+            .attach_attestation(verifier, mint_finality_authority, publisher)
+            .map_err(|error| NodeError::Driver(error.to_string()))?;
         let mut keys: Vec<(PublicKey, bool)> = vec![(key, false)];
         for retired in &config.retired_keys {
             keys.push((
@@ -591,6 +713,7 @@ impl Prepared {
             &*records,
             &*crypto,
             &instance,
+            genesis_epoch,
             &keys,
             GENESIS_HEIGHT,
             assertion.as_ref(),
@@ -610,8 +733,14 @@ impl Prepared {
             )
         };
         let n = configs
-            .first()
-            .map_or(1, |(_, config)| config.committee.n());
+            .iter()
+            .find_map(|(_, slot)| match slot {
+                iroha_sumeragi::types::ConfigSlot::Ready(config) => Some(config.committee.n()),
+                iroha_sumeragi::types::ConfigSlot::PendingBoundary { .. } => None,
+            })
+            .ok_or_else(|| {
+                NodeError::Input("native startup has no authenticated ready committee".into())
+            })?;
         let identity = NodeIdentity {
             node_id: PeerId::new(key_pair.public_key().clone()),
             config_fingerprint: configuration_fingerprint(
@@ -643,6 +772,16 @@ impl Prepared {
         );
         let signer =
             KeyPairSigner::new(&key_pair).map_err(|error| NodeError::Key(error.to_string()))?;
+        let (_, beacon_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .map_err(|error| NodeError::Key(error.to_string()))?;
+        let beacon_key: [u8; 48] = beacon_key.try_into().map_err(|_| {
+            NodeError::Key("native beacon identity must be the actual BLS key".into())
+        })?;
+        let beacon_readiness = executor
+            .attach_beacon(instance, Some(beacon_key), beacon_signer)
+            .map_err(|error| NodeError::Driver(error.to_string()))?;
         // Inbound frames reach the driver of their instance: the global one and each lane's.
         let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
         // Lane instances (`specs/sumeragi_lanes.md` §4.1) share the transport, ingress,
@@ -678,27 +817,21 @@ impl Prepared {
         .spawn(
             driver,
             DriverStart {
+                allocation_budget: budget,
                 local: local_params(n, &config.local),
                 init,
                 signers: vec![Box::new(signer)],
                 crypto: shared,
-                // TODO(WP5c-kagemusha): the KAGEMUSHA Pasta attestor and verifier; until then no
-                // block is flagged (top-ups are not proposable before WP8a).
-                attestor: Box::new(NoAttestation),
-                verifier: Box::new(NoAttestation),
+                attestor: Box::new(attestor),
+                verifier: Box::new(verifier),
             },
         )
         .map_err(|error| NodeError::Driver(error.to_string()))?;
-        beacon.set_wakeup(running.handle());
-        ingress.register(
-            instance,
-            Arc::new(super::beacon::BeaconFrameSink::new(
-                running.handle(),
-                Arc::clone(&beacon),
-            )),
-        );
+        ingress.register(instance, Arc::new(running.handle()));
         Ok(RunningNode {
-            beacon,
+            state,
+            config_fingerprint,
+            beacon_readiness,
             driver: running,
             instance,
             crypto,
@@ -729,7 +862,6 @@ impl Prepared {
             Ok(thread) => thread,
             Err(error) => {
                 node.lanes.shutdown();
-                node.beacon.shutdown();
                 node.driver.shutdown();
                 return Err(NodeError::Driver(format!(
                     "sumeragi ingress thread: {error}"
@@ -763,7 +895,6 @@ impl NetworkedNode {
     pub fn shutdown(self) {
         self.ingress.unregister(&self.node.instance);
         self.node.lanes.shutdown();
-        self.node.beacon.shutdown();
         self.node.driver.shutdown();
         drop(self.ingress_thread);
     }
@@ -882,19 +1013,21 @@ pub(crate) fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> Loca
 }
 
 /// Admit the committee keys scheduled for `t`, `t + 1` and `t + 2`.
-fn admit_window(state: &State, crypto: &BlsCrypto, t: u64) {
+fn admit_window(state: &State, crypto: &BlsCrypto, t: u64) -> Result<(), String> {
     let view = state.view();
     let world = view.world();
     for height in t..=t.saturating_add(2) {
-        let Some(config) = world.consensus_schedule().get(height) else {
+        let Some(schedule::ScheduledSlot::Ready(config)) = world.consensus_schedule().get(height)
+        else {
             continue;
         };
-        for (peer, pop) in schedule::committee_pops(world, config) {
-            if let Err(error) = crypto.admit(peer.public_key(), &pop) {
-                iroha_logger::warn!(%peer, ?error, "sumeragi: committee key not admitted");
-            }
+        for (peer, pop) in schedule::committee_pops(config).map_err(|error| error.to_string())? {
+            crypto
+                .admit(peer.public_key(), &pop)
+                .map_err(|error| format!("scheduled committee member {peer}: {error}"))?;
         }
     }
+    Ok(())
 }
 
 /// A fresh nonce for the record-loss probe (§7.4 R2): distinct at every start.
@@ -1110,7 +1243,7 @@ mod tests {
             NetworkId::from_genesis_hash(genesis.hash()),
         ));
         let nexus = state.nexus_snapshot();
-        state.install_lane_manifests(&Arc::new(
+        state.install_lane_manifests_for_testing(&Arc::new(
             LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
         ));
         state
@@ -1161,6 +1294,12 @@ mod tests {
                         registry: Arc::clone(&registry),
                     }),
                     key_pair,
+                    beacon_signer: None,
+                    mint_finality_authority: Some(Arc::new(crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+                        Arc::new(super::super::epoch::genesis_epoch(&chain.genesis).unwrap().authority),
+                        zeroize::Zeroizing::new([0xA0 + index as u8; 32]),
+                        index as u32,
+                    ).unwrap())),
                     chain_id: chain.chain_id.to_string(),
                     genesis: Some(chain.genesis.clone()),
                     genesis_account: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
@@ -1680,6 +1819,89 @@ mod tests {
         assert_same_certified_blocks(&disks, 3);
     }
 
+    #[test]
+    fn all_seat_restart_reproduces_missing_original_context_archives_from_certified_execution() {
+        let chain = chain(4, 200);
+        let disks = disks(&chain);
+        let validators = start_all(&chain, &disks, true);
+        let hash = submit(&chain, &validators, "original context archive restart");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "archive source committed",
+            || committed_everywhere(&validators, hash),
+        );
+        shutdown(validators);
+        let mut records = Vec::new();
+        for disk in &disks {
+            let directory = disk.kura.store_root().join("native-contexts");
+            let mut files = std::fs::read_dir(&directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            files.sort();
+            assert_eq!(
+                files.len(),
+                2,
+                "original genesis and its actual work successor"
+            );
+            for file in files {
+                let bytes = std::fs::read(&file).unwrap();
+                std::fs::remove_file(&file).unwrap();
+                records.push((file, bytes));
+            }
+        }
+        let validators = start_all(&chain, &disks, false);
+        assert_eq!(committed_heights(&validators), vec![2; 4]);
+        for (file, original) in &records {
+            assert_eq!(
+                &std::fs::read(file).unwrap(),
+                original,
+                "fresh State replay must reproduce the exact certified execution projection"
+            );
+        }
+        let hash = submit(&chain, &validators, "work after context archive repair");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "work after replay",
+            || committed_everywhere(&validators, hash),
+        );
+        shutdown(validators);
+        assert_same_certified_blocks(&disks, 3);
+        // Neither genesis nor a later record may be repaired by overwriting conflicts.
+        for (index, (file, original)) in records[..2].iter().enumerate() {
+            let mut corrupt = original.clone();
+            corrupt[0] ^= 1;
+            std::fs::write(file, &corrupt).unwrap();
+            let state = empty_state(&chain.chain_id, &chain.genesis, &disks[0].kura);
+            let result = prepare(PrepareInputs {
+                state: Arc::clone(&state),
+                kura: Arc::clone(&disks[0].kura),
+                events: tokio::sync::broadcast::channel(16).0,
+                chain_id: chain.chain_id.to_string(),
+                genesis: Some(chain.genesis.clone()),
+                genesis_account: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                consensus_mode: ConsensusMode::Permissioned,
+            });
+            if index == 0 {
+                assert!(matches!(
+                    result,
+                    Err(NodeError::Startup(StartupError::Local(_)))
+                ));
+                assert_eq!(
+                    state.view().height(),
+                    0,
+                    "failed original genesis archive cannot expose State"
+                );
+            } else {
+                assert!(matches!(result, Err(NodeError::Replay { height: 2, .. })));
+            }
+            assert_eq!(std::fs::read(file).unwrap(), corrupt);
+            std::fs::write(file, original).unwrap();
+        }
+    }
+
     /// Replay checks every stored block against its certified result (§12.1): a certificate
     /// whose result differs from re-execution stops the replay.
     #[test]
@@ -1709,9 +1931,23 @@ mod tests {
         let crypto = Arc::new(BlsCrypto::new());
         let shared: SharedCrypto = crypto.clone();
         let staging = Staging::new();
-        let blocks = KuraBlockStore::new(kura, shared, GENESIS_HEIGHT, staging.clone());
+        let blocks = KuraBlockStore::new(
+            kura,
+            shared,
+            GENESIS_HEIGHT,
+            staging.clone(),
+            state.ivm_execution_budget(),
+        );
         let mut executor = StateExecutor::spawn(ExecutorContext {
             state: Arc::clone(&state),
+            native_context_archive: Arc::new(
+                crate::query::native_context_archive::NativeContextArchive::open(
+                    state.kura(),
+                    state.ivm_execution_budget(),
+                    state.kura().native_context_archive_max_bytes(),
+                )
+                .expect("original-pool native context archive"),
+            ),
             queue: None,
             staging,
             events: tokio::sync::broadcast::channel(16).0,
@@ -1726,7 +1962,7 @@ mod tests {
             lane_blocks: std::sync::Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         })
         .expect("executor");
-        admit_window(&state, &crypto, GENESIS_HEIGHT);
+        admit_window(&state, &crypto, GENESIS_HEIGHT).expect("authenticated schedule admission");
         let entry = blocks.entry(2).expect("height 2 stored");
         let mut forged = entry.commit_qc.clone();
         forged.result = Hash32([0xAB; 32]);

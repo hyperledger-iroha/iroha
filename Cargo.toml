@@ -76,6 +76,7 @@ iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
 iroha_test_network = { path = "crates/iroha_test_network" }
 iroha_test_samples = { path = "crates/iroha_test_samples" }
+iroha_accel = { path = "crates/iroha_accel", default-features = false }
 ivm = { path = "crates/ivm" }
 ivm_abi = { path = "crates/ivm_abi" }
 kotodama_lang = { path = "crates/kotodama_lang" }
@@ -185,6 +186,7 @@ num-bigint = { path = "vendor/num-bigint-0.4.6" }
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
+cust_raw = { path = "vendor/cust_raw" }
 wayland-scanner = { path = "vendor/wayland-scanner-0.31.10" }
 
 # The pinned 0.5.3 release does not adapt Pasta fields to halo2-base's local
@@ -321,6 +323,7 @@ members = [
     "crates/norito/accelerators/jsonstage1_metal",
     "vendor/concread",
     "vendor/find_cuda_helper",
+    "vendor/cust_raw",
     "mochi/*",
     "data_model/samples/*",
     "integration_tests",
@@ -511,6 +514,46 @@ opt-level = 1
 
 [profile.release.package.iroha_model_base]
 opt-level = 1
+
+# Cargo otherwise strips debuginfo from host proc macros in release builds.
+# On macOS 27 that can misalign the Mach-O LINKEDIT string pool, so dyld
+# refuses to load a freshly built proc macro (rust-lang/rust#157750).
+[profile.release.build-override]
+strip = "none"
+
+# Xcode 27 can produce a non-loadable Mach-O addon when Cargo strips this
+# dynamic library; preserve symbols for every published native build profile.
+[profile.dev.package.iroha_js_host]
+strip = "none"
+
+[profile.release.package.iroha_js_host]
+strip = "none"
+
+[profile.deploy.package.iroha_js_host]
+strip = "none"
+
+# Xcode 27 also emits a non-loadable ABI bridge when Cargo strips its Mach-O
+# LINKEDIT string pool. Keep the native library loadable in SDK qualification
+# builds and published release/deploy artifacts.
+[profile.dev.package.connect_norito_bridge]
+strip = "none"
+
+[profile.release.package.connect_norito_bridge]
+strip = "none"
+
+[profile.deploy.package.connect_norito_bridge]
+strip = "none"
+
+# Xcode 27 applies the same misaligned LINKEDIT string-pool strip to the
+# Python extension. Keep the editable/test build and published wheel loadable.
+[profile.dev.package.iroha_python_rs]
+strip = "none"
+
+[profile.release.package.iroha_python_rs]
+strip = "none"
+
+[profile.deploy.package.iroha_python_rs]
+strip = "none"
 
 # Fast, incremental optimization for local runnable builds only. This profile
 # is not valid for release, packaging, or evidence-producing workflows; those

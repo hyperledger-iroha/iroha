@@ -1311,6 +1311,9 @@ impl NativePublicationFixture {
         let state = self.state();
         let restored = deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             kura: Arc::clone(&state.kura),
             lane_manifests: state.lane_manifests.read().clone(),
             query_handle: LiveQueryStore::start_test(),

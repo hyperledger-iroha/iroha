@@ -1,7 +1,8 @@
-//! Regression guard for the AXT envelope fixtures (handles/proofs/touches).
+//! Regression guard for the final AXT anchored-spend fixtures and descriptor binding.
 use hex::encode;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::nexus::{
-    AxtDescriptor, AxtHandleFragment, AxtHandleReplayKey, AxtProofEnvelope, AxtProofFragment,
+    AxtAnchoredSpendV1, AxtDescriptor, AxtHandleReplayKey, AxtProofEnvelope, AxtProofFragment,
     AxtRemoteSpendClaimV1, TouchManifest, compute_descriptor_binding,
     compute_remote_spend_claim_commitment_v1, proof_envelope_shape_matches_manifest,
     validate_descriptor,
@@ -15,19 +16,29 @@ struct DescriptorFixture {
     descriptor_hex: String,
 }
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
-struct HandleFixtures {
-    happy: Vec<AxtHandleFragment>,
-    rejects: Vec<AxtHandleFragment>,
+struct AnchoredSpendFixtures {
+    happy: Vec<AxtAnchoredSpendV1>,
+    rejects: Vec<AxtAnchoredSpendV1>,
 }
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 struct EnvelopeFixture {
     descriptor_hex: String,
     binding_hex: String,
     proofs: Vec<AxtProofFragment>,
-    handles: HandleFixtures,
+    spends: AnchoredSpendFixtures,
 }
 #[test]
 fn envelope_fixtures_align_with_descriptor_binding() {
+    let fixture_json = include_str!("fixtures/axt_envelope_multi_ds.json");
+    let retired_transport = fixture_json.replacen("\"spends\":", "\"handles\":", 1);
+    assert_ne!(
+        retired_transport, fixture_json,
+        "fixture uses final V1 spends"
+    );
+    assert!(
+        json::from_str::<EnvelopeFixture>(&retired_transport).is_err(),
+        "retired handle-fragment envelope must not decode as anchored V1"
+    );
     let descriptor: DescriptorFixture =
         json::from_slice(include_bytes!("fixtures/axt_descriptor_multi_ds.json"))
             .expect("descriptor fixture decodes");
@@ -57,7 +68,16 @@ fn envelope_fixtures_align_with_descriptor_binding() {
             proof.dsid.as_u64()
         );
     }
-    for handle in &envelope.handles.happy {
+    let issuer = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+    for spend in &envelope.spends.happy {
+        let handle = &spend.draft;
+        spend
+            .verify_issuer_signatures_v1(
+                handle.handle.issuer_context,
+                spend.authorization.anchor,
+                issuer.public_key(),
+            )
+            .expect("fixture spend has both valid issuer signatures");
         assert_eq!(
             handle.handle.axt_binding.as_bytes(),
             &binding,
@@ -92,8 +112,27 @@ fn envelope_fixtures_align_with_descriptor_binding() {
         );
         let proof_envelope: AxtProofEnvelope = decode_from_bytes(&attached_proof.payload)
             .expect("fixture proof payload decodes canonically");
+        assert_eq!(
+            effective_amount.scale(),
+            0,
+            "clear fixture uses integer units"
+        );
+        assert_eq!(
+            proof_envelope.committed_amount,
+            effective_amount.as_numeric().try_mantissa_u128(),
+            "proof scalar must exactly bind the signed clear amount"
+        );
+        assert_eq!(
+            proof_envelope.amount_commitment, None,
+            "clear fixture must not carry a hidden-amount commitment"
+        );
         assert_eq!(proof_envelope.dsid, handle.intent.asset_dsid);
         assert_eq!(proof_envelope.manifest_root, manifest_root_bytes);
+        assert_eq!(
+            proof_envelope.da_commitment,
+            Some(spend.authorization.anchor.da_manifest_digest.into()),
+            "proof DA commitment must equal the signed finalized anchor"
+        );
         assert_eq!(
             to_bytes(&proof_envelope).expect("re-encode proof envelope"),
             attached_proof.payload,
@@ -128,7 +167,18 @@ fn envelope_fixtures_align_with_descriptor_binding() {
         );
     }
     let mut reject_seen = false;
-    for handle in &envelope.handles.rejects {
+    for spend in &envelope.spends.rejects {
+        let handle = &spend.draft;
+        assert!(
+            spend
+                .verify_issuer_signatures_v1(
+                    handle.handle.issuer_context,
+                    spend.authorization.anchor,
+                    issuer.public_key(),
+                )
+                .is_err(),
+            "reject fixture cannot be issuer authorized"
+        );
         if handle.handle.axt_binding.as_bytes() != &binding {
             reject_seen = true;
         }

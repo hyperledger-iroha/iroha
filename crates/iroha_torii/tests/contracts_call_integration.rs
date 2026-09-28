@@ -628,12 +628,14 @@ fn execute_prepared_contract_in_test_overlay(
     );
     let mut block = state.block(header);
     let mut cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let (entrypoint, result) = block.validate_transaction(
-        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(
-            &prepared.transaction,
-        )),
-        &mut cache,
-    );
+    let (entrypoint, result) = block
+        .validate_transaction(
+            iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(
+                &prepared.transaction,
+            )),
+            &mut cache,
+        )
+        .expect("local execution completes");
     assert_eq!(entrypoint, prepared.transaction.hash_as_entrypoint());
     result.expect("prepared contract executes exactly once in test overlay");
     block

@@ -406,7 +406,9 @@ fn early_nested_depth_failure_cannot_be_swallowed_or_drained_as_success() {
                         Ok(row(0, 0))
                     })
                     .expect_err("failed journal must refuse parent application");
-                assert!(!error.is_empty());
+                assert!(
+                    matches!(error, ExecutionAttemptError::Rejected(reason) if !reason.is_empty())
+                );
                 Ok(())
             })
             .is_err()

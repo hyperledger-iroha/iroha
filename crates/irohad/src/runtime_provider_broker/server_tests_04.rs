@@ -2647,6 +2647,7 @@ fn global_beacon_partial_signer_round_trips_over_authenticated_broker() {
         fixture.session.clone(),
         51,
         anchor,
+        iroha_core::beacon::pulse_context_fixture_v1(),
     )
     .expect("construct canonical brokered beacon pulse");
     let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
@@ -2660,6 +2661,34 @@ fn global_beacon_partial_signer_round_trips_over_authenticated_broker() {
             .accept_partial(partial)
             .expect("independently verify brokered beacon partial")
     );
+    let context = iroha_core::beacon::pulse_context_fixture_v1();
+    let slot = iroha_core::beacon::global_threshold_beacon_pulse_signing_slot_v1(
+        &fixture.session,
+        verifier.payload(),
+    )
+    .expect("parse original caller signing context");
+    assert_eq!(slot.context, context);
+    for field in 0..5 {
+        let mut changed = context;
+        match field {
+            0 => changed.instance[0] ^= 1,
+            1 => changed.epoch += 1,
+            2 => changed.epoch_context_id[0] ^= 1,
+            3 => changed.parent_consensus_hash[0] ^= 1,
+            _ => changed.parent_result[0] ^= 1,
+        }
+        let mut other = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+            fixture.session.clone(),
+            51,
+            anchor,
+            changed,
+        )
+        .expect("different explicit native signing context");
+        assert!(
+            other.accept_partial(partial).is_err(),
+            "brokered signature must retain context field {field}"
+        );
+    }
     drop(dependencies);
     shutdown.request_shutdown();
     server
@@ -2692,6 +2721,7 @@ fn maximum_committee_global_beacon_proxy_round_trips_on_ordinary_stack() {
         fixture.session.clone(),
         51,
         anchor,
+        iroha_core::beacon::pulse_context_fixture_v1(),
     )
     .expect("construct maximum-committee brokered beacon pulse");
     let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
@@ -2754,6 +2784,7 @@ fn transient_beacon_qualification_reconnects_without_signer_replay() {
             fixture.session.clone(),
             51,
             anchor,
+            iroha_core::beacon::pulse_context_fixture_v1(),
         )
         .expect("construct transient-qualification beacon pulse");
         let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
@@ -2834,6 +2865,7 @@ fn global_beacon_partial_signer_reconnects_after_broker_restart() {
         session.clone(),
         51,
         anchor,
+        iroha_core::beacon::pulse_context_fixture_v1(),
     )
     .expect("construct post-restart beacon pulse");
     let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
@@ -2895,6 +2927,7 @@ fn invalid_beacon_partial_permanently_poisons_without_reconnect_or_replay() {
         session.clone(),
         51,
         anchor,
+        iroha_core::beacon::pulse_context_fixture_v1(),
     )
     .expect("construct invalid-provider beacon pulse");
     for attempt in 0..2 {
@@ -3004,6 +3037,7 @@ fn correlated_malformed_beacon_response_is_rejected_by_typed_proxy() {
         session.clone(),
         51,
         anchor,
+        iroha_core::beacon::pulse_context_fixture_v1(),
     )
     .expect("construct malformed-response beacon pulse");
     assert_eq!(
@@ -4121,6 +4155,7 @@ fn prepared_beacon_readiness_round_trips_over_its_typed_broker_domain() {
         fixture.session.clone(),
         51,
         anchor,
+        iroha_core::beacon::pulse_context_fixture_v1(),
     )
     .unwrap();
     assert!(

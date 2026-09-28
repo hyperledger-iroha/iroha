@@ -145,7 +145,7 @@ public sealed class NumericV1Tests
 
         var unassigned = NumericV1.EncodeIntEnvelope(NumericV1.IntValue.Parse("1"));
         unassigned[0] = 0;
-        unassigned[1] = 0x13;
+        unassigned[1] = 0x0C;
         unassigned[2] = 2;
         AssertNumericError(
             NumericV1.ErrorCode.UnknownType,

@@ -177,10 +177,6 @@ fn test_poseidon2_cuda_vectors() {
         eprintln!("CUDA hardware unavailable; skipping Poseidon2 parity test");
         return;
     }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to initialize GpuManager; skipping Poseidon2 CUDA test");
-        return;
-    }
     for &(a, b, expected) in POSEIDON2_VECTORS {
         match ivm::poseidon2_cuda(a, b) {
             Some(gpu) => assert_eq!(gpu, expected),
@@ -196,10 +192,6 @@ fn test_poseidon2_cuda_vectors() {
 fn test_poseidon6_cuda_vectors() {
     if !ivm::cuda_available() {
         eprintln!("CUDA hardware unavailable; skipping Poseidon6 parity test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to initialize GpuManager; skipping Poseidon6 CUDA test");
         return;
     }
     for &(inputs, expected) in POSEIDON6_VECTORS {
@@ -272,7 +264,8 @@ fn test_poseidon2_many_matches_scalar() {
         (1u64, 2u64),
         (u64::MAX, 0x1234_5678_9abc_def0),
     ];
-    let outputs = ivm::poseidon2_many(&inputs);
+    let mut outputs = [0; 3];
+    assert!(ivm::poseidon2_many_into(&inputs, &mut outputs));
     assert_eq!(outputs.len(), inputs.len());
     for ((a, b), result) in inputs.iter().copied().zip(outputs.iter()) {
         assert_eq!(*result, ivm::poseidon2(a, b));
@@ -285,9 +278,21 @@ fn test_poseidon6_many_matches_scalar() {
         [1u64, 2, 3, 4, 5, 6],
         [0x0123_4567_89ab_cdef, 0x0fed_cba9_8765_4321, 7, 8, 9, 10],
     ];
-    let outputs = ivm::poseidon6_many(&inputs);
+    let mut outputs = [0; 3];
+    assert!(ivm::poseidon6_many_into(&inputs, &mut outputs));
     assert_eq!(outputs.len(), inputs.len());
     for (input, result) in inputs.iter().copied().zip(outputs.iter()) {
         assert_eq!(*result, ivm::poseidon6(input));
     }
+}
+
+#[test]
+fn poseidon_batch_shapes_preserve_caller_storage() {
+    let mut untouched = [0xa5];
+    assert!(!ivm::poseidon2_many_into(&[(1, 2); 2], &mut untouched));
+    assert_eq!(untouched, [0xa5]);
+    assert!(!ivm::poseidon6_many_into(&[[1; 6]; 2], &mut untouched));
+    assert_eq!(untouched, [0xa5]);
+    assert!(ivm::poseidon2_many_into(&[], &mut []));
+    assert!(ivm::poseidon6_many_into(&[], &mut []));
 }

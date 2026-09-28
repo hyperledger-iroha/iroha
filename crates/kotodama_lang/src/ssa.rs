@@ -2850,7 +2850,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         }
         StateHas { path, .. } | StateLen { path, .. } => f(path),
         StateCount { prefix, .. } => f(prefix),
-        DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(blob),
+        JsonDecode { blob, .. } | NameDecode { blob, .. } => f(blob),
         TlvLen { value, .. } => f(value),
         JsonSetInt {
             json, key, value, ..
@@ -2876,7 +2876,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(schema);
             f(blob);
         }
-        EncodeInt { value, .. } | PointerToNorito { value, .. } => f(value),
+        EncodeBoolKey { value, .. } | PointerToNorito { value, .. } => f(value),
         PointerFromNorito { blob, .. } => f(blob),
         StatePathFromName { name, .. } => f(name),
         PathMapKeyNorito { base, key_blob, .. } => {
@@ -2912,6 +2912,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         VrfVerify { request, .. } => f(request),
         VrfVerifyBatch { batch, .. } => f(batch),
         AxtBegin { descriptor } => f(descriptor),
+        StageAnchoredSpend { spend } => f(spend),
         AxtTouch { dsid, manifest } => {
             f(dsid);
             if let Some(m) = manifest {
@@ -2920,17 +2921,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         }
         VerifyDsProof { dsid, proof } => {
             f(dsid);
-            if let Some(p) = proof {
-                f(p);
-            }
-        }
-        UseAssetHandle {
-            handle,
-            intent,
-            proof,
-        } => {
-            f(handle);
-            f(intent);
             if let Some(p) = proof {
                 f(p);
             }
@@ -3032,9 +3022,8 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::VrfVerify { dest, .. } => Some(dest),
         ir::Instr::VrfVerifyBatch { dest, .. } => Some(dest),
         ir::Instr::MapGet { dest, .. } => Some(dest),
-        ir::Instr::DecodeInt { dest, .. } => Some(dest),
         ir::Instr::TlvLen { dest, .. } => Some(dest),
-        ir::Instr::EncodeInt { dest, .. } => Some(dest),
+        ir::Instr::EncodeBoolKey { dest, .. } => Some(dest),
         ir::Instr::JsonObject { dest, .. } => Some(dest),
         ir::Instr::JsonSetInt { dest, .. } => Some(dest),
         ir::Instr::JsonSetAccountId { dest, .. } => Some(dest),
@@ -3118,8 +3107,8 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::StateDel { .. }
         | ir::Instr::AxtBegin { .. }
         | ir::Instr::AxtTouch { .. }
+        | ir::Instr::StageAnchoredSpend { .. }
         | ir::Instr::VerifyDsProof { .. }
-        | ir::Instr::UseAssetHandle { .. }
         | ir::Instr::AxtCommit
         | ir::Instr::TransferBatchBegin
         | ir::Instr::TransferBatchEnd

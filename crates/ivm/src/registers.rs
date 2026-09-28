@@ -10,11 +10,15 @@
 //! longer use a dedicated register file – instead groups of the general
 //! registers are interpreted as vectors.  This module implements that design.
 use crate::zk::{RegEvent, with_reg_logger};
-use crate::{VMError, parallel::REGISTER_COUNT};
+use crate::{VMError, error::ExecutionDeferral, parallel::REGISTER_COUNT};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
+use mv::allocation::{AllocationBudget, AllocationCharge};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    alloc::Layout,
+    sync::atomic::{AtomicBool, Ordering},
+};
 pub struct Registers {
     /// 256 general purpose 64-bit registers. `r0` is hardwired to zero.
     gpr: [u64; 256],
@@ -22,7 +26,9 @@ pub struct Registers {
     /// and `true` denotes private (secret) data.
     tags: [bool; 256],
     /// Merkle tree commitment to the register contents and tags (canonical type).
-    tree: Mutex<MerkleTree<[u8; 32]>>,
+    tree: Mutex<crate::cache_memory::FixedAllocationValue<MerkleTree<[u8; 32]>>>,
+    // Drop the node allocation above before refunding its original active charge.
+    _tree_charge: Option<AllocationCharge>,
     /// Dirty flag to defer rebuilds until root/path are requested.
     dirty: AtomicBool,
 }
@@ -31,7 +37,10 @@ impl Clone for Registers {
         let gpr = self.gpr;
         let tags = self.tags;
         let tree = if self.dirty.load(Ordering::Acquire) {
-            MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&gpr, &tags))
+            crate::cache_memory::FixedAllocationValue::new(
+                MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&gpr, &tags)),
+                MerkleTree::allocated_bytes,
+            )
         } else {
             self.tree.lock().clone()
         };
@@ -39,26 +48,136 @@ impl Clone for Registers {
             gpr,
             tags,
             tree: Mutex::new(tree),
+            _tree_charge: None,
             dirty: AtomicBool::new(false),
         }
     }
 }
 impl Registers {
+    /// Conservatively cover the exact node clone request, including spare source capacity.
+    pub(crate) fn runtime_template_memory_plan(
+        &self,
+    ) -> Result<crate::execution_memory::ExecutionMemoryPlan, VMError> {
+        crate::execution_memory::ExecutionMemoryPlan::array::<u8>(
+            self.tree.lock().allocated_bytes(),
+        )
+        .map_err(VMError::AllocationDeferred)
+    }
+
+    /// Copy the register file for a reusable runtime baseline with a fallible
+    /// Merkle-node allocation. Dirty state stays dirty until its next root read.
+    pub(crate) fn try_clone_for_runtime_template(&self) -> Result<Self, VMError> {
+        let tree = self.tree.lock();
+        let reservation = crate::cache_memory::MemoryReservation::active(tree.allocated_bytes());
+        let copied_tree = tree
+            .try_clone_allocation()
+            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        Ok(Self {
+            gpr: self.gpr,
+            tags: self.tags,
+            tree: Mutex::new(
+                crate::cache_memory::FixedAllocationValue::from_pre_reserved(
+                    copied_tree,
+                    reservation,
+                    MerkleTree::allocated_bytes,
+                ),
+            ),
+            _tree_charge: None,
+            dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
+        })
+    }
+
+    pub(crate) fn try_retain(&self) -> bool {
+        self.tree.lock().try_retain()
+    }
+    pub(crate) fn make_active(&self) {
+        self.tree.lock().make_active();
+    }
     #[inline]
     pub fn new() -> Self {
+        Self::try_new().expect("register Merkle allocation requires local memory")
+    }
+    /// Construct the register file with its Merkle node charge reserved before allocation.
+    ///
+    /// # Errors
+    /// Returns a local allocation deferral if the canonical register tree
+    /// cannot be reserved. No guest gas or transaction validity is changed.
+    #[inline]
+    pub fn try_new() -> Result<Self, VMError> {
+        Self::try_new_with_charge(None)
+    }
+
+    /// Prepay the complete initial Merkle-node backing from an active VM pool.
+    /// The charge follows this register owner through resets and idle borrowing.
+    pub(crate) fn try_new_with_memory_budget(budget: &AllocationBudget) -> Result<Self, VMError> {
+        let layout = Self::initial_tree_layout()?;
+        let mut reservation = budget
+            .try_reserve(layout)
+            .map_err(VMError::AllocationDeferred)?;
+        let charge = reservation
+            .try_split(layout)
+            .expect("the original exact layout is prepaid");
+        Self::try_new_with_charge(Some(charge))
+    }
+
+    pub(crate) fn initial_tree_allocation_bytes() -> Result<usize, VMError> {
+        Self::initial_tree_layout().map(|layout| layout.size())
+    }
+
+    fn initial_tree_layout() -> Result<Layout, VMError> {
+        let unavailable = || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let bytes = MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(256)
+            .map_err(|_| unavailable())?;
+        Layout::from_size_align(bytes, std::mem::align_of::<Option<HashOf<[u8; 32]>>>())
+            .map_err(|_| unavailable())
+    }
+
+    fn try_new_with_charge(tree_charge: Option<AllocationCharge>) -> Result<Self, VMError> {
         let gpr = [0u64; 256];
         let tags = [false; 256];
         let zero_leaf: [u8; 32] = {
             let b = [0u8; 9];
             Sha256::digest(b).into()
         };
-        let tree = MerkleTree::from_hashed_leaves_sha256(vec![zero_leaf; 256]);
-        Registers {
+        let unavailable = || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let requested = Self::initial_tree_allocation_bytes()?;
+        let reservation = crate::cache_memory::MemoryReservation::active(requested);
+        let tree = crate::cache_memory::FixedAllocationValue::from_pre_reserved(
+            MerkleTree::try_from_repeated_hashed_leaf_sha256(256, zero_leaf)
+                .map_err(|_| unavailable())?,
+            reservation,
+            MerkleTree::allocated_bytes,
+        );
+        Ok(Registers {
             gpr,
             tags,
             tree: Mutex::new(tree),
+            _tree_charge: tree_charge,
             dirty: AtomicBool::new(false),
-        }
+        })
+    }
+
+    /// Restore zero registers while retaining the existing Merkle backing and charge.
+    pub(crate) fn reset_to_zero(&mut self) {
+        self.gpr = [0; 256];
+        self.tags = [false; 256];
+        let zero_leaf: [u8; 32] = Sha256::digest([0_u8; 9]).into();
+        self.tree
+            .get_mut()
+            .rewrite_hashed_leaves_sha256(&[zero_leaf; 256])
+            .expect("register tree has fixed SHA-256 geometry");
+        self.dirty.store(false, Ordering::Release);
+    }
+
+    /// Restore a runtime baseline without replacing the worker's Merkle backing.
+    pub(crate) fn restore_from_template(&mut self, template: &Self) {
+        self.gpr = template.gpr;
+        self.tags = template.tags;
+        self.tree
+            .get_mut()
+            .rewrite_hashed_leaves_sha256(&register_leaf_digests(&self.gpr, &self.tags))
+            .expect("register tree has fixed SHA-256 geometry");
+        self.dirty.store(false, Ordering::Release);
     }
     /// Get the value of register `idx`.
     #[inline]
@@ -270,11 +389,14 @@ impl Registers {
         Ok((proof, adj_root))
     }
     #[inline]
-    fn ensure_built_and_lock(&self) -> parking_lot::MutexGuard<'_, MerkleTree<[u8; 32]>> {
+    fn ensure_built_and_lock(
+        &self,
+    ) -> parking_lot::MutexGuard<'_, crate::cache_memory::FixedAllocationValue<MerkleTree<[u8; 32]>>>
+    {
         let mut tree = self.tree.lock();
         if self.dirty.load(Ordering::Acquire) {
-            *tree =
-                MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&self.gpr, &self.tags));
+            tree.rewrite_hashed_leaves_sha256(&register_leaf_digests(&self.gpr, &self.tags))
+                .expect("register tree has fixed SHA-256 geometry");
             self.dirty.store(false, Ordering::Release);
         }
         tree
@@ -301,11 +423,8 @@ fn register_leaf_index(idx: usize) -> Result<u32, VMError> {
     }
     u32::try_from(idx).map_err(|_| VMError::RegisterOutOfBounds)
 }
-fn register_leaf_digests(gpr: &[u64; 256], tags: &[bool; 256]) -> Vec<[u8; 32]> {
-    gpr.iter()
-        .zip(tags)
-        .map(|(&value, &tag)| register_leaf_digest(value, tag))
-        .collect()
+fn register_leaf_digests(gpr: &[u64; 256], tags: &[bool; 256]) -> [[u8; 32]; 256] {
+    std::array::from_fn(|index| register_leaf_digest(gpr[index], tags[index]))
 }
 #[cfg(test)]
 thread_local! {
@@ -322,6 +441,74 @@ fn register_leaf_digest_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn funded_tree_charge_survives_rebuild_reset_and_template_restore() {
+        let bytes = Registers::initial_tree_allocation_bytes().unwrap();
+        let insufficient = AllocationBudget::new(bytes - 1);
+        assert!(matches!(
+            Registers::try_new_with_memory_budget(&insufficient),
+            Err(VMError::AllocationDeferred(
+                mv::allocation::AllocationRefusal::ExceedsLimit { .. }
+            ))
+        ));
+        assert_eq!(insufficient.reserved_bytes(), 0);
+
+        let budget = AllocationBudget::new(bytes);
+        let mut worker = Registers::try_new_with_memory_budget(&budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), bytes);
+        assert!(matches!(
+            Registers::try_new_with_memory_budget(&budget),
+            Err(VMError::AllocationDeferred(
+                mv::allocation::AllocationRefusal::Capacity { .. }
+            ))
+        ));
+        worker.set(7, 81);
+        worker.set_tag(7, true);
+        let changed_root = worker.merkle_root();
+        assert_eq!(budget.reserved_bytes(), bytes);
+
+        let mut baseline = Registers::try_new().unwrap();
+        baseline.set(31, 0x1000);
+        baseline.set_tag(31, true);
+        worker.restore_from_template(&baseline);
+        assert_eq!(worker.snapshot(), baseline.snapshot());
+        assert_eq!(worker.snapshot_tags(), baseline.snapshot_tags());
+        assert_eq!(worker.merkle_root(), baseline.merkle_root());
+        assert_ne!(worker.merkle_root(), changed_root);
+        assert_eq!(budget.reserved_bytes(), bytes);
+        worker.reset_to_zero();
+        assert_eq!(
+            worker.merkle_root(),
+            Registers::try_new().unwrap().merkle_root()
+        );
+        assert_eq!(budget.reserved_bytes(), bytes);
+        drop(worker);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+    #[test]
+    fn fallible_runtime_template_register_copy_preserves_values_tags_and_root() {
+        let mut source = Registers::try_new().expect("bounded register tree");
+        source.set(7, 81);
+        source.set_tag(7, true);
+        let copied = source
+            .try_clone_for_runtime_template()
+            .expect("bounded register snapshot");
+        assert_eq!(copied.snapshot(), source.snapshot());
+        assert_eq!(copied.snapshot_tags(), source.snapshot_tags());
+        assert_eq!(copied.merkle_root(), source.merkle_root());
+    }
+
+    #[test]
+    fn fallible_initial_register_tree_matches_canonical_root_and_capacity() {
+        let regs = Registers::try_new().expect("initial register allocation fits test host");
+        let zero_leaf: [u8; 32] = Sha256::digest([0_u8; 9]).into();
+        let canonical = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![zero_leaf; 256]);
+        let tree = regs.tree.lock();
+        assert_eq!(tree.root(), canonical.root());
+        assert_eq!(tree.allocated_bytes(), canonical.allocated_bytes());
+        assert_eq!(tree.leaf_count(), 256);
+    }
+
     #[test]
     fn private_scrub_zeros_tagged_registers_and_preserves_public_values() {
         let mut regs = Registers::new();

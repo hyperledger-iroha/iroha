@@ -76,6 +76,7 @@ fn contract_code_management_manager_sponsors_registration_and_meters_every_instr
                 transaction,
                 &mut IvmCache::new(),
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect(
                 "an admitted code-management grant authority may register and authorize a builder",
             );
@@ -286,6 +287,7 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
                 transaction,
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("an existing authority cannot replay the bootstrap prefix")
     };
     assert!(
@@ -394,6 +396,7 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
                     transaction,
                     &mut ivm_cache,
                 )
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("noncanonical bootstrap must be rejected")
         };
         let error_debug = format!("{error:?}");
@@ -509,6 +512,7 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
             transaction,
             &mut ivm_cache,
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("an existing authority cannot replay the bootstrap prefix");
     assert!(
         matches!(&error, ValidationFail::InstructionFailed(

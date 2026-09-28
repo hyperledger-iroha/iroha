@@ -46,7 +46,7 @@ const KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS: &[&str] = &[
     "NftView",
     "QueryPage",
     "AxtDescriptor",
-    "AssetHandle",
+    "AxtAnchoredSpendV1",
     "ProofBlob",
     "SoracloudRequest",
     "SoracloudResponse",
@@ -129,11 +129,11 @@ pub fn entrypoint_return_schema_hash_v1(schema_payload: &[u8]) -> [u8; 32] {
     Hash::new(&material).into()
 }
 /// Maximum number of public source parameters carried by ABI V1.
-pub const MAX_ENTRYPOINT_ARGUMENTS: usize = 13;
-/// Maximum flattened public argument words in the V1 `r10..r22` call window.
-pub const MAX_ENTRYPOINT_ARGUMENT_WORDS: usize = 13;
-/// Maximum words returned through the public V1 register window (`r10..r22`).
-pub const MAX_ENTRYPOINT_RETURN_WORDS: usize = 13;
+pub const MAX_ENTRYPOINT_ARGUMENTS: usize = 8192;
+/// Maximum flattened public argument words in the 64 KiB V1 call table.
+pub const MAX_ENTRYPOINT_ARGUMENT_WORDS: usize = 8192;
+/// Maximum flattened public result words in the 64 KiB V1 call table.
+pub const MAX_ENTRYPOINT_RETURN_WORDS: usize = 8192;
 /// Maximum recursive type nodes in one V1 boundary schema.
 pub const MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES: usize = 256;
 /// Maximum recursive aggregate depth in one V1 boundary schema.
@@ -162,13 +162,6 @@ pub const ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1: usize = 7 + Hash::LENGTH;
 /// and check the exact framed Norito length before publishing the record.
 pub const MAX_ENTRYPOINT_RETURN_RECORD_BYTES: usize =
     MAX_ENTRYPOINT_BOUNDARY_BYTES - ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1;
-/// Byte offset of the first naturally aligned word in a decoded argument table.
-///
-/// Pointer-ABI envelopes have a seven-byte header; the result `Blob` therefore reserves one payload
-/// byte so every following `u64` starts at an eight-byte aligned address.
-pub const DECODED_ARGUMENT_TABLE_OFFSET: i16 = 8;
-/// Width of one decoded argument word in the returned table.
-pub const DECODED_ARGUMENT_WORD_BYTES: i16 = 8;
 /// Leaf representation used at a public Kotodama boundary.
 #[derive(
     Clone,
@@ -691,8 +684,7 @@ impl EntrypointValueTypeV1 {
                 EntrypointValueTypeNodeV1::StateCursor(EntrypointValueKindV1::Json) => return None,
                 EntrypointValueTypeNodeV1::Error(error) if !error.validate() => return None,
                 EntrypointValueTypeNodeV1::Struct(node) => {
-                    if node.fields.is_empty()
-                        || !is_canonical_kotodama_struct_name(&node.name)
+                    if !is_canonical_kotodama_struct_name(&node.name)
                         || node
                             .fields
                             .iter()
@@ -724,6 +716,7 @@ impl EntrypointValueTypeV1 {
             );
             if !suppress_words
                 && (is_handle
+                    || matches!(node, EntrypointValueTypeNodeV1::Struct(product) if product.fields.is_empty())
                     || matches!(
                         node,
                         EntrypointValueTypeNodeV1::Leaf(_)
@@ -770,7 +763,8 @@ impl EntrypointValueTypeV1 {
     /// Return the fixed ABI words emitted for this type.
     ///
     /// Every `Option`, `Result`, and `List` consumes one compiler-owned handle
-    /// word; products flatten their children in declaration order.
+    /// word; products flatten their children in declaration order. Empty named
+    /// products occupy one initialized zero word while keeping an empty atom tape.
     #[must_use]
     pub fn word_count(&self) -> Option<usize> {
         self.analyze().map(|analysis| analysis.max_words)
@@ -1046,7 +1040,7 @@ pub struct EntrypointArgumentFieldV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1")]
 pub struct EntrypointArgumentSchemaV1 {
-    /// Fields in source declaration and ABI register order.
+    /// Fields in source declaration and ABI argument-table order.
     pub fields: Vec<EntrypointArgumentFieldV1>,
 }
 impl EntrypointArgumentSchemaV1 {
@@ -1157,6 +1151,9 @@ fn max_entrypoint_word_kinds(
             }
             EntrypointValueTypeNodeV1::Unit => vec![EntrypointValueWordKindV1::Unit],
             EntrypointValueTypeNodeV1::Error(_) => vec![EntrypointValueWordKindV1::Error],
+            EntrypointValueTypeNodeV1::Struct(product) if product.fields.is_empty() => {
+                vec![EntrypointValueWordKindV1::Unit]
+            }
             EntrypointValueTypeNodeV1::Struct(_) | EntrypointValueTypeNodeV1::Tuple(_) => {
                 children.into_iter().flatten().collect()
             }
@@ -1234,6 +1231,12 @@ fn walk_entrypoint_value_atoms(
                 }
             }
             EntrypointValueTypeNodeV1::Struct(node) => {
+                if node.fields.is_empty()
+                    && emit_kind
+                    && let Some(kinds) = kinds.as_deref_mut()
+                {
+                    kinds.push(EntrypointValueWordKindV1::Unit);
+                }
                 let mut child = node_start + 1;
                 let mut starts = Vec::with_capacity(node.fields.len());
                 for _ in &node.fields {
@@ -2289,8 +2292,8 @@ mod tests {
         );
     }
     #[test]
-    fn argument_and_return_words_share_the_v1_register_window() {
-        assert_eq!(MAX_ENTRYPOINT_RETURN_WORDS, 13);
+    fn argument_and_return_words_share_the_v1_table_bound() {
+        assert_eq!(MAX_ENTRYPOINT_RETURN_WORDS, 8_192);
         assert_eq!(MAX_ENTRYPOINT_ARGUMENT_WORDS, MAX_ENTRYPOINT_RETURN_WORDS);
         assert_eq!(ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1, 39);
         assert_eq!(
@@ -2298,6 +2301,24 @@ mod tests {
             MAX_ENTRYPOINT_BOUNDARY_BYTES
         );
         assert_eq!(leaf(EntrypointValueKindV1::Bool).word_count(), Some(1));
+    }
+    #[test]
+    fn argument_table_bound_counts_flattened_words() {
+        let mut schema = EntrypointArgumentSchemaV1 {
+            fields: (0..64)
+                .map(|index| EntrypointArgumentFieldV1 {
+                    name: format!("field_{index}"),
+                    ty: wide_tuple_schema(128),
+                })
+                .collect(),
+        };
+        assert_eq!(schema.word_count(), Some(8_192));
+        schema.fields.push(EntrypointArgumentFieldV1 {
+            name: "overflow".into(),
+            ty: leaf(EntrypointValueKindV1::Bool),
+        });
+        assert!(!schema.validate());
+        assert_eq!(schema.word_count(), None);
     }
     #[test]
     fn canonical_boundary_identifiers_reject_keywords_and_forbidden_spellings() {
@@ -2352,7 +2373,7 @@ mod tests {
         }
     }
     #[test]
-    fn schemas_reject_empty_products_and_non_tuple_arities() {
+    fn empty_named_products_use_one_zero_word_and_no_atoms() {
         let empty_struct = EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Struct(
                 EntrypointStructTypeNodeV1 {
@@ -2361,7 +2382,42 @@ mod tests {
                 },
             )],
         };
-        assert!(!empty_struct.validate());
+        assert!(empty_struct.validate());
+        assert_eq!(empty_struct.word_count(), Some(1));
+        assert_eq!(
+            empty_struct.word_kinds(),
+            Some(vec![EntrypointValueWordKindV1::Unit])
+        );
+        assert_eq!(
+            empty_struct.word_kinds_for_atoms(&[]),
+            empty_struct.word_kinds()
+        );
+        assert!(empty_struct.validate_atoms(&[]));
+        assert!(!empty_struct.validate_atoms(&[EntrypointValueAtomV1::Unit]));
+        assert_eq!(
+            empty_struct.canonical_type_name().as_deref(),
+            Some("struct Empty")
+        );
+        let encoded = norito::to_bytes(&empty_struct).expect("encode empty nominal schema");
+        assert_eq!(
+            norito::decode_from_bytes::<EntrypointValueTypeV1>(&encoded).unwrap(),
+            empty_struct
+        );
+
+        let mut nested = vec![EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 {
+            capacity: 2,
+        })];
+        nested.extend(empty_struct.nodes.clone());
+        let list = EntrypointValueTypeV1 { nodes: nested };
+        assert_eq!(list.word_count(), Some(1));
+        assert!(list.validate_atoms(&[EntrypointValueAtomV1::List(2)]));
+        assert_eq!(
+            list.word_kinds_for_atoms(&[EntrypointValueAtomV1::List(2)]),
+            Some(vec![EntrypointValueWordKindV1::List])
+        );
+    }
+    #[test]
+    fn schemas_reject_non_tuple_arities() {
         for arity in [0, 1] {
             let mut nodes = vec![EntrypointValueTypeNodeV1::Tuple(arity)];
             nodes.extend(

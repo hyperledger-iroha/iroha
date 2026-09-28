@@ -40,6 +40,7 @@ iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 reqwest = { workspace = true, features = ["blocking"] }
+rustix = { version = "1.1.4", features = ["fs"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 tempfile = { workspace = true }
 url = { workspace = true }

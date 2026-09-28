@@ -436,7 +436,7 @@ mod tests {
         ConsensusConfigCaps {
             execution_policy_hash: [0xB4; 32],
             nexus_policy_digest: [0xA5; 32],
-            v2_config_fingerprint: [0xC3; 32],
+            native_config_fingerprint: [0xC3; 32],
             ivm_gas_schedule_hash: [0xE7; 32],
         }
     }

@@ -7,6 +7,38 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class NominalContractManifestTests
 {
     [Fact]
+    public void DurableEmptyProductsPreserveNominalNamesAndExactGrammar()
+    {
+        static ToriiContractManifest Decode(string typeName)
+        {
+            var payload = new JsonObject
+            {
+                ["states"] = new JsonArray(new JsonObject { ["name"] = "Stored", ["type_name"] = typeName }),
+            };
+            return payload.Deserialize<ToriiContractManifest>()!;
+        }
+        foreach (var typeName in new[]
+        {
+            "Empty{}", "Other{}", "Transfer{}", "List<Empty{}, 2>", "List<List<Empty{}, 2>, 2>",
+            "Envelope{empty: Empty{}}", "StateMap<int, Empty{}>",
+            "std/math@1.0.0::Math::Empty{}",
+        })
+        {
+            var manifest = Decode(typeName);
+            Assert.Equal(typeName, manifest.States!.Single().TypeName);
+            var roundtrip = JsonSerializer.Deserialize<ToriiContractManifest>(JsonSerializer.Serialize(manifest))!;
+            Assert.Equal(typeName, roundtrip.States!.Single().TypeName);
+        }
+        foreach (var typeName in new[]
+        {
+            "{}", "Empty{", "Empty{ }", "Empty{,}", "Empty{: int}",
+            "Empty{field: int, }", "Empty{}trailing", "List<Empty{},2>",
+            "List<Empty{}, 0>", "Envelope{empty: Empty{}, empty: Empty{}}",
+            "StatePage{}", "Option{}", "int{}",
+        }) Assert.Throws<JsonException>(() => Decode(typeName));
+    }
+
+    [Fact]
     public void ExportedStructIdentitySurvivesPublicAndDurableSchemas()
     {
         const string identity = "std/math@1.0.0::Math::Receipt";

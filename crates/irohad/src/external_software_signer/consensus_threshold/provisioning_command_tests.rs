@@ -104,7 +104,10 @@ fn prepared_custody_publication_is_complete_exclusive_and_preserves_incumbent() 
 fn prepared_custody_cli_requires_external_pins_and_exposes_no_secret_argument() {
     use clap::CommandFactory as _;
     let help = Args::command().render_long_help().to_string();
-    assert!(help.contains("--trusted-context-id"));
+    assert!(help.contains("--chain-id"));
+    assert!(help.contains("--finality-allocated-bytes"));
+    assert!(!help.contains("--trusted-context-id"));
+    assert!(!help.contains("--anchor-height"));
     assert!(help.contains("--transition-id"));
     assert!(help.contains("--current-catalog"));
     assert!(!help.contains("--private-key"));

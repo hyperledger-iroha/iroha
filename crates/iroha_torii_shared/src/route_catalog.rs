@@ -2729,9 +2729,6 @@ pub mod runtime_governance {
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
     }
-    const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        public_get(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
-    }
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         public_post(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
@@ -2777,22 +2774,6 @@ pub mod runtime_governance {
     pub const ZK_VOTE_TALLY: RouteDescriptor =
         account_read_post("zk.vote.tally", "/v1/zk/vote/tally")
             .with_projections(RouteProjections::ALL);
-    /// Derive an IVM zero-knowledge executable.
-    pub const ZK_IVM_DERIVE: RouteDescriptor =
-        account_compute_post("zk.ivm.derive", "/v1/zk/ivm/derive")
-            .with_feature_gate(FeatureGate::Feature("app_api"));
-    /// Start an IVM zero-knowledge proving job.
-    pub const ZK_IVM_PROVE: RouteDescriptor =
-        account_compute_post("zk.ivm.prove", "/v1/zk/ivm/prove")
-            .with_feature_gate(FeatureGate::Feature("app_api"));
-    /// Read an IVM zero-knowledge proving job.
-    pub const ZK_IVM_PROVE_GET: RouteDescriptor =
-        app_get("zk.ivm.prove_job.read", "/v1/zk/ivm/prove/{job_id}")
-            .with_admission(AdmissionPolicy::AuthenticatedAccount)
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-    /// Cancel and delete an IVM zero-knowledge proving job.
-    pub const ZK_IVM_PROVE_DELETE: RouteDescriptor =
-        app_signed_delete("zk.ivm.prove_job.delete", "/v1/zk/ivm/prove/{job_id}");
     /// Verify a bounded batch of zero-knowledge proofs.
     pub const ZK_VERIFY_BATCH: RouteDescriptor =
         account_compute_post("zk.proof.verify_batch", "/v1/zk/verify-batch")
@@ -3060,10 +3041,6 @@ pub mod runtime_governance {
         ZK_ROOTS,
         ZK_MERKLE_PATH,
         ZK_VOTE_TALLY,
-        ZK_IVM_DERIVE,
-        ZK_IVM_PROVE,
-        ZK_IVM_PROVE_GET,
-        ZK_IVM_PROVE_DELETE,
         ZK_VERIFY_BATCH,
         ZK_ATTACHMENTS_GET,
         ZK_ATTACHMENTS_POST,

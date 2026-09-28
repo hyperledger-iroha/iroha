@@ -101,7 +101,7 @@ def test_final_policy_pins_quantity_without_an_abi_tombstone() -> None:
     assert schemas["quantity"].pointer_id == 0x0010
     assert schemas["int"].pointer_id == 0x0011
     assert schemas["decimal"].pointer_id == 0x0012
-    assert policy.unassigned_pointers == (0x0013,)
+    assert policy.unassigned_pointers == (0x000C, 0x0014)
     assert "quantity" in policy.active_source_types
     assert "Quantity" not in policy.active_source_types
     assert "Amount" in policy.retired_numeric_type_spellings
@@ -253,7 +253,6 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
         *MODULE.JAVASCRIPT_IDENTIFIER_PATHS,
         MODULE.PYTHON_MANIFEST_PATH,
         MODULE.KOTLIN_MANIFEST_PATH,
-        MODULE.JAVA_MANIFEST_PATH,
         MODULE.SWIFT_MANIFEST_PATH,
         MODULE.CSHARP_MANIFEST_PATH,
     )
@@ -291,7 +290,7 @@ def test_repository_generated_outputs_are_current_and_complete() -> None:
     outputs = MODULE.render_outputs(MODULE.REPOSITORY_ROOT, policy)
 
     assert tuple(outputs) == MODULE.GENERATED_TARGETS
-    assert len(outputs) == 18
+    assert len(outputs) == 17
     assert MODULE.apply_outputs(MODULE.REPOSITORY_ROOT, outputs, check=True) == 0
 
 
@@ -308,7 +307,8 @@ def test_javascript_runtime_and_declaration_policy_are_generated_from_one_mappin
 
     assert "pointerType: 0x0010" in source_body
     assert "readonly pointerType: 0x0010" in declarations
-    assert "0x0013" not in source_body
+    assert "NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x0013" in source_body
+    assert "0x0014" not in source_body
     assert "Amount" not in source_body
 
 
@@ -407,7 +407,6 @@ def test_sdk_validator_policy_forbids_exact_amount_globally() -> None:
 
     for rendered in (
         MODULE._kotlin_validator_policy(policy, grammar),
-        MODULE._java_validator_policy(policy, grammar),
         MODULE._swift_validator_policy(policy, grammar),
         MODULE._csharp_validator_policy(policy, grammar),
     ):

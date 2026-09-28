@@ -690,6 +690,8 @@ fn strict_init_kura() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -734,6 +736,8 @@ fn kura_not_miss_replace_block() {
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
                 lane_history_retention:
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+                native_context_archive_max_bytes:
+                    iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
                 block_hash_history_bytes:
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
                 transaction_history_bytes:
@@ -781,6 +785,8 @@ fn get_block_caches_loaded_block() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -837,6 +843,8 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -953,6 +961,8 @@ fn get_block_returns_none_when_data_missing() {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -986,6 +996,8 @@ fn eviction_requires_remote_replicas() {
             fsync_mode: FsyncMode::Batched,
             fsync_interval: FSYNC_INTERVAL,
             lane_history_retention: LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:

@@ -22,8 +22,9 @@
 //! parameters, every frame is decoded within it, and a committed configuration that outgrows it
 //! is reported, [`FrameLimitExceeded`]).
 //!
-//! Every backend call on a worker thread is guarded: a panic is a failed write, a failed apply
-//! step or a missing entry, retried like an I/O error (§12.5). A thread that stops anyway, or a
+//! Every backend call on a worker thread is guarded. Publication unwind requires recovery;
+//! ordinary execution, idempotent writes and missing reads retain their retry semantics
+//! (§12.5). A thread that stops anyway, or a
 //! worker that cannot be reached, stops the instance: the observer is told
 //! ([`Observer::stopped`]) and the handle reports it (`ready()` false, [`DriverHandle::stopped`]).
 //!
@@ -41,6 +42,9 @@ pub mod traits;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "tests/witness_admission.rs"]
+mod witness_admission_tests;
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -64,7 +68,10 @@ use iroha_sumeragi::{
     message::{Evidence, TrafficClass, WireMessage},
     pacemaker::FRAME_OVERHEAD,
     safety::RecordState,
-    types::{AggregateSignature, Hash32, HeightConfig, Millis, PublicKey, Signature},
+    types::{
+        AggregateSignature, AppliedConfig, ConfigSlot, Hash32, HeightConfig, Millis, PublicKey,
+        Signature,
+    },
 };
 use parking_lot::Mutex;
 
@@ -74,7 +81,9 @@ use self::{
     ingress::{Ingress, IngressLimits},
     persist::{Backoff, PersistQueue, Write},
     serve::{ServeLimits, ServeRequest, ServeSched, Served},
-    traits::{BlockStore, BodyStore, Clock, Executor, Net, Observer, RecordStore},
+    traits::{
+        BlockStore, BodyStore, Clock, Executor, Net, Observer, PublicationError, RecordStore,
+    },
 };
 
 /// Longest idle wait of the event loop before it re-reads the clock.
@@ -247,6 +256,27 @@ pub fn frame_limit_exceeded(
     })
 }
 
+/// O10 examines every concrete config in an atomic publication; a pending authority has
+/// no guessed parameters or committee to inspect.
+fn applied_frame_limits(
+    frame_limit: u64,
+    height: u64,
+    output: &AppliedConfig,
+) -> [Option<FrameLimitExceeded>; 2] {
+    match output {
+        AppliedConfig::Continuation { after_next } => [
+            after_next.ready().and_then(|config| {
+                frame_limit_exceeded(frame_limit, height.saturating_add(2), config)
+            }),
+            None,
+        ],
+        AppliedConfig::Boundary { next, after_next } => [
+            frame_limit_exceeded(frame_limit, height.saturating_add(1), next),
+            frame_limit_exceeded(frame_limit, height.saturating_add(2), after_next),
+        ],
+    }
+}
+
 /// The single-threaded, I/O-free heart of a driver instance.
 pub struct Kernel {
     core: Core,
@@ -393,6 +423,13 @@ impl Kernel {
                     self.exec.execute(req, block_hash, block);
                 }
                 Action::DiscardExecution { height, keep } => self.exec.discard(height, keep),
+                Action::BuildControlWitness { req, context } => {
+                    self.exec.build_control(req, context)
+                }
+                Action::DriveApplicationControl { context } => self.exec.drive_control(context),
+                Action::ReceiveApplicationControl { from, message } => {
+                    self.exec.receive_control(from, message)
+                }
                 Action::BuildPayload {
                     req,
                     height,
@@ -415,11 +452,27 @@ impl Kernel {
                 }
             }
         }
+        self.exec
+            .retain_control_round(self.core.control_work_round());
         self.collect();
     }
 
     /// Carry out an effect the barrier let through.
     fn effect(&mut self, action: Action) {
+        // Effects produced before recovery may still be held behind an O2 write. Do not
+        // release their votes, proposals or publications after the terminal local failure.
+        if matches!(
+            self.exec.halted(),
+            Some(HaltReason::PublicationRecoveryRequired { .. })
+        ) && !matches!(
+            &action,
+            Action::ServeBlocks { .. }
+                | Action::ServeBody { .. }
+                | Action::ReportEvidence(_)
+                | Action::Halt(_)
+        ) {
+            return;
+        }
         match action {
             Action::Send { to, msg } => self.send(vec![to], msg),
             Action::Broadcast { to, msg } => self.send(to, msg),
@@ -448,19 +501,27 @@ impl Kernel {
     /// transport limit is reported (O10).
     fn collect(&mut self) {
         for event in self.exec.take_events() {
-            if let Event::BlockApplied {
-                height,
-                config_after_next,
-                ..
-            } = &event
-                && let Some(exceeded) = frame_limit_exceeded(
-                    self.frame_limit,
-                    height.saturating_add(2),
-                    config_after_next,
-                )
-            {
-                iroha_logger::error!(?exceeded, "sumeragi configuration outgrows the transport");
-                self.out.push_back(Op::Report(Report::FrameLimit(exceeded)));
+            if matches!(event, Event::PublicationRecoveryRequired { .. }) {
+                // This completion stops the core synchronously, before a due Tick or another
+                // poll can sign or dispatch anything. Already durable safety writes remain;
+                // the halt report still obeys the existing persist-before-effect barrier.
+                self.out
+                    .retain(|op| !matches!(op, Op::Send { .. } | Op::Exec(_)));
+                let actions = self.core.handle(self.now, event);
+                self.route(actions);
+                continue;
+            }
+            if let Event::BlockApplied { height, config, .. } = &event {
+                for exceeded in applied_frame_limits(self.frame_limit, *height, config)
+                    .into_iter()
+                    .flatten()
+                {
+                    iroha_logger::error!(
+                        ?exceeded,
+                        "sumeragi configuration outgrows the transport"
+                    );
+                    self.out.push_back(Op::Report(Report::FrameLimit(exceeded)));
+                }
             }
             self.local.push_back(event);
         }
@@ -579,7 +640,7 @@ pub fn assemble_init(
     genesis: (Hash32, Hash32),
     demotion_window: u64,
     records: Vec<(PublicKey, RecordState, bool)>,
-    configs: Vec<(u64, HeightConfig)>,
+    configs: Vec<(u64, ConfigSlot)>,
     nonce: u64,
 ) -> Result<Init, ConfigError> {
     let t = blocks.height().max(genesis_height);
@@ -701,6 +762,8 @@ impl Crypto for CryptoRef {
 
 /// What a driver instance starts with (all of it moves to its threads).
 pub struct DriverStart {
+    /// Exact original State resource pool used to admit retained result witnesses.
+    pub allocation_budget: mv::allocation::AllocationBudget,
     /// Local parameters.
     pub local: LocalParams,
     /// Startup input ([`assemble_init`]).
@@ -724,8 +787,17 @@ enum Input {
     Stop,
 }
 
+/// One original decoded frame awaiting its remaining witness-control admission.
+/// Only this slot can retain an incompletely admitted frame; Core never observes it.
+struct PendingMessage {
+    from: PublicKey,
+    message: WireMessage,
+}
+
 /// State shared between the event loop and the handles.
 struct Shared {
+    allocation_budget: mv::allocation::AllocationBudget,
+    pending_admission: Mutex<Option<PendingMessage>>,
     instance: Hash32,
     own: Vec<PublicKey>,
     ingress: Arc<Mutex<Ingress>>,
@@ -741,6 +813,38 @@ struct Shared {
 }
 
 impl Shared {
+    /// Retry the exact bounded waiting frame once on event-loop progress or its idle timer.
+    fn retry_pending_message(&self) -> bool {
+        let Some(mut slot) = self.pending_admission.try_lock() else {
+            return false;
+        };
+        let Some(pending) = slot.as_mut() else {
+            return false;
+        };
+        if let Err(error) = pending
+            .message
+            .admit_attestation_witnesses(&self.allocation_budget)
+        {
+            if !error.is_local_refusal() {
+                slot.take();
+            }
+            return false;
+        }
+        let pending = slot
+            .take()
+            .expect("the original pending frame remains installed");
+        drop(slot);
+        let class = pending.message.traffic_class();
+        admit_message(
+            &self.ingress,
+            &self.own,
+            &self.instance,
+            pending.from,
+            pending.message,
+            class,
+        )
+    }
+
     fn publish(&self, kernel: &Kernel) {
         *self.status.lock() = Some(kernel.core().status());
         *self.backlog.lock() = kernel.backlog();
@@ -788,6 +892,8 @@ impl Drop for LoopGuard {
             stop(&self.shared, &*self.observer, Worker::Loop);
         }
         self.shared.alive.store(false, Ordering::Release);
+        // No partially admitted owner can outlive a stopped instance via a retained handle.
+        self.shared.pending_admission.lock().take();
     }
 }
 
@@ -816,9 +922,40 @@ impl DriverHandle {
     }
 
     /// Deliver a decoded message (in-process transports and tests).
-    pub fn deliver_message(&self, from: PublicKey, msg: WireMessage) -> bool {
-        let class = msg.traffic_class();
+    ///
+    /// A local witness refusal may retain this original frame in the sole pending slot.
+    /// True means retained for retry or queued; incomplete admission never reaches Core.
+    /// A full slot refuses new unadmitted frames while already admitted/control traffic
+    /// continues. Refusal is local backpressure, not evidence of invalid consensus data.
+    pub fn deliver_message(&self, from: PublicKey, mut msg: WireMessage) -> bool {
         let shared = &self.shared;
+        if !shared.alive.load(Ordering::Acquire)
+            || msg.instance() != &shared.instance
+            || shared.own.contains(&from)
+        {
+            return false;
+        }
+        let Some(mut pending) = shared.pending_admission.try_lock() else {
+            return false;
+        };
+        if pending.is_some() && !msg.attestation_witnesses_admitted_to(&shared.allocation_budget) {
+            return false;
+        }
+        if let Err(error) = msg.admit_attestation_witnesses(&shared.allocation_budget) {
+            if !error.is_local_refusal() {
+                return false;
+            }
+            debug_assert!(
+                pending.is_none(),
+                "completed witnesses cannot require allocation"
+            );
+            *pending = Some(PendingMessage { from, message: msg });
+            drop(pending);
+            self.wake();
+            return true;
+        }
+        drop(pending);
+        let class = msg.traffic_class();
         let queued = admit_message(
             &shared.ingress,
             &shared.own,
@@ -967,6 +1104,8 @@ where
             .collect();
         let ingress = Arc::new(Mutex::new(Ingress::new(config.ingress)));
         let shared = Arc::new(Shared {
+            allocation_budget: start.allocation_budget.clone(),
+            pending_admission: Mutex::new(None),
             instance,
             own,
             ingress: Arc::clone(&ingress),
@@ -1116,8 +1255,10 @@ where
 /// O10 at start: the transport limit covers the blocks of every startup configuration and the
 /// sync byte cap.
 fn check_frame_limit(config: &DriverConfig, start: &DriverStart) -> Result<(), DriverError> {
-    for (height, height_config) in &start.init.configs {
-        if let Some(exceeded) = frame_limit_exceeded(config.frame_limit, *height, height_config) {
+    for (height, slot) in &start.init.configs {
+        if let Some(height_config) = slot.ready()
+            && let Some(exceeded) = frame_limit_exceeded(config.frame_limit, *height, height_config)
+        {
             return Err(DriverError::FrameLimit {
                 needed: exceeded.needed,
                 limit: exceeded.limit,
@@ -1135,7 +1276,8 @@ fn check_frame_limit(config: &DriverConfig, start: &DriverStart) -> Result<(), D
 }
 
 /// Run one executor operation (the executor thread); a panic of the executor or of the block
-/// store becomes a local failure, retried like one.
+/// store becomes a local failure. Publication unwind requires recovery because the original
+/// owner may be consumed or visible; ordinary execution and idempotent append remain retryable.
 fn run_exec<E: Executor, K: BlockStore + ?Sized>(
     executor: &mut E,
     blocks: &K,
@@ -1157,7 +1299,7 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
             catch_unwind(AssertUnwindSafe(|| {
                 executor.prepare(&commit.block, &commit.qc)
             }))
-            .unwrap_or_else(|_| Err(failed("prepare"))),
+            .unwrap_or_else(|_| Err(PublicationError::RecoveryRequired(failed("prepare")))),
         ),
         ExecOp::Append(commit) => {
             let appended = catch_unwind(AssertUnwindSafe(|| {
@@ -1174,10 +1316,41 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
         }
         ExecOp::Commit(commit) => ExecDone::Committed(
             catch_unwind(AssertUnwindSafe(|| {
-                executor.commit(&commit.block, &commit.qc)
+                executor.commit(&commit.block, &commit.qc).map(Box::new)
             }))
-            .unwrap_or_else(|_| Err(failed("commit"))),
+            .unwrap_or_else(|_| Err(PublicationError::RecoveryRequired(failed("commit")))),
         ),
+        ExecOp::BuildControlWitness { context, .. } => ExecDone::ControlWitnessBuilt(
+            catch_unwind(AssertUnwindSafe(|| {
+                executor.build_control_witness(&context)
+            }))
+            .unwrap_or_else(|_| {
+                Err(PublicationError::RecoveryRequired(failed(
+                    "build control witness",
+                )))
+            }),
+        ),
+        ExecOp::DriveApplicationControl(context) => ExecDone::ApplicationControlDriven(
+            catch_unwind(AssertUnwindSafe(|| executor.drive_control(&context))).unwrap_or_else(
+                |_| {
+                    Err(PublicationError::RecoveryRequired(failed(
+                        "drive application control",
+                    )))
+                },
+            ),
+        ),
+        ExecOp::ReceiveApplicationControl { from, message } => {
+            ExecDone::ApplicationControlReceived(
+                catch_unwind(AssertUnwindSafe(|| {
+                    executor.receive_application_control(&from, &message)
+                }))
+                .unwrap_or_else(|_| {
+                    Err(PublicationError::RecoveryRequired(failed(
+                        "receive application control",
+                    )))
+                }),
+            )
+        }
         ExecOp::Build {
             height,
             view,
@@ -1276,6 +1449,7 @@ fn run_loop(
                 Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
+        shared.retry_pending_message();
         let now = clock.now();
         workers.dispatch(kernel.poll(now))?;
         if let Some(event) = kernel.next_input(now) {

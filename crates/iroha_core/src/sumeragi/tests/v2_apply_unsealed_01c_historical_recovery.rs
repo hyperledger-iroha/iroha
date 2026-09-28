@@ -1726,6 +1726,9 @@ fn assert_cold_merge_registry_replay_boundary(
     let restore = |snapshot| {
         crate::state::deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             lane_manifests: Arc::clone(&startup_lane_manifests),
             kura: Arc::clone(&fixture.kura),
             query_handle: LiveQueryStore::start_test(),
@@ -1802,6 +1805,9 @@ fn assert_cold_merge_registry_replay_boundary(
             .build(&fixture.service.genesis_account),
     );
     let cold = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         cold_world,
         Arc::clone(&fixture.kura),
         LiveQueryStore::start_test(),

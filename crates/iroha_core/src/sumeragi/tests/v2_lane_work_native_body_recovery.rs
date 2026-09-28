@@ -3356,6 +3356,8 @@ fn cold_restart_native_predecessor_publication_fixture(
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -3374,6 +3376,9 @@ fn cold_restart_native_predecessor_publication_fixture(
     .expect("cold Kura reconstructs the original unfinished canonical publication owner");
     let mut state = crate::state::deserialize::KuraSeed {
         operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        execution_budget: mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         kura: Arc::clone(&kura),
         lane_manifests,
         query_handle: LiveQueryStore::start_test(),
@@ -3544,7 +3549,7 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
                 (participant_lane, participant_dataspace),
             ],
         ));
-        queue.install_lane_manifests(&adapter.state.lane_manifests.read().clone());
+        queue.install_lane_manifests_for_testing(&adapter.state.lane_manifests.read().clone());
         queue.install_test_router_metadata_for_nexus(&adapter.state.nexus_snapshot());
         let journals = tempfile::tempdir().unwrap();
         queue

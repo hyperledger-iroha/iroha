@@ -454,6 +454,11 @@ impl<'a> PublicationEngine<'a> {
             }
             PublicationPhaseV1::Readback => {
                 let registration = journal.registration()?;
+                let registered = journal.registered_archive.as_ref().ok_or_else(|| {
+                    PublicationError::InvalidJournal(
+                        "provider readback is missing finalized archive registration".to_owned(),
+                    )
+                })?;
                 let journaled_checkpoint = journal.replication.as_ref().ok_or_else(|| {
                     PublicationError::InvalidJournal("missing finalized replication".to_owned())
                 })?;
@@ -499,6 +504,7 @@ impl<'a> PublicationEngine<'a> {
                     let evidence = match backend.readback_provider(
                         operation_id,
                         &journal.request,
+                        registered,
                         location,
                         *provider,
                     ) {

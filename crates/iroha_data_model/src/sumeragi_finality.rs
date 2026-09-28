@@ -2,10 +2,39 @@
 //!
 //! Proofs carry the canonical block and its embedded commit certificate. A structural
 //! decode is never an authenticated execution capability: only the contiguous verifier
-//! constructs [`VerifiedSumeragiBlock`]. Genesis has no quorum certificate; its execution
+//! constructs [`VerifiedSumeragiBlock`]. The receipt proves exact-quorum execution finality;
+//! it does not verify embedded application attestations or grant KAGEMUSHA mint authority. Genesis has no quorum certificate; its execution
 //! result is authenticated by a successor's parent-result binding or independent node
 //! attestations, not by inventing a genesis quorum certificate.
+//!
+//! This module owns the sole canonical execution-result codec and authenticated epoch/schedule
+//! graph shared with Core. Core produces execution witnesses, validates application attestations
+//! and beacon signatures, and publishes these same results; portable readers authenticate the
+//! resulting commit-finality chain without introducing another result layout or authority source.
 
+mod schedule;
+pub use schedule::{
+    GenesisCommitteeError, ScheduleError, ScheduleSourceError, consensus_key,
+    genesis_registrations, global_committee,
+};
+mod epoch_graph;
+pub use epoch_graph::{
+    ConsensusSchedule, ScheduleOutcome, ScheduledConfig, ScheduledSlot, core_epoch,
+};
+mod beacon;
+pub use beacon::{
+    BeaconPulseShapeError, GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1, election_seed,
+    global_threshold_beacon_npos_successor_seed_v1, global_threshold_beacon_pulse_id_v1,
+    global_threshold_beacon_pulse_payload_v1, validate_beacon_pulse_shape,
+};
+mod genesis;
+pub use genesis::{genesis_epoch, signed_genesis_consensus_metadata};
+mod lane_state_commitment;
+mod native_lanes;
+pub use lane_state_commitment::SumeragiLaneStateCommitment;
+pub use native_lanes::{
+    NativeLaneStateProof, NativeLaneStateProofError, SUMERAGI_LANE_STATE_WITNESS_KEY,
+};
 mod commitment;
 pub use commitment::*;
 mod checkpoint;
@@ -19,7 +48,7 @@ use iroha_crypto::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
-    crypto::{Crypto, NoAttestation, verify_qc},
+    crypto::{Crypto, verify_qc_signatures},
     message::{BlockHeader as CoreHeader, Qc, VoteKind},
     preimage::{InstanceKind, committee_digest_preimage, instance_id, payload_hash},
     types::{AggregateSignature, Committee, Hash32, PublicKey as CoreKey, Signature},
@@ -101,7 +130,7 @@ pub struct SumeragiFinalityProof {
     pub block_header: BlockHeader,
     /// Result-bearing canonical `SignedBlockWire`, including the embedded current certificate.
     pub block_wire: Vec<u8>,
-    /// Committee, admitted only against the signed genesis or an authenticated lag-2 digest.
+    /// Committee, admitted only against the signed genesis or an authenticated complete epoch context.
     pub committee: Vec<FinalityValidator>,
 }
 
@@ -176,9 +205,31 @@ impl SumeragiFinalityProof {
             .commit_certificate()
             .ok_or_else(|| FinalityError("embedded commit certificate missing".into()))?;
         let commitment =
-            ExecutionResultCommitment::decode(&certificate.result_preimage).map_err(malformed)?;
-        commitment.next_params.validate().map_err(malformed)?;
-        let result = result_of_preimage(&certificate.result_preimage);
+            ExecutionResultCommitment::decode(certificate.result_preimage()).map_err(malformed)?;
+        need(
+            commitment.height == self.height(),
+            "result height differs from its block",
+        )?;
+        need(
+            commitment.beacon.as_ref().is_none_or(|pulse| {
+                Some(pulse.finalized_chain_anchor.block_hash) == block.header().prev_block_hash()
+            }),
+            "beacon pulse names another committed parent",
+        )?;
+        need(
+            self.committee.len() == commitment.schedule.current.committee.len()
+                && self
+                    .committee
+                    .iter()
+                    .zip(&commitment.schedule.current.committee)
+                    .all(|(proof, member)| {
+                        proof.public_key == *member.validator.public_key()
+                            && proof.proof_of_possession == member.proof_of_possession
+                    }),
+            "proof roster differs from its complete epoch context",
+        )?;
+        let epoch = core_epoch(&commitment.schedule.current).map_err(malformed)?;
+        let result = result_of_preimage(certificate.result_preimage());
         let (len, hash) = block.executed_block_wire_identity().map_err(malformed)?;
         need(
             commitment.execution.executed_block_wire_len == len
@@ -191,18 +242,15 @@ impl SumeragiFinalityProof {
         )?;
         let (header, core_hash) = if self.height() == 1 {
             need(
-                certificate.consensus_header.is_empty() && certificate.commit_qc.is_empty(),
+                certificate.consensus_header().is_empty() && certificate.commit_qc().is_empty(),
                 "genesis requires a result-only certificate",
             )?;
             (None, Hash32(Hash::from(block.hash()).into()))
         } else {
-            need(
-                block.network_entrypoint_count() > 0,
-                "empty blocks are invalid",
-            )?;
+            need(block.has_consensus_work(), "empty blocks are invalid")?;
             let header: CoreHeader =
-                norito::decode_canonical(&certificate.consensus_header).map_err(malformed)?;
-            let qc: Qc = norito::decode_canonical(&certificate.commit_qc).map_err(malformed)?;
+                norito::decode_canonical(certificate.consensus_header()).map_err(malformed)?;
+            let qc: Qc = norito::decode_canonical(certificate.commit_qc()).map_err(malformed)?;
             let payload = block
                 .canonical_resultless_proposal()
                 .encode_wire()
@@ -210,6 +258,9 @@ impl SumeragiFinalityProof {
             let core_hash = header.hash(&crypto);
             need(
                 header.height == self.height()
+                    && header.epoch == epoch.id
+                    && qc.epoch == epoch.id
+                    && (commitment.schedule.boundary.is_none() || header.attest)
                     && usize::try_from(header.payload_len).ok() == Some(payload.len())
                     && header.payload_hash == payload_hash(&crypto, &payload)
                     && qc.kind == VoteKind::Commit
@@ -220,8 +271,27 @@ impl SumeragiFinalityProof {
                     && qc.attest == header.attest,
                 "current certificate does not bind this block and execution",
             )?;
-            // No unverified application attestation can be relayed as a verified proof.
-            verify_qc(&crypto, &NoAttestation, &header.instance, &committee, &qc)
+            need(
+                commitment.beacon.as_ref().is_none_or(|pulse| {
+                    pulse.context.instance == header.instance.0
+                        && pulse.context.epoch == commitment.schedule.current.authorization.epoch
+                        && pulse.context.epoch_context_id == epoch.id.context.0
+                        && pulse.context.parent_consensus_hash == header.parent_hash.0
+                        && pulse.context.parent_result == header.parent_result.0
+                }),
+                "beacon pulse names another native consensus context",
+            )?;
+            need(
+                if qc.needs_attestations() {
+                    qc.attestations.len() == committee.q()
+                } else {
+                    qc.attestations.is_empty()
+                },
+                "certificate attestation shape differs from its signed flag",
+            )?;
+            // Exact quorum signatures authenticate execution finality. Embedded application
+            // attestations remain separate evidence; this proof grants no attestation capability.
+            verify_qc_signatures(&crypto, &header.instance, &epoch.id, &committee, &qc)
                 .map_err(|error| FinalityError(format!("commit certificate: {error:?}")))?;
             (Some(header), core_hash)
         };
@@ -321,7 +391,8 @@ struct Decision {
     core_hash: Hash32,
     result: Hash32,
     committee_digest: [u8; 32],
-    next_committee_digest: [u8; 32],
+    schedule: ScheduleOutcome,
+    beacon: Option<crate::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
     executed_hash: Hash,
     executed_len: u64,
 }
@@ -334,6 +405,7 @@ pub struct SumeragiFinalityVerifier {
     genesis_committee: Vec<FinalityValidator>,
     instance: Hash32,
     genesis_committee_digest: [u8; 32],
+    genesis_epoch: crate::sumeragi::epoch::ValidatorEpochContextV1,
     decisions: BTreeMap<u64, Decision>,
 }
 impl SumeragiFinalityVerifier {
@@ -352,6 +424,18 @@ impl SumeragiFinalityVerifier {
             "trust root must be signed genesis",
         )?;
         let (crypto, committee) = ProofCrypto::new(&validators)?;
+        let genesis_epoch = genesis_epoch(trusted_genesis).map_err(malformed)?;
+        need(
+            validators.len() == genesis_epoch.committee.len()
+                && validators
+                    .iter()
+                    .zip(&genesis_epoch.committee)
+                    .all(|(selected, member)| {
+                        selected.public_key == *member.validator.public_key()
+                            && selected.proof_of_possession == member.proof_of_possession
+                    }),
+            "selected roster differs from signed genesis authority",
+        )?;
         let instance = instance_id(
             &crypto,
             &Hash32(Hash::from(trusted_genesis.hash()).into()),
@@ -363,6 +447,7 @@ impl SumeragiFinalityVerifier {
             genesis: trusted_genesis.clone(),
             chain_id: chain_id.to_owned(),
             genesis_committee: validators,
+            genesis_epoch,
             instance,
             genesis_committee_digest: chain_hash(&committee_digest_preimage(&committee)).0,
             decisions: BTreeMap::new(),
@@ -422,7 +507,8 @@ impl SumeragiFinalityVerifier {
                     && found.core_hash == expected.core_hash
                     && found.result == expected.result
                     && found.committee_digest == expected.committee_digest
-                    && found.next_committee_digest == expected.next_committee_digest
+                    && found.schedule == expected.schedule
+                    && found.beacon == expected.beacon
                     && found.executed_hash == expected.executed_hash
                     && found.executed_len == expected.executed_len,
                 "alternate proof differs from authenticated decision",
@@ -436,7 +522,8 @@ impl SumeragiFinalityVerifier {
             core_hash: value.core_hash,
             result: value.result,
             committee_digest: value.committee_digest,
-            next_committee_digest: value.commitment.next_committee_digest,
+            schedule: value.commitment.schedule.clone(),
+            beacon: value.commitment.beacon.clone(),
             executed_hash: value.commitment.execution.executed_block_wire_hash,
             executed_len: value.commitment.execution.executed_block_wire_len,
         }
@@ -461,22 +548,51 @@ impl SumeragiFinalityVerifier {
                             .canonical_resultless_proposal()
                             .encode_wire()
                             .map_err(malformed)?
-                    && decoded.committee_digest == self.genesis_committee_digest,
+                    && decoded.committee_digest == self.genesis_committee_digest
+                    && decoded.commitment.schedule.current == self.genesis_epoch,
                 "genesis proof differs from independently selected signed root",
             )?;
+            ConsensusSchedule::from_genesis_outcome(&decoded.commitment.schedule)
+                .map_err(malformed)?;
         } else {
             let parent = self
                 .decisions
                 .get(&(height - 1))
                 .ok_or_else(|| FinalityError("authenticated parent is missing".into()))?;
-            let expected_committee = if height == 2 {
-                self.genesis_committee_digest
-            } else {
-                self.decisions
-                    .get(&(height - 2))
-                    .ok_or_else(|| FinalityError("authenticated schedule is missing".into()))?
-                    .next_committee_digest
-            };
+            parent
+                .schedule
+                .validate_successor(&decoded.commitment.schedule)
+                .map_err(malformed)?;
+            if let Some(boundary) = &decoded.commitment.schedule.boundary {
+                need(
+                    boundary.selection_anchor == parent.block_hash,
+                    "boundary selection anchor differs from certified parent",
+                )?;
+                let pulse = parent.beacon.as_ref().ok_or_else(|| {
+                    FinalityError("boundary predecessor omits its certified selection pulse".into())
+                })?;
+                need(
+                    boundary.next.leader_seed
+                        == global_threshold_beacon_npos_successor_seed_v1(
+                            pulse,
+                            height,
+                            boundary.next.authorization.epoch,
+                        ),
+                    "boundary leader seed differs from certified fresh pulse",
+                )?;
+                if let Some(preparation) = &boundary.preparation {
+                    need(
+                        preparation.election_seed
+                            == election_seed(
+                                decoded.commitment.schedule.current.network_id,
+                                decoded.commitment.schedule.current.authorization.epoch,
+                                pulse,
+                            )
+                            .map_err(malformed)?,
+                        "frozen election seed differs from certified fresh pulse",
+                    )?;
+                }
+            }
             let header = decoded
                 .header
                 .as_ref()
@@ -485,9 +601,8 @@ impl SumeragiFinalityVerifier {
                 header.instance == self.instance
                     && header.parent_hash == parent.core_hash
                     && header.parent_result == parent.result
-                    && decoded.block.header().prev_block_hash() == Some(parent.block_hash)
-                    && decoded.committee_digest == expected_committee,
-                "proof breaks authenticated instance, parent/result or lag-2 committee binding",
+                    && decoded.block.header().prev_block_hash() == Some(parent.block_hash),
+                "proof breaks authenticated instance, parent/result or authenticated epoch binding",
             )?;
         }
         Ok(decoded)
@@ -621,8 +736,8 @@ struct ProofCrypto {
 impl ProofCrypto {
     fn new(validators: &[FinalityValidator]) -> Result<(Self, Committee), FinalityError> {
         need(
-            !validators.is_empty() && validators.len() <= iroha_sumeragi::types::MAX_COMMITTEE_SIZE,
-            "committee exceeds its finite bound",
+            crate::block::consensus_v2::is_valid_committee_size(validators.len()),
+            "committee must have exact first-release global voting geometry",
         )?;
         let mut keys = BTreeMap::new();
         let mut ordered = Vec::new();

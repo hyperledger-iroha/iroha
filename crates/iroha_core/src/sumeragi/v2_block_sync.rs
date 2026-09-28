@@ -1481,6 +1481,8 @@ pub(super) mod tests {
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -1507,6 +1509,9 @@ pub(super) mod tests {
         // install active markers eagerly and cannot precede this startup cut.
         let mut state =
             crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+                crate::state::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
                 world,
                 Arc::clone(&kura),
                 crate::query::store::LiveQueryStore::start_test(),

@@ -25,7 +25,7 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
-    block::consensus_v2::{ConsensusMode, ValidatorPower, finality::FinalizedNextEpochSnapshot},
+    block::consensus_v2::ValidatorPower,
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::kagemusha_v1::InstalledBeaconEpochBindingV1,
     nexus::{
@@ -34,7 +34,13 @@ use iroha_data_model::{
         ValidatorCommitteeCredentialsV1, ValidatorCommitteePreparationV1,
         ValidatorCommitteeSeatReadinessV1,
     },
-    parameter::{Parameter, system::SumeragiNposParameters},
+    parameter::{
+        Parameter,
+        system::{ConsensusMode, SumeragiNposParameters},
+    },
+    sumeragi::epoch::{
+        ValidatorCommitteeMemberV1, ValidatorEpochBoundaryV1, ValidatorEpochContextV1,
+    },
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
@@ -60,6 +66,16 @@ pub(crate) fn fixture_with_selection_anchor(
     let network = iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
         Hash::new(b"prepared-committee-proof-tests"),
     ));
+    fixture_with_native_selection(size, network, selection_anchor, [0x31; 32])
+}
+
+/// Keep native proof fixtures bound to their actual signed genesis and fresh certified pulse.
+pub(crate) fn fixture_with_native_selection(
+    size: usize,
+    network: iroha_data_model::NetworkId,
+    selection_anchor: HashOf<iroha_data_model::block::BlockHeader>,
+    election_seed: [u8; 32],
+) -> Fixture {
     let mut keys = (1..=size)
         .map(|index| KeyPair::from_seed(vec![index as u8; 32], Algorithm::BlsNormal))
         .collect::<Vec<_>>();
@@ -134,11 +150,23 @@ pub(crate) fn fixture_with_selection_anchor(
         last_height: 30,
         authority_generation: 1,
         preparing_authorization_id: authorization.authorization_id().unwrap(),
-        election_seed: [0x31; 32],
-        roster: roster.clone(),
-        validator_set_pops: keys
+        election_seed,
+        eligibility: iroha_data_model::nexus::ValidatorElectionPolicyV1 {
+            epoch_length_blocks: 10,
+            ..iroha_data_model::nexus::ValidatorElectionPolicyV1::from_npos_parameters(
+                &iroha_data_model::parameter::system::SumeragiNposParameters::default(),
+            )
+            .unwrap()
+        },
+        committee: keys
             .iter()
-            .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
+            .map(
+                |key| iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1 {
+                    validator: PeerId::new(key.public_key().clone()),
+                    proof_of_possession: iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .unwrap(),
+                },
+            )
             .collect(),
     };
     let target_peers = roster
@@ -501,22 +529,32 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
         .into_custom_parameter(),
     ));
     parameters.commit();
-    let mut snapshot = FinalizedNextEpochSnapshot {
-        committee_preparation: None,
-        epoch: 2,
-        kagemusha_mint_finality_authorization: outcome(&fixture, false),
-        kagemusha_mint_finality_authority: fixture.incumbent.clone(),
-        epoch_end_height: 30,
+    // This component fixture exercises the native boundary reducer with the exact original
+    // credentials. It does not claim a certified chain or executed transition.
+    let current = ValidatorEpochContextV1 {
+        version: 1,
+        network_id: fixture.authorization.network_id,
         mode: ConsensusMode::Npos,
-        roster: fixture.transition.preparation.roster.clone(),
-        validator_set_pops: fixture.transition.preparation.validator_set_pops.clone(),
-        quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(
-            &fixture.transition.preparation.roster,
-        )
-        .unwrap(),
-        leader_seed: [3; 32],
+        authority: fixture.incumbent.clone(),
+        authorization: fixture.authorization,
+        committee: fixture.transition.preparation.committee.clone(),
+        leader_seed: [2; 32],
     };
-    let retained = prepare_staking_obligations(&fixture.world.view(), &snapshot).unwrap();
+    current.validate().unwrap();
+    let mut boundary = ValidatorEpochBoundaryV1 {
+        version: 1,
+        height: current.authorization.last_height,
+        predecessor_context_id: current.context_id().unwrap(),
+        selection_anchor: fixture.transition.preparation.selection_anchor,
+        next: ValidatorEpochContextV1 {
+            authorization: outcome(&fixture, false),
+            leader_seed: [3; 32],
+            ..current.clone()
+        },
+        preparation: None,
+    };
+    boundary.validate_against(&current).unwrap();
+    let retained = prepare_staking_obligations(&fixture.world.view(), &boundary).unwrap();
     assert!(
         retained.validators.is_empty(),
         "retention must not close the tenure"
@@ -529,26 +567,30 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
         ),
         (30, 33)
     );
-    let replacement = PeerId::new(
-        KeyPair::from_seed(vec![99; 32], Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    );
-    snapshot.roster[0].validator = replacement;
-    snapshot
-        .roster
+    let replacement = KeyPair::from_seed(vec![99; 32], Algorithm::BlsNormal);
+    boundary.next.committee[0] = ValidatorCommitteeMemberV1 {
+        validator: PeerId::new(replacement.public_key().clone()),
+        proof_of_possession: iroha_crypto::bls_normal_pop_prove(replacement.private_key()).unwrap(),
+    };
+    boundary
+        .next
+        .committee
         .sort_by(|a, b| a.validator.cmp(&b.validator));
-    snapshot.kagemusha_mint_finality_authority =
-        mint_finality_authority(fixture.authorization.network_id, 1, &snapshot.roster);
-    snapshot
-        .kagemusha_mint_finality_authorization
-        .authority_generation = 1;
-    snapshot.kagemusha_mint_finality_authorization.authority_id = snapshot
-        .kagemusha_mint_finality_authority
-        .authority_id()
-        .unwrap();
-    snapshot.kagemusha_mint_finality_authorization.decision =
-        KagemushaMintFinalityEpochDecisionV1::Activate;
-    let released = prepare_staking_obligations(&fixture.world.view(), &snapshot).unwrap();
+    let replacement_roster = boundary
+        .next
+        .committee
+        .iter()
+        .map(|member| ValidatorPower {
+            validator: member.validator.clone(),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    boundary.next.authority =
+        mint_finality_authority(fixture.authorization.network_id, 1, &replacement_roster);
+    boundary.next.authorization.authority_generation = 1;
+    boundary.next.authorization.authority_id = boundary.next.authority.authority_id().unwrap();
+    boundary.next.authorization.decision = KagemushaMintFinalityEpochDecisionV1::Activate;
+    boundary.validate_against(&current).unwrap();
+    let released = prepare_staking_obligations(&fixture.world.view(), &boundary).unwrap();
     assert_eq!(released.validators[0].1.deactivation_height, Some(21));
 }

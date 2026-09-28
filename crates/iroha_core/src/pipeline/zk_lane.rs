@@ -34,7 +34,7 @@ pub struct ZkTask {
     /// Code hash of the executed bytecode.
     pub code_hash: [u8; 32],
     /// Shared immutable program bytes executed to produce this trace.
-    pub program: Arc<[u8]>,
+    pub program: ivm::cache_memory::SharedAllocation<u8>,
     /// Optional block header associated with this trace (for warnings/events). If not provided, the
     /// ZK lane will emit a warning with a minimal header carrying height=1.
     pub header: Option<iroha_data_model::block::BlockHeader>,
@@ -969,7 +969,7 @@ mod tests {
         ZkTask {
             tx_hash: Some(Hash::prehashed([0xCD; 32])),
             code_hash: [0xAB; 32],
-            program: Arc::from(vec![0x55; 96]),
+            program: vec![0x55; 96].into(),
             header: None,
             trace: vec![RegisterState {
                 pc: 11,
@@ -1022,7 +1022,9 @@ mod tests {
         let digest = original.digest();
 
         let mut changed = original.clone();
-        Arc::make_mut(&mut changed.program)[95] ^= 1;
+        let mut changed_program = changed.program.as_ref().to_vec();
+        changed_program[95] ^= 1;
+        changed.program = changed_program.into();
         assert_ne!(
             digest,
             changed.digest(),
@@ -1084,7 +1086,7 @@ mod tests {
         let task = ZkTask {
             tx_hash: Some(Hash::prehashed([0x11; 32])),
             code_hash: [0x22; 32],
-            program: Arc::from(vec![0x01, 0x02]),
+            program: vec![0x01, 0x02].into(),
             header: None,
             trace: Vec::new(),
             constraints: Vec::new(),
@@ -1109,7 +1111,7 @@ mod tests {
             let task = ZkTask {
                 tx_hash: Some(Hash::prehashed([idx as u8; 32])),
                 code_hash: [0xAA; 32],
-                program: Arc::from(vec![idx as u8]),
+                program: vec![idx as u8].into(),
                 header: None,
                 trace: Vec::new(),
                 constraints: Vec::new(),
@@ -1124,7 +1126,7 @@ mod tests {
         let mut pending = vec![ZkTask {
             tx_hash: None,
             code_hash: [0xFF; 32],
-            program: Arc::from(vec![0xFF]),
+            program: vec![0xFF].into(),
             header: None,
             trace: Vec::new(),
             constraints: Vec::new(),

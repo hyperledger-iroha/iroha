@@ -78,7 +78,6 @@ E_LIST_TAKE_CONST	Semantic	List.take received a dynamic limit	Pass a compile-tim
 E_LIST_TAKE_LIMIT	Semantic	List.take received a limit outside its source capacity	Use a constant limit from 0 through the source List capacity.
 E_LIST_TYPE_ARITY	Semantic	List has an invalid number of type arguments	Declare List<T, N> with one element type and one capacity constant.
 E_LIST_UNSAFE_INDEX	Semantic	source attempted an unchecked List index operation	Use get(index) for reads and try_set(index, value) for writes.
-E_LIST_ZERO_SIZED_ELEMENT	Semantic	a List element schema encodes to zero runtime words	Add at least one runtime-valued field; every List element must encode at least one word.
 E_LOCAL_SHADOWING	Resolve	a local binding duplicates or shadows another visible symbol	Rename the binding so every local and source-unit declaration remains unambiguous.
 E_MALFORMED_CALL	Semantic	resolved call metadata was internally inconsistent	Report this compiler defect with a minimal source reproducer; malformed resolved calls never produce artifacts.
 E_MAP_BOUNDS	Semantic	a StateMap operation lacked a compiler-proven deterministic bound	Use direct keyed access or canonical StateMap iteration with the fixed 64-item cap.
@@ -95,6 +94,7 @@ E_MULTIPLE_SEIYAKU_ROOTS	Resolve	one diagnostics request contains more than one 
 E_NAMED_ARGUMENTS_REQUIRED	Semantic	a named parameter was supplied positionally	Supply the declared parameter name, or explicitly declare a positional prefix with `Type _ name`.
 E_NAMED_ARGUMENT_HOLE	Semantic	a named call supplies a later optional parameter after omitting an earlier optional ABI slot	Supply the earlier optional parameter too, or omit the complete trailing optional suffix.
 E_NEGATIVE_QUANTITY	Semantic	a value converted to quantity is negative	Use decimal when the value may be negative, or prove the value non-negative before an explicit quantity conversion.
+E_NEGATIVE_SQUARE_ROOT	Semantic	integer square root requires a nonnegative operand	Pass a nonnegative int to math::isqrt; negative inputs fault instead of narrowing or changing sign.
 E_NON_CANONICAL_BUILTIN	Semantic	source used a retired, flat, or compiler-internal builtin spelling	Use the canonical V1 namespaced builtin shown by the diagnostic.
 E_NON_CANONICAL_NUMERIC	Semantic	a numeric value was not in canonical int, decimal, or quantity form	Construct the value with the exact canonical numeric type and representation.
 E_NUMERIC_ROUNDING_MODE	Semantic	an explicitly rounded numeric operation received an unknown rounding mode	Use one of the seven V1 modes: toward_zero, away_from_zero, floor, ceil, nearest_even, nearest_away, or nearest_toward_zero.
@@ -223,7 +223,7 @@ K2003	Semantic	an expression violates the strict type rules	Use the exact declar
 K2004	Semantic	authorization or view-effect policy was violated	Authorize every kotoage function and keep view call graphs read-only.
 K2005	Semantic	durable-state rules were violated	Initialize scalar state in hajimari and access StateMap values through its typed API.
 K2006	Semantic	a recursive call graph or recursive value type was found	Refactor the cycle into an iterative, compiler-proven bounded design.
-K2007	Semantic	a function exceeds the V1 argument-register word limit	Reduce or regroup parameters so their recursively flattened representation occupies at most 13 words.
+K2007	Semantic	a function exceeds a V1 argument or result table bound	Reduce the recursively flattened argument or result representation to at most 8192 words per table.
 K2008	Semantic	a named value type exceeds a fixed V1 resolution budget	Shorten deeply nested value types or replace repeatedly branching product fields with a flatter bounded schema.
 K2098	Semantic	an accepted parameter type retained no bounded ABI representation	Report this compiler defect with the source; semantic analysis must assign every parameter an exact bounded V1 ABI representation.
 K2099	Resolve	resolved-HIR construction or integrity validation failed	Report this compiler defect with the source; resolution stopped before typed/effect analysis.

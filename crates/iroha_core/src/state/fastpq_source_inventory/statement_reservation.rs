@@ -86,9 +86,6 @@ fn checked_entry_count(count: usize) -> Result<u32, String> {
 }
 
 fn owned_inventory(block: &StateBlock<'_>) -> Result<Arc<FastpqSourceInventoryV1>, String> {
-    if block.authenticated_replay_commit {
-        return Err("authenticated replay cannot reserve new ordinary FASTPQ statements".into());
-    }
     block.verified_fastpq_source_inventory_for_capture()
 }
 
@@ -100,7 +97,7 @@ impl StateBlock<'_> {
     /// witness, drain the recorder, latch a capture error, or perform private materialization.
     ///
     /// # Errors
-    /// Rejects replay, missing/failed/stale ownership, an unrepresentable count or transcript
+    /// Rejects missing/failed/stale ownership, an unrepresentable count or transcript
     /// ceiling, and an exceeded E cap. The remaining dimensions are checked during preparation.
     pub fn fastpq_source_statement_budget(
         &self,

@@ -518,7 +518,9 @@ state_test! { sync native_recorded_control_beacon_preserves_complete_snapshot_an
         assert_eq!(native_control_requested_beacon(&fixture), pulse);
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before,
             "reading the requested pulse cannot publish a replacement World undo");
-        let restored = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        let restored = deserialize::KuraSeed {
+        operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+execution_budget: mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
             kura: Arc::clone(&state.kura),
             lane_manifests: state.lane_manifests.read().clone(),
             query_handle: LiveQueryStore::start_test(),

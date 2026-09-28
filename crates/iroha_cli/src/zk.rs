@@ -37,7 +37,6 @@ use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
 // JSON and Norito decoders additionally receive explicit graph/allocation
 // limits so a short hostile frame cannot request a much larger heap.
 const ZK_CLI_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;
-const ZK_CLI_VK_MAX_BYTES_V1: usize = iroha_core::zk::HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES;
 const ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1;
 const ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
@@ -123,9 +122,6 @@ pub enum Command {
     /// Inspect proof registry (list/count/get)
     #[command(subcommand)]
     Proofs(ProofCommand),
-    /// IVM prove helpers (non-consensus, app API)
-    #[command(subcommand)]
-    Ivm(IvmCommand),
     /// ZK Vote helpers (tally)
     #[command(subcommand)]
     Vote(VoteCommand),
@@ -151,7 +147,6 @@ impl Run for Command {
             Command::RegisterAsset(args) => args.run(context),
             Command::Vk(args) => args.run(context),
             Command::Proofs(args) => args.run(context),
-            Command::Ivm(args) => args.run(context),
             Command::Vote(args) => args.run(context),
             Command::Envelope(args) => args.run(context),
         }
@@ -380,158 +375,6 @@ impl Run for ProofPruneArgs {
         let prune: InstructionBox =
             iroha_data_model::isi::zk::PruneProofs::new(self.backend).into();
         context.finish(Executable::Instructions(vec![prune].into()))
-    }
-}
-#[derive(clap::Subcommand, Debug)]
-pub enum IvmCommand {
-    /// Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
-    Derive(IvmDeriveArgs),
-    /// Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
-    Prove(IvmProveArgs),
-    /// Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
-    Get(IvmProveGetArgs),
-    /// Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
-    Delete(IvmProveDeleteArgs),
-    /// Derive a circuit/vk-bound proving key archive (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
-    DerivePk(IvmDerivePkArgs),
-}
-impl Run for IvmCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            IvmCommand::Derive(args) => args.run(context),
-            IvmCommand::Prove(args) => args.run(context),
-            IvmCommand::Get(args) => args.run(context),
-            IvmCommand::Delete(args) => args.run(context),
-            IvmCommand::DerivePk(args) => args.run(context),
-        }
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmDeriveArgs {
-    /// Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode }`
-    #[arg(long, value_name = "PATH")]
-    json: std::path::PathBuf,
-}
-impl Run for IvmDeriveArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM derive request")?;
-        let value = client.post_zk_ivm_derive_json(&req)?;
-        context.print_data(&value)?;
-        Ok(())
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmProveArgs {
-    /// Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode, proved? }`
-    #[arg(long, value_name = "PATH")]
-    json: std::path::PathBuf,
-    /// Poll the job until it reaches `done` or `error`
-    #[arg(long)]
-    wait: bool,
-    /// Poll interval (milliseconds) when using --wait
-    #[arg(long, default_value_t = 250)]
-    poll_interval_ms: u64,
-    /// Optional timeout (seconds) when using --wait (0 = no timeout)
-    #[arg(long, default_value_t = 0)]
-    timeout_secs: u64,
-}
-impl Run for IvmProveArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM prove request")?;
-        let created = client.post_zk_ivm_prove_json(&req)?;
-        if !self.wait {
-            context.print_data(&created)?;
-            return Ok(());
-        }
-        let job_id = created
-            .get("job_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("response missing job_id"))?
-            .to_string();
-        let started = std::time::Instant::now();
-        let poll = std::time::Duration::from_millis(self.poll_interval_ms.max(10));
-        let timeout =
-            (self.timeout_secs > 0).then(|| std::time::Duration::from_secs(self.timeout_secs));
-        loop {
-            if let Some(timeout) = timeout
-                && started.elapsed() >= timeout
-            {
-                eyre::bail!("timed out waiting for ivm prove job {job_id}");
-            }
-            let status = client.get_zk_ivm_prove_job_json(&job_id)?;
-            let label = status
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            match label {
-                "pending" | "running" => std::thread::sleep(poll),
-                "done" | "error" => {
-                    context.print_data(&status)?;
-                    return Ok(());
-                }
-                other => eyre::bail!("unexpected job status `{other}` for job {job_id}"),
-            }
-        }
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmProveGetArgs {
-    /// Prove job id returned by `iroha zk ivm prove`
-    #[arg(long, value_name = "JOB_ID")]
-    job_id: String,
-}
-impl Run for IvmProveGetArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let value = client.get_zk_ivm_prove_job_json(&self.job_id)?;
-        context.print_data(&value)?;
-        Ok(())
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmProveDeleteArgs {
-    /// Prove job id returned by `iroha zk ivm prove`
-    #[arg(long, value_name = "JOB_ID")]
-    job_id: String,
-}
-impl Run for IvmProveDeleteArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let value = client.delete_zk_ivm_prove_job_json(&self.job_id)?;
-        context.print_data(&value)?;
-        Ok(())
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmDerivePkArgs {
-    /// Backend label for the verifying key bytes (must match Torii `vk_ref.backend`), e.g. `halo2/ipa`
-    #[arg(long, default_value = "halo2/ipa", value_name = "BACKEND")]
-    backend: String,
-    /// Path to verifying key bytes (`.vk`) in Halo2 "processed" format
-    #[arg(long, value_name = "PATH")]
-    vk: std::path::PathBuf,
-    /// Output path for circuit/vk-bound Norito proving key archive (`.pk`)
-    #[arg(long, value_name = "PATH")]
-    out: std::path::PathBuf,
-}
-impl Run for IvmDerivePkArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let vk_bytes =
-            read_zk_file_bounded(&self.vk, ZK_CLI_VK_MAX_BYTES_V1, "Halo2 IPA verifying key")?;
-        let vk_box = iroha::data_model::proof::VerifyingKeyBox::new(self.backend, vk_bytes);
-        let pk = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(&vk_box)
-            .map_err(|err| {
-                eyre::eyre!("failed to derive proving key bytes from verifying key bytes: {err}")
-            })?;
-        std::fs::write(&self.out, &pk)?;
-        context.println(format!(
-            "Wrote {} bytes to {}",
-            pk.len(),
-            self.out.display()
-        ))?;
-        Ok(())
     }
 }
 #[derive(clap::Subcommand, Debug)]
@@ -1005,6 +848,9 @@ mod tests {
             "halo2/ipa:release-ready:vk_transfer",
             "halo2/ipa:tiny-add:vk_transfer",
             "halo2/ipa:ivm-replay-binding-v1:vk_ivm",
+            "halo2/ipa:ivm-execution-v1:vk_ivm",
+            "halo2/pasta/ivm-execution-v1:vk_ivm",
+            "halo2/pasta/ivm-replay-binding-v1:vk_ivm",
             "mock/dev:vk_transfer",
             "halo2/ipa:",
             "halo2/ipa:vk:shadow",
@@ -1014,10 +860,6 @@ mod tests {
                 "{literal:?} must reject before building a verifying-key id"
             );
         }
-        let parsed = parse_vk_id_pair("halo2/pasta/ivm-replay-binding-v1:vk_ivm")
-            .expect("canonical IVM execution vk id");
-        assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-replay-binding-v1");
-        assert_eq!(parsed.name.as_str(), "vk_ivm");
         let parsed = parse_vk_id_pair("stark/fri/poseidon-x7-goldilocks-6x64-v1:vk_stark")
             .expect("stark vk id");
         assert_eq!(

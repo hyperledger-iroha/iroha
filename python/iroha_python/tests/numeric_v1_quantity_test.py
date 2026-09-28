@@ -21,12 +21,13 @@ from iroha_python.settlement import SettlementLeg
 
 def test_quantity_modules_do_not_load_native_crypto() -> None:
     package_root = Path(__file__).resolve().parents[1] / "src" / "iroha_python"
+    norito_root = Path(__file__).resolve().parents[3] / "python" / "norito_py" / "src"
     probe = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "import sys, types; "
+                "import sys, types; sys.path.insert(0, sys.argv[2]); "
                 "package = types.ModuleType('iroha_python'); "
                 "package.__path__ = [sys.argv[1]]; "
                 "sys.modules['iroha_python'] = package; "
@@ -37,6 +38,7 @@ def test_quantity_modules_do_not_load_native_crypto() -> None:
                 "))"
             ),
             str(package_root),
+            str(norito_root),
         ],
         check=False,
         capture_output=True,

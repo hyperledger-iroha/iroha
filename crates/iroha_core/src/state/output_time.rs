@@ -15,7 +15,9 @@ use mv::storage::StorageReadOnly;
 impl ExecutionOutputProducer<'_, '_, '_> {
     /// Consume the actual frozen Time schedule once after prior output phases.
     /// No caller supplies an event, index, descriptor, result or skip count.
-    pub(super) fn execute_scheduled_time_outputs(&mut self) -> Result<(), String> {
+    pub(super) fn execute_scheduled_time_outputs(
+        &mut self,
+    ) -> Result<(), ExecutionAttemptError<String>> {
         let result = (|| {
             if self.failed || self.time_started || self.network_resolved.iter().any(|done| !done) {
                 return Err("Time phase is repeated or has unresolved prior work".into());
@@ -32,9 +34,11 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             let now = u64::try_from(self.source.header().creation_time().as_millis())
                 .map_err(|_| "Time timestamp exceeds u64")?;
             let mut matched = Vec::new();
-            matched
-                .try_reserve_exact(maximum)
-                .map_err(|_| "host cannot retain bounded Time matches")?;
+            matched.try_reserve_exact(maximum).map_err(|_| {
+                ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            })?;
             matched.extend(
                 self.state
                     .world
@@ -81,7 +85,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         id: TriggerId,
         event: TimeEvent,
         schedule_index: u32,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ExecutionAttemptError<String>> {
         let height = self.source.header().height().get();
         let now = u64::try_from(self.source.header().creation_time().as_millis())
             .map_err(|_| "Time timestamp exceeds u64")?;

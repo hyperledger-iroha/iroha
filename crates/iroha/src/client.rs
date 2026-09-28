@@ -110,13 +110,13 @@ pub use iroha_torii_shared::parliament_api::{
     PARLIAMENT_API_VERSION_V1, PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
     ParliamentAttemptDraftResponseV1, ParliamentAttemptPlanResponseV1,
-    ParliamentAttemptReadResponseV1,
-    ParliamentDecisionModeProjectionV1, ParliamentInstructionDraftV1,
-    ParliamentTimedOvnCastingContextResponseV1, ParliamentTimedOvnCastingPhaseProjectionV1,
-    ParliamentTimedOvnCastingProofRequestV1, ParliamentTimedOvnCastingProofResponseV1,
-    ParliamentTimedOvnSessionProjectionV1, ParliamentTlePartialReleaseShareV1,
-    ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
-    ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
+    ParliamentAttemptReadResponseV1, ParliamentDecisionModeProjectionV1,
+    ParliamentInstructionDraftV1, ParliamentTimedOvnCastingContextResponseV1,
+    ParliamentTimedOvnCastingPhaseProjectionV1, ParliamentTimedOvnCastingProofRequestV1,
+    ParliamentTimedOvnCastingProofResponseV1, ParliamentTimedOvnSessionProjectionV1,
+    ParliamentTlePartialReleaseShareV1, ParliamentTleReleaseContextResponseV1,
+    ParliamentTransitionDraftRequestV1, ParliamentTransitionDraftResponseV1,
+    RequiredParliamentBodyProjectionV1,
 };
 pub use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
@@ -4501,11 +4501,6 @@ fn validate_zk_proofs_filter(filter: &ZkProofsFilter<'_>) -> Result<()> {
     }
     Ok(())
 }
-fn validate_zk_ivm_json(value: &norito::json::Value, context: &str) -> Result<()> {
-    let object = require_json_object(value, context)?;
-    require_json_vk_ref(object, context, None)?;
-    Ok(())
-}
 fn validate_zk_vk_submission_json(
     value: &norito::json::Value,
     context: &str,
@@ -5095,27 +5090,6 @@ fn zk_vk_commitment_hex(backend: &str, bytes: &[u8]) -> Result<String> {
     hasher.update(bytes_len.to_be_bytes());
     hasher.update(bytes);
     Ok(hex::encode(hasher.finalize()))
-}
-fn require_json_vk_ref(
-    object: &norito::json::Map,
-    context: &str,
-    expected_backend: Option<&str>,
-) -> Result<()> {
-    let vk_ref = object
-        .get("vk_ref")
-        .and_then(norito::json::Value::as_object)
-        .ok_or_else(|| eyre!("{context}.vk_ref must be a JSON object"))?;
-    let backend =
-        require_json_backend_field(vk_ref, "backend", &format!("{context}.vk_ref.backend"))?;
-    if let Some(expected) = expected_backend
-        && backend != expected
-    {
-        return Err(eyre!(
-            "{context}.vk_ref.backend must match {context}.backend"
-        ));
-    }
-    require_json_non_empty_string_field(vk_ref, "name", &format!("{context}.vk_ref.name"))?;
-    Ok(())
 }
 fn require_verifier_backend_registry_label_v1<'a>(
     backend: &'a str,
@@ -11231,118 +11205,6 @@ mod evidence_http_tests {
             );
         }
     }
-    #[test]
-    fn post_zk_ivm_prove_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        let req = norito::json!({
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
-            "authority": { "placeholder": true },
-            "fee_payment": {
-                "payer": "authority",
-                "value": { "charge_limits": [], "gas_limit": 123 }
-            },
-            "metadata": {},
-            "bytecode": { "placeholder": true },
-            "proved": { "placeholder": true }
-        });
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.post_zk_ivm_prove_json(&req)
-        });
-        let resp = resp.expect("post zk ivm prove json");
-        assert_eq!(resp["job_id"].as_str(), Some("abc"));
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/prove");
-        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(body, req);
-        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
-        });
-        assert!(has_content_type, "Content-Type header missing");
-    }
-    #[test]
-    fn post_zk_ivm_derive_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"proved\": {\"placeholder\": true}}");
-        let req = norito::json!({
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
-            "authority": { "placeholder": true },
-            "fee_payment": {
-                "payer": "authority",
-                "value": { "charge_limits": [], "gas_limit": 123 }
-            },
-            "metadata": {},
-            "bytecode": { "placeholder": true }
-        });
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.post_zk_ivm_derive_json(&req)
-        });
-        let resp = resp.expect("post zk ivm derive json");
-        assert!(resp.get("proved").is_some());
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/derive");
-        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(body, req);
-        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
-        });
-        assert!(has_content_type, "Content-Type header missing");
-    }
-    #[test]
-    fn post_zk_ivm_json_rejects_bad_vk_ref_before_request() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        for req in [
-            norito::json!({ "authority": { "placeholder": true } }),
-            norito::json!({ "vk_ref": "halo2/ipa:vk_main" }),
-            norito::json!({ "vk_ref": { "backend": "aztec/plonkish/private-kernel", "name": "vk_main" } }),
-            norito::json!({ "vk_ref": { "backend": "halo2/ipa", "name": "   " } }),
-        ] {
-            let derive_err = with_mock_http(
-                respond_with(&snapshots, response.clone()),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-
-                    client
-                        .post_zk_ivm_derive_json(&req)
-                        .expect_err("bad derive vk_ref must be rejected")
-                },
-            );
-            assert!(
-                derive_err.to_string().contains("vk_ref"),
-                "unexpected derive error: {derive_err}"
-            );
-            let prove_err = with_mock_http(
-                respond_with(&snapshots, response.clone()),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-
-                    client
-                        .post_zk_ivm_prove_json(&req)
-                        .expect_err("bad prove vk_ref must be rejected")
-                },
-            );
-            assert!(
-                prove_err.to_string().contains("vk_ref"),
-                "unexpected prove error: {prove_err}"
-            );
-        }
-        assert!(
-            snapshots.lock().expect("lock snapshot store").is_empty(),
-            "rejected IVM JSON must not be sent"
-        );
-    }
     fn vk_submission_json(
         authority: &AccountId,
         overrides: &[(&str, norito::json::Value)],
@@ -11751,44 +11613,6 @@ mod evidence_http_tests {
             snapshots.lock().expect("lock snapshot store").is_empty(),
             "rejected VK JSON must not be sent"
         );
-    }
-    #[test]
-    fn get_zk_ivm_prove_job_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\",\"status\":\"done\"}");
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.get_zk_ivm_prove_job_json("abc")
-        });
-        let resp = resp.expect("get zk ivm prove job json");
-        assert_eq!(resp["status"].as_str(), Some("done"));
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.as_str(),
-            "http://mock.local/v1/zk/ivm/prove/abc"
-        );
-        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
-    }
-    #[test]
-    fn delete_zk_ivm_prove_job_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.delete_zk_ivm_prove_job_json("abc")
-        });
-        let resp = resp.expect("delete zk ivm prove job json");
-        assert_eq!(resp["job_id"].as_str(), Some("abc"));
-        assert_eq!(snapshot.method, HttpMethod::DELETE);
-        assert_eq!(
-            snapshot.url.as_str(),
-            "http://mock.local/v1/zk/ivm/prove/abc"
-        );
-        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
     }
     fn alias_proof_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         let mut bundle = AliasProofBundleV1 {
@@ -19413,86 +19237,6 @@ impl Client {
             resp,
             StatusCode::OK,
             "Failed to verify-batch (json) with HTTP status",
-        )
-    }
-    /// Convenience: POST `/v1/zk/ivm/derive` with a JSON DTO body.
-    ///
-    /// The configured account signs the exact-network request and must match
-    /// `authority`. The body is expected to match the Torii app API DTO:
-    /// `{ vk_ref: { backend, name }, authority, fee_payment, metadata, bytecode }`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_ivm_derive_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        validate_zk_ivm_json(value, "zk ivm derive json")?;
-        let url = join_torii_url(&self.torii_url, "v1/zk/ivm/derive");
-        let body = norito::json::to_vec(value)?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON),
-        )?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to derive ivm proved payload (json) with HTTP status",
-        )
-    }
-    /// Convenience: POST a ZK IVM prove job to `/v1/zk/ivm/prove` with a JSON DTO body.
-    ///
-    /// The request body is expected to match the Torii app API DTO:
-    /// `{ vk_ref: { backend, name }, authority, fee_payment, metadata, bytecode, proved? }`.
-    /// The configured client account signs the exact request and must equal `authority`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_ivm_prove_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        validate_zk_ivm_json(value, "zk ivm prove json")?;
-        let url = join_torii_url(&self.torii_url, "v1/zk/ivm/prove");
-        let body = norito::json::to_vec(value)?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON),
-        )?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to submit ivm prove job (json) with HTTP status",
-        )
-    }
-    /// Convenience: GET a ZK IVM prove job status from `/v1/zk/ivm/prove/{job_id}` (JSON).
-    /// The configured client account signs the exact request and must own the job.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn get_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
-        let resp =
-            self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to get ivm prove job (json) with HTTP status",
-        )
-    }
-    /// Convenience: DELETE a ZK IVM prove job from `/v1/zk/ivm/prove/{job_id}` (JSON).
-    /// The configured client account signs the exact request and must own the job.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn delete_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
-        let resp =
-            self.send_builder(self.account_signed_request(HttpMethod::DELETE, url, Vec::new())?)?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to delete ivm prove job (json) with HTTP status",
         )
     }
     /// Convenience: POST `/v1/zk/vote/tally` with a JSON DTO body `{ election_id }`.
@@ -28888,7 +28632,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "503f4936525f4790f6a9a123aacfaa49a7fd636bde4e1704833bf7a729c99f1f",
+            "6105b45abb0080bc6aea6e72093990ee7f5749c604683ea2f75a60b95a88d4fb",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact
@@ -32805,10 +32549,8 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/params",
-            Client::get_sumeragi_params_json,
-        )];
+        let cases: [SumeragiEndpointCase; 1] =
+            [("/v1/sumeragi/params", Client::get_sumeragi_params_json)];
         for (path, request) in cases {
             let (result, snapshot) =
                 capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
@@ -32824,10 +32566,8 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_reject_malformed_ok_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/params",
-            Client::get_sumeragi_params_json,
-        )];
+        let cases: [SumeragiEndpointCase; 1] =
+            [("/v1/sumeragi/params", Client::get_sumeragi_params_json)];
         for (path, request) in cases {
             let (result, snapshot) = capture_request(
                 json_response(StatusCode::OK, r#"{"broken":"#),
@@ -33078,6 +32818,9 @@ mod tests {
             .public_key()
             .clone();
         SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: Hash::new(b"native client status configuration fixture"),
+            beacon_horizon: None,
             instance: [3; 32],
             height: 12,
             view: 5,

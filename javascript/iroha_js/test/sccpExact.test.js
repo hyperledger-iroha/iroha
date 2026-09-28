@@ -186,7 +186,7 @@ function soraOutboundExecutionPolicy() {
     contract_artifact_sha256: UPPER(0xb1, 32),
     vk_ref: {
       backend: "stark/fri/v1",
-      name: "ivm-replay-binding-v1",
+      name: "sccp-source-execution-fixture",
       version: 1,
       commitment: UPPER(0xb2, 32),
     },
@@ -572,7 +572,7 @@ function soraOutboundMaterial() {
       contract_artifact_sha256: createHash("sha256").update(artifact).digest("hex").toUpperCase(),
       vk_ref: {
         backend: "stark/fri/v1",
-        name: "ivm-replay-binding-v1",
+        name: "sccp-source-execution-fixture",
         version: 7,
         commitment: UPPER(0x23, 32),
       },

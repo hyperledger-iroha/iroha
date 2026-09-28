@@ -121,6 +121,7 @@ mod raw_ivm_work {
                 block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
             let error = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("the actual raw VM must exhaust its effective gas limit");
             assert!(
                 matches!(error, ValidationFail::NotPermitted(ref reason) if reason.contains("gas")),
@@ -206,6 +207,7 @@ seiyaku RawMeteredFailure {
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("the genuinely bound and permitted raw contract must exhaust VM gas");
         assert!(
             matches!(&error, ValidationFail::NotPermitted(reason) if reason.contains("gas")),
@@ -297,6 +299,7 @@ seiyaku UnverifiedBallot {
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err(
                 "completed VM must fail artifact export without actual ballot verification",
             );
@@ -363,6 +366,7 @@ seiyaku UnverifiedBallot {
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("the deferred missing-role instruction must reject after the first write");
         assert!(
             matches!(error, ValidationFail::InstructionFailed(
@@ -407,6 +411,7 @@ seiyaku UnverifiedBallot {
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .unwrap();
         assert_eq!(tx.last_tx_gas_used, expected_gas);
         tx.apply();
@@ -460,7 +465,7 @@ seiyaku UnverifiedBallot {
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = count_cap;
             tx.pipeline.overlay_max_bytes = byte_cap;
-            let error = Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
+            let error = Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache).map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("the actual group either exceeds admission or reaches its missing-role instruction");
             assert_eq!(
                 tx.last_tx_gas_used, expected_gas,
@@ -555,8 +560,9 @@ seiyaku UnverifiedBallot {
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.quarantine_tx_max_cycles = cap;
-            let result =
-                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result = Executor::Initial
+                .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection);
             let cycles = tx.completed_execution_cycles_for_tests();
             assert_eq!(cycles.is_some(), finite);
             assert!(

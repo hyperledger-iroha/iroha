@@ -1,6 +1,6 @@
 //! Ensure the decoded-op limit controls cache retention without changing decoding.
 
-use std::sync::Arc;
+use ivm::cache_memory::SharedAllocation;
 
 fn halt_stream(ops: usize) -> Vec<u8> {
     ivm::encoding::wide::encode_halt().to_le_bytes().repeat(ops)
@@ -41,7 +41,7 @@ fn stream_over_retention_cap_decodes_without_being_cached() {
         .get_or_predecode(&code)
         .expect("repeated over-cap stream must decode");
     assert_eq!(second.len(), 4);
-    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(!SharedAllocation::ptr_eq(&first, &second));
     assert_eq!(cache.counters(), (0, 2, 0));
 }
 
@@ -64,7 +64,7 @@ fn stream_at_retention_cap_is_cached() {
     let second = cache
         .get_or_predecode(&code)
         .expect("stream exactly at cap must hit cache");
-    assert!(Arc::ptr_eq(&first, &second));
+    assert!(SharedAllocation::ptr_eq(&first, &second));
     assert_eq!(cache.counters(), (1, 1, 0));
 }
 
@@ -92,12 +92,12 @@ fn tightened_retention_cap_evicts_warm_entry_then_decodes_uncached() {
         .get_or_predecode(&code)
         .expect("tightened cap must not reject a warmed stream");
     assert_eq!(first_uncached.len(), 4);
-    assert!(!Arc::ptr_eq(&warm, &first_uncached));
+    assert!(!SharedAllocation::ptr_eq(&warm, &first_uncached));
     assert_eq!(cache.counters(), (0, 2, 1));
 
     let second_uncached = cache
         .get_or_predecode(&code)
         .expect("evicted over-cap stream must keep decoding");
-    assert!(!Arc::ptr_eq(&first_uncached, &second_uncached));
+    assert!(!SharedAllocation::ptr_eq(&first_uncached, &second_uncached));
     assert_eq!(cache.counters(), (0, 3, 1));
 }

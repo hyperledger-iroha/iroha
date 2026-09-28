@@ -200,7 +200,7 @@ fn publisher_authorization_accepts_exact_multisig_quorum_and_rejects_bad_sets() 
     }
 }
 #[test]
-fn publisher_authorization_counts_weight_and_revalidates_decoded_policy() {
+fn publisher_authorization_counts_weight_and_rejects_invalid_policy() {
     let operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
     let operation_id = [0x47; 32];
     let digest = [0x58; 32];
@@ -265,24 +265,9 @@ fn publisher_authorization_counts_weight_and_revalidates_decoded_policy() {
         .as_object_mut()
         .and_then(|object| object.get_mut("threshold"))
         .expect("policy threshold field") = norito::json::Value::from(0_u64);
-    let unchecked_policy: MultisigPolicy = norito::json::from_value(unchecked_json)
-        .expect("generic decoding materializes unchecked policy fields");
-    let mut malformed = payload;
-    malformed.publisher = AccountId::new_multisig(unchecked_policy);
-    let malformed = MusubiPublicationRuntimeAuthorizationV1 {
-        approvals: vec![MusubiPublicationRuntimeAuthorizationApprovalV1 {
-            public_key: key_pairs[0].public_key().clone(),
-            signature: SignatureOf::try_new(key_pairs[0].private_key(), &malformed)
-                .expect("malformed-policy fixture signature"),
-        }],
-        payload: malformed,
-    };
-    let error = malformed
-        .verify(operation, operation_id, digest, 1_001)
-        .expect_err("a structurally invalid decoded controller must fail closed");
-    assert_eq!(
-        error.code(),
-        "MUSUBI_RUNTIME_AUTHORIZATION_CONTROLLER_UNSUPPORTED"
+    assert!(
+        norito::json::from_value::<MultisigPolicy>(unchecked_json).is_err(),
+        "invalid controller policy must fail at the canonical decode boundary"
     );
 }
 #[test]
@@ -1426,6 +1411,53 @@ fn private_service_returns_one_broker_receipt_and_reuses_exact_completed_operati
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 2);
 }
 #[test]
+fn private_service_cached_seed_receipt_requires_retained_seed_custody() {
+    let mut fixture = private_service_fixture(false);
+    let metadata = fixture.metadata.clone();
+    let car = fixture.car.clone();
+    let first_authorization =
+        authorization_header(&fixture.runtime, &fixture.request, &metadata, 1_000);
+    let first = seed_http_response(&mut fixture, &first_authorization, &metadata, &car, 1_001);
+    assert_eq!(first.status, 200);
+    assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
+
+    let retained_calls = Arc::clone(&fixture.calls);
+    fixture.service.seed_ingress = Box::new(RecordingSeedIngress {
+        provider: fixture.request.binding.seed_provider,
+        calls: Arc::new(Mutex::new(0)),
+        fail_first: false,
+        clock_after_stage: None,
+    });
+    let retry_authorization =
+        authorization_header(&fixture.runtime, &fixture.request, &metadata, 1_002);
+    let lost = seed_http_response(&mut fixture, &retry_authorization, &metadata, &car, 1_003);
+    assert_eq!(lost.status, 422);
+    assert_eq!(
+        decode_service_error(&lost).code,
+        MusubiPublicationServiceErrorCodeV1::SeedIngressUnavailable,
+    );
+    assert_eq!(*retained_calls.lock().expect("seed calls"), 1);
+
+    fixture.service.seed_ingress = Box::new(RecordingSeedIngress {
+        provider: fixture.request.binding.seed_provider,
+        calls: retained_calls,
+        fail_first: false,
+        clock_after_stage: None,
+    });
+    let restored_authorization =
+        authorization_header(&fixture.runtime, &fixture.request, &metadata, 1_004);
+    let restored = seed_http_response(
+        &mut fixture,
+        &restored_authorization,
+        &metadata,
+        &car,
+        1_005,
+    );
+    assert_eq!(restored.status, 200);
+    assert_eq!(restored.body, first.body);
+    assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
+}
+#[test]
 fn private_service_rejects_consumed_authorization_but_accepts_fresh_retry() {
     let mut fixture = private_service_fixture(true);
     let metadata = fixture.metadata.clone();
@@ -1920,6 +1952,93 @@ fn private_service_accepts_exact_storage_and_provider_readback_evidence() {
         norito::decode_canonical_with_limits(&readback.body, RESPONSE_DECODE_LIMITS)
             .expect("readback response");
     assert_eq!(readback_response, fixture.readback_response);
+}
+#[test]
+fn cached_storage_response_rechecks_finalized_registration_without_replaying_effects() {
+    use std::sync::atomic::AtomicUsize;
+
+    struct ClosedRegistration(Arc<AtomicUsize>, MusubiPublicationServiceBackendErrorV1);
+    impl MusubiStorageCoordinationBackendV1 for ClosedRegistration {
+        fn verify_current_registration(
+            &self,
+            _request: &MusubiStorageCoordinationRequestV1,
+        ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(self.1)
+        }
+
+        fn coordinate_storage(
+            &mut self,
+            _request: &MusubiStorageCoordinationRequestV1,
+        ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
+        {
+            panic!("cached replay must not repeat storage effects");
+        }
+    }
+
+    let mut fixture = control_service_fixture(false, false);
+    let request = fixture.storage_request.clone();
+    let first = control_storage_response(&mut fixture, &request, 2_000);
+    assert_eq!(first.status, 200);
+
+    let checks = Arc::new(AtomicUsize::new(0));
+    fixture.service.storage = Box::new(ClosedRegistration(
+        Arc::clone(&checks),
+        MusubiPublicationServiceBackendErrorV1::Retryable,
+    ));
+    let lagging = control_storage_response(&mut fixture, &request, 2_002);
+    assert_eq!(lagging.status, 503);
+    assert_eq!(
+        decode_service_error(&lagging).code,
+        MusubiPublicationServiceErrorCodeV1::StorageCoordinationUnavailable,
+    );
+    assert!(decode_service_error(&lagging).retryable);
+    assert_eq!(checks.load(Ordering::SeqCst), 1);
+
+    fixture.service.storage = Box::new(ClosedRegistration(
+        Arc::clone(&checks),
+        MusubiPublicationServiceBackendErrorV1::Permanent,
+    ));
+    let revoked = control_storage_response(&mut fixture, &request, 2_004);
+    assert_eq!(revoked.status, 422);
+    assert_eq!(
+        decode_service_error(&revoked).code,
+        MusubiPublicationServiceErrorCodeV1::StorageCoordinationUnavailable,
+    );
+    assert!(!decode_service_error(&revoked).retryable);
+    assert_eq!(checks.load(Ordering::SeqCst), 2);
+
+    fixture.service.storage = Box::new(FixedStorage {
+        response: fixture.storage_response.clone(),
+        substitute: false,
+    });
+    let restored = control_storage_response(&mut fixture, &request, 2_006);
+    assert_eq!(restored.status, 200);
+    assert_eq!(restored.body, first.body);
+}
+
+#[test]
+fn cached_provider_readback_rechecks_current_target_before_replaying_response() {
+    let mut fixture = control_service_fixture(false, false);
+    let request = fixture.readback_request.clone();
+    let first = control_readback_response(&mut fixture, &request, 3_000);
+    assert_eq!(first.status, 200);
+
+    fixture.service.readback = Box::new(UnusedReadback);
+    let revoked = control_readback_response(&mut fixture, &request, 3_002);
+    assert_eq!(revoked.status, 422);
+    assert_eq!(
+        decode_service_error(&revoked).code,
+        MusubiPublicationServiceErrorCodeV1::ProviderReadbackUnavailable,
+    );
+
+    fixture.service.readback = Box::new(FixedReadback {
+        response: fixture.readback_response.clone(),
+        substitute: false,
+    });
+    let restored = control_readback_response(&mut fixture, &request, 3_004);
+    assert_eq!(restored.status, 200);
+    assert_eq!(restored.body, first.body);
 }
 #[cfg(unix)]
 #[test]

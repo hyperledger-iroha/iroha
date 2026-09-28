@@ -18689,6 +18689,28 @@ impl V2LaneWorkAdapter {
     ) -> Result<MergeCandidateValidation, MergeCandidateValidationError> {
         match validation {
             Ok(()) => Ok(MergeCandidateValidation::Ready),
+            Err(crate::state::MergeLedgerCommitError::ExecutionDeferred(reason)) => {
+                self.validated_merge_execution_candidate = None;
+                let Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+                    reason.allocation_refusal()
+                else {
+                    return Err(MergeCandidateValidationError::Frontier(reason.to_string()));
+                };
+                let wake = self
+                    .lane_drain_queue
+                    .as_ref()
+                    .ok_or_else(|| {
+                        MergeCandidateValidationError::Frontier(
+                            "execution admission requires the installed runner Queue".to_owned(),
+                        )
+                    })?
+                    .sumeragi_waker();
+                self.merge_history_wait = Some((
+                    active_view,
+                    super::v2_body_store::HistoryAdmissionWait::new(release.clone(), &wake),
+                ));
+                Ok(MergeCandidateValidation::Deferred)
+            }
             Err(
                 error @ (crate::state::MergeLedgerCommitError::StateStorageAdmission(_)
                 | crate::state::MergeLedgerCommitError::BlockHashAdmission(_)
@@ -21340,9 +21362,7 @@ pub(super) mod tests {
     use super::*;
     use crate::{
         block::{CommittedBlock, ValidBlock},
-        governance::manifest::{
-            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
-        },
+        governance::manifest::ManifestValidatorBinding,
         merge_sidecar::CertifiedMergeSidecarChunkV1,
         query::store::LiveQueryStore,
         state::World,
@@ -21386,7 +21406,7 @@ pub(super) mod tests {
         isi::{InstructionBox, Log},
         nexus::{
             DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneFastpqProofMaterial,
-            LaneStorageProfile, LaneVisibility,
+            LaneVisibility,
         },
         transaction::{TransactionBuilder, TransactionEntrypoint, signed::TransactionResultInner},
         trigger::DataTriggerSequence,
@@ -21608,6 +21628,8 @@ pub(super) mod tests {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -21627,6 +21649,9 @@ pub(super) mod tests {
         network_id: iroha_data_model::NetworkId,
     ) -> State {
         let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             world,
             kura,
             LiveQueryStore::start_test(),
@@ -22040,6 +22065,9 @@ pub(super) mod tests {
             block.commit();
         }
         let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             world,
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
@@ -22113,41 +22141,11 @@ pub(super) mod tests {
                 torii_url: None,
             })
             .collect();
-        let mut statuses = BTreeMap::from([(
-            LaneId::SINGLE,
-            LaneManifestStatus {
-                lane: LaneId::SINGLE,
-                alias: "default".to_owned(),
-                dataspace: DataSpaceId::UNIVERSAL,
-                visibility: LaneVisibility::Public,
-                storage: LaneStorageProfile::FullReplica,
-                governance: LaneConfig::default().governance,
-                manifest_path: Some(std::path::PathBuf::from(
-                    "/tmp/v2-default-lane-manifest.json",
-                )),
-                governance_rules: Some(GovernanceRules {
-                    validators,
-                    validator_bindings,
-                    ..GovernanceRules::default()
-                }),
-                privacy_commitments: Vec::new(),
-            },
-        )]);
+        let mut bindings_by_lane = BTreeMap::from([(LaneId::SINGLE, validator_bindings)]);
         if let Some(lane) = initial_lane {
-            let mut status = statuses
-                .get(&LaneId::SINGLE)
-                .expect("default manifest")
-                .clone();
-            status.lane = lane.id;
-            status.alias = lane.alias;
-            status.dataspace = lane.dataspace_id;
-            status.governance = lane.governance;
-            status.governance_rules = Some(GovernanceRules {
-                validators: lane_keys
-                    .iter()
-                    .map(|key| AccountId::new(key.public_key().clone()))
-                    .collect(),
-                validator_bindings: lane_keys
+            bindings_by_lane.insert(
+                lane.id,
+                lane_keys
                     .iter()
                     .map(|key| ManifestValidatorBinding {
                         validator: AccountId::new(key.public_key().clone()),
@@ -22155,14 +22153,16 @@ pub(super) mod tests {
                         torii_url: None,
                     })
                     .collect(),
-                ..GovernanceRules::default()
-            });
-            status.manifest_path = Some(std::path::PathBuf::from(
-                "/tmp/v2-independent-lane-manifest.json",
-            ));
-            statuses.insert(lane.id, status);
+            );
         }
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let nexus = state.nexus_snapshot();
+        state.install_lane_manifests_for_testing(&Arc::new(
+            crate::governance::manifest::test_support::validator_registry(
+                &nexus.lane_catalog,
+                &nexus.governance,
+                bindings_by_lane,
+            ),
+        ));
         // NPoS stake selects the epoch committee; consensus remains one vote
         // per finalized committee member, just like permissioned mode.
         let powers = [1, 1, 1, 1];
@@ -22500,29 +22500,17 @@ pub(super) mod tests {
         world_block.commit();
         let_row! { validators = keys .iter() .map(|key| AccountId::new(key.public_key().clone())) .collect::<Vec<_>>() };
         let_row! { validator_bindings = validators .iter() .zip(keys) .map(|(validator, key)| ManifestValidatorBinding { validator: validator.clone(), peer_id: PeerId::new(key.public_key().clone()), torii_url: None, }) .collect::<Vec<_>>() };
-        let_row! { default_status = LaneManifestStatus { lane: LaneId::SINGLE, alias: "default".to_owned(), dataspace: DataSpaceId::UNIVERSAL, visibility: LaneVisibility::Public, storage: LaneStorageProfile::FullReplica, governance: LaneConfig::default().governance, manifest_path: Some(std::path::PathBuf::from("/tmp/v2-default-lane-manifest.json")), governance_rules: Some(GovernanceRules { validators: validators.clone(), validator_bindings: validator_bindings.clone(), ..GovernanceRules::default() }), privacy_commitments: Vec::new(), } };
-        let status = LaneManifestStatus {
-            lane: lane_id,
-            alias: "independent-lane".to_owned(),
-            dataspace: dataspace_id,
-            visibility: LaneVisibility::Public,
-            storage: LaneStorageProfile::FullReplica,
-            governance: LaneConfig::default().governance,
-            manifest_path: Some(std::path::PathBuf::from(
-                "/tmp/v2-independent-lane-manifest.json",
-            )),
-            governance_rules: Some(GovernanceRules {
-                validators,
-                validator_bindings,
-                ..GovernanceRules::default()
-            }),
-            privacy_commitments: Vec::new(),
-        };
-        adapter
-            .state
-            .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
-                BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
-            )));
+        let nexus = adapter.state.nexus_snapshot();
+        adapter.state.install_lane_manifests_for_testing(&Arc::new(
+            crate::governance::manifest::test_support::validator_registry(
+                &nexus.lane_catalog,
+                &nexus.governance,
+                BTreeMap::from([
+                    (LaneId::SINGLE, validator_bindings.clone()),
+                    (lane_id, validator_bindings),
+                ]),
+            ),
+        ));
         adapter.context.nexus_amx_context_hash =
             super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
                 .expect("valid committed catalog");
@@ -22820,6 +22808,66 @@ pub(super) mod tests {
             ),
             Err(MergeCandidateValidationError::Frontier(_))
         ));
+    }
+    #[test]
+    fn merge_execution_allocator_refusal_is_local_frontier_recovery() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        for reason in [
+            ivm::error::ExecutionDeferral::AllocationUnavailable,
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+        ] {
+            assert!(matches!(
+                adapter.classify_merge_state_validation(
+                    3,
+                    Err(crate::state::MergeLedgerCommitError::ExecutionDeferred(
+                        reason.into()
+                    )),
+                ),
+                Err(MergeCandidateValidationError::Frontier(_)),
+            ));
+            assert!(adapter.validated_merge_execution_candidate.is_none());
+            assert!(adapter.merge_history_wait.is_none());
+        }
+    }
+    #[test]
+    fn merge_execution_allocator_refusal_waits_for_original_pool_release() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &iroha_primitives::time::TimeSource::new_system(),
+        ));
+        adapter
+            .install_lane_drain_queue(Arc::clone(&queue))
+            .unwrap();
+        let budget = mv::allocation::AllocationBudget::new(8);
+        let occupied = budget.try_reserve_bytes(8).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        assert_eq!(
+            adapter
+                .classify_merge_state_validation(
+                    3,
+                    Err(crate::state::MergeLedgerCommitError::ExecutionDeferred(
+                        refusal.into()
+                    )),
+                )
+                .unwrap(),
+            MergeCandidateValidation::Deferred,
+        );
+        assert!(adapter.validated_merge_execution_candidate.is_none());
+        let (view, wait) = adapter.merge_history_wait.as_mut().unwrap();
+        assert_eq!(*view, 3);
+        assert!(!wait.is_ready(&queue.sumeragi_waker()));
+        // A different allocation pool cannot satisfy this dependency.
+        drop(
+            mv::allocation::AllocationBudget::new(8)
+                .try_reserve_bytes(8)
+                .unwrap(),
+        );
+        assert!(!wait.is_ready(&queue.sumeragi_waker()));
+        drop(occupied);
+        assert!(wait.is_ready(&queue.sumeragi_waker()));
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert!(budget.try_reserve_bytes(1).is_ok());
     }
     #[test]
     fn lane_drain_blocks_until_one_stable_live_queue_is_installed() {

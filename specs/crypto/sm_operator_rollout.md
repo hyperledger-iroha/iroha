@@ -60,7 +60,7 @@ legal/export guidance in `specs/crypto/sm_compliance_brief.md`.
 default_hash = "sm3-256"
 allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mode
 sm2_distid_default = "1234567812345678"
-# enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
+# enable_sm_openssl_preview = true  # optional OpenSSL SM3/SM4; SM2 verification is unaffected
 ```
 3. Restart the node and confirm `crypto.sm_helpers_available` and (if you enabled the preview backend) `crypto.sm_openssl_preview_enabled` surface as expected in:
    - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`).

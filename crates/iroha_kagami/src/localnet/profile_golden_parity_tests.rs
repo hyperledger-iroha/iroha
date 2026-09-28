@@ -654,7 +654,6 @@ fn sora_nexus_v1_genesis_recipe_matches_kagami_taira_genesis() {
         "epoch_length_blocks"
     );
     assert_eq!(npos.max_validators(), geometry.npos_max_validators);
-    assert_eq!(npos.seat_band_pct(), recipe.npos_seat_band_pct);
     assert_eq!(
         npos.min_self_bond(),
         &Quantity::from(recipe.npos_min_self_bond)

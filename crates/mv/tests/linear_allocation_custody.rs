@@ -234,6 +234,10 @@ impl LinCowCellCapable<Reader, Writer> for Data {
 type CellOwner = LinCowCell<Data, Reader, Writer, Charge>;
 
 fn initial_charges(budget: &AllocationBudget, layouts: InitialLayouts) -> InitialCharges<Charge> {
+    // This test observes the two exact prepaid root/reader allocations. Build
+    // independent notification scaffolding before arming those slots: its
+    // layout can equal the u64 reader shell, but it is a different live owner.
+    let notification = concread::release::ReleaseNotification::default();
     let mut prepaid = budget
         .try_reserve_layouts([layouts.root, layouts.reader])
         .unwrap();
@@ -250,7 +254,7 @@ fn initial_charges(budget: &AllocationBudget, layouts: InitialLayouts) -> Initia
         ]);
     });
     InitialCharges {
-        notification: concread::release::ReleaseNotification::default(),
+        notification,
         root: Charge {
             id: ROOT_ID,
             credit: prepaid.try_split(layouts.root).unwrap(),
@@ -1131,6 +1135,7 @@ fn root_constructor_and_final_drop_destroy_data_before_refund_callbacks() {
                 },
                 charges,
             );
+            assert!(EXPECTED.with(|pending| pending.get().iter().all(Option::is_none)));
             assert_eq!(*owner.read(), 17);
             without_allocations(|| drop(owner));
         }));
@@ -1159,6 +1164,7 @@ fn root_payload_unwind_frees_original_block_without_refunding_unfinished_payload
         },
         initial_charges(&budget, layouts),
     );
+    assert!(EXPECTED.with(|pending| pending.get().iter().all(Option::is_none)));
     assert!(catch_unwind(AssertUnwindSafe(|| drop(owner))).is_err());
     assert!(RECORDS[ROOT_ID].freed.load(SeqCst));
     assert_eq!(RECORDS[ROOT_ID].payload_drops.load(SeqCst), 1);

@@ -16,6 +16,10 @@ pub struct Kura {
         default = "defaults::kura::MAX_DISK_USAGE_BYTES"
     )]
     pub max_disk_usage_bytes: Bytes,
+    /// Complete native context projection bytes per committed carrier; zero is invalid.
+    /// This mandatory archive has no environment override or disable switch.
+    #[config(default = "defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES")]
+    pub native_context_archive_max_bytes: NonZeroUsize,
     /// Number of most-recent blocks kept in memory for fast access.
     #[config(
         env = "KURA_BLOCKS_IN_MEMORY",
@@ -92,6 +96,7 @@ impl Kura {
             init_mode,
             store_dir,
             max_disk_usage_bytes,
+            native_context_archive_max_bytes,
             blocks_in_memory,
             block_hash_history_bytes,
             transaction_history_bytes,
@@ -145,6 +150,7 @@ impl Kura {
             init_mode,
             store_dir,
             max_disk_usage_bytes,
+            native_context_archive_max_bytes,
             blocks_in_memory,
             block_hash_history_bytes,
             transaction_history_bytes,

@@ -13,6 +13,10 @@
 use crate::{
     byte_merkle_tree::ByteMerkleTree,
     error::{Perm, VMError},
+    execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
+    execution_memory_recorder::{
+        DiagnosticInitialMemoryState, DiagnosticMemoryAccessKind, DiagnosticMemoryAccessRecorder,
+    },
     merkle_utils::compute_memory_leaf_digest,
     stack_policy::IvmStackPolicy,
 };
@@ -20,33 +24,29 @@ use iroha_crypto::{
     CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
 };
 use likely_stable::{likely, unlikely};
+use mv::allocation::AllocationBudget;
 use parking_lot::Mutex;
-use std::{collections::HashSet, convert::TryInto, num::NonZeroU64, sync::Arc, time::Instant};
+use std::{
+    convert::TryInto,
+    num::NonZeroU64,
+    ops::{Deref, DerefMut},
+    time::Instant,
+};
+pub(crate) mod dirty_chunks;
+use dirty_chunks::DirtyChunks;
+mod write_log;
+use write_log::WriteLog;
+pub use write_log::{WriteLogEntry, WriteLogSnapshot};
+
 #[cfg(test)]
 std::thread_local! {
-    static MEMORY_CLONE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-/// Reset the current test thread's full-memory clone counter.
-#[cfg(test)]
-pub(crate) fn reset_memory_clone_count() {
-    MEMORY_CLONE_COUNT.set(0);
-}
-/// Return the number of full-memory clones on the current test thread.
-#[cfg(test)]
-pub(crate) fn memory_clone_count() -> u64 {
-    MEMORY_CLONE_COUNT.get()
+    static REFUSE_NEXT_READ_TRACKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 /// Memory read range recorded for conflict detection in parallel execution.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccessRange {
     pub addr: u64,
     pub len: u64,
-}
-/// Memory write entry capturing the exact bytes written.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WriteLogEntry {
-    pub addr: u64,
-    pub bytes: Vec<u8>,
 }
 /// Memory manager for the VM, with fixed regions for code, heap, and stack.
 ///
@@ -56,7 +56,8 @@ pub struct WriteLogEntry {
 /// paths to be produced after a commit. Zero‑knowledge mode can request inclusion paths for any
 /// address.
 pub struct Memory {
-    data: Vec<u8>,
+    /// Trusted stack/table ownership and actual byte initialization for compiled calls.
+    pub(crate) call_frames: crate::call_frame::CallFrameMemory,
     stack_limit: u64,
     heap_alloc: u64,
     heap_limit: u64,
@@ -72,24 +73,76 @@ pub struct Memory {
     tree: ByteMerkleTree,
     /// Flag indicating that memory contents have changed since the last commit.
     dirty: bool,
-    /// Set of Merkle leaf indices modified since the last commit.
-    dirty_chunks: HashSet<usize>,
+    /// Prepaid bitmap of Merkle leaves modified since the last commit.
+    dirty_chunks: DirtyChunks,
     /// Leaf indices modified since the last runtime-template reset.
     ///
-    /// Unlike `dirty_chunks`, this set is not drained by Merkle commits. It
+    /// Unlike `dirty_chunks`, this bitmap is not cleared by Merkle commits. It
     /// lets warm VM reuse restore only pages the guest actually changed.
-    modified_chunks: HashSet<usize>,
+    modified_chunks: DirtyChunks,
     /// Number of times a program loader established a new runtime baseline.
     template_generation: u64,
     /// Opaque identity of the runtime baseline that owns this memory image.
     ///
-    /// Ordinary independent clones receive a fresh identity. Runtime-template
-    /// snapshots explicitly preserve it.
-    baseline_lineage: Arc<()>,
+    /// Runtime-template snapshots preserve this identity.
+    baseline_lineage: crate::cache_memory::SharedValue<()>,
     /// Addresses read during execution when access tracking is enabled.
-    read_log: Mutex<Vec<AccessRange>>,
+    read_log: Mutex<crate::cache_memory::OwnedVec<AccessRange>>,
     /// Log of writes performed during execution (byte-accurate).
-    write_log: Mutex<Vec<WriteLogEntry>>,
+    write_log: Mutex<WriteLog>,
+    /// Attached only for one explicit local diagnostic run; never cloned into a template.
+    diagnostic_access_recorder: Option<DiagnosticMemoryAccessRecorder>,
+    // Release aggregate charges after every owned allocation above is destroyed.
+    data: MemoryImage,
+}
+
+/// One fixed guest image with its original allocation owner attached.
+/// Only Core's cold nested checkout uses the finite active pool so far.
+enum MemoryImage {
+    Local(crate::cache_memory::OwnedAllocation<u8>),
+    Funded(ExecutionBuffer<u8>),
+}
+
+impl From<Vec<u8>> for MemoryImage {
+    fn from(values: Vec<u8>) -> Self {
+        Self::Local(values.into())
+    }
+}
+
+impl MemoryImage {
+    fn try_retain(&self) -> bool {
+        match self {
+            Self::Local(image) => image.try_retain(),
+            Self::Funded(image) => image.try_retain(),
+        }
+    }
+
+    fn mark_unmeasured(&mut self) {
+        match self {
+            Self::Local(image) => image.mark_unmeasured(),
+            Self::Funded(image) => image.mark_unmeasured(),
+        }
+    }
+}
+
+impl Deref for MemoryImage {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Local(image) => image,
+            Self::Funded(image) => image.as_slice(),
+        }
+    }
+}
+
+impl DerefMut for MemoryImage {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        match self {
+            Self::Local(image) => image,
+            Self::Funded(image) => image.as_mut_slice(),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MemoryGeometry {
@@ -105,6 +158,113 @@ pub(crate) struct MemoryTemplateMismatch {
     pub(crate) template: MemoryGeometry,
 }
 impl Memory {
+    pub(crate) fn capture_diagnostic_initial_image(
+        &self,
+        recorder: &DiagnosticMemoryAccessRecorder,
+    ) -> Result<(), VMError> {
+        recorder.capture_initial_image(
+            DiagnosticInitialMemoryState {
+                image_bytes: self.data.len(),
+                code_length: self.code_length,
+                heap_allocated: self.heap_alloc,
+                heap_limit: self.heap_limit,
+                heap_max_limit: self.heap_max_limit,
+                output_cursor: self.output_cursor,
+                stack_limit: self.stack_limit,
+            },
+            &self.data,
+        )
+    }
+
+    pub(crate) fn install_diagnostic_access_recorder(
+        &mut self,
+        recorder: DiagnosticMemoryAccessRecorder,
+    ) -> Result<(), VMError> {
+        if self.diagnostic_access_recorder.is_some() {
+            return Err(VMError::HostUnavailable);
+        }
+        self.diagnostic_access_recorder = Some(recorder);
+        Ok(())
+    }
+
+    pub(crate) fn clear_diagnostic_access_recorder(&mut self) {
+        self.diagnostic_access_recorder = None;
+    }
+
+    pub(crate) fn diagnostic_step_ordinal(&self, ordinal: u64) {
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            recorder.set_step_ordinal(ordinal);
+        }
+    }
+
+    pub(crate) fn diagnostic_classify_last_access(
+        &self,
+        addr: u64,
+        len: u64,
+        kind: DiagnosticMemoryAccessKind,
+        private: bool,
+    ) {
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            recorder.classify_last_access(addr, len, kind, private);
+        }
+    }
+
+    /// Fund a complete loader's CODE/HEAP/OUTPUT byte rows before its first
+    /// memory mutation. Ordinary execution has no recorder and no new limit.
+    pub(crate) fn preflight_diagnostic_program_load(&self, code_len: usize) -> Result<(), VMError> {
+        let Some(recorder) = &self.diagnostic_access_recorder else {
+            return Ok(());
+        };
+        let heap_rows = if self.heap_contains_data || self.heap_alloc != 0 {
+            Memory::HEAP_MAX_SIZE as usize
+        } else {
+            0
+        };
+        let output_start = Memory::OUTPUT_START as usize;
+        let output_end = output_start + Memory::OUTPUT_SIZE as usize;
+        let output_rows = if self.output_cursor != 0
+            || self.data[output_start..output_end]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            Memory::OUTPUT_SIZE as usize
+        } else {
+            0
+        };
+        let demand = heap_rows
+            .checked_add(code_len.max(self.code_length as usize))
+            .and_then(|rows| rows.checked_add(output_rows))
+            .ok_or(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))?;
+        recorder.ensure_remaining(demand)
+    }
+
+    // Fixed storage and both access logs carry their own lifetime charges.
+    // TODO: Complete original active-pool plans for read-log growth, hardware
+    // and remaining snapshot scratch before claiming complete execution funding.
+    pub(crate) fn prepare_for_cache(&mut self) -> bool {
+        self.call_frames.compact_for_cache()
+    }
+    pub(crate) fn try_retain(&self) -> bool {
+        self.data.try_retain()
+            && self.read_log.lock().try_retain()
+            && self.write_log.lock().try_retain()
+            && self.tree.try_retain()
+            && self.dirty_chunks.try_retain()
+            && self.modified_chunks.try_retain()
+            && self.call_frames.try_retain()
+            && self.baseline_lineage.try_retain()
+    }
+    pub(crate) fn activate_cache_accounting(&mut self) {
+        self.data.mark_unmeasured();
+        self.read_log.lock().make_active();
+        self.write_log.lock().make_active();
+        self.tree.make_active();
+        self.dirty_chunks.make_active();
+        self.modified_chunks.make_active();
+        self.call_frames.make_active();
+    }
     /// Alignment enforced for the ABI V1 guest stack top.
     pub const STACK_ALIGNMENT: u64 = IvmStackPolicy::V1.stack_alignment_bytes();
     /// Define static addresses for memory regions
@@ -139,15 +299,15 @@ impl Memory {
     /// Update only the modified Merkle leaves and recompute the root.
     fn recompute_dirty(&mut self) {
         let started_at = Instant::now();
-        let indices: Vec<_> = self.dirty_chunks.drain().collect();
         // Heuristic: if more than half the leaves are dirty, prefer a full
         // accelerated leaf recompute when available.
         let total_leaves = self.tree.leaf_count();
-        let large_update = indices.len() * 2 >= total_leaves;
-        let dirty_count = indices.len() as f64;
+        let large_update = self.dirty_chunks.len() >= total_leaves.div_ceil(2);
+        let dirty_count = self.dirty_chunks.len() as f64;
         let mut commit_path = "incremental";
         if large_update && self.tree.recompute_all_leaves_accel(&self.data) {
             self.root = self.tree.root_hash();
+            self.dirty_chunks.clear();
             self.dirty = false;
             commit_path = "accel";
             let metrics = iroha_telemetry::metrics::global_or_default();
@@ -162,17 +322,14 @@ impl Memory {
             return;
         }
         if large_update {
-            self.tree =
-                ByteMerkleTree::from_bytes_parallel_with_leaf_count(&self.data, 32, total_leaves);
+            self.tree.recompute_all_leaves_parallel(&self.data);
             commit_path = "full_rebuild";
-            iroha_telemetry::metrics::global_or_default()
-                .ivm_merkle_rebuild_total
-                .inc();
         } else {
             self.tree
-                .update_leaves_from_bytes_parallel(&self.data, &indices);
+                .update_dirty_leaves_from_bytes(&self.data, &self.dirty_chunks);
         }
         self.root = self.tree.root_hash();
+        self.dirty_chunks.clear();
         self.dirty = false;
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics
@@ -349,8 +506,49 @@ impl Memory {
     /// # Errors
     /// Returns [`VMError::MemoryOutOfBounds`] when `stack_limit` is outside the
     /// ABI V1 range, is not exactly aligned, or the resulting memory geometry
-    /// is not representable on the host.
+    /// is not representable on the host. Local allocation refusal defers execution.
     pub fn new_with_stack_limit(stack_limit: u64) -> Result<Self, VMError> {
+        let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
+        let data = crate::cache_memory::OwnedAllocation::try_zeroed(total_size).map_err(|_| {
+            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+        })?;
+        Self::new_with_image(
+            stack_limit,
+            total_size,
+            MemoryImage::Local(data),
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn new_with_stack_limit_funded(
+        stack_limit: u64,
+        budget: &AllocationBudget,
+    ) -> Result<Self, VMError> {
+        let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
+        let unavailable =
+            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let leaf_count = total_size.div_ceil(32).max(1);
+        let mut plan = ExecutionMemoryPlan::array::<u8>(total_size).map_err(|_| unavailable())?;
+        plan.include_child(ByteMerkleTree::memory_plan(leaf_count)?)
+            .map_err(|_| unavailable())?;
+        for _ in 0..2 {
+            plan.include_child(DirtyChunks::memory_plan(leaf_count)?)
+                .map_err(VMError::AllocationDeferred)?;
+        }
+        let mut lease =
+            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+        let image = ExecutionBuffer::zeroed(total_size, &mut lease).map_err(|_| unavailable())?;
+        Self::new_with_image(
+            stack_limit,
+            total_size,
+            MemoryImage::Funded(image),
+            Some(&mut lease),
+            Some(budget),
+        )
+    }
+
+    pub(crate) fn image_bytes_for_stack_limit(stack_limit: u64) -> Result<usize, VMError> {
         if !(Self::MIN_STACK_SIZE..=Self::STACK_SIZE).contains(&stack_limit)
             || !stack_limit.is_multiple_of(Self::STACK_ALIGNMENT)
         {
@@ -360,9 +558,29 @@ impl Memory {
             .checked_add(stack_limit)
             .and_then(|size| size.checked_add(Memory::STACK_SLOP))
             .ok_or(VMError::MemoryOutOfBounds)?;
-        let total_size = usize::try_from(total_size).map_err(|_| VMError::MemoryOutOfBounds)?;
+        usize::try_from(total_size).map_err(|_| VMError::MemoryOutOfBounds)
+    }
+
+    fn new_with_image(
+        stack_limit: u64,
+        total_size: usize,
+        data: MemoryImage,
+        mut lease: Option<&mut ExecutionMemoryLease>,
+        active_budget: Option<&AllocationBudget>,
+    ) -> Result<Self, VMError> {
+        let leaf_count = total_size.div_ceil(32).max(1);
+        let tree = match lease.as_deref_mut() {
+            Some(lease) => ByteMerkleTree::new_funded(leaf_count, 32, lease)?,
+            None => ByteMerkleTree::new(leaf_count, 32)?,
+        };
+        let dirty_chunks = DirtyChunks::new(leaf_count, lease.as_deref_mut())?;
+        let modified_chunks = DirtyChunks::new(leaf_count, lease)?;
         let mut mem = Memory {
-            data: vec![0u8; total_size],
+            call_frames: active_budget.map_or_else(
+                crate::call_frame::CallFrameMemory::default,
+                crate::call_frame::CallFrameMemory::with_memory_budget,
+            ),
+            data,
             stack_limit,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
@@ -371,17 +589,21 @@ impl Memory {
             code_length: 0,
             output_cursor: 0,
             root: HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32])),
-            tree: ByteMerkleTree::new(total_size.div_ceil(32).max(1), 32)?,
+            tree,
             dirty: false,
-            dirty_chunks: HashSet::new(),
-            modified_chunks: HashSet::new(),
+            dirty_chunks,
+            modified_chunks,
             template_generation: 0,
-            baseline_lineage: Arc::new(()),
-            read_log: Mutex::new(Vec::new()),
-            write_log: Mutex::new(Vec::new()),
+            baseline_lineage: crate::cache_memory::SharedValue::new((), Some(0)),
+            read_log: Mutex::new(crate::cache_memory::OwnedVec::default()),
+            write_log: Mutex::new(
+                active_budget.map_or_else(WriteLog::default, WriteLog::with_memory_budget),
+            ),
+            diagnostic_access_recorder: None,
         };
         // initialize root from zeroed memory
         mem.root = mem.tree.root_hash();
+        mem.activate_cache_accounting();
         Ok(mem)
     }
     /// Preload data into the input region. Used by tests/host before execution.
@@ -396,6 +618,14 @@ impl Memory {
         }
         let start = (Memory::INPUT_START + offset) as usize;
         let end = start + bytes.len();
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            recorder.record_write(
+                Memory::INPUT_START + offset,
+                &self.data[start..end],
+                bytes,
+                DiagnosticMemoryAccessKind::HostInputWrite,
+            )?;
+        }
         self.data[start..end].copy_from_slice(bytes);
         if crate::dev_env::decode_trace_enabled() {
             let h = &self.data[start..(start + bytes.len().min(7))];
@@ -507,16 +737,24 @@ impl Memory {
         Ok(())
     }
     /// Clear all physical heap bytes before installing a different program.
-    pub(crate) fn clear_program_heap(&mut self) {
+    pub(crate) fn clear_program_heap(&mut self) -> Result<(), VMError> {
         if !self.heap_contains_data && self.heap_alloc == 0 {
-            return;
+            return Ok(());
         }
         let start = Memory::HEAP_START as usize;
         let end = start + Memory::HEAP_MAX_SIZE as usize;
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            recorder.record_zero_fill(
+                Memory::HEAP_START,
+                &self.data[start..end],
+                DiagnosticMemoryAccessKind::HeapReset,
+            )?;
+        }
         self.data[start..end].fill(0);
         self.heap_alloc = 0;
         self.update_merkle(start, end - start);
         self.heap_contains_data = false;
+        Ok(())
     }
     /// Update the code region length after loading a program.
     fn set_code_length(&mut self, code_size: u64) {
@@ -550,12 +788,16 @@ impl Memory {
         if old_len > code_region_end {
             return Err(VMError::MemoryOutOfBounds);
         }
+        let modified_len = len.max(old_len);
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            recorder.record_code_install(&self.data[..modified_len], code)?;
+        }
+        self.call_frames.clear();
         self.data[0..len].copy_from_slice(code);
         if len < old_len {
             self.data[len..old_len].fill(0);
         }
         self.set_code_length(len as u64);
-        let modified_len = len.max(old_len);
         if modified_len != 0 {
             self.update_merkle(0, modified_len);
         }
@@ -611,6 +853,8 @@ impl Memory {
     /// Check that an address range has the required permissions.
     #[inline]
     fn check_perm(&self, addr: u64, size: u32, required: Perm) -> Result<(), VMError> {
+        self.call_frames
+            .check_access(addr, u64::from(size), required)?;
         if let Some(perm) = self.region_perm(addr, size) {
             if likely(perm.contains(required)) {
                 Ok(())
@@ -631,12 +875,28 @@ impl Memory {
     #[inline]
     pub fn load_u8(&self, addr: u64) -> Result<u8, VMError> {
         self.check_perm(addr, 1, Perm::READ)?;
-        self.record_read_range(addr, 1);
+        self.record_read_range(addr, 1, DiagnosticMemoryAccessKind::Read)?;
         Ok(self.data[addr as usize])
     }
     /// Load a 32-bit value (little-endian) from memory.
     #[inline]
     pub fn load_u32(&self, addr: u64) -> Result<u32, VMError> {
+        self.load_u32_with_kind(addr, DiagnosticMemoryAccessKind::Read)
+    }
+
+    /// Fetch a code word through the existing checked read path.
+    ///
+    /// The read-set behavior stays identical to `load_u32`; an attached local
+    /// diagnostic bus identifies the transfer as an instruction fetch.
+    pub(crate) fn load_instruction_u32(&self, addr: u64) -> Result<u32, VMError> {
+        self.load_u32_with_kind(addr, DiagnosticMemoryAccessKind::InstructionFetch)
+    }
+
+    fn load_u32_with_kind(
+        &self,
+        addr: u64,
+        kind: DiagnosticMemoryAccessKind,
+    ) -> Result<u32, VMError> {
         if unlikely(!addr.is_multiple_of(4)) {
             return Err(VMError::MisalignedAccess { addr: addr as u32 });
         }
@@ -644,8 +904,33 @@ impl Memory {
         let bytes: [u8; 4] = self.data[addr as usize..addr as usize + 4]
             .try_into()
             .unwrap();
-        self.record_read_range(addr, 4);
+        self.record_read_range(addr, 4, kind)?;
         Ok(u32::from_le_bytes(bytes))
+    }
+
+    /// Record a prepared instruction against the loaded code image without
+    /// changing the ordinary prepared path's read set.
+    pub(crate) fn diagnostic_record_prepared_fetch(
+        &self,
+        pc: u64,
+        instruction: u32,
+    ) -> Result<(), VMError> {
+        let Some(recorder) = &self.diagnostic_access_recorder else {
+            return Ok(());
+        };
+        let end = pc.checked_add(4).ok_or(VMError::DecodeError)?;
+        if !pc.is_multiple_of(4) || end > self.code_length {
+            return Err(VMError::DecodeError);
+        }
+        let start = usize::try_from(pc).map_err(|_| VMError::DecodeError)?;
+        let bytes = self
+            .data
+            .get(start..start.checked_add(4).ok_or(VMError::DecodeError)?)
+            .ok_or(VMError::DecodeError)?;
+        if bytes != instruction.to_le_bytes() {
+            return Err(VMError::DecodeError);
+        }
+        recorder.record_read(pc, bytes, DiagnosticMemoryAccessKind::InstructionFetch)
     }
     /// Load a 64-bit value from memory.
     #[inline]
@@ -654,11 +939,27 @@ impl Memory {
             return Err(VMError::MisalignedAccess { addr: addr as u32 });
         }
         self.check_perm(addr, 8, Perm::READ)?;
-        self.record_read_range(addr, 8);
+        self.record_read_range(addr, 8, DiagnosticMemoryAccessKind::Read)?;
         let bytes: [u8; 8] = self.data[addr as usize..addr as usize + 8]
             .try_into()
             .unwrap();
         Ok(u64::from_le_bytes(bytes))
+    }
+    /// Read an initialized result slot for the interpreter's trusted return transition.
+    /// Guest reads remain forbidden while the result table is borrowed for writing.
+    pub(crate) fn active_call_result(&self, index: usize) -> Result<(u64, u64), VMError> {
+        let address = self.call_frames.active_result_word(index)?;
+        if !self
+            .region_perm(address, 8)
+            .is_some_and(|perm| perm.contains(Perm::READ))
+        {
+            return Err(VMError::MemoryOutOfBounds);
+        }
+        let bytes = self.data[address as usize..address as usize + 8]
+            .try_into()
+            .map_err(|_| VMError::MemoryOutOfBounds)?;
+        self.record_read_range(address, 8, DiagnosticMemoryAccessKind::CallResultRead)?;
+        Ok((address, u64::from_le_bytes(bytes)))
     }
     /// Load a 128-bit value from memory (little endian).
     #[inline]
@@ -670,7 +971,7 @@ impl Memory {
         let bytes: [u8; 16] = self.data[addr as usize..addr as usize + 16]
             .try_into()
             .unwrap();
-        self.record_read_range(addr, 16);
+        self.record_read_range(addr, 16, DiagnosticMemoryAccessKind::Read)?;
         Ok(u128::from_le_bytes(bytes))
     }
     /// Copy `out.len()` bytes starting at `addr` into `out`.
@@ -681,11 +982,12 @@ impl Memory {
             perm: Perm::READ,
         })?;
         let (start, end) = self.checked_region_bounds_for(addr, len, Perm::READ)?;
+        self.record_read_range(addr, len, DiagnosticMemoryAccessKind::HostRead)?;
         out.copy_from_slice(&self.data[start..end]);
-        self.record_read_range(addr, len);
         Ok(())
     }
-    fn checked_region_bounds_for(
+    /// Validate a complete host transfer range without reading or mutating guest memory.
+    pub(crate) fn checked_region_bounds_for(
         &self,
         addr: u64,
         len: u64,
@@ -726,7 +1028,7 @@ impl Memory {
     #[inline]
     pub fn load_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
         let (start, end) = self.checked_region_bounds(addr, len)?;
-        self.record_read_range(addr, len);
+        self.record_read_range(addr, len, DiagnosticMemoryAccessKind::HostRead)?;
         if crate::dev_env::debug_wsv_enabled() && len <= 64 {
             let win_start = start.saturating_sub(16);
             let win_end = (end + 16).min(self.data.len());
@@ -749,21 +1051,24 @@ impl Memory {
             perm: Perm::WRITE,
         })?;
         let (start, end) = self.checked_region_bounds_for(addr, len, Perm::WRITE)?;
-        // Enforce append-only semantics for OUTPUT region
-        self.check_output_append_only(addr, len)?;
+        let output_cursor = self.checked_output_append_cursor(addr, len)?;
+        let tracking = self.prepare_write_tracking(addr, bytes)?;
+        self.output_cursor = output_cursor;
         self.data[start..end].copy_from_slice(bytes);
         self.update_merkle(start, bytes.len());
-        self.record_write(addr, bytes);
+        self.record_write(tracking);
         Ok(())
     }
     /// Store an 8-bit value into memory.
     #[inline]
     pub fn store_u8(&mut self, addr: u64, value: u8) -> Result<(), VMError> {
         self.check_perm(addr, 1, Perm::WRITE)?;
-        self.check_output_append_only(addr, 1)?;
+        let output_cursor = self.checked_output_append_cursor(addr, 1)?;
+        let tracking = self.prepare_write_tracking(addr, &[value])?;
+        self.output_cursor = output_cursor;
         self.data[addr as usize] = value;
         self.update_merkle(addr as usize, 1);
-        self.record_write(addr, &[value]);
+        self.record_write(tracking);
         Ok(())
     }
     /// Store a 32-bit value (little-endian) into memory.
@@ -773,10 +1078,13 @@ impl Memory {
             return Err(VMError::MisalignedAccess { addr: addr as u32 });
         }
         self.check_perm(addr, 4, Perm::WRITE)?;
-        self.check_output_append_only(addr, 4)?;
-        self.data[addr as usize..addr as usize + 4].copy_from_slice(&value.to_le_bytes());
+        let output_cursor = self.checked_output_append_cursor(addr, 4)?;
+        let bytes = value.to_le_bytes();
+        let tracking = self.prepare_write_tracking(addr, &bytes)?;
+        self.output_cursor = output_cursor;
+        self.data[addr as usize..addr as usize + 4].copy_from_slice(&bytes);
         self.update_merkle(addr as usize, 4);
-        self.record_write(addr, &value.to_le_bytes());
+        self.record_write(tracking);
         Ok(())
     }
     /// Store a 64-bit value into memory.
@@ -786,9 +1094,12 @@ impl Memory {
             return Err(VMError::MisalignedAccess { addr: addr as u32 });
         }
         self.check_perm(addr, 8, Perm::WRITE)?;
-        self.check_output_append_only(addr, 8)?;
-        self.data[addr as usize..addr as usize + 8].copy_from_slice(&value.to_le_bytes());
-        self.record_write(addr, &value.to_le_bytes());
+        let output_cursor = self.checked_output_append_cursor(addr, 8)?;
+        let bytes = value.to_le_bytes();
+        let tracking = self.prepare_write_tracking(addr, &bytes)?;
+        self.output_cursor = output_cursor;
+        self.data[addr as usize..addr as usize + 8].copy_from_slice(&bytes);
+        self.record_write(tracking);
         self.update_merkle(addr as usize, 8);
         Ok(())
     }
@@ -799,10 +1110,13 @@ impl Memory {
             return Err(VMError::MisalignedAccess { addr: addr as u32 });
         }
         self.check_perm(addr, 16, Perm::WRITE)?;
-        self.check_output_append_only(addr, 16)?;
-        self.data[addr as usize..addr as usize + 16].copy_from_slice(&value.to_le_bytes());
+        let output_cursor = self.checked_output_append_cursor(addr, 16)?;
+        let bytes = value.to_le_bytes();
+        let tracking = self.prepare_write_tracking(addr, &bytes)?;
+        self.output_cursor = output_cursor;
+        self.data[addr as usize..addr as usize + 16].copy_from_slice(&bytes);
         self.update_merkle(addr as usize, 16);
-        self.record_write(addr, &value.to_le_bytes());
+        self.record_write(tracking);
         Ok(())
     }
     /// Obtain a slice of the entire output region without allocating.
@@ -825,42 +1139,60 @@ impl Memory {
         &self.data[start..start.saturating_add(used)]
     }
     /// Clear the OUTPUT region and reset the append-only cursor.
-    pub(crate) fn clear_output(&mut self) {
+    pub(crate) fn clear_output(&mut self) -> Result<(), VMError> {
         let start = Memory::OUTPUT_START as usize;
         let end = start + Memory::OUTPUT_SIZE as usize;
         if self.output_cursor == 0 && self.data[start..end].iter().all(|b| *b == 0) {
-            return;
+            return Ok(());
+        }
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            recorder.record_zero_fill(
+                Memory::OUTPUT_START,
+                &self.data[start..end],
+                DiagnosticMemoryAccessKind::OutputReset,
+            )?;
         }
         self.data[start..end].fill(0);
         self.output_cursor = 0;
         self.update_merkle(start, end - start);
+        Ok(())
     }
     /// Clear recorded access information.
     pub fn clear_tracking(&self) {
         self.read_log.lock().clear();
-        let mut write_log = self.write_log.lock();
-        for entry in write_log.iter_mut() {
-            entry.bytes.fill(0);
-        }
-        write_log.clear();
+        self.with_write_log(WriteLog::clear);
     }
     /// Snapshot the set of ranges read since the last clear.
     pub fn read_set(&self) -> Vec<AccessRange> {
-        self.read_log.lock().clone()
+        self.read_log.lock().to_vec()
     }
-    /// Snapshot of writes made since the last clear.
-    pub fn write_log(&self) -> Vec<WriteLogEntry> {
-        self.write_log.lock().clone()
+    /// Detach an immutable, independently accounted snapshot of recorded writes.
+    ///
+    /// The snapshot owns its bytes and holds no Memory lock across later stores.
+    ///
+    /// # Errors
+    /// Defers locally if snapshot row or payload storage cannot be allocated.
+    pub fn try_write_log_snapshot(&self) -> Result<WriteLogSnapshot, VMError> {
+        self.with_write_log(|log| log.try_snapshot())
+    }
+
+    // A charge refund may run a capacity-waiter callback. Keep every such
+    // callback outside the write-log lock, including failure and unwind paths.
+    fn with_write_log<R>(&self, operation: impl FnOnce(&mut WriteLog) -> R) -> R {
+        match self.allocation_budget() {
+            Some(budget) => {
+                budget.with_deferred_refund_notifications(|_| operation(&mut self.write_log.lock()))
+            }
+            None => operation(&mut self.write_log.lock()),
+        }
     }
     /// Ranges of memory that have been modified since the last commit.
     pub fn dirty_ranges(&self) -> Vec<(usize, usize)> {
         const CHUNK: usize = 32;
-        let mut indices: Vec<_> = self.dirty_chunks.iter().copied().collect();
-        indices.sort_unstable();
         let mut ranges = Vec::new();
         let mut start = None;
         let mut prev = 0;
-        for idx in indices {
+        for idx in self.dirty_chunks.iter() {
             if let Some(s) = start {
                 if idx == prev + 1 {
                     prev = idx;
@@ -884,7 +1216,7 @@ impl Memory {
             .template_generation
             .checked_add(1)
             .expect("IVM memory template generation exhausted");
-        self.baseline_lineage = Arc::new(());
+        self.baseline_lineage = crate::cache_memory::SharedValue::new((), Some(0));
         self.clear_tracking();
     }
     /// Return the current runtime-template lifecycle generation.
@@ -893,15 +1225,97 @@ impl Memory {
     }
     /// Whether this memory image descends from the same captured runtime baseline.
     pub(crate) fn shares_baseline_lineage(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.baseline_lineage, &other.baseline_lineage)
+        crate::cache_memory::SharedValue::ptr_eq(&self.baseline_lineage, &other.baseline_lineage)
     }
 
-    /// Clone a runtime-template baseline without allowing an independent image
-    /// to counterfeit that baseline later.
-    pub(crate) fn clone_for_runtime_template(&self) -> Self {
-        let mut template = self.clone();
-        template.baseline_lineage = Arc::clone(&self.baseline_lineage);
-        template
+    /// The exact State pool survives every immutable template derived from this VM.
+    pub(crate) fn allocation_budget(&self) -> Option<&AllocationBudget> {
+        self.call_frames.allocation_budget()
+    }
+
+    /// Plan the clone's requested layouts before any snapshot allocation.
+    ///
+    /// Both dirty bitmaps reserve their complete geometry, independently of
+    /// the current number of set bits. Vec copies use exact reserve, and fixed
+    /// images, leaves and bitmaps use move-only funded buffers.
+    /// The caller holds exclusive VM access until the clone is complete.
+    pub(crate) fn runtime_template_memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
+        let mut plan = ExecutionMemoryPlan::array::<u8>(self.data.len())
+            .map_err(VMError::AllocationDeferred)?;
+        plan.include_child(DirtyChunks::memory_plan(self.dirty_chunks.chunks())?)
+            .map_err(VMError::AllocationDeferred)?;
+        plan.include_child(DirtyChunks::memory_plan(self.modified_chunks.chunks())?)
+            .map_err(VMError::AllocationDeferred)?;
+        plan.include_child(
+            ExecutionMemoryPlan::array::<AccessRange>(self.read_log.lock().len())
+                .map_err(VMError::AllocationDeferred)?,
+        )
+        .map_err(VMError::AllocationDeferred)?;
+        plan.include_child(self.write_log.lock().memory_plan()?)
+            .map_err(VMError::AllocationDeferred)?;
+        plan.include_child(self.tree.runtime_template_memory_plan()?)
+            .map_err(VMError::AllocationDeferred)?;
+        Ok(plan)
+    }
+
+    /// Copy a frame-inactive memory image, reserving each owned allocation
+    /// before constructing it. The image can become a runtime baseline or a
+    /// sequential block checkpoint.
+    pub(crate) fn try_clone_for_runtime_template(
+        &self,
+        mut lease: Option<&mut ExecutionMemoryLease>,
+    ) -> Result<Self, VMError> {
+        let unavailable =
+            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        if !self.call_frames.is_empty() {
+            return Err(unavailable());
+        }
+        let data = if let Some(lease) = lease.as_deref_mut() {
+            let mut copied =
+                ExecutionBuffer::new(self.data.len(), lease).map_err(|_| unavailable())?;
+            copied.append(&self.data).map_err(|_| unavailable())?;
+            MemoryImage::Funded(copied)
+        } else {
+            let mut copied = crate::cache_memory::OwnedAllocation::try_zeroed(self.data.len())
+                .map_err(|_| unavailable())?;
+            copied.copy_from_slice(&self.data);
+            MemoryImage::Local(copied)
+        };
+        let reads = self
+            .read_log
+            .lock()
+            .try_copy_exact()
+            .map_err(|_| unavailable())?;
+        let copied_writes = self.with_write_log(|log| log.try_copy(lease.as_deref_mut()))?;
+        let mut copied = Self {
+            // An empty frame stack has no nested owned buffers; retain its
+            // scalar completed-result descriptor for exact runtime snapshots.
+            call_frames: self.call_frames.copy_inactive(),
+            data,
+            stack_limit: self.stack_limit,
+            heap_alloc: self.heap_alloc,
+            heap_limit: self.heap_limit,
+            heap_max_limit: self.heap_max_limit,
+            heap_contains_data: self.heap_contains_data,
+            code_length: self.code_length,
+            output_cursor: self.output_cursor,
+            root: self.root,
+            tree: self
+                .tree
+                .try_clone_for_runtime_template(lease.as_deref_mut())?,
+            dirty: self.dirty,
+            dirty_chunks: self.dirty_chunks.try_copy(lease.as_deref_mut())?,
+            modified_chunks: self.modified_chunks.try_copy(lease)?,
+            template_generation: self.template_generation,
+            baseline_lineage: self.baseline_lineage.clone(),
+            read_log: Mutex::new(reads),
+            write_log: Mutex::new(copied_writes),
+            diagnostic_access_recorder: None,
+        };
+        if !copied.prepare_for_cache() {
+            return Err(unavailable());
+        }
+        Ok(copied)
     }
     pub(crate) fn reset_from_template(
         &mut self,
@@ -909,9 +1323,11 @@ impl Memory {
     ) -> Result<(), MemoryTemplateMismatch> {
         self.ensure_template_geometry(template)?;
         const CHUNK: usize = 32;
-        let mut modified = self.modified_chunks.iter().copied().collect::<Vec<_>>();
-        modified.sort_unstable();
-        for index in &modified {
+        let modified_chunks = &self.modified_chunks;
+        let indices = || modified_chunks.iter();
+        // Independent leaves commute. Streaming the same sources twice keeps
+        // the memory and Merkle images aligned without allocating reset scratch.
+        for index in indices() {
             let start = index.saturating_mul(CHUNK);
             if start >= self.data.len() {
                 continue;
@@ -919,7 +1335,7 @@ impl Memory {
             let end = (start + CHUNK).min(self.data.len());
             self.data[start..end].copy_from_slice(&template.data[start..end]);
         }
-        self.tree.reset_leaves_from(&template.tree, &modified);
+        self.tree.reset_leaves_from(&template.tree, indices());
         self.heap_alloc = template.heap_alloc;
         self.heap_limit = template.heap_limit;
         self.heap_max_limit = template.heap_max_limit;
@@ -928,8 +1344,12 @@ impl Memory {
         self.output_cursor = template.output_cursor;
         self.root = template.root;
         self.dirty = template.dirty;
-        self.dirty_chunks = template.dirty_chunks.clone();
+        // Equal geometry already owns every bit; warm reset copies initialized
+        // words without allocating or requesting more execution credit.
+        self.dirty_chunks.copy_from(&template.dirty_chunks);
         self.modified_chunks.clear();
+        self.call_frames
+            .restore_inactive_from(&template.call_frames);
         self.clear_tracking();
         Ok(())
     }
@@ -955,14 +1375,56 @@ impl Memory {
             merkle_leaves: self.tree.leaf_count(),
         }
     }
-    fn record_read_range(&self, addr: u64, len: u64) {
-        self.read_log.lock().push(AccessRange { addr, len });
+    fn record_read_range(
+        &self,
+        addr: u64,
+        len: u64,
+        kind: DiagnosticMemoryAccessKind,
+    ) -> Result<(), VMError> {
+        let unavailable =
+            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        #[cfg(test)]
+        if REFUSE_NEXT_READ_TRACKING.with(|refuse| refuse.replace(false)) {
+            return Err(unavailable());
+        }
+        let mut reads = self.read_log.lock();
+        reads.try_reserve_one().map_err(|_| unavailable())?;
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            let start = usize::try_from(addr).map_err(|_| unavailable())?;
+            let len = usize::try_from(len).map_err(|_| unavailable())?;
+            let end = start.checked_add(len).ok_or_else(unavailable)?;
+            let bytes = self.data.get(start..end).ok_or_else(unavailable)?;
+            recorder.record_read(addr, bytes, kind)?;
+        }
+        // Capacity was charged before the recorder or guest-visible log changes.
+        reads
+            .try_push(AccessRange { addr, len })
+            .map_err(|_| unavailable())?;
+        Ok(())
     }
-    fn record_write(&self, addr: u64, bytes: &[u8]) {
-        self.write_log.lock().push(WriteLogEntry {
-            addr,
-            bytes: bytes.to_vec(),
-        });
+    fn prepare_write_tracking(
+        &mut self,
+        addr: u64,
+        bytes: &[u8],
+    ) -> Result<WriteLogEntry, VMError> {
+        let unavailable =
+            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let copied = self.with_write_log(|log| log.prepare(addr, bytes))?;
+        let start = usize::try_from(addr).map_err(|_| unavailable())?;
+        let end = start.checked_add(bytes.len()).ok_or_else(unavailable)?;
+        if let Some(recorder) = &self.diagnostic_access_recorder {
+            let previous = self.data.get(start..end).ok_or_else(unavailable)?;
+            recorder.record_write(addr, previous, bytes, DiagnosticMemoryAccessKind::Write)?;
+        }
+        Ok(copied)
+    }
+
+    fn record_write(&mut self, entry: WriteLogEntry) {
+        self.call_frames
+            .record_write(entry.address(), entry.bytes().len() as u64);
+        // The prepared-capacity invariant normally makes this infallible. Keep
+        // payload refunds outside the mutex even if that invariant unwinds.
+        self.with_write_log(|log| log.record_prepared(entry));
     }
     /// Overwrite just the code region with bytes from another Memory.
     pub fn overlay_code(&mut self, src: &Memory) -> Result<(), VMError> {
@@ -976,34 +1438,9 @@ impl Default for Memory {
         Self::new()
     }
 }
-impl Clone for Memory {
-    fn clone(&self) -> Self {
-        #[cfg(test)]
-        MEMORY_CLONE_COUNT.set(MEMORY_CLONE_COUNT.get().saturating_add(1));
-        Self {
-            data: self.data.clone(),
-            stack_limit: self.stack_limit,
-            heap_alloc: self.heap_alloc,
-            heap_limit: self.heap_limit,
-            heap_max_limit: self.heap_max_limit,
-            heap_contains_data: self.heap_contains_data,
-            code_length: self.code_length,
-            output_cursor: self.output_cursor,
-            root: self.root,
-            tree: self.tree.clone(),
-            dirty: self.dirty,
-            dirty_chunks: self.dirty_chunks.clone(),
-            modified_chunks: HashSet::new(),
-            template_generation: self.template_generation,
-            baseline_lineage: Arc::new(()),
-            read_log: Mutex::new(Vec::new()),
-            write_log: Mutex::new(Vec::new()),
-        }
-    }
-}
 impl Memory {
     #[inline]
-    fn check_output_append_only(&mut self, addr: u64, len: u64) -> Result<(), VMError> {
+    fn checked_output_append_cursor(&self, addr: u64, len: u64) -> Result<u64, VMError> {
         // Only enforce within OUTPUT region; allow arbitrary writes elsewhere.
         let start = Memory::OUTPUT_START;
         let end = Memory::OUTPUT_START + Memory::OUTPUT_SIZE;
@@ -1020,11 +1457,9 @@ impl Memory {
                 });
             }
             let new_end = off.saturating_add(len);
-            if new_end > self.output_cursor {
-                self.output_cursor = new_end;
-            }
+            return Ok(self.output_cursor.max(new_end));
         }
-        Ok(())
+        Ok(self.output_cursor)
     }
 }
 #[cfg(test)]
@@ -1032,6 +1467,438 @@ mod tests {
     use super::*;
     use crate::merkle_utils::compute_memory_leaf_digest;
     use iroha_crypto::{Hash, HashOf, MerkleProof};
+
+    #[test]
+    fn funded_large_commit_keeps_leaf_owner_and_matches_local_root() {
+        let stack_limit = Memory::MIN_STACK_SIZE;
+        let image_bytes = Memory::image_bytes_for_stack_limit(stack_limit).unwrap();
+        let leaf_bytes = image_bytes.div_ceil(32) * 32;
+        let node_bytes =
+            MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(image_bytes.div_ceil(32))
+                .unwrap();
+        let bitmap_bytes = 2 * image_bytes.div_ceil(32).div_ceil(64) * 8;
+        let log_bytes = 4 * std::mem::size_of::<WriteLogEntry>() + 1;
+        let budget =
+            AllocationBudget::new(image_bytes + leaf_bytes + node_bytes + bitmap_bytes + log_bytes);
+        let mut funded = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        let mut local = Memory::new_with_stack_limit(stack_limit).unwrap();
+        funded.store_u8(Memory::STACK_START, 0xa5).unwrap();
+        local.store_u8(Memory::STACK_START, 0xa5).unwrap();
+        let leaf_count = funded.tree.leaf_count();
+        funded.dirty_chunks.extend(0..=leaf_count / 2);
+        funded.commit();
+        local.commit();
+        assert_eq!(funded.current_root(), local.current_root());
+        assert_eq!(
+            budget.reserved_bytes(),
+            image_bytes + leaf_bytes + node_bytes + bitmap_bytes + log_bytes
+        );
+        drop(funded);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn funded_memory_passes_its_original_pool_to_root_frame_preparation() {
+        use ivm_abi::call::{CallWordV1, EmbeddedCallableV1};
+
+        let frame_backing_bytes = crate::call_frame::frame_backing_bytes_for_test();
+        let stack_limit = Memory::MIN_STACK_SIZE;
+        let image_bytes = Memory::image_bytes_for_stack_limit(stack_limit).unwrap();
+        let leaf_bytes = image_bytes.div_ceil(32) * 32;
+        let node_bytes =
+            MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(image_bytes.div_ceil(32))
+                .unwrap();
+        let bitmap_bytes = 2 * image_bytes.div_ceil(32).div_ceil(64) * 8;
+        let base_bytes = image_bytes + leaf_bytes + node_bytes + bitmap_bytes;
+        let budget = AllocationBudget::new(base_bytes);
+        let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), base_bytes);
+        let callable = EmbeddedCallableV1 {
+            entry_pc: 0,
+            frame_bytes: 128,
+            argument_words: vec![CallWordV1::Bool],
+            result_words: vec![CallWordV1::Bool],
+        };
+        let tables = crate::call_frame::CallTables {
+            argument_base: Memory::HEAP_START,
+            argument_words: 1,
+            result_base: Memory::HEAP_START + 16,
+            result_words: 1,
+        };
+        let top = Memory::STACK_START + 128;
+        assert!(matches!(
+            memory.call_frames.prepare_root(top, &callable, tables, top),
+            Err(VMError::AllocationDeferred(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), base_bytes);
+        budget.set_limit_bytes(base_bytes + frame_backing_bytes + 17);
+        memory
+            .call_frames
+            .enter_root(top, &callable, tables, top)
+            .unwrap();
+        assert_eq!(
+            budget.reserved_bytes(),
+            base_bytes + frame_backing_bytes + 17
+        );
+        memory.call_frames.clear();
+        assert_eq!(budget.reserved_bytes(), base_bytes + frame_backing_bytes);
+        assert!(memory.call_frames.compact_for_cache());
+        assert_eq!(budget.reserved_bytes(), base_bytes);
+        drop(memory);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn template_bitmap_plan_is_fixed_by_geometry_and_copies_exact_bits() {
+        let mut source = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let fixed_bytes = source
+            .runtime_template_memory_plan()
+            .unwrap()
+            .requested_bytes();
+        let bitmap_bytes = 2 * source.tree.leaf_count().div_ceil(64) * 8;
+        assert_eq!(
+            fixed_bytes,
+            source.data.len()
+                + source
+                    .tree
+                    .runtime_template_memory_plan()
+                    .unwrap()
+                    .requested_bytes()
+                + bitmap_bytes
+        );
+        for entries in [0, 1, 3, 4, 7, 8, 14, 15, 28, 29, 63, 64, 65, 127, 128] {
+            source.dirty_chunks.clear();
+            source.modified_chunks.clear();
+            source.dirty_chunks.extend((0..entries).rev());
+            source.modified_chunks.extend(0..entries);
+            assert_eq!(
+                source
+                    .runtime_template_memory_plan()
+                    .unwrap()
+                    .requested_bytes(),
+                fixed_bytes
+            );
+            let mut copy = source.try_clone_for_runtime_template(None).unwrap();
+            assert_eq!(copy.dirty_chunks, source.dirty_chunks);
+            assert_eq!(copy.modified_chunks, source.modified_chunks);
+            assert_ne!(
+                copy.dirty_chunks.words().as_ptr(),
+                source.dirty_chunks.words().as_ptr()
+            );
+            assert_ne!(
+                copy.modified_chunks.words().as_ptr(),
+                source.modified_chunks.words().as_ptr()
+            );
+            // Fixed owners carry their own charge; retained scratch must not charge them twice.
+            assert!(copy.prepare_for_cache());
+            assert!(copy.write_log.lock().is_empty());
+        }
+    }
+
+    #[test]
+    fn funded_bitmap_constructor_refusal_and_final_owner_keep_original_credit() {
+        let stack_limit = Memory::MIN_STACK_SIZE;
+        let image_bytes = Memory::image_bytes_for_stack_limit(stack_limit).unwrap();
+        let leaf_count = image_bytes.div_ceil(32);
+        let bitmap_bytes = 2 * leaf_count.div_ceil(64) * 8;
+        let node_bytes =
+            MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(leaf_count).unwrap();
+        let total_bytes = image_bytes + leaf_count * 32 + node_bytes + bitmap_bytes;
+        let budget = AllocationBudget::new(total_bytes - 1);
+        assert!(matches!(
+            Memory::new_with_stack_limit_funded(stack_limit, &budget),
+            Err(VMError::AllocationDeferred(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), 0);
+        budget.set_limit_bytes(total_bytes);
+        let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        budget.set_limit_bytes(0);
+        let dirty_words = memory.dirty_chunks.words().as_ptr();
+        let modified_words = memory.modified_chunks.words().as_ptr();
+        memory.preload_input(0, &[0xa5; 129]).unwrap();
+        assert!(matches!(
+            memory.store_u64(Memory::STACK_START, 0x1234),
+            Err(VMError::AllocationDeferred(_))
+        ));
+        let log_bytes = 4 * std::mem::size_of::<WriteLogEntry>() + 8;
+        budget.set_limit_bytes(total_bytes + log_bytes);
+        memory.store_u64(Memory::STACK_START, 0x1234).unwrap();
+        budget.set_limit_bytes(0);
+        memory.commit();
+        assert_eq!(memory.dirty_chunks.words().as_ptr(), dirty_words);
+        assert_eq!(memory.modified_chunks.words().as_ptr(), modified_words);
+        assert_eq!(budget.reserved_bytes(), total_bytes + log_bytes);
+        let owner = std::sync::Arc::new(memory);
+        let borrower = std::sync::Arc::clone(&owner);
+        drop(owner);
+        assert_eq!(budget.reserved_bytes(), total_bytes + log_bytes);
+        drop(borrower);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn write_log_row_and_payload_refusal_preserve_existing_store_state() {
+        let mut memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let budget = crate::cache_memory::TestMemoryBudget::new(64 * 1024);
+        memory.write_log = Mutex::new(WriteLog::with_test_budget(&budget));
+        for index in 0..4 {
+            memory
+                .store_u8(Memory::OUTPUT_START + index, index as u8)
+                .unwrap();
+        }
+        let before = memory.try_write_log_snapshot().unwrap();
+        let root = memory.root();
+        crate::cache_memory::refuse_next_owned_vec_growth_for_test();
+        assert!(matches!(
+            memory.store_u8(Memory::OUTPUT_START + 4, 9),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.current_root(), root);
+        assert_eq!(memory.output_used_len(), 4);
+        assert_eq!(memory.read_output_used(), &[0, 1, 2, 3]);
+        assert_eq!(memory.try_write_log_snapshot().unwrap(), before);
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(memory.store_u8(Memory::OUTPUT_START + 4, 9).is_err());
+        assert_eq!(memory.current_root(), root);
+        assert_eq!(memory.output_used_len(), 4);
+        assert_eq!(memory.try_write_log_snapshot().unwrap(), before);
+        memory.store_u8(Memory::OUTPUT_START + 4, 9).unwrap();
+        assert_eq!(memory.read_output_used(), &[0, 1, 2, 3, 9]);
+        assert_eq!(before.len(), 4);
+        let charged = budget.stats().measured_resident_bytes();
+        assert!(memory.prepare_for_cache());
+        assert_eq!(budget.stats().measured_resident_bytes(), charged);
+        memory.clear_tracking();
+        assert_eq!(before[3].address(), Memory::OUTPUT_START + 3);
+        assert_eq!(before[3].bytes(), &[3]);
+        drop(memory);
+        assert!(budget.stats().measured_resident_bytes() > 0);
+        drop(before);
+        assert_eq!(budget.stats().measured_resident_bytes(), 0);
+    }
+
+    #[test]
+    fn guest_store_tracking_refusal_preserves_memory_cursor_and_log() {
+        let mut memory = Memory::new();
+        let initial_root = memory.current_root();
+        let mut next = Memory::OUTPUT_START;
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(matches!(
+            memory.store_u8(next, 0x5a),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.output_used_len(), 0);
+        assert_eq!(memory.current_root(), initial_root);
+        assert!(
+            memory
+                .try_write_log_snapshot()
+                .expect("allocate write-log snapshot")
+                .is_empty()
+        );
+        memory.store_u8(next, 0x5a).unwrap();
+        next += 1;
+
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(matches!(
+            memory.store_bytes(next, &[0xa5, 0xc3, 0x7e]),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.output_used_len(), 1);
+        assert_eq!(memory.read_output_used(), &[0x5a]);
+        assert_eq!(
+            memory
+                .try_write_log_snapshot()
+                .expect("allocate write-log snapshot")
+                .len(),
+            1
+        );
+        memory.store_bytes(next, &[0xa5, 0xc3, 0x7e]).unwrap();
+        next += 3;
+
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(matches!(
+            memory.store_u32(next, 0x1234_5678),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.output_used_len(), 4);
+        memory.store_u32(next, 0x1234_5678).unwrap();
+        next += 4;
+
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(matches!(
+            memory.store_u64(next, 0x0102_0304_0506_0708),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.output_used_len(), 8);
+        memory.store_u64(next, 0x0102_0304_0506_0708).unwrap();
+        next += 8;
+
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(matches!(
+            memory.store_u128(next, 0x1020_3040_5060_7080_90a0_b0c0_d0e0_f000),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.output_used_len(), 16);
+        memory
+            .store_u128(next, 0x1020_3040_5060_7080_90a0_b0c0_d0e0_f000)
+            .unwrap();
+        assert_eq!(
+            memory
+                .try_write_log_snapshot()
+                .expect("allocate write-log snapshot")
+                .len(),
+            5
+        );
+        assert_eq!(memory.output_used_len(), 32);
+    }
+
+    #[test]
+    fn invalid_output_rewind_precedes_tracking_allocation() {
+        let mut memory = Memory::new();
+        memory.store_u8(Memory::OUTPUT_START, 7).unwrap();
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(matches!(
+            memory.store_u8(Memory::OUTPUT_START, 8),
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::WRITE,
+                ..
+            })
+        ));
+        assert_eq!(memory.output_used_len(), 1);
+        assert_eq!(memory.read_output_used(), &[7]);
+        assert!(matches!(
+            memory.store_u8(Memory::OUTPUT_START + 1, 8),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.output_used_len(), 1);
+    }
+
+    #[test]
+    fn guest_read_tracking_refusal_leaves_outputs_and_logs_unchanged() {
+        let memory = Memory::new();
+        let address = Memory::OUTPUT_START;
+        let reads: [fn(&Memory) -> Result<(), VMError>; 5] = [
+            |memory| memory.load_u8(Memory::OUTPUT_START).map(|_| ()),
+            |memory| memory.load_u32(Memory::OUTPUT_START).map(|_| ()),
+            |memory| memory.load_u64(Memory::OUTPUT_START).map(|_| ()),
+            |memory| memory.load_u128(Memory::OUTPUT_START).map(|_| ()),
+            |memory| memory.load_region(Memory::OUTPUT_START, 2).map(|_| ()),
+        ];
+        for read in reads {
+            REFUSE_NEXT_READ_TRACKING.set(true);
+            assert!(matches!(
+                read(&memory),
+                Err(VMError::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable
+                ))
+            ));
+            assert!(memory.read_set().is_empty());
+        }
+
+        let mut output = [0xa5, 0xc3];
+        REFUSE_NEXT_READ_TRACKING.set(true);
+        assert!(matches!(
+            memory.load_bytes(address, &mut output),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(output, [0xa5, 0xc3]);
+        assert!(memory.read_set().is_empty());
+
+        REFUSE_NEXT_READ_TRACKING.set(true);
+        assert!(matches!(
+            memory.load_u8(0),
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::READ,
+                ..
+            })
+        ));
+        assert!(matches!(
+            memory.load_u8(address),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert!(memory.read_set().is_empty());
+
+        memory.load_bytes(address, &mut output).unwrap();
+        assert_eq!(output, [0, 0]);
+        assert_eq!(
+            memory.read_set(),
+            vec![AccessRange {
+                addr: address,
+                len: 2
+            }]
+        );
+    }
+    #[test]
+    fn read_log_growth_refusal_preserves_accesses_and_retry() {
+        let mut memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let address = Memory::OUTPUT_START;
+        memory.load_u8(address).unwrap();
+        while {
+            let reads = memory.read_log.lock();
+            reads.len() < reads.capacity()
+        } {
+            memory.load_u8(address).unwrap();
+        }
+        let before = memory.read_set();
+        assert!(memory.read_log.lock().capacity() > 0);
+        assert!(memory.prepare_for_cache());
+        assert!(memory.write_log.lock().is_empty());
+        let before_root = memory.current_root();
+        crate::cache_memory::refuse_next_owned_vec_growth_for_test();
+        assert!(matches!(
+            memory.load_u8(address),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(memory.read_set(), before);
+        assert_eq!(memory.current_root(), before_root);
+        memory.load_u8(address).unwrap();
+        assert_eq!(memory.read_set().len(), before.len() + 1);
+    }
+    #[test]
+    fn fallible_template_memory_copy_preserves_bytes_root_and_lineage() {
+        let mut source =
+            Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).expect("bounded test memory");
+        source
+            .store_u64(Memory::STACK_START, 0x1234_5678)
+            .expect("owned stack write");
+        source.mark_template_clean();
+        source
+            .store_u64(Memory::STACK_START + 8, 0x9abc_def0)
+            .expect("tracked stack write");
+        assert!(!source.modified_chunks.is_empty());
+        assert_eq!(source.load_u64(Memory::STACK_START + 8), Ok(0x9abc_def0));
+        let mut copied = source
+            .try_clone_for_runtime_template(None)
+            .expect("bounded template copy");
+        assert!(copied.shares_baseline_lineage(&source));
+        assert_ne!(copied.data.as_ptr(), source.data.as_ptr());
+        assert_eq!(copied.modified_chunks, source.modified_chunks);
+        assert_eq!(&**copied.read_log.lock(), &**source.read_log.lock());
+        assert_eq!(*copied.write_log.lock(), *source.write_log.lock());
+        assert_eq!(copied.load_u64(Memory::STACK_START), Ok(0x1234_5678));
+        assert_eq!(copied.root(), source.root());
+    }
+
     #[test]
     fn reset_from_template_restores_runtime_regions() {
         let mut base = Memory::new();
@@ -1039,7 +1906,9 @@ mod tests {
             .expect("preload template input");
         base.set_heap_limit(Memory::HEAP_MAX_SIZE - 128)
             .expect("lower template heap limit");
-        let mut worker = base.clone();
+        let mut worker = base
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
         worker.alloc(32).expect("alloc");
         worker
             .store_u64(Memory::OUTPUT_START, 0xDEAD_BEEF_DEAD_BEEFu64)
@@ -1061,14 +1930,20 @@ mod tests {
         assert_eq!(worker.code_len(), base.code_len());
         assert_eq!(worker.read_output(), base.read_output());
         assert!(worker.modified_chunks.is_empty());
-        let mut worker_clone = worker.clone();
-        let mut base_clone = base.clone();
+        let mut worker_clone = worker
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
+        let mut base_clone = base
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
         assert_eq!(worker_clone.root(), base_clone.root());
     }
     #[test]
     fn warm_reset_does_not_copy_unmodified_memory_chunks() {
         let base = Memory::new();
-        let mut worker = base.clone();
+        let mut worker = base
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
         let tracked_address = Memory::HEAP_START;
         worker
             .store_u8(tracked_address, 0xA5)
@@ -1163,7 +2038,7 @@ mod tests {
             .set_heap_max_limit(0x1_000)
             .expect("match heap authority");
 
-        memory.clear_program_heap();
+        memory.clear_program_heap().unwrap();
 
         assert_eq!(memory.heap_allocated_len(), 0);
         assert_eq!(memory.heap_limit(), pristine.heap_limit());
@@ -1189,26 +2064,93 @@ mod tests {
         );
         let worker_geometry = worker.geometry();
         let template_geometry = template.geometry();
-        let worker_data = worker.data.clone();
+        let worker_data = worker.data.to_vec();
         let worker_root = worker.root;
         let worker_dirty = worker.dirty;
-        let worker_dirty_chunks = worker.dirty_chunks.clone();
-        let worker_modified_chunks = worker.modified_chunks.clone();
+        let worker_dirty_chunks = worker.dirty_chunks.try_copy(None).unwrap();
+        let worker_modified_chunks = worker.modified_chunks.try_copy(None).unwrap();
         let worker_reads = worker.read_set();
-        let worker_writes = worker.write_log();
+        let worker_writes = worker
+            .try_write_log_snapshot()
+            .expect("allocate write-log snapshot");
         let error = worker
             .reset_from_template(&template)
             .expect_err("different stack geometry must reject warm reset");
-        assert_eq!(error.current, worker_geometry);
-        assert_eq!(error.template, template_geometry);
+        assert_eq!(
+            error,
+            MemoryTemplateMismatch {
+                current: worker_geometry,
+                template: template_geometry,
+            }
+        );
         assert_eq!(worker.geometry(), worker_geometry);
-        assert_eq!(worker.data, worker_data);
+        assert_eq!(&worker.data[..], &worker_data[..]);
         assert_eq!(worker.root, worker_root);
         assert_eq!(worker.dirty, worker_dirty);
         assert_eq!(worker.dirty_chunks, worker_dirty_chunks);
         assert_eq!(worker.modified_chunks, worker_modified_chunks);
         assert_eq!(worker.read_set(), worker_reads);
-        assert_eq!(worker.write_log(), worker_writes);
+        assert_eq!(
+            worker
+                .try_write_log_snapshot()
+                .expect("allocate write-log snapshot"),
+            worker_writes
+        );
+    }
+    #[test]
+    fn warm_reset_copies_prepaid_dirty_bits_after_original_budget_shrinks() {
+        let stack_limit = Memory::MIN_STACK_SIZE;
+        let mut template = Memory::new_with_stack_limit(stack_limit).unwrap();
+        template.store_u8(Memory::HEAP_START, 0xA5).unwrap();
+        let image_bytes = Memory::image_bytes_for_stack_limit(stack_limit).unwrap();
+        let leaf_count = image_bytes.div_ceil(32);
+        let node_bytes =
+            MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(leaf_count).unwrap();
+        let total_bytes =
+            image_bytes + leaf_count * 32 + node_bytes + 2 * leaf_count.div_ceil(64) * 8;
+        let row_bytes = 4 * std::mem::size_of::<WriteLogEntry>();
+        let budget = AllocationBudget::new(total_bytes + row_bytes + 1);
+        let mut worker = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        worker.store_u8(Memory::HEAP_START, 0xB6).unwrap();
+        worker.commit();
+        assert!(worker.dirty_chunks.is_empty());
+        assert!(!template.dirty_chunks.is_empty());
+        let dirty_words = worker.dirty_chunks.words().as_ptr();
+        let modified_words = worker.modified_chunks.words().as_ptr();
+        budget.set_limit_bytes(0);
+        for _ in 0..2 {
+            worker.reset_from_template(&template).unwrap();
+            assert_eq!(worker.dirty_chunks, template.dirty_chunks);
+            assert_eq!(worker.load_u8(Memory::HEAP_START), Ok(0xA5));
+            assert_eq!(worker.dirty_chunks.words().as_ptr(), dirty_words);
+            assert_eq!(worker.modified_chunks.words().as_ptr(), modified_words);
+            assert!(worker.modified_chunks.is_empty());
+            assert_eq!(budget.reserved_bytes(), total_bytes + row_bytes);
+        }
+        assert_eq!(worker.root(), template.root());
+        drop(worker);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+    #[test]
+    fn dirty_ranges_coalesce_across_bitmap_words_in_memory_order() {
+        let mut memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let start = Memory::HEAP_START;
+        for leaf in [128, 64, 1, 63, 62, 0, 64] {
+            memory.store_u8(start + leaf * 32, 0xa5).unwrap();
+        }
+        let start = start as usize;
+        assert_eq!(
+            memory.dirty_ranges(),
+            [
+                (start, start + 2 * 32),
+                (start + 62 * 32, start + 65 * 32),
+                (start + 128 * 32, start + 129 * 32),
+            ]
+        );
+        assert_eq!(memory.dirty_chunks.len(), 6);
+        memory.commit();
+        assert!(memory.dirty_ranges().is_empty());
+        assert_eq!(memory.modified_chunks.len(), 6);
     }
     #[test]
     fn commit_small_dirty_set_uses_incremental_merkle_update() {
@@ -1238,7 +2180,8 @@ mod tests {
         let tree = ByteMerkleTree::from_bytes(&data, 32).unwrap();
         let root = tree.root_hash();
         let mut mem = Memory {
-            data,
+            call_frames: crate::call_frame::CallFrameMemory::default(),
+            data: data.into(),
             stack_limit: Memory::STACK_ALIGNMENT,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
@@ -1249,12 +2192,13 @@ mod tests {
             root,
             tree,
             dirty: false,
-            dirty_chunks: HashSet::new(),
-            modified_chunks: HashSet::new(),
+            dirty_chunks: DirtyChunks::new(8, None).unwrap(),
+            modified_chunks: DirtyChunks::new(8, None).unwrap(),
             template_generation: 0,
-            baseline_lineage: Arc::new(()),
-            read_log: Mutex::new(Vec::new()),
-            write_log: Mutex::new(Vec::new()),
+            baseline_lineage: crate::cache_memory::SharedValue::new((), Some(0)),
+            read_log: Mutex::new(crate::cache_memory::OwnedVec::default()),
+            write_log: Mutex::new(WriteLog::default()),
+            diagnostic_access_recorder: None,
         };
         mem.data[0..32].fill(0xAA);
         mem.data[32..64].fill(0x55);
@@ -1279,7 +2223,8 @@ mod tests {
         let tree = ByteMerkleTree::new(8, 32).unwrap();
         let root = tree.root_hash();
         let mut incremental = Memory {
-            data: data.clone(),
+            call_frames: crate::call_frame::CallFrameMemory::default(),
+            data: data.clone().into(),
             stack_limit: Memory::STACK_ALIGNMENT,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
@@ -1290,14 +2235,17 @@ mod tests {
             root,
             tree,
             dirty: false,
-            dirty_chunks: HashSet::new(),
-            modified_chunks: HashSet::new(),
+            dirty_chunks: DirtyChunks::new(8, None).unwrap(),
+            modified_chunks: DirtyChunks::new(8, None).unwrap(),
             template_generation: 0,
-            baseline_lineage: Arc::new(()),
-            read_log: Mutex::new(Vec::new()),
-            write_log: Mutex::new(Vec::new()),
+            baseline_lineage: crate::cache_memory::SharedValue::new((), Some(0)),
+            read_log: Mutex::new(crate::cache_memory::OwnedVec::default()),
+            write_log: Mutex::new(WriteLog::default()),
+            diagnostic_access_recorder: None,
         };
-        let mut rebuilt = incremental.clone();
+        let mut rebuilt = incremental
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
         incremental.data[0..32].fill(0xAA);
         incremental.data[32..64].fill(0x55);
         incremental.dirty_chunks.extend([0, 1]);
@@ -1528,7 +2476,9 @@ mod tests {
         let addr = Memory::HEAP_START;
         mem.store_u64(addr, 0xCAFEBABE_DEADBEEF).unwrap();
         mem.store_u32(addr + 32, 0xA5A5_5A5A).unwrap();
-        let mut clone = mem.clone();
+        let mut clone = mem
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
         let expected = clone.root();
         let observed = mem.current_root();
         assert_ne!(observed, baseline);
@@ -1540,7 +2490,9 @@ mod tests {
         let mut mem = Memory::new();
         let addr = Memory::HEAP_START + 96;
         mem.store_u64(addr, 0xFEED_FACE_DEAD_BEEFu64).unwrap();
-        let mut reference = mem.clone();
+        let mut reference = mem
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
         let path = mem.merkle_path(addr).unwrap();
         let root = mem.current_root();
         let expected_path = reference.merkle_path(addr).unwrap();
@@ -1553,7 +2505,9 @@ mod tests {
         let mut mem = Memory::new();
         let addr = Memory::HEAP_START + 160;
         mem.store_u32(addr, 0x1357_9BDF).unwrap();
-        let mut reference = mem.clone();
+        let mut reference = mem
+            .try_clone_for_runtime_template(None)
+            .expect("bounded test memory copy");
         let (proof, root) = mem.merkle_compact(addr, Some(12)).unwrap();
         let depth = proof.depth() as usize;
         assert_eq!(proof.siblings().len(), depth);

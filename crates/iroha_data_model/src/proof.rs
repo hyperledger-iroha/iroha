@@ -6,6 +6,14 @@
 //! fields byte-for-byte to ensure stable hashing and compatibility across nodes.
 use crate::{confidential::ConfidentialStatus, zk::BackendTag};
 
+mod ivm_execution_statement;
+pub use ivm_execution_statement::{
+    IVM_EXECUTION_STATEMENT_DIGEST_DOMAIN_V1, IvmAccessDependencyClaimV1,
+    IvmCompleteStateRootClaimV1, IvmExecutionStatementDigestV1, IvmExecutionStatementErrorV1,
+    IvmExecutionStatementV1, IvmFinalizedPrestateClaimV1, IvmOrderedOutputClaimV1,
+    IvmReturnClaimV1, IvmVerifierProfileV1,
+};
+
 use base64::Engine as _;
 
 use base64::engine::general_purpose::STANDARD;

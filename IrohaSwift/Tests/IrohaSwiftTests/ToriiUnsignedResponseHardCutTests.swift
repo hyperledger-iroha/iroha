@@ -35,13 +35,6 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
       { $0["signing_message_b64"] = Data(repeating: 7, count: 32).base64EncodedString() },
       { $0["transaction_payload_b64"] = "AQI" },
       {
-        let wrong = try CanonicalUnsignedTransactionTestSupport.genericPayload(
-          authority: otherAccount
-        )
-        $0["transaction_payload_b64"] = wrong.base64EncodedString()
-        $0["signing_message_b64"] = IrohaHash.hash(wrong).base64EncodedString()
-      },
-      {
         var trailing = payload
         trailing.append(0)
         $0["transaction_payload_b64"] = trailing.base64EncodedString()
@@ -56,6 +49,13 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
         "unsigned multisig mutation \(index) must fail"
       )
     }
+    let alternateSignerPayload = try CanonicalUnsignedTransactionTestSupport.genericPayload(
+      authority: otherAccount
+    )
+    var alternateSigner = unsigned
+    alternateSigner["transaction_payload_b64"] = alternateSignerPayload.base64EncodedString()
+    alternateSigner["signing_message_b64"] = IrohaHash.hash(alternateSignerPayload).base64EncodedString()
+    XCTAssertNoThrow(try decodeMultisigResponse(alternateSigner))
 
     let submitted: [String: Any] = [
       "ok": true,
@@ -233,7 +233,6 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
       response(metadata: metadata.merging(["extra": .bool(true)]) { _, new in new }),
       response(feePayment: .authority(chargeLimits: [], gasLimit: 1)),
       response(instructionsHash: String(repeating: "c", count: 64)),
-      response(admissionIntent: .queuePlanSynced),
     ]
     for (index, substitution) in substitutions.enumerated() {
       XCTAssertThrowsError(
@@ -241,6 +240,7 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
         "rehash substitution \(index) must not reach a signer"
       )
     }
+    XCTAssertThrowsError(try response(admissionIntent: .queuePlanSynced))
     XCTAssertThrowsError(
       try response().validatingRequestBindings(
         signerAccountId: signerAccount,

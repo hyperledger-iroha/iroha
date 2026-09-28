@@ -174,7 +174,7 @@ fn manifest_install_and_unwind_defer_indexes_until_even_generation_and_free_fenc
             lifecycle_index_publication::panic_after_manifest_write_for_test();
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            state.install_lane_manifests(&manifests);
+            state.install_lane_manifests_for_testing(&manifests);
         }));
         assert_eq!(result.is_err(), unwind);
         assert_eq!(state.state_view_generation(), before + 2);
@@ -187,10 +187,12 @@ fn compatible_manifest_refresh_defers_real_read_refusal_and_write_success() {
     for refuse in [false, true] {
         let state = blank_test_state();
         let nexus = state.nexus_snapshot();
-        let original =
-            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
-        // Status-only fixtures deliberately cannot authenticate catalog binding.
-        // Load a real immutable source set for the incompatible-policy branch.
+        let original = Arc::new(LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &iroha_config::parameters::actual::LaneRegistry::default(),
+        ));
+        // Load a different immutable source set for the incompatible-policy branch.
         let source_dir = tempfile::tempdir().unwrap();
         let alias = &nexus.lane_catalog.lanes()[0].alias;
         std::fs::write(
@@ -198,7 +200,7 @@ fn compatible_manifest_refresh_defers_real_read_refusal_and_write_success() {
             norito::json::to_vec(&norito::json!({"lane": alias})).unwrap(),
         )
         .unwrap();
-        state.install_lane_manifests(&original);
+        state.install_lane_manifests_for_testing(&original);
         let candidate = if refuse {
             Arc::new(LaneManifestRegistry::from_config(
                 &nexus.lane_catalog,

@@ -540,7 +540,7 @@ async fn push_rejects_without_governance_manifest() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
     let result = queue.push(accepted_tx_by_someone(&time_source), state.view());
     assert!(matches!(
         result,
@@ -650,7 +650,7 @@ async fn uaid_without_dataspace_binding_is_rejected() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
     let result = queue.push(
         accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
         state.view(),
@@ -760,7 +760,7 @@ async fn uaid_binding_allows_lane_identity_extraction() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
     queue
         .push(
             accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),

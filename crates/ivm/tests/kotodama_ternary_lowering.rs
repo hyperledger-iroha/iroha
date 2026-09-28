@@ -22,5 +22,5 @@ fn kotodama_ternary_executes() {
     vm.load_program(&code).expect("load ternary program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run ternary program");
-    assert_eq!(common::decode_i64_register(&vm, 10), 509);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 509);
 }

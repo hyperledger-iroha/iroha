@@ -132,7 +132,15 @@ impl Core {
             return;
         }
         #[cfg(not(sumeragi_mutation = "MS38"))]
-        if verify_vote(&*self.crypto, &self.instance, &self.cfg.committee, &x).is_err() {
+        if verify_vote(
+            &*self.crypto,
+            &self.instance,
+            &self.cfg.epoch.id,
+            &self.cfg.committee,
+            &x,
+        )
+        .is_err()
+        {
             return;
         }
         // Two signed values in one slot are equivocation, whatever the unsigned attestation.
@@ -296,8 +304,13 @@ impl Core {
         }
         // §3.7 A2: a flagged lock is Commit-voted only with this node's attestation.
         let attestation = if attest {
-            let statement =
-                crate::preimage::att_preimage(&self.instance, self.height, &bh, &result);
+            let statement = crate::preimage::att_preimage(
+                &self.instance,
+                &self.cfg.epoch.id,
+                self.height,
+                &bh,
+                &result,
+            );
             let outcome = self.own_attestation(me, &statement);
             match outcome {
                 AttestOutcome::Attested(attestation) => Some(attestation),
@@ -336,7 +349,14 @@ impl Core {
             // MA10: an attestation the node's own verifier rejects is used anyway.
             AttestOutcome::Attested(attestation)
                 if !cfg!(sumeragi_mutation = "MA10")
-                    && !verifier.verify(self.height, me.index, key, statement, &attestation) =>
+                    && !verifier.verify(
+                        self.height,
+                        me.index,
+                        key,
+                        statement,
+                        &attestation.witness,
+                        attestation.signature.as_slice(),
+                    ) =>
             {
                 AttestOutcome::NoAuthority
             }
@@ -351,11 +371,12 @@ impl Core {
         me: super::Me,
         kind: VoteKind,
         (bh, result, attest): (Hash32, Hash32, bool),
-        attestation: Option<Vec<u8>>,
+        attestation: Option<crate::message::CommitAttestation>,
     ) {
         let preimage = crate::preimage::vote_preimage(
             kind,
             &self.instance,
+            &self.cfg.epoch.id,
             self.height,
             self.view,
             &bh,
@@ -368,6 +389,7 @@ impl Core {
         let vote = Vote {
             kind,
             instance: self.instance,
+            epoch: self.cfg.epoch.id,
             height: self.height,
             view: self.view,
             block_hash: bh,

@@ -42,7 +42,7 @@ fn checked_random_ivm_admission_keypair() -> KeyPair {
 }
 fn install_current_lane_manifest_registry(state: &iroha_core::state::State) {
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 }
@@ -121,7 +121,9 @@ fn unknown_syscall_is_rejected_at_admission() {
     let mut block = state.block(header);
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_hash, result) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     let unknown_syscall = unlisted_syscall_number();
     match result {
         Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) => {

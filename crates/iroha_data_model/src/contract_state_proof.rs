@@ -153,16 +153,19 @@ pub fn decode_verified_contract_state_value_inclusion_proof_v1(
 
 /// Persistent, history-independent commitment to every current physical
 /// smart-contract state key/value pair.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ContractStateMapV1 {
     map: MerkleMap,
 }
 
 impl ContractStateMapV1 {
-    /// Construct an empty accumulated map.
+    /// Construct an empty accumulated map retaining the caller's original finite pool.
+    /// Every node allocated by later updates remains charged until its final owner releases it.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(budget: &mv::allocation::AllocationBudget) -> Self {
+        Self {
+            map: MerkleMap::new(budget),
+        }
     }
 
     /// Cold-capture every current physical key/value pair, including entries
@@ -171,11 +174,13 @@ impl ContractStateMapV1 {
     ///
     /// # Errors
     /// Rejects a duplicate physical key or an entry-count overflow while
-    /// inserting the supplied current-state entries.
+    /// inserting the supplied current-state entries, or insufficient capacity in the
+    /// caller's original pool. Refusal releases the incomplete capture's node owners.
     pub fn capture<'a>(
         entries: impl IntoIterator<Item = (&'a StatePath, &'a [u8])>,
+        budget: &mv::allocation::AllocationBudget,
     ) -> Result<Self, MerkleMapError> {
-        let mut map = Self::new();
+        let mut map = Self::new(budget);
         for (path, value) in entries {
             map.replace(path, None, Some(value))?;
         }
@@ -263,7 +268,8 @@ mod tests {
     fn inclusion_binds_exact_path_value_and_accumulated_history() {
         let a = StatePath::from_str("sc/alpha/Balance").unwrap();
         let b = StatePath::from_str("sc/beta/Balance").unwrap();
-        let mut map = ContractStateMapV1::new();
+        let budget = mv::allocation::AllocationBudget::new(1 << 20);
+        let mut map = ContractStateMapV1::new(&budget);
         map.replace(&a, None, Some(b"one")).unwrap();
         let first_root = map.root();
         map.replace(&b, None, Some(b"two")).unwrap();
@@ -313,10 +319,89 @@ mod tests {
         let decoded_json: ContractStateValueInclusionProofV1 =
             norito::json::from_json(&json).expect("proof JSON decodes");
         assert_eq!(decoded_json, proof);
-        let captured =
-            ContractStateMapV1::capture([(&b, b"two".as_slice()), (&a, b"one".as_slice())])
-                .unwrap();
+        let captured = ContractStateMapV1::capture(
+            [(&b, b"two".as_slice()), (&a, b"one".as_slice())],
+            &budget,
+        )
+        .unwrap();
         assert_eq!(captured.root(), current_root);
         assert!(captured.proof(&a, b"one").unwrap().verify(&a, current_root));
+    }
+
+    #[test]
+    fn original_map_pool_funds_captures_clones_and_refusals() {
+        use mv::allocation::{AllocationBudget, AllocationRefusal};
+        let a: StatePath = "sc/alpha/Balance".parse().unwrap();
+        let b: StatePath = "sc/beta/Balance".parse().unwrap();
+        let budget = AllocationBudget::new(4096);
+        let mut map = ContractStateMapV1::new(&budget);
+        assert_eq!(
+            budget.reserved_bytes(),
+            0,
+            "empty map has no node allocation"
+        );
+        map.replace(&a, None, Some(b"one")).unwrap();
+        let root = map.root();
+        let retained = map.clone();
+        let charged = budget.reserved_bytes();
+        assert!(charged > 0);
+        // A second leaf needs a new leaf and branch while the original leaf stays live.
+        // Its demand fits the policy limit, but existing owners occupy the required space.
+        budget.set_limit_bytes(charged * 2);
+        assert!(matches!(
+            map.replace(&b, None, Some(b"two")),
+            Err(MerkleMapError::Admission(
+                AllocationRefusal::Capacity { requested_bytes, reserved_bytes, .. }
+            )) if requested_bytes == charged * 2 && reserved_bytes == charged
+        ));
+        assert_eq!(map.root(), root);
+        budget.set_limit_bytes(charged);
+        assert!(
+            matches!(
+                ContractStateMapV1::capture([(&a, b"one".as_slice())], &budget),
+                Err(MerkleMapError::Admission(
+                    AllocationRefusal::Capacity { .. }
+                ))
+            ),
+            "capture must use the supplied pool, not a fresh budget"
+        );
+        budget.set_limit_bytes(0);
+        assert!(matches!(
+            map.replace(&b, None, Some(b"two")),
+            Err(MerkleMapError::Admission(AllocationRefusal::ExceedsLimit {
+                requested_bytes, limit_bytes: 0,
+            })) if requested_bytes == charged * 2
+        ));
+        assert!(matches!(
+            ContractStateMapV1::capture([(&a, b"one".as_slice())], &budget),
+            Err(MerkleMapError::Admission(AllocationRefusal::ExceedsLimit {
+                requested_bytes, limit_bytes: 0,
+            })) if requested_bytes == charged
+        ));
+        assert_eq!(map.root(), root);
+        assert_eq!(map.len(), 1);
+        assert_eq!(budget.reserved_bytes(), charged);
+        drop(map);
+        assert_eq!(
+            budget.reserved_bytes(),
+            charged,
+            "clone keeps original nodes funded"
+        );
+        assert!(retained.proof(&a, b"one").unwrap().verify(&a, root));
+        drop(retained);
+        assert_eq!(budget.reserved_bytes(), 0);
+        budget.set_limit_bytes(4096);
+        assert!(matches!(
+            ContractStateMapV1::capture(
+                [(&a, b"one".as_slice()), (&a, b"duplicate".as_slice())],
+                &budget,
+            ),
+            Err(MerkleMapError::PreimageMismatch { .. })
+        ));
+        assert_eq!(
+            budget.reserved_bytes(),
+            0,
+            "incomplete capture releases all nodes"
+        );
     }
 }

@@ -29,8 +29,7 @@ import org.hyperledger.iroha.sdk.alias.PreparedOperationBindingV1
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
-import org.hyperledger.iroha.sdk.consensus.SumeragiV2Status
+import org.hyperledger.iroha.sdk.consensus.SumeragiStatus
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -382,18 +381,9 @@ interface IrohaClient {
         return future
     }
 
-    /** Fetches the complete non-authoritative `/v1/sumeragi/diagnostics` payload. */
-    fun getSumeragiDiagnostics(): CompletableFuture<SumeragiDiagnosticsStatus> {
-        val future = CompletableFuture<SumeragiDiagnosticsStatus>()
-        future.completeExceptionally(
-            IllegalStateException("getSumeragiDiagnostics requires a concrete IrohaClient implementation")
-        )
-        return future
-    }
-
     /** Fetches the authoritative, fail-closed `/v1/sumeragi/status` snapshot. */
-    fun getSumeragiStatus(): CompletableFuture<SumeragiV2Status> {
-        val future = CompletableFuture<SumeragiV2Status>()
+    fun getSumeragiStatus(): CompletableFuture<SumeragiStatus> {
+        val future = CompletableFuture<SumeragiStatus>()
         future.completeExceptionally(
             IllegalStateException("getSumeragiStatus requires a concrete IrohaClient implementation")
         )

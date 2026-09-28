@@ -47,15 +47,30 @@ pub struct BlockHashField<'a> {
     height: usize,
     attempted: bool,
     released: bool,
+    retry_metadata: Option<OriginalHashMetadata>,
+    retry_readers: Option<concread::release::DeferredReleaseBatch>,
+    retry_writers: concread::release::DeferredReleaseBatch,
+}
+
+#[derive(Clone, Copy)]
+struct OriginalHashMetadata {
+    mode: mv::BlockMode,
+    visible_len: usize,
+    reserved_tip: Option<usize>,
+    fixture_edits: bool,
 }
 impl<'a> BlockHashField<'a> {
     pub(crate) fn new(block: BlockHashesBlock<'a>) -> Self {
+        let target = block.inner;
         Self {
-            target: block.inner,
+            target,
             phase: Some(Phase::Executing(block)),
             height: 0,
             attempted: false,
             released: false,
+            retry_metadata: None,
+            retry_readers: target.map().map(|map| map.reader_release_batch()),
+            retry_writers: target.released.deferred_batch(),
         }
     }
     pub(crate) fn into_executing(mut self) -> BlockHashesBlock<'a> {
@@ -93,6 +108,12 @@ impl<'a> BlockHashField<'a> {
         // This validates cursor operability before its original owner is moved.
         // No edit occurs between this check and native acquisition.
         self.height = block.len();
+        self.retry_metadata.get_or_insert(OriginalHashMetadata {
+            mode: block.mode,
+            visible_len: block.visible_len,
+            reserved_tip: block.reserved_tip,
+            fixture_edits: block.fixture_edits,
+        });
         // No advisory reader acquisition: exact family/base validation happens
         // under the original writer, then reader custody stays in this slot.
         let Some(Phase::Executing(block)) = self.phase.take() else {
@@ -147,6 +168,93 @@ impl<'a> BlockHashField<'a> {
         slot.try_prepare()
             .map_err(|error| Self::refusal(error, wait))
     }
+    /// Release a refused physical prefix and restore the same private cursor in
+    /// this field. Only the original scalar metadata is restored; no hash, node,
+    /// predecessor identity, allocation or reservation is regenerated.
+    pub(crate) fn release_for_retry(&mut self) {
+        assert!(
+            self.attempted && !self.released,
+            "original hash preparation"
+        );
+        let phase = self.phase.take().expect("original hash custody");
+        let block = match phase {
+            Phase::Executing(block) => block,
+            Phase::Acquired(acquired) => {
+                let (work, notice) = acquired.release_deferred(|owner| owner.abort());
+                assert!(
+                    notice.try_merge_into(&mut self.retry_writers).is_ok(),
+                    "original hash writer source"
+                );
+                self.restore_original_work(work)
+            }
+            Phase::Preparing(slot) => {
+                let ((work, reader), writer) = slot.release_deferred(|slot| {
+                    let (writer, reader) = slot.abort_retaining();
+                    (writer.detach(), reader)
+                });
+                if let Some(reader) = reader {
+                    assert!(
+                        reader
+                            .try_merge_into(
+                                self.retry_readers
+                                    .as_mut()
+                                    .expect("original hash reader batch")
+                            )
+                            .is_ok(),
+                        "original hash reader source"
+                    );
+                }
+                assert!(
+                    writer.try_merge_into(&mut self.retry_writers).is_ok(),
+                    "original hash writer source"
+                );
+                self.restore_original_work(work)
+            }
+            _ => panic!("published or retired hash owner is not retry authority"),
+        };
+        self.phase = Some(Phase::Executing(block));
+        self.attempted = false;
+    }
+
+    /// Restore an attempted private cursor after an enclosing previsibility refusal.
+    /// A field not reached by this attempt already retains its original unlocked work.
+    pub(crate) fn recover_attempt_for_retry(&mut self) {
+        assert!(
+            !self.released,
+            "original hash field was terminally released"
+        );
+        if self.attempted {
+            self.release_for_retry();
+        }
+    }
+
+    /// Retire actual attempt notices after every aggregate physical owner unlocks.
+    /// Fresh empty batches share the very same sources without allocation.
+    pub(crate) fn retire_retry_notices(&mut self) {
+        self.executing();
+        let readers = std::mem::replace(
+            &mut self.retry_readers,
+            self.target.map().map(|map| map.reader_release_batch()),
+        );
+        let writers = std::mem::replace(
+            &mut self.retry_writers,
+            self.target.released.deferred_batch(),
+        );
+        drop((readers, writers));
+    }
+
+    fn restore_original_work(&self, work: BlockHashWork) -> BlockHashesBlock<'a> {
+        let original = self.retry_metadata.expect("original hash scalar metadata");
+        BlockHashesBlock {
+            inner: self.target,
+            work,
+            mode: original.mode,
+            visible_len: original.visible_len,
+            reserved_tip: original.reserved_tip,
+            fixture_edits: original.fixture_edits,
+        }
+    }
+
     fn refusal(
         error: OwnedWriteError,
         wait: concread::release::ReleaseWait,

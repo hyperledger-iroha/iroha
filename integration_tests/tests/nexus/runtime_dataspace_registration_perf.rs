@@ -707,11 +707,11 @@ fn leader_or_highest_height_peer_index(
         return 0;
     }
     if let Ok(status) = status_client.client().get_sumeragi_status() {
-        if let Some(index) = status
-            .leader
-            .as_ref()
-            .and_then(|leader| peers.iter().position(|peer| peer.id().public_key() == leader))
-        {
+        if let Some(index) = status.leader.as_ref().and_then(|leader| {
+            peers
+                .iter()
+                .position(|peer| peer.id().public_key() == leader)
+        }) {
             {
                 let leader_height = peers[index]
                     .client()

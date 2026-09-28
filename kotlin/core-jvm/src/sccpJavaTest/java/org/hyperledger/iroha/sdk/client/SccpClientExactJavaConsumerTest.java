@@ -1658,7 +1658,7 @@ public final class SccpClientExactJavaConsumerTest {
   private static Map<String, Object> soraOutboundExecutionPolicy() {
     final Map<String, Object> reference = map();
     reference.put("backend", "stark/fri/v1");
-    reference.put("name", "ivm-replay-binding-v1");
+    reference.put("name", "sccp-source-execution-fixture");
     reference.put("version", 1);
     reference.put("commitment", upper(0xb2, 32));
     final Map<String, Object> policy = map();

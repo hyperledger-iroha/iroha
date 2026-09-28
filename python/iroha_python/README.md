@@ -444,7 +444,7 @@ Contract deployment is performed by locally signing the native code-upload,
 manifest-registration, and atomic `CommitContractDeployment` instructions;
 the client does not expose a server-side deployment wrapper.
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+Binding-only IVM verifier labels are retired and rejected. Production proof-backed IVM invocation remains closed until the complete native execution relation and finalized State authority are implemented and qualified.
 
 Verifying-key register/update helpers validate production backends, the
 required `authority`, height ranges, and inline verifier-key commitments before

@@ -399,6 +399,37 @@ fn provider_cache_warns_when_chunk_range_missing() {
     );
 }
 #[test]
+fn admitted_provider_lookup_rechecks_expiry_without_pruning_cached_record() {
+    let signing_key = SigningKey::from_bytes(&[0x97; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA7; 32],
+        [0xB7; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let mut cache = ProviderAdvertCache::new([CapabilityType::ToriiGateway], registry);
+    cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 1)
+        .expect("council-admitted signed advert");
+    let provider = fixture.advert.body.provider_id;
+    assert!(
+        cache
+            .admitted_record_by_provider(&provider, ISSUED_AT + 1)
+            .is_some()
+    );
+    assert!(cache.record_by_provider(&provider).is_some());
+    assert!(
+        cache
+            .admitted_record_by_provider(&provider, fixture.advert.expires_at + 1)
+            .is_none()
+    );
+}
+#[test]
 fn provider_cache_rejects_relaxed_signature_policy_even_when_signed() {
     let signing_key = SigningKey::from_bytes(&[0x91; 32]);
     let modern_fixture = make_signed_advert(

@@ -10855,8 +10855,77 @@ pub unsafe extern "C" fn connect_norito_decode_transaction_receipt_json(
         )
     }
 }
+/// Separate process acceleration attempt envelope. Zero is a real ceiling.
+/// Caller-owned State execution destinations retain their original lease.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct connect_norito_acceleration_resource_limits {
+    /// Aggregate ordinary host backing bytes.
+    pub host_bytes: u64,
+    /// Aggregate pinned host backing bytes.
+    pub pinned_bytes: u64,
+    /// Aggregate requested device backing bytes.
+    pub device_bytes: u64,
+    /// Complete attempted-work owner count.
+    pub in_flight: u64,
+    /// Variable Rust control backing bytes.
+    pub metadata_bytes: u64,
+    /// Lifetime-observed physical device records.
+    pub observed_devices: u64,
+    /// Ordinal probes per discovery pass; must fit u32.
+    pub discovery_ordinals: u64,
+    /// Aggregate native module owner count.
+    pub modules: u64,
+    /// Aggregate native stream owner count.
+    pub streams: u64,
+    /// Immutable artifact bytes per module, including its NUL.
+    pub artifact_bytes: u64,
+}
+impl Default for connect_norito_acceleration_resource_limits {
+    fn default() -> Self {
+        encode_acceleration_resource_limits(iroha_accel::RegistryLimits::STANDARD)
+    }
+}
+
+fn encode_acceleration_resource_limits(
+    limits: iroha_accel::RegistryLimits,
+) -> connect_norito_acceleration_resource_limits {
+    connect_norito_acceleration_resource_limits {
+        host_bytes: limits.work.host_bytes as u64,
+        pinned_bytes: limits.work.pinned_bytes as u64,
+        device_bytes: limits.work.device_bytes as u64,
+        in_flight: limits.work.in_flight as u64,
+        metadata_bytes: limits.metadata_bytes as u64,
+        observed_devices: limits.devices as u64,
+        discovery_ordinals: limits.discovery_ordinals as u64,
+        modules: limits.modules as u64,
+        streams: limits.streams as u64,
+        artifact_bytes: limits.artifact_bytes as u64,
+    }
+}
+
+fn decode_acceleration_resource_limits(
+    limits: connect_norito_acceleration_resource_limits,
+) -> Result<iroha_accel::RegistryLimits, ()> {
+    let size = |value| usize::try_from(value).map_err(|_| ());
+    Ok(iroha_accel::RegistryLimits {
+        metadata_bytes: size(limits.metadata_bytes)?,
+        devices: size(limits.observed_devices)?,
+        discovery_ordinals: u32::try_from(limits.discovery_ordinals).map_err(|_| ())?,
+        modules: size(limits.modules)?,
+        streams: size(limits.streams)?,
+        artifact_bytes: size(limits.artifact_bytes)?,
+        work: iroha_accel::GpuResourceLimits {
+            host_bytes: size(limits.host_bytes)?,
+            pinned_bytes: size(limits.pinned_bytes)?,
+            device_bytes: size(limits.device_bytes)?,
+            in_flight: size(limits.in_flight)?,
+        },
+    })
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct connect_norito_acceleration_config {
     pub enable_simd: u8,
     pub enable_metal: u8,
@@ -10873,6 +10942,13 @@ pub struct connect_norito_acceleration_config {
     pub prefer_cpu_sha2_max_leaves_aarch64_present: u8,
     pub prefer_cpu_sha2_max_leaves_x86: u64,
     pub prefer_cpu_sha2_max_leaves_x86_present: u8,
+    /// Complete process attempt envelope, independent of State destination funding.
+    pub resource_limits: connect_norito_acceleration_resource_limits,
+}
+impl Default for connect_norito_acceleration_config {
+    fn default() -> Self {
+        encode_acceleration_config(AccelerationConfig::default())
+    }
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -10920,6 +10996,7 @@ fn encode_acceleration_config(cfg: AccelerationConfig) -> connect_norito_acceler
         prefer_cpu_sha2_max_leaves_aarch64_present,
         prefer_cpu_sha2_max_leaves_x86,
         prefer_cpu_sha2_max_leaves_x86_present,
+        resource_limits: encode_acceleration_resource_limits(cfg.resource_limits),
     }
 }
 fn encode_backend_status(
@@ -10954,58 +11031,95 @@ fn encode_backend_status(
         last_error_len,
     }
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_set_acceleration_config(
-    cfg: *const connect_norito_acceleration_config,
-) {
-    unsafe {
-        let cfg = if let Some(cfg_ref) = cfg.as_ref() {
-            cfg_ref
-        } else {
-            ivm::set_acceleration_config(AccelerationConfig::default());
-            return;
-        };
-        let bool_from = |v: u8| v != 0;
-        let usize_option = |present: u8, value: u64| {
-            if present != 0 {
-                Some(value as usize)
-            } else {
-                None
-            }
-        };
-        let rust_cfg = AccelerationConfig {
-            enable_simd: bool_from(cfg.enable_simd),
-            enable_metal: bool_from(cfg.enable_metal),
-            enable_cuda: bool_from(cfg.enable_cuda),
-            max_gpus: usize_option(cfg.max_gpus_present, cfg.max_gpus),
-            merkle_min_leaves_gpu: usize_option(
-                cfg.merkle_min_leaves_gpu_present,
-                cfg.merkle_min_leaves_gpu,
-            ),
-            merkle_min_leaves_metal: usize_option(
-                cfg.merkle_min_leaves_metal_present,
-                cfg.merkle_min_leaves_metal,
-            ),
-            merkle_min_leaves_cuda: usize_option(
-                cfg.merkle_min_leaves_cuda_present,
-                cfg.merkle_min_leaves_cuda,
-            ),
-            prefer_cpu_sha2_max_leaves_aarch64: usize_option(
-                cfg.prefer_cpu_sha2_max_leaves_aarch64_present,
-                cfg.prefer_cpu_sha2_max_leaves_aarch64,
-            ),
-            prefer_cpu_sha2_max_leaves_x86: usize_option(
-                cfg.prefer_cpu_sha2_max_leaves_x86_present,
-                cfg.prefer_cpu_sha2_max_leaves_x86,
-            ),
-        };
-        ivm::set_acceleration_config(rust_cfg);
-    }
+fn decode_acceleration_config(
+    cfg: &connect_norito_acceleration_config,
+) -> Result<AccelerationConfig, ()> {
+    let boolean = |value| match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(()),
+    };
+    let optional = |present, value| match (present, value) {
+        (0, 0) => Ok(None),
+        (1, value) => usize::try_from(value).map(Some).map_err(|_| ()),
+        _ => Err(()),
+    };
+    Ok(AccelerationConfig {
+        resource_limits: decode_acceleration_resource_limits(cfg.resource_limits)?,
+        enable_simd: boolean(cfg.enable_simd)?,
+        enable_metal: boolean(cfg.enable_metal)?,
+        enable_cuda: boolean(cfg.enable_cuda)?,
+        max_gpus: optional(cfg.max_gpus_present, cfg.max_gpus)?,
+        merkle_min_leaves_gpu: optional(
+            cfg.merkle_min_leaves_gpu_present,
+            cfg.merkle_min_leaves_gpu,
+        )?,
+        merkle_min_leaves_metal: optional(
+            cfg.merkle_min_leaves_metal_present,
+            cfg.merkle_min_leaves_metal,
+        )?,
+        merkle_min_leaves_cuda: optional(
+            cfg.merkle_min_leaves_cuda_present,
+            cfg.merkle_min_leaves_cuda,
+        )?,
+        prefer_cpu_sha2_max_leaves_aarch64: optional(
+            cfg.prefer_cpu_sha2_max_leaves_aarch64_present,
+            cfg.prefer_cpu_sha2_max_leaves_aarch64,
+        )?,
+        prefer_cpu_sha2_max_leaves_x86: optional(
+            cfg.prefer_cpu_sha2_max_leaves_x86_present,
+            cfg.prefer_cpu_sha2_max_leaves_x86,
+        )?,
+    })
 }
+
+/// Apply the complete first-release record, or restore defaults for a null pointer.
+/// Returns zero on application, -2 for malformed flags/counts, or -3 for an
+/// incorrect record length. Rejections occur before configuration mutation.
+///
+/// # Safety
+/// For an exact nonzero length, the pointer must reference a readable complete
+/// current record. Null plus length zero restores defaults. All other lengths
+/// are rejected before accessing the pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_get_acceleration_config(
-    out_cfg: *mut connect_norito_acceleration_config,
+pub unsafe extern "C" fn connect_norito_acceleration_config_set_v1(
+    cfg: *const connect_norito_acceleration_config,
+    cfg_len: usize,
 ) -> c_int {
+    if cfg_len
+        != if cfg.is_null() {
+            0
+        } else {
+            std::mem::size_of::<connect_norito_acceleration_config>()
+        }
+    {
+        return -3;
+    }
+    let rust_cfg = match unsafe { cfg.as_ref() } {
+        None => AccelerationConfig::default(),
+        Some(cfg) => match decode_acceleration_config(cfg) {
+            Ok(value) => value,
+            Err(()) => return -2,
+        },
+    };
+    ivm::set_acceleration_config(rust_cfg);
+    0
+}
+/// Write the current requested acceleration configuration into an exact V1 record.
+/// Returns `0` on success, `-1` for a null output with the exact current size,
+/// or `-3` for any other size, before pointer access or output mutation.
+///
+/// # Safety
+/// With the exact record size and a non-null pointer, `out_cfg` must be aligned
+/// and valid for writing one complete [`connect_norito_acceleration_config`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_acceleration_config_get_v1(
+    out_cfg: *mut connect_norito_acceleration_config,
+    out_len: usize,
+) -> c_int {
+    if out_len != std::mem::size_of::<connect_norito_acceleration_config>() {
+        return -3;
+    }
     unsafe {
         if out_cfg.is_null() {
             return -1;
@@ -11016,10 +11130,25 @@ pub unsafe extern "C" fn connect_norito_get_acceleration_config(
         0
     }
 }
+/// Write current requested policy and backend diagnostics into an exact V1 record.
+/// Returns `0` on success, `-1` for a null output with the exact current size,
+/// or `-3` for any other size, before pointer access or diagnostic allocation.
+/// Each non-null diagnostic byte pointer in the returned backend records is
+/// caller-owned and must be released exactly once with [`connect_norito_free`]
+/// after use. The bytes remain valid until that release.
+///
+/// # Safety
+/// With the exact record size and a non-null pointer, `out_state` must be aligned
+/// and valid for writing one complete [`connect_norito_acceleration_state`].
+/// Release diagnostics from a previous record before overwriting its storage.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_get_acceleration_state(
+pub unsafe extern "C" fn connect_norito_acceleration_state_get_v1(
     out_state: *mut connect_norito_acceleration_state,
+    out_len: usize,
 ) -> c_int {
+    if out_len != std::mem::size_of::<connect_norito_acceleration_state>() {
+        return -3;
+    }
     unsafe {
         if out_state.is_null() {
             return -1;
@@ -15950,8 +16079,112 @@ mod tests {
         );
         connect_norito_free(err_out_ptr);
     }
+    static ACCELERATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn acceleration_resource_limits_defaults_and_zero_roundtrip() {
+        let defaults = connect_norito_acceleration_config::default();
+        assert_eq!(defaults.enable_cuda, 1);
+        assert_eq!(
+            decode_acceleration_config(&defaults)
+                .unwrap()
+                .resource_limits,
+            iroha_accel::RegistryLimits::STANDARD
+        );
+        let zero = connect_norito_acceleration_resource_limits {
+            host_bytes: 0,
+            pinned_bytes: 0,
+            device_bytes: 0,
+            in_flight: 0,
+            metadata_bytes: 0,
+            observed_devices: 0,
+            discovery_ordinals: 0,
+            modules: 0,
+            streams: 0,
+            artifact_bytes: 0,
+        };
+        assert_eq!(
+            encode_acceleration_resource_limits(decode_acceleration_resource_limits(zero).unwrap()),
+            zero
+        );
+    }
+
+    #[test]
+    fn malformed_acceleration_record_is_rejected_before_configuration_mutation() {
+        let _guard = ACCELERATION_TEST_LOCK
+            .lock()
+            .expect("acceleration test lock");
+        let original = ivm::acceleration_config();
+        let mut bad = encode_acceleration_config(original);
+        bad.resource_limits.discovery_ordinals = u64::from(u32::MAX) + 1;
+        assert!(decode_acceleration_config(&bad).is_err());
+        assert_eq!(
+            unsafe { connect_norito_acceleration_config_set_v1(&bad, std::mem::size_of_val(&bad)) },
+            -2
+        );
+        assert_eq!(
+            ivm::acceleration_config().resource_limits,
+            original.resource_limits
+        );
+        bad = encode_acceleration_config(original);
+        bad.enable_cuda = 2;
+        assert!(decode_acceleration_config(&bad).is_err());
+        bad = encode_acceleration_config(original);
+        bad.max_gpus_present = 0;
+        bad.max_gpus = 1;
+        assert!(decode_acceleration_config(&bad).is_err());
+        bad.max_gpus_present = 2;
+        assert!(decode_acceleration_config(&bad).is_err());
+    }
+
+    #[test]
+    fn acceleration_rejects_retired_or_truncated_record_sizes_before_access() {
+        let config = connect_norito_acceleration_config::default();
+        for wrong_size in [
+            0,
+            104,
+            std::mem::size_of_val(&config) - 1,
+            std::mem::size_of_val(&config) + 1,
+        ] {
+            assert_eq!(
+                unsafe { connect_norito_acceleration_config_set_v1(&config, wrong_size) },
+                -3
+            );
+            let mut bytes = [0xA5u8; std::mem::size_of::<connect_norito_acceleration_config>()];
+            assert_eq!(
+                unsafe {
+                    connect_norito_acceleration_config_get_v1(bytes.as_mut_ptr().cast(), wrong_size)
+                },
+                -3
+            );
+            assert!(bytes.iter().all(|&byte| byte == 0xA5));
+        }
+        let mut bytes = [0x5Au8; std::mem::size_of::<connect_norito_acceleration_state>()];
+        for wrong_size in [0, 176, bytes.len() - 1, bytes.len() + 1] {
+            assert_eq!(
+                unsafe {
+                    connect_norito_acceleration_state_get_v1(bytes.as_mut_ptr().cast(), wrong_size)
+                },
+                -3
+            );
+            assert!(bytes.iter().all(|&byte| byte == 0x5A));
+        }
+        assert_eq!(
+            unsafe {
+                connect_norito_acceleration_config_set_v1(
+                    std::ptr::null(),
+                    std::mem::size_of_val(&config),
+                )
+            },
+            -3
+        );
+    }
+
     #[test]
     fn acceleration_config_roundtrip() {
+        let _guard = ACCELERATION_TEST_LOCK
+            .lock()
+            .expect("acceleration test lock");
         let previous = ivm::acceleration_config();
         let _reset = ResetConfig(previous);
         let new_cfg = connect_norito_acceleration_config {
@@ -15970,14 +16203,38 @@ mod tests {
             prefer_cpu_sha2_max_leaves_aarch64_present: 0,
             prefer_cpu_sha2_max_leaves_x86: 256,
             prefer_cpu_sha2_max_leaves_x86_present: 1,
+            resource_limits: connect_norito_acceleration_resource_limits {
+                host_bytes: 71,
+                pinned_bytes: 79,
+                device_bytes: 83,
+                in_flight: 2,
+                metadata_bytes: 1024 * 1024,
+                observed_devices: 16,
+                discovery_ordinals: 47,
+                modules: 19,
+                streams: 3,
+                artifact_bytes: 89,
+            },
         };
         unsafe {
-            connect_norito_set_acceleration_config(&new_cfg);
+            assert_eq!(
+                connect_norito_acceleration_config_set_v1(
+                    &new_cfg,
+                    std::mem::size_of_val(&new_cfg)
+                ),
+                0
+            );
         }
         let mut out_cfg = MaybeUninit::<connect_norito_acceleration_config>::uninit();
-        let rc = unsafe { connect_norito_get_acceleration_config(out_cfg.as_mut_ptr()) };
+        let rc = unsafe {
+            connect_norito_acceleration_config_get_v1(
+                out_cfg.as_mut_ptr(),
+                std::mem::size_of::<connect_norito_acceleration_config>(),
+            )
+        };
         assert_eq!(rc, 0);
         let out_cfg = unsafe { out_cfg.assume_init() };
+        assert_eq!(out_cfg.resource_limits, new_cfg.resource_limits);
         assert_eq!(out_cfg.enable_metal, new_cfg.enable_metal);
         assert_eq!(out_cfg.enable_cuda, new_cfg.enable_cuda);
         assert_eq!(out_cfg.enable_simd, new_cfg.enable_simd);
@@ -16020,7 +16277,12 @@ mod tests {
             out_cfg.prefer_cpu_sha2_max_leaves_x86_present,
             new_cfg.prefer_cpu_sha2_max_leaves_x86_present
         );
-        let rc_err = unsafe { connect_norito_get_acceleration_config(std::ptr::null_mut()) };
+        let rc_err = unsafe {
+            connect_norito_acceleration_config_get_v1(
+                std::ptr::null_mut(),
+                std::mem::size_of::<connect_norito_acceleration_config>(),
+            )
+        };
         assert_eq!(rc_err, -1);
     }
     #[test]

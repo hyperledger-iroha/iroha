@@ -32,6 +32,9 @@ fn native_process_three_route_source_fixture() -> Box<NativeProcessFixture> {
     )
     .unwrap();
     let mut state = State::try_new_with_chain_and_network_id(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),

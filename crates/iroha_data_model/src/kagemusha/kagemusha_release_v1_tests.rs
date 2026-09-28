@@ -107,6 +107,47 @@ fn reseal_profile_qualification(receipt: &mut KagemushaInternalValidationReceipt
 }
 
 #[test]
+fn streaming_authority_policy_digest_preserves_canonical_frame_identity() {
+    let keys = authority_keys();
+    for signer_count in 1..=keys.len() {
+        let policy = authority_policy(&keys[..signer_count], signer_count as u16);
+        let frame = norito::encode_canonical(&policy).expect("canonical policy frame");
+        assert_eq!(norito::canonical_frame_len(&policy).unwrap(), frame.len());
+        assert_eq!(
+            norito::schema::identity::frame_hash::<KagemushaReleaseAuthorityPolicyV1>(),
+            norito::core::schema_hash_for_name(AUTHORITY_POLICY_FRAME_NAME)
+        );
+        assert_eq!(
+            policy.canonical_digest().unwrap(),
+            digest_encoded(AUTHORITY_POLICY_DIGEST_DOMAIN, &policy).unwrap()
+        );
+    }
+}
+
+#[test]
+fn authority_policy_validation_counts_the_complete_canonical_frame() {
+    let policy = authority_policy(&authority_keys(), 2);
+    let frame_len = norito::canonical_frame_len(&policy).expect("count canonical policy frame");
+    assert_eq!(
+        frame_len,
+        norito::encode_canonical(&policy)
+            .expect("encode canonical policy frame")
+            .len()
+    );
+    assert!(frame_len <= KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1);
+    policy.validate().expect("bounded signer policy");
+
+    // Every admitted public key has a bounded payload and at most 32 signers
+    // are permitted. Keep a conservative framing allowance below the policy cap.
+    assert!(
+        KAGEMUSHA_RELEASE_AUTHORITY_MAX_SIGNERS_V1
+            * (iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1_024)
+            + 4_096
+            < KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1
+    );
+}
+
+#[test]
 fn authenticates_complete_typed_evidence_release() {
     let artifacts = artifacts();
     let receipt = receipt(&artifacts);
@@ -433,6 +474,41 @@ fn experimental_receipt_rejects_production_only_evidence() {
             "{label} must be rejected during canonical decode"
         );
     }
+}
+
+#[test]
+fn governed_verifier_registry_installs_only_threshold_authenticated_release() {
+    let artifacts = artifacts();
+    let receipt = receipt(&artifacts);
+    let manifest = manifest(artifacts, &receipt);
+    let keys = authority_keys();
+    let policy = authority_policy(&keys, 2);
+    let attestation = release_attestation(&manifest, &receipt, &policy, &keys[..2]);
+    let mut registry = crate::kagemusha::KagemushaGovernedVerifierRegistryV1::default();
+    registry.initialize_authority_policy(policy).unwrap();
+    let mut unsigned = attestation.clone();
+    unsigned.approvals.pop();
+    assert!(
+        registry
+            .install_authenticated_release(&manifest, &receipt, &unsigned)
+            .is_err()
+    );
+    assert!(registry.releases.is_empty());
+    registry
+        .install_authenticated_release(&manifest, &receipt, &attestation)
+        .unwrap();
+    assert_eq!(registry.active_release_id, None);
+    assert_eq!(registry.releases.len(), 1);
+    assert_eq!(
+        registry.releases[0].status,
+        crate::kagemusha::KAGEMUSHA_RELEASE_STANDBY_V1
+    );
+    assert!(
+        registry
+            .install_authenticated_release(&manifest, &receipt, &attestation)
+            .is_err()
+    );
+    registry.validate().unwrap();
 }
 
 #[test]
@@ -1969,5 +2045,241 @@ fn release_digests_bind_inner_outer_helper_and_lifecycle_artifact_provenance() {
         )
         .expect("changed release profile digest"),
         profile_digest
+    );
+}
+
+fn governed_release_install_instruction()
+-> crate::isi::governance::ProposeKagemushaVerifierReleaseInstallV1 {
+    use crate::{
+        governance::types::KagemushaVerifierReleaseInstallProposalV1,
+        kagemusha::KagemushaGovernedVerifierRegistryV1,
+    };
+    let inventory = artifacts();
+    let receipt = receipt(&inventory);
+    let manifest = manifest(inventory, &receipt);
+    let keys = authority_keys();
+    let policy = authority_policy(&keys, 2);
+    let attestation = release_attestation(&manifest, &receipt, &policy, &keys[..2]);
+    let mut predecessor = KagemushaGovernedVerifierRegistryV1::default();
+    predecessor
+        .initialize_authority_policy(policy)
+        .expect("governed signer policy");
+    let proposal = KagemushaVerifierReleaseInstallProposalV1 {
+        proposal_operator: crate::AccountId::new(keys[0].public_key().clone()),
+        network_id: manifest.network_id,
+        expected_predecessor: predecessor.clone(),
+        manifest,
+        receipt,
+        attestation,
+    };
+    crate::isi::governance::ProposeKagemushaVerifierReleaseInstallV1 { proposal }
+}
+
+#[test]
+#[ignore = "explicit canonical governance fixture regeneration"]
+fn print_governed_release_fixtures() {
+    use crate::{
+        governance::types::{KagemushaVerifierReleaseActivateProposalV1, ProposalKind},
+        isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
+    };
+    let install = governed_release_install_instruction();
+    install
+        .proposal
+        .validate()
+        .expect("real threshold signatures and exact manifest network");
+    let activate = ProposeKagemushaVerifierReleaseActivateV1 {
+        proposal: KagemushaVerifierReleaseActivateProposalV1 {
+            proposal_operator: install.proposal.proposal_operator.clone(),
+            network_id: install.proposal.network_id,
+            expected_predecessor: install
+                .proposal
+                .successor()
+                .expect("authenticated predecessor"),
+            successor_release_id: install.proposal.manifest.release_id,
+        },
+    };
+    activate
+        .proposal
+        .validate()
+        .expect("exact sole standby activation");
+    println!(
+        "GOVERNANCE_RELEASE_FIXTURE_INSTALL_HEX={}",
+        hex::encode(norito::encode_canonical(&install).unwrap())
+    );
+    println!(
+        "GOVERNANCE_RELEASE_FIXTURE_INSTALL_JSON={}",
+        norito::json::to_json(&ProposalKind::KagemushaVerifierReleaseInstall(
+            install.proposal
+        ))
+        .unwrap()
+    );
+    println!(
+        "GOVERNANCE_RELEASE_FIXTURE_ACTIVATE_HEX={}",
+        hex::encode(norito::encode_canonical(&activate).unwrap())
+    );
+    println!(
+        "GOVERNANCE_RELEASE_FIXTURE_ACTIVATE_JSON={}",
+        norito::json::to_json(&ProposalKind::KagemushaVerifierReleaseActivate(
+            activate.proposal
+        ))
+        .unwrap()
+    );
+}
+
+#[test]
+fn governed_release_install_is_canonical_standby_and_requires_exact_evidence() {
+    use crate::{
+        governance::types::{FIRST_RELEASE_MAX_EXACT_JSON_U64, ProposalKind},
+        isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
+        kagemusha::KAGEMUSHA_RELEASE_STANDBY_V1,
+    };
+
+    let proposal = governed_release_install_instruction().proposal;
+    let predecessor = proposal.expected_predecessor.clone();
+    let successor = proposal
+        .successor()
+        .expect("threshold-authenticated standby");
+    assert_eq!(successor.active_release_id, None);
+    assert_eq!(successor.releases.len(), 1);
+    assert_eq!(successor.releases[0].status, KAGEMUSHA_RELEASE_STANDBY_V1);
+    assert_eq!(
+        successor.releases[0].release_id,
+        proposal.manifest.release_id
+    );
+    successor.validate().expect("canonical inactive registry");
+    assert_eq!(
+        predecessor.releases.len(),
+        0,
+        "proposal cannot mutate predecessor"
+    );
+
+    let mut forged = proposal.clone();
+    forged.receipt.source_tree_digest[0] ^= 1;
+    assert!(forged.validate().is_err(), "changed receipt cannot install");
+    let mut duplicate = proposal.clone();
+    duplicate.expected_predecessor = successor;
+    assert!(
+        duplicate.validate().is_err(),
+        "release cannot be installed twice"
+    );
+    let mut oversized_json_number = proposal.clone();
+    oversized_json_number.receipt.profile_qualifications[0]
+        .profile
+        .hardware_profile
+        .policy_epoch = FIRST_RELEASE_MAX_EXACT_JSON_U64 + 1;
+    assert!(
+        ProposalKind::KagemushaVerifierReleaseInstall(oversized_json_number)
+            .first_release_exact_json_u64_invariant_error()
+            .is_some(),
+        "deeply nested release fields remain inside the V1 JSON integer bound"
+    );
+
+    let instruction = ProposeKagemushaVerifierReleaseInstallV1 { proposal };
+    let json = norito::json::to_json(&ProposalKind::KagemushaVerifierReleaseInstall(
+        instruction.proposal.clone(),
+    ))
+    .expect("Norito JSON proposal projection");
+    assert_eq!(
+        format!("{json}\n"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.json"
+        )),
+        "canonical verifier-release install JSON changed",
+    );
+    let frame = norito::encode_canonical(&instruction).expect("canonical instruction frame");
+    let decoded: ProposeKagemushaVerifierReleaseInstallV1 =
+        norito::decode_canonical(&frame).expect("decode canonical instruction frame");
+    assert_eq!(decoded, instruction);
+    assert_eq!(
+        frame.as_slice(),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
+        )),
+        "canonical verifier-release install frame changed",
+    );
+}
+
+#[test]
+fn governed_release_activation_is_canonical_and_requires_exact_standby() {
+    use crate::{
+        governance::types::{KagemushaVerifierReleaseActivateProposalV1, ProposalKind},
+        isi::governance::{
+            ProposeKagemushaVerifierReleaseActivateV1, ProposeKagemushaVerifierReleaseInstallV1,
+        },
+        kagemusha::{KAGEMUSHA_RELEASE_ACTIVE_V1, KAGEMUSHA_RELEASE_STANDBY_V1},
+    };
+
+    let install: ProposeKagemushaVerifierReleaseInstallV1 =
+        norito::decode_canonical(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
+        )))
+        .expect("authenticated release-install fixture");
+    let predecessor = install.proposal.successor().expect("standby predecessor");
+    assert_eq!(predecessor.releases[0].status, KAGEMUSHA_RELEASE_STANDBY_V1);
+    let proposal = KagemushaVerifierReleaseActivateProposalV1 {
+        proposal_operator: install.proposal.proposal_operator,
+        network_id: install.proposal.network_id,
+        expected_predecessor: predecessor.clone(),
+        successor_release_id: install.proposal.manifest.release_id,
+    };
+    let successor = proposal.successor().expect("first exact activation");
+    assert_eq!(
+        successor.active_release_id,
+        Some(proposal.successor_release_id)
+    );
+    assert_eq!(successor.releases[0].status, KAGEMUSHA_RELEASE_ACTIVE_V1);
+    assert_eq!(
+        predecessor.active_release_id, None,
+        "predecessor is immutable"
+    );
+    let mut missing = proposal.clone();
+    missing.successor_release_id = [0x7F; 32];
+    assert!(
+        missing.validate().is_err(),
+        "absent release cannot activate"
+    );
+    let mut replay = proposal.clone();
+    replay.expected_predecessor = successor;
+    assert!(replay.validate().is_err(), "activation cannot replay");
+    let mut multiple = proposal.clone();
+    let mut second = multiple.expected_predecessor.releases[0].clone();
+    second.release_id = [0xFF; 32];
+    multiple.expected_predecessor.releases.push(second);
+    multiple
+        .expected_predecessor
+        .validate()
+        .expect("two standby rows are structurally valid");
+    assert!(
+        multiple.validate().is_err(),
+        "single-release local reload cannot serve multiple standby rows"
+    );
+
+    let json = norito::json::to_json(&ProposalKind::KagemushaVerifierReleaseActivate(
+        proposal.clone(),
+    ))
+    .expect("Norito JSON activation projection");
+    let instruction = ProposeKagemushaVerifierReleaseActivateV1 { proposal };
+    let frame = norito::encode_canonical(&instruction).expect("canonical activation frame");
+    let decoded: ProposeKagemushaVerifierReleaseActivateV1 =
+        norito::decode_canonical(&frame).expect("decode canonical activation frame");
+    assert_eq!(decoded, instruction);
+    assert_eq!(
+        frame.as_slice(),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
+        )),
+        "canonical verifier activation frame changed",
+    );
+    assert_eq!(
+        format!("{json}\n"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.json"
+        )),
+        "canonical verifier activation JSON changed",
     );
 }

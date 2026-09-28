@@ -378,11 +378,15 @@ impl DaReceiptCursorIndex {
     ///
     /// Returns [`DaReceiptCursorError`] when any record regresses or skips the next expected
     /// sequence relative to its cursor.
-    pub fn record_bundle(
+    pub fn record_bundle<'a, I>(
         &mut self,
         block_height: u64,
-        records: &[DaCommitmentRecord],
-    ) -> Result<Vec<(LaneEpoch, u64)>, DaReceiptCursorError> {
+        records: I,
+    ) -> Result<Vec<(LaneEpoch, u64)>, DaReceiptCursorError>
+    where
+        I: IntoIterator<Item = &'a DaCommitmentRecord>,
+        I::IntoIter: ExactSizeIterator,
+    {
         let plan = self.plan_bundle(block_height, records)?;
         self.by_lane_epoch.extend(plan.updates);
         Ok(plan.advanced)
@@ -400,11 +404,16 @@ impl DaReceiptCursorIndex {
     ) -> Result<(), DaReceiptCursorError> {
         self.plan_bundle(block_height, records).map(|_| ())
     }
-    fn plan_bundle(
+    fn plan_bundle<'a, I>(
         &self,
         block_height: u64,
-        records: &[DaCommitmentRecord],
-    ) -> Result<DaReceiptCursorPlan, DaReceiptCursorError> {
+        records: I,
+    ) -> Result<DaReceiptCursorPlan, DaReceiptCursorError>
+    where
+        I: IntoIterator<Item = &'a DaCommitmentRecord>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let records = records.into_iter();
         let mut advanced = Vec::with_capacity(records.len());
         let mut updates = BTreeMap::new();
         for record in records {
@@ -1138,6 +1147,38 @@ mod tests {
         };
         let catalog = LaneCatalog::new(lane_count, vec![metadata]).expect("lane catalog");
         ConfigLaneConfig::from_catalog(&catalog)
+    }
+    #[test]
+    fn borrowed_bundle_positions_keep_receipt_order_and_atomic_failure() {
+        let records = [
+            sample_record(&sample_receipt(0, 1, 1), 1),
+            sample_record(&sample_receipt(0, 1, 9), 9),
+            sample_record(&sample_receipt(0, 1, 2), 2),
+        ];
+        let positions = [0, 2];
+        let mut index = DaReceiptCursorIndex::default();
+        let advanced = index
+            .record_bundle(3, positions.iter().map(|&i| &records[i]))
+            .unwrap();
+        let lane_epoch = LaneEpoch::new(LaneId::new(0), 1);
+        assert_eq!(advanced, vec![(lane_epoch, 1), (lane_epoch, 2)]);
+        assert_eq!(index.by_lane_epoch[&lane_epoch].sequence, 2);
+        let rejected = [
+            sample_record(&sample_receipt(0, 1, 3), 3),
+            sample_record(&sample_receipt(1, 1, 1), 1),
+            sample_record(&sample_receipt(0, 1, 5), 5),
+        ];
+        assert!(
+            index
+                .record_bundle(4, positions.iter().map(|&i| &rejected[i]))
+                .is_err()
+        );
+        assert_eq!(index.by_lane_epoch[&lane_epoch].sequence, 2);
+        assert!(
+            !index
+                .by_lane_epoch
+                .contains_key(&LaneEpoch::new(LaneId::new(1), 1))
+        );
     }
     #[test]
     fn receipt_cursor_record_bundle_rolls_back_when_later_record_regresses() {
