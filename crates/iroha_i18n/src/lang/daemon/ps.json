@@ -5,6 +5,7 @@
   "error.logger": "د لاګ کولو سیستم پیل نه شو",
   "error.start": "\u2066Iroha\u2069 پیل نه شو",
   "error.run": "\u2066Iroha\u2069 چلولو پر مهال تېروتنه رامنځته شوه",
+  "error.check_storage": "\u2066Kura\u2069 (د بلاک زېرمه) د یوازې لوستلو زېرمې ازموینه ونه منله",
   "error.start_p2p": "د \u2066P2P\u2069 شبکه پیل نه شوه",
   "error.init_kura": "\u2066Kura\u2069 (د بلاک زېرمه) پیل نه شوه",
   "error.start_dev_telemetry": "د پرمختیا ټیلي مېټري خدمت پیل نه شو",

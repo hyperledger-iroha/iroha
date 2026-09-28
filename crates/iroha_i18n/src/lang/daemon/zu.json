@@ -5,6 +5,7 @@
   "error.logger": "Isistimu yokugcinwa kwezibalo ayiqalanga",
   "error.start": "Iroha ayikwazanga ukuqala",
   "error.run": "Kube nephutha ngesikhathi kuqhutshwa i-Iroha",
+  "error.check_storage": "I-Kura (isiphetho sokugcina izibhalo) yehlulekile ekuhlolweni kwesitoreji sokufunda kuphela",
   "error.start_p2p": "Ayikwazanga ukuqala inethiwekhi ye-P2P",
   "error.init_kura": "Ayikwazanga ukuqala i-Kura (isiphetho sokugcina izibhalo)",
   "error.start_dev_telemetry": "Ayikwazanga ukuqala isevisi ye-telemetry yentuthuko",

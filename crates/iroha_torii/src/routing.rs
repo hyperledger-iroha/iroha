@@ -6203,15 +6203,18 @@ pub(crate) async fn handle_v1_bridge_finality(
     )
     .await
 }
-/// GET /v1/bridge/finality/attestation/{height} — Challenge-bound node-signed
-/// finality proof for the exact durable state tip plus its committed genesis.
+/// GET /v1/bridge/finality/attestation/{height|latest} — Challenge-bound
+/// node-signed finality proof for the exact durable state tip plus its
+/// committed genesis. `height = None` selects `latest`: the durable tip of the
+/// same immutable view that produces the proof (at least 1, so an empty ledger
+/// still reports a valid selector), so it never names a height it did not sign.
 /// Exact requested/applied/status height races return a selector-bound HTTP 409;
 /// missing or corrupt proofs remain fixed failures.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_attestation(
     state: Arc<CoreState>,
     status: iroha_data_model::block::consensus_v2::SumeragiV2Status,
-    height: u64,
+    height: Option<u64>,
     challenge: [u8; 32],
     signer: KeyPair,
     format: crate::utils::ResponseFormat,
@@ -6222,6 +6225,8 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
         "bridge finality attestation worker failed",
         move || {
             let view = state.view();
+            let height =
+                height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(u64::MAX).max(1));
             let status_height = status.last_committed_height;
             let network_id = *view.network_id();
             let node_id = PeerId::new(signer.public_key().clone());

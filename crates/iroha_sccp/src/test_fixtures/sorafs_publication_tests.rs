@@ -1,8 +1,11 @@
 //! Publication evidence tests with exact signed executions and a real four-validator RS16 lineage.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::*;
 use iroha_data_model::{
     isi::sorafs::AssertSorafsPublicationV1,
+    nexus::AxtPolicySnapshot,
     sorafs::{
         pin_registry::{ManifestDigest, ReplicationOrderId},
         publication::{SorafsPublicationProofV1, verify_sorafs_publication_v1},
@@ -56,10 +59,10 @@ fn publication_block(
         .set_execution_outputs(
             outputs,
             accepted,
-            Default::default(),
+            BTreeMap::default(),
             Vec::new(),
-            Default::default(),
-            Default::default(),
+            AxtPolicySnapshot::default(),
+            BTreeSet::default(),
             Vec::new(),
             &exact_fixture_output_limits(),
         )

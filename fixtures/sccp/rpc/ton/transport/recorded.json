@@ -1,0 +1,128 @@
+{
+  "account": "0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe",
+  "captured": "2026-09-28",
+  "exchanges": {
+    "error_block_not_found": {
+      "answer": "answers/error_block_not_found.tl",
+      "answer_bytes": 128,
+      "request": "1ef7c8fa01000000ffffffff00000000000000801e5bbf05"
+    },
+    "error_send_message": {
+      "answer": "answers/error_send_message.tl",
+      "answer_bytes": 132,
+      "request": "82d40a6903000102"
+    },
+    "get_account_state": {
+      "answer": "answers/get_account_state.tl",
+      "answer_bytes": 5544,
+      "request": "250e896bffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed200000000b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe"
+    },
+    "get_all_shards_info": {
+      "answer": "answers/get_all_shards_info.tl",
+      "answer_bytes": 700,
+      "request": "6bfdd374ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed2"
+    },
+    "get_block": {
+      "answer": "answers/get_block.tl",
+      "answer_bytes": 10040,
+      "request": "0dcf7763ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed2"
+    },
+    "get_block_header": {
+      "answer": "answers/get_block_header.tl",
+      "answer_bytes": 432,
+      "request": "9e06ec21ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed200000000"
+    },
+    "get_block_proof_backward": {
+      "answer": "answers/get_block_proof_backward.tl",
+      "answer_bytes": 4180,
+      "request": "449cea8a01000000ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed2ffffffff00000000000000805510b00546e2543fe316a998857f006c994044136454e44831c8274e6876c165cb9cde3e26d2cd172102794193e03dcb0299ccc02386151575a0c65a0523b50c32418f43"
+    },
+    "get_block_proof_forward": {
+      "answer": "answers/get_block_proof_forward.tl",
+      "answer_bytes": 41596,
+      "request": "449cea8a01000000ffffffff00000000000000805510b00546e2543fe316a998857f006c994044136454e44831c8274e6876c165cb9cde3e26d2cd172102794193e03dcb0299ccc02386151575a0c65a0523b50c32418f43ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed2"
+    },
+    "get_block_proof_key_hop": {
+      "answer": "answers/get_block_proof_key_hop.tl",
+      "answer_bytes": 41316,
+      "request": "449cea8a01000000ffffffff0000000000000080d4eead0526f471638eb1bfd17a60159025fe7f0899a6dbf550620031a14bd5437d49e0e2e0519a9fc67a963f7f7522fec06f75127e219c164fe6923bf1048e7ea05c3d63ffffffff00000000000000805510b00546e2543fe316a998857f006c994044136454e44831c8274e6876c165cb9cde3e26d2cd172102794193e03dcb0299ccc02386151575a0c65a0523b50c32418f43"
+    },
+    "get_config_params": {
+      "answer": "answers/get_config_params.tl",
+      "answer_bytes": 34604,
+      "request": "191c112a00000000ffffffff00000000000000805510b00546e2543fe316a998857f006c994044136454e44831c8274e6876c165cb9cde3e26d2cd172102794193e03dcb0299ccc02386151575a0c65a0523b50c32418f4303000000220000001c0000000f000000"
+    },
+    "get_masterchain_info": {
+      "answer": "answers/get_masterchain_info.tl",
+      "answer_bytes": 184,
+      "request": "2ee6b589"
+    },
+    "get_one_transaction": {
+      "answer": "answers/get_one_transaction.tl",
+      "answer_bytes": 1668,
+      "request": "ea240fd4000000000000000000000080fa69f4057a65e5182d39355387094259c8948c296950162d72741da7d3e7d515c7acfceb49d37e86fa6d0d5636a3947d6ef4d3e80132e8f81516d1dc515cec148d1618d800000000b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe492d97e9a1600000"
+    },
+    "get_shard_block_proof": {
+      "answer": "answers/get_shard_block_proof.tl",
+      "answer_bytes": 728,
+      "request": "5003a64c000000000000000000000080fa69f4057a65e5182d39355387094259c8948c296950162d72741da7d3e7d515c7acfceb49d37e86fa6d0d5636a3947d6ef4d3e80132e8f81516d1dc515cec148d1618d8"
+    },
+    "get_time": {
+      "answer": "answers/get_time.tl",
+      "answer_bytes": 8,
+      "request": "345aad16"
+    },
+    "get_transactions": {
+      "answer": "answers/get_transactions.tl",
+      "answer_bytes": 1908,
+      "request": "a1e7401c0300000000000000b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe492d97e9a160000081f7d5ccfd023f846688a958c856ede66bf8438d6537ab4fe4952b4821a1ed14"
+    },
+    "lookup_block_lt": {
+      "answer": "answers/lookup_block_lt.tl",
+      "answer_bytes": 432,
+      "request": "1ef7c8fa02000000ffffffff000000000000008000000000c0faa0d5a4600000"
+    },
+    "lookup_block_seqno": {
+      "answer": "answers/lookup_block_seqno.tl",
+      "answer_bytes": 432,
+      "request": "1ef7c8fa01000000ffffffff0000000000000080d418b005"
+    },
+    "lookup_block_utime": {
+      "answer": "answers/lookup_block_utime.tl",
+      "answer_bytes": 432,
+      "request": "1ef7c8fa04000000ffffffff0000000000000080000000008c32b96a"
+    },
+    "lookup_key_block_seqno": {
+      "answer": "answers/lookup_key_block_seqno.tl",
+      "answer_bytes": 432,
+      "request": "1ef7c8fa01000000ffffffff00000000000000805510b005"
+    },
+    "lookup_prev_key_block_seqno": {
+      "answer": "answers/lookup_prev_key_block_seqno.tl",
+      "answer_bytes": 432,
+      "request": "1ef7c8fa01000000ffffffff0000000000000080d4eead05"
+    },
+    "run_smc_method_all": {
+      "answer": "answers/run_smc_method_all.tl",
+      "answer_bytes": 4916,
+      "request": "d25dc65c1f000000ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed200000000b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe2d9e01000000000010b5ee9c72010101010005000006000000000000"
+    },
+    "run_smc_method_result": {
+      "answer": "answers/run_smc_method_result.tl",
+      "answer_bytes": 448,
+      "request": "d25dc65c04000000ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed200000000b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe2d9e01000000000010b5ee9c72010101010005000006000000000000"
+    },
+    "wait_masterchain_seqno_get_time": {
+      "answer": "answers/wait_masterchain_seqno_get_time.tl",
+      "answer_bytes": 8,
+      "request": "92b8eabade18b00588130000345aad16"
+    }
+  },
+  "key_block_seqno": 95424597,
+  "liteserver": "5.9.10.47:19949:n4VDnSCUuSpjnCyUk9e3QOOd6o0ItSWYbTnW3Wnn8wk=",
+  "masterchain_block_seqno": 95426772,
+  "masterchain_last_seqno": 95426782,
+  "method_id_get_jetton_data": 106029,
+  "prev_key_block_seqno": 95284948,
+  "transaction_lt": 106248525000009
+}

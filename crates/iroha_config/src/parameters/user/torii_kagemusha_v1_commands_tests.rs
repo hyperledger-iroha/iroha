@@ -49,6 +49,7 @@ impl Drop for TestKeyFile {
 fn sample() -> ToriiKagemushaV1Commands {
     let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
     ToriiKagemushaV1Commands {
+        redemption_authority: None,
         redemption_private_key: Some(key_pair.private_key().clone()),
         redemption_private_key_file: None,
         redemption_minimum_xor_balance: Some(Quantity::from(25_u32)),
@@ -99,6 +100,52 @@ fn parses_kagemusha_v1_redemption_authority() {
         .redemption_issuer
         .expect("configured redemption issuer");
     assert_eq!(issuer.minimum_xor_balance, Quantity::from(25_u32));
+}
+
+/// The canonical literal of the account `seed`'s Ed25519 key signs for.
+fn account_literal(seed: u8) -> String {
+    AccountId::new(
+        KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    )
+    .to_string()
+}
+
+#[test]
+fn redemption_authority_binds_the_redemption_key() {
+    let mut config = sample();
+    config.redemption_authority = Some(account_literal(0x41));
+    let issuer = parse_valid(config)
+        .redemption_issuer
+        .expect("bound redemption issuer");
+    assert_eq!(issuer.authority.to_string(), account_literal(0x41));
+
+    let mut foreign = sample();
+    foreign.redemption_authority = Some(account_literal(0x45));
+    let report = rejection_report(foreign);
+    assert!(
+        report.contains("does not sign for torii.kagemusha_v1_commands.redemption_authority"),
+        "unexpected diagnostic: {report}"
+    );
+
+    let mut keyless = sample();
+    keyless.redemption_authority = Some(account_literal(0x41));
+    keyless.redemption_private_key = None;
+    keyless.redemption_minimum_xor_balance = None;
+    let report = rejection_report(keyless);
+    assert!(
+        report.contains("redemption_authority requires a redemption private key"),
+        "unexpected diagnostic: {report}"
+    );
+
+    let mut malformed = sample();
+    malformed.redemption_authority = Some("not-an-account".to_owned());
+    let report = rejection_report(malformed);
+    assert!(
+        report.contains("torii.kagemusha_v1_commands.redemption_authority must be a canonical"),
+        "unexpected diagnostic: {report}"
+    );
 }
 
 #[test]

@@ -3270,6 +3270,13 @@ fn instruction_uses_universal_alias_registry(instruction: &dyn Instruction) -> b
     any.is::<iroha_data_model::isi::alias_setup::EnsureAlias>()
         || any.is::<iroha_data_model::isi::alias_setup::RenewAliasLease>()
 }
+/// Instructions that always execute in the universal dataspace: the universal alias registry
+/// and every SCCP v1 instruction, which executes serially in one context so outbound nonces
+/// and leaf indices are deterministic (`specs/sccp.md` §4.5, §4.19).
+fn instruction_routes_to_universal_dataspace(instruction: &dyn Instruction) -> bool {
+    instruction_uses_universal_alias_registry(instruction)
+        || crate::smartcontracts::isi::sccp::is_sccp_instruction(instruction)
+}
 
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
@@ -3282,7 +3289,7 @@ fn instruction_transaction_dataspace_target(
     {
         return Ok(Some(settlement_target));
     }
-    if instruction_uses_universal_alias_registry(instruction) {
+    if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(Some(DataSpaceId::UNIVERSAL));
     }
     if let Some(configure) =
@@ -3667,7 +3674,7 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     )? {
         return Ok(Some(settlement_target));
     }
-    if instruction_uses_universal_alias_registry(instruction) {
+    if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(Some(DataSpaceId::UNIVERSAL));
     }
     if let Some(configure) =
@@ -4760,7 +4767,7 @@ fn extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_s
     fx_overlay: &FxCorridorRoutingOverlay,
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<(), RoutingResolveError> {
-    if instruction_uses_universal_alias_registry(instruction) {
+    if instruction_routes_to_universal_dataspace(instruction) {
         targets.extend(
             instruction_transaction_dataspace_target_with_world_and_fx_overlay(
                 instruction,
@@ -5483,7 +5490,7 @@ fn instruction_transaction_target_requires_universal_coordinator(
         return settlement_atomic::requires_universal_coordinator(atomic);
     }
 
-    if instruction_uses_universal_alias_registry(instruction) {
+    if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(true);
     }
     if musubi_instruction_requires_universal_coordinator(any) {
@@ -5640,7 +5647,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         return settlement_atomic::requires_universal_coordinator(atomic);
     }
 
-    if instruction_uses_universal_alias_registry(instruction) {
+    if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(true);
     }
     if musubi_instruction_requires_universal_coordinator(any) {
@@ -5910,7 +5917,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
-    if instruction_uses_universal_alias_registry(instruction) {
+    if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(true);
     }
     if let Some(multisig) = multisig_instruction(instruction) {
@@ -6305,7 +6312,7 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return false;
     }
 
-    if instruction_uses_universal_alias_registry(instruction) {
+    if instruction_routes_to_universal_dataspace(instruction) {
         return false;
     }
     if any.downcast_ref::<SettleFxCorridor>().is_some() {
@@ -8790,6 +8797,49 @@ fn transaction_target_routing_requires_state(tx: &dyn TransactionRoutingView) ->
 #[cfg(test)]
 #[path = "router/alias_registry_routing_tests.rs"]
 mod alias_registry_routing_tests;
+
+#[cfg(test)]
+mod sccp_routing_tests {
+    use super::*;
+    use crate::smartcontracts::isi::sccp::test_support::SampleInstructions;
+
+    #[test]
+    fn every_sccp_instruction_routes_to_the_universal_dataspace() {
+        let samples = SampleInstructions::all();
+        assert_eq!(samples.len(), 10);
+        for (index, instruction) in samples.iter().enumerate() {
+            let instruction: &dyn Instruction = &**instruction;
+            assert!(instruction_routes_to_universal_dataspace(instruction));
+            assert!(!instruction_uses_universal_alias_registry(instruction));
+            assert_eq!(
+                instruction_transaction_dataspace_target(instruction, None, None),
+                Ok(Some(DataSpaceId::UNIVERSAL)),
+                "SCCP sample {index}"
+            );
+            assert_eq!(
+                instruction_transaction_target_requires_universal_coordinator(
+                    instruction,
+                    None,
+                    None
+                ),
+                Ok(true),
+                "SCCP sample {index}"
+            );
+            assert!(!instruction_transaction_dataspace_target_needs_state(
+                instruction
+            ));
+        }
+    }
+
+    #[test]
+    fn other_instructions_keep_their_routing() {
+        let log = InstructionBox::from(iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "not SCCP".to_owned(),
+        ));
+        assert!(!instruction_routes_to_universal_dataspace(&*log));
+    }
+}
 
 #[cfg(test)]
 mod tests {

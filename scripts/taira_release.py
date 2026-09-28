@@ -9,10 +9,11 @@ lane (override with --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR; both must ag
 selector, and also builds the four Linux release binaries
 from one fixed Git-object source capture with six jobs and captures read-only
 copies. Rerun the same prepare command to reuse completed checks/captures or
-retry an incomplete local build in the same warm Cargo lane. After a network
-failure, an exact independent-test checkpoint can avoid rerunning those tests;
-fresh matching Cargo artifact copies and the real four-peer gate are still
-required. Failed attempt directories and logs remain intact.
+retry an incomplete local build in the same warm Cargo lane. After a shipping,
+capacity or network failure, an exact pre-network checkpoint avoids rerunning the
+startup and priority tests that passed before the four-peer gate; fresh matching
+Cargo artifact copies, the real four-peer gate and the remaining independent
+tests are still required. Failed attempt directories and logs remain intact.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 For a mutable-source prequalification diagnostic, check accepts repeatable
@@ -1421,29 +1422,48 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             return prepare_in_lane(args, source, lock_fd, mode_lock_fd)
 
 
-def run_native_checks_with_checkpoint(selected_gate, source: Path, native_env: dict[str, str],
-                                      request: dict[str, object], checkpoint: Path,
-                                      revalidate, retire_checkpoint, lock_fds: tuple[int, ...]) -> None:
-    """Resume only an independent pass from this exact preparation request."""
-    completed = None
-    if checkpoint.exists():
-        record = read_record(checkpoint)
-        require(set(record) == {"request", "evidence"} and record["request"] == request
-                and isinstance(record["evidence"], dict),
-                "independent native check checkpoint differs or is incomplete")
-        completed = record["evidence"]
+def read_native_check_checkpoint(checkpoint: Path, request: dict[str, object],
+                                 label: str) -> dict[str, object] | None:
+    """Return exact-request evidence, or None when no pass was recorded."""
+    if not checkpoint.exists():
+        return None
+    record = read_record(checkpoint)
+    require(set(record) == {"request", "evidence"} and record["request"] == request
+            and isinstance(record["evidence"], dict),
+            f"{label} native check checkpoint differs or is incomplete")
+    return record["evidence"]
 
-    def update(evidence):
-        if evidence is None:
-            retire_checkpoint(checkpoint)
-            return
-        revalidate()
-        write_record(checkpoint, {"request": request, "evidence": evidence})
+
+def run_native_checks_with_checkpoints(selected_gate, source: Path, native_env: dict[str, str],
+                                       request: dict[str, object], pre_network: Path,
+                                       independent: Path, revalidate, retire_checkpoint,
+                                       lock_fds: tuple[int, ...]) -> None:
+    """Resume only exact passes from this preparation request.
+
+    The pre-network checkpoint records the prefix that passed before shipping
+    codegen and the four-peer fixture; the independent checkpoint records the
+    complete census after both. The gate compares each against the actual
+    census and copied artifacts and retires either before its tests rerun.
+    """
+    completed_pre_network = read_native_check_checkpoint(pre_network, request, "pre-network")
+    completed_independent = read_native_check_checkpoint(independent, request, "independent")
+
+    def updater(checkpoint: Path):
+        def update(evidence):
+            if evidence is None:
+                retire_checkpoint(checkpoint)
+                return
+            revalidate()
+            write_record(checkpoint, {"request": request, "evidence": evidence})
+        return update
 
     try:
         selected_gate.run_checks(source, environment=native_env, source_commit=request["commit"],
-                                 lock_fds=lock_fds, completed_independent_checks=completed,
-                                 update_independent_checks=update,
+                                 lock_fds=lock_fds,
+                                 completed_independent_checks=completed_independent,
+                                 update_independent_checks=updater(independent),
+                                 completed_pre_network_checks=completed_pre_network,
+                                 update_pre_network_checks=updater(pre_network),
                                  qualification_scope=request["native_check_scope"])
     except selected_gate.CheckError as error:
         raise PrepareError(str(error)) from error
@@ -1603,6 +1623,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
 
         checks = output / "checks.json"
         independent_checks = output / "independent-checks.json"
+        pre_network_checks = output / "pre-network-checks.json"
         if checks.exists():
             require(read_record(checks) == {"request": request, "passed": True}, "native check checkpoint differs")
 
@@ -1621,6 +1642,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         def retire_checks():
             retire_checkpoint(checks)
             retire_checkpoint(independent_checks)
+            retire_checkpoint(pre_network_checks)
 
         admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
         revalidate()
@@ -1629,9 +1651,10 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         else:
             selected_gate = captured_gate(source, before)
             def run_native_checks():
-                run_native_checks_with_checkpoint(
-                    selected_gate, source, native_env, request, independent_checks,
-                    revalidate, retire_checkpoint, (lock_fd, lane_lock_fd, mode_lock_fd))
+                run_native_checks_with_checkpoints(
+                    selected_gate, source, native_env, request, pre_network_checks,
+                    independent_checks, revalidate, retire_checkpoint,
+                    (lock_fd, lane_lock_fd, mode_lock_fd))
             stage("native CLI checks", run_native_checks)
             revalidate()
             if not checks.exists():

@@ -171,6 +171,26 @@ class SumeragiStatusHeightContext internal constructor(
         listOf(epoch, epochEndHeight, mode, epochSeed, validatorCount, quorum)
 }
 
+/**
+ * Local global-beacon horizon published by serialized height activation and signed inside
+ * finality attestations. It is an observation only and never authorizes signing.
+ */
+class SumeragiStatusBeaconHorizon internal constructor(
+    @JvmField val epochLengthBlocks: BigInteger,
+    @JvmField val nextRequiredPulseHeight: BigInteger?,
+    @JvmField val activeSessionId: String?,
+    @JvmField val sessionCoversNextPulse: Boolean,
+    @JvmField val localProviderReady: Boolean,
+) : SumeragiStatusValue() {
+    override fun equalityFields(): List<Any?> = listOf(
+        epochLengthBlocks,
+        nextRequiredPulseHeight,
+        activeSessionId,
+        sessionCoversNextPulse,
+        localProviderReady,
+    )
+}
+
 /** Latest durable CommitQC with exact count and voting-power totals. */
 class SumeragiStatusCommitQc internal constructor(
     @JvmField val certificate: SumeragiStatusQcReference,
@@ -455,6 +475,7 @@ class SumeragiV2Status internal constructor(
     @JvmField val heightContext: SumeragiStatusHeightContext,
     @JvmField val lastCommitQc: SumeragiStatusCommitQc?,
     @JvmField val liveness: SumeragiStatusLiveness,
+    @JvmField val beaconHorizon: SumeragiStatusBeaconHorizon?,
 ) : SumeragiStatusValue() {
     override fun equalityFields(): List<Any?> = listOf(
         protocolVersion,
@@ -477,6 +498,7 @@ class SumeragiV2Status internal constructor(
         heightContext,
         lastCommitQc,
         liveness,
+        beaconHorizon,
     )
 
     companion object {
@@ -506,7 +528,7 @@ private object SumeragiStatusParser {
     )
     private val topLevelOptional = setOf(
         "locked_prepare_qc", "highest_prepare_qc", "last_timeout_certificate",
-        "pending_persistence_id", "last_committed_subject", "last_commit_qc",
+        "pending_persistence_id", "last_committed_subject", "last_commit_qc", "beacon_horizon",
     )
 
     fun parse(payload: String): SumeragiV2Status {
@@ -573,6 +595,9 @@ private object SumeragiStatusParser {
             heightContext,
             "Sumeragi status.liveness",
         )
+        val beaconHorizon = root["beacon_horizon"]?.let {
+            beaconHorizon(it, height, heightContext.mode, "Sumeragi status.beacon_horizon")
+        }
 
         validatePhaseAndFrontier(
             phase,
@@ -618,6 +643,60 @@ private object SumeragiStatusParser {
             heightContext = heightContext,
             lastCommitQc = lastCommitQc,
             liveness = liveness,
+            beaconHorizon = beaconHorizon,
+        )
+    }
+
+    private fun beaconHorizon(
+        value: Any,
+        height: BigInteger,
+        mode: SumeragiStatusConsensusMode,
+        context: String,
+    ): SumeragiStatusBeaconHorizon {
+        val record = SumeragiJsonPrimitives.exactObject(
+            value,
+            setOf(
+                "epoch_length_blocks", "next_required_pulse_height", "active_session_id",
+                "session_covers_next_pulse", "local_provider_ready",
+            ),
+            context,
+        )
+        val epochLengthBlocks = SumeragiJsonPrimitives.u64(
+            record["epoch_length_blocks"], "$context.epoch_length_blocks",
+        )
+        val nextRequiredPulseHeight = record["next_required_pulse_height"]?.let {
+            SumeragiJsonPrimitives.positiveU64(it, "$context.next_required_pulse_height")
+        }
+        val activeSessionId = record["active_session_id"]?.let {
+            SumeragiJsonPrimitives.byte32(it, "$context.active_session_id")
+        }
+        val sessionCoversNextPulse = SumeragiJsonPrimitives.boolean(
+            record["session_covers_next_pulse"], "$context.session_covers_next_pulse",
+        )
+        val localProviderReady = SumeragiJsonPrimitives.boolean(
+            record["local_provider_ready"], "$context.local_provider_ready",
+        )
+        require(
+            mode != SumeragiStatusConsensusMode.PERMISSIONED || epochLengthBlocks.signum() == 0,
+        ) { "$context.epoch_length_blocks must be zero in permissioned mode" }
+        require(
+            mode == SumeragiStatusConsensusMode.PERMISSIONED || epochLengthBlocks.signum() > 0,
+        ) { "$context.epoch_length_blocks must be positive in NPoS mode" }
+        require(nextRequiredPulseHeight == null || nextRequiredPulseHeight >= height) {
+            "$context.next_required_pulse_height must not precede the active height"
+        }
+        require(
+            !sessionCoversNextPulse || (activeSessionId != null && nextRequiredPulseHeight != null),
+        ) { "$context coverage requires an active session and a scheduled pulse" }
+        require(!localProviderReady || activeSessionId != null) {
+            "$context provider readiness requires an active session"
+        }
+        return SumeragiStatusBeaconHorizon(
+            epochLengthBlocks = epochLengthBlocks,
+            nextRequiredPulseHeight = nextRequiredPulseHeight,
+            activeSessionId = activeSessionId,
+            sessionCoversNextPulse = sessionCoversNextPulse,
+            localProviderReady = localProviderReady,
         )
     }
 

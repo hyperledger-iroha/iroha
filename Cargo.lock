@@ -163,6 +163,7 @@ dependencies = [
  "cfg-if",
  "cipher 0.4.4",
  "cpufeatures 0.2.17",
+ "zeroize",
 ]
 
 [[package]]
@@ -4927,6 +4928,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -5189,6 +5191,25 @@ dependencies = [
  "quote",
  "syn 2.0.117",
  "trybuild",
+]
+
+[[package]]
+name = "iroha_deploy"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "error-stack",
+ "humantime",
+ "iroha_config_base",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_model_base",
+ "iroha_primitives",
+ "norito",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
+ "url",
 ]
 
 [[package]]
@@ -5649,11 +5670,14 @@ name = "iroha_sccp"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "blake3",
+ "blstrs",
  "bs58",
+ "group",
  "halo2curves",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_model_base",
+ "iroha_sccp",
  "norito",
  "sha2",
  "tiny-keccak",
@@ -5673,6 +5697,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_sccp",
  "norito",
+ "rand 0.9.4",
  "reqwest",
  "sha2",
  "tiny-keccak",
@@ -5687,6 +5712,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "iroha_config",
+ "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_sccp",
@@ -5694,7 +5720,9 @@ dependencies = [
  "iroha_wallet",
  "k256",
  "norito",
+ "rustix 1.1.4",
  "sha2",
+ "tempfile",
  "tiny-keccak",
  "zeroize",
 ]

@@ -475,6 +475,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                 }
             ],
         },
+        "beacon_horizon": None,
     }
 
 
@@ -5855,6 +5856,91 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.liveness.blocker == "prepare_quorum_missing"
     assert not hasattr(status, "lane_settlement_commitments")
     assert not hasattr(status, "operator")
+
+
+def test_get_sumeragi_status_requires_exact_transaction_tree_commitments() -> None:
+    def commitment(payload: dict) -> dict:
+        return payload["last_commit_qc"]["certificate"]["execution_commitment"]
+
+    status = _get_sumeragi_status(_sumeragi_v2_status_payload())
+    parsed = status.last_commit_qc.certificate.execution_commitment
+    assert parsed.transaction_input_commitment is None
+    assert parsed.transaction_output_commitment is None
+
+    def trees(inputs, outputs) -> dict:
+        payload = _sumeragi_v2_status_payload()
+        commitment(payload)["transaction_input_commitment"] = (
+            None if inputs is None else {"root": _canonical_hash(0x3A), "leaf_count": inputs}
+        )
+        commitment(payload)["transaction_output_commitment"] = (
+            None if outputs is None else {"root": _canonical_hash(0x3B), "leaf_count": outputs}
+        )
+        return payload
+
+    carried = _get_sumeragi_status(trees(2, 3)).last_commit_qc.certificate
+    assert carried.execution_commitment.transaction_input_commitment.leaf_count == 2
+    assert carried.execution_commitment.transaction_output_commitment.root == (
+        _canonical_hash(0x3B)
+    )
+    _get_sumeragi_status(trees(None, 1))
+    for inputs, outputs in ((2, 1), (1, None), (0, 1)):
+        with pytest.raises(RuntimeError):
+            _get_sumeragi_status(trees(inputs, outputs))
+    for field in ("transaction_input_commitment", "transaction_output_commitment"):
+        missing = _sumeragi_v2_status_payload()
+        del commitment(missing)[field]
+        with pytest.raises(RuntimeError, match="is required"):
+            _get_sumeragi_status(missing)
+
+
+def test_get_sumeragi_status_parses_and_validates_beacon_horizon() -> None:
+    payload = _sumeragi_v2_status_payload()
+    assert _get_sumeragi_status(payload).beacon_horizon is None
+    payload["beacon_horizon"] = {
+        "epoch_length_blocks": 0,
+        "next_required_pulse_height": 15,
+        "active_session_id": "AB" * 32,
+        "session_covers_next_pulse": True,
+        "local_provider_ready": True,
+    }
+    horizon = _get_sumeragi_status(payload).beacon_horizon
+    assert horizon is not None
+    assert horizon.next_required_pulse_height == 15
+    assert horizon.active_session_id == "AB" * 32
+    assert horizon.session_covers_next_pulse is True
+    assert horizon.local_provider_ready is True
+
+    for field, value, message in (
+        ("epoch_length_blocks", 64, r"must be zero in permissioned mode"),
+        ("next_required_pulse_height", 9, r"must not precede the active height"),
+        ("active_session_id", None, r"coverage requires an active session"),
+        ("active_session_id", "ab" * 32, r"canonical uppercase 32-byte hex"),
+    ):
+        broken = _sumeragi_v2_status_payload()
+        broken["beacon_horizon"] = dict(payload["beacon_horizon"], **{field: value})
+        with pytest.raises(RuntimeError, match=message):
+            _get_sumeragi_status(broken)
+
+    npos = _sumeragi_v2_status_payload()
+    npos["height_context"]["mode"] = {"mode": "npos", "details": None}
+    npos["beacon_horizon"] = dict(payload["beacon_horizon"], epoch_length_blocks=64)
+    assert _get_sumeragi_status(npos).beacon_horizon.epoch_length_blocks == 64
+    npos["beacon_horizon"]["epoch_length_blocks"] = 0
+    with pytest.raises(RuntimeError, match=r"must be positive in NPoS mode"):
+        _get_sumeragi_status(npos)
+
+    extended = _sumeragi_v2_status_payload()
+    extended["beacon_horizon"] = dict(payload["beacon_horizon"], extra=True)
+    with pytest.raises(RuntimeError, match=r"unknown field extra"):
+        _get_sumeragi_status(extended)
+    missing = _sumeragi_v2_status_payload()
+    missing["beacon_horizon"] = {
+        key: value
+        for key, value in payload["beacon_horizon"].items()
+        if key != "local_provider_ready"
+    }
+    with pytest.raises(RuntimeError, match=r"missing field local_provider_ready"):
+        _get_sumeragi_status(missing)
 
 
 def test_get_sumeragi_status_rejects_sent_outbound_stage() -> None:

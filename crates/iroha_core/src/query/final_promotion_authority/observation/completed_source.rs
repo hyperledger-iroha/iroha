@@ -1,9 +1,6 @@
 //! Exact original Reserve and Complete sources joined to one finalized Check State cut.
 
-use std::num::NonZeroUsize;
-
 use iroha_data_model::{
-    block::{consensus_v2::finality::V2FinalityArtifact, proofs::TrustedBlockProofAnchor},
     isi::sorafs::MutateSorafsFinalPromotionAuthority,
     sorafs::final_promotion_authority::{
         FinalPromotionAuthorityActionV1, FinalPromotionOperationOutcomeV1,
@@ -14,22 +11,20 @@ use iroha_data_model::{
 
 use super::{Error, FinalPromotionCheckFloorV1};
 use crate::{
-    kura::KuraV2CommitReceipt,
     query::{
         final_promotion_authority::{
             final_promotion_authority_request_digest_v1,
             operation::{read_operation_slot, read_original_reserved_operation},
         },
         signer_check::{NativeCheckFloorV1, NativeCheckRoundV1, native_signed_entry_frame_v1},
-        signer_finality::verify_signer_finality_v1,
     },
     state::{StateReadOnly, StateView, TransactionsReadOnly},
-    sumeragi::v2::VerifiedHeightContext,
+    sumeragi::certified_chain::CertifiedChain,
 };
 
 /// A completed Check may replay at most this many finalized blocks from its original floor.
 const MAX_COMPLETED_HISTORY_BLOCKS_V1: u64 = 4_096;
-/// The complete Reserve-to-Complete lineage has one cumulative canonical finality-frame cap.
+/// The complete Reserve-to-Complete lineage has one cumulative commit-certificate frame cap.
 const MAX_COMPLETED_HISTORY_FINALITY_BYTES_V1: usize = 64 * 1024 * 1024;
 
 pub(super) fn authenticate_completed_source(
@@ -173,73 +168,24 @@ pub(super) fn authenticate_completed_source(
             .map_err(|_| Error::Execution)?;
 
     // The challenged Check already authenticated floor-to-applied continuity. Replaying the
-    // original floor through Complete retains both target Kura/QC contexts and exact entries.
+    // original floor through Complete retains both targets' certified blocks and exact entries.
+    let chain = CertifiedChain::new(view).map_err(|_| Error::Finality)?;
     let mut cumulative_bytes = 0_usize;
-    let mut parent: Option<(V2FinalityArtifact, KuraV2CommitReceipt)> = None;
-    for cursor in floor.height..=expected.execution.height {
+    for block in chain.walk(floor.height, expected.execution.height) {
         round.ensure_live()?;
-        let index = usize::try_from(cursor)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .ok_or(Error::Finality)?;
-        let hash = *view
-            .block_hashes()
-            .get(index.get() - 1)
-            .ok_or(Error::Finality)?;
-        verify_signer_finality_v1(view, cursor, *hash.as_ref()).map_err(|_| Error::Finality)?;
-        let (artifact, receipt) = view
-            .kura()
-            .v2_finality_artifact_with_receipt(cursor)
-            .map_err(|_| Error::Finality)?
-            .ok_or(Error::Finality)?;
+        let block = block.map_err(|_| Error::Finality)?;
         cumulative_bytes = cumulative_bytes
-            .checked_add(norito::canonical_frame_len(&artifact).map_err(|_| Error::Finality)?)
+            .checked_add(block.certificate_len())
             .ok_or(Error::Finality)?;
         if cumulative_bytes > MAX_COMPLETED_HISTORY_FINALITY_BYTES_V1 {
             return Err(Error::Finality);
         }
-        let block = view
-            .canonical_block_by_height(index)
-            .map_err(|_| Error::Finality)?;
-        let expected_parent = if index.get() == 1 {
-            None
-        } else {
-            Some(
-                *view
-                    .block_hashes()
-                    .get(index.get() - 2)
-                    .ok_or(Error::Finality)?,
-            )
-        };
-        if artifact.height != cursor
-            || artifact.block_hash != hash
-            || artifact.subject.parent_block_hash != expected_parent
-            || artifact.height_context.network_id != *view.network_id()
-            || receipt.height() != cursor
-            || receipt.block_hash() != hash
-            || receipt.context_id() != artifact.context_id()
-            || block.header().height().get() != cursor
-            || block.header().prev_block_hash() != expected_parent
-            || block.hash() != hash
+        let cursor = block.height();
+        if cursor == floor.height
+            && (*block.block_hash().as_ref() != floor.block_hash || block.id() != floor.context_id)
         {
             return Err(Error::Finality);
         }
-        if cursor == floor.height {
-            if *hash.as_ref() != floor.block_hash || artifact.context_id() != floor.context_id {
-                return Err(Error::Finality);
-            }
-        } else {
-            let (previous, previous_receipt) = parent.as_ref().ok_or(Error::Finality)?;
-            VerifiedHeightContext::successor(
-                artifact.height_context.clone(),
-                artifact.validator_set_pops.clone(),
-                previous,
-                previous_receipt,
-                &previous.validator_set_pops,
-            )
-            .map_err(|_| Error::Finality)?;
-        }
-
         for (execution, origin, entry_hash, source_frame) in [
             (
                 &original.reserved,
@@ -258,31 +204,26 @@ pub(super) fn authenticate_completed_source(
                 continue;
             }
             round.ensure_live()?;
-            let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                artifact.context_id(),
-                entry_hash,
-            )
-            .map_err(|_| Error::Execution)?;
-            let proof = block
+            let anchor = block
+                .entry_anchor(entry_hash)
+                .map_err(|_| Error::Execution)?;
+            let body = block.block();
+            let proof = body
                 .network_execution_proof(entry_hash)
                 .ok_or(Error::Execution)?;
             if !proof.verify(&anchor) || anchor.entry_index() != origin.entry_index {
                 return Err(Error::Execution);
             }
-            let actual = block
+            let actual = body
                 .network_entrypoint_at(
                     usize::try_from(origin.entry_index).map_err(|_| Error::Execution)?,
                 )
                 .ok_or(Error::Execution)?;
-            let (_, output) = block
+            let (_, output) = body
                 .network_output_at(origin.entry_index)
                 .ok_or(Error::Execution)?;
-            let block_time = u64::try_from(block.header().creation_time().as_millis())
-                .map_err(|_| Error::Execution)?;
             if !output.result.is_ok()
-                || block_time != execution.recorded_at_unix_ms
+                || block.block_time_ms() != execution.recorded_at_unix_ms
                 || native_signed_entry_frame_v1(actual)
                     .map_err(|_| Error::Execution)?
                     .as_slice()
@@ -291,7 +232,6 @@ pub(super) fn authenticate_completed_source(
                 return Err(Error::Execution);
             }
         }
-        parent = Some((artifact, receipt));
     }
     round.ensure_live()?;
     Ok(())

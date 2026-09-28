@@ -2264,10 +2264,6 @@
         "type": "Option<HashOf<NposConsensusEffects>>"
       },
       {
-        "name": "sccp_commitment_root",
-        "type": "Option<Array<u8, 32>>"
-      },
-      {
         "name": "creation_time_ms",
         "type": "u64"
       },
@@ -2455,10 +2451,6 @@
       {
         "discriminant": 22,
         "tag": "NposEffectsMismatch"
-      },
-      {
-        "discriminant": 23,
-        "tag": "SccpCommitmentRootMismatch"
       }
     ]
   },
@@ -2558,11 +2550,6 @@
         "discriminant": 0,
         "tag": "Emitted",
         "type": "BridgeReceipt"
-      },
-      {
-        "discriminant": 1,
-        "tag": "ReplayDelta",
-        "type": "SccpReplayDeltaEventV1"
       }
     ]
   },
@@ -2584,10 +2571,6 @@
         {
           "mask": 1,
           "name": "Emitted"
-        },
-        {
-          "mask": 2,
-          "name": "ReplayDelta"
         }
       ],
       "repr": "u32"
@@ -2629,42 +2612,6 @@
       }
     ]
   },
-  "BridgeNativeProofBackendV1": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "ethereum_beacon_v1"
-      },
-      {
-        "discriminant": 1,
-        "tag": "bsc_parlia_v1"
-      },
-      {
-        "discriminant": 2,
-        "tag": "tron_dpos_v1"
-      },
-      {
-        "discriminant": 3,
-        "tag": "ton_masterchain_v1"
-      }
-    ]
-  },
-  "BridgeNativeProtocolProofV1": {
-    "Struct": [
-      {
-        "name": "backend",
-        "type": "BridgeNativeProofBackendV1"
-      },
-      {
-        "name": "route_configuration_hash",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "encoded_envelope",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
   "BridgeProof": {
     "Struct": [
       {
@@ -2688,16 +2635,6 @@
         "discriminant": 1,
         "tag": "TransparentZk",
         "type": "BridgeTransparentProof"
-      },
-      {
-        "discriminant": 2,
-        "tag": "NativeProtocol",
-        "type": "BridgeNativeProtocolProofV1"
-      },
-      {
-        "discriminant": 3,
-        "tag": "SccpDestination",
-        "type": "BridgeSccpDestinationProofV1"
       }
     ]
   },
@@ -2765,38 +2702,6 @@
       }
     ]
   },
-  "BridgeSccpDestinationProofBackendV1": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "evm_groth16_bn254_v1"
-      },
-      {
-        "discriminant": 1,
-        "tag": "tron_groth16_bn254_v1"
-      },
-      {
-        "discriminant": 2,
-        "tag": "ton_groth16_bls12381_v1"
-      }
-    ]
-  },
-  "BridgeSccpDestinationProofV1": {
-    "Struct": [
-      {
-        "name": "backend",
-        "type": "BridgeSccpDestinationProofBackendV1"
-      },
-      {
-        "name": "route_configuration_hash",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "encoded_artifact",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
   "BridgeTransparentProof": {
     "Struct": [
       {
@@ -2833,6 +2738,10 @@
       },
       {
         "name": "target_triple",
+        "type": "String"
+      },
+      {
+        "name": "wire_schema_hash",
         "type": "String"
       }
     ]
@@ -3594,11 +3503,6 @@
         "discriminant": 0,
         "tag": "Changed",
         "type": "ParameterChanged"
-      },
-      {
-        "discriminant": 1,
-        "tag": "SccpRegistryChanged",
-        "type": "SccpRegistryChanged"
       }
     ]
   },
@@ -3616,10 +3520,6 @@
         {
           "mask": 1,
           "name": "Changed"
-        },
-        {
-          "mask": 2,
-          "name": "SccpRegistryChanged"
         }
       ],
       "repr": "u32"
@@ -18377,9 +18277,6 @@
   "Option<RwaId>": {
     "Option": "RwaId"
   },
-  "Option<SccpRouteKeyV1>": {
-    "Option": "SccpRouteKeyV1"
-  },
   "Option<SignedGameCheckpointV1>": {
     "Option": "SignedGameCheckpointV1"
   },
@@ -25339,242 +25236,6 @@
       {
         "name": "new_owner",
         "type": "AccountId"
-      }
-    ]
-  },
-  "SccpLaneIdV1": {
-    "Struct": [
-      {
-        "name": "source",
-        "type": "SccpNetworkV1"
-      },
-      {
-        "name": "target",
-        "type": "SccpNetworkV1"
-      }
-    ]
-  },
-  "SccpNetworkV1": {
-    "Enum": [
-      {
-        "discriminant": 64,
-        "tag": "sora_taira"
-      },
-      {
-        "discriminant": 65,
-        "tag": "ethereum_mainnet"
-      },
-      {
-        "discriminant": 66,
-        "tag": "bsc_mainnet"
-      },
-      {
-        "discriminant": 67,
-        "tag": "tron_mainnet"
-      },
-      {
-        "discriminant": 68,
-        "tag": "ton_mainnet"
-      }
-    ]
-  },
-  "SccpRegistryChanged": {
-    "Struct": [
-      {
-        "name": "operation",
-        "type": "SccpRegistryOperation"
-      },
-      {
-        "name": "lane_id",
-        "type": "SccpLaneIdV1"
-      },
-      {
-        "name": "route",
-        "type": "Option<SccpRouteKeyV1>"
-      },
-      {
-        "name": "old_digest",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "new_digest",
-        "type": "Array<u8, 32>"
-      }
-    ]
-  },
-  "SccpRegistryOperation": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "RegisterRoute"
-      },
-      {
-        "discriminant": 1,
-        "tag": "SetRouteActivation"
-      },
-      {
-        "discriminant": 2,
-        "tag": "SwitchRouteRevision"
-      },
-      {
-        "discriminant": 3,
-        "tag": "InitializeLaneTrustAnchor"
-      },
-      {
-        "discriminant": 4,
-        "tag": "AdvanceLaneTrustAnchor"
-      },
-      {
-        "discriminant": 5,
-        "tag": "RemoveStagedRoute"
-      }
-    ]
-  },
-  "SccpReplayAccumulatorIdV1": {
-    "Struct": [
-      {
-        "name": "route_key",
-        "type": "SccpRouteKeyV1"
-      },
-      {
-        "name": "boundary",
-        "type": "SccpReplayBoundaryV1"
-      },
-      {
-        "name": "domain_hash",
-        "type": "Array<u8, 32>"
-      }
-    ]
-  },
-  "SccpReplayBoundaryV1": {
-    "Enum": [
-      {
-        "discriminant": 1,
-        "tag": "SoraOutboundLock"
-      },
-      {
-        "discriminant": 2,
-        "tag": "SoraInboundRelease"
-      },
-      {
-        "discriminant": 16,
-        "tag": "EvmSourceBurn"
-      },
-      {
-        "discriminant": 17,
-        "tag": "EvmDestinationMint"
-      },
-      {
-        "discriminant": 32,
-        "tag": "TronSourceBurn"
-      },
-      {
-        "discriminant": 33,
-        "tag": "TronDestinationMint"
-      },
-      {
-        "discriminant": 48,
-        "tag": "TonBridgeInboundMint"
-      },
-      {
-        "discriminant": 49,
-        "tag": "TonBridgeOutboundBurn"
-      },
-      {
-        "discriminant": 50,
-        "tag": "TonMasterMint"
-      },
-      {
-        "discriminant": 51,
-        "tag": "TonMasterBurn"
-      },
-      {
-        "discriminant": 52,
-        "tag": "TonWalletMintCredit"
-      },
-      {
-        "discriminant": 53,
-        "tag": "TonWalletBurnAuthorization"
-      },
-      {
-        "discriminant": 54,
-        "tag": "TonWalletBurnLock"
-      },
-      {
-        "discriminant": 55,
-        "tag": "TonWalletBurnRefund"
-      }
-    ]
-  },
-  "SccpReplayDeltaEventV1": {
-    "Struct": [
-      {
-        "name": "lane",
-        "type": "LaneId"
-      },
-      {
-        "name": "accumulator_id",
-        "type": "SccpReplayAccumulatorIdV1"
-      },
-      {
-        "name": "delta",
-        "type": "SccpReplayDeltaV1"
-      }
-    ]
-  },
-  "SccpReplayDeltaV1": {
-    "Struct": [
-      {
-        "name": "domain_hash",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "shard",
-        "type": "u8"
-      },
-      {
-        "name": "key",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "record_digest",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "old_root",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "new_root",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "leaf_count",
-        "type": "u64"
-      },
-      {
-        "name": "update_sequence",
-        "type": "u64"
-      }
-    ]
-  },
-  "SccpRouteKeyV1": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "SccpLaneIdV1"
-      },
-      {
-        "name": "route_id",
-        "type": "String"
-      },
-      {
-        "name": "asset_key",
-        "type": "String"
-      },
-      {
-        "name": "revision",
-        "type": "u32"
       }
     ]
   },

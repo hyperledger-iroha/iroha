@@ -1,0 +1,17 @@
+[network]
+name = "perf-10k"
+profile = "sora-nexus-v1-qual"
+# chain_id omitted: fresh per generation
+
+[scaling]
+lanes = 8
+accounts = 10000
+
+[[node]]
+name = "n0"
+[[node]]
+name = "n1"
+[[node]]
+name = "n2"
+[[node]]
+name = "n3"

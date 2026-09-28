@@ -5,6 +5,7 @@
   "error.logger": "לא ניתן לאתחל את האוגר",
   "error.start": "הפעלת Iroha נכשלה",
   "error.run": "אירעה שגיאה בעת הפעלת Iroha",
+  "error.check_storage": "Kura (אחסון בלוק) נכשל בבדיקת האחסון לקריאה בלבד",
   "error.start_p2p": "לא ניתן להתחיל רשת עמית לעמית",
   "error.init_kura": "לא ניתן לאתחל את Kura (אחסון בלוק)",
   "error.start_dev_telemetry": "לא ניתן להפעיל את שירות הטלמטריה DEV",

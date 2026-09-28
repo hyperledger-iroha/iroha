@@ -11,6 +11,8 @@ workspace = true
 
 [features]
 test-fixtures = [
+    "dep:blstrs",
+    "dep:group",
     "dep:halo2curves",
     "dep:iroha_model_base",
     "iroha_data_model/test-fixtures",
@@ -25,11 +27,18 @@ sha2 = { version = "0.10.9", default-features = false }
 bs58 = { version = "0.5.1", default-features = false, features = ["alloc"] }
 norito = { path = "../norito", default-features = false, features = ["base-codec"] }
 halo2curves = { workspace = true, optional = true }
+# The synthetic beacon chain signs with the BLS implementation the verifier uses (`iroha_crypto`).
+blstrs = { version = "0.7.1", default-features = false, optional = true }
+group = { version = "0.13", default-features = false, optional = true }
 iroha_crypto = { path = "../iroha_crypto", features = ["node-crypto"], default-features = false }
 iroha_data_model = { path = "../iroha_data_model", default-features = false }
 
 [dev-dependencies]
+blstrs = { version = "0.7.1", default-features = false }
+group = { version = "0.13", default-features = false }
 halo2curves = { workspace = true }
+# Integration tests use the synthetic source chains of `test_support`.
+iroha_sccp = { path = ".", features = ["test-fixtures"] }
 iroha_model_base = { workspace = true }
 # Unit-test builds compile the deterministic fixture module under `cfg(test)`.
 # Enable only the data-model construction surface that those test-only fixtures

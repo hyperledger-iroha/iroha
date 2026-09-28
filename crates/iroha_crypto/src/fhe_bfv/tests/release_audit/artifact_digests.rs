@@ -3,13 +3,13 @@
 use super::*;
 
 pub(super) struct MalformedArtifactBytes {
-    pub(super) header_only_audit_report_bytes: Vec<u8>,
-    pub(super) header_only_audit_archive_bytes: Vec<u8>,
-    pub(super) zero_body_audit_report_bytes: Vec<u8>,
-    pub(super) zero_body_audit_archive_bytes: Vec<u8>,
-    pub(super) short_body_audit_report_bytes: Vec<u8>,
-    pub(super) blank_body_audit_archive_bytes: Vec<u8>,
-    pub(super) whitespace_nested_audit_report_bytes: Vec<u8>,
+    pub(super) header_only_audit_report: Vec<u8>,
+    pub(super) header_only_audit_archive: Vec<u8>,
+    pub(super) zero_body_audit_report: Vec<u8>,
+    pub(super) zero_body_audit_archive: Vec<u8>,
+    pub(super) short_body_audit_report: Vec<u8>,
+    pub(super) blank_body_audit_archive: Vec<u8>,
+    pub(super) whitespace_nested_audit_report: Vec<u8>,
 }
 
 pub(super) fn check(
@@ -107,12 +107,12 @@ pub(super) fn check(
     let_row! { whitespace_nested_audit_report_bytes = [ BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1, b" \n\t".as_slice(), BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1, b"nested archive artifact header smuggled into the audit report body", ] .concat() };
     assert_local_diag! { signed.artifact_fixture.diagnostics; 647 => release_package_v1( &signed.artifact_fixture.params, &signed.artifact_fixture.material, &signed.artifact_fixture.artifacts, &whitespace_nested_audit_report_bytes, &signed.review_fixture.audit_evidence_archive_bytes, "sora-zk-audit-wg-2026", signed.review_fixture.reviewer_key_pair.private_key(), ) };
     MalformedArtifactBytes {
-        header_only_audit_report_bytes,
-        header_only_audit_archive_bytes,
-        zero_body_audit_report_bytes,
-        zero_body_audit_archive_bytes,
-        short_body_audit_report_bytes,
-        blank_body_audit_archive_bytes,
-        whitespace_nested_audit_report_bytes,
+        header_only_audit_report: header_only_audit_report_bytes,
+        header_only_audit_archive: header_only_audit_archive_bytes,
+        zero_body_audit_report: zero_body_audit_report_bytes,
+        zero_body_audit_archive: zero_body_audit_archive_bytes,
+        short_body_audit_report: short_body_audit_report_bytes,
+        blank_body_audit_archive: blank_body_audit_archive_bytes,
+        whitespace_nested_audit_report: whitespace_nested_audit_report_bytes,
     }
 }

@@ -1374,6 +1374,7 @@ fn fee_exempt_payload(
 ) -> bool {
     nexus_fee_exempt_payload(payload)
         || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)
+        || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload)
 }
 fn fee_exempt_transaction(
     world: &impl WorldReadOnly,
@@ -1381,8 +1382,11 @@ fn fee_exempt_transaction(
     transaction: &SignedTransaction,
     observation_time_ms: u64,
 ) -> bool {
+    // SCCP exemptions hold on success only (`specs/sccp.md` §4.19).
+    // TODO(ws31): charge the ordinary Nexus fee when an SCCP-exempt transaction fails.
     nexus_fee_exempt_transaction(transaction)
         || successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms)
+        || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, transaction.payload())
 }
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
@@ -5439,7 +5443,7 @@ impl Executor {
     ///
     /// Sealed reveals use an inner execution call hash, while their output proof names the
     /// distinct outer entry. Contract-emitted instructions have no direct signed ordinal.
-    fn direct_stream_token_instruction_index(
+    pub(crate) fn direct_stream_token_instruction_index(
         state_transaction: &StateTransaction<'_, '_>,
         transaction: &SignedTransaction,
         instruction: &InstructionBox,

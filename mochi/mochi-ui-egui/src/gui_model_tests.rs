@@ -716,6 +716,7 @@ fn sample_sumeragi_status_wire() -> SumeragiV2Status {
         },
         last_commit_qc: None,
         liveness: Default::default(),
+        beacon_horizon: None,
     }
 }
 fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {

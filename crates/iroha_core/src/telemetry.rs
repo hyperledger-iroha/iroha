@@ -9719,6 +9719,7 @@ mod tests {
             },
             last_commit_qc: None,
             liveness: Default::default(),
+            beacon_horizon: None,
         };
         for mode in [wire::ConsensusMode::Npos, wire::ConsensusMode::Permissioned] {
             snapshot.height_context.mode = mode;

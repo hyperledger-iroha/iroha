@@ -5,6 +5,7 @@
   "error.logger": "Nie można zainicjować systemu logowania",
   "error.start": "Nie udało się uruchomić Iroha",
   "error.run": "Błąd wystąpił podczas uruchamiania Iroha",
+  "error.check_storage": "Kura (przechowywanie bloków) nie przeszła kontroli magazynu tylko do odczytu",
   "error.start_p2p": "Nie można uruchomić sieci peer-to-peer",
   "error.init_kura": "Nie można zainicjować kury (przechowywanie bloków)",
   "error.start_dev_telemetry": "Nie można uruchomić usługi telemetrii dla deweloperów",

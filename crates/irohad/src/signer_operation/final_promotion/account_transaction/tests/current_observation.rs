@@ -11,8 +11,7 @@ use crate::signer_operation::final_promotion::observer_transaction::FinalPromoti
 use crate::signer_operation::final_promotion::pending_reserve_journal::FinalPromotionPendingReserveJournalV1;
 use crate::signer_operation::final_promotion::reserved_observation::FinalPromotionReservedCheckRuntimeV1;
 use iroha_core::{
-    query::final_promotion_authority::observation::PendingFinalPromotionCheckV1,
-    state::{State, StateReadOnly},
+    query::final_promotion_authority::observation::PendingFinalPromotionCheckV1, state::State,
 };
 use iroha_data_model::{
     isi::sorafs::MutateSorafsFinalPromotionAuthority,
@@ -70,7 +69,7 @@ struct RetainedFloor {
 }
 impl RetainedFloor {
     fn new(f: &Fixture) -> Self {
-        let (height, block_hash, context_id) = f.native.finalized_floor().unwrap();
+        let (height, block_hash, context_id) = f.native.finalized_floor();
         Self {
             current: FinalPromotionCheckFloorV1 {
                 height,
@@ -141,8 +140,8 @@ fn current_handoff_uses_one_finalized_snapshot_and_retains_floor_before_returnin
         intervals: VecDeque::from([
             Ok(times().0),
             Ok(FinalPromotionEligibilityTimeIntervalV1 {
-                earliest_unix_ms: NOW + 1,
-                latest_unix_ms: NOW + 2,
+                earliest_unix_ms: OBSERVED + 1,
+                latest_unix_ms: OBSERVED + 2,
             }),
         ]),
         calls: 0,
@@ -161,8 +160,8 @@ fn current_handoff_uses_one_finalized_snapshot_and_retains_floor_before_returnin
         signing.custody.active_head,
         expected.control.active_head.unwrap()
     );
-    assert_eq!(signing.custody.now_unix_ms, NOW + 2);
-    assert_eq!(signing.custody.anchor_observed_at_unix_ms, NOW);
+    assert_eq!(signing.custody.now_unix_ms, OBSERVED + 2);
+    assert_eq!(signing.custody.anchor_observed_at_unix_ms, OBSERVED);
     assert_eq!(verified.snapshot().operations.audit, signing.audit_head);
     assert_eq!(
         verified.snapshot().custody_anchor,
@@ -332,11 +331,11 @@ fn current_handoff_rejects_backward_widened_and_unavailable_qualified_time() {
         );
         let later = match fault {
             0 => Ok(FinalPromotionEligibilityTimeIntervalV1 {
-                earliest_unix_ms: NOW - 1,
-                latest_unix_ms: NOW,
+                earliest_unix_ms: OBSERVED - 1,
+                latest_unix_ms: OBSERVED,
             }),
             1 => Ok(FinalPromotionEligibilityTimeIntervalV1 {
-                earliest_unix_ms: NOW,
+                earliest_unix_ms: OBSERVED,
                 latest_unix_ms: 100_000,
             }),
             2 => Err(CurrentError::Clock),
@@ -481,18 +480,12 @@ fn pending_reserve_rejects_a_finalized_but_rolled_back_floor_before_staging() {
         .unwrap();
 
     let mut floor = RetainedFloor::new(&f);
-    let view = f.native.state().view();
-    let artifact = view
-        .kura()
-        .v2_finality_artifact(check_height)
-        .unwrap()
-        .unwrap();
+    let certified = f.native.chain().committed(check_height);
     floor.current = FinalPromotionCheckFloorV1 {
         height: check_height,
-        block_hash: *artifact.block_hash.as_ref(),
-        context_id: artifact.context_id(),
+        block_hash: *certified.block_hash().as_ref(),
+        context_id: certified.id(),
     };
-    drop(view);
     let (directory, journal) = pending_reserve_journal();
     assert!(matches!(
         FinalPromotionReservedCheckRuntimeV1::new(
@@ -1050,7 +1043,7 @@ fn reserved_runtime_keeps_original_role15_envelope_through_reconciliation_and_fi
     assert_eq!(row.intent.operation_id, request.operation_id);
     assert!(row.reserved.height > pre_reserve.height);
     assert_eq!(custody.current_anchor, verified.snapshot().custody_anchor);
-    assert_eq!(custody.now_unix_ms, NOW);
+    assert_eq!(custody.now_unix_ms, OBSERVED);
 }
 
 #[test]
@@ -1129,7 +1122,7 @@ fn reserved_runtime_refuses_floor_advance_before_reserve_transport() {
 #[test]
 fn reserved_runtime_rejects_wrong_finalized_floor_context_before_construction() {
     let mut f = Fixture::new();
-    let earlier_context = f.native.finalized_floor().unwrap().2;
+    let earlier_context = f.native.finalized_floor().2;
     let (request, signed) = signed_reserve(&mut f);
     let mut floor = RetainedFloor::new(&f);
     assert_ne!(earlier_context, floor.current.context_id);

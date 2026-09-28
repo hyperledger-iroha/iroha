@@ -12,11 +12,8 @@
 use crate::{
     IrohaRuntimeDeps, IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
     IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1,
-    IrohaRuntimeProviderSlotV1,
-    soracloud_runtime_signer::{
-        SoracloudRuntimeMutationSignerV1, SoracloudRuntimeSignerProbeErrorV1,
-        SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSigningErrorV1,
-    },
+    IrohaRuntimeProviderSlotV1, node_secrets,
+    soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1,
 };
 use iroha_config::parameters::{
     actual::{NexusStorageWeights, Root as Config, SoracloudRuntime},
@@ -36,16 +33,8 @@ use iroha_config::parameters::{
 use iroha_core::{
     sumeragi::GenesisV2Bootstrap, zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
-    soracloud::{
-        SoracloudRuntimeProvenancePurposeV1, validate_soracloud_runtime_provenance_preimage_v1,
-    },
-    transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
-};
+use iroha_crypto::KeyPair;
+use iroha_data_model::{NetworkId, isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1};
 use iroha_model_base::peer::PeerId;
 use std::{
     ffi::OsStr,
@@ -433,23 +422,8 @@ pub(crate) fn load_private_record_from_file<T>(
 
 fn load_key_pair_from_file(file: File) -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
     load_private_record_from_file(file, TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1, |bytes| {
-        let record = bytes
-            .strip_suffix(b"\n")
-            .ok_or(TairaRuntimeSignerErrorV1::InvalidKey)?;
-        let literal =
-            std::str::from_utf8(record).map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)?;
-        let exposed = literal
-            .parse::<ExposedPrivateKey>()
-            .map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)?;
-        if exposed.0.algorithm() != Algorithm::Ed25519
-            || exposed
-                .try_to_multihash_string()
-                .map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)?
-                != literal
-        {
-            return Err(TairaRuntimeSignerErrorV1::InvalidKey);
-        }
-        KeyPair::from_private_key(exposed.0).map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)
+        node_secrets::parse_ed25519_signer_record_v1(bytes)
+            .ok_or(TairaRuntimeSignerErrorV1::InvalidKey)
     })
 }
 
@@ -509,7 +483,7 @@ fn load_global_beacon_signer_from_file(
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?
         .len();
     let maximum =
-        u64::try_from(crate::external_software_signer::MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1)
+        u64::try_from(iroha_core::beacon::credential::MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1)
             .map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)?;
     if length == 0 || length > maximum {
         return Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor);
@@ -540,37 +514,17 @@ fn load_inherited_key_pair() -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
     load_key_pair_from_file(take_inherited_private_file(TAIRA_RUNTIME_SIGNER_FD_V1)?)
 }
 
+/// Bind an inherited seed through the shared node-secret binding
+/// ([`node_secrets::bind_mint_finality_seed`]): the local validator's seated genesis entry, or an
+/// unseated candidate that signs only once an authenticated later generation seats it.
 fn bind_inherited_mint_finality_authority(
     network_id: NetworkId,
     local_validator: &PeerId,
     generation: &KagemushaMintFinalityAuthorityGenerationV1,
     seed: Zeroizing<[u8; 32]>,
 ) -> Result<KagemushaMintFinalityLocalAuthorityV1, String> {
-    if generation.network_id != network_id {
-        return Err("mint-finality roster does not match the configured network".to_owned());
-    }
-    let validator_index = generation
-        .validators
-        .iter()
-        .position(|entry| &entry.validator == local_validator)
-        .and_then(|index| u32::try_from(index).ok());
-    let authority = if let Some(validator_index) = validator_index {
-        KagemushaMintFinalityLocalAuthorityV1::new(
-            Arc::new(generation.clone()),
-            seed,
-            validator_index,
-        )
-    } else {
-        KagemushaMintFinalityLocalAuthorityV1::new_unseated(
-            generation,
-            local_validator.clone(),
-            seed,
-        )
-    };
-    authority.map_err(|_| {
-        "mint-finality seed or candidate identity does not match the authenticated genesis authority"
-            .to_owned()
-    })
+    node_secrets::bind_mint_finality_seed(network_id, local_validator, generation, seed)
+        .map_err(|error| format!("mint-finality binding failed: {error}"))
 }
 
 pub(crate) fn resolve_inherited_mint_finality_runtime(
@@ -602,90 +556,30 @@ pub(crate) fn resolve_inherited_mint_finality_runtime(
     Ok(dependencies.with_kagemusha_mint_finality_authority(Arc::new(authority)))
 }
 
-fn signer_handle(public_key: &PublicKey) -> Result<String, TairaRuntimeSignerErrorV1> {
-    let (algorithm, payload) = public_key
-        .try_to_bytes()
-        .map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)?;
-    if algorithm != Algorithm::Ed25519 || payload.len() != 32 {
-        return Err(TairaRuntimeSignerErrorV1::InvalidKey);
-    }
-    Ok(format!(
-        "{TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1}{}",
-        hex::encode(payload)
-    ))
-}
+/// Compiled public binding of the inherited-descriptor Taira signer.
+const TAIRA_RUNTIME_SIGNER_POLICY_V1: node_secrets::RuntimeSignerPolicyV1 =
+    node_secrets::RuntimeSignerPolicyV1 {
+        handle_prefix: TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1,
+        revision: TAIRA_RUNTIME_SIGNER_REVISION_V1,
+        policy_digest: taira_runtime_signer_policy_digest_v1,
+    };
 
-struct TairaRuntimeSignerV1 {
-    handle: String,
+/// The shared file-backed signer under the Taira policy.
+fn taira_runtime_signer(
     key_pair: KeyPair,
-}
-
-impl TairaRuntimeSignerV1 {
-    fn from_key_pair(key_pair: KeyPair) -> Result<Self, TairaRuntimeSignerErrorV1> {
-        let handle = signer_handle(key_pair.public_key())?;
-        Ok(Self { handle, key_pair })
-    }
-}
-
-impl SoracloudRuntimeMutationSignerV1 for TairaRuntimeSignerV1 {
-    fn handle(&self) -> &str {
-        &self.handle
-    }
-
-    fn authority(&self) -> AccountId {
-        AccountId::new(self.key_pair.public_key().clone())
-    }
-
-    fn public_key(&self) -> Result<PublicKey, SoracloudRuntimeSignerProbeErrorV1> {
-        Ok(self.key_pair.public_key().clone())
-    }
-
-    fn qualification(
-        &self,
-    ) -> Result<SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSignerProbeErrorV1> {
-        Ok(SoracloudRuntimeSignerQualificationV1::new(
-            TAIRA_RUNTIME_SIGNER_REVISION_V1,
-            taira_runtime_signer_policy_digest_v1(),
-            true,
-            false,
-        ))
-    }
-
-    fn sign_transaction(
-        &self,
-        payload: TransactionPayload,
-    ) -> Result<SignedTransaction, SoracloudRuntimeSigningErrorV1> {
-        if payload.authority() != &self.authority() {
-            return Err(SoracloudRuntimeSigningErrorV1::InputAuthorityMismatch);
-        }
-        TransactionBuilder::from_payload(payload)
-            .map_err(|_| SoracloudRuntimeSigningErrorV1::Refused)?
-            .try_sign(self.key_pair.private_key())
-            .map_err(|_| SoracloudRuntimeSigningErrorV1::Refused)
-    }
-
-    fn sign_provenance(
-        &self,
-        purpose: SoracloudRuntimeProvenancePurposeV1,
-        preimage: &[u8],
-    ) -> Result<Signature, SoracloudRuntimeSigningErrorV1> {
-        validate_soracloud_runtime_provenance_preimage_v1(purpose, preimage)
-            .map_err(|_| SoracloudRuntimeSigningErrorV1::InvalidProvenancePreimage)?;
-        Signature::try_new(self.key_pair.private_key(), preimage)
-            .map_err(|_| SoracloudRuntimeSigningErrorV1::Refused)
-    }
+) -> Result<node_secrets::FileRuntimeSignerV1, TairaRuntimeSignerErrorV1> {
+    node_secrets::FileRuntimeSignerV1::new(TAIRA_RUNTIME_SIGNER_POLICY_V1, key_pair)
+        .ok_or(TairaRuntimeSignerErrorV1::InvalidKey)
 }
 
 struct TairaRuntimeProviderRegistryV1 {
-    signer: Arc<TairaRuntimeSignerV1>,
+    signer: Arc<node_secrets::FileRuntimeSignerV1>,
 }
 
 impl TairaRuntimeProviderRegistryV1 {
     fn from_inherited_descriptor() -> Result<Self, TairaRuntimeSignerErrorV1> {
         Ok(Self {
-            signer: Arc::new(TairaRuntimeSignerV1::from_key_pair(
-                load_inherited_key_pair()?,
-            )?),
+            signer: Arc::new(taira_runtime_signer(load_inherited_key_pair()?)?),
         })
     }
 }
@@ -741,7 +635,7 @@ impl TairaRuntimeProviderRegistryV1 {
             .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
         if exact.handle() != self.signer.handle()
             || exact.authority() != &self.signer.authority()
-            || exact.public_key() != self.signer.key_pair.public_key()
+            || exact.public_key() != self.signer.signer_public_key()
             || exact.qualification() != qualification
         {
             return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
@@ -815,6 +709,9 @@ pub fn main_entry() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1;
+    use iroha_crypto::{Algorithm, ExposedPrivateKey};
+    use iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1;
     use iroha_data_model::{
         NetworkId,
         block::BlockHeader,
@@ -1651,7 +1548,7 @@ mod tests {
     fn signer_binds_handle_authority_and_exact_payload() {
         let key_pair =
             KeyPair::try_from_seed(vec![0x34; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
-        let signer = TairaRuntimeSignerV1::from_key_pair(key_pair).expect("Taira signer");
+        let signer = taira_runtime_signer(key_pair).expect("Taira signer");
         assert!(
             signer
                 .handle()
@@ -1699,7 +1596,7 @@ mod tests {
     fn signer_rejects_cross_purpose_provenance() {
         let key_pair =
             KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
-        let signer = TairaRuntimeSignerV1::from_key_pair(key_pair).expect("Taira signer");
+        let signer = taira_runtime_signer(key_pair).expect("Taira signer");
         let withdrawal = encode_soracloud_runtime_provenance_preimage_v1(
             SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw,
             b"canonical-withdrawal-payload",
@@ -1712,7 +1609,7 @@ mod tests {
             )
             .expect("sign matching purpose");
         signature
-            .verify(signer.key_pair.public_key(), &withdrawal)
+            .verify(signer.signer_public_key(), &withdrawal)
             .expect("matching-purpose signature verifies");
         assert!(matches!(
             signer.sign_provenance(
@@ -1779,7 +1676,7 @@ mod tests {
                 handle: signer.handle().to_owned(),
                 authority: signer.authority(),
                 algorithm: Algorithm::Ed25519,
-                public_key: signer.key_pair.public_key().clone(),
+                public_key: signer.signer_public_key().clone(),
                 revision: TAIRA_RUNTIME_SIGNER_REVISION_V1,
                 policy_digest: taira_runtime_signer_policy_digest_v1(),
             },
@@ -1796,14 +1693,14 @@ mod tests {
         config
     }
 
+    fn fixture_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519).expect("fixture Soracloud key")
+    }
+
     fn fixture_registry() -> TairaRuntimeProviderRegistryV1 {
         TairaRuntimeProviderRegistryV1 {
             signer: Arc::new(
-                TairaRuntimeSignerV1::from_key_pair(
-                    KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519)
-                        .expect("fixture Soracloud key"),
-                )
-                .expect("fixture Soracloud signer"),
+                taira_runtime_signer(fixture_key_pair()).expect("fixture Soracloud signer"),
             ),
         }
     }
@@ -1834,14 +1731,14 @@ mod tests {
                 None,
             )
             .unwrap();
-            let (_directory, path) = key_file(&signer.signer.key_pair);
+            let (_directory, path) = key_file(&fixture_key_pair());
             let mut loaded_signer = false;
             let registry =
                 disposable_broker::load_with_signer(&catalog, &mut bundle.as_slice(), || {
                     loaded_signer = true;
-                    Ok(Arc::new(TairaRuntimeSignerV1::from_key_pair(
-                        load_key_pair_from_file(open_consumable_key_file(&path))?,
-                    )?))
+                    Ok(Arc::new(taira_runtime_signer(load_key_pair_from_file(
+                        open_consumable_key_file(&path),
+                    )?)?))
                 })
                 .expect("complete exact broker custody");
             assert_eq!(loaded_signer, with_soracloud);
@@ -1895,7 +1792,7 @@ mod tests {
         let wrong = KeyPair::from_seed(vec![0x38; 32], Algorithm::Ed25519);
         assert!(matches!(
             disposable_broker::load_with_signer(&catalog, &mut complete.as_slice(), || {
-                Ok(Arc::new(TairaRuntimeSignerV1::from_key_pair(wrong)?))
+                Ok(Arc::new(taira_runtime_signer(wrong)?))
             }),
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
         ));
@@ -1952,7 +1849,7 @@ mod tests {
         assert_eq!(fs::metadata(&launch).expect("consumed descriptor").len(), 0);
         assert_eq!(child.read(&mut [0_u8; 1]).expect("consumed child inode"), 0);
         let digest =
-            crate::external_software_signer::global_beacon_partial_signer_public_inventory_digest_v1(
+            iroha_core::beacon::credential::global_beacon_partial_signer_public_inventory_digest_v1(
                 *fixture.catalog.network_id(),
                 &[(fixture.session.record().clone(), 1)],
             )
@@ -2076,7 +1973,7 @@ mod tests {
         for size in [
             0,
             u64::try_from(
-                crate::external_software_signer::MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
+                iroha_core::beacon::credential::MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
             )
             .expect("max size")
                 + 1,

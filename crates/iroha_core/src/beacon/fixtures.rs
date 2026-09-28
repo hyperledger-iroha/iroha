@@ -408,6 +408,9 @@ pub fn complete_beacon_dkg_fixture_for_seat_v1(
 }
 
 /// Build a fully signed test DKG for one exact session and deterministic roster.
+///
+/// Every call for the same session returns the same transcript within one
+/// process (see [`complete_beacon_dkg_fixture_v1`]).
 #[cfg(any(test, feature = "iroha-core-tests"))]
 #[doc(hidden)]
 pub fn complete_beacon_dkg_fixture_for_exact_session_v1(
@@ -415,23 +418,76 @@ pub fn complete_beacon_dkg_fixture_for_exact_session_v1(
     signer_index: u16,
 ) -> (GlobalThresholdBeaconKeySessionV1, Zeroizing<[[u8; 32]; 3]>) {
     assert!(signer_index > 0 && signer_index <= session.committee_size);
+    let fixture = complete_beacon_dkg_fixture_v1(session);
+    (
+        fixture.record.clone(),
+        Zeroizing::new(*fixture.seat_components[usize::from(signer_index - 1)]),
+    )
+}
+
+/// One complete signed all-edge test DKG: its public record and every seat's share.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+struct CompleteBeaconDkgFixtureV1 {
+    record: GlobalThresholdBeaconKeySessionV1,
+    seat_components: Vec<Zeroizing<[[u8; 32]; 3]>>,
+}
+
+/// Build, or reuse, the complete test DKG of one exact session.
+///
+/// Sealing a private edge draws fresh KEM randomness, so rebuilding a session
+/// would yield another transcript. Tests that rebuild "the same" fixture (a
+/// restarted provider or a replacement credential) must see one transcript, so
+/// the first completed build of each session is kept for the process.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn complete_beacon_dkg_fixture_v1(
+    session: GlobalThresholdBeaconDkgSessionV1,
+) -> std::sync::Arc<CompleteBeaconDkgFixtureV1> {
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, LazyLock, Mutex, PoisonError},
+    };
+    type Fixtures =
+        Mutex<BTreeMap<GlobalThresholdBeaconDkgSessionV1, Arc<CompleteBeaconDkgFixtureV1>>>;
+    static FIXTURES: LazyLock<Fixtures> = LazyLock::new(Fixtures::default);
+    if let Some(built) = FIXTURES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&session)
+    {
+        return Arc::clone(built);
+    }
+    // Build outside the lock; a concurrent build of the same session loses to the first insert.
     let keys = adaptive_fixture_signing_keys(session.committee_size);
     let fixture = adaptive_beacon_fixture_for_session_and_keys(session, &keys);
-    let shares = fixture
-        .dealer_secrets
-        .iter()
-        .zip(&fixture.dealer_commitments)
-        .map(|(secret, dealer)| {
-            secret
-                .private_share(&fixture.parameters, dealer, signer_index)
-                .expect("verified fixture contribution")
+    let seat_components = (1..=session.committee_size)
+        .map(|signer_index| {
+            let shares = fixture
+                .dealer_secrets
+                .iter()
+                .zip(&fixture.dealer_commitments)
+                .map(|(secret, dealer)| {
+                    secret
+                        .private_share(&fixture.parameters, dealer, signer_index)
+                        .expect("verified fixture contribution")
+                })
+                .collect::<Vec<_>>();
+            AdaptiveThresholdBlsSecretShare::from_dealer_shares(
+                &fixture.session.transcript,
+                &shares,
+            )
+            .expect("complete fixture seat share")
+            .into_components_for_runtime_custody()
         })
-        .collect::<Vec<_>>();
-    let aggregate =
-        AdaptiveThresholdBlsSecretShare::from_dealer_shares(&fixture.session.transcript, &shares)
-            .expect("complete fixture seat share");
-    (
-        fixture.session.record().clone(),
-        aggregate.into_components_for_runtime_custody(),
+        .collect();
+    let built = Arc::new(CompleteBeaconDkgFixtureV1 {
+        record: fixture.session.record().clone(),
+        seat_components,
+    });
+    Arc::clone(
+        FIXTURES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(session)
+            .or_insert(built),
     )
 }

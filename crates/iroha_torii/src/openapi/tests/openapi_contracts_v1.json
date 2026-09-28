@@ -472,7 +472,8 @@
         "last_committed_subject",
         "height_context",
         "last_commit_qc",
-        "liveness"
+        "liveness",
+        "beacon_horizon"
       ]
     },
     {

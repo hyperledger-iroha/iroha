@@ -4582,6 +4582,27 @@ pub(crate) mod valid {
                 | Self::SumeragiGenesis { .. } => None,
             }
         }
+        /// Where the SCCP post-execution hook takes the consensus inputs of the executed
+        /// height (`specs/sccp.md` §4.3.2): the Sumeragi core's lag-2 schedule for its blocks
+        /// and genesis, the authenticated v2 height context otherwise, and nothing for a v2
+        /// signed genesis, whose height-one context is frozen from the staged genesis.
+        fn sccp_height_source(
+            &self,
+        ) -> crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1<'_> {
+            use crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1;
+            if let Some(genesis_height) = self.sumeragi_schedule() {
+                return SccpHeightSourceV1::SumeragiSchedule {
+                    genesis_height,
+                    mode: self.authoritative_consensus_mode(),
+                };
+            }
+            self.v2_context()
+                .and_then(SumeragiV2ValidationContext::authenticated_height_context)
+                .map_or(
+                    SccpHeightSourceV1::Unauthenticated,
+                    SccpHeightSourceV1::V2Context,
+                )
+        }
         const fn v2_context(&self) -> Option<&SumeragiV2ValidationContext> {
             match self {
                 Self::SumeragiV2 { context, .. } | Self::NativePreparation { context, .. } => {
@@ -8164,11 +8185,12 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Err(error) = Self::execute_and_record_canonical_outputs(
+            if let Err(error) = Self::execute_and_record_canonical_outputs_in_context(
                 &mut block,
                 &mut state_block,
                 timings.as_deref_mut(),
                 genesis.as_ref(),
+                validation_profile.sccp_height_source(),
             ) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -10912,6 +10934,44 @@ pub(crate) mod valid {
                 .map(|entrypoint| transactions.get(&entrypoint.hash()))
                 .collect()
         }
+        /// Reject a block that carries more exempt-shaped SCCP transactions than the per-block
+        /// caps allow (`specs/sccp.md` §4.19). The shapes are a pure function of the entry
+        /// points and the caps are the committed parent's parameters, exactly what the
+        /// proposer's queue selection counts (`Queue::bounded_pending_snapshot`), so a block
+        /// its proposer built always passes. Without SCCP nothing is capped.
+        fn validate_sccp_exempt_cap(
+            block: &SignedBlock,
+            state_block: &StateBlock<'_>,
+        ) -> Result<(), BlockValidationError> {
+            // SCCP is initialized only in genesis, so a block whose own state has no SCCP
+            // parameters has no SCCP parent either; skip the parent view entirely.
+            if !crate::smartcontracts::isi::sccp::params::exists(&state_block.world) {
+                return Ok(());
+            }
+            Self::validate_sccp_exempt_cap_against(block, &state_block.sccp_parent_world_view())
+        }
+        /// Check the per-block SCCP exemption caps of `block` against the `parent` World.
+        fn validate_sccp_exempt_cap_against(
+            block: &SignedBlock,
+            parent: &(impl crate::state::WorldReadOnly + ?Sized),
+        ) -> Result<(), BlockValidationError> {
+            use crate::smartcontracts::isi::sccp::{admission, params};
+            if !params::exists(parent) {
+                return Ok(());
+            }
+            let classes = block
+                .network_entrypoints()
+                .filter_map(admission::exempt_shape_of_entrypoint)
+                .collect::<Vec<_>>();
+            if admission::block_exempt_cap_ok(parent, &classes) {
+                Ok(())
+            } else {
+                Err(Self::execution_context_error(format!(
+                    "block carries {} exempt-shaped SCCP transactions beyond the per-block caps",
+                    classes.len()
+                )))
+            }
+        }
         fn signed_transaction_from_entrypoint(
             entrypoint: &TransactionEntrypoint,
         ) -> Option<&SignedTransaction> {
@@ -12072,11 +12132,32 @@ pub(crate) mod valid {
             }
             Ok(expected)
         }
+        /// Execute a component fixture without a consensus height context.
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
         fn execute_and_record_canonical_outputs(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
             timings: Option<&mut ValidationTimings>,
             genesis: Option<&AuthenticatedGenesisOutputSource>,
+        ) -> Result<(), BlockValidationError> {
+            Self::execute_and_record_canonical_outputs_in_context(
+                block,
+                state_block,
+                timings,
+                genesis,
+                crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1::Unauthenticated,
+            )
+        }
+        /// Execute and seal ordinary outputs. `sccp_height` names the authenticated consensus
+        /// inputs of the block's height that the SCCP post-execution hook consumes
+        /// (`specs/sccp.md` §4.3.2); `Unauthenticated` is reserved for component fixtures and
+        /// v2 signed genesis, whose height-one context is frozen from the staged genesis.
+        fn execute_and_record_canonical_outputs_in_context(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            timings: Option<&mut ValidationTimings>,
+            genesis: Option<&AuthenticatedGenesisOutputSource>,
+            sccp_height: crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1<'_>,
         ) -> Result<(), BlockValidationError> {
             let start = Instant::now();
             let mut timings = timings;
@@ -12085,6 +12166,7 @@ pub(crate) mod valid {
             block
                 .validate_proposal_commitments()
                 .map_err(Self::execution_context_error)?;
+            Self::validate_sccp_exempt_cap(block, state_block)?;
             let advertised_fragments = block.committed_fragment_count();
             let advertised_policy = block.axt_policy_snapshot().cloned();
             let advertised_transitions = block.axt_transitioned_dataspaces().cloned();
@@ -12161,6 +12243,7 @@ pub(crate) mod valid {
                     advertised_fragments,
                     advertised_policy.as_ref(),
                     advertised_transitions.as_ref(),
+                    sccp_height,
                 )
             };
             // The applying constructor already owns the recorder over pristine
@@ -13031,6 +13114,7 @@ pub(crate) mod valid {
             };
         }
         include!("block/post_execution_tail_tests.rs");
+        include!("block/sccp_call_site_tests.rs");
         include!("block/autonomous_merge_carrier_content_tests.rs");
         fn checked_block_signature(
             private_key: &PrivateKey,

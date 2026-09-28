@@ -107,6 +107,21 @@ pub const DEFAULT_ZK_GAS_PER_NULLIFIER: u64 = 300;
 pub const DEFAULT_ZK_GAS_PER_COMMITMENT: u64 = 500;
 const FIELD_ELEMENT_BYTES: usize = 32;
 /// Dynamic factors (per-byte) applied to encoded payloads where sensible.
+/// Base cost of an SCCP instruction: bounded SCCP World reads and writes (`specs/sccp.md` §4).
+const BASE_SCCP: u64 = BASE_REGISTER;
+/// One secp256k1 public-key recovery with its EIP-712 digest: an attestation entry, a bridge
+/// key's proof of possession or one fault signature.
+const SCCP_SECP256K1_RECOVER: u64 = 1_000;
+/// Verification of one peer consensus-key signature over a bridge-key binding.
+const SCCP_PEER_SIGNATURE_VERIFY: u64 = 25_000;
+/// Verification base of one source-chain light-client proof (the source chain's consensus
+/// signatures), matching the default ZK verification base.
+const SCCP_LIGHT_CLIENT_VERIFY: u64 = DEFAULT_ZK_GAS_BASE_VERIFY;
+/// Light-client proof bytes per gas unit (decoding and hashing). A maximal 8 MiB source proof
+/// stays below the shipped 1 680 000 block gas limit.
+const SCCP_PROOF_BYTES_PER_GAS: u64 = 8;
+/// Per byte of SCCP payload or recipient data hashed and stored.
+const PER_BYTE_SCCP: u64 = 1;
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
 const PER_BYTE_PIN_MANIFEST: u64 = 1;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
@@ -357,6 +372,85 @@ fn gas_for_parliament_transition(
         .saturating_add(parliament_transition_cached_work_gas(
             &instruction.transition,
         ))
+}
+fn sccp_byte_gas(bytes: usize, per_unit: u64, bytes_per_unit: u64) -> u64 {
+    let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+    per_unit.saturating_mul(bytes.div_ceil(bytes_per_unit))
+}
+fn sccp_proof_gas(proof_bytes: usize) -> u64 {
+    SCCP_LIGHT_CLIENT_VERIFY.saturating_add(sccp_byte_gas(proof_bytes, 1, SCCP_PROOF_BYTES_PER_GAS))
+}
+/// Gas of the SCCP v1 instructions (`specs/sccp.md` §4), proportional to their signature and
+/// proof work, or `None` for any other instruction.
+fn sccp_instruction_gas(any: &dyn core::any::Any) -> Option<u64> {
+    use dm_isi::sccp;
+    if let Some(submit) = any.downcast_ref::<sccp::SubmitSccpAttestationsV1>() {
+        let entries = u64::try_from(submit.entries.len()).unwrap_or(u64::MAX);
+        return Some(BASE_SCCP.saturating_add(SCCP_SECP256K1_RECOVER.saturating_mul(entries)));
+    }
+    if let Some(set) = any.downcast_ref::<sccp::SetSccpBridgeKeyV1>() {
+        let registration = if set.public_key.is_some() {
+            // The key's own account is registered implicitly and its PoP recovered.
+            BASE_REGISTER.saturating_add(SCCP_SECP256K1_RECOVER)
+        } else {
+            0
+        };
+        return Some(
+            BASE_SCCP
+                .saturating_add(SCCP_PEER_SIGNATURE_VERIFY)
+                .saturating_add(registration),
+        );
+    }
+    if let Some(fault) = any.downcast_ref::<sccp::SubmitSccpAttestationFaultV1>() {
+        return Some(
+            BASE_SCCP
+                .saturating_add(SCCP_SECP256K1_RECOVER)
+                .saturating_add(sccp_byte_gas(
+                    fault.statement.encode().len(),
+                    PER_BYTE_SCCP,
+                    1,
+                )),
+        );
+    }
+    if let Some(record) = any.downcast_ref::<sccp::RecordSccpMessage>() {
+        return Some(
+            BASE_SCCP
+                .saturating_add(BASE_TRANSFER)
+                .saturating_add(sccp_byte_gas(record.recipient.len(), PER_BYTE_SCCP, 1)),
+        );
+    }
+    if let Some(inbound) = any.downcast_ref::<sccp::SubmitSccpInboundMessageV1>() {
+        return Some(
+            BASE_SCCP
+                .saturating_add(sccp_proof_gas(inbound.proof.len()))
+                .saturating_add(sccp_byte_gas(inbound.payload.len(), PER_BYTE_SCCP, 1)),
+        );
+    }
+    if let Some(void) = any.downcast_ref::<sccp::SubmitSccpOutboundVoidV1>() {
+        return Some(BASE_SCCP.saturating_add(sccp_proof_gas(void.proof.len())));
+    }
+    if let Some(advance) = any.downcast_ref::<sccp::AdvanceSccpLightClientV1>() {
+        return Some(BASE_SCCP.saturating_add(sccp_proof_gas(advance.advance.len())));
+    }
+    if let Some(report) = any.downcast_ref::<sccp::ReportSccpLightClientEquivocationV1>() {
+        return Some(
+            BASE_SCCP
+                .saturating_add(sccp_proof_gas(report.a.len()))
+                .saturating_add(sccp_proof_gas(report.b.len())),
+        );
+    }
+    if any.downcast_ref::<sccp::SettleSccpV1>().is_some() {
+        // A settlement releases escrow and may register its recipient implicitly.
+        return Some(
+            BASE_SCCP
+                .saturating_add(BASE_TRANSFER)
+                .saturating_add(BASE_REGISTER),
+        );
+    }
+    if any.downcast_ref::<sccp::InitializeSccpV1>().is_some() {
+        return Some(BASE_SCCP);
+    }
+    None
 }
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
@@ -661,6 +755,9 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         any.downcast_ref::<dm_isi::governance::SubmitParliamentLifecycleTransitionV1>()
     {
         return gas_for_parliament_transition(transition);
+    }
+    if let Some(gas) = sccp_instruction_gas(any) {
+        return gas;
     }
     // Unclassified instructions have a fixed first-release cost. Avoid encoding
     // the full instruction here: the retired per-byte factor was zero, so that
@@ -1924,5 +2021,83 @@ mod tests {
             dm_isi::mint_burn::Mint::asset_quantity(1u64, AssetId::of(asset, account.clone()));
         let instr = InstructionBox::from(dm_isi::mint_burn::MintBox::from(mint));
         assert_eq!(confidential_gas_cost(&instr), 0);
+    }
+    #[test]
+    fn sccp_gas_grows_with_signature_and_proof_work_and_fits_the_block() {
+        use crate::smartcontracts::isi::sccp::test_support::SampleInstructions as I;
+        use iroha_data_model::sccp::{
+            inbound::{SCCP_SOURCE_PROOF_MAX_BYTES_V1, SccpSourceProofBytesV1},
+            light_client::{
+                SCCP_LC_ADVANCE_MAX_BYTES_V1, SCCP_LC_EVIDENCE_MAX_BYTES_V1, SccpLcAdvanceBytesV1,
+                SccpLcEvidenceBytesV1,
+            },
+        };
+        const SHIPPED_BLOCK_GAS_LIMIT: u64 = 1_680_000;
+        let gas = |instruction: InstructionBox| meter_instruction(&instruction);
+        for instruction in I::all() {
+            assert!(gas(instruction.clone()) >= BASE_SCCP, "{instruction:?}");
+            assert!(gas(instruction.clone()) < SHIPPED_BLOCK_GAS_LIMIT);
+            assert_eq!(confidential_gas_cost(&instruction), 0);
+        }
+        let attestations = |entries: usize| {
+            let mut submit = I::attestations();
+            submit.entries = vec![submit.entries[0].clone(); entries];
+            gas(submit.into())
+        };
+        assert_eq!(attestations(1), BASE_SCCP + SCCP_SECP256K1_RECOVER);
+        assert_eq!(attestations(64) - attestations(63), SCCP_SECP256K1_RECOVER);
+        assert!(
+            attestations(1_024) < SHIPPED_BLOCK_GAS_LIMIT,
+            "a maximal attestation batch is includable"
+        );
+        let mut revocation = I::set_bridge_key();
+        revocation.public_key = None;
+        revocation.key_pop = None;
+        assert!(gas(I::set_bridge_key().into()) > gas(revocation.clone().into()));
+        assert!(gas(revocation.into()) >= SCCP_PEER_SIGNATURE_VERIFY);
+        assert!(gas(I::fault().into()) > SCCP_SECP256K1_RECOVER);
+        let record = |bytes: usize| {
+            let mut record = I::record();
+            record.recipient = vec![1; bytes];
+            gas(record.into())
+        };
+        assert!(record(36) > record(20));
+        let inbound = |bytes: usize| {
+            let mut inbound = I::inbound();
+            inbound.proof = SccpSourceProofBytesV1::new(vec![1; bytes]).expect("bounded proof");
+            gas(inbound.into())
+        };
+        assert!(inbound(1_024) >= SCCP_LIGHT_CLIENT_VERIFY);
+        assert!(inbound(1_024 * 1_024) > inbound(1_024));
+        assert!(inbound(SCCP_SOURCE_PROOF_MAX_BYTES_V1) < SHIPPED_BLOCK_GAS_LIMIT);
+        let inbound_payload = |bytes: usize| {
+            let mut inbound = I::inbound();
+            inbound.payload = vec![2; bytes];
+            gas(inbound.into())
+        };
+        assert!(inbound_payload(512) > inbound_payload(64));
+        let void = |bytes: usize| {
+            let mut void = I::void();
+            void.proof = SccpSourceProofBytesV1::new(vec![1; bytes]).expect("bounded proof");
+            gas(void.into())
+        };
+        assert!(void(4_096) > void(64));
+        let advance = |bytes: usize| {
+            let mut advance = I::advance();
+            advance.advance = SccpLcAdvanceBytesV1::new(vec![1; bytes]).expect("bounded advance");
+            gas(advance.into())
+        };
+        assert!(advance(4_096) > advance(64));
+        assert!(advance(SCCP_LC_ADVANCE_MAX_BYTES_V1) < SHIPPED_BLOCK_GAS_LIMIT);
+        let equivocation = |bytes: usize| {
+            let evidence = || SccpLcEvidenceBytesV1::new(vec![1; bytes]).expect("bounded evidence");
+            let mut report = I::equivocation();
+            report.a = evidence();
+            report.b = evidence();
+            gas(report.into())
+        };
+        assert!(equivocation(4_096) > equivocation(64));
+        assert!(equivocation(64) >= 2 * SCCP_LIGHT_CLIENT_VERIFY);
+        assert!(equivocation(SCCP_LC_EVIDENCE_MAX_BYTES_V1) < SHIPPED_BLOCK_GAS_LIMIT);
     }
 }

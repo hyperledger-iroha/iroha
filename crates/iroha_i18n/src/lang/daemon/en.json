@@ -5,6 +5,7 @@
   "error.logger": "Could not initialize logger",
   "error.start": "Failed to start Iroha",
   "error.run": "Error occurred while running Iroha",
+  "error.check_storage": "The node store failed the read-only storage check",
   "error.start_p2p": "Unable to start peer-to-peer network",
   "error.init_kura": "Unable to initialize Kura (block storage)",
   "error.start_dev_telemetry": "Unable to start dev telemetry service",

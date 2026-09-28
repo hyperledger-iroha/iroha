@@ -568,6 +568,7 @@ fn data_event_schema_reserves_disabled_capability_discriminants() {
         ("Social", 20),
         ("Bridge", 21),
         ("GameSession", 22),
+        ("Sccp", 23),
     ]
     .into_iter()
     .filter(|(name, _)| *name != "Governance" || cfg!(feature = "governance"))

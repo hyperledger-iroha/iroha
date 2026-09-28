@@ -2668,6 +2668,12 @@ pub mod sumeragi {
         "/v1/bridge/finality/attestation/{height}",
     )
     .with_projections(RouteProjections::OPENAPI);
+    /// Read the same challenge-bound attestation for whichever height is the durable tip.
+    pub const BRIDGE_FINALITY_ATTESTATION_LATEST: RouteDescriptor = public_get(
+        "bridge.finality_attestation.read_latest",
+        "/v1/bridge/finality/attestation/latest",
+    )
+    .with_projections(RouteProjections::OPENAPI);
     /// Read a bridge finality commitment and justification bundle.
     pub const BRIDGE_FINALITY_BUNDLE: RouteDescriptor = public_get(
         "bridge.finality_bundle.read",
@@ -2691,6 +2697,7 @@ pub mod sumeragi {
         QC,
         BRIDGE_FINALITY,
         BRIDGE_FINALITY_ATTESTATION,
+        BRIDGE_FINALITY_ATTESTATION_LATEST,
         BRIDGE_FINALITY_BUNDLE,
         CONSENSUS_KEYS,
         PARAMETERS,

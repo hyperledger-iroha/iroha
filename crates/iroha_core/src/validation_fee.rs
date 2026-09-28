@@ -4182,6 +4182,9 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::SetAssetDefinitionAlias,
         SetKeyValue<Trigger>,
     );
+    if let Some(disposition) = sccp_native_ds_effect_disposition(instruction) {
+        return disposition;
+    }
     // Consult orthogonal, reviewed metadata only after payload-dependent asset guards.
     // No Initial-executor authority disposition implies any fee-policy exemption.
     if let Some((type_name, effect)) =
@@ -4203,6 +4206,47 @@ fn native_instruction_ds_effect_disposition(
         }
         None => NativeInstructionDsEffectDisposition::Unknown,
     }
+}
+/// Classify the SCCP v1 instructions (`specs/sccp.md` §4.19).
+///
+/// Attestations, fault evidence, light-client advances and equivocation reports write only SCCP
+/// control records. Bridge-key registration and genesis initialization register accounts with
+/// the effect of `Register<Account>`. The value-moving instructions lock, release or refund XOR
+/// through route escrows, which is not a signed transparent transfer coordinate, so they stay
+/// rejected while a validation-fee policy is active.
+// TODO(ws31): refine the value-moving dispositions once the escrow effects have an effect plan.
+fn sccp_native_ds_effect_disposition(
+    instruction: &InstructionBox,
+) -> Option<NativeInstructionDsEffectDisposition> {
+    use iroha_data_model::isi::sccp;
+    let any = instruction.as_any();
+    if any.is::<sccp::SubmitSccpAttestationsV1>()
+        || any.is::<sccp::SubmitSccpAttestationFaultV1>()
+        || any.is::<sccp::AdvanceSccpLightClientV1>()
+        || any.is::<sccp::ReportSccpLightClientEquivocationV1>()
+        || any.is::<sccp::SetSccpBridgeKeyV1>()
+        || any.is::<sccp::InitializeSccpV1>()
+    {
+        return Some(NativeInstructionDsEffectDisposition::AuditedNoDsEffect);
+    }
+    macro_rules! value_moving {
+        ($($ty:ty),+ $(,)?) => {
+            $(
+                if any.is::<$ty>() {
+                    return Some(NativeInstructionDsEffectDisposition::RejectKnownDsCapable(
+                        core::any::type_name::<$ty>(),
+                    ));
+                }
+            )+
+        };
+    }
+    value_moving!(
+        sccp::RecordSccpMessage,
+        sccp::SubmitSccpInboundMessageV1,
+        sccp::SettleSccpV1,
+        sccp::SubmitSccpOutboundVoidV1,
+    );
+    None
 }
 fn collect_instruction_asset_transfers(
     instructions: &[InstructionBox],
@@ -5101,3 +5145,35 @@ pub(crate) mod tests {
 #[cfg(test)]
 #[path = "validation_fee_atomic_tests.rs"]
 mod atomic_settlement_fee_tests;
+
+#[cfg(test)]
+mod sccp_ds_effect_tests {
+    use super::*;
+
+    #[test]
+    fn every_sccp_instruction_has_an_explicit_ds_effect_disposition() {
+        let samples = crate::smartcontracts::isi::sccp::test_support::SampleInstructions::all();
+        assert_eq!(samples.len(), 10);
+        let mut rejected = Vec::new();
+        for instruction in &samples {
+            match sccp_native_ds_effect_disposition(instruction) {
+                Some(NativeInstructionDsEffectDisposition::AuditedNoDsEffect) => {}
+                Some(NativeInstructionDsEffectDisposition::RejectKnownDsCapable(name)) => {
+                    rejected.push(name);
+                }
+                other => panic!("unclassified SCCP instruction {instruction:?}: {other:?}"),
+            }
+        }
+        assert_eq!(
+            rejected,
+            vec![
+                core::any::type_name::<iroha_data_model::isi::sccp::RecordSccpMessage>(),
+                core::any::type_name::<iroha_data_model::isi::sccp::SubmitSccpInboundMessageV1>(),
+                core::any::type_name::<iroha_data_model::isi::sccp::SettleSccpV1>(),
+                core::any::type_name::<iroha_data_model::isi::sccp::SubmitSccpOutboundVoidV1>(),
+            ]
+        );
+        let log = InstructionBox::from(Log::new(Level::INFO, "not SCCP".to_owned()));
+        assert_eq!(sccp_native_ds_effect_disposition(&log), None);
+    }
+}

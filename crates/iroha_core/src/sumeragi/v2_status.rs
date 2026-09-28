@@ -37,9 +37,9 @@ use crate::status::{
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 use iroha_data_model::block::consensus_v2::{
-    BlockSubject, ConsensusRound, GlobalPhase, HeightContextId, SumeragiV2BodyState,
-    SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind,
-    SumeragiV2OutboundIntentStage, SumeragiV2ProgressTransition,
+    BeaconHorizonStatusV1, BlockSubject, ConsensusRound, GlobalPhase, HeightContextId,
+    SumeragiV2BodyState, SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage,
+    SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage, SumeragiV2ProgressTransition,
     SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
     SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
     SumeragiV2VoteQuorumStatus,
@@ -77,6 +77,9 @@ struct V2EffectCompletionRegistration {
     owner: V2StatusOwner,
     observer: Weak<dyn V2IoCompletionQueueObserver>,
 }
+/// Beacon horizon published by the serialized activation of one exact height.
+static SUMERAGI_V2_BEACON_HORIZON: OnceLock<Mutex<Option<(V2StatusOwner, BeaconHorizonStatusV1)>>> =
+    OnceLock::new();
 static SUMERAGI_V2_NETWORK_INGRESS: OnceLock<Mutex<Option<V2NetworkIngressRegistration>>> =
     OnceLock::new();
 static SUMERAGI_V2_EFFECT_COMPLETION_OBSERVER: OnceLock<
@@ -998,6 +1001,40 @@ pub(crate) fn set_v2_network_ingress(
         ingress: Arc::downgrade(ingress),
     });
 }
+/// Register the beacon horizon observed when `height` of `height_context_id` was activated.
+///
+/// The horizon is overlaid onto status reads for exactly that height owner, so
+/// a published snapshot never carries an observation from another height.
+pub(crate) fn set_v2_beacon_horizon(
+    height_context_id: HeightContextId,
+    height: u64,
+    horizon: BeaconHorizonStatusV1,
+) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
+    *SUMERAGI_V2_BEACON_HORIZON
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
+        V2StatusOwner {
+            height_context_id,
+            height,
+        },
+        horizon,
+    ));
+}
+fn overlay_v2_beacon_horizon(status: &mut SumeragiV2Status) {
+    let owner = V2StatusOwner::from_status(status);
+    if let Some(horizon) = SUMERAGI_V2_BEACON_HORIZON.get().and_then(|slot| {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|(registered, _)| *registered == owner)
+            .map(|(_, horizon)| *horizon)
+    }) {
+        status.beacon_horizon = Some(horizon);
+    }
+}
 fn bounded_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
@@ -1460,6 +1497,7 @@ fn v2_status_observation_at(now: Instant) -> Option<V2StatusObservation> {
         }
         V2EffectCompletionObservation::Unregistered => {}
     }
+    overlay_v2_beacon_horizon(&mut status);
     let network_ingress_service_idle_age = overlay_v2_network_ingress(&mut status, now);
     let (no_progress_age, retained_watchdog_threshold, semantic_progress_at) =
         overlay_v2_liveness_clock(&mut status, now).map_or_else(
@@ -1966,6 +2004,11 @@ pub fn clear_v2_status() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
+    if let Some(slot) = SUMERAGI_V2_BEACON_HORIZON.get() {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
     if let Some(slot) = SUMERAGI_V2_EFFECT_COMPLETION_OBSERVER.get() {
         *slot
             .lock()
@@ -2098,6 +2141,7 @@ mod v2_liveness_watchdog_tests {
             },
             last_commit_qc: None,
             liveness: Default::default(),
+            beacon_horizon: None,
         }
     }
     fn round(status: &SumeragiV2Status, view: u64) -> ConsensusRound {
@@ -2285,6 +2329,43 @@ mod v2_liveness_watchdog_tests {
                 "closed-ingress recovery stage {stage:?} must expose its actual blocker"
             );
         }
+    }
+    #[test]
+    fn beacon_horizon_overlays_only_its_exact_height_owner() {
+        let _guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let started_at = Instant::now();
+        let published = status();
+        let horizon = super::BeaconHorizonStatusV1 {
+            epoch_length_blocks: 0,
+            next_required_pulse_height: Some(published.height + 3),
+            active_session_id: Some([0x71; 32]),
+            session_covers_next_pulse: true,
+            local_provider_ready: true,
+        };
+        super::set_v2_beacon_horizon(published.height_context_id, published.height + 1, horizon);
+        set_v2_status_at(published.clone(), started_at);
+        assert_eq!(
+            v2_status_at(started_at).expect("published").beacon_horizon,
+            None,
+            "a horizon for another height is never attached"
+        );
+        super::set_v2_beacon_horizon(published.height_context_id, published.height, horizon);
+        let observed = v2_status_at(started_at).expect("published");
+        assert_eq!(observed.beacon_horizon, Some(horizon));
+        observed
+            .validate()
+            .expect("overlaid horizon keeps the status valid");
+        clear_v2_status();
+        set_v2_status_at(published, started_at);
+        assert_eq!(
+            v2_status_at(started_at)
+                .expect("republished")
+                .beacon_horizon,
+            None,
+            "clearing status retires the registered horizon"
+        );
+        clear_v2_status();
     }
     #[test]
     fn cross_thread_v2_publication_waits_for_status_test_lease_and_resumes_after_release() {

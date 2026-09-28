@@ -1837,6 +1837,7 @@ fn sample_sumeragi_status_wire() -> SumeragiV2Status {
         },
         last_commit_qc: None,
         liveness: Default::default(),
+        beacon_horizon: None,
     }
 }
 #[path = "tests/canonical_fixture_owner.rs"]

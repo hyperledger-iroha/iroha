@@ -16,6 +16,8 @@ iroha_sccp_rpc = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_config = { workspace = true }
+# `#[derive(ReadConfig)]` of the client-config `[sccp]` table expands to `::iroha_config_base` paths.
+iroha_config_base = { workspace = true }
 iroha_wallet = { workspace = true }
 norito = { workspace = true, features = ["base-codec"] }
 tiny-keccak = { workspace = true, features = ["keccak"] }
@@ -24,3 +26,10 @@ hex = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std", "zeroize"] }
 k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "sha256", "std"] }
+
+# Owner-only key files and journal directories: `O_NOFOLLOW` opens and the effective uid.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -3538,6 +3538,82 @@ pub struct SumeragiV2QcResponse {
     #[norito(required)]
     pub locked_prepare_qc: Option<QuorumCertificateRef>,
 }
+/// Local global-beacon horizon observed when the active height was activated.
+///
+/// The horizon is derived from the frozen height context, committed public
+/// beacon state and the local partial-signer provider. It is an observation
+/// only: it never authorizes signing and never changes mandatory pulse rules.
+/// Operators read it from a signed status (for example inside
+/// `BridgeFinalityAttestationBodyV1`) to decide whether a restart could strand
+/// the next mandatory pulse.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus_v2::BeaconHorizonStatusV1")]
+pub struct BeaconHorizonStatusV1 {
+    /// Length of the `NPoS` epoch the frozen height context governs, which is never zero; zero
+    /// in permissioned mode, which has no finite epochs.
+    pub epoch_length_blocks: u64,
+    /// Earliest height at or after the active height whose finalized beacon
+    /// pulse is consensus-mandatory, or `null` when none is scheduled.
+    #[norito(required)]
+    pub next_required_pulse_height: Option<Height>,
+    /// Committed active global threshold-beacon key session, if one is installed.
+    #[norito(required)]
+    pub active_session_id: Option<[u8; 32]>,
+    /// Whether the active session is authenticated for this network and roster
+    /// and is live at `next_required_pulse_height`.
+    pub session_covers_next_pulse: bool,
+    /// Whether this validator's partial-signer provider attested custody of its
+    /// seat in the active session. Always `false` on observers.
+    pub local_provider_ready: bool,
+}
+impl BeaconHorizonStatusV1 {
+    /// Blocks remaining from `height` until the next mandatory pulse, if one is scheduled.
+    #[must_use]
+    pub fn blocks_to_pulse(&self, height: Height) -> Option<u64> {
+        self.next_required_pulse_height
+            .map(|pulse| pulse.saturating_sub(height))
+    }
+    /// Validate the horizon against the active height and its frozen consensus mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SumeragiV2StatusValidationError::InvalidBeaconHorizon`] when a
+    /// permissioned context reports an epoch length or an `NPoS` context reports
+    /// none, the next pulse precedes the active height, or coverage or provider
+    /// readiness is claimed without the session and pulse they depend on.
+    pub fn validate(
+        &self,
+        height: Height,
+        mode: ConsensusMode,
+    ) -> Result<(), SumeragiV2StatusValidationError> {
+        let session = self.active_session_id.is_some();
+        if (mode == ConsensusMode::Permissioned && self.epoch_length_blocks != 0)
+            || (mode == ConsensusMode::Npos && self.epoch_length_blocks == 0)
+            || self
+                .next_required_pulse_height
+                .is_some_and(|pulse| pulse < height)
+            || (self.session_covers_next_pulse
+                && (!session || self.next_required_pulse_height.is_none()))
+            || (self.local_provider_ready && !session)
+        {
+            return Err(SumeragiV2StatusValidationError::InvalidBeaconHorizon);
+        }
+        Ok(())
+    }
+}
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
 ///
 /// Every field belongs to the first-release JSON schema. Nullable consensus
@@ -3604,6 +3680,10 @@ pub struct SumeragiV2Status {
     pub last_commit_qc: Option<SumeragiV2CommitQcStatus>,
     /// Authoritative progress and no-progress diagnostics for the active height.
     pub liveness: SumeragiV2LivenessStatus,
+    /// Global-beacon horizon published by the serialized activation of this
+    /// exact height, or `null` before that observation exists.
+    #[norito(required)]
+    pub beacon_horizon: Option<BeaconHorizonStatusV1>,
 }
 impl SumeragiV2Status {
     /// Validate scalar and cross-field invariants which do not require the
@@ -3947,6 +4027,9 @@ impl SumeragiV2Status {
                 return Err(Error::LivenessGenerationFromFuture);
             }
         }
+        if let Some(horizon) = &self.beacon_horizon {
+            horizon.validate(self.height, self.height_context.mode)?;
+        }
         Ok(())
     }
 }
@@ -4030,6 +4113,8 @@ pub enum SumeragiV2StatusValidationError {
     DuplicateLivenessIgnoreReason,
     /// A progress record referred to a reducer generation not yet installed.
     LivenessGenerationFromFuture,
+    /// The beacon horizon is inconsistent with the active height, mode, or itself.
+    InvalidBeaconHorizon,
 }
 impl fmt::Display for SumeragiV2StatusValidationError {
     #[expect(
@@ -4145,6 +4230,9 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             }
             Error::LivenessGenerationFromFuture => {
                 f.write_str("Sumeragi liveness progress record is from a future generation")
+            }
+            Error::InvalidBeaconHorizon => {
+                f.write_str("Sumeragi status beacon horizon is internally inconsistent")
             }
         }
     }

@@ -712,6 +712,7 @@ Root {
     },
     sumeragi: Sumeragi {
         role: Validator,
+        mint_finality_seed_fd: None,
         global_beacon_partial_signer_provider_handle: None,
         global_beacon_partial_signer_provider_revision: None,
         global_beacon_partial_signer_provider_policy_digest: None,
@@ -2047,5 +2048,9 @@ Root {
             },
             secret_headers: [],
         },
+    },
+    data_dir: None,
+    lifecycle: Lifecycle {
+        exit_on_stdin_close: false,
     },
 }

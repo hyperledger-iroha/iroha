@@ -924,3 +924,283 @@ fn ordering_is_preserved_across_roundtrip() {
     assert_eq!(instrs, rt_sorted);
 }
 include!("default_registry_tail_test.rs");
+/// SCCP v1 instruction registration (`specs/sccp.md` §4): every instruction boxes, carries its
+/// `iroha.instruction.v1::sccp::<Name>` wire id and round-trips through the default registry.
+pub(crate) mod sccp_instruction_enum {
+    use super::RegistryGuard;
+    use crate::{
+        NetworkId,
+        bridge::SccpNetworkV1,
+        isi::{
+            Instruction, InstructionBox,
+            sccp::{
+                AdvanceSccpLightClientV1, InitializeSccpV1, RecordSccpMessage,
+                ReportSccpLightClientEquivocationV1, SetSccpBridgeKeyV1, SettleSccpV1,
+                SubmitSccpAttestationFaultV1, SubmitSccpAttestationsV1, SubmitSccpInboundMessageV1,
+                SubmitSccpOutboundVoidV1,
+            },
+        },
+        sccp::{
+            attestation::{SccpAttestationSignatureV1, SccpAttestationStatementV1},
+            inbound::SccpSourceProofBytesV1,
+            keys::SccpBridgeKeyBindingV1,
+            light_client::{SccpLcAdvanceBytesV1, SccpLcEvidenceBytesV1},
+            params::SccpParametersV1,
+        },
+    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_model_base::peer::PeerId;
+    use iroha_primitives::numeric::Numeric;
+
+    fn network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+            Hash::new([0x7a; Hash::LENGTH]),
+        ))
+    }
+
+    /// Deterministic populated values of the ten SCCP v1 instructions, in wire-id order.
+    pub(crate) fn initialize() -> InitializeSccpV1 {
+        InitializeSccpV1 {
+            parameters: SccpParametersV1::taira_default(),
+            reset_nonce: [0x5a; 32],
+        }
+    }
+
+    /// Populated bridge-key registration signed by a deterministic peer key.
+    pub(crate) fn set_bridge_key() -> SetSccpBridgeKeyV1 {
+        let peer_keys = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)
+            .expect("deterministic Ed25519 seed");
+        let peer = PeerId::new(peer_keys.public_key().clone());
+        let public_key = Some([2; 33]);
+        let binding = SccpBridgeKeyBindingV1::new(network_id(), peer.clone(), public_key, 3, 0);
+        SetSccpBridgeKeyV1 {
+            peer,
+            public_key,
+            activation_epoch: 3,
+            binding_nonce: 0,
+            peer_signature: SignatureOf::new(peer_keys.private_key(), &binding),
+            key_pop: Some([0x1b; 65]),
+        }
+    }
+
+    /// Populated attestation batch.
+    pub(crate) fn submit_attestations() -> SubmitSccpAttestationsV1 {
+        SubmitSccpAttestationsV1 {
+            entries: vec![
+                SccpAttestationSignatureV1 {
+                    height: 9,
+                    signer_index: 0,
+                    signature: [0x1c; 65],
+                },
+                SccpAttestationSignatureV1 {
+                    height: 10,
+                    signer_index: 3,
+                    signature: [0x1b; 65],
+                },
+            ],
+        }
+    }
+
+    /// Populated equivocation evidence.
+    pub(crate) fn submit_fault() -> SubmitSccpAttestationFaultV1 {
+        SubmitSccpAttestationFaultV1 {
+            statement: SccpAttestationStatementV1 {
+                height: 9,
+                epoch: 1,
+                timestamp_ms: 1_758_000_000_000,
+                block_hash: [1; 32],
+                sccp_root: [2; 32],
+                message_count: 1,
+                history_root: [3; 32],
+                history_size: 1,
+                roster_digest: [4; 32],
+                next_roster_digest: [0; 32],
+            },
+            signature: [0x1b; 65],
+        }
+    }
+
+    /// Populated outbound record request.
+    pub(crate) fn record() -> RecordSccpMessage {
+        RecordSccpMessage {
+            network: SccpNetworkV1::EthereumMainnet,
+            expected_revision: 1,
+            amount: Numeric::new(1_500_000_000_u64, 9),
+            recipient: vec![0x22; 20],
+        }
+    }
+
+    /// Populated inbound proof submission.
+    pub(crate) fn submit_inbound() -> SubmitSccpInboundMessageV1 {
+        SubmitSccpInboundMessageV1 {
+            network: SccpNetworkV1::TonMainnet,
+            revision: 2,
+            payload: vec![2, 1, 0, 0, 0, 4],
+            proof: SccpSourceProofBytesV1::new(vec![0x4e, 0x52, 0x54, 0x30, 0x01])
+                .expect("bounded proof"),
+        }
+    }
+
+    /// Populated settlement retry.
+    pub(crate) fn settle() -> SettleSccpV1 {
+        SettleSccpV1::refund(SccpNetworkV1::BscMainnet, 1, 7)
+    }
+
+    /// Populated void proof submission.
+    pub(crate) fn submit_void() -> SubmitSccpOutboundVoidV1 {
+        SubmitSccpOutboundVoidV1 {
+            network: SccpNetworkV1::TronMainnet,
+            revision: 1,
+            proof: SccpSourceProofBytesV1::new(vec![0x4e, 0x52, 0x54, 0x30, 0x02])
+                .expect("bounded proof"),
+        }
+    }
+
+    /// Populated light-client advance.
+    pub(crate) fn advance() -> AdvanceSccpLightClientV1 {
+        AdvanceSccpLightClientV1 {
+            network: SccpNetworkV1::EthereumMainnet,
+            expected_state_hash: Some([8; 32]),
+            advance: SccpLcAdvanceBytesV1::new(vec![1; 64]).expect("bounded advance"),
+        }
+    }
+
+    /// Populated light-client equivocation report.
+    pub(crate) fn report_equivocation() -> ReportSccpLightClientEquivocationV1 {
+        ReportSccpLightClientEquivocationV1 {
+            network: SccpNetworkV1::BscMainnet,
+            a: SccpLcEvidenceBytesV1::new(vec![1, 2]).expect("bounded evidence"),
+            b: SccpLcEvidenceBytesV1::new(vec![3, 4]).expect("bounded evidence"),
+        }
+    }
+
+    /// Every SCCP v1 instruction with its expected wire id.
+    pub(crate) fn boxed_samples() -> Vec<(&'static str, InstructionBox)> {
+        vec![
+            (
+                "iroha.instruction.v1::sccp::InitializeSccpV1",
+                initialize().into(),
+            ),
+            (
+                "iroha.instruction.v1::sccp::SetSccpBridgeKeyV1",
+                set_bridge_key().into(),
+            ),
+            (
+                "iroha.instruction.v1::sccp::SubmitSccpAttestationsV1",
+                submit_attestations().into(),
+            ),
+            (
+                "iroha.instruction.v1::sccp::SubmitSccpAttestationFaultV1",
+                submit_fault().into(),
+            ),
+            (
+                "iroha.instruction.v1::sccp::RecordSccpMessage",
+                record().into(),
+            ),
+            (
+                "iroha.instruction.v1::sccp::SubmitSccpInboundMessageV1",
+                submit_inbound().into(),
+            ),
+            ("iroha.instruction.v1::sccp::SettleSccpV1", settle().into()),
+            (
+                "iroha.instruction.v1::sccp::SubmitSccpOutboundVoidV1",
+                submit_void().into(),
+            ),
+            (
+                "iroha.instruction.v1::sccp::AdvanceSccpLightClientV1",
+                advance().into(),
+            ),
+            (
+                "iroha.instruction.v1::sccp::ReportSccpLightClientEquivocationV1",
+                report_equivocation().into(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn sccp_instructions_use_their_v1_wire_ids() {
+        let registry = crate::instruction_registry::default();
+        let samples = boxed_samples();
+        assert_eq!(samples.len(), 10, "the complete SCCP v1 instruction set");
+        for (wire_id, instruction) in &samples {
+            let type_name = Instruction::id(&**instruction);
+            assert!(
+                type_name.starts_with("iroha_data_model::isi::sccp::"),
+                "{type_name}"
+            );
+            assert_eq!(registry.wire_id(type_name), Some(*wire_id), "{type_name}");
+            assert!(registry.contains(wire_id), "{wire_id}");
+            assert!(
+                !registry.contains(type_name),
+                "the Rust path is not a decoding key: {type_name}"
+            );
+            assert!(crate::isi::registry::is_instruction_wire_id_registered(
+                wire_id
+            ));
+        }
+    }
+
+    #[test]
+    fn sccp_instructions_roundtrip_through_the_default_registry() {
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let registry = crate::instruction_registry::default();
+        for (wire_id, instruction) in boxed_samples() {
+            let bytes = norito::to_bytes(&instruction).expect("serialize instruction box");
+            let (name, payload) = norito::decode_from_bytes::<(String, Vec<u8>)>(&bytes)
+                .expect("extract wire id and payload");
+            assert_eq!(name, wire_id);
+            let decoded = registry
+                .decode(&name, &payload)
+                .unwrap_or_else(|| panic!("`{name}` is not registered"))
+                .expect("decode through the default registry");
+            assert_eq!(decoded, instruction, "{wire_id}");
+            let boxed: InstructionBox =
+                norito::decode_from_bytes(&bytes).expect("decode the instruction box");
+            assert_eq!(boxed, instruction, "{wire_id}");
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit maintenance command prints the SCCP v1 instruction record fixture rows"]
+    fn print_sccp_instruction_record_fixture_rows() {
+        use crate::isi::generated_record_identity_tests::capture;
+        let rows = [
+            capture(initialize()),
+            capture(set_bridge_key()),
+            capture(submit_attestations()),
+            capture(submit_fault()),
+            capture(record()),
+            capture(submit_inbound()),
+            capture(settle()),
+            capture(submit_void()),
+            capture(advance()),
+            capture(report_equivocation()),
+        ];
+        for row in rows {
+            println!(
+                "SCCP_RECORD_FIXTURE_ROW={}",
+                norito::json::to_json(&row).expect("SCCP record fixture row")
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_instructions_downcast_from_their_boxes() {
+        let samples = boxed_samples();
+        assert!(
+            samples[0]
+                .1
+                .as_any()
+                .downcast_ref::<InitializeSccpV1>()
+                .is_some()
+        );
+        assert_eq!(
+            samples[4].1.as_any().downcast_ref::<RecordSccpMessage>(),
+            Some(&record())
+        );
+        assert_eq!(
+            samples[6].1.as_any().downcast_ref::<SettleSccpV1>(),
+            Some(&settle())
+        );
+    }
+}

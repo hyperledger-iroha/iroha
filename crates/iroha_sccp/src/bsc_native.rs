@@ -7,7 +7,7 @@
 //! supports the post-Mendel first-release protocol and refuses unknown header layouts or
 //! validator-set changes that were not finalized by the preceding set.
 //!
-//! TODO(ws38): the governed Parlia anchor (with its BLAKE2b hash), the anchor-based finality
+//! TODO(ws38): the governed Parlia anchor (with its `BLAKE2b` hash), the anchor-based finality
 //! replay entry points, the proof work estimate and the retired SCCP transfer-event binding
 //! were cut. The v1 BSC skipping light client (`light_client::bsc`) rebuilds finality from the
 //! header, seal, vote-attestation, RLP and MPT primitives kept here and deletes the full Parlia

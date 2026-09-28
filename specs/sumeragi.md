@@ -2513,6 +2513,49 @@ split (a budget, not an estimate):
 
 A new mechanism that would exceed the budget replaces something or goes to §14.
 
+### 12.7 Reading the committed chain (application layer)
+
+Not part of the core; recorded here because application code relies on the driver's block store
+(Appendix E, E57). `iroha_core::sumeragi::certified_chain` reads the committed chain from Kura,
+which holds one frame per height: the result-bearing block and its `CommitCertificate` (the
+canonical core header, the `CommitQC` and the preimage of `R`); genesis carries a result-only
+certificate (no header, no `CommitQC`) and is the chain's trust root (its hash is the network id
+every transaction binds). The reader offers two reads over one State view:
+
+1. **Committed read** (`committed_block`): the frame must be the block the view committed at the
+   height (its hash in the view's block-hash journal), its core header must name the height and
+   certify the block's payload (§3 rule 2: the re-derived payload hashes to `payload_hash`), and
+   the preimage must commit the exact result-bearing block wire (length and hash). The receipt
+   is the block, the header, `block_hash = H(header)`, `R` and the decoded preimage, and the
+   certified block id `H("iroha/sumeragi/certified-block/v1" ‖ block_hash ‖ R)`. It never decodes
+   the `CommitQC`. **Certificates are per node**: a header binds `parent_hash` and
+   `parent_result`, never the parent's certificate, so honest nodes may store different valid
+   `CommitQC`s (any `q` signers) for one block, while header and preimage are identical on every
+   honest node. Deterministic code — instruction execution and anything that feeds `R` — uses
+   only this read.
+2. **Certified read** (`CertifiedChain::certified`, `walk`): the committed read plus the local
+   `CommitQC`, which must be a Commit certificate of this height, block hash, `R`, `attest` flag
+   and instance `I`, and verify under `C_height`. `C_height` is authenticated against
+   `next_committee_digest` in the preimage of `R_{height−2}` (cross-checked against the header of
+   `height − 1`, which binds `R_{height−2}` as `parent_result`); `C_{g+1}` is the committee the
+   signed genesis registers. Candidate committees are the genesis committee and the World
+   schedule window (§10.1), each member admitted by its proof of possession. Verification is
+   pluggable: by default the commit-only signature check (`verify_qc_signatures`); a caller that
+   relays the certificate as an attestation bundle passes an `AttestationVerifier` (§3.7) for the
+   full `verify_qc`. `walk` also checks that each block extends the previous one (core
+   `parent_hash`/`parent_result` and the iroha parent hash). Off-chain consumers (signers, Torii,
+   provers, bridges) use this read.
+
+**Trust boundary.** A historical committee that is neither the genesis committee nor in the
+schedule window (the chain has since rotated validators) cannot be reconstructed from retained
+state. The certified read then reports `CommittedLocally` instead of `Verified`: it relies on the
+verification the driver performed before appending the block (the block store only appends a
+block whose `CommitQC` verified under `C_x`, §12.2), so a node trusts its own Kura for such
+heights as it trusts it for its whole state. A consumer that needs an independent proof requires
+`Verified`. Consensus-critical committed reads need the frame of the height they read; every
+validator keeps full blocks in the first release, and a snapshot-bootstrapped node must retain the
+frames its instructions may name (goal S7).
+
 ---
 ## 13. Verification plan (deterministic simulator, scripted tests, driver conformance)
 
@@ -2921,9 +2964,9 @@ The review logs of revisions 2, 3, 4 and 4.1 (Appendices A–D) are kept verbati
 This appendix reconciles revision 4.1 with the implementation in `crates/iroha_sumeragi` and its
 simulator. Every `// SPEC:` marker in the crate refers to one row below. Rows E1–E8, E36, E40,
 E41, E43, E44, E47 and E53 changed the normative text above (minimal edits, marked by their section;
-E43, E44, E47 and E53 are the node-integration additions); rows E9–E30, E37, E38, E45, E49, E51, E52
-and E54 record code-level choices where the text leaves room or adds a defensive check, without changing
-the protocol (E51, E52 and E54 record the node's application and backend choices; E51 is a deviation
+E43, E44, E47 and E53 are the node-integration additions); rows E9–E30, E37, E38, E45, E49, E51, E52,
+E54 and E57 record code-level choices where the text leaves room or adds a defensive check, without changing
+the protocol (E51, E52, E54 and E57 record the node's application and backend choices; E51 is a deviation
 from §4.1);
 E31–E35, E39, E42 and E46 record simulator and verification deviations. This file,
 `specs/sumeragi.md`, is the normative specification that the crate's `§`
@@ -2984,6 +3027,7 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E54 | Production driver backends (§7.4, §12.2, §12.3 O2, O8, O10) | `iroha_core::sumeragi`: `crypto` — `H = iroha_crypto::Hash`; BLS-normal signatures (48-byte keys, 96-byte signatures); a committee key's proof of possession is verified once when the height schedule admits it and every aggregate naming a key not admitted fails (fail closed); a TC verifies with one multi-pairing over its `hq` groups (`iroha_crypto::bls_normal_verify_preaggregated_multi_message`); the signer is the node's key pair (BLS signatures are unique, so deterministic). `records` — one file per `(I, K)` under `records_dir/<I hex>/<H(K) hex>.record` and the store id beside them, each replaced by temp file, fsync, rename and directory fsync; the installation log is an append-only file of length-prefixed Norito entries outside `records_dir`, fsynced per entry; a torn or corrupt tail ends the log (cut before the next append), which the store-id check then sees as a mismatch (safe). The operator's assertion is a one-shot boot flag, never a configuration key. `bodies` — `<root>/bodies/<I hex>/<h>/<bh hex>`, written like records, never replaced, verified against `(h, bh)` when read, pruned through the applied height, and bounded by a byte cap that fails a write like a full disk (retried; never an eviction). `net` — `NetworkMessage::Sumeragi` carries the exact frame and `I`; one classifier (`traffic_class_of_frame`) serves the raw and the decoded P2P paths; Control → `ConsensusSafety` (the reserved safety FIFO), Proposal → `ConsensusPayload`, Bulk → `BlockSync`; one `post_recoverable` per recipient, dropped on backpressure; the driver owns its three FIFOs on `SubscriberRoute::Sumeragi`; relayed frames (origin ≠ authenticated connection) are not accepted, so ingress stays keyed by authenticated peers. | `sumeragi::{crypto, records, bodies, net}` |
 | E55 | Driver builds (§6.10 rule 1, §12.1 `PayloadReady`); found by the node's n = 4 in-process test with `idle_block_interval` = 600 s | Two lost wakeups at a view-0 leader. (a) A transaction arriving while `BuildPayload{req}` runs (the builder may have read the queue before it) is remembered, and an `EMPTY` answer to `req` is followed by `PayloadReady{req}` at once. (b) A builder that first waits for the parent's apply can answer after `t_propose + build_timeout`: the core has then used `EMPTY` and waits for the heartbeat, and ignores the late answer (its `req` is no longer in `build`). The driver sends `PayloadReady{req}` after every non-empty answer too; in `Requested{req}` the answer is proposed first and the readiness is ignored, in `IdleWait{req}` it requests again at once. Without either, a transaction waited up to `idle_block_interval`. The core is unchanged. | `driver::exec::ExecSched::{transactions_available, done}` |
 | E56 | Node cutover (§12.1, §12.3, §7.4; node integration) | `irohad` starts only Sumeragi. Startup order: Kura; a new empty State (snapshots are not restored until the consensus anchor exists, goal S7) with the node's runtime configuration installed; `node::prepare` applies (fresh chain) or re-executes (restart) the signed genesis and replays every Kura block against its certificate, before the queue, the handshake and the network are built from the rebuilt state; then `Prepared::start_on_network` installs the records of the node's key, subscribes the driver's three FIFOs and spawns the driver over `P2pNet`. The handshake binds `proto = PROTOCOL_VERSION` and `consensus_fingerprint = I`. The operator's assertion is the one-shot CLI flag `--sumeragi-assert-fresh-key` (test-network peers pass it only on their original launch, with both the configured records directory and installation log absent; a restart never reasserts it after history loss. `kagami localnet` currently selects it when the peer's records directory is absent). The v2 relay is replaced by one subscriber per semantic class for gossip, streaming and time only. Emergency Fast starts no driver. Until their captures are ported, a node with a SoraFS provider-ingest or reputation finalized archive refuses to start (they would silently stop at the startup height). | `iroha_core::sumeragi::node::{prepare, Prepared, NetworkedNode, NodeHandle}`, `irohad::{network_relay, supervise_sumeragi, sumeragi_node_config}` |
+| E57 | Certified-chain reader (§12.7; node integration) | `iroha_core::sumeragi::certified_chain` replaces the v2 finality sidecar for application readers. `committed_block` derives a per-height receipt from the Kura frame's header and result preimage only (certified block id `H("iroha/sumeragi/certified-block/v1" ‖ block_hash ‖ R)`, which signer floors pin as `context_id`); `CertifiedChain` adds the local `CommitQC` check under the committee authenticated by `R_{height−2}` (commit-only by default, full with an `AttestationVerifier`) and reports `CommittedLocally` for a rotated-away historical committee, trusting the driver's commit-time verification. The role-11 Check instruction uses only the committed read (certificates are per node); signer finality, native Check histories and provider-admission readers use the certified read. | `iroha_core::sumeragi::certified_chain` |
 
 ### E.3 Simulator and verification
 

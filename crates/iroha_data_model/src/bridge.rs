@@ -1068,8 +1068,9 @@ mod tests {
     }
     fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
         use crate::block::consensus_v2::{
-            SumeragiV2BodyState, SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus,
-            SumeragiV2LivenessStatus, SumeragiV2Status, SumeragiV2StatusPhase,
+            BeaconHorizonStatusV1, SumeragiV2BodyState, SumeragiV2CommitQcStatus,
+            SumeragiV2HeightContextStatus, SumeragiV2LivenessStatus, SumeragiV2Status,
+            SumeragiV2StatusPhase,
         };
         let artifact = &fixture.proof.finality_artifact;
         let context = &artifact.height_context;
@@ -1117,6 +1118,17 @@ mod tests {
                 total_power: context.quorum.total_power,
             }),
             liveness: SumeragiV2LivenessStatus::default(),
+            beacon_horizon: Some(BeaconHorizonStatusV1 {
+                epoch_length_blocks: 10,
+                next_required_pulse_height: Some(
+                    artifact
+                        .height
+                        .max(context.epoch_end_height.saturating_sub(1)),
+                ),
+                active_session_id: Some([0x3C; 32]),
+                session_covers_next_pulse: true,
+                local_provider_ready: true,
+            }),
         };
         let body = BridgeFinalityAttestationBodyV1 {
             version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
@@ -1967,6 +1979,69 @@ mod tests {
         assert_eq!(
             mixed_node.body.validate_consistency(),
             Err(BridgeFinalityAttestationValidationError::StatusNodeMismatch)
+        );
+    }
+    #[test]
+    fn bridge_finality_attestation_signs_the_beacon_horizon() {
+        let fixture = make_v2_fixture("signed-beacon-horizon");
+        let attestation = attestation_for_fixture(&fixture);
+        attestation.verify().expect("valid node attestation");
+        let horizon = attestation
+            .body
+            .status
+            .beacon_horizon
+            .expect("fixture carries a horizon");
+        let json = norito::json::to_json(&attestation).expect("attestation JSON");
+        let decoded: BridgeFinalityAttestationV1 =
+            norito::json::from_json(&json).expect("decode attestation JSON");
+        assert_eq!(decoded.body.status.beacon_horizon, Some(horizon));
+        decoded
+            .verify()
+            .expect("JSON roundtrip keeps the signed horizon");
+        let tampered = |mutate: fn(&mut crate::block::consensus_v2::BeaconHorizonStatusV1)| {
+            let mut changed = attestation.clone();
+            mutate(
+                changed
+                    .body
+                    .status
+                    .beacon_horizon
+                    .as_mut()
+                    .expect("fixture horizon"),
+            );
+            changed.verify()
+        };
+        for result in [
+            tampered(|horizon| horizon.local_provider_ready = false),
+            tampered(|horizon| horizon.session_covers_next_pulse = false),
+            tampered(|horizon| horizon.active_session_id = Some([0x3D; 32])),
+            tampered(|horizon| {
+                horizon.next_required_pulse_height =
+                    horizon.next_required_pulse_height.map(|height| height + 1);
+            }),
+            tampered(|horizon| horizon.epoch_length_blocks += 1),
+        ] {
+            assert_eq!(
+                result,
+                Err(BridgeFinalityAttestationValidationError::InvalidNodeSignature)
+            );
+        }
+        let mut removed = attestation.clone();
+        removed.body.status.beacon_horizon = None;
+        assert_eq!(
+            removed.verify(),
+            Err(BridgeFinalityAttestationValidationError::InvalidNodeSignature)
+        );
+        let mut inconsistent = attestation;
+        inconsistent
+            .body
+            .status
+            .beacon_horizon
+            .as_mut()
+            .expect("fixture horizon")
+            .next_required_pulse_height = Some(0);
+        assert_eq!(
+            inconsistent.verify(),
+            Err(BridgeFinalityAttestationValidationError::InvalidStatus)
         );
     }
 

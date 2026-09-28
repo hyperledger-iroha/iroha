@@ -10,20 +10,6 @@ pub(crate) fn is_x25519_low_order_public_key(public_key: &x25519_dalek::PublicKe
     x25519::is_x25519_low_order_public_key(public_key)
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn low_order_validation_is_available_without_pqc() {
-        assert!(super::is_x25519_low_order_public_key(
-            &x25519_dalek::PublicKey::from([0_u8; 32])
-        ));
-        let mut basepoint = [0_u8; 32];
-        basepoint[0] = 9;
-        assert!(!super::is_x25519_low_order_public_key(
-            &x25519_dalek::PublicKey::from(basepoint)
-        ));
-    }
-}
 /// A Generic trait for key exchange schemes. Each scheme provides a way to generate keys and
 /// do a diffie-hellman computation
 pub trait KeyExchangeScheme {
@@ -82,4 +68,19 @@ pub trait KeyExchangeScheme {
     const PUBLIC_KEY_SIZE: usize;
     /// Size of the private key in bytes.
     const PRIVATE_KEY_SIZE: usize;
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn low_order_validation_is_available_without_pqc() {
+        assert!(super::is_x25519_low_order_public_key(
+            &x25519_dalek::PublicKey::from([0_u8; 32])
+        ));
+        let mut basepoint = [0_u8; 32];
+        basepoint[0] = 9;
+        assert!(!super::is_x25519_low_order_public_key(
+            &x25519_dalek::PublicKey::from(basepoint)
+        ));
+    }
 }

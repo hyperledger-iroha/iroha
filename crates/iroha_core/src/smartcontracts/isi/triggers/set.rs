@@ -265,6 +265,7 @@ enum DataTriggerFamily {
     Bridge,
     Governance,
     GameSession,
+    Sccp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -481,6 +482,7 @@ fn data_trigger_filter_index_keys(filter: &DataEventFilter) -> Vec<DataTriggerIn
         DataEventFilter::Social(_) => family(DataTriggerFamily::Social),
         DataEventFilter::Bridge(_) => family(DataTriggerFamily::Bridge),
         DataEventFilter::Governance(_) => family(DataTriggerFamily::Governance),
+        DataEventFilter::Sccp(_) => family(DataTriggerFamily::Sccp),
     }
 }
 
@@ -642,6 +644,9 @@ fn data_event_index_keys(event: &DataEvent) -> BTreeSet<DataTriggerIndexKey> {
         }
         DataEvent::Governance(_) => {
             keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Governance));
+        }
+        DataEvent::Sccp(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Sccp));
         }
     }
     keys

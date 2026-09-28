@@ -10,7 +10,6 @@
 //! separate configured operator/observer credentials, and actual Kura/QC Check consumption.
 //! Private receipt persistence and all native operation phases must complete before release.
 
-
 use super::journal::{
     SignerReceiptJournalErrorV1, SignerReceiptJournalReaderV1, SignerReceiptJournalV1,
     SignerReceiptPurposeV1,

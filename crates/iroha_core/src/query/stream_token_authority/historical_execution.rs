@@ -5,19 +5,12 @@
 
 use super::{Error, OperationHistoryV1, OperationRecordV1, read_history, request_digest};
 use crate::{
-    kura::KuraV2CommitReceipt,
-    query::{
-        signer_check::native_signed_entry_frame_v1, signer_finality::verify_signer_finality_v1,
-    },
+    query::signer_check::native_signed_entry_frame_v1,
     state::{StateReadOnly, StateView, TransactionsReadOnly},
-    sumeragi::v2::VerifiedHeightContext,
+    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain},
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{
-        consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
-        proofs::TrustedBlockProofAnchor,
-    },
     isi::sorafs::MutateSorafsStreamTokenAuthority,
     sorafs::{
         capacity::ProviderId,
@@ -28,11 +21,10 @@ use iroha_data_model::{
     },
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
 };
-use std::num::NonZeroUsize;
 
 /// Canonical maximum number of consecutive finalized blocks replayed for one role-11 Check.
 pub const STREAM_TOKEN_HISTORY_MAX_BLOCKS_V1: u64 = 4_096;
-/// Canonical maximum cumulative finality-artifact frame bytes in one role-11 history replay.
+/// Canonical maximum cumulative commit-certificate frame bytes in one role-11 history replay.
 pub const STREAM_TOKEN_HISTORY_FINALITY_MAX_BYTES_V1: usize = 64 * 1024 * 1024;
 
 /// Non-serializable proof of exact role-11 Reserve/current rows and their signed execution.
@@ -79,11 +71,6 @@ fn bound_history_span(start: u64, floor: u64) -> Result<(), Error> {
         return Err(Error::CheckUnavailable);
     }
     Ok(())
-}
-
-fn charge_finality_bytes(total: &mut usize, artifact: &V2FinalityArtifact) -> Result<(), Error> {
-    let size = norito::canonical_frame_len(artifact).map_err(|_| Error::Finality)?;
-    charge_finality_len(total, size)
 }
 
 fn charge_finality_len(total: &mut usize, size: usize) -> Result<(), Error> {
@@ -203,54 +190,25 @@ fn authenticate_target(
     view: &StateView<'_>,
     record: &OperationRecordV1,
     kind: TargetKind,
-    expected_context: HeightContextId,
+    target: &CertifiedBlock,
 ) -> Result<(), Error> {
     let execution = execution_for(record, kind)?;
-    let index = usize::try_from(execution.height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .ok_or(Error::Execution)?;
     let entry_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
         execution.transaction_hash,
     ));
-    if view
-        .transactions
-        .get(&entry_hash)
-        .map(|height| height.get())
-        != Some(index.get())
+    if target.height() != execution.height
+        || view
+            .transactions
+            .get(&entry_hash)
+            .map(|height| height.get())
+            != usize::try_from(execution.height).ok()
     {
         return Err(Error::Execution);
     }
-    let hash = *view
-        .block_hashes()
-        .get(index.get() - 1)
-        .ok_or(Error::Finality)?;
-    verify_signer_finality_v1(view, execution.height, *hash.as_ref())
-        .map_err(|_| Error::Finality)?;
-    let (artifact, receipt) = view
-        .kura()
-        .v2_finality_artifact_with_receipt(execution.height)
-        .map_err(|_| Error::Finality)?
-        .ok_or(Error::Finality)?;
-    let block = view
-        .canonical_block_by_height(index)
-        .map_err(|_| Error::Finality)?;
-    if artifact.context_id() != expected_context
-        || artifact.block_hash != hash
-        || receipt.height() != execution.height
-        || receipt.block_hash() != hash
-        || receipt.context_id() != expected_context
-        || block.hash() != hash
-    {
-        return Err(Error::Finality);
-    }
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        &block,
-        &artifact,
-        expected_context,
-        &entry_hash,
-    )
-    .map_err(|_| Error::Execution)?;
+    let anchor = target
+        .entry_anchor(&entry_hash)
+        .map_err(|_| Error::Execution)?;
+    let block = target.block();
     let proof = block
         .network_execution_proof(&entry_hash)
         .ok_or(Error::Execution)?;
@@ -265,9 +223,7 @@ fn authenticate_target(
     let (_, output) = block
         .network_output_at(execution.entry_index)
         .ok_or(Error::Execution)?;
-    let block_time =
-        u64::try_from(block.header().creation_time().as_millis()).map_err(|_| Error::Execution)?;
-    if !output.result.is_ok() || block.header().height().get() != execution.height {
+    if !output.result.is_ok() {
         return Err(Error::Execution);
     }
     signed_source_matches(
@@ -275,7 +231,7 @@ fn authenticate_target(
         kind,
         entry,
         *view.network_id().as_bytes(),
-        block_time,
+        target.block_time_ms(),
     )
 }
 
@@ -285,12 +241,12 @@ fn authenticate_target(
 /// The caller must pin `floor` before looking at the candidate operation and later use the same
 /// borrowed view for custody, permission, phase and finalized Check eligibility. A decoded row,
 /// self-selected floor, or this history capability alone cannot authorize private key use.
-/// The protocol caps one replay at 4,096 heights and 64 MiB of finality frames; exhaustion returns
+/// The protocol caps one replay at 4,096 heights and 64 MiB of commit-certificate frames; exhaustion returns
 /// `CheckUnavailable` before any State side effect. Kura's own per-record bounds apply as well.
 ///
 /// # Errors
 /// Rejects missing or incoherent State rows, an unavailable bounded proof window, discontinuous
-/// signed-RS16 finality, missing target membership, rejected output, or changed signed source.
+/// certified chain, missing target membership, rejected output, or changed signed source.
 pub fn authenticate_stream_token_history_to_floor_v1<'view, 'state>(
     view: &'view StateView<'state>,
     provider: ProviderId,
@@ -323,81 +279,37 @@ pub fn authenticate_stream_token_history_to_floor_v1<'view, 'state>(
     if floor.height > u64::try_from(view.block_hashes().len()).map_err(|_| Error::Finality)? {
         return Err(Error::Finality);
     }
+    let chain = CertifiedChain::new(view).map_err(|_| Error::Finality)?;
     let mut finality_bytes = 0_usize;
-    let mut parent: Option<(V2FinalityArtifact, KuraV2CommitReceipt)> = None;
-    let mut reserved_context = None;
-    let mut terminal_context = None;
-    for height in start..=floor.height {
-        let index = usize::try_from(height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .ok_or(Error::Finality)?;
-        let hash = *view
-            .block_hashes()
-            .get(index.get() - 1)
-            .ok_or(Error::Finality)?;
-        verify_signer_finality_v1(view, height, *hash.as_ref()).map_err(|_| Error::Finality)?;
-        let (artifact, receipt) = view
-            .kura()
-            .v2_finality_artifact_with_receipt(height)
-            .map_err(|_| Error::Finality)?
-            .ok_or(Error::Finality)?;
-        charge_finality_bytes(&mut finality_bytes, &artifact)?;
-        let expected_parent = if index.get() == 1 {
-            None
-        } else {
-            Some(
-                *view
-                    .block_hashes()
-                    .get(index.get() - 2)
-                    .ok_or(Error::Finality)?,
-            )
-        };
-        if artifact.height != height
-            || artifact.block_hash != hash
-            || artifact.subject.parent_block_hash != expected_parent
-            || artifact.height_context.network_id != *view.network_id()
-            || receipt.height() != height
-            || receipt.block_hash() != hash
-            || receipt.context_id() != artifact.context_id()
+    let mut reserved = None;
+    let mut terminal = None;
+    for block in chain.walk(start, floor.height) {
+        let block = block.map_err(|_| Error::Finality)?;
+        charge_finality_len(&mut finality_bytes, block.certificate_len())?;
+        let height = block.height();
+        if height == floor.height
+            && (*block.block_hash().as_ref() != floor.block_hash || block.id() != floor.context_id)
         {
             return Err(Error::Finality);
-        }
-        if let Some((previous, previous_receipt)) = parent.as_ref() {
-            VerifiedHeightContext::successor(
-                artifact.height_context.clone(),
-                artifact.validator_set_pops.clone(),
-                previous,
-                previous_receipt,
-                &previous.validator_set_pops,
-            )
-            .map_err(|_| Error::Finality)?;
         }
         if height == start {
-            reserved_context = Some(artifact.context_id());
+            reserved = Some(block);
+        } else if terminal_height == Some(height) {
+            terminal = Some(block);
         }
-        if terminal_height == Some(height) {
-            terminal_context = Some(artifact.context_id());
-        }
-        if height == floor.height
-            && (*hash.as_ref() != floor.block_hash || artifact.context_id() != floor.context_id)
-        {
-            return Err(Error::Finality);
-        }
-        parent = Some((artifact, receipt));
     }
     authenticate_target(
         view,
         &history.reserved,
         TargetKind::Reserved,
-        reserved_context.ok_or(Error::Finality)?,
+        reserved.as_ref().ok_or(Error::Finality)?,
     )?;
     if terminal_height.is_some() {
         authenticate_target(
             view,
             &history.current,
             TargetKind::Terminal,
-            terminal_context.ok_or(Error::Finality)?,
+            terminal.as_ref().ok_or(Error::Finality)?,
         )?;
     }
     Ok(VerifiedStreamTokenHistoryV1 {

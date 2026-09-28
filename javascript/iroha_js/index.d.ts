@@ -6583,6 +6583,15 @@ export interface ToriiSumeragiV2HeightContextStatus {
   }>;
 }
 
+/** Local global-beacon horizon signed inside the authoritative Sumeragi status. */
+export interface ToriiSumeragiV2BeaconHorizonStatus {
+  epoch_length_blocks: ToriiU64;
+  next_required_pulse_height: ToriiU64 | null;
+  active_session_id: string | null;
+  session_covers_next_pulse: boolean;
+  local_provider_ready: boolean;
+}
+
 export interface ToriiSumeragiV2CommitQcStatus {
   certificate: ToriiSumeragiV2QuorumCertificateRef;
   validator_count: number;
@@ -6888,6 +6897,7 @@ export interface ToriiSumeragiStatus {
   height_context: ToriiSumeragiV2HeightContextStatus;
   last_commit_qc: ToriiSumeragiV2CommitQcStatus | null;
   liveness: ToriiSumeragiV2LivenessStatus;
+  beacon_horizon: ToriiSumeragiV2BeaconHorizonStatus | null;
 }
 
 export interface ToriiSumeragiPipelineExecutionStatus {

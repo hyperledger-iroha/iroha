@@ -1,0 +1,4 @@
+[sumeragi]
+collectors_redundant_send_r = 3
+rbc_pending_ttl_ms = 120000
+rbc_session_ttl_secs = 240

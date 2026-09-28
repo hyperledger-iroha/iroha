@@ -1584,10 +1584,6 @@ impl ParliamentAttemptStateV1 {
     /// # Errors
     /// Returns the same errors as [`Self::try_new`], plus a redraw-limit error
     /// when the inherited prefix is already outside the V1 protocol bound.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the proposal retry prefix is an independent persisted binding"
-    )]
     pub(crate) fn try_new_with_randomness_redraws_before_attempt(
         attempt: GovernanceAttemptV1,
         randomness_redraws_before_attempt: u32,

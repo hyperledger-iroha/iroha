@@ -39,6 +39,7 @@ use iroha_config::parameters::defaults;
 use iroha_core::{
     beacon::{
         GlobalThresholdBeaconSessionBindingV1, RuntimeGlobalThresholdBeaconShareCustodyV1,
+        credential::global_beacon_partial_signer_public_inventory_digest_v1,
         global_threshold_beacon_roster_hash_v1, prove_global_threshold_beacon_seat_readiness_v1,
         validate_global_threshold_beacon_session_v1,
     },
@@ -59,10 +60,7 @@ use iroha_test_network::{
 use iroha_test_samples::ALICE_ID;
 use irohad::{
     IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderSlotV1,
-    external_software_signer::{
-        encode_consensus_threshold_credential_bundle_v1,
-        global_beacon_partial_signer_public_inventory_digest_v1,
-    },
+    external_software_signer::encode_consensus_threshold_credential_bundle_v1,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -180,7 +178,7 @@ fn validator_xor_escrow(
             {
                 definitions += 1;
                 ensure!(
-                    register.object.spec() == &iroha::data_model::asset::NumericSpec::fractional(9),
+                    register.object.spec == iroha_primitives::numeric::NumericSpec::fractional(9),
                     "signed XOR definition must have its canonical fractional quantity"
                 );
             }

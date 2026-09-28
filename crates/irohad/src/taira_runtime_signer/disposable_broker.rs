@@ -107,7 +107,7 @@ pub fn load_disposable_runtime_provider_broker_v1(
     reader: &mut impl std::io::Read,
 ) -> Result<Box<dyn RuntimeProviderBrokerBackendRegistryV1>, IrohaRuntimeProviderRegistryErrorV1> {
     let registry = load_with_signer(catalog, reader, || {
-        let signer = TairaRuntimeSignerV1::from_key_pair(load_inherited_key_pair()?)?;
+        let signer = taira_runtime_signer(load_inherited_key_pair()?)?;
         Ok(Arc::new(signer))
     })?;
     Ok(Box::new(registry))

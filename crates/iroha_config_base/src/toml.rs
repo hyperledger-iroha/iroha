@@ -234,6 +234,10 @@ impl TomlSource {
             table,
         )
     }
+    /// Get a shared borrow of the TOML table inside
+    pub fn table(&self) -> &Table {
+        &self.table
+    }
     /// Get an exclusive borrow of the TOML table inside
     pub fn table_mut(&mut self) -> &mut Table {
         &mut self.table
@@ -505,6 +509,27 @@ mod tests {
         ));
         fs::create_dir_all(&path).expect("create temporary configuration directory");
         path
+    }
+    #[test]
+    fn table_accessors_share_one_table() {
+        let mut source = TomlSource::inline(toml! { value = 1 });
+        assert_eq!(
+            source
+                .table()
+                .get("value")
+                .and_then(toml::Value::as_integer),
+            Some(1)
+        );
+        source
+            .table_mut()
+            .insert("value".to_owned(), toml::Value::Integer(2));
+        assert_eq!(
+            source
+                .table()
+                .get("value")
+                .and_then(toml::Value::as_integer),
+            Some(2)
+        );
     }
     #[test]
     fn from_file_rejects_oversized_source_before_parsing() {

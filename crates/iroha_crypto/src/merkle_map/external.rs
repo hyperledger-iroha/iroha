@@ -11,7 +11,8 @@ use super::{
 #[path = "update.rs"]
 mod update;
 pub use update::{
-    MerkleMapEdit, MerkleMapNodeStore, MerkleMapUpdateError, MerkleMapUpdateWorkspace,
+    MerkleMapEdit, MerkleMapNodeStore, MerkleMapStoreNode, MerkleMapUpdateError,
+    MerkleMapUpdateWorkspace,
 };
 
 const MAX_PATH_NODES: usize = Hash::LENGTH * 8 + 1;

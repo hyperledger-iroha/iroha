@@ -4,7 +4,7 @@
 //! Sumeragi-v2 finality. They are compiled only for crate tests or with the `test-fixtures`
 //! feature and carry no SCCP message content.
 //!
-//! TODO(ws70): move the generic finalized-block fixture out of iroha_sccp once the SoraFS
+//! TODO(ws70): move the generic finalized-block fixture out of `iroha_sccp` once the `SoraFS`
 //! sessions land.
 #[cfg(test)]
 use core::{num::NonZeroU64, time::Duration};
@@ -95,22 +95,22 @@ fn sccp_mint_finality_genesis_test_fixture_v1(
                 .enumerate()
                 .map(|(index, validator)| {
                     let scalar = u64::try_from(index + 1).expect("small SCCP fixture roster");
-                    let eq_encoded = (<PallasAffine as CurveAffine>::CurveExt::generator()
+                    let pallas_encoded = (<PallasAffine as CurveAffine>::CurveExt::generator()
                         * PastaFq::from(scalar))
                     .to_affine()
                     .to_bytes();
-                    let ep_encoded = (<VestaAffine as CurveAffine>::CurveExt::generator()
+                    let vesta_encoded = (<VestaAffine as CurveAffine>::CurveExt::generator()
                         * PastaFp::from(scalar))
                     .to_affine()
                     .to_bytes();
-                    let mut eq_proof_public_key = [0_u8; 32];
-                    eq_proof_public_key.copy_from_slice(eq_encoded.as_ref());
-                    let mut ep_proof_public_key = [0_u8; 32];
-                    ep_proof_public_key.copy_from_slice(ep_encoded.as_ref());
+                    let mut pallas_key = [0_u8; 32];
+                    pallas_key.copy_from_slice(pallas_encoded.as_ref());
+                    let mut vesta_key = [0_u8; 32];
+                    vesta_key.copy_from_slice(vesta_encoded.as_ref());
                     KagemushaMintFinalityValidatorKeysV1 {
                         validator: validator.validator.clone(),
-                        eq_proof_public_key,
-                        ep_proof_public_key,
+                        eq_proof_public_key: pallas_key,
+                        ep_proof_public_key: vesta_key,
                     }
                 })
                 .collect(),
@@ -291,7 +291,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
 
 /// Finalize one exact native-operation test block in a bounded 255-height epoch.
 ///
-/// The four-validator roster, canonical source/output checks, three-vote CommitQC and signed
+/// The four-validator roster, canonical source/output checks, three-vote `CommitQC` and signed
 /// RS16 layout are identical to the short SCCP fixture. This separate schedule supports the
 /// sequential Reserve/Check/Complete rounds of native services without changing bridge fixtures.
 ///
@@ -507,36 +507,39 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
                 leader_seed,
                 authorization,
                 authority,
-            ) = if let Some(next) = parent_context.next_epoch_snapshot.as_ref() {
-                assert_eq!(
-                    parent_context.epoch_end_height.checked_add(1),
-                    Some(height),
-                    "the certified epoch snapshot belongs to this exact successor"
-                );
-                assert_eq!(next.validator_set_pops, validator_set_pops);
-                (
-                    next.epoch,
-                    next.epoch_end_height,
-                    next.mode,
-                    next.roster.clone(),
-                    next.quorum,
-                    next.leader_seed,
-                    next.kagemusha_mint_finality_authorization,
-                    next.kagemusha_mint_finality_authority.clone(),
-                )
-            } else {
-                assert!(height < parent_context.epoch_end_height);
-                (
-                    parent_context.epoch,
-                    parent_context.epoch_end_height,
-                    parent_context.mode,
-                    parent_context.roster.clone(),
-                    parent_context.quorum,
-                    parent_context.leader_seed,
-                    parent_context.kagemusha_mint_finality_authorization,
-                    parent_context.kagemusha_mint_finality_authority.clone(),
-                )
-            };
+            ) = parent_context.next_epoch_snapshot.as_ref().map_or_else(
+                || {
+                    assert!(height < parent_context.epoch_end_height);
+                    (
+                        parent_context.epoch,
+                        parent_context.epoch_end_height,
+                        parent_context.mode,
+                        parent_context.roster.clone(),
+                        parent_context.quorum,
+                        parent_context.leader_seed,
+                        parent_context.kagemusha_mint_finality_authorization,
+                        parent_context.kagemusha_mint_finality_authority.clone(),
+                    )
+                },
+                |next| {
+                    assert_eq!(
+                        parent_context.epoch_end_height.checked_add(1),
+                        Some(height),
+                        "the certified epoch snapshot belongs to this exact successor"
+                    );
+                    assert_eq!(next.validator_set_pops, validator_set_pops);
+                    (
+                        next.epoch,
+                        next.epoch_end_height,
+                        next.mode,
+                        next.roster.clone(),
+                        next.quorum,
+                        next.leader_seed,
+                        next.kagemusha_mint_finality_authorization,
+                        next.kagemusha_mint_finality_authority.clone(),
+                    )
+                },
+            );
             HeightContext {
                 network_id: parent_context.network_id,
                 protocol_version: PROTOCOL_VERSION,

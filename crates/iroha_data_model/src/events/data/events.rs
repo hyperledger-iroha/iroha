@@ -129,6 +129,9 @@ mod model {
         /// Native race lifecycle transition.
         #[codec(index = 22)]
         GameSession(super::game::GameSessionEventV1),
+        /// SCCP v1 cross-chain events (`specs/sccp.md` §4.17).
+        #[codec(index = 23)]
+        Sccp(crate::sccp::events::SccpEvent),
     }
 }
 

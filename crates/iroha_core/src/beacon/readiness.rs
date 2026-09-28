@@ -63,6 +63,12 @@ struct HeightBinding {
     required: bool,
     roster: Vec<PeerId>,
     local_validator: Option<wire::ValidatorIndex>,
+    /// Length of the epoch the frozen context governs ([`frozen_epoch_length_blocks`]); zero in
+    /// permissioned mode.
+    epoch_length_blocks: u64,
+    /// Earliest mandatory pulse at or after `height`, from the frozen context
+    /// and committed Parliament slots, for the published horizon.
+    next_required_pulse_height: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -72,6 +78,57 @@ struct PublishedReadiness {
     pointer: Result<Option<[u8; 32]>, ()>,
     record: Option<Arc<FinalizedGlobalThresholdBeaconKeySessionRecordV1>>,
     outcome: Result<(), GlobalBeaconReadinessErrorV1>,
+    /// The committed active session passed network, roster, transcript and lifecycle checks.
+    session_authenticated: bool,
+    /// The local provider attested custody of this validator's seat in that session.
+    provider_ready: bool,
+}
+
+impl PublishedReadiness {
+    /// Project the non-secret horizon facts of this observation onto the status wire.
+    ///
+    /// The epoch length and the next pulse both come from the same frozen height context, so an
+    /// `NPoS` horizon never reports a zero epoch length beside a scheduled pulse.
+    fn horizon(&self) -> wire::BeaconHorizonStatusV1 {
+        let binding = &self.binding;
+        let current = self.outcome != Err(GlobalBeaconReadinessErrorV1::StateChanged);
+        let active_session_id = self.pointer.ok().flatten();
+        let session_covers_next_pulse = current
+            && self.session_authenticated
+            && active_session_id.is_some()
+            && binding
+                .next_required_pulse_height
+                .zip(self.record.as_deref())
+                .is_some_and(|(pulse, record)| record.is_active_at(pulse));
+        wire::BeaconHorizonStatusV1 {
+            epoch_length_blocks: binding.epoch_length_blocks,
+            next_required_pulse_height: binding.next_required_pulse_height,
+            active_session_id,
+            session_covers_next_pulse,
+            local_provider_ready: current
+                && self.provider_ready
+                && active_session_id.is_some()
+                && binding.local_validator.is_some(),
+        }
+    }
+}
+
+/// Length of the epoch a frozen height context governs; zero in permissioned mode.
+///
+/// In `NPoS` mode it is the span of the context's KAGEMUSHA mint-finality scheduling
+/// authorization, which [`wire::HeightContext::validate`] binds to the context's epoch and
+/// `epoch_end_height` (the genesis authorization starts at height 1, every successor right after
+/// its predecessor). It therefore comes from the same authenticated context as the scheduled
+/// pulse, never from committed world state, which lacks the `NPoS` parameters until the genesis
+/// block commits.
+fn frozen_epoch_length_blocks(context: &wire::HeightContext) -> u64 {
+    if context.mode != wire::ConsensusMode::Npos {
+        return 0;
+    }
+    context
+        .epoch_end_height
+        .saturating_sub(context.kagemusha_mint_finality_authorization.first_height)
+        .saturating_add(1)
 }
 
 #[derive(Default)]
@@ -112,21 +169,43 @@ impl GlobalBeaconReadinessV1 {
         local_validator: Option<wire::ValidatorIndex>,
         signer: Option<&dyn GlobalThresholdBeaconPartialSignerV1>,
     ) {
-        let parliament_requested = {
-            let world = state.world_view();
-            world
-                .parliament_required_beacon_pulse_slots
-                .get(&(
-                    BeaconSessionId::for_network_v1(&context.network_id),
-                    context.height,
-                ))
-                .is_some_and(|attempts| !attempts.is_empty())
-        };
         let npos = context.mode == wire::ConsensusMode::Npos;
+        let (parliament_requested, next_parliament_slot) = {
+            let world = state.world_view();
+            let beacon = BeaconSessionId::for_network_v1(&context.network_id);
+            let parliament_requested = world
+                .parliament_required_beacon_pulse_slots
+                .get(&(beacon, context.height))
+                .is_some_and(|attempts| !attempts.is_empty());
+            let next_parliament_slot = world
+                .parliament_required_beacon_pulse_slots
+                .range((beacon, context.height)..=(beacon, u64::MAX))
+                .find(|(_, attempts)| !attempts.is_empty())
+                .map(|((_, height), _)| *height);
+            (parliament_requested, next_parliament_slot)
+        };
         let npos_pulse_height = if npos && context.height < context.epoch_end_height {
             context.epoch_end_height.saturating_sub(1)
         } else {
             context.height
+        };
+        // The mandatory NPoS pulse is the pre-boundary height. At the epoch's
+        // last height it has already committed, so the frozen successor
+        // snapshot names the next one.
+        let next_npos_pulse = if !npos {
+            None
+        } else if context.height < context.epoch_end_height {
+            context.epoch_end_height.checked_sub(1)
+        } else {
+            context
+                .next_epoch_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.epoch_end_height.checked_sub(1))
+        }
+        .filter(|pulse| *pulse >= context.height);
+        let next_required_pulse_height = match (next_parliament_slot, next_npos_pulse) {
+            (Some(slot), Some(pulse)) => Some(slot.min(pulse)),
+            (slot, pulse) => slot.or(pulse),
         };
         self.publish_binding(
             HeightBinding {
@@ -146,6 +225,8 @@ impl GlobalBeaconReadinessV1 {
                     .map(|seat| seat.validator.clone())
                     .collect(),
                 local_validator,
+                epoch_length_blocks: frozen_epoch_length_blocks(context),
+                next_required_pulse_height,
             },
             state,
             signer,
@@ -164,8 +245,17 @@ impl GlobalBeaconReadinessV1 {
             pointer: Ok(None),
             record: None,
             outcome: Ok(()),
+            session_authenticated: false,
+            provider_ready: false,
         };
-        published.outcome = assess_public_and_provider(self, &mut published, state, signer);
+        let outcome = assess_public_and_provider(self, &mut published, state, signer);
+        // A future Parliament slot is assessed only for the published horizon;
+        // readiness still gates solely on pulses required at this height.
+        published.outcome = if published.binding.required {
+            outcome
+        } else {
+            Ok(())
+        };
         if !matches_committed_state(&published, state) {
             published.outcome = Err(GlobalBeaconReadinessErrorV1::StateChanged);
         }
@@ -195,6 +285,24 @@ impl GlobalBeaconReadinessV1 {
         );
         *self.authenticated_session.lock() = Some((*binding, Arc::clone(&session)));
         Ok(session)
+    }
+
+    /// Non-secret beacon horizon of the observation published for `context_id`.
+    ///
+    /// Returns `None` until serialized activation has published this exact height.
+    pub(crate) fn horizon(
+        &self,
+        context_id: wire::HeightContextId,
+    ) -> Option<wire::BeaconHorizonStatusV1> {
+        let current = self.state.lock();
+        if current.context_id != Some(context_id) {
+            return None;
+        }
+        current
+            .published
+            .as_ref()
+            .filter(|published| published.binding.context_id == context_id)
+            .map(|published| published.horizon())
     }
 
     pub(crate) fn check(&self, state: &State) -> Result<(), GlobalBeaconReadinessErrorV1> {
@@ -228,7 +336,10 @@ fn assess_public_and_provider(
 ) -> Result<(), GlobalBeaconReadinessErrorV1> {
     use GlobalBeaconReadinessErrorV1 as E;
     let binding = &published.binding;
-    if !binding.required {
+    if !binding.required && binding.next_required_pulse_height.is_none() {
+        // No pulse is scheduled: report only the committed session pointer.
+        let world = state.world_view();
+        published.pointer = active_global_threshold_beacon_session_id_v1(&world).map_err(|_| ());
         return Ok(());
     }
     let record = {
@@ -276,14 +387,29 @@ fn assess_public_and_provider(
     {
         return Err(E::InvalidSession);
     }
-    if !record.is_active_at(binding.earliest_required_height)
-        || !record.is_active_at(binding.latest_required_height)
-    {
+    published.session_authenticated = true;
+    let covered = record.is_active_at(binding.earliest_required_height)
+        && record.is_active_at(binding.latest_required_height);
+    // Custody is probed even when these heights are not covered so the
+    // horizon can report the provider for a later pulse; readiness keeps its
+    // error precedence below.
+    let provider = binding
+        .local_validator
+        .map(|local_validator| assess_provider(binding, &session, local_validator, signer));
+    published.provider_ready = matches!(provider, Some(Ok(())));
+    if !covered {
         return Err(E::SessionNotLive);
     }
-    let Some(local_validator) = binding.local_validator else {
-        return Ok(());
-    };
+    provider.unwrap_or(Ok(()))
+}
+
+fn assess_provider(
+    binding: &HeightBinding,
+    session: &ValidatedGlobalThresholdBeaconSessionV1,
+    local_validator: wire::ValidatorIndex,
+    signer: Option<&dyn GlobalThresholdBeaconPartialSignerV1>,
+) -> Result<(), GlobalBeaconReadinessErrorV1> {
+    use GlobalBeaconReadinessErrorV1 as E;
     let signer_index = local_validator
         .checked_add(1)
         .and_then(|index| u16::try_from(index).ok())
@@ -296,13 +422,13 @@ fn assess_public_and_provider(
     }
     let capability = signer
         .ok_or(E::MissingProvider)?
-        .attest_partial_signing_capability(&session, signer_index)
+        .attest_partial_signing_capability(session, signer_index)
         .map_err(|error| match error {
             super::GlobalThresholdBeaconCapabilityErrorV1::Unavailable => E::ProviderUnavailable,
             super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned
             | super::GlobalThresholdBeaconCapabilityErrorV1::InvalidRequest => E::ProviderMismatch,
         })?;
-    if !capability.matches(&session, signer_index) {
+    if !capability.matches(session, signer_index) {
         return Err(E::ProviderMismatch);
     }
     Ok(())
@@ -766,6 +892,157 @@ mod tests {
             readiness.check(&state),
             Err(GlobalBeaconReadinessErrorV1::StateChanged)
         );
+    }
+
+    /// Regression: before the genesis block commits, world state holds no `NPoS` parameters while
+    /// the frozen context already schedules the pulse. The horizon must still report the epoch
+    /// length of that context, never zero beside a scheduled pulse.
+    #[test]
+    fn npos_horizon_takes_the_epoch_length_from_the_frozen_context() {
+        let (state, context, _) = fixture_with_epoch_end_height(80);
+        assert_eq!(context.mode, wire::ConsensusMode::Npos);
+        assert!(
+            crate::sumeragi::v2_npos::committed_epoch_length_blocks(&state.world_view()).is_err(),
+            "the fixture has no committed NPoS parameters"
+        );
+        assert_eq!(frozen_epoch_length_blocks(&context), 40);
+        let readiness = GlobalBeaconReadinessV1::default();
+        let provider = CapabilityProvider::exact();
+        publish(&readiness, &context, &state, Some(&provider));
+        assert_eq!(readiness.check(&state), Ok(()));
+        let horizon = readiness.horizon(context.id()).expect("frozen horizon");
+        assert_eq!(horizon.epoch_length_blocks, 40);
+        assert_eq!(horizon.next_required_pulse_height, Some(79));
+        horizon
+            .validate(context.height, context.mode)
+            .expect("the frozen NPoS horizon is structurally valid");
+
+        let mut permissioned = context.clone();
+        permissioned.mode = wire::ConsensusMode::Permissioned;
+        assert_eq!(frozen_epoch_length_blocks(&permissioned), 0);
+        let mut genesis = context;
+        genesis.kagemusha_mint_finality_authorization.first_height = 1;
+        genesis.epoch_end_height = 64;
+        assert_eq!(
+            frozen_epoch_length_blocks(&genesis),
+            64,
+            "the genesis epoch spans heights 1..=epoch_end_height"
+        );
+    }
+
+    #[test]
+    fn readiness_publishes_the_signed_horizon_for_its_exact_height() {
+        let (state, context, record) = fixture_with_epoch_end_height(80);
+        let readiness = GlobalBeaconReadinessV1::default();
+        assert_eq!(readiness.horizon(context.id()), None);
+        let provider = CapabilityProvider::exact();
+        publish(&readiness, &context, &state, Some(&provider));
+        let horizon = readiness.horizon(context.id()).expect("published horizon");
+        assert_eq!(horizon.epoch_length_blocks, 40);
+        assert_eq!(horizon.next_required_pulse_height, Some(79));
+        assert_eq!(
+            horizon.blocks_to_pulse(context.height),
+            Some(79 - context.height)
+        );
+        assert_eq!(horizon.active_session_id, Some(record.session.session_id));
+        assert!(horizon.session_covers_next_pulse);
+        assert!(horizon.local_provider_ready);
+        horizon
+            .validate(context.height, context.mode)
+            .expect("published horizon is structurally valid");
+        assert_eq!(
+            provider.calls.load(Ordering::Relaxed),
+            1,
+            "readiness and the horizon share one custody probe"
+        );
+        let mut other = context.clone();
+        other.roster.swap(0, 1);
+        assert_eq!(readiness.horizon(other.id()), None);
+
+        let mut retired = record.clone();
+        retired.retired_at_height = Some(79);
+        install(&state, &retired);
+        publish(&readiness, &context, &state, Some(&provider));
+        let horizon = readiness
+            .horizon(context.id())
+            .expect("republished horizon");
+        assert_eq!(
+            readiness.check(&state),
+            Err(GlobalBeaconReadinessErrorV1::SessionNotLive)
+        );
+        assert!(!horizon.session_covers_next_pulse);
+        assert!(
+            horizon.local_provider_ready,
+            "custody is still reported when the session misses the pulse"
+        );
+
+        install(&state, &record);
+        readiness.begin_height(context.id());
+        readiness.publish_for_height(&context, &state, None, None);
+        let observer = readiness.horizon(context.id()).expect("observer horizon");
+        assert!(observer.session_covers_next_pulse);
+        assert!(!observer.local_provider_ready, "observers have no seat");
+
+        {
+            let mut world = state.world.block();
+            world
+                .global_beacon_active_session
+                .remove(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY);
+            world.commit();
+        }
+        publish(&readiness, &context, &state, Some(&provider));
+        let missing = readiness
+            .horizon(context.id())
+            .expect("missing-session horizon");
+        assert_eq!(missing.active_session_id, None);
+        assert!(!missing.session_covers_next_pulse);
+        assert!(!missing.local_provider_ready);
+        assert_eq!(missing.next_required_pulse_height, Some(79));
+    }
+
+    #[test]
+    fn horizon_reports_future_parliament_slots_without_gating_permissioned_readiness() {
+        let (state, mut context, record) = fixture();
+        context.mode = wire::ConsensusMode::Permissioned;
+        let readiness = GlobalBeaconReadinessV1::default();
+        let provider = CapabilityProvider::exact();
+        publish(&readiness, &context, &state, Some(&provider));
+        assert_eq!(readiness.check(&state), Ok(()));
+        let idle = readiness.horizon(context.id()).expect("idle horizon");
+        assert_eq!(idle.epoch_length_blocks, 0);
+        assert_eq!(idle.next_required_pulse_height, None);
+        assert_eq!(idle.active_session_id, Some(record.session.session_id));
+        assert!(!idle.session_covers_next_pulse);
+        assert!(!idle.local_provider_ready);
+        assert_eq!(
+            provider.calls.load(Ordering::Relaxed),
+            0,
+            "no scheduled pulse never reaches custody"
+        );
+        let slot = context.height + 5;
+        {
+            let mut world = state.world.block();
+            world.parliament_required_beacon_pulse_slots.insert(
+                (BeaconSessionId::for_network_v1(&context.network_id), slot),
+                std::collections::BTreeSet::from([
+                    iroha_data_model::governance::types::GovernanceAttemptId::new([0x76; 32]),
+                ]),
+            );
+            world.commit();
+        }
+        publish(&readiness, &context, &state, Some(&provider));
+        assert_eq!(
+            readiness.check(&state),
+            Ok(()),
+            "a future slot does not gate the current height"
+        );
+        let scheduled = readiness.horizon(context.id()).expect("scheduled horizon");
+        assert_eq!(scheduled.next_required_pulse_height, Some(slot));
+        assert!(scheduled.session_covers_next_pulse);
+        assert!(scheduled.local_provider_ready);
+        scheduled
+            .validate(context.height, context.mode)
+            .expect("permissioned horizon is structurally valid");
     }
 
     #[test]

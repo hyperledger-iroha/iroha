@@ -437,12 +437,6 @@
           }
         },
         {
-          "RegisterCitizen": {
-            "owner": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": "10000"
-          }
-        },
-        {
           "CreateFeeSponsorProgram": {
             "program": {
               "id": {

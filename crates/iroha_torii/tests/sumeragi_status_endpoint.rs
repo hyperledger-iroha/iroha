@@ -76,6 +76,7 @@ fn status_fixture() -> SumeragiV2Status {
         },
         last_commit_qc: None,
         liveness: Default::default(),
+        beacon_horizon: None,
     }
 }
 fn build_status_router() -> iroha_torii::TestApiRouterRuntime {

@@ -27,7 +27,7 @@ fn reference(entries: &BTreeMap<Hash, Hash>) -> Hash {
         }
         Hash::new_from_chunks(&[
             BRANCH,
-            &(bit as u16).to_le_bytes(),
+            &u16::try_from(bit).expect("key bit index").to_le_bytes(),
             &shared,
             subtree(&entries[..boundary]).as_ref(),
             subtree(&entries[boundary..]).as_ref(),
@@ -114,6 +114,13 @@ fn stale_preimages_noops_and_count_failures_do_not_change_versions() {
 
 #[test]
 fn every_split_bit_and_byte_boundary_matches_the_rebuilt_reference() {
+    fn height(node: &Node) -> usize {
+        match &node.kind {
+            NodeKind::Leaf(_) => 0,
+            NodeKind::Branch { left, right, .. } => 1 + height(left).max(height(right)),
+        }
+    }
+
     let zero = Hash::prehashed([0; 32]);
     let mut map = MerkleMap::new();
     let mut expected = BTreeMap::new();
@@ -131,12 +138,6 @@ fn every_split_bit_and_byte_boundary_matches_the_rebuilt_reference() {
     }
     for (key, value) in &expected {
         assert_eq!(map.get(key), Some(*value));
-    }
-    fn height(node: &Node) -> usize {
-        match &node.kind {
-            NodeKind::Leaf(_) => 0,
-            NodeKind::Branch { left, right, .. } => 1 + height(left).max(height(right)),
-        }
     }
     assert_eq!(height(map.node.as_ref().unwrap()), 255);
     map.replace(zero, Some(hash(999)), None).unwrap();
@@ -156,7 +157,7 @@ fn mixed_mutations_match_a_sorted_map_without_changing_snapshots() {
         rng ^= rng << 17;
         let key = hash(rng % 63);
         let before = expected.get(&key).copied();
-        let after = (rng % 4 != 0).then(|| hash(step));
+        let after = (!rng.is_multiple_of(4)).then(|| hash(step));
         let snapshot = map.clone();
         let old_root = snapshot.root();
         map.replace(key, before, after).unwrap();

@@ -1,4 +1,4 @@
-//! Account-custody observations with exact native execution and real fixed-roster BLS/RS16 proofs.
+//! Account-custody observations with exact native execution on a certified test chain.
 //! These simulated device attestations and local finality fixtures do not qualify production custody.
 use super::*;
 use iroha_crypto::{Hash, SignatureOf};
@@ -36,15 +36,15 @@ fn exact_account_check_joins_real_finality_and_distinct_current_accounts() {
     let expected_hash = signed.hash_as_entrypoint();
     assert_eq!(f.commit(NOW, vec![signed], true, true), [true]);
     let verified = pending.verify_finalized(|| Ok(interval(NOW, NOW))).unwrap();
-    assert_eq!(verified.check_height(), 3);
-    assert_eq!(verified.applied_floor().height, 3);
+    assert_eq!(verified.check_height(), 4);
+    assert_eq!(verified.applied_floor().height, 4);
     assert_eq!(
         verified.applied_floor().context_id,
-        f.finalized[2].proof().finality_artifact.context_id()
+        f.chain.committed(4).id()
     );
     assert_eq!(
         verified.applied_floor().block_hash,
-        *f.finalized[2].block().hash().as_ref()
+        *f.chain.committed(4).block_hash().as_ref()
     );
     assert_eq!(
         verified.observer(),
@@ -80,9 +80,9 @@ fn coherent_authenticated_descendant_cut_rechecks_current_authority() {
     let verified = pending
         .verify_finalized(|| Ok(interval(NOW + 1, NOW + 1)))
         .unwrap();
-    assert_eq!(verified.check_height(), 3);
-    assert_eq!(verified.applied_floor().height, 4);
-    assert_eq!(verified.snapshot().custody_anchor.height, 4);
+    assert_eq!(verified.check_height(), 4);
+    assert_eq!(verified.applied_floor().height, 5);
+    assert_eq!(verified.snapshot().custody_anchor.height, 5);
 }
 
 #[test]
@@ -557,9 +557,9 @@ fn account_verified_check_retains_original_full_floor_after_applied_descendants(
         .verify_finalized(|| Ok(interval(NOW + 1, NOW + 1)))
         .unwrap();
     assert_eq!(verified.original_floor(), original);
-    assert_eq!(verified.original_floor().height, 2);
-    assert_eq!(verified.check_height(), 3);
-    assert_eq!(verified.applied_floor().height, 4);
+    assert_eq!(verified.original_floor().height, 3);
+    assert_eq!(verified.check_height(), 4);
+    assert_eq!(verified.applied_floor().height, 5);
     assert_ne!(verified.original_floor(), verified.applied_floor());
     verified
         .recheck_use_interval(interval(NOW + 2, NOW + 2))
@@ -581,7 +581,7 @@ fn account_verified_check_retains_exact_external_and_check_block_after_descendan
         .verify_finalized(|| Ok(interval(NOW + 1, NOW + 1)))
         .unwrap();
     assert_eq!(verified.canonical_external(), exact);
-    assert_eq!(verified.check_height(), 3);
+    assert_eq!(verified.check_height(), 4);
     assert_eq!(verified.check_block_hash(), check_hash);
     assert_ne!(
         verified.check_block_hash(),

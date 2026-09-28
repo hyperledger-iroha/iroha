@@ -321,7 +321,7 @@ impl AccountService {
             after.status
         };
         if status == OperationStatus::Applied {
-            journal.write_evidence_exact("applied.json", &after.evidence)?;
+            journal.write_applied_evidence(&after.evidence)?;
         }
         transfer_report(&journal, &record, status, after.evidence)
     }

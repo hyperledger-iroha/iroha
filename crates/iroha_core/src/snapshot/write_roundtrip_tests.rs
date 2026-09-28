@@ -1251,3 +1251,99 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
         TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height: 1 }
     ));
 }
+#[tokio::test]
+async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
+    let tmp_root = tempdir().unwrap();
+    let store_dir = tmp_root.path().join("snapshot");
+    let state = state_factory();
+    for seed in [1, 2] {
+        let mut block = state.world.block();
+        crate::smartcontracts::isi::sccp::test_support::populate_every_sccp_map(&mut block, seed);
+        block.commit();
+    }
+    let key_pair = checked_random_snapshot_keypair();
+    try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+    let snapshot_bytes = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
+        .expect("snapshot bytes");
+    let snapshot_value: json::Value =
+        json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
+    assert!(
+        matches!(&snapshot_value, json::Value::Object(map) if map.contains_key("sccp")),
+        "new snapshots must carry the SCCP envelope"
+    );
+    let restored = try_read_snapshot(
+        &store_dir,
+        &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
+        LiveQueryStore::start_test,
+        BlockCount(state.view().height()),
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        &state.network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
+    .expect("snapshot with SCCP state reads back");
+    assert_eq!(
+        canonical_state_snapshot_bytes_for_tests(&restored),
+        canonical_state_snapshot_bytes_for_tests(&state),
+        "snapshot roundtrip must preserve canonical WSV bytes"
+    );
+    let mut original_envelope = String::new();
+    crate::state::sccp_snapshot_state::serialize_envelope(&state.world, &mut original_envelope);
+    let mut restored_envelope = String::new();
+    crate::state::sccp_snapshot_state::serialize_envelope(&restored.world, &mut restored_envelope);
+    assert_eq!(restored_envelope, original_envelope);
+    use crate::state::WorldReadOnly as _;
+    use mv::storage::StorageReadOnly as _;
+    let world = restored.world.view();
+    assert_eq!(world.sccp_bridge_keys().len(), 2);
+    assert_eq!(world.sccp_rosters().len(), 2);
+    assert_eq!(world.sccp_block_leaves().len(), 2);
+    assert_eq!(world.sccp_light_client_checkpoint_expiry().len(), 2);
+    assert_eq!(*world.sccp_roster_current(), 2);
+    assert!(world.sccp_parameters().is_some());
+}
+#[tokio::test]
+async fn signed_snapshot_without_the_sccp_envelope_is_rejected() {
+    let tmp_root = tempdir().expect("temporary snapshot root");
+    let store_dir = tmp_root.path().join("snapshot");
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_factory_with_kura(Arc::clone(&kura));
+    let serialized = CapturedStateSnapshot::capture(&state)
+        .expect("stable valid fixture snapshot")
+        .json;
+    let mut snapshot: json::Value =
+        json::from_str(&serialized).expect("valid baseline snapshot JSON");
+    let json::Value::Object(snapshot_object) = &mut snapshot else {
+        panic!("snapshot root must be an object");
+    };
+    assert!(snapshot_object.remove("sccp").is_some());
+    let mutated = snapshot_json_with_mutation(&serialized, &snapshot);
+    let key_pair = checked_random_snapshot_keypair();
+    write_snapshot_bundle_from_bytes(&store_dir, mutated.as_bytes(), &key_pair);
+    assert!(
+        try_read_snapshot(
+            &store_dir,
+            &kura,
+            &state.lane_manifests.read().clone(),
+            &state.nexus_snapshot(),
+            LiveQueryStore::start_test,
+            BlockCount(0),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.network_id,
+            &crate::state::default_zk_config(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+            &snapshot_read_budget_for_testing(),
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+        )
+        .is_err(),
+        "a snapshot must carry its SCCP envelope"
+    );
+}

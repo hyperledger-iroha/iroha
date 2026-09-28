@@ -968,6 +968,7 @@ mod serde_tests {
                 dpn_validator_release_commit: "feedface".to_owned(),
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
+                wire_schema_hash: "ab".repeat(32),
             },
             peers: 3,
             blocks: 42,
@@ -7492,5 +7493,6 @@ fn build_status_fixture() -> BuildStatus {
         dpn_validator_release_commit: "2222222222222222222222222222222222222222".to_owned(),
         cargo_features: "test-features".to_owned(),
         target_triple: "test-target".to_owned(),
+        wire_schema_hash: "33".repeat(32),
     }
 }

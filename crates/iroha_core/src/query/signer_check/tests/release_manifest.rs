@@ -208,7 +208,7 @@ fn finalized_role13_check_with_exact_grants_still_cannot_authenticate() {
         1_000,
     );
     fixture.commit(1_000, vec![anchor]);
-    let (height, block_hash, context_id) = fixture.finalized_floor().unwrap();
+    let (height, block_hash, context_id) = fixture.finalized_floor();
     let floor = NativeCheckFloorV1 {
         height,
         block_hash,
@@ -224,7 +224,7 @@ fn finalized_role13_check_with_exact_grants_still_cannot_authenticate() {
         "the registered role-13 ISI must remain closed",
     );
     let block = state
-        .block_by_height(NonZeroUsize::new(2).unwrap())
+        .block_by_height(NonZeroUsize::new(3).unwrap())
         .unwrap();
     let (_, output) = block.network_output_at(0).unwrap();
     assert!(matches!(

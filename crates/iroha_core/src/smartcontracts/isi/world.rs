@@ -8626,10 +8626,11 @@ pub mod isi {
                         |record| parliament_present_head_v1(subject_id, 1, record),
                     )
             }
-            ProposalKind::SccpRouteGovernance(_) => {
-                Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP v1 governance enactment is not wired yet (TODO(ws20, ws33))".into(),
-                ))
+            ProposalKind::SccpRouteGovernance(payload) => {
+                crate::smartcontracts::isi::sccp::governance::expected_head(
+                    state_transaction,
+                    &payload.proposal,
+                )
             }
             ProposalKind::SorafsProviderGovernance(payload) => {
                 if let iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Admission(
@@ -8782,10 +8783,17 @@ pub mod isi {
                 payload,
                 &payload.proposal_operator,
             ),
-            ProposalKind::SccpRouteGovernance(_) => {
-                Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP v1 governance enactment is not wired yet (TODO(ws20, ws33))".into(),
-                ))
+            ProposalKind::SccpRouteGovernance(payload) => {
+                if payload.proposal.network_id != state_transaction.network_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "certified SCCP proposal belongs to a different exact NetworkId".into(),
+                    ));
+                }
+                crate::smartcontracts::isi::sccp::governance::enact(
+                    state_transaction,
+                    &payload.proposal,
+                    proposal_id,
+                )
             }
             ProposalKind::SorafsProviderGovernance(payload) => {
                 if super::sorafs::apply_governed_provider_owner_action(
@@ -9304,6 +9312,12 @@ pub mod isi {
                 validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                     &payload.payout_binding,
                     state_transaction,
+                )?;
+            }
+            if let ProposalKind::SccpRouteGovernance(payload) = &self.proposal {
+                crate::smartcontracts::isi::sccp::governance::preflight_attempt(
+                    state_transaction,
+                    &payload.proposal,
                 )?;
             }
 

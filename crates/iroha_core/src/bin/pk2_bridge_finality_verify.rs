@@ -1541,6 +1541,7 @@ mod tests {
                 total_power: context.quorum.total_power,
             }),
             liveness: SumeragiV2LivenessStatus::default(),
+            beacon_horizon: None,
         };
         let expectations = ExpectedRosterDocument {
             schema_version: LEGACY_EXPECTATIONS_SCHEMA_VERSION,

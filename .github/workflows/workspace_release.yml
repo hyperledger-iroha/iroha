@@ -65,7 +65,7 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -90,57 +90,22 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: workspace-release-build-1.93.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: "3.11"
-      - name: Check Taira CLI release boundaries before workspace build
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/target/taira-native-checks"
-          # Initialize the same isolated registry cache; only fetch allows network.
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          import subprocess
-          import sys
-
-          root = Path.cwd().resolve(strict=True)
-          sys.path.insert(0, str(root / "scripts"))
-          import taira_release as release
-
-          target = root / "target/taira-native-checks"
-          with release.cargo_lane(root, target, "development") as lock_fd:
-              env = release.child_environment(dict(os.environ), target)
-              env, _ = release.isolated_cargo_environment(root, root, env)
-              env["CARGO_NET_OFFLINE"] = "false"
-              command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "fetch",
-                         "--manifest-path", str(root / "Cargo.toml"), "--locked"]
-              subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
-                             check=True, pass_fds=(lock_fd,))
-          PY
-          python3 scripts/taira_release_check.py --target-dir "$GITHUB_WORKSPACE/target/taira-native-checks"
+      - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Run the release-gate test profile
+        # The package set equals the packages named by the release-gate
+        # default-filter in .config/nextest.toml.
+        run: >-
+          cargo nextest run --profile release-gate --locked --offline
+          --no-tests=fail
+          -p mv -p iroha_deploy -p iroha_config -p iroha_torii_shared
+          -p iroha_wallet -p iroha -p concread -p iroha_data_model
+          -p iroha_crypto -p iroha_p2p -p fastpq_prover -p iroha_core
+          -p iroha_torii -p irohad -p iroha_cli -p iroha_kagami
+          -p iroha_test_network
       - name: Build the full workspace
-        run: |
-          # Reuse the gate's exact target, registry paths and mode lock.
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          import subprocess
-          import sys
-
-          root = Path.cwd().resolve(strict=True)
-          sys.path.insert(0, str(root / "scripts"))
-          import taira_release as release
-
-          target = root / "target/taira-native-checks"
-          with release.cargo_lane(root, target, "development") as lock_fd:
-              env = release.child_environment(dict(os.environ), target)
-              env, _ = release.isolated_cargo_environment(root, root, env)
-              env["CARGO_INCREMENTAL"] = "0"
-              command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
-                         "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline", "--workspace"]
-              subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
-                             check=True, pass_fds=(lock_fd,))
-          PY
+        run: cargo build --locked --offline --workspace
 
   doc:
     name: Workspace documentation

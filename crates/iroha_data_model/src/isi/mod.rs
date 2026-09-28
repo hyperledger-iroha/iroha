@@ -330,6 +330,19 @@ impl_direct_instruction_box!(crate::isi::escrow::ExpireAssetLock);
 impl_direct_instruction_box!(crate::isi::vpn::OpenVpnLeaseEscrow);
 impl_direct_instruction_box!(crate::isi::vpn::SettleVpnLease);
 impl_direct_instruction_box!(crate::isi::vpn::RefundExpiredVpnLease);
+// Allow direct boxing of the SCCP v1 instructions (`specs/sccp.md` §4).
+impl_direct_instruction_box!(
+    crate::isi::sccp::InitializeSccpV1,
+    crate::isi::sccp::SetSccpBridgeKeyV1,
+    crate::isi::sccp::SubmitSccpAttestationsV1,
+    crate::isi::sccp::SubmitSccpAttestationFaultV1,
+    crate::isi::sccp::RecordSccpMessage,
+    crate::isi::sccp::SubmitSccpInboundMessageV1,
+    crate::isi::sccp::SettleSccpV1,
+    crate::isi::sccp::SubmitSccpOutboundVoidV1,
+    crate::isi::sccp::AdvanceSccpLightClientV1,
+    crate::isi::sccp::ReportSccpLightClientEquivocationV1,
+);
 // Allow direct boxing of SoraFS capacity marketplace instructions.
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterCapacityDeclaration);
 impl_direct_instruction_box!(crate::isi::sorafs::RecordCapacityTelemetry);
@@ -1837,7 +1850,6 @@ pub mod asset_alias;
 pub mod asset_transfer_control;
 /// Confidential registry management instructions. Bridge proof ingestion instructions.
 pub mod bridge;
-pub mod sccp;
 /// Confidential registry management instructions.
 pub mod confidential;
 /// Content lane instructions.
@@ -1879,6 +1891,8 @@ pub mod retail_daily_limit;
 pub mod runtime_upgrade;
 /// Real-world asset lot instructions.
 pub mod rwa;
+/// SCCP v1 cross-chain instructions (`specs/sccp.md` §4).
+pub mod sccp;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
 /// Smart contract code management instructions.

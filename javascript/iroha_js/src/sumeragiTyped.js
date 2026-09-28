@@ -1526,6 +1526,7 @@ function parseSumeragiStatusPayload(payload) {
     "height_context",
     "last_commit_qc",
     "liveness",
+    "beacon_horizon",
   ]);
   const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknownField !== undefined) {
@@ -1675,6 +1676,83 @@ function parseSumeragiStatusPayload(payload) {
     height_context: heightContext,
     last_commit_qc: lastCommitQc,
     liveness,
+    beacon_horizon:
+      record.beacon_horizon == null
+        ? null
+        : parseSumeragiBeaconHorizon(record.beacon_horizon, "sumeragi.beacon_horizon", {
+            height,
+            heightContext,
+          }),
+  });
+}
+
+const SUMERAGI_BEACON_HORIZON_FIELDS = Object.freeze([
+  "epoch_length_blocks",
+  "next_required_pulse_height",
+  "active_session_id",
+  "session_covers_next_pulse",
+  "local_provider_ready",
+]);
+
+function parseSumeragiBeaconHorizon(value, context, { height, heightContext }) {
+  const record = ensureRecord(value, context);
+  const unknownField = Object.keys(record).find(
+    (field) => !SUMERAGI_BEACON_HORIZON_FIELDS.includes(field),
+  );
+  if (unknownField !== undefined) {
+    rejectType(`${context} contains unknown field ${unknownField}`);
+  }
+  const missingField = SUMERAGI_BEACON_HORIZON_FIELDS.find(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missingField !== undefined) {
+    rejectType(`${context} is missing field ${missingField}`);
+  }
+  const epochLengthBlocks = parseSumeragiUnsigned(
+    record.epoch_length_blocks,
+    `${context}.epoch_length_blocks`,
+  );
+  const nextRequiredPulseHeight =
+    record.next_required_pulse_height == null
+      ? null
+      : parseSumeragiUnsigned(
+          record.next_required_pulse_height,
+          `${context}.next_required_pulse_height`,
+          { positive: true },
+        );
+  const activeSessionId = parseSumeragiOptionalByte32(
+    record.active_session_id,
+    `${context}.active_session_id`,
+  );
+  const sessionCoversNextPulse = parseSumeragiBoolean(
+    record.session_covers_next_pulse,
+    `${context}.session_covers_next_pulse`,
+  );
+  const localProviderReady = parseSumeragiBoolean(
+    record.local_provider_ready,
+    `${context}.local_provider_ready`,
+  );
+  if (heightContext.mode.mode === "permissioned" && epochLengthBlocks !== 0) {
+    rejectRange(`${context}.epoch_length_blocks must be zero in permissioned mode`);
+  }
+  if (heightContext.mode.mode !== "permissioned" && epochLengthBlocks === 0) {
+    rejectRange(`${context}.epoch_length_blocks must be positive in NPoS mode`);
+  }
+  if (nextRequiredPulseHeight !== null && nextRequiredPulseHeight < height) {
+    rejectRange(`${context}.next_required_pulse_height must not precede the active height`);
+  }
+  if (sessionCoversNextPulse && (activeSessionId === null || nextRequiredPulseHeight === null)) {
+    rejectType(`${context} coverage requires an active session and a scheduled pulse`);
+  }
+  if (localProviderReady && activeSessionId === null) {
+    rejectType(`${context} provider readiness requires an active session`);
+  }
+  return Object.freeze({
+    epoch_length_blocks: epochLengthBlocks,
+    next_required_pulse_height: nextRequiredPulseHeight,
+    active_session_id: activeSessionId,
+    session_covers_next_pulse: sessionCoversNextPulse,
+    local_provider_ready: localProviderReady,
   });
 }
 

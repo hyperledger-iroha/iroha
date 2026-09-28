@@ -4,7 +4,8 @@
     "git_commit_sha": "",
     "dpn_validator_release_commit": "",
     "cargo_features": "",
-    "target_triple": ""
+    "target_triple": "",
+    "wire_schema_hash": ""
   },
   "observed_at_ms": 0,
   "peers": 2,

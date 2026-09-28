@@ -1637,6 +1637,7 @@ fn runner_status(context: &wire::HeightContext) -> wire::SumeragiV2Status {
         },
         last_commit_qc: None,
         liveness: Default::default(),
+        beacon_horizon: None,
     }
 }
 fn publish_applied_runner_status(context: &wire::HeightContext) {

@@ -38,6 +38,21 @@ impl Fixture {
         Self::build_with_epoch(20)
     }
 
+    /// The fixture genesis plus sixteen seated Parliament citizens (`specs/sccp.md` §4.14.5),
+    /// executed with the fixture's fresh citizenship escrow that `peer0.toml` names.
+    fn seated() -> Self {
+        static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                Self::build_with_escrow(
+                    20,
+                    seated_citizen_instructions(),
+                    Some(crate::taira::parliament_seating::fixture_citizenship_escrow()),
+                )
+            })
+            .clone()
+    }
+
     fn build_with_epoch(epoch: u64) -> Self {
         Self::build_with_epoch_and_instructions(epoch, Vec::new())
     }
@@ -45,6 +60,16 @@ impl Fixture {
     fn build_with_epoch_and_instructions(
         epoch: u64,
         instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    ) -> Self {
+        Self::build_with_escrow(epoch, instructions, None)
+    }
+
+    /// Build and execute the fixture genesis; `citizenship_escrow`, when given, replaces the
+    /// default `gov.citizenship_escrow_account` the genesis executes with.
+    fn build_with_escrow(
+        epoch: u64,
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+        citizenship_escrow: Option<AccountId>,
     ) -> Self {
         let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let genesis = key(101, Algorithm::Ed25519);
@@ -100,7 +125,8 @@ impl Fixture {
             .with_chain_discriminant(CHAIN_DISCRIMINANT)
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_consensus_meta();
-        let (_, nexus_hash, execution_hash) = execute_fixture_genesis(&manifest, &genesis);
+        let (_, nexus_hash, execution_hash) =
+            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref());
         let mut context = manifest.sumeragi_v2_context_parameters();
         context.nexus_amx_context_hash = nexus_hash.into();
         context.execution_policy_hash = execution_hash.into();
@@ -108,7 +134,7 @@ impl Fixture {
             .with_sumeragi_v2_context_parameters(context)
             .with_consensus_meta();
         let (mut block, final_nexus_hash, final_execution_hash) =
-            execute_fixture_genesis(&manifest, &genesis);
+            execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref());
         assert_eq!(nexus_hash, final_nexus_hash);
         assert_eq!(execution_hash, final_execution_hash);
         block
@@ -147,10 +173,16 @@ impl Fixture {
         NetworkId::from_genesis_hash(self.block.hash())
     }
 
+    /// Raw manifest bytes with Taira account literals, as the generator writes them.
+    fn manifest_json(&self) -> Vec<u8> {
+        let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+        json_line(&self.manifest).unwrap()
+    }
+
     fn derive(&self) -> Result<PublicInputsV1> {
         derive(
             &self.block.encode_wire().unwrap(),
-            &json_line(&self.manifest).unwrap(),
+            &self.manifest_json(),
             &line(self.network()),
             &line(self.genesis.public_key()),
             &line(self.canary.public_key()),
@@ -164,9 +196,13 @@ impl Fixture {
         fs::set_permissions(&localnet, fs::Permissions::from_mode(0o700)).unwrap();
         for (name, bytes) in [
             ("genesis.signed.nrt", self.block.encode_wire().unwrap()),
-            ("genesis.json", json_line(&self.manifest).unwrap()),
+            ("genesis.json", self.manifest_json()),
             ("genesis.expected_hash", line(self.network())),
             ("genesis.public_key", line(self.genesis.public_key())),
+            (
+                "peer0.toml",
+                crate::taira::parliament_seating::canonical_seating_config_toml().into_bytes(),
+            ),
         ] {
             fs::write(localnet.join(name), bytes).unwrap();
         }
@@ -181,12 +217,64 @@ impl Fixture {
     }
 }
 
+/// Sixteen genesis citizens bonded at the canonical Taira bond (`specs/sccp.md` §4.14.5), under
+/// the default citizenship asset and the fresh fixture escrow that the seated fixture genesis
+/// executes with and its `peer0.toml` names.
+fn seated_citizen_instructions() -> Vec<iroha_data_model::isi::InstructionBox> {
+    use iroha_data_model::{
+        asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
+        domain::Domain,
+        isi::Register,
+    };
+    use iroha_model_base::domain::DomainId;
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
+
+    let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let asset = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::governance::citizenship_asset_id(),
+    )
+    .unwrap();
+    let escrow = crate::taira::parliament_seating::fixture_citizenship_escrow();
+    let citizens = (150_u8..166)
+        .map(|seed| AccountId::new(key(seed, Algorithm::Ed25519).public_key().clone()))
+        .collect::<Vec<_>>();
+    let mut instructions: Vec<iroha_data_model::isi::InstructionBox> = vec![
+        Register::domain(Domain::new(
+            DomainId::parse_fully_qualified("sora.universal").unwrap(),
+        ))
+        .into(),
+        Register::asset_definition(AssetDefinition::new(
+            asset.clone(),
+            "xor",
+            NumericSpec::default(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+    ];
+    instructions.extend(
+        crate::taira::parliament_seating::citizen_genesis_instructions(
+            &citizens,
+            &asset,
+            crate::taira::parliament_seating::SeatingProfile::canonical()
+                .unwrap()
+                .citizenship_bond(),
+            &Quantity::from(1_000_u32),
+            Some(&escrow),
+            None,
+        )
+        .unwrap(),
+    );
+    instructions
+}
+
 // Exercise the same public Core validation/execution boundary as Kagami. A raw
 // GenesisBuilder proposal is not release evidence: only actual execution may
 // populate results and determine the two signed consensus context commitments.
 fn execute_fixture_genesis(
     manifest: &iroha_genesis::RawGenesisTransaction,
     key: &KeyPair,
+    citizenship_escrow: Option<&AccountId>,
 ) -> (SignedBlock, Hash, Hash) {
     use iroha_config::{
         kura::InitMode,
@@ -286,6 +374,13 @@ fn execute_fixture_genesis(
         .set_nexus_from_config(nexus)
         .expect("install the exact configured genesis Nexus baseline");
     state.set_crypto(actual::Crypto::default());
+    if let Some(escrow) = citizenship_escrow {
+        // Validators of a seated network name a fresh escrow, never the published default.
+        state.set_gov(actual::Governance {
+            citizenship_escrow_account: escrow.clone(),
+            ..actual::Governance::default()
+        });
+    }
     let topology = Topology::new(
         iroha_core::sumeragi::startup::genesis_committee_peers(&provisional.0).unwrap(),
     );
@@ -510,7 +605,7 @@ fn rejects_noncanonical_identity_and_non_ed25519_canary() {
 fn publishes_complete_public_bundle_and_reuses_identical_request() {
     let temp = private_custody_test_dir("taira-public-inputs-publish-");
     let root = temp.path();
-    let fixture = Fixture::new();
+    let fixture = Fixture::seated();
     let args = fixture.write(root);
     let original = fs::read(args.localnet_dir.join("genesis.signed.nrt")).unwrap();
     let mut first = Vec::new();
@@ -544,7 +639,7 @@ fn publishes_complete_public_bundle_and_reuses_identical_request() {
 #[test]
 fn refuses_changed_bundle_and_never_overwrites_existing_output() {
     let temp = private_custody_test_dir("taira-public-inputs-refusal-");
-    let args = Fixture::new().write(temp.path());
+    let args = Fixture::seated().write(temp.path());
     prepare(&args, &mut Vec::new()).unwrap();
     let original = fs::read(args.output_dir.join("public-inputs.json")).unwrap();
     fs::write(
@@ -573,7 +668,7 @@ fn refuses_changed_bundle_and_never_overwrites_existing_output() {
 #[test]
 fn rejects_symlink_input_and_partial_or_surplus_output() {
     let temp = private_custody_test_dir("taira-public-inputs-invalid-");
-    let args = Fixture::new().write(temp.path());
+    let args = Fixture::seated().write(temp.path());
     let key = fs::read(args.canary_public_key.as_ref().unwrap()).unwrap();
     fs::remove_file(args.canary_public_key.as_ref().unwrap()).unwrap();
     std::os::unix::fs::symlink(
@@ -802,7 +897,7 @@ fn beacon_public_preparation_derives_native_network_bound_seats_and_rejects_subs
 #[test]
 fn public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback() {
     let directory = private_custody_test_dir("public-manifest-");
-    let fixture = Fixture::new();
+    let fixture = Fixture::seated();
     let args = fixture.write(directory.path());
     prepare(&args, &mut Vec::new()).unwrap();
     let raw = fs::read(args.output_dir.join("genesis.json")).unwrap();
@@ -848,7 +943,7 @@ fn public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback(
 fn public_bundle_derives_canary_from_topology_intent_without_key_file() {
     let _chain_guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
     let directory = private_custody_test_dir("public-draft-canary-");
-    let fixture = Fixture::new();
+    let fixture = Fixture::seated();
     let mut args = fixture.write(directory.path());
     let mut inventory = sample_inventory_fixture();
     inventory.canary_onboarding_request = fixture.derive().unwrap().canary_onboarding_request;
@@ -869,4 +964,70 @@ fn public_bundle_derives_canary_from_topology_intent_without_key_file() {
     );
     fs::write(draft, json_line(&value).unwrap()).unwrap();
     assert!(prepare(&args, &mut Vec::new()).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn public_bundle_refuses_a_network_that_cannot_seat_the_parliament() {
+    // A genesis without citizens cannot seat any body.
+    let directory = private_custody_test_dir("public-unseated-genesis-");
+    let args = Fixture::build_with_epoch(20).write(directory.path());
+    let error = prepare(&args, &mut Vec::new()).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("citizens_cover_bodies"),
+        "{error:#}"
+    );
+    assert!(!args.output_dir.exists());
+
+    // Seated citizens under a validator profile that keeps the default bodies and faucet.
+    let directory = private_custody_test_dir("public-unseated-profile-");
+    let args = Fixture::seated().write(directory.path());
+    fs::write(
+        args.localnet_dir.join("peer0.toml"),
+        "[torii.faucet]\nenabled = true\namount = \"25000\"\n",
+    )
+    .unwrap();
+    let error = format!("{:#}", prepare(&args, &mut Vec::new()).unwrap_err());
+    for requirement in [
+        "citizens_cover_bodies",
+        "coordination_council_explicit",
+        "adaptive_faucet_difficulty",
+        "citizenship_escrow_is_custodial",
+    ] {
+        assert!(error.contains(requirement), "{requirement}: {error}");
+    }
+    assert!(!args.output_dir.exists());
+
+    // A seated profile whose escrow is the published default governance account is refused:
+    // anyone holding that key could drain every bond.
+    let mut published: toml::Table =
+        toml::from_str(&crate::taira::parliament_seating::canonical_seating_config_toml()).unwrap();
+    crate::taira::parliament_seating::set_citizenship_escrow(
+        &mut published,
+        &iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
+    )
+    .unwrap();
+    fs::write(
+        args.localnet_dir.join("peer0.toml"),
+        toml::to_string(&published).unwrap(),
+    )
+    .unwrap();
+    let error = format!("{:#}", prepare(&args, &mut Vec::new()).unwrap_err());
+    assert!(error.contains("citizenship_escrow_is_custodial"), "{error}");
+    assert!(!error.contains("citizens_cover_bodies"), "{error}");
+    assert!(!args.output_dir.exists());
+
+    // Validators that disagree on the consensus seating profile are refused.
+    let mut disagreeing = crate::taira::parliament_seating::canonical_seating_config_toml();
+    disagreeing = disagreeing.replace("policy_jury_size = 9", "policy_jury_size = 7");
+    fs::write(
+        args.localnet_dir.join("peer0.toml"),
+        crate::taira::parliament_seating::canonical_seating_config_toml(),
+    )
+    .unwrap();
+    fs::write(args.localnet_dir.join("peer1.toml"), disagreeing).unwrap();
+    let error = format!("{:#}", prepare(&args, &mut Vec::new()).unwrap_err());
+    assert!(error.contains("does not share"), "{error}");
+    fs::remove_file(args.localnet_dir.join("peer1.toml")).unwrap();
+    prepare(&args, &mut Vec::new()).unwrap();
 }

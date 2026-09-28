@@ -1,83 +1,101 @@
 //! Exact historical selection, bounded canonical decoding and no-write read regressions.
 use super::*;
 use iroha_crypto::Hash;
-use iroha_sccp::sccp_finalize_taira_block_test_fixture_v1;
-use std::num::NonZeroUsize;
+
+/// The custody fixture's accounts and policy on a certified test chain (height 1 is genesis).
+fn certified_fixture() -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    SignerCustodyPolicyV1,
+    ProviderId,
+) {
+    let f = fixture();
+    let chain = crate::query::signer_check::fixture::chain(fixture_world(
+        &f.authority,
+        &f.other,
+        f.provider,
+    ));
+    let mut policy = f.policy;
+    policy.binding.chain_id = chain.state().view().chain_id().to_string();
+    policy.binding.network_id = *chain.state().network_id_ref().as_bytes();
+    (chain, policy, f.provider)
+}
 
 #[test]
 fn current_stream_token_custody_requires_same_state_finality_and_grants_no_operation() {
-    let mut f = fixture();
-    configure(&mut f);
-    let read = |f: &Fixture, binding: &SignerCustodyBindingV1, height| {
+    use crate::query::signer_check::fixture::{commit, commit_uncertified, sign};
+    let (mut chain, policy, provider) = certified_fixture();
+    let state = Arc::clone(chain.state());
+    let read = |binding: &SignerCustodyBindingV1, height| {
         crate::query::stream_token_custody::read_current_stream_token_custody_block_finality_v1(
-            &f.state.view(),
+            &state.view(),
             binding,
             height,
         )
     };
+    let configure = MutateSorafsStreamTokenCustody {
+        provider_id: provider,
+        expected_revision: 0,
+        expected_digest: [0; 32],
+        action: Action::Configure(encode(&policy).expect("policy")),
+    };
+    // The configuration is applied and durable, but its block's local CommitQC does not verify.
     assert_eq!(
-        read(&f, &f.policy.binding, 1),
+        commit_uncertified(
+            &mut chain,
+            1_000,
+            vec![sign(&state, configure.into(), 1, 1_000)]
+        ),
+        [true]
+    );
+    assert_eq!(
+        read(&policy.binding, 2),
         Err(Error::FinalityUnavailable),
         "a retained row and durable block do not replace CommitQC"
     );
-    let mut foreign = f.policy.binding.clone();
+    let mut foreign = policy.binding.clone();
     foreign.purpose = SignerPurposeBindingV1::StreamToken {
         provider_id: [0xB6; 32],
     };
     assert_eq!(
-        read(&f, &foreign, 1),
+        read(&foreign, 2),
         Err(Error::FinalityUnavailable),
         "absence of a provider row cannot bypass finality"
     );
-    assert_eq!(read(&f, &f.policy.binding, 0), Err(Error::StaleHeight));
-    let block = f
-        .state
-        .kura()
-        .get_block(NonZeroUsize::new(1).unwrap())
-        .unwrap();
-    let finalized = sccp_finalize_taira_block_test_fixture_v1(&block, None);
-    let mut forked = finalized.proof().finality_artifact.clone();
-    forked.block_hash = iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-        b"forked stream-token fixture block",
-    ));
-    assert!(f.state.kura().store_v2_finality_artifact(&forked).is_err());
-    assert_eq!(
-        read(&f, &f.policy.binding, 1),
-        Err(Error::FinalityUnavailable)
-    );
-    let _receipt = f
-        .state
-        .kura()
-        .store_v2_finality_artifact(&finalized.proof().finality_artifact)
-        .expect("exact four-validator Kura finality");
-    let current = read(&f, &f.policy.binding, 1)
+    assert_eq!(read(&policy.binding, 0), Err(Error::StaleHeight));
+    // A certified successor: the retained row is current at a certified block.
+    assert!(commit(&mut chain, 1_500, Vec::new()).is_empty());
+    let current = read(&policy.binding, 3)
         .expect("same-State finality")
         .expect("raw custody");
-    assert_eq!(current.custody().state.policy.binding, f.policy.binding);
-    assert_eq!(current.block_finality().height(), 1);
+    assert_eq!(current.custody().state.policy.binding, policy.binding);
+    assert_eq!(current.block_finality().height(), 3);
     assert_eq!(
         current.block_finality().block_hash(),
         current.custody().anchor.block_hash
     );
     assert_eq!(
-        crate::query::stream_token_authority::read_head(f.state.view().world(), f.provider)
+        current.block_finality().context_id(),
+        chain.committed(3).id()
+    );
+    assert_eq!(
+        crate::query::stream_token_authority::read_head(state.view().world(), provider)
             .expect("no role-11 operation")
             .revision,
         0,
         "block finality cannot create an operation or completed Check"
     );
-    let mut foreign = f.policy.binding.clone();
+    let mut foreign = policy.binding.clone();
     foreign.network_id = [0xA5; 32];
-    assert_eq!(read(&f, &foreign, 1), Err(Error::BindingMismatch));
-    foreign = f.policy.binding.clone();
+    assert_eq!(read(&foreign, 3), Err(Error::BindingMismatch));
+    foreign = policy.binding.clone();
     foreign.purpose = SignerPurposeBindingV1::StreamToken {
         provider_id: [0xB6; 32],
     };
-    assert!(read(&f, &foreign, 1).unwrap().is_none());
-    transact(&mut f.state, 2_000, |_| {});
-    assert_eq!(read(&f, &f.policy.binding, 1), Err(Error::StaleHeight));
+    assert!(read(&foreign, 3).unwrap().is_none());
+    assert!(commit_uncertified(&mut chain, 2_000, Vec::new()).is_empty());
+    assert_eq!(read(&policy.binding, 3), Err(Error::StaleHeight));
     assert_eq!(
-        read(&f, &f.policy.binding, 2),
+        read(&policy.binding, 4),
         Err(Error::FinalityUnavailable),
         "a later block cannot borrow an earlier QC"
     );

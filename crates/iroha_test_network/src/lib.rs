@@ -5946,13 +5946,6 @@ impl ParliamentTestSignerSelection {
     }
 }
 
-#[derive(Clone)]
-enum PermissionedLaneAuthorityBootstrap {
-    Disabled,
-    Implicit(Quantity),
-    Explicit(Quantity),
-}
-
 /// Builder of [`Network`].
 ///
 /// Cloning copies only the deterministic network recipe. Every call to
@@ -5980,7 +5973,6 @@ pub struct NetworkBuilder {
     auto_populate_trusted_peer_pops: bool,
     genesis_committee_keys_for_global_peers: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
-    permissioned_lane_authority_bootstrap: PermissionedLaneAuthorityBootstrap,
     consensus_message_control: bool,
     parliament_test_signers: Option<ParliamentTestSignerSelection>,
     #[cfg(unix)]
@@ -7133,9 +7125,6 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake: Some(
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
-            permissioned_lane_authority_bootstrap: PermissionedLaneAuthorityBootstrap::Implicit(
-                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
-            ),
             consensus_message_control: false,
             parliament_test_signers: None,
             #[cfg(unix)]
@@ -7635,29 +7624,6 @@ impl NetworkBuilder {
         self.npos_genesis_bootstrap_stake = None;
         self
     }
-    /// Override the stake used to provision the default public-lane authority
-    /// while keeping global consensus permissioned.
-    ///
-    /// This explicit form requires the standard single-lane, stake-elected,
-    /// manifest-free generated genesis, exact committee geometry, default
-    /// staking resources, and no caller-owned bootstrap support state. Build
-    /// fails with a concrete reason when those requirements are not met.
-    pub fn with_permissioned_lane_authority_bootstrap(mut self, stake_amount: Quantity) -> Self {
-        assert!(!stake_amount.is_zero(), "stake_amount must be non-zero");
-        self.consensus_mode = ConsensusMode::Permissioned;
-        self.permissioned_lane_authority_bootstrap =
-            PermissionedLaneAuthorityBootstrap::Explicit(stake_amount);
-        self
-    }
-    /// Disable the default public-lane authority bootstrap for permissioned
-    /// consensus.
-    ///
-    /// Use this for negative fixtures or when authority is supplied through a
-    /// lane manifest, a custom genesis block, or explicit validator records.
-    pub fn without_permissioned_lane_authority_bootstrap(mut self) -> Self {
-        self.permissioned_lane_authority_bootstrap = PermissionedLaneAuthorityBootstrap::Disabled;
-        self
-    }
     /// Override the genesis signing key pair used to sign the manifest.
     pub fn with_genesis_keypair(mut self, key_pair: KeyPair) -> Self {
         self.genesis_key_pair = key_pair;
@@ -7914,7 +7880,6 @@ impl NetworkBuilder {
             auto_populate_trusted_peer_pops,
             genesis_committee_keys_for_global_peers,
             npos_genesis_bootstrap_stake,
-            permissioned_lane_authority_bootstrap,
             consensus_message_control,
             parliament_test_signers,
             #[cfg(unix)]
@@ -7994,9 +7959,6 @@ impl NetworkBuilder {
         let has_fee_asset_override = config_layers
             .iter()
             .any(|layer| get_nested_value(layer, &["nexus", "fees", "fee_asset_id"]).is_some());
-        let has_stake_asset_override = config_layers.iter().any(|layer| {
-            get_nested_value(layer, &["nexus", "staking", "stake_asset_id"]).is_some()
-        });
         let has_stake_escrow_override = config_layers.iter().any(|layer| {
             get_nested_value(layer, &["nexus", "staking", "stake_escrow_account_id"]).is_some()
         });
@@ -8312,16 +8274,6 @@ impl NetworkBuilder {
                     })
             })
             .collect::<BTreeSet<_>>();
-        let has_explicit_lane_validator_bootstrap = genesis_isi
-            .iter()
-            .chain(&genesis_post_topology_isi)
-            .flatten()
-            .any(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<RegisterPublicLaneValidator>()
-                    .is_some()
-            });
         let has_permissioned_bootstrap_support_collision = genesis_isi
             .iter()
             .chain(&genesis_post_topology_isi)
@@ -8347,118 +8299,44 @@ impl NetworkBuilder {
                         _ => false,
                     })
             });
-        let permissioned_lane_bootstrap_ineligibility = {
-            let nexus = &resolved_pre_genesis_config.nexus;
-            let is_default_single_lane = matches!(
-                nexus.lane_catalog.lanes(),
-                [lane]
-                    if lane.id == LaneId::SINGLE
-                        && lane.dataspace_id == DataSpaceId::UNIVERSAL
-                        && lane.visibility
-                            == iroha_data_model::nexus::LaneVisibility::Public
-            );
-            let is_stake_elected = matches!(
-                nexus
-                    .staking
-                    .validator_mode(LaneId::SINGLE, &nexus.lane_catalog),
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            );
-            let has_no_manifest_source = nexus.registry.manifest_directory.is_none()
-                && nexus.registry.cache_directory.is_none();
-            let generated_validator_peers =
-                peers.iter().map(NetworkPeer::id).collect::<BTreeSet<_>>();
-            let trusted_peers = resolved_pre_genesis_config.common.trusted_peers.value();
-            let configured_validator_peers = trusted_peers
-                .pops
-                .keys()
-                .cloned()
-                .map(PeerId::new)
-                .collect::<BTreeSet<_>>();
-            let exact_committee_size = nexus
-                .dataspace_catalog
-                .by_id(DataSpaceId::UNIVERSAL)
-                .and_then(|dataspace| dataspace.fault_tolerance.checked_mul(3))
-                .and_then(|size| size.checked_add(1))
-                .and_then(|size| (size <= nexus.staking.max_validators.get()).then_some(size))
-                .and_then(|size| usize::try_from(size).ok())
-                .is_some_and(|size| size == peers.len())
-                && configured_validator_peers == generated_validator_peers;
-            if custom_genesis.is_some() {
-                Some("a custom genesis block owns lane authority")
-            } else if has_explicit_lane_validator_bootstrap {
-                Some("genesis already contains public-lane validator registrations")
-            } else if !is_default_single_lane {
-                Some("the resolved lane catalog is not the single universal public lane")
-            } else if !is_stake_elected {
-                Some("the default public lane is not stake-elected")
-            } else if !has_no_manifest_source {
-                Some("the resolved Nexus registry has a manifest or cache source")
-            } else if !exact_committee_size {
-                Some("3f+1, max_validators, and trusted-peer geometry are not exact")
-            } else if has_fee_asset_override
-                || has_stake_asset_override
-                || has_stake_escrow_override
-                || has_slash_sink_override
-            {
-                Some("the resolved Nexus staking resources were overridden")
-            } else if has_permissioned_bootstrap_support_collision {
-                Some("genesis already registers reserved lane-bootstrap support state")
-            } else {
-                None
-            }
-        };
-        let lane_validator_bootstrap = match consensus_mode {
+        // Staking is NPoS-only: the network XOR identity that staking and rewards use lives in the
+        // signed NPoS parameters, which permissioned genesis omits. A permissioned network
+        // therefore registers no public-lane validators; its committee is the genesis roster
+        // (`RegisterPeerWithPop`). Both modes provision the genesis XOR fee resources unless the
+        // caller owns them.
+        let validator_stake = match consensus_mode {
             ConsensusMode::Npos => npos_genesis_bootstrap_stake.map(|stake_amount| {
                 resolve_npos_bootstrap_stake(&genesis_isi, &genesis_post_topology_isi, stake_amount)
             }),
-            ConsensusMode::Permissioned => {
-                let requested = match permissioned_lane_authority_bootstrap {
-                    PermissionedLaneAuthorityBootstrap::Disabled => None,
-                    PermissionedLaneAuthorityBootstrap::Implicit(stake_amount) => {
-                        permissioned_lane_bootstrap_ineligibility
-                            .is_none()
-                            .then_some(stake_amount)
-                    }
-                    PermissionedLaneAuthorityBootstrap::Explicit(stake_amount) => {
-                        if let Some(reason) = permissioned_lane_bootstrap_ineligibility {
-                            panic!(
-                                "explicit permissioned lane-authority bootstrap is unsupported: {reason}"
-                            );
-                        }
-                        Some(stake_amount)
-                    }
-                };
-                requested.map(|stake_amount| {
-                    stake_amount.max(
-                        resolved_pre_genesis_config
-                            .nexus
-                            .staking
-                            .min_validator_stake
-                            .clone(),
-                    )
-                })
-            }
+            ConsensusMode::Permissioned => None,
         };
-        if let Some(stake_amount) = lane_validator_bootstrap.clone() {
+        let fee_resource_bootstrap = validator_stake.is_some()
+            || (matches!(consensus_mode, ConsensusMode::Permissioned)
+                && custom_genesis.is_none()
+                && !has_fee_asset_override
+                && !has_permissioned_bootstrap_support_collision);
+        if fee_resource_bootstrap {
             let gas_account_str = gas_account_id
                 .to_i105_for_discriminant(chain_discriminant)
                 .expect("harness bootstrap custody renders for selected profile");
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
-            writer
-                .write(["nexus", "fees", "fee_asset_id"], fee_asset_id.to_string())
-                .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_id.to_string(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_str,
-                );
+            writer.write(["nexus", "fees", "fee_asset_id"], fee_asset_id.to_string());
+            if validator_stake.is_some() {
+                writer
+                    .write(
+                        ["nexus", "staking", "stake_asset_id"],
+                        stake_asset_id.to_string(),
+                    )
+                    .write(
+                        ["nexus", "staking", "stake_escrow_account_id"],
+                        gas_account_str.clone(),
+                    )
+                    .write(
+                        ["nexus", "staking", "slash_sink_account_id"],
+                        gas_account_str,
+                    );
+            }
             config_layers.push(bootstrap_layer);
             // Staking and transaction fees consume the same genesis-selected XOR.
             // These explicit allocations belong only to this isolated fixture network.
@@ -8481,13 +8359,15 @@ impl NetworkBuilder {
             for peer in &peers {
                 let validator_id = peer.account_id();
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
-                bootstrap_tx.push(
-                    Mint::asset_quantity(
-                        stake_amount.clone(),
-                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                    )
-                    .into(),
-                );
+                if let Some(stake_amount) = &validator_stake {
+                    bootstrap_tx.push(
+                        Mint::asset_quantity(
+                            stake_amount.clone(),
+                            AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        )
+                        .into(),
+                    );
+                }
                 bootstrap_tx.push(
                     Mint::asset_quantity(
                         fee_seed_amount,
@@ -8511,10 +8391,11 @@ impl NetworkBuilder {
                 );
             }
             genesis_post_topology_isi.push(bootstrap_tx);
-            let mut validator_tx = Vec::new();
-            for peer in &peers {
-                let validator_id = peer.account_id();
-                validator_tx.push(
+            if let Some(stake_amount) = validator_stake {
+                let mut validator_tx = Vec::new();
+                for peer in &peers {
+                    let validator_id = peer.account_id();
+                    validator_tx.push(
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator_id.clone(),
@@ -8531,15 +8412,16 @@ impl NetworkBuilder {
                     }
                     .into(),
                 );
-                validator_tx.push(
-                    ActivatePublicLaneValidator {
-                        lane_id: LaneId::SINGLE,
-                        validator: validator_id,
-                    }
-                    .into(),
-                );
+                    validator_tx.push(
+                        ActivatePublicLaneValidator {
+                            lane_id: LaneId::SINGLE,
+                            validator: validator_id,
+                        }
+                        .into(),
+                    );
+                }
+                genesis_post_topology_isi.push(validator_tx);
             }
-            genesis_post_topology_isi.push(validator_tx);
         }
         if custom_genesis.is_none() {
             let agent_wallet_asset_definition =
@@ -8550,7 +8432,7 @@ impl NetworkBuilder {
                     .expect("soracloud HF shared lease asset definition id");
             let mut soracloud_validator_bootstrap = Vec::new();
             let mut seeded_accounts = BTreeSet::new();
-            let register_validator_accounts = lane_validator_bootstrap.is_none();
+            let register_validator_accounts = !fee_resource_bootstrap;
             for peer in &peers {
                 let account_id = peer.account_id();
                 if !seeded_accounts.insert(account_id.clone()) {
@@ -15297,23 +15179,6 @@ mod tests {
             .with_genesis_instruction(SetParameter::new(parameter))
             .build();
     }
-    fn genesis_has_public_lane_validator_registration(network: &Network) -> bool {
-        network
-            .genesis()
-            .0
-            .external_transactions()
-            .filter_map(|transaction| match transaction.instructions() {
-                Executable::Instructions(instructions) => Some(instructions),
-                _ => None,
-            })
-            .flatten()
-            .any(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<RegisterPublicLaneValidator>()
-                    .is_some()
-            })
-    }
     fn genesis_account_registration_count(network: &Network, account_id: &AccountId) -> usize {
         network
             .genesis()
@@ -15337,8 +15202,59 @@ mod tests {
             })
             .count()
     }
+    fn genesis_instructions(network: &Network) -> Vec<InstructionBox> {
+        network
+            .genesis()
+            .0
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => Some(instructions.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+    fn default_fee_asset_definition() -> AssetDefinitionId {
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("canonical fixture XOR asset")
+    }
+    fn registers_asset_definition(
+        instructions: &[InstructionBox],
+        definition: &AssetDefinitionId,
+    ) -> bool {
+        instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .is_some_and(|register| {
+                    matches!(
+                        register,
+                        RegisterBox::AssetDefinition(register) if &register.object.id == definition
+                    )
+                })
+        })
+    }
+    fn mints_to(
+        instructions: &[InstructionBox],
+        definition: &AssetDefinitionId,
+        account: &AccountId,
+    ) -> usize {
+        let asset = AssetId::new(definition.clone(), account.clone());
+        instructions
+            .iter()
+            .filter(|instruction| {
+                instruction.as_any().downcast_ref::<MintBox>().is_some_and(
+                    |mint| matches!(mint, MintBox::Asset(mint) if mint.destination == asset),
+                )
+            })
+            .count()
+    }
+    /// Staking is NPoS-only (the network XOR identity lives in the NPoS parameters), so a
+    /// permissioned genesis provisions the XOR fee resources and registers no public-lane
+    /// validator; building the network pre-executes the genesis, so it also must execute.
     #[test]
-    fn permissioned_builder_bootstraps_default_lane_authority() {
+    fn permissioned_builder_provisions_fees_without_staking() {
         init_instruction_registry();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
@@ -15349,191 +15265,34 @@ mod tests {
         assert_eq!(
             network.consensus_bootstrap_profile().mode_tag,
             PERMISSIONED_TAG,
-            "lane-authority bootstrap must not switch global consensus to NPoS",
         );
-        let genesis = network.genesis();
-        let mut registered = BTreeSet::new();
-        let mut activated = BTreeSet::new();
-        for transaction in genesis.0.external_transactions() {
-            let Executable::Instructions(instructions) = transaction.instructions() else {
-                continue;
-            };
-            for instruction in instructions {
-                if let Some(register) = instruction
+        let instructions = genesis_instructions(&network);
+        assert!(
+            !instructions.iter().any(|instruction| {
+                instruction
                     .as_any()
                     .downcast_ref::<RegisterPublicLaneValidator>()
-                {
-                    assert_eq!(register.lane_id, LaneId::SINGLE);
-                    assert_eq!(register.validator, register.stake_account);
-                    assert!(!register.initial_stake.is_zero());
-                    registered.insert((register.validator.clone(), register.peer_id.clone()));
-                }
-                if let Some(activate) = instruction
-                    .as_any()
-                    .downcast_ref::<ActivatePublicLaneValidator>()
-                {
-                    assert_eq!(activate.lane_id, LaneId::SINGLE);
-                    activated.insert(activate.validator.clone());
-                }
-            }
+                    .is_some()
+                    || instruction
+                        .as_any()
+                        .downcast_ref::<ActivatePublicLaneValidator>()
+                        .is_some()
+            }),
+            "permissioned genesis must not stake public-lane validators",
+        );
+        let xor = default_fee_asset_definition();
+        assert!(registers_asset_definition(&instructions, &xor));
+        assert_eq!(mints_to(&instructions, &xor, &ALICE_ID), 1);
+        for peer in network.peers() {
+            assert_eq!(
+                mints_to(&instructions, &xor, &peer.account_id()),
+                1,
+                "a permissioned validator receives fee funding and no stake",
+            );
         }
-        let expected = network
-            .peers()
-            .iter()
-            .map(|peer| (peer.account_id(), peer.id()))
-            .collect::<BTreeSet<_>>();
-        assert_eq!(registered, expected);
-        assert_eq!(
-            activated,
-            expected
-                .into_iter()
-                .map(|(validator, _)| validator)
-                .collect(),
-            "every registered default-lane validator must be active in genesis",
-        );
     }
     #[test]
-    fn permissioned_lane_authority_bootstrap_can_be_disabled() {
-        init_instruction_registry();
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_permissioned_consensus()
-                .without_permissioned_lane_authority_bootstrap(),
-        );
-        assert!(
-            !genesis_has_public_lane_validator_registration(&network),
-            "explicit opt-out must preserve empty permissioned lane authority fixtures",
-        );
-    }
-    #[test]
-    fn permissioned_lane_authority_bootstrap_skips_admin_managed_lane() {
-        init_instruction_registry();
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_permissioned_consensus()
-                .with_config_layer(|layer| {
-                    layer.write(
-                        ["nexus", "staking", "public_validator_mode"],
-                        "admin_managed",
-                    );
-                }),
-        );
-        assert!(
-            !genesis_has_public_lane_validator_registration(&network),
-            "admin-managed lanes require explicit manifest authority, not staking ISIs",
-        );
-    }
-    #[test]
-    fn permissioned_lane_authority_bootstrap_skips_restricted_stake_elected_lane() {
-        init_instruction_registry();
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_permissioned_consensus()
-                .with_config_layer(|layer| {
-                    let mut lane = Table::new();
-                    lane.insert("index".into(), Value::Integer(0));
-                    lane.insert("alias".into(), Value::String("restricted".to_owned()));
-                    lane.insert("visibility".into(), Value::String("restricted".to_owned()));
-                    lane.insert("metadata".into(), Value::Table(Table::new()));
-                    layer
-                        .write(
-                            ["nexus", "lane_catalog"],
-                            Value::Array(vec![Value::Table(lane)]),
-                        )
-                        .write(
-                            ["nexus", "staking", "restricted_validator_mode"],
-                            "stake_elected",
-                        );
-                }),
-        );
-        assert!(
-            !genesis_has_public_lane_validator_registration(&network),
-            "restricted lanes must retain caller-owned authority even when stake-elected",
-        );
-    }
-    #[test]
-    #[should_panic(
-        expected = "explicit permissioned lane-authority bootstrap is unsupported: the resolved lane catalog is not the single universal public lane"
-    )]
-    fn explicit_permissioned_lane_bootstrap_rejects_restricted_stake_elected_lane() {
-        let _ = NetworkBuilder::new()
-            .with_permissioned_lane_authority_bootstrap(
-                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
-            )
-            .with_config_layer(|layer| {
-                let mut lane = Table::new();
-                lane.insert("index".into(), Value::Integer(0));
-                lane.insert("alias".into(), Value::String("restricted".to_owned()));
-                lane.insert("visibility".into(), Value::String("restricted".to_owned()));
-                lane.insert("metadata".into(), Value::Table(Table::new()));
-                layer
-                    .write(
-                        ["nexus", "lane_catalog"],
-                        Value::Array(vec![Value::Table(lane)]),
-                    )
-                    .write(
-                        ["nexus", "staking", "restricted_validator_mode"],
-                        "stake_elected",
-                    );
-            })
-            .build();
-    }
-    #[test]
-    fn implicit_permissioned_lane_bootstrap_skips_invalid_max_validators_geometry() {
-        init_instruction_registry();
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_permissioned_consensus()
-                .with_config_layer(|layer| {
-                    layer.write(["nexus", "staking", "max_validators"], 3_i64);
-                }),
-        );
-        assert!(
-            !genesis_has_public_lane_validator_registration(&network),
-            "implicit bootstrap must not inject a committee larger than max_validators",
-        );
-    }
-    #[test]
-    fn implicit_permissioned_lane_bootstrap_skips_empty_pop_validator_roster() {
-        init_instruction_registry();
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_permissioned_consensus()
-                .without_auto_populated_trusted_peers(),
-        );
-        assert!(
-            !genesis_has_public_lane_validator_registration(&network),
-            "an empty trusted-peer PoP map must not authorize lane validators",
-        );
-    }
-    #[test]
-    #[should_panic(
-        expected = "explicit permissioned lane-authority bootstrap is unsupported: 3f+1, max_validators, and trusted-peer geometry are not exact"
-    )]
-    fn explicit_permissioned_lane_bootstrap_rejects_invalid_max_validators_geometry() {
-        let _ = NetworkBuilder::new()
-            .with_permissioned_lane_authority_bootstrap(
-                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
-            )
-            .with_config_layer(|layer| {
-                layer.write(["nexus", "staking", "max_validators"], 3_i64);
-            })
-            .build();
-    }
-    #[test]
-    #[should_panic(
-        expected = "explicit permissioned lane-authority bootstrap is unsupported: 3f+1, max_validators, and trusted-peer geometry are not exact"
-    )]
-    fn explicit_permissioned_lane_bootstrap_rejects_empty_pop_validator_roster() {
-        let _ = NetworkBuilder::new()
-            .with_permissioned_lane_authority_bootstrap(
-                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
-            )
-            .without_auto_populated_trusted_peers()
-            .build();
-    }
-    #[test]
-    fn implicit_permissioned_lane_bootstrap_skips_caller_owned_support_state() {
+    fn permissioned_fee_bootstrap_skips_caller_owned_support_state() {
         init_instruction_registry();
         let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
         let network = build_with_isolated_permit(
@@ -15542,15 +15301,17 @@ mod tests {
                 .with_genesis_instruction(Register::domain(Domain::new(nexus_domain))),
         );
         assert!(
-            !genesis_has_public_lane_validator_registration(&network),
-            "implicit bootstrap must not merge into caller-owned reserved support state",
+            !registers_asset_definition(
+                &genesis_instructions(&network),
+                &default_fee_asset_definition()
+            ),
+            "the fee bootstrap must not merge into caller-owned reserved support state",
         );
     }
     #[test]
-    fn implicit_permissioned_lane_bootstrap_skips_caller_owned_validator_account() {
+    fn permissioned_fee_bootstrap_skips_caller_owned_validator_account() {
         init_instruction_registry();
-        let base_seed =
-            stringify!(implicit_permissioned_lane_bootstrap_skips_caller_owned_validator_account);
+        let base_seed = stringify!(permissioned_fee_bootstrap_skips_caller_owned_validator_account);
         let peer_zero_seed = format!("{base_seed}-peer-0").into_bytes();
         let peer_zero_account = AccountId::new(
             checked_key_pair_from_seed(peer_zero_seed, Algorithm::Ed25519)
@@ -15565,49 +15326,15 @@ mod tests {
                     peer_zero_account.clone(),
                 ))),
         );
-        assert!(
-            !genesis_has_public_lane_validator_registration(&network),
-            "implicit bootstrap must not merge into a caller-owned validator account",
-        );
+        assert!(!registers_asset_definition(
+            &genesis_instructions(&network),
+            &default_fee_asset_definition()
+        ));
         assert_eq!(
             genesis_account_registration_count(&network, &peer_zero_account),
             1,
             "the SoraCloud fallback must not register the caller-owned validator account again",
         );
-    }
-    #[test]
-    #[should_panic(
-        expected = "explicit permissioned lane-authority bootstrap is unsupported: genesis already registers reserved lane-bootstrap support state"
-    )]
-    fn explicit_permissioned_lane_bootstrap_rejects_caller_owned_validator_account() {
-        let base_seed =
-            stringify!(explicit_permissioned_lane_bootstrap_rejects_caller_owned_validator_account);
-        let peer_zero_seed = format!("{base_seed}-peer-0").into_bytes();
-        let peer_zero_account = AccountId::new(
-            checked_key_pair_from_seed(peer_zero_seed, Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
-        let _ = NetworkBuilder::new()
-            .with_base_seed(base_seed)
-            .with_permissioned_lane_authority_bootstrap(
-                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
-            )
-            .with_genesis_instruction(Register::account(Account::new(peer_zero_account)))
-            .build();
-    }
-    #[test]
-    #[should_panic(
-        expected = "explicit permissioned lane-authority bootstrap is unsupported: genesis already registers reserved lane-bootstrap support state"
-    )]
-    fn explicit_permissioned_lane_bootstrap_rejects_caller_owned_support_state() {
-        let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
-        let _ = NetworkBuilder::new()
-            .with_permissioned_lane_authority_bootstrap(
-                iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
-            )
-            .with_genesis_instruction(Register::domain(Domain::new(nexus_domain)))
-            .build();
     }
     #[test]
     fn npos_bootstrap_adds_validator_instructions() {

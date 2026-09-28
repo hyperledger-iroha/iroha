@@ -1,4 +1,4 @@
-//! Native admission transitions and exact four-validator durable-finality reader regressions.
+//! Native admission transitions and finalized readers over a certified four-validator chain.
 use super::test_fixture::{
     NOW, ProviderAdmissionTestFixtureV1 as Fixture, key, raw, sign_envelope,
 };
@@ -41,7 +41,9 @@ fn finalized_admission_revocation_and_tombstones_share_one_native_history() {
     let mut f = Fixture::new();
     assert!(
         native::read_finalized_provider_admission_v1(&f.state.view(), f.provider(), NOW + 1)
-            .is_err()
+            .unwrap()
+            .is_none(),
+        "no council and no admission before the first enactment"
     );
     f.admit();
     let provider = f.provider();
@@ -136,14 +138,12 @@ fn native_head_needs_durable_qc_and_exact_owner_and_retained_predecessor() {
     let mut f = Fixture::new();
     f.admit();
     let provider = f.provider();
+    // A tip whose local CommitQC does not verify is not a finalized cut.
     f.commit(|_| {}, false);
     assert!(
         native::read_finalized_provider_admission_v1(&f.state.view(), provider, NOW + 3).is_err()
     );
-    f.state
-        .kura()
-        .store_v2_finality_artifact(&f.parent.as_ref().unwrap().proof().finality_artifact)
-        .unwrap();
+    f.commit(|_| {}, true);
     assert!(
         native::read_finalized_provider_admission_v1(&f.state.view(), provider, NOW + 3)
             .unwrap()

@@ -5,6 +5,7 @@
   "error.logger": "Không thể khởi tạo hệ thống ghi log",
   "error.start": "Không thể khởi động Iroha",
   "error.run": "Đã xảy ra lỗi trong quá trình chạy Iroha",
+  "error.check_storage": "Kura (kho lưu trữ khối) không vượt qua kiểm tra lưu trữ chỉ đọc",
   "error.start_p2p": "Không thể khởi động mạng P2P",
   "error.init_kura": "Không thể khởi tạo Kura (kho lưu trữ khối)",
   "error.start_dev_telemetry": "Không thể khởi chạy dịch vụ telemetry cho môi trường phát triển",

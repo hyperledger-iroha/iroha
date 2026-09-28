@@ -5,6 +5,7 @@
   "error.logger": "ロガーを初期化できませんでした",
   "error.start": "Iroha を起動できませんでした",
   "error.run": "Iroha の実行中にエラーが発生しました",
+  "error.check_storage": "ノードのストアが読み取り専用のストレージ検査に失敗しました",
   "error.start_p2p": "ピアツーピアネットワークを起動できませんでした",
   "error.init_kura": "蔵（ブロックストレージ）を初期化できませんでした",
   "error.start_dev_telemetry": "開発用テレメトリーサービスを起動できませんでした",

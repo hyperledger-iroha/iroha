@@ -1807,6 +1807,13 @@ fn compact_v2_status_norito_roundtrip() {
         },
         last_commit_qc: None,
         liveness: SumeragiV2LivenessStatus::default(),
+        beacon_horizon: Some(BeaconHorizonStatusV1 {
+            epoch_length_blocks: 3_600,
+            next_required_pulse_height: Some(context.height + 7),
+            active_session_id: Some([0x5A; 32]),
+            session_covers_next_pulse: true,
+            local_provider_ready: true,
+        }),
     };
     let encoded = status.encode();
     let decoded =
@@ -2310,7 +2317,121 @@ fn status(context: &HeightContext) -> SumeragiV2Status {
         },
         last_commit_qc: None,
         liveness: SumeragiV2LivenessStatus::default(),
+        beacon_horizon: None,
     }
+}
+fn horizon(context: &HeightContext) -> BeaconHorizonStatusV1 {
+    BeaconHorizonStatusV1 {
+        epoch_length_blocks: context.epoch_end_height,
+        next_required_pulse_height: Some(context.epoch_end_height - 1),
+        active_session_id: Some([0x42; 32]),
+        session_covers_next_pulse: true,
+        local_provider_ready: true,
+    }
+}
+#[test]
+fn beacon_horizon_roundtrips_and_reports_blocks_to_pulse() {
+    let context = context(&[1, 1, 1, 1]);
+    let horizon = horizon(&context);
+    let encoded = horizon.encode();
+    assert_eq!(
+        BeaconHorizonStatusV1::decode_all(&mut encoded.as_slice()).expect("decode horizon"),
+        horizon
+    );
+    let json = norito::json::to_json(&horizon).expect("encode horizon JSON");
+    assert_eq!(
+        norito::json::from_str::<BeaconHorizonStatusV1>(&json).expect("decode horizon JSON"),
+        horizon
+    );
+    assert_eq!(horizon.blocks_to_pulse(context.height), Some(98));
+    assert_eq!(horizon.blocks_to_pulse(200), Some(0));
+    let unscheduled = BeaconHorizonStatusV1 {
+        next_required_pulse_height: None,
+        session_covers_next_pulse: false,
+        ..horizon
+    };
+    assert_eq!(unscheduled.blocks_to_pulse(context.height), None);
+    let mut status = status(&context);
+    status.beacon_horizon = Some(horizon);
+    let encoded = status.encode();
+    assert_eq!(
+        SumeragiV2Status::decode_all(&mut encoded.as_slice()).expect("decode status"),
+        status
+    );
+    let mut absent = status.clone();
+    absent.beacon_horizon = None;
+    assert_ne!(
+        absent.encode(),
+        encoded,
+        "the horizon is part of the status wire"
+    );
+}
+#[test]
+fn status_validation_rejects_inconsistent_beacon_horizons() {
+    use SumeragiV2StatusValidationError as Error;
+    let context = context(&[1, 1, 1, 1]);
+    let mut baseline = status(&context);
+    assert_eq!(
+        baseline.validate(),
+        Ok(()),
+        "an unobserved horizon is valid"
+    );
+    baseline.beacon_horizon = Some(horizon(&context));
+    assert_eq!(baseline.validate(), Ok(()));
+    let observer = BeaconHorizonStatusV1 {
+        local_provider_ready: false,
+        ..horizon(&context)
+    };
+    assert_eq!(
+        observer.validate(context.height, ConsensusMode::Npos),
+        Ok(())
+    );
+    let reject = |mutate: fn(&mut BeaconHorizonStatusV1)| {
+        let mut status = baseline.clone();
+        mutate(status.beacon_horizon.as_mut().expect("horizon"));
+        status.validate()
+    };
+    assert_eq!(
+        reject(|horizon| horizon.next_required_pulse_height = Some(0)),
+        Err(Error::InvalidBeaconHorizon),
+        "a pulse cannot precede the active height"
+    );
+    assert_eq!(
+        reject(|horizon| horizon.next_required_pulse_height = None),
+        Err(Error::InvalidBeaconHorizon),
+        "coverage requires a scheduled pulse"
+    );
+    assert_eq!(
+        reject(|horizon| {
+            horizon.active_session_id = None;
+            horizon.session_covers_next_pulse = false;
+        }),
+        Err(Error::InvalidBeaconHorizon),
+        "provider readiness requires an installed session"
+    );
+    assert_eq!(
+        reject(|horizon| horizon.active_session_id = None),
+        Err(Error::InvalidBeaconHorizon),
+        "coverage requires an installed session"
+    );
+    assert_eq!(
+        reject(|horizon| horizon.epoch_length_blocks = 0),
+        Err(Error::InvalidBeaconHorizon),
+        "an NPoS horizon carries its committed epoch length"
+    );
+    let mut permissioned = baseline.clone();
+    permissioned.height_context.mode = ConsensusMode::Permissioned;
+    assert_eq!(permissioned.validate(), Err(Error::InvalidBeaconHorizon));
+    permissioned
+        .beacon_horizon
+        .as_mut()
+        .expect("horizon")
+        .epoch_length_blocks = 0;
+    assert_eq!(permissioned.validate(), Ok(()));
+    assert_eq!(
+        Error::InvalidBeaconHorizon.to_string(),
+        "Sumeragi status beacon horizon is internally inconsistent"
+    );
 }
 #[test]
 #[expect(

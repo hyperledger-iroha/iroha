@@ -1,0 +1,294 @@
+//! Consensus inputs of one Taira height for the SCCP post-execution hook (`specs/sccp.md`
+//! §4.3.2). Owner: ws20 (complete); consumed by ws30.
+//!
+//! The roster rule needs, for the executing height `h`: the consensus mode, the epoch of `h`
+//! and its last height, the voting roster of `h`, and at an epoch boundary the voting roster
+//! of the next epoch. [`SccpHeightInputsV1`] carries exactly these values and is built from one
+//! of two authenticated sources, both deterministic functions of committed consensus state:
+//!
+//! * a Sumeragi v2 frozen [`HeightContext`] ([`SccpHeightInputsV1::from_height_context`]);
+//! * the lag-2 schedule of the Sumeragi core that `irohad` runs
+//!   ([`SccpHeightInputsV1::from_sumeragi_schedule`]). The schedule is World state advanced
+//!   inside the block's output-seal finalizer before the SCCP hook runs, so it holds the
+//!   committees of `h` and `h + 1`, and its chain parameters carry the epoch length.
+//!
+//! The Sumeragi core has no NPoS election epochs yet (`crate::sumeragi::schedule`: both
+//! consensus modes schedule every live validator key). Its epochs are the fixed-length ones of
+//! `specs/sumeragi.md` §11.7: epoch starts are the heights `s` with
+//! `(s − g − 1) mod epoch_length = 0`, where `g` is the genesis height, and the genesis block
+//! belongs to epoch 0. A committee can change at any height there, not only at epoch starts,
+//! so `roster` is the committee of `h` itself and `next_roster` the committee of `h + 1`.
+//! TODO(ws30): §4.3.2 assumes NPoS epochs with `next_epoch_snapshot`; the spec owner must
+//! confirm the Sumeragi-core mapping above (and the `ctx.mode = Npos` requirement of §4.1)
+//! before the roster rule relies on it.
+
+use crate::state::WorldReadOnly;
+use iroha_data_model::{block::consensus_v2::HeightContext, parameter::system::ConsensusMode};
+use iroha_model_base::peer::PeerId;
+
+/// Consensus inputs of one height for the SCCP roster rule (§4.3.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SccpHeightInputsV1 {
+    /// Consensus mode that selected the roster.
+    pub mode: ConsensusMode,
+    /// Executing height `h`.
+    pub height: u64,
+    /// Epoch of `h`.
+    pub epoch: u64,
+    /// Last height of the epoch of `h`; `h` is a boundary iff it equals `height`.
+    pub epoch_end_height: u64,
+    /// Voting roster of `h`, in canonical consensus order.
+    pub roster: Vec<PeerId>,
+    /// Voting roster of the next epoch, present exactly at a boundary.
+    pub next_roster: Option<Vec<PeerId>>,
+}
+
+/// Where block validation takes the SCCP height inputs of the block it executes.
+#[derive(Debug, Clone, Copy)]
+pub enum SccpHeightSourceV1<'context> {
+    /// No consensus authority: a component fixture, or a Sumeragi v2 signed genesis, whose
+    /// height-one context is frozen from its staged state after execution.
+    Unauthenticated,
+    /// The frozen, authenticated Sumeragi v2 height context of the block.
+    V2Context(&'context HeightContext),
+    /// The lag-2 schedule of the Sumeragi core, read after the block advanced it.
+    SumeragiSchedule {
+        /// The chain's genesis height.
+        genesis_height: u64,
+        /// Consensus mode of the chain.
+        mode: ConsensusMode,
+    },
+}
+
+/// Why the Sumeragi schedule does not yield the inputs of a height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SccpHeightInputsError {
+    /// The height precedes the genesis height.
+    #[error("height {height} precedes the genesis height {genesis_height}")]
+    BeforeGenesis {
+        /// Executing height.
+        height: u64,
+        /// Genesis height.
+        genesis_height: u64,
+    },
+    /// The stored schedule has no configuration for a needed height.
+    #[error("the consensus schedule has no configuration for height {0}")]
+    Unscheduled(u64),
+    /// The scheduled epoch length is zero.
+    #[error("the scheduled epoch length of height {0} is zero")]
+    ZeroEpochLength(u64),
+    /// A height does not fit `u64`.
+    #[error("height arithmetic overflows")]
+    Overflow,
+}
+
+impl SccpHeightInputsV1 {
+    /// Build the inputs of a Sumeragi v2 frozen height context.
+    #[must_use]
+    pub fn from_height_context(context: &HeightContext) -> Self {
+        let validators = |roster: &[iroha_data_model::block::consensus_v2::ValidatorPower]| {
+            roster
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect::<Vec<_>>()
+        };
+        Self {
+            mode: context.mode,
+            height: context.height,
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            roster: validators(&context.roster),
+            next_roster: context
+                .next_epoch_snapshot
+                .as_ref()
+                .map(|snapshot| validators(&snapshot.roster)),
+        }
+    }
+
+    /// Build the inputs of `height` from the Sumeragi core's lag-2 schedule in `world`.
+    ///
+    /// `world` must hold the schedule after the block of `height` advanced it, which the SCCP
+    /// hook sees because the schedule step precedes it in the output-seal finalizer.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `height` precedes genesis, the schedule lacks `height` (or `height + 1` at a
+    /// boundary), or the scheduled epoch length is zero.
+    pub fn from_sumeragi_schedule(
+        world: &(impl WorldReadOnly + ?Sized),
+        height: u64,
+        genesis_height: u64,
+        mode: ConsensusMode,
+    ) -> Result<Self, SccpHeightInputsError> {
+        if height < genesis_height {
+            return Err(SccpHeightInputsError::BeforeGenesis {
+                height,
+                genesis_height,
+            });
+        }
+        let schedule = world.consensus_schedule();
+        let current = schedule
+            .get(height)
+            .ok_or(SccpHeightInputsError::Unscheduled(height))?;
+        let epoch_length = current.params.epoch_length_blocks;
+        let (epoch, epoch_end_height) = sumeragi_epoch(height, genesis_height, epoch_length)?;
+        let next_roster = if height == epoch_end_height {
+            let next_height = height
+                .checked_add(1)
+                .ok_or(SccpHeightInputsError::Overflow)?;
+            let next = schedule
+                .get(next_height)
+                .ok_or(SccpHeightInputsError::Unscheduled(next_height))?;
+            Some(next.committee.clone())
+        } else {
+            None
+        };
+        Ok(Self {
+            mode,
+            height,
+            epoch,
+            epoch_end_height,
+            roster: current.committee.clone(),
+            next_roster,
+        })
+    }
+
+    /// Return whether the height is the last one of its epoch (§4.3.2 boundary).
+    #[must_use]
+    pub fn is_boundary(&self) -> bool {
+        self.height == self.epoch_end_height
+    }
+}
+
+/// Return `(epoch, epoch_end_height)` of `height` for fixed-length Sumeragi-core epochs of
+/// `epoch_length` heights after the genesis height (`specs/sumeragi.md` §11.7). The genesis
+/// block and the first `epoch_length` heights after it form epoch 0.
+///
+/// # Errors
+///
+/// Fails on a zero epoch length, a height below genesis or an unrepresentable epoch end.
+pub fn sumeragi_epoch(
+    height: u64,
+    genesis_height: u64,
+    epoch_length: u64,
+) -> Result<(u64, u64), SccpHeightInputsError> {
+    if epoch_length == 0 {
+        return Err(SccpHeightInputsError::ZeroEpochLength(height));
+    }
+    if height < genesis_height {
+        return Err(SccpHeightInputsError::BeforeGenesis {
+            height,
+            genesis_height,
+        });
+    }
+    let first = genesis_height
+        .checked_add(1)
+        .ok_or(SccpHeightInputsError::Overflow)?;
+    let epoch = height.saturating_sub(first) / epoch_length;
+    let end = epoch
+        .checked_add(1)
+        .and_then(|epochs| epochs.checked_mul(epoch_length))
+        .and_then(|offset| genesis_height.checked_add(offset))
+        .ok_or(SccpHeightInputsError::Overflow)?;
+    Ok((epoch, end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        smartcontracts::isi::sccp::test_support::{blank_state, header, peer},
+        sumeragi::schedule::{ChainParamsRecord, ConsensusSchedule, ScheduledConfig},
+    };
+
+    fn config(committee: Vec<PeerId>, epoch_length: u64) -> ScheduledConfig {
+        ScheduledConfig {
+            height: 0,
+            committee,
+            params: ChainParamsRecord {
+                epoch_length_blocks: epoch_length,
+                ..ChainParamsRecord::default()
+            },
+        }
+    }
+
+    #[test]
+    fn sumeragi_epochs_start_after_genesis_and_have_fixed_length() {
+        assert_eq!(sumeragi_epoch(1, 1, 4), Ok((0, 5)), "genesis is in epoch 0");
+        assert_eq!(sumeragi_epoch(2, 1, 4), Ok((0, 5)));
+        assert_eq!(
+            sumeragi_epoch(5, 1, 4),
+            Ok((0, 5)),
+            "the boundary of epoch 0"
+        );
+        assert_eq!(sumeragi_epoch(6, 1, 4), Ok((1, 9)));
+        assert_eq!(sumeragi_epoch(9, 1, 4), Ok((1, 9)));
+        assert_eq!(sumeragi_epoch(2, 1, 1), Ok((0, 2)));
+        assert_eq!(sumeragi_epoch(3, 1, 1), Ok((1, 3)));
+        assert_eq!(
+            sumeragi_epoch(3, 1, 0),
+            Err(SccpHeightInputsError::ZeroEpochLength(3))
+        );
+        assert_eq!(
+            sumeragi_epoch(0, 1, 4),
+            Err(SccpHeightInputsError::BeforeGenesis {
+                height: 0,
+                genesis_height: 1
+            })
+        );
+        assert_eq!(
+            sumeragi_epoch(u64::MAX, 1, u64::MAX),
+            Err(SccpHeightInputsError::Overflow)
+        );
+    }
+
+    #[test]
+    fn schedule_inputs_carry_the_next_committee_only_at_a_boundary() {
+        let state = blank_state();
+        let mut block = state.block(header(4));
+        let committee = |seeds: &[u8]| seeds.iter().map(|seed| peer(*seed)).collect::<Vec<_>>();
+        *block.world.consensus_schedule.get_mut() = ConsensusSchedule::genesis(
+            4,
+            [
+                config(committee(&[1, 2, 3, 4]), 4),
+                config(committee(&[1, 2, 3, 5]), 4),
+                config(committee(&[1, 2, 3, 6]), 4),
+            ],
+        );
+        let inner =
+            SccpHeightInputsV1::from_sumeragi_schedule(&block.world, 4, 1, ConsensusMode::Npos)
+                .expect("scheduled height");
+        assert_eq!(
+            inner,
+            SccpHeightInputsV1 {
+                mode: ConsensusMode::Npos,
+                height: 4,
+                epoch: 0,
+                epoch_end_height: 5,
+                roster: committee(&[1, 2, 3, 4]),
+                next_roster: None,
+            }
+        );
+        assert!(!inner.is_boundary());
+        let boundary = SccpHeightInputsV1::from_sumeragi_schedule(
+            &block.world,
+            5,
+            1,
+            ConsensusMode::Permissioned,
+        )
+        .expect("scheduled boundary");
+        assert!(boundary.is_boundary());
+        assert_eq!(boundary.roster, committee(&[1, 2, 3, 5]));
+        assert_eq!(boundary.next_roster, Some(committee(&[1, 2, 3, 6])));
+        assert_eq!(
+            SccpHeightInputsV1::from_sumeragi_schedule(&block.world, 7, 1, ConsensusMode::Npos),
+            Err(SccpHeightInputsError::Unscheduled(7))
+        );
+        assert_eq!(
+            SccpHeightInputsV1::from_sumeragi_schedule(&block.world, 6, 1, ConsensusMode::Npos)
+                .map(|inputs| inputs.next_roster),
+            Ok(None),
+            "the first height of epoch 1 is no boundary"
+        );
+    }
+}

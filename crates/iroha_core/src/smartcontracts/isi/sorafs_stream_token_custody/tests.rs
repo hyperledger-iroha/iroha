@@ -32,14 +32,12 @@ struct Fixture {
     policy: SignerCustodyPolicyV1,
     attester: KeyPair,
 }
-fn fixture() -> Fixture {
-    let authority = AccountId::new(key(1).public_key().clone());
-    let other = AccountId::new(key(2).public_key().clone());
-    let provider = ProviderId::new([3; 32]);
+/// The fixture's accounts, custody manager permission and provider owner.
+fn fixture_world(authority: &AccountId, other: &AccountId, provider: ProviderId) -> World {
     let mut world = World::new();
-    for account in [&authority, &other] {
+    for account in [authority, other] {
         let (id, value) = Account::new(account.clone())
-            .build(&authority)
+            .build(authority)
             .into_key_value();
         world.accounts.insert(id, value);
     }
@@ -51,8 +49,14 @@ fn fixture() -> Fixture {
         .account_permissions
         .insert(authority.clone(), permissions);
     world.provider_owners.insert(provider, authority.clone());
+    world
+}
+fn fixture() -> Fixture {
+    let authority = AccountId::new(key(1).public_key().clone());
+    let other = AccountId::new(key(2).public_key().clone());
+    let provider = ProviderId::new([3; 32]);
     let state = State::new_with_chain_and_network_id_for_testing(
-        world,
+        fixture_world(&authority, &other, provider),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
         SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),

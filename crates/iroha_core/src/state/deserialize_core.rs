@@ -586,6 +586,7 @@ impl KuraSeed {
             "soradns_rotation_policy",
             "soradns_last_publish_ms",
             "soradns_history_len",
+            "sccp",
             "commit_topology",
             "prev_commit_topology",
             "lane_consensus_contexts",
@@ -621,6 +622,7 @@ impl KuraSeed {
             "soradns_rotation_policy",
             "soradns_last_publish_ms",
             "soradns_history_len",
+            "sccp",
             "commit_topology",
             "prev_commit_topology",
             "lane_consensus_contexts",
@@ -764,6 +766,11 @@ impl KuraSeed {
             soradns_last_publish_ms: take_required(&mut map, "soradns_last_publish_ms")?,
             soradns_history_len: take_required(&mut map, "soradns_history_len")?,
         }
+        .restore(&mut world)?;
+        take_required::<sccp_snapshot_state::SnapshotSccpState>(
+            &mut map,
+            sccp_snapshot_state::SCCP_SNAPSHOT_MEMBER,
+        )?
         .restore(&mut world)?;
         let canonical_runtime: Cell<SnapshotNexusRuntime> =
             take_required(&mut map, "nexus_runtime")?;

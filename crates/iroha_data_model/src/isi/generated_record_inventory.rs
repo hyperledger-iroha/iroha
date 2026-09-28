@@ -880,6 +880,56 @@ record!(
     "iroha_data_model::isi::rwa::UnfreezeRwa"
 );
 record!(
+    sccp_advance_sccp_light_client_v1,
+    crate::isi::sccp::AdvanceSccpLightClientV1,
+    "iroha_data_model::isi::sccp::AdvanceSccpLightClientV1"
+);
+record!(
+    sccp_initialize_sccp_v1,
+    crate::isi::sccp::InitializeSccpV1,
+    "iroha_data_model::isi::sccp::InitializeSccpV1"
+);
+record!(
+    sccp_record_sccp_message,
+    crate::isi::sccp::RecordSccpMessage,
+    "iroha_data_model::isi::sccp::RecordSccpMessage"
+);
+record!(
+    sccp_report_sccp_light_client_equivocation_v1,
+    crate::isi::sccp::ReportSccpLightClientEquivocationV1,
+    "iroha_data_model::isi::sccp::ReportSccpLightClientEquivocationV1"
+);
+record!(
+    sccp_set_sccp_bridge_key_v1,
+    crate::isi::sccp::SetSccpBridgeKeyV1,
+    "iroha_data_model::isi::sccp::SetSccpBridgeKeyV1"
+);
+record!(
+    sccp_settle_sccp_v1,
+    crate::isi::sccp::SettleSccpV1,
+    "iroha_data_model::isi::sccp::SettleSccpV1"
+);
+record!(
+    sccp_submit_sccp_attestation_fault_v1,
+    crate::isi::sccp::SubmitSccpAttestationFaultV1,
+    "iroha_data_model::isi::sccp::SubmitSccpAttestationFaultV1"
+);
+record!(
+    sccp_submit_sccp_attestations_v1,
+    crate::isi::sccp::SubmitSccpAttestationsV1,
+    "iroha_data_model::isi::sccp::SubmitSccpAttestationsV1"
+);
+record!(
+    sccp_submit_sccp_inbound_message_v1,
+    crate::isi::sccp::SubmitSccpInboundMessageV1,
+    "iroha_data_model::isi::sccp::SubmitSccpInboundMessageV1"
+);
+record!(
+    sccp_submit_sccp_outbound_void_v1,
+    crate::isi::sccp::SubmitSccpOutboundVoidV1,
+    "iroha_data_model::isi::sccp::SubmitSccpOutboundVoidV1"
+);
+record!(
     settlement_dvp_isi,
     crate::isi::settlement::DvpIsi,
     "iroha_data_model::isi::settlement::DvpIsi"

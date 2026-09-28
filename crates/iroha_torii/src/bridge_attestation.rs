@@ -452,6 +452,7 @@ mod tests {
             },
             last_commit_qc: None,
             liveness: SumeragiV2LivenessStatus::default(),
+            beacon_horizon: None,
         }
     }
     #[test]

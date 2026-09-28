@@ -296,6 +296,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push(':');
     snapshot_storage::serialize(&state.world.space_directory_manifests, out);
     crate::state::snapshot_service_state::serialize(&state.world, out);
+    crate::state::sccp_snapshot_state::serialize(&state.world, out);
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
@@ -374,6 +375,7 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(':');
     snapshot_storage::serialize_block(&world.space_directory_manifests, out);
     crate::state::snapshot_service_state::serialize_block(world, out);
+    crate::state::sccp_snapshot_state::serialize_block(world, out);
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');

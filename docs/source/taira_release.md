@@ -265,17 +265,18 @@ the shipping binary table with Cargo manifests and the early compilation targets
 Configuration library and integration tests, CLI, SDK, Torii, crypto, P2P, Core, proof and fixture harnesses,
 including all four shipping entry points, then share one Cargo invocation,
 resolving the union of their existing default features. Configuration runs first
-and fails immediately, including when an independent-test checkpoint can be reused.
-Core, Torii and daemon startup recovery checks run next; failures are collected
-across those startup groups before stopping, without running CLI or network tests.
-After these prerequisites pass, a separate `cargo check` selects only the four
-authoritative shipping binaries with their default features. It uses the same warm
-target, tool environment and locks, without a test profile or dev-feature injection.
-Cargo library artifact events must also exclude Core's `iroha-core-tests` and
-Torii's `test-fixtures`, including accidental default or normal-dependency opt-ins.
-Production metadata errors stop before CLI and long independent tests. This check
-reruns even when the independent-test checkpoint is reused and supplies no test or
-artifact qualification; the later shipping build and network checks remain required.
+and fails immediately, including when a native-check checkpoint can be reused.
+MV ownership, pending-Kura recovery, and Core, Torii and daemon startup checks run
+next; failures are collected across the startup groups before stopping, without
+running CLI or network tests. The priority CLI reset-scope control and Torii
+admission groups follow and report their combined failures. This passed prefix is
+recorded in `pre-network-checks.json` before shipping codegen. The four-peer
+fixture's shipping build then selects the authoritative shipping binaries with
+their default features, in the same warm target, tool environment and locks,
+without a test profile or dev-feature injection. Its Cargo library artifact events
+must exclude Core's `iroha-core-tests` and Torii's `test-fixtures`, including
+accidental default or normal-dependency opt-ins, before any peer starts. This audit
+and the four-peer fixture rerun on every attempt, including checkpoint reuse.
 These include bounded regressions for failure reporting and worker teardown under
 a held lifecycle operation, plus retained-output recovery through real actor admission.
 Live Decision cleanup also exercises the shared runner reconciliation after an idle
@@ -284,9 +285,11 @@ Recovered Decision Fetch checks run real periodic runtime turns before the signe
 response arrives and while its persistence is queued, then complete Store,
 Validate and the cold Apply handoff. An exact retry retains the original request
 owner; unrelated or unauthenticated work cannot claim its coordinates.
-CLI and the canonical Kagami projection checks then precede the proof, crypto,
-transport, consensus and fixture selections. Every independent failure stops
-before daemon startup. Shipping targets without selected tests provide actual
+After the four-peer fixture, the remaining CLI batch, the canonical Kagami
+projection, proof, crypto, transport, consensus and fixture selections run and
+report their combined failures. Only then does preparation record the complete
+census in `independent-checks.json`. Test copies whose selected census already
+completed are released before shipping codegen. Shipping targets without selected tests provide actual
 compilation evidence, with no invented test passes. The native production build
 uses the same four shipping packages and binaries, plus the ordinary `iroha3d`
 fixture launcher; the four-peer test continues to launch that ordinary binary.
@@ -303,6 +306,12 @@ recorded inputs still match the fixed signed source capture and tools, and resum
 
 - Completed native checks are reused for those exact inputs unless foreign
   local-package fingerprints had to be retired.
+- After a shipping-build, capacity or four-peer failure, the exact passed
+  pre-network prefix is reused: configuration, shipping codegen, the four-peer
+  fixture and the deferred census run again. A complete independent pass is
+  reused only with its exact census and copied test artifacts. A changed census
+  or artifact retires the affected checkpoint into the new attempt before any
+  selected test reruns; fingerprint retirement retires all three.
 - A failed or interrupted build runs Cargo again in the same warm target. Cargo
   reuses its cache; each attempt gets a fresh private log and capture directory.
 - A completed read-only capture is revalidated and reused without running checks
@@ -329,8 +338,9 @@ observe a remote guest's sparse backing disk. Run the deployment capacity check
 below on the guest and its backing host. No cache or output is deleted
 automatically, and the warm Cargo target is never replaced with a new lane.
 
-The output directory contains read-only `request.json`, `checks.json`, and
-`result.json`, a persistent private `session.lock`, and numbered `attempts/`
+The output directory contains read-only `request.json`, `pre-network-checks.json`,
+`independent-checks.json`, `checks.json`, and `result.json`, a persistent private
+`session.lock`, and numbered `attempts/`
 directories. Failed attempt logs and partial captures stay available. Successful
 captures contain four 0500 executables and a 0400 `capture.json`; its artifact paths
 are returned in `result.json`. The successful attempt, capture and top-level output

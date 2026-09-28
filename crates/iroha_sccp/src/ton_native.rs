@@ -12,11 +12,11 @@
 //! terminated shard ids only after decoding their exact wire representation.
 
 //!
-//! TODO(ws3A): the governed masterchain anchor (with its BLAKE2b hash), the anchor-based
+//! TODO(ws3A): the governed masterchain anchor (with its `BLAKE2b` hash), the anchor-based
 //! 64-block continuation, the proof work estimates, the mint-breaker observation and its
 //! deployment readbacks, and the retired SCCP event and payload binding were cut. The v1 TON
 //! light client (`light_client::ton`) rebuilds key-block hops, `OldMcBlocksInfo` back-links and
-//! the shard walk from the BoC, cell, TL, signature and transaction primitives kept here.
+//! the shard walk from the `BoC`, cell, TL, signature and transaction primitives kept here.
 #![allow(
     dead_code,
     reason = "TODO(ws3A): the kept TON primitives are rewired by the v1 TON light client"
@@ -106,7 +106,7 @@ const TON_VALIDATOR_SET_KEY_BITS: u16 = 16;
 
 /// Maximum post-anchor masterchain blocks accepted by one TON proof.
 pub const TON_NATIVE_MAX_MASTERCHAIN_BLOCKS_V1: usize = TON_MAX_MASTERCHAIN_BLOCKS;
-/// Maximum bytes accepted for any individual proof BoC.
+/// Maximum bytes accepted for any individual proof `BoC`.
 pub const TON_NATIVE_MAX_BOC_BYTES_V1: usize = TON_MAX_BOC_BYTES;
 
 /// Native TON extended block identifier.
@@ -325,7 +325,7 @@ pub struct TonMasterchainBlockProofV1 {
     /// Native block identifier signed by validators.
     pub block_id: TonBlockIdExtV1,
     /// Canonical checksum-free, unindexed, minimal-width complete or
-    /// Merkle-pruned BoC rooted at `block_id.root_hash`.
+    /// Merkle-pruned `BoC` rooted at `block_id.root_hash`.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub block_proof_boc: Vec<u8>,
     /// Native final signatures for this exact `BlockIdExt`.
@@ -349,7 +349,7 @@ pub struct TonShardEventProofV1 {
     /// Shard block selected by the finalized masterchain `ShardHashes` tree.
     pub shard_block_id: TonBlockIdExtV1,
     /// Canonical checksum-free, unindexed, minimal-width complete or
-    /// Merkle-pruned shard-block BoC.
+    /// Merkle-pruned shard-block `BoC`.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub shard_block_proof_boc: Vec<u8>,
     /// Canonical Merkle proof rooted at the selected transaction's pre-state
@@ -383,10 +383,14 @@ pub struct TonShardEventProofV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_sccp::ton_native::TonAccountStateOpeningV1")]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the shard-prefixed field names are the canonical Norito JSON keys"
+)]
 pub struct TonAccountStateOpeningV1 {
     /// Shard block selected from the finalized masterchain `ShardHashes` tree.
     pub shard_block_id: TonBlockIdExtV1,
-    /// Canonical complete or Merkle-pruned shard-block BoC.
+    /// Canonical complete or Merkle-pruned shard-block `BoC`.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub shard_block_proof_boc: Vec<u8>,
     /// Canonical account opening rooted at the shard block's post-state.
@@ -411,7 +415,7 @@ pub enum TonNativeSourceError {
     AnchorHashMismatch,
     /// Proof framing exceeded a deterministic resource cap.
     ResourceLimit,
-    /// A BoC was malformed, noncanonical, unsupported, or not rooted as claimed.
+    /// A `BoC` was malformed, noncanonical, unsupported, or not rooted as claimed.
     InvalidBoc,
     /// A masterchain block did not extend the authenticated checkpoint.
     BrokenMasterchainLink,
@@ -652,7 +656,7 @@ fn push_tl_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
     if len < 254 {
         out.push(u8::try_from(len).ok()?);
         out.extend_from_slice(bytes);
-        while out.len() % 4 != 0 {
+        while !out.len().is_multiple_of(4) {
             out.push(0);
         }
         return Some(());
@@ -665,7 +669,7 @@ fn push_tl_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
     out.push(u8::try_from((len >> 8) & 0xff).ok()?);
     out.push(u8::try_from((len >> 16) & 0xff).ok()?);
     out.extend_from_slice(bytes);
-    while out.len() % 4 != 0 {
+    while !out.len().is_multiple_of(4) {
         out.push(0);
     }
     Some(())
@@ -1162,6 +1166,10 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear canonical BoC header and cell-table parser"
+)]
 fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     if bytes.len() < 6 || bytes.len() > TON_MAX_BOC_BYTES || bytes.get(..4)? != TON_BOC_MAGIC {
         return None;
@@ -1441,10 +1449,10 @@ fn parse_canonical_single_root_boc(bytes: &[u8]) -> Option<(TonBoc, Vec<TonCompu
     Some((boc, computed, root))
 }
 
-/// Derive the authenticated root hash only when a proof BoC has the one
+/// Derive the authenticated root hash only when a proof `BoC` has the one
 /// canonical final-V1 byte representation.
 ///
-/// Canonical proof BoCs are single-root, unindexed, checksum-free, use minimal
+/// Canonical proof `BoC`s are single-root, unindexed, checksum-free, use minimal
 /// integer widths and root index zero, contain no unreachable or duplicate
 /// structural subgraphs, and admit at most one root Merkle-proof wrapper.
 #[must_use]
@@ -1465,6 +1473,10 @@ fn ton_boc_child_for_hash_level(
     ton_child_hash_depth(computed, child_level)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one bottom-up pass computing every level hash and depth per cell"
+)]
 fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
     let empty = TonComputedCell {
         mask: 0,
@@ -1614,14 +1626,14 @@ fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
             let resolved_index =
                 ton_level_mask_hash_index(ton_level_mask_apply(mask, resolved_level));
             if let Some(pruned) = &pruned {
-                if resolved_index != ton_level_mask_hash_index(mask) {
+                if resolved_index == ton_level_mask_hash_index(mask) {
+                    resolved_hashes[usize::from(resolved_level)] = *hashes.first()?;
+                    resolved_depths[usize::from(resolved_level)] = *depths.first()?;
+                } else {
                     resolved_hashes[usize::from(resolved_level)] =
                         *pruned.hashes.get(resolved_index)?;
                     resolved_depths[usize::from(resolved_level)] =
                         *pruned.depths.get(resolved_index)?;
-                } else {
-                    resolved_hashes[usize::from(resolved_level)] = *hashes.first()?;
-                    resolved_depths[usize::from(resolved_level)] = *depths.first()?;
                 }
             } else {
                 resolved_hashes[usize::from(resolved_level)] = *hashes.get(resolved_index)?;
@@ -1692,7 +1704,7 @@ fn ton_proven_root_hash(boc: &TonBoc, computed: &[TonComputedCell], root: usize)
     }
 }
 
-/// Derive the authenticated hash-zero identity of one bounded single-root BoC.
+/// Derive the authenticated hash-zero identity of one bounded single-root `BoC`.
 pub fn ton_boc_single_root_hash_v1(bytes: &[u8]) -> Option<H256> {
     let (boc, computed, root) = parse_single_root_boc(bytes)?;
     ton_proven_root_hash(&boc, &computed, root)
@@ -1780,7 +1792,7 @@ impl TonCanonicalCellBits {
         if self.bit_len >= 1_023 {
             return None;
         }
-        if self.bit_len % 8 == 0 {
+        if self.bit_len.is_multiple_of(8) {
             self.data.push(0);
         }
         if value {
@@ -1828,7 +1840,7 @@ impl TonCanonicalCellBits {
             return None;
         }
         let byte_len = self.bit_len.div_ceil(8);
-        let data_descriptor = if self.bit_len % 8 == 0 {
+        let data_descriptor = if self.bit_len.is_multiple_of(8) {
             byte_len.checked_mul(2)?
         } else {
             *self.data.last_mut()? |= 1 << (7 - self.bit_len % 8);
@@ -2112,6 +2124,10 @@ fn ton_parse_ext_block_ref(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the independent TL-B BlockInfo flag bits"
+)]
 struct TonParsedBlockInfo {
     not_master: bool,
     after_merge: bool,
@@ -2623,7 +2639,7 @@ fn ton_select_masterchain_validator_set(
         }
         indices
             .into_iter()
-            .map(|index| config.validators.get(index).cloned())
+            .map(|index| config.validators.get(index).copied())
             .collect::<Option<Vec<_>>>()?
     } else {
         config.validators.get(..count)?.to_vec()
@@ -2720,8 +2736,7 @@ fn ton_select_shard_descriptor(
         ton_hashmap_ref_value(boc, shard_hashes_root, &address.workchain.to_be_bytes(), 32)?;
     let mut cell_index = bin_tree;
     let mut shard = TON_MASTERCHAIN_SHARD;
-    let mut depth = 0_usize;
-    for _ in 0..=60 {
+    for depth in 0..=60_usize {
         cell_index = ton_virtual_root_index(boc, cell_index)?;
         let cell = boc.cells.get(cell_index)?;
         (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
@@ -2737,7 +2752,6 @@ fn ton_select_shard_descriptor(
         let go_right = ton_key_bit(&address.account, 256, depth)?;
         shard = ton_shard_child(shard, go_right)?;
         cell_index = if go_right { right } else { left };
-        depth += 1;
     }
     None
 }
@@ -3052,13 +3066,15 @@ fn ton_parse_action_phase(
 }
 
 fn ton_skip_bounce_phase(reader: &mut TonBitReader<'_>) -> Option<()> {
-    if reader.read_bit()? {
+    // `tr_phase_bounce_ok$1` carries `StorageUsed` and two `Grams`; `tr_phase_bounce_nofunds$01`
+    // carries `StorageUsed` and one `Grams`; `tr_phase_bounce_negfunds$00` carries nothing.
+    let bounce_ok = reader.read_bit()?;
+    if bounce_ok || reader.read_bit()? {
         ton_skip_storage_used(reader)?;
         ton_skip_grams(reader)?;
-        ton_skip_grams(reader)?;
-    } else if reader.read_bit()? {
-        ton_skip_storage_used(reader)?;
-        ton_skip_grams(reader)?;
+        if bounce_ok {
+            ton_skip_grams(reader)?;
+        }
     }
     Some(())
 }
@@ -3201,7 +3217,7 @@ fn ton_skip_storage_extra_info(reader: &mut TonBitReader<'_>) -> Option<()> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TonLastTransactionLtRequirement {
-    /// AccountStorage records the previous transaction's end LT, while the
+    /// `AccountStorage` records the previous transaction's end LT, while the
     /// current Transaction records that transaction's start LT in
     /// `prev_trans_lt`. The next transaction may begin at the same LT as the
     /// stored end, but never before it.
@@ -3209,7 +3225,7 @@ enum TonLastTransactionLtRequirement {
         previous_start_lt: u64,
         current_start_lt: u64,
     },
-    /// AccountStorage records an end LT strictly after the corresponding
+    /// `AccountStorage` records an end LT strictly after the corresponding
     /// ShardAccount/Transaction start LT.
     After(u64),
 }
@@ -3302,6 +3318,10 @@ fn ton_opaque_ref_hash(boc: &TonBoc, computed: &[TonComputedCell], index: usize)
     ton_opened_original_tree_hash(boc, computed, index).filter(nonzero)
 }
 
+#[expect(
+    clippy::option_option,
+    reason = "outer None is a malformed cell; inner None is an absent dictionary"
+)]
 fn ton_optional_dictionary_root_hash(
     boc: &TonBoc,
     computed: &[TonComputedCell],
@@ -3519,7 +3539,7 @@ mod tests {
                     data[index / 8] |= 1 << (7 - index % 8);
                 }
             }
-            let data_descriptor = if bit_len % 8 == 0 {
+            let data_descriptor = if bit_len.is_multiple_of(8) {
                 byte_len * 2
             } else {
                 data[bit_len / 8] |= 1 << (7 - bit_len % 8);
@@ -3841,11 +3861,11 @@ mod tests {
             file_hash: [0x72; 32],
         };
         for constructor in [0x0a, 0x0b] {
-            for registered_seqno in [0, 1, 16] {
+            for registered_seqno in [0_u32, 1, 16] {
                 let mut bits = TestBits::default();
                 bits.uint(constructor, 4);
                 bits.uint(u64::from(expected.seqno), 32);
-                bits.uint(registered_seqno, 32);
+                bits.uint(u64::from(registered_seqno), 32);
                 bits.uint(42, 64);
                 bits.uint(43, 64);
                 bits.bytes(&expected.root_hash);
@@ -3854,7 +3874,7 @@ mod tests {
                 let mut reader = TonBitReader::new(&cell).expect("shard descriptor cell");
                 assert_eq!(
                     ton_parse_shard_descriptor(&mut reader, expected.workchain, expected.shard),
-                    (registered_seqno != 0).then_some((expected, registered_seqno as u32))
+                    (registered_seqno != 0).then_some((expected, registered_seqno))
                 );
             }
         }
@@ -4021,10 +4041,7 @@ mod tests {
         assert_eq!(simplex_finality_transcript(block, &signatures), None);
 
         let mut boxed_nested = candidate_data;
-        boxed_nested.splice(
-            4..4,
-            TON_BLOCK_ID_EXT_TL_CONSTRUCTOR.to_le_bytes().into_iter(),
-        );
+        boxed_nested.splice(4..4, TON_BLOCK_ID_EXT_TL_CONSTRUCTOR.to_le_bytes());
         assert_eq!(parse_simplex_candidate_data(&boxed_nested), None);
     }
 
@@ -4111,6 +4128,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one golden walk over the complete Tolk StateInit fixture"
+    )]
     fn final_tolk_stateinit_golden_matches_rust_hash_depth_binding() {
         fn field<'a>(value: &'a norito::json::Value, key: &str) -> &'a norito::json::Value {
             value

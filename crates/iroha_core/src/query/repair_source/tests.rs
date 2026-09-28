@@ -1,4 +1,4 @@
-//! Live repair-source reads over native admission/lease transitions and retained four-peer QCs.
+//! Live repair-source reads over native admission/lease transitions on a certified chain.
 //! The admission fixture bypasses Parliament only for setup; these tests do not qualify enactment.
 use super::*;
 use crate::smartcontracts::{
@@ -288,12 +288,15 @@ fn source_requires_the_current_and_original_floor_durable_qcs() {
         } else {
             fixture.admission.state.view().height() as u64
         };
-        let path = fixture
+        // The certified frame (block and commit certificate) is no longer held.
+        fixture
             .admission
             .state
             .kura()
-            .v2_finality_artifact_path_for_testing(height);
-        std::fs::remove_file(path).unwrap();
+            .force_hash_only_block_for_testing(
+                std::num::NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap(),
+            )
+            .unwrap();
         assert!(
             fixture
                 .authorize(&fixture.request, (NOW + 3) * 1000)

@@ -5,6 +5,7 @@
   "error.logger": "Ko ṣeeṣe lati bẹrẹ eto ìkọrọ̀ọ̀rọ̀",
   "error.start": "A ko le bẹrẹ Iroha",
   "error.run": "Aṣiṣe ṣẹlẹ nigba ṣiṣe Iroha",
+  "error.check_storage": "Kura (àgbàlá ìpamọ́ bulọọki) kùnà nínú àyẹ̀wò ìpamọ́ kíkà-nìkan",
   "error.start_p2p": "Ko ṣeeṣe lati bẹrẹ nẹ́tíwọ́ọ̀kì P2P",
   "error.init_kura": "Ko ṣeeṣe lati bẹrẹ Kura (àgbàlá ìpamọ́ bulọọki)",
   "error.start_dev_telemetry": "Ko ṣeeṣe lati bẹrẹ iṣẹ telemetry idagbasoke",

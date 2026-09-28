@@ -5,6 +5,7 @@
   "error.logger": "Janiw logger qalltañjamäkiti",
   "error.start": "Iroha qalltañax janiw atipkanti",
   "error.run": "Pantjasiwix Iroha ukan t’ijtäwipanx utjawayi",
+  "error.check_storage": "Kura (bloque almacenamiento) uñakipäwix janiw walikïkiti",
   "error.start_p2p": "Janiw red de peer-to-peer ukax qalltañjamäkiti",
   "error.init_kura": "Kura (bloque almacenamiento) ukax janiw qalltañjamäkiti .",
   "error.start_dev_telemetry": "Janiw dev telemetría servicio qalltañjamäkiti",

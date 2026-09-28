@@ -89,19 +89,16 @@ fn native_checkpoint_competing_successors_have_exactly_one_winner() {
     store.compare_and_swap_latest(None, &first).unwrap();
     let next = [record(Some(&first), 2), record(Some(&first), 3)];
     let barrier = Arc::new(std::sync::Barrier::new(2));
-    let handles = next
-        .iter()
-        .cloned()
-        .map(|next| {
-            let store = Arc::clone(&store);
-            let barrier = Arc::clone(&barrier);
-            let revision = first.revision;
-            std::thread::spawn(move || {
-                barrier.wait();
-                store.compare_and_swap_latest(Some(revision), &next)
-            })
+    // Both writers are spawned before either is joined, so they race on the same revision.
+    let handles = next.clone().map(|next| {
+        let store = Arc::clone(&store);
+        let barrier = Arc::clone(&barrier);
+        let revision = first.revision;
+        std::thread::spawn(move || {
+            barrier.wait();
+            store.compare_and_swap_latest(Some(revision), &next)
         })
-        .collect::<Vec<_>>();
+    });
     let successes = handles
         .into_iter()
         .map(|handle| handle.join().unwrap().is_ok())

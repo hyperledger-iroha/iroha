@@ -1785,6 +1785,7 @@ fn sample_status() -> Status {
             dpn_validator_release_commit: "feedface".to_owned(),
             cargo_features: "telemetry,zk-halo2".to_owned(),
             target_triple: "aarch64-apple-darwin".to_owned(),
+            wire_schema_hash: "ab".repeat(32),
         },
         observed_at_ms: 1_234_999,
         peers: 4,
@@ -2055,7 +2056,8 @@ fn serialize_status_json() {
             "git_commit_sha": "deadbeef",
             "dpn_validator_release_commit": "feedface",
             "cargo_features": "telemetry,zk-halo2",
-            "target_triple": "aarch64-apple-darwin"
+            "target_triple": "aarch64-apple-darwin",
+            "wire_schema_hash": "abababababababababababababababababababababababababababababababab"
         },
         "observed_at_ms": 1_234_999,
         "peers": 4,

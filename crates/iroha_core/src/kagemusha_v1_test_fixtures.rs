@@ -1,5 +1,9 @@
 //! Deterministic, non-shipping Kagemusha V1 consensus fixtures.
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::isi::kagemusha_v1::{
+    KagemushaMintFinalityAuthorityGenerationTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+};
 use iroha_data_model::{
     NetworkId,
     block::consensus_v2::ValidatorPower,
@@ -11,10 +15,7 @@ use iroha_data_model::{
 #[cfg(test)]
 use iroha_data_model::{
     block::consensus_v2::SumeragiV2GenesisContextParameters,
-    isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
-    },
+    isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
 };
 
 /// Build actual paired-Pasta keys for one immutable generation, independent of election epoch.
@@ -116,7 +117,7 @@ pub(crate) fn mint_finality_successor_authorization(
 }
 
 /// Build a real networkless signed-genesis template aligned with `roster`.
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn mint_finality_authority_template(
     generation: u64,
     roster: &[ValidatorPower],
@@ -137,7 +138,7 @@ pub(crate) fn mint_finality_authority_template(
 }
 
 /// Build mandatory signed Kagemusha genesis parameters for a closed roster.
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn mint_finality_genesis_parameters(
     roster: &[ValidatorPower],
 ) -> KagemushaMintFinalityGenesisParametersV1 {

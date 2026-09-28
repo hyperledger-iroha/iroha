@@ -4,7 +4,9 @@
 ``up`` requires an explicit owner-only Inrou guest-canary workspace, builds the
 current Kagami, fixed-FD Taira daemon, CLI, and SoraFS node; asks Kagami
 for a fresh four-validator NPoS Nexus network using the canonical Taira chain
-id; validates all four configs; starts the peers; and proves finality with one
+id; seats the SORA Parliament in genesis (sixteen citizens under the
+recommended ``[gov]`` profile, refusing a network that cannot seat every body);
+validates all four configs; starts the peers; and proves finality with one
 signed ``iroha tx ping`` submission followed by the typed transaction-status
 waiter.
 The generated profile enables the sole first-release Inrou backend, one
@@ -23,6 +25,8 @@ qualification record. ``check`` additionally revalidates the retained input,
 stage, qualifying CLI/source/target identity, account-signed service status,
 manifest hashes, and all four routed identities without submitting a mutation
 or ping.
+``citizens`` acts for the genesis citizens (invitation responses,
+endorsements and timed-OVN ballots) through their generated client configs.
 The generated network lives in one marked directory and is replaced on the
 next ``up``.  There is no release authority, promotion state, evidence bundle,
 soak, or rollback workflow.
@@ -523,6 +527,22 @@ CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "iroha",
         ("tx", "status"),
         ("--hash", "--wait", "--timeout-ms", "--poll-interval-ms"),
+    ),
+    (
+        "iroha",
+        ("taira", "seat-parliament"),
+        ("--localnet-dir", "--citizens", "--fee-float", "--sccp-proposer-public-key"),
+    ),
+    (
+        "kagami",
+        ("genesis", "sign"),
+        (
+            "--private-key-file",
+            "--config",
+            "--out-file",
+            "--bound-manifest-out",
+            "--expected-hash-out",
+        ),
     ),
 )
 INROU_CANARY_CLI_SURFACES: tuple[
@@ -2619,6 +2639,868 @@ def generate_network(
         cwd=REPO_ROOT,
         timeout=None,
         capture_output=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# SORA Parliament seating (specs/sccp.md §4.14.5, §4.18)
+#
+# The Parliament is the only SCCP governance authority, so every devnet seats
+# it in genesis. ``iroha taira seat-parliament`` copies the canonical Taira
+# ``[gov]``/``[torii.faucet]`` seating keys into every generated validator
+# config, generates the citizen keys in the owner-only network workspace and
+# appends each citizen's account, bond plus fee float and ``RegisterCitizen``
+# to the unsigned genesis; ``kagami genesis sign`` then re-binds and re-signs
+# genesis. This script refuses a network whose profile or citizens cannot seat
+# every body, and acts for the citizens (invitation responses, endorsements and
+# timed-OVN ballots) through ``iroha gov parliament`` with each citizen's own
+# generated client config.
+# TODO(ws42): run the SCCP Parliament driver (`iroha sccp governance drive`)
+# for the devnet once it exists; until then attempts are driven by hand.
+# ---------------------------------------------------------------------------
+
+PARLIAMENT_GENESIS_CITIZENS = 16
+PARLIAMENT_FEE_FLOAT_XOR = "1000"
+PARLIAMENT_CITIZEN_DIRECTORY = Path("runtime") / "taira-parliament-citizens"
+PARLIAMENT_CITIZEN_MANIFEST = "citizens.json"
+PARLIAMENT_CITIZEN_MANIFEST_SCHEMA = "iroha.taira.parliament-citizens.v1"
+PARLIAMENT_SEAT_REPORT_SCHEMA = "iroha.taira.parliament-seating.v1"
+# Re-signing publishes the seated identity here before it replaces genesis.expected_hash.
+PARLIAMENT_NEXT_IDENTITY_FILE = "genesis.expected_hash.next"
+PARLIAMENT_BOND_FAUCET_CLAIMS = 40
+PARLIAMENT_MARGIN_FREE_POLICY_JURY = 20
+PARLIAMENT_CONFIRMATION_JURY_OUTSIDE_POLICY_JURY = 3
+PARLIAMENT_HIDDEN_BALLOT_ANONYMITY = 3
+PARLIAMENT_PUBLIC_BODY_KEYS = (
+    "rules_committee_size",
+    "agenda_council_size",
+    "interest_panel_size",
+    "review_panel_size",
+    "coordination_council_size",
+    "mpc_committee_size",
+    "fma_committee_size",
+    "oversight_committee_size",
+)
+PARLIAMENT_BODIES = (
+    "rules-committee",
+    "agenda-council",
+    "interest-panel",
+    "review-panel",
+    "coordination-council",
+    "mpc-committee",
+    "fma-committee",
+    "oversight-committee",
+    "policy-jury",
+    "confirmation-jury",
+)
+PARLIAMENT_BALLOT_CHOICES = ("approve", "reject", "abstain")
+# Citizens act only through `iroha gov parliament` (specs/sccp.md §4.14.5 Tooling);
+# each helper proves the compiled CLI exposes the documented command and options
+# before acting, so a build without them fails with one clear error.
+PARLIAMENT_CITIZEN_COMMANDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "respond-invitation": (
+        ("gov", "parliament", "respond-invitation"),
+        ("--governance-attempt-id", "--election-attempt-id", "--body", "--decision"),
+    ),
+    "endorse": (
+        ("gov", "parliament", "endorse"),
+        ("--governance-attempt-id", "--body-instance-id", "--result-root"),
+    ),
+    "ballot-anchor": (("gov", "parliament", "ballot", "anchor"), ("--height",)),
+    "ballot-register": (
+        ("gov", "parliament", "ballot", "register"),
+        (
+            "--ballot-attempt-id",
+            "--key-file",
+            "--state-file",
+            "--trusted-checkpoint-height",
+            "--trusted-checkpoint-context-id",
+        ),
+    ),
+    "ballot-cast": (
+        ("gov", "parliament", "ballot", "cast"),
+        ("--ballot-attempt-id", "--choice", "--key-file", "--state-file", "--record-out"),
+    ),
+    "ballot-relay": (
+        ("gov", "parliament", "ballot", "relay"),
+        ("--ballot-attempt-id", "--record"),
+    ),
+    "ballot-dropout": (("gov", "parliament", "ballot", "dropout"), ("--ballot-attempt-id",)),
+    "ballot-status": (
+        ("gov", "parliament", "ballot", "status"),
+        ("--governance-attempt-id", "--ballot-attempt-id"),
+    ),
+}
+_LOWER_HEX32_RE = re.compile(r"[0-9a-f]{64}")
+# The canonical profile's sample `[gov]` accounts (among them the Taira form of
+# the default governance account Kagami renders) are controlled by keys that
+# ship in this repository. `iroha taira seat-parliament` replaces the
+# citizenship escrow with a fresh one whose key it discards, and a devnet that
+# keeps a sample escrow is refused (anyone could drain the bonds). The native
+# command applies the complete published-key check.
+_TAIRA_CANONICAL_GOV = tomllib.loads(
+    (REPO_ROOT / "configs/soranexus/taira/config.toml").read_text(encoding="utf-8")
+)["gov"]
+PARLIAMENT_PUBLISHED_ESCROW_ACCOUNTS = frozenset(
+    value
+    for key, value in _TAIRA_CANONICAL_GOV.items()
+    if key.endswith("_account") and isinstance(value, str)
+)
+
+
+@dataclass(frozen=True)
+class ParliamentSeatingProfile:
+    """Consensus seating values of one seated validator config."""
+
+    public_bodies: tuple[tuple[str, int], ...]
+    policy_jury_size: int
+    confirmation_jury_size: int
+    max_corpus_entries: int
+    registration_phase_blocks: int
+    survivor_freeze_phase_blocks: int
+    citizenship_bond: Fraction
+    faucet_amount: Fraction | None
+    faucet_adaptive: tuple[int, int, int] | None
+    faucet_max_anchor_age: int | None = None
+    citizenship_escrow_account: str | None = None
+
+
+def faucet_burst_cost(
+    max_anchor_age: int, lookback: int, per_extra_bit: int, max_extra_bits: int, claims: int
+) -> int:
+    """Cost of the cheapest ``claims``-claim faucet burst, in base-difficulty proofs.
+
+    Torii counts the claims in the ``lookback`` blocks ending at the claimant-chosen
+    anchor and accepts anchors up to ``max_anchor_age`` blocks old, so a burst of
+    one claim per block pinned to the oldest accepted anchor counts only the claims
+    older than the anchor age. A flat faucet costs exactly ``claims``.
+    """
+
+    total = 0
+    for claim in range(claims):
+        counted = min(max(0, claim - max_anchor_age), lookback)
+        extra = min(counted // per_extra_bit, max_extra_bits) if per_extra_bit else 0
+        total += 1 << extra
+    return total
+
+
+def _seating_integer(table: Any, key: str, label: str) -> int:
+    value = table.get(key) if isinstance(table, dict) else None
+    if type(value) is not int or value < 0:
+        fail(f"{label} must set `{key}` explicitly as a non-negative integer")
+    return value
+
+
+def _seating_decimal(table: Any, key: str, label: str) -> Fraction:
+    value = table.get(key) if isinstance(table, dict) else None
+    if type(value) is int and value >= 0:
+        return Fraction(value)
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"(0|[1-9][0-9]*)(\.[0-9]{1,9})?", value) is None
+    ):
+        fail(f"{label} must set `{key}` explicitly as a canonical XOR decimal")
+    return Fraction(value)
+
+
+def parliament_seating_profile(config: dict[str, Any], label: str) -> ParliamentSeatingProfile:
+    """Read the explicit seating profile of one seated validator config."""
+
+    gov = config.get("gov")
+    if not isinstance(gov, dict):
+        fail(f"{label} has no [gov] seating profile")
+    timed_ovn = gov.get("parliament_timed_ovn")
+    if not isinstance(timed_ovn, dict):
+        fail(f"{label} has no [gov.parliament_timed_ovn] seating profile")
+    escrow = gov.get("citizenship_escrow_account")
+    if escrow is not None and (not isinstance(escrow, str) or not escrow):
+        fail(f"{label} [gov] citizenship_escrow_account must be an account literal")
+    torii = config.get("torii")
+    faucet = torii.get("faucet") if isinstance(torii, dict) else None
+    faucet_amount: Fraction | None = None
+    faucet_adaptive: tuple[int, int, int] | None = None
+    faucet_max_anchor_age: int | None = None
+    if isinstance(faucet, dict) and faucet.get("enabled", True) is True:
+        faucet_amount = _seating_decimal(faucet, "amount", f"{label} [torii.faucet]")
+        faucet_max_anchor_age = _seating_integer(
+            faucet, "pow_max_anchor_age_blocks", f"{label} [torii.faucet]"
+        )
+        faucet_adaptive = (
+            _seating_integer(faucet, "pow_adaptive_lookback_blocks", f"{label} [torii.faucet]"),
+            _seating_integer(
+                faucet, "pow_adaptive_claims_per_extra_bit", f"{label} [torii.faucet]"
+            ),
+            _seating_integer(faucet, "pow_adaptive_max_extra_bits", f"{label} [torii.faucet]"),
+        )
+    return ParliamentSeatingProfile(
+        public_bodies=tuple(
+            (key, _seating_integer(gov, key, f"{label} [gov]"))
+            for key in PARLIAMENT_PUBLIC_BODY_KEYS
+        ),
+        policy_jury_size=_seating_integer(gov, "policy_jury_size", f"{label} [gov]"),
+        confirmation_jury_size=_seating_integer(
+            gov, "confirmation_jury_size", f"{label} [gov]"
+        ),
+        max_corpus_entries=_seating_integer(
+            timed_ovn, "max_corpus_entries", f"{label} [gov.parliament_timed_ovn]"
+        ),
+        registration_phase_blocks=_seating_integer(
+            timed_ovn, "registration_phase_blocks", f"{label} [gov.parliament_timed_ovn]"
+        ),
+        survivor_freeze_phase_blocks=_seating_integer(
+            timed_ovn, "survivor_freeze_phase_blocks", f"{label} [gov.parliament_timed_ovn]"
+        ),
+        citizenship_bond=_seating_decimal(gov, "citizenship_bond_amount", f"{label} [gov]"),
+        faucet_amount=faucet_amount,
+        faucet_adaptive=faucet_adaptive,
+        faucet_max_anchor_age=faucet_max_anchor_age,
+        citizenship_escrow_account=escrow,
+    )
+
+
+def parliament_seating_failures(
+    profile: ParliamentSeatingProfile, citizens: int
+) -> list[str]:
+    """Return every §4.14.5 refusal rule the profile and citizen count violate."""
+
+    failures: list[str] = []
+    largest_name, largest = max(
+        (*profile.public_bodies, ("policy_jury_size", profile.policy_jury_size)),
+        key=lambda body: body[1],
+    )
+    if citizens < largest:
+        failures.append(
+            f"citizens_cover_bodies: {citizens} citizens; largest body {largest_name}={largest}"
+        )
+    if (
+        profile.policy_jury_size > PARLIAMENT_MARGIN_FREE_POLICY_JURY
+        and profile.policy_jury_size
+        > citizens - PARLIAMENT_CONFIRMATION_JURY_OUTSIDE_POLICY_JURY
+    ):
+        failures.append(
+            "policy_jury_confirmation_margin: policy_jury_size="
+            f"{profile.policy_jury_size} > {PARLIAMENT_MARGIN_FREE_POLICY_JURY} needs "
+            f"policy_jury_size <= C - {PARLIAMENT_CONFIRMATION_JURY_OUTSIDE_POLICY_JURY}"
+        )
+    if min(profile.policy_jury_size, profile.confirmation_jury_size) < (
+        PARLIAMENT_HIDDEN_BALLOT_ANONYMITY
+    ):
+        failures.append("hidden_ballot_anonymity: juries need at least 3 seats")
+    if profile.max_corpus_entries < max(
+        profile.policy_jury_size, profile.confirmation_jury_size
+    ):
+        failures.append(
+            "corpus_covers_juries: max_corpus_entries is below the largest jury"
+        )
+    if (
+        profile.registration_phase_blocks <= profile.max_corpus_entries
+        or profile.survivor_freeze_phase_blocks < profile.max_corpus_entries
+    ):
+        failures.append(
+            "windows_cover_corpus: a timed-OVN window is shorter than max_corpus_entries"
+        )
+    if profile.faucet_amount is not None:
+        reach = profile.faucet_amount * PARLIAMENT_BOND_FAUCET_CLAIMS
+        if profile.citizenship_bond < reach:
+            failures.append(
+                "bond_beyond_faucet_reach: citizenship_bond_amount is within "
+                f"{PARLIAMENT_BOND_FAUCET_CLAIMS} faucet claims"
+            )
+        if profile.faucet_adaptive is None or 0 in profile.faucet_adaptive:
+            failures.append("adaptive_faucet_difficulty: adaptive faucet difficulty is off")
+        else:
+            lookback, per_extra_bit, max_extra_bits = profile.faucet_adaptive
+            age = profile.faucet_max_anchor_age
+            burst = faucet_burst_cost(
+                age or 0,
+                lookback,
+                per_extra_bit,
+                max_extra_bits,
+                PARLIAMENT_BOND_FAUCET_CLAIMS,
+            )
+            if age is None or age >= lookback or burst <= PARLIAMENT_BOND_FAUCET_CLAIMS:
+                failures.append(
+                    "faucet_anchor_age_below_lookback: pow_max_anchor_age_blocks="
+                    f"{age} pow_adaptive_lookback_blocks={lookback}; the cheapest "
+                    f"{PARLIAMENT_BOND_FAUCET_CLAIMS}-claim burst costs {burst} base proofs"
+                )
+    return failures
+
+
+def parliament_escrow_failures(
+    profile: ParliamentSeatingProfile, manifest: dict[str, Any]
+) -> list[str]:
+    """Refuse a citizenship escrow anyone can sign for (specs/sccp.md §4.14.5 item 1)."""
+
+    escrow = profile.citizenship_escrow_account
+    if escrow is None:
+        return [
+            "citizenship_escrow_is_custodial: gov.citizenship_escrow_account is unset "
+            "and its default names a published key"
+        ]
+    if escrow in PARLIAMENT_PUBLISHED_ESCROW_ACCOUNTS:
+        return [
+            f"citizenship_escrow_is_custodial: citizenship escrow {escrow} is "
+            "controlled by a key published in this repository"
+        ]
+    if manifest.get("citizenship_escrow_account") != escrow:
+        return [
+            "citizenship_escrow_is_custodial: validators do not name the fresh "
+            "escrow generated by the seating run"
+        ]
+    if any(entry.get("account_id") == escrow for entry in manifest.get("citizens", [])):
+        return ["citizenship_escrow_is_custodial: a citizen holds the escrow key"]
+    return []
+
+
+def _read_parliament_citizens(target: Path) -> tuple[Path, dict[str, Any]]:
+    directory = target / PARLIAMENT_CITIZEN_DIRECTORY
+    _require_owner_only_entry(directory, directory=True, label="Parliament citizen directory")
+    manifest_path = directory / PARLIAMENT_CITIZEN_MANIFEST
+    manifest = json_loads_no_duplicates(
+        read_bounded_text(
+            manifest_path,
+            limit=MAX_BUNDLE_TEXT_BYTES,
+            label="Parliament citizen manifest",
+        )
+    )
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != PARLIAMENT_CITIZEN_MANIFEST_SCHEMA
+        or manifest.get("chain") != DEFAULT_CHAIN_ID
+        or not isinstance(manifest.get("citizens"), list)
+        or not isinstance(manifest.get("citizenship_escrow_account"), str)
+    ):
+        fail(f"Parliament citizen manifest is not exact V1: {manifest_path}")
+    accounts: set[str] = set()
+    for position, entry in enumerate(manifest["citizens"]):
+        if (
+            not isinstance(entry, dict)
+            or entry.get("index") != position
+            or not isinstance(entry.get("account_id"), str)
+            or entry["account_id"] in accounts
+            or not isinstance(entry.get("private_key_file"), str)
+            or "/" in entry["private_key_file"]
+        ):
+            fail(f"Parliament citizen manifest entry {position} is not exact V1")
+        accounts.add(entry["account_id"])
+        _require_owner_only_entry(
+            directory / entry["private_key_file"],
+            directory=False,
+            label=f"citizen {position} private key",
+        )
+    return directory, manifest
+
+
+def require_parliament_seating(target: Path) -> dict[str, Any]:
+    """Refuse a devnet whose validators and genesis citizens cannot seat the Parliament."""
+
+    profiles: list[ParliamentSeatingProfile] = []
+    for peer_index in range(PEER_COUNT):
+        config_path = target / f"peer{peer_index}.toml"
+        try:
+            config = tomllib.loads(
+                read_bounded_text(
+                    config_path,
+                    limit=MAX_BUNDLE_TEXT_BYTES,
+                    label=f"peer{peer_index} config",
+                )
+            )
+        except tomllib.TOMLDecodeError as error:
+            fail(f"peer{peer_index} config is not TOML: {config_path}: {error}")
+        profiles.append(parliament_seating_profile(config, f"peer{peer_index}"))
+    if len(set(profiles)) != 1:
+        fail("generated Taira validators do not share one Parliament seating profile")
+    _directory, manifest = _read_parliament_citizens(target)
+    citizens = len(manifest["citizens"])
+    failures = parliament_seating_failures(profiles[0], citizens)
+    failures += parliament_escrow_failures(profiles[0], manifest)
+    if failures:
+        fail(
+            "refusing a Taira devnet that cannot seat the SORA Parliament "
+            "(specs/sccp.md §4.14.5): " + "; ".join(failures)
+        )
+    if manifest.get("citizenship_bond_amount") is None or Fraction(
+        str(manifest["citizenship_bond_amount"])
+    ) < profiles[0].citizenship_bond:
+        fail("Parliament citizen manifest bonds citizens below citizenship_bond_amount")
+    return {
+        "citizens": citizens,
+        "citizenship_bond_amount": manifest["citizenship_bond_amount"],
+        "citizenship_escrow_account": manifest["citizenship_escrow_account"],
+        "fee_float": manifest.get("fee_float"),
+        "sccp_proposer": manifest.get("sccp_proposer"),
+        "citizen_directory": str(target / PARLIAMENT_CITIZEN_DIRECTORY),
+    }
+
+
+def _client_public_key(target: Path) -> str:
+    client = tomllib.loads(
+        read_bounded_text(target / "client.toml", limit=MAX_BUNDLE_TEXT_BYTES, label="client config")
+    )
+    account = client.get("account")
+    public_key = account.get("public_key") if isinstance(account, dict) else None
+    if not isinstance(public_key, str) or not public_key or public_key != public_key.strip():
+        fail("generated client config has no canonical account public key")
+    return public_key
+
+
+def seat_parliament(
+    target: Path,
+    iroha: Path,
+    kagami: Path,
+    run: Runner,
+    *,
+    citizens: int = PARLIAMENT_GENESIS_CITIZENS,
+    fee_float: str = PARLIAMENT_FEE_FLOAT_XOR,
+    grant_sccp_proposer: bool = True,
+) -> dict[str, Any]:
+    """Seat the SORA Parliament in the freshly generated, not yet started devnet."""
+
+    command = [
+        str(iroha),
+        "-c",
+        str(target / "client.toml"),
+        "taira",
+        "seat-parliament",
+        "--localnet-dir",
+        str(target),
+        "--citizens",
+        str(citizens),
+        "--fee-float",
+        fee_float,
+    ]
+    if grant_sccp_proposer:
+        # Devnets grant the genesis-only CanProposeSccpRouteGovernance to the operator's
+        # client account; public resets leave it off by default (specs/sccp.md §4.19).
+        command.extend(["--sccp-proposer-public-key", _client_public_key(target)])
+    completed = run(command, cwd=target, timeout=120)
+    try:
+        report = json_loads_no_duplicates((completed.stdout or "").strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        fail("iroha taira seat-parliament did not return a JSON report")
+    if not isinstance(report, dict) or report.get("schema") != PARLIAMENT_SEAT_REPORT_SCHEMA:
+        fail("iroha taira seat-parliament returned an unexpected report")
+    # Kagami never replaces a different published identity, and every config still
+    # reads the pre-seating one, so the new identity is published beside it and then
+    # renamed over it once the seated genesis is signed.
+    identity = target / "genesis.expected_hash"
+    next_identity = target / PARLIAMENT_NEXT_IDENTITY_FILE
+    next_identity.unlink(missing_ok=True)
+    run(
+        [
+            str(kagami),
+            "genesis",
+            "sign",
+            str(target / "genesis.json"),
+            "--private-key-file",
+            str(target / "genesis.private_key"),
+            "--config",
+            str(target / "peer0.toml"),
+            "--out-file",
+            str(target / "genesis.signed.nrt"),
+            "--bound-manifest-out",
+            str(target / "genesis.json"),
+            "--expected-hash-out",
+            str(next_identity),
+        ],
+        cwd=target,
+        timeout=600,
+    )
+    if not next_identity.is_file() or next_identity.is_symlink():
+        fail("kagami genesis sign did not publish the seated genesis network identity")
+    os.replace(next_identity, identity)
+    seating = require_parliament_seating(target)
+    if seating["citizens"] != citizens:
+        fail("seated citizen count differs from the requested genesis citizens")
+    return seating
+
+
+def parliament_citizens(target: Path) -> list[dict[str, Any]]:
+    """Return the seated citizens with absolute owner-only runtime paths."""
+
+    directory, manifest = _read_parliament_citizens(target)
+    citizens = []
+    for entry in manifest["citizens"]:
+        client = entry.get("client_config_file")
+        if not isinstance(client, str) or "/" in client:
+            fail(f"citizen {entry['index']} has no generated client config")
+        _require_owner_only_entry(
+            directory / client, directory=False, label=f"citizen {entry['index']} client config"
+        )
+        stem = f"citizen-{entry['index']:02d}"
+        citizens.append(
+            {
+                "index": entry["index"],
+                "account_id": entry["account_id"],
+                "client_config": directory / client,
+                "ballot_key_file": directory / f"{stem}.ballot.key",
+                "ballot_state_file": directory / f"{stem}.ballot-state.json",
+                "ballot_record_stem": directory / stem,
+            }
+        )
+    return citizens
+
+
+def _select_citizens(
+    citizens: Sequence[dict[str, Any]], indices: Sequence[int] | None
+) -> list[dict[str, Any]]:
+    if not indices:
+        return list(citizens)
+    by_index = {citizen["index"]: citizen for citizen in citizens}
+    selected = []
+    for index in indices:
+        if index not in by_index:
+            fail(f"devnet has no Parliament citizen {index}")
+        if by_index[index] in selected:
+            fail(f"Parliament citizen {index} is selected twice")
+        selected.append(by_index[index])
+    return selected
+
+
+def _require_lower_hex32(value: str, label: str) -> str:
+    if _LOWER_HEX32_RE.fullmatch(value) is None:
+        fail(f"{label} must be 64 lowercase hexadecimal characters")
+    return value
+
+
+def _last_json_line(completed: subprocess.CompletedProcess[str]) -> object | None:
+    """Return the last stdout line parsed as JSON, or ``None`` when it is not JSON."""
+
+    lines = (completed.stdout or "").strip().splitlines()
+    if not lines:
+        return None
+    try:
+        return json_loads_no_duplicates(lines[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def require_citizen_command(iroha: Path, action: str, run: Runner) -> tuple[str, ...]:
+    """Prove the compiled CLI exposes one documented ``iroha gov parliament`` command."""
+
+    if action not in PARLIAMENT_CITIZEN_COMMANDS:
+        fail(f"unknown Parliament citizen action `{action}`")
+    subcommands, options = PARLIAMENT_CITIZEN_COMMANDS[action]
+    surface = " ".join(("iroha", *subcommands))
+    try:
+        completed = run([str(iroha), *subcommands, "--help"], cwd=REPO_ROOT, timeout=20)
+    except DevnetError as error:
+        fail(
+            f"`{surface}` is not available in this CLI build; Parliament citizens act "
+            f"through `iroha gov parliament` (specs/sccp.md §4.14.5 Tooling): {error}"
+        )
+    help_text = "\n".join((completed.stdout or "", completed.stderr or ""))
+    missing = [option for option in options if not help_has_option(help_text, option)]
+    if missing:
+        fail(f"`{surface}` lacks its documented options: " + ", ".join(missing))
+    return subcommands
+
+
+def _act_for_citizens(
+    citizens: Sequence[dict[str, Any]],
+    build: Callable[[dict[str, Any]], list[str]],
+    run: Runner,
+    target: Path,
+) -> list[dict[str, Any]]:
+    """Run one citizen command per citizen and keep going past per-citizen refusals.
+
+    Only drawn, invited or seated citizens can act, so a refusal for one citizen is a
+    result to report, not a reason to stop acting for the others.
+    """
+
+    results = []
+    for citizen in citizens:
+        result: dict[str, Any] = {"index": citizen["index"], "account_id": citizen["account_id"]}
+        try:
+            completed = run(build(citizen), cwd=target, timeout=180)
+        except DevnetError as error:
+            result.update(ok=False, detail=str(error)[-512:])
+        else:
+            result["ok"] = True
+            output = _last_json_line(completed)
+            if output is not None:
+                result["output"] = output
+        results.append(result)
+    return results
+
+
+def _citizen_command(iroha: Path, citizen: dict[str, Any], subcommands: Sequence[str]) -> list[str]:
+    return [str(iroha), "--machine", "-c", str(citizen["client_config"]), *subcommands]
+
+
+def respond_to_invitations(
+    target: Path,
+    iroha: Path,
+    run: Runner,
+    *,
+    governance_attempt_id: str,
+    election_attempt_id: str,
+    body: str,
+    accept: bool = True,
+    indices: Sequence[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Answer one body election's invitations as the selected citizens."""
+
+    _require_lower_hex32(governance_attempt_id, "governance attempt id")
+    _require_lower_hex32(election_attempt_id, "election attempt id")
+    if body not in PARLIAMENT_BODIES:
+        fail(f"unknown Parliament body `{body}`")
+    subcommands = require_citizen_command(iroha, "respond-invitation", run)
+    return _act_for_citizens(
+        _select_citizens(parliament_citizens(target), indices),
+        lambda citizen: [
+            *_citizen_command(iroha, citizen, subcommands),
+            "--governance-attempt-id",
+            governance_attempt_id,
+            "--election-attempt-id",
+            election_attempt_id,
+            "--body",
+            body,
+            "--decision",
+            "accept" if accept else "decline",
+        ],
+        run,
+        target,
+    )
+
+
+def endorse_public_finding(
+    target: Path,
+    iroha: Path,
+    run: Runner,
+    *,
+    governance_attempt_id: str,
+    body_instance_id: str,
+    result_root: str,
+    indices: Sequence[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Endorse one public-finding result root as the selected seated citizens."""
+
+    _require_lower_hex32(governance_attempt_id, "governance attempt id")
+    _require_lower_hex32(body_instance_id, "body instance id")
+    _require_lower_hex32(result_root, "result root")
+    subcommands = require_citizen_command(iroha, "endorse", run)
+    return _act_for_citizens(
+        _select_citizens(parliament_citizens(target), indices),
+        lambda citizen: [
+            *_citizen_command(iroha, citizen, subcommands),
+            "--governance-attempt-id",
+            governance_attempt_id,
+            "--body-instance-id",
+            body_instance_id,
+            "--result-root",
+            result_root,
+        ],
+        run,
+        target,
+    )
+
+
+def ballot_trust_anchor(
+    target: Path,
+    iroha: Path,
+    citizen: dict[str, Any],
+    run: Runner,
+    request: Request,
+    *,
+    height: int | None = None,
+) -> tuple[int, str]:
+    """Return the finality anchor that initializes a citizen's ballot state file.
+
+    Every devnet peer is operator-owned, so the devnet's own Torii is the independent
+    source the ballot commands ask for; public Taira citizens pin an anchor they
+    compare against a source they trust.
+    """
+
+    if height is None:
+        height = read_height(bundle_torii_roots(target)[0], request)
+    if type(height) is not int or height < 1:
+        fail("ballot trust-anchor height must be a positive block height")
+    subcommands = require_citizen_command(iroha, "ballot-anchor", run)
+    completed = run(
+        [*_citizen_command(iroha, citizen, subcommands), "--height", str(height)],
+        cwd=target,
+        timeout=60,
+    )
+    anchor = _last_json_line(completed)
+    context_id = anchor.get("context_id") if isinstance(anchor, dict) else None
+    if (
+        not isinstance(anchor, dict)
+        or anchor.get("height") != height
+        or not isinstance(context_id, str)
+        or _LOWER_HEX32_RE.fullmatch(context_id) is None
+    ):
+        fail(f"`iroha gov parliament ballot anchor` returned no exact anchor at height {height}")
+    return height, context_id
+
+
+def register_ballot_keys(
+    target: Path,
+    iroha: Path,
+    run: Runner,
+    request: Request,
+    *,
+    ballot_attempt_id: str,
+    anchor_height: int | None = None,
+    indices: Sequence[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Register each selected citizen's timed-OVN ballot keys, generating key files once."""
+
+    _require_lower_hex32(ballot_attempt_id, "ballot attempt id")
+    subcommands = require_citizen_command(iroha, "ballot-register", run)
+    selected = _select_citizens(parliament_citizens(target), indices)
+    fresh = [citizen for citizen in selected if not citizen["ballot_state_file"].exists()]
+    # One anchor initializes every new state file; existing state files keep theirs.
+    anchor = (
+        ballot_trust_anchor(target, iroha, fresh[0], run, request, height=anchor_height)
+        if fresh
+        else None
+    )
+
+    def build(citizen: dict[str, Any]) -> list[str]:
+        command = [
+            *_citizen_command(iroha, citizen, subcommands),
+            "--ballot-attempt-id",
+            ballot_attempt_id,
+            "--key-file",
+            str(citizen["ballot_key_file"]),
+            "--state-file",
+            str(citizen["ballot_state_file"]),
+        ]
+        if anchor is not None and citizen in fresh:
+            command += [
+                "--trusted-checkpoint-height",
+                str(anchor[0]),
+                "--trusted-checkpoint-context-id",
+                anchor[1],
+            ]
+        return command
+
+    return _act_for_citizens(selected, build, run, target)
+
+
+def cast_ballots(
+    target: Path,
+    iroha: Path,
+    run: Runner,
+    *,
+    ballot_attempt_id: str,
+    choice: str,
+    indices: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """Cast each selected citizen's ballot, then relay the records cast out of order.
+
+    The ballot corpus accepts survivors strictly in frozen order. Each ``cast`` writes
+    its public record before it submits, so records of citizens whose predecessors had
+    not cast yet are relayed together once every selected citizen has cast.
+    """
+
+    _require_lower_hex32(ballot_attempt_id, "ballot attempt id")
+    if choice not in PARLIAMENT_BALLOT_CHOICES:
+        fail(f"ballot choice must be one of {', '.join(PARLIAMENT_BALLOT_CHOICES)}")
+    cast = require_citizen_command(iroha, "ballot-cast", run)
+    relay = require_citizen_command(iroha, "ballot-relay", run)
+    selected = _select_citizens(parliament_citizens(target), indices)
+
+    def record(citizen: dict[str, Any]) -> Path:
+        stem = citizen["ballot_record_stem"]
+        return stem.with_name(f"{stem.name}.ballot-{ballot_attempt_id}.record")
+
+    results = _act_for_citizens(
+        selected,
+        lambda citizen: [
+            *_citizen_command(iroha, citizen, cast),
+            "--ballot-attempt-id",
+            ballot_attempt_id,
+            "--choice",
+            choice,
+            "--key-file",
+            str(citizen["ballot_key_file"]),
+            "--state-file",
+            str(citizen["ballot_state_file"]),
+            "--record-out",
+            str(record(citizen)),
+        ],
+        run,
+        target,
+    )
+    report: dict[str, Any] = {"results": results, "relay": None}
+    records = [record(citizen) for citizen in selected if record(citizen).is_file()]
+    if records and any(not result["ok"] for result in results):
+        # Any funded account may relay public records; prefer one that just submitted.
+        relayer = next(
+            (citizen for citizen, result in zip(selected, results) if result["ok"]),
+            selected[0],
+        )
+        command = [
+            *_citizen_command(iroha, relayer, relay),
+            "--ballot-attempt-id",
+            ballot_attempt_id,
+        ]
+        for path in records:
+            command += ["--record", str(path)]
+        try:
+            run(command, cwd=target, timeout=180)
+        except DevnetError as error:
+            report["relay"] = {"ok": False, "records": len(records), "detail": str(error)[-512:]}
+        else:
+            report["relay"] = {"ok": True, "records": len(records)}
+    return report
+
+
+def drop_out_of_ballot(
+    target: Path,
+    iroha: Path,
+    run: Runner,
+    *,
+    ballot_attempt_id: str,
+    indices: Sequence[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Record each selected citizen's authenticated dropout before the survivor freeze."""
+
+    _require_lower_hex32(ballot_attempt_id, "ballot attempt id")
+    subcommands = require_citizen_command(iroha, "ballot-dropout", run)
+    return _act_for_citizens(
+        _select_citizens(parliament_citizens(target), indices),
+        lambda citizen: [
+            *_citizen_command(iroha, citizen, subcommands),
+            "--ballot-attempt-id",
+            ballot_attempt_id,
+        ],
+        run,
+        target,
+    )
+
+
+def ballot_status(
+    target: Path,
+    iroha: Path,
+    run: Runner,
+    *,
+    governance_attempt_id: str,
+    ballot_attempt_id: str | None = None,
+    indices: Sequence[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Read each selected citizen's part in the active hidden ballots of one attempt."""
+
+    _require_lower_hex32(governance_attempt_id, "governance attempt id")
+    if ballot_attempt_id is not None:
+        _require_lower_hex32(ballot_attempt_id, "ballot attempt id")
+    subcommands = require_citizen_command(iroha, "ballot-status", run)
+
+    def build(citizen: dict[str, Any]) -> list[str]:
+        command = [
+            *_citizen_command(iroha, citizen, subcommands),
+            "--governance-attempt-id",
+            governance_attempt_id,
+        ]
+        if ballot_attempt_id is not None:
+            command += ["--ballot-attempt-id", ballot_attempt_id]
+        return command
+
+    return _act_for_citizens(
+        _select_citizens(parliament_citizens(target), indices), build, run, target
     )
 
 
@@ -7922,6 +8804,8 @@ def up(
             args.block_cadence_ms,
             run,
         )
+        print("Seating the SORA Parliament in genesis...", flush=True)
+        parliament = seat_parliament(target, iroha, kagami, run)
         require_generated_taira_profiles(target)
         require_bundle_identity(target, roots)
         print("Building and pre-seeding the exact Taira Inrou stage...", flush=True)
@@ -8140,6 +9024,7 @@ def up(
         "final_height": final[0],
         "transaction_hash": transaction_hash,
         "terminal_status": "Applied",
+        "parliament": parliament,
         "configured_inrou_vm_capacity_per_peer": TAIRA_INROU_VM_CAPACITY,
         "inrou_startup_boundary_qualified_peers": PEER_COUNT,
         "inrou_operator_preseed": guest_qualification["inrou_operator_preseed"],
@@ -8196,6 +9081,7 @@ def check(
         fail("retained Inrou stage guest identity differs from qualification evidence")
     require_canonical_taira_profiles(target, trusted_guest)
     require_bundle_identity(target, roots)
+    parliament = require_parliament_seating(target)
     retained_input = require_inrou_canary_workspace(
         target / INROU_CANARY_INPUT_SNAPSHOT_DIRECTORY
     )
@@ -8270,6 +9156,7 @@ def check(
         "directory": str(target),
         "torii_roots": list(roots),
         "height": heights[0],
+        "parliament": parliament,
         "configured_inrou_vm_capacity_per_peer": TAIRA_INROU_VM_CAPACITY,
         "configured_peers": PEER_COUNT,
         "inrou_operator_preseed": guest_qualification["inrou_operator_preseed"],
@@ -8302,6 +9189,93 @@ def down(args: argparse.Namespace, *, run: Runner = run_command) -> dict[str, An
         "network_destroyed": True,
         "stopped": True,
     }
+
+
+def citizens(
+    args: argparse.Namespace,
+    *,
+    run: Runner = run_command,
+    request: Request = http_request,
+) -> dict[str, Any]:
+    """Act for the devnet's genesis citizens in one Parliament attempt."""
+
+    root = managed_root(args.dir, create=False)
+    target = require_network_bundle(root)
+    seating = require_parliament_seating(target)
+    if args.action == "list":
+        return {
+            "parliament": seating,
+            "citizens": [
+                {
+                    "index": citizen["index"],
+                    "account_id": citizen["account_id"],
+                    "client_config": str(citizen["client_config"]),
+                }
+                for citizen in parliament_citizens(target)
+            ],
+        }
+    iroha = require_executable(args.iroha.expanduser().absolute())
+    report: dict[str, Any] = {"action": args.action}
+    if args.action == "respond-invitation":
+        report["results"] = respond_to_invitations(
+            target,
+            iroha,
+            run,
+            governance_attempt_id=args.governance_attempt_id,
+            election_attempt_id=args.election_attempt_id,
+            body=args.body,
+            accept=args.decision == "accept",
+            indices=args.citizen,
+        )
+    elif args.action == "endorse":
+        report["results"] = endorse_public_finding(
+            target,
+            iroha,
+            run,
+            governance_attempt_id=args.governance_attempt_id,
+            body_instance_id=args.body_instance_id,
+            result_root=args.result_root,
+            indices=args.citizen,
+        )
+    elif args.action == "ballot-register":
+        report["results"] = register_ballot_keys(
+            target,
+            iroha,
+            run,
+            request,
+            ballot_attempt_id=args.ballot_attempt_id,
+            anchor_height=args.anchor_height,
+            indices=args.citizen,
+        )
+    elif args.action == "ballot-cast":
+        report.update(
+            cast_ballots(
+                target,
+                iroha,
+                run,
+                ballot_attempt_id=args.ballot_attempt_id,
+                choice=args.choice,
+                indices=args.citizen,
+            )
+        )
+    elif args.action == "ballot-dropout":
+        report["results"] = drop_out_of_ballot(
+            target,
+            iroha,
+            run,
+            ballot_attempt_id=args.ballot_attempt_id,
+            indices=args.citizen,
+        )
+    else:
+        report["results"] = ballot_status(
+            target,
+            iroha,
+            run,
+            governance_attempt_id=args.governance_attempt_id,
+            ballot_attempt_id=args.ballot_attempt_id,
+            indices=args.citizen,
+        )
+    return report
 
 
 def parser() -> argparse.ArgumentParser:
@@ -8370,6 +9344,52 @@ def parser() -> argparse.ArgumentParser:
         "down", help="stop the disposable peers and destroy the generated network"
     )
     down_parser.set_defaults(handler=down)
+
+    citizens_parser = commands.add_parser(
+        "citizens",
+        help="list or act for the devnet's genesis Parliament citizens",
+    )
+    actions = citizens_parser.add_subparsers(dest="action", required=True)
+    actions.add_parser("list", help="list the seated genesis citizens")
+
+    def citizen_action(name: str, help_text: str) -> argparse.ArgumentParser:
+        action = actions.add_parser(name, help=help_text)
+        action.add_argument(
+            "--iroha", type=Path, required=True, help="compiled iroha CLI of this devnet"
+        )
+        action.add_argument(
+            "--citizen",
+            type=int,
+            action="append",
+            help="citizen index to act for (repeatable); defaults to every citizen",
+        )
+        return action
+
+    respond = citizen_action("respond-invitation", "answer one body election's invitations")
+    respond.add_argument("--governance-attempt-id", required=True)
+    respond.add_argument("--election-attempt-id", required=True)
+    respond.add_argument("--body", required=True, choices=PARLIAMENT_BODIES)
+    respond.add_argument("--decision", choices=("accept", "decline"), default="accept")
+    endorse = citizen_action("endorse", "endorse one public-finding result root")
+    endorse.add_argument("--governance-attempt-id", required=True)
+    endorse.add_argument("--body-instance-id", required=True)
+    endorse.add_argument("--result-root", required=True)
+    register = citizen_action("ballot-register", "register timed-OVN ballot keys")
+    register.add_argument("--ballot-attempt-id", required=True)
+    register.add_argument(
+        "--anchor-height",
+        type=int,
+        help="trusted finality anchor height for new ballot state files (default: current height)",
+    )
+    cast = citizen_action("ballot-cast", "cast timed-OVN ballots, relaying out-of-order records")
+    cast.add_argument("--ballot-attempt-id", required=True)
+    cast.add_argument("--choice", required=True, choices=PARLIAMENT_BALLOT_CHOICES)
+    dropout = citizen_action("ballot-dropout", "record timed-OVN ballot dropouts")
+    dropout.add_argument("--ballot-attempt-id", required=True)
+    status = citizen_action("ballot-status", "read each citizen's timed-OVN ballot status")
+    status.add_argument("--governance-attempt-id", required=True)
+    status.add_argument("--ballot-attempt-id")
+    citizens_parser.set_defaults(handler=citizens)
     return result
 
 

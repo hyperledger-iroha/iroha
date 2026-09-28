@@ -1,10 +1,13 @@
 //! SCCP (SORA Cross-Chain Protocol) primitives for Iroha (`specs/sccp.md` revision 3).
 //!
 //! [`v1`] holds the network-free contract-visible encodings, [`light_client`] the stateless
-//! inbound light-client checks and [`api`] the Torii read-API records. The per-chain modules
-//! (`ethereum_native`, `ethereum_source`, `bsc_native`, `tron_native`, `ton_native`) keep the
-//! native chain-verification primitives that the v1 light clients are being built from; the
-//! retired Groth16, replay-archive and anchor-based message paths are gone.
+//! inbound light-client checks and [`api`] the Torii read-API records. The Ethereum consensus
+//! primitives (`ethereum_native`, re-exported at the crate root) and the Ethereum wire and
+//! execution-layer primitives ([`ethereum_source`]) back [`light_client::ethereum`]. The BSC,
+//! TRON and TON modules (`bsc_native`, `tron_native`, `ton_native`) keep the native
+//! chain-verification primitives their v1 light clients are being built from; the retired
+//! Groth16, replay-archive and anchor-based message paths are gone. `test_support` (under
+//! `cfg(test)` and the `test-fixtures` feature) holds deterministic synthetic source chains.
 //!
 //! The crate targets the Rust standard library unconditionally, and BLS verification is not
 //! feature-gated, so Cargo feature selection cannot change consensus admission results.
@@ -12,12 +15,13 @@ extern crate alloc;
 /// Torii read-API records for SCCP v1.
 pub mod api;
 mod ethereum_native;
+pub mod ethereum_source;
 pub mod light_client;
 pub mod v1;
 pub use ethereum_native::*;
-mod ethereum_source;
-pub use ethereum_source::*;
 mod bsc_native;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support;
 pub use bsc_native::*;
 mod tron_native;
 pub use tron_native::*;

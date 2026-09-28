@@ -89,6 +89,12 @@ use iroha_smart_contract::data_model::{
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
+        sccp::{
+            AdvanceSccpLightClientV1, InitializeSccpV1, RecordSccpMessage,
+            ReportSccpLightClientEquivocationV1, SetSccpBridgeKeyV1, SettleSccpV1,
+            SubmitSccpAttestationFaultV1, SubmitSccpAttestationsV1, SubmitSccpInboundMessageV1,
+            SubmitSccpOutboundVoidV1,
+        },
         settlement::SettlementInstructionBox,
         smart_contract_code::{
             AcceptContractOwnership, ActivateContractInstance, CancelContractOwnershipOffer,
@@ -567,6 +573,39 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RefundExpiredVpnLease>() {
+            execute!(executor, isi);
+        }
+        // Core enforces every SCCP v1 rule (`specs/sccp.md` §4.19): signatures, bridge-key
+        // authority, admission pre-verification, escrow custody and Parliament enactment. The
+        // default executor forwards all ten SCCP instructions so those consensus checks run.
+        if let Some(isi) = any.downcast_ref::<InitializeSccpV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SetSccpBridgeKeyV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpAttestationsV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpAttestationFaultV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RecordSccpMessage>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpInboundMessageV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SettleSccpV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpOutboundVoidV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<AdvanceSccpLightClientV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ReportSccpLightClientEquivocationV1>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
@@ -4964,6 +5003,38 @@ pub mod trigger {
                 !is_permission_trigger_associated(&permission, &trigger_id),
                 "asset-metadata permission must not bind to triggers"
             );
+        }
+        #[test]
+        fn default_executor_forwards_every_sccp_instruction() {
+            let source = include_str!("mod.rs");
+            let start = source
+                .find("// Core enforces every SCCP v1 rule (`specs/sccp.md` §4.19)")
+                .expect("SCCP dispatch marker");
+            let tail = &source[start..];
+            let end = tail
+                .find("if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>()")
+                .expect("SCCP dispatch terminator");
+            let dispatch = &tail[..end];
+            for instruction in [
+                "InitializeSccpV1",
+                "SetSccpBridgeKeyV1",
+                "SubmitSccpAttestationsV1",
+                "SubmitSccpAttestationFaultV1",
+                "RecordSccpMessage",
+                "SubmitSccpInboundMessageV1",
+                "SettleSccpV1",
+                "SubmitSccpOutboundVoidV1",
+                "AdvanceSccpLightClientV1",
+                "ReportSccpLightClientEquivocationV1",
+            ] {
+                let forward = format!(
+                    "if let Some(isi) = any.downcast_ref::<{instruction}>() {{\n            execute!(executor, isi);"
+                );
+                assert!(
+                    dispatch.contains(&forward),
+                    "default executor SCCP dispatch omitted {instruction}"
+                );
+            }
         }
         #[test]
         fn default_executor_forwards_the_complete_vpn_lifecycle() {

@@ -6,22 +6,14 @@ use iroha_data_model::parameter::system::SumeragiNposParameters;
 const REQUEST_SCHEMA: &str = "iroha.global-beacon.bootstrap.request.v1";
 const BUNDLE_SCHEMA: &str = "iroha.global-beacon.bootstrap.bundle.v1";
 
-/// Pin a fresh network to one genesis beacon transcript identity.
+/// Pin a fresh network to one genesis beacon transcript identity (Core's canonical one).
 pub(super) fn canonical_genesis_session_id(network: NetworkId) -> [u8; 32] {
-    Hash::new_from_chunks(&[
-        b"iroha.global-beacon.genesis-session.v1\0",
-        network.as_bytes(),
-    ])
-    .into()
+    iroha_core::beacon::ceremony::global_beacon_genesis_session_id_v1(network)
 }
 
-/// Pin the network's only genesis dealer attempt across crash recovery.
+/// Pin the network's only genesis dealer attempt across crash recovery (Core's canonical one).
 pub(super) fn canonical_genesis_attempt_id(network: NetworkId) -> [u8; 32] {
-    Hash::new_from_chunks(&[
-        b"iroha.global-beacon.genesis-attempt.v1\0",
-        network.as_bytes(),
-    ])
-    .into()
+    iroha_core::beacon::ceremony::global_beacon_genesis_attempt_id_v1(network)
 }
 
 /// Reject a rerolled session under the same signed genesis or attempt root.

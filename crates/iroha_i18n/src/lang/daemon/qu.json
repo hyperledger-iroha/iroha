@@ -5,6 +5,7 @@
   "error.logger": "Mana atirqanchu registrador qallariyta",
   "error.start": "Iroha qallariyta mana atirqanchu",
   "error.run": "Iroha purichichkaspa pantasqa karqan",
+  "error.check_storage": "Kura (bloque waqaychay) mana atirqachu ñawinchanalla waqaychay qhawariyta",
   "error.start_p2p": "Mana atispa masipura llika qallariyta",
   "error.init_kura": "Mana atispa Kura (bloque waqaychay) qallariyta .",
   "error.start_dev_telemetry": "Mana dev telemetría yanapakuyta qallariyta atispa",

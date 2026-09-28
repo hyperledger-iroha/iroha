@@ -1,5 +1,5 @@
 //! Tests for the built-in parameter defaults.
-use super::{governance, network, nexus::fees, norito, oracle, pipeline, queue, torii};
+use super::{governance, network, nexus::fees, oracle, pipeline, queue, torii};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
 #[test]

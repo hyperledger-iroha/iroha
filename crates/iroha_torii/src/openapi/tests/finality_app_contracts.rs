@@ -328,6 +328,7 @@ fn bridge_finality_operations_describe_durable_v2_evidence() {
     for contract in response_rows! {
         "/v1/bridge/finality/{height}", "get", "200", "#/components/schemas/BridgeFinalityProof";
         "/v1/bridge/finality/attestation/{height}", "get", "200", "#/components/schemas/BridgeFinalityAttestationV1";
+        "/v1/bridge/finality/attestation/latest", "get", "200", "#/components/schemas/BridgeFinalityAttestationV1";
         "/v1/bridge/finality/bundle/{height}", "get", "200", "#/components/schemas/BridgeFinalityBundle";
     } {
         let operation = openapi_operation(&document, contract.path, contract.method);
@@ -338,17 +339,46 @@ fn bridge_finality_operations_describe_durable_v2_evidence() {
         let norito = contract_object(response_content(operation, "200").get("application/x-norito").and_then(|media| media.get("schema")), "Norito response schema");
         scalar_contracts! { norito.get("type") => Text("string"); norito.get("format") => Text("binary"); }
     }
-    let path = "/v1/bridge/finality/attestation/{height}";
-    let operation = openapi_operation(&document, path, "get");
-    let challenge = operation_parameter(operation, "X-Iroha-Finality-Challenge");
-    scalar_contracts! { challenge.get("in") => Text("header"); challenge.get("required") => Flag(true); }
-    for status in contract_words("200 400 404 406 409 503") {
-        let headers = contract_object(operation_responses(operation).get(status).and_then(|response| response.get("headers")), &format!("{status} headers"));
-        let constant = |name| headers.get(name).and_then(|header| header.get("schema")).and_then(|schema| schema.get("const")).and_then(Value::as_str);
-        assert_eq!(constant("Cache-Control"), Some("no-store"));
-        assert_eq!(constant("Vary"), Some("X-Iroha-Finality-Challenge, Accept"));
-        assert_eq!(constant("X-Content-Type-Options"), Some("nosniff"));
+    for path in ["/v1/bridge/finality/attestation/{height}", "/v1/bridge/finality/attestation/latest"] {
+        let operation = openapi_operation(&document, path, "get");
+        let challenge = operation_parameter(operation, "X-Iroha-Finality-Challenge");
+        scalar_contracts! { challenge.get("in") => Text("header"); challenge.get("required") => Flag(true); }
+        for status in contract_words("200 400 404 406 409 503") {
+            let headers = contract_object(operation_responses(operation).get(status).and_then(|response| response.get("headers")), &format!("{status} headers"));
+            let constant = |name| headers.get(name).and_then(|header| header.get("schema")).and_then(|schema| schema.get("const")).and_then(Value::as_str);
+            assert_eq!(constant("Cache-Control"), Some("no-store"));
+            assert_eq!(constant("Vary"), Some("X-Iroha-Finality-Challenge, Accept"));
+            assert_eq!(constant("X-Content-Type-Options"), Some("nosniff"));
+        }
     }
+    let latest = openapi_operation(&document, "/v1/bridge/finality/attestation/latest", "get");
+    let parameters = contract_array(latest.get("parameters"), "latest attestation parameters");
+    assert!(parameters.iter().all(|parameter| parameter.get("in").and_then(Value::as_str) != Some("path")), "latest selects the durable tip without a height parameter");
+    let height = openapi_operation(&document, "/v1/bridge/finality/attestation/{height}", "get");
+    assert_eq!(operation_responses(latest).keys().collect::<BTreeSet<_>>(), operation_responses(height).keys().collect::<BTreeSet<_>>(), "both selectors share one response contract");
+}
+#[test]
+fn signed_status_documents_the_native_beacon_horizon() {
+    use iroha_data_model::block::consensus_v2::BeaconHorizonStatusV1;
+    let schemas = openapi_schemas();
+    scalar_contracts! { contract_property(&schemas, "SumeragiStatusResponse", "beacon_horizon").get("$ref") => Text("#/components/schemas/SumeragiV2BeaconHorizonStatus"); }
+    let required = contract_array(contract_schema(&schemas, "SumeragiStatusResponse").get("required"), "status required");
+    string_members! { required; Absent => &["beacon_horizon"]; };
+    let horizon = BeaconHorizonStatusV1 {
+        epoch_length_blocks: 64,
+        next_required_pulse_height: Some(63),
+        active_session_id: Some([0xA5; 32]),
+        session_covers_next_pulse: true,
+        local_provider_ready: false,
+    };
+    let native = norito::json::to_value(&horizon).expect("native horizon JSON");
+    let native_fields = native.as_object().expect("horizon object").keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let schema = contract_schema(&schemas, "SumeragiV2BeaconHorizonStatus");
+    scalar_contracts! { schema.get("additionalProperties") => Flag(false); }
+    assert_eq!(object_field_set(contract_object(schema.get("properties"), "horizon properties")), native_fields);
+    assert_eq!(schema_string_field_set(schema, "required", "horizon"), contract_words("epoch_length_blocks session_covers_next_pulse local_provider_ready").into_iter().collect::<BTreeSet<_>>());
+    scalar_contracts! { contract_property(&schemas, "SumeragiV2BeaconHorizonStatus", "active_session_id").get("$ref") => Text("#/components/schemas/SumeragiV2Bytes32"); }
+    assert_eq!(native.get("active_session_id").and_then(Value::as_str), Some("A5".repeat(32).as_str()), "session identifiers use canonical uppercase hex");
 }
 #[test]
 fn generated_spec_documents_read_only_nexus_lifecycle_status() {
@@ -400,6 +430,7 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
         PropertyRefContract { owner: "SumeragiStatusResponse", property: "height_context", expected: "#/components/schemas/SumeragiV2HeightContextStatus", },
         PropertyRefContract { owner: "SumeragiStatusResponse", property: "last_commit_qc", expected: "#/components/schemas/SumeragiV2CommitQcStatus", },
         PropertyRefContract { owner: "SumeragiStatusResponse", property: "liveness", expected: "#/components/schemas/SumeragiV2LivenessStatus", },
+        PropertyRefContract { owner: "SumeragiStatusResponse", property: "beacon_horizon", expected: "#/components/schemas/SumeragiV2BeaconHorizonStatus", },
     ] {
         scalar_contracts! { contract_property(schemas, contract.owner, contract.property).get("$ref") => Text(contract.expected); }
     }

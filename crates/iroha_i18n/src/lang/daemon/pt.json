@@ -5,6 +5,7 @@
   "error.logger": "Não foi possível inicializar o sistema de registro",
   "error.start": "Falha ao iniciar Iroha",
   "error.run": "Ocorreu um erro durante a execução do Iroha",
+  "error.check_storage": "O Kura (armazenamento em bloco) falhou na verificação de armazenamento somente leitura",
   "error.start_p2p": "Não foi possível iniciar a rede P2P",
   "error.init_kura": "Não foi possível inicializar o Kura (armazenamento em bloco)",
   "error.start_dev_telemetry": "Não foi possível iniciar o serviço de telemetria de desenvolvimento",

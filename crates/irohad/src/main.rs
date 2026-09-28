@@ -6,11 +6,16 @@ compile_error!(
 /// Per-seat authenticated global-beacon DKG and exact-quorum rotation provisioning.
 #[cfg(unix)]
 pub mod beacon_bootstrap;
+/// Read-only `--check-config --json` and `--check-storage` compatibility probes.
+mod compatibility_probe;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
 /// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
 mod network_relay;
+/// Fixed-name runtime secrets of a `data_dir` node.
+#[cfg(all(feature = "daemon", unix))]
+pub mod node_secrets;
 /// Asynchronous Nexus DPN fee settlement relay.
 /// Explicit recovery boundaries for daemon-owned provider work.
 mod panic_recovery;
@@ -68,8 +73,9 @@ use error_stack::{Report, ResultExt};
 use eyre::Result as EyreResult;
 use fastpq_prover::MetalOverrides;
 use iroha_config::{
-    base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Emitter},
+    base::{WithOrigin, read::ConfigReader, util::Emitter},
     kura::InitMode,
+    node_config::{NodeConfigOptions, NodeFile, open_node_config},
     parameters::{
         actual::{
             FastpqExecutionMode, FastpqPoseidonMode, NexusStorageBudgetComponent,
@@ -403,9 +409,6 @@ fn complete_test_genesis_builder_for_topology(
     let validators = topology
         .iter()
         .map(|entry| entry.peer.clone())
-        .collect::<Vec<_>>();
-    let validators = validators
-        .into_iter()
         .enumerate()
         .map(|(index, validator)| {
             let seed_byte = 0xA0_u8.wrapping_add(
@@ -745,10 +748,30 @@ fn startup_beep(enable_beep: bool) -> bool {
 }
 /// Iroha server CLI
 #[derive(clap::Args, Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent command-line switch"
+)]
 pub struct StartupArgs {
     /// Validate configuration and available genesis, then exit without binding network sockets.
+    ///
+    /// The runtime-only secrets under `<data_dir>/secrets/` (runtime signer, mint-finality seed,
+    /// beacon credential) are never opened; the key files the configuration names are read by
+    /// the parser after their custody checks.
     #[arg(long)]
     pub check_config: bool,
+    /// With `--check-config`, print this build's and configuration's compatibility values as one
+    /// Norito JSON object instead of the `Ready`/`Pending` line.
+    #[arg(long, requires = "check_config")]
+    pub json: bool,
+    /// Inspect the stopped node's Kura store and newest snapshot read-only with this build's
+    /// decoders, print the result as one Norito JSON object and exit nonzero on failure.
+    ///
+    /// Takes the Kura store-root lock, so it refuses a store a running node owns. It never
+    /// mutates the store and never opens runtime-only secrets (the configuration is parsed as for
+    /// `--check-config`).
+    #[arg(long, conflicts_with = "check_config")]
+    pub check_storage: bool,
     /// Require this registered account to retain SoraCloud deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -866,6 +889,8 @@ pub enum MainError {
     IrohaStart,
     /// A supervised node subsystem failed while the daemon was running.
     IrohaRun,
+    /// `--check-storage` could not read the store or its snapshot restore dry run failed.
+    CheckStorage,
 }
 /// Read-only Torii adapter that refuses committed reputation reads whenever
 /// the supervised daemon is not ready.
@@ -971,6 +996,7 @@ impl std::fmt::Display for MainError {
             MainError::Logger => "error.logger",
             MainError::IrohaStart => "error.start",
             MainError::IrohaRun => "error.run",
+            MainError::CheckStorage => "error.check_storage",
         };
         write!(f, "{}", i18n::t(key))
     }
@@ -4081,14 +4107,17 @@ impl Iroha {
                 Some(compliance) => {
                     sorafs_gateway_compliance_feed_transport = Some(
                         sorafs_gateway_compliance_transport::resolve(
-                            &compliance.feed_transport_provider, &compliance.feeds,
+                            &compliance.feed_transport_provider,
+                            &compliance.feeds,
                             sorafs_gateway_compliance_feed_transport.take(),
-                        ).map_err(|error| Report::new(StartError::StartTorii).attach(error))?,
+                        )
+                        .map_err(|error| Report::new(StartError::StartTorii).attach(error))?,
                     );
                 }
                 None if sorafs_gateway_compliance_feed_transport.is_some() => {
                     return Err(Report::new(StartError::StartTorii).attach(
-                        "disabled SoraFS gateway compliance rejects an unexpected feed transport"));
+                        "disabled SoraFS gateway compliance rejects an unexpected feed transport",
+                    ));
                 }
                 None => {}
             }
@@ -6008,6 +6037,41 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
         );
     }
 }
+/// Check the custody of the `<data_dir>/secrets/` key files the configuration parser may read
+/// ([`node_secrets::verify_config_key_custody`]).
+#[cfg(all(feature = "daemon", unix))]
+fn verify_config_key_custody(data_dir: &Path) -> Result<(), String> {
+    node_secrets::verify_config_key_custody(&iroha_config::parameters::actual::DataDir::new(
+        data_dir.to_path_buf(),
+    ))
+    .map_err(|error| error.to_string())
+}
+/// Non-Unix builds cannot enforce secret-file custody; a real start of a `data_dir` node is
+/// refused by `resolve_node_secrets_runtime_deps`.
+#[cfg(not(all(feature = "daemon", unix)))]
+fn verify_config_key_custody(_data_dir: &Path) -> Result<(), String> {
+    Ok(())
+}
+/// Sora Nexus features that a flat configuration may enable only together with `--sora`.
+///
+/// A profile node file is exempt: its compiled profile owns these settings.
+fn sora_features_requiring_flag(config: &Config) -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if config.torii.sorafs_storage.enabled
+        || config.torii.sorafs_discovery.discovery_enabled
+        || config.torii.sorafs_repair.enabled
+        || config.torii.sorafs_gc.enabled
+    {
+        features.push("SoraFS");
+    }
+    if nexus_topology_is_custom(&config.nexus) {
+        features.push("multi-lane routing");
+    }
+    if config.nexus.has_lane_overrides() {
+        features.push("nexus lane configuration");
+    }
+    features
+}
 /// Read the configuration and then a genesis block if specified.
 ///
 /// The returned configuration is **not** validated; call [`validate_config`] after
@@ -6028,13 +6092,11 @@ fn read_config_and_genesis_with_filesystem_space(
     args: &Args,
     space: fn(&Path) -> Option<(u64, u64)>,
 ) -> ReportResult<(Config, Option<GenesisBlock>), ConfigError> {
-    let mut config = if args.config.is_some() {
-        ConfigReader::new().without_env()
-    } else {
-        ConfigReader::new()
-    };
-    if let Some(path) = &args.config {
-        config = if let Some(expected) = args.startup.config_blake3.as_deref() {
+    // Every configuration file goes through the node-file loader: a flat file is read as before
+    // (with `extends` unless it is integrity-bound), a profile node file is layered over its
+    // compiled profile, and a `data_dir` completes the fixed state and secret paths.
+    let (config, profile_binding) = if let Some(path) = &args.config {
+        let file = if let Some(expected) = args.startup.config_blake3.as_deref() {
             if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Err(Report::new(ConfigError::ReadConfig)
                     .attach("`--config-blake3` must contain exactly 64 hexadecimal digits"));
@@ -6076,13 +6138,28 @@ fn read_config_and_genesis_with_filesystem_space(
                     path.display()
                 )));
             }
-            config.with_toml_source(TomlSource::new(path.clone(), table))
+            NodeFile::Verified {
+                path: path.clone(),
+                table,
+            }
         } else {
-            config
-                .read_toml_with_extends(path)
-                .change_context(ConfigError::ReadConfig)?
+            NodeFile::Path(path.clone())
         };
-    }
+        let node = open_node_config(file, NodeConfigOptions { sora: args.sora })
+            .change_context(ConfigError::ReadConfig)?;
+        let data_dir = node.data_dir().map(Path::to_path_buf);
+        let (reader, binding) = node.into_parts();
+        // The parser reads the key files the configuration names under `<data_dir>/secrets/`;
+        // they pass the runtime-secret custody checks first.
+        if let Some(Err(error)) = data_dir.as_deref().map(verify_config_key_custody) {
+            // Defuse the prepared reader's drop guard; the custody error replaces its report.
+            let _ = reader.into_result();
+            return Err(Report::new(ConfigError::ReadConfig).attach(error));
+        }
+        (reader, binding)
+    } else {
+        (ConfigReader::new(), None)
+    };
     let sorafs_storage_enabled_is_explicit =
         config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
     let sorafs_discovery_enabled_is_explicit =
@@ -6106,24 +6183,9 @@ fn read_config_and_genesis_with_filesystem_space(
             config.torii.sorafs_discovery.discovery_enabled = configured_sorafs_discovery_enabled;
         }
     }
-    let sorafs_enabled = config.torii.sorafs_storage.enabled
-        || config.torii.sorafs_discovery.discovery_enabled
-        || config.torii.sorafs_repair.enabled
-        || config.torii.sorafs_gc.enabled;
-    let nexus_topology_custom = nexus_topology_is_custom(&config.nexus);
-    let nexus_lane_overrides = config.nexus.has_lane_overrides();
-    let requires_sora_profile = sorafs_enabled || nexus_topology_custom || nexus_lane_overrides;
-    if !args.sora && requires_sora_profile {
-        let mut sora_features = Vec::new();
-        if sorafs_enabled {
-            sora_features.push("SoraFS");
-        }
-        if nexus_topology_custom {
-            sora_features.push("multi-lane routing");
-        }
-        if nexus_lane_overrides {
-            sora_features.push("nexus lane configuration");
-        }
+    let sora_features = sora_features_requiring_flag(&config);
+    // A compiled profile owns its Nexus and SoraFS settings; `--sora` is rejected with it.
+    if !args.sora && profile_binding.is_none() && !sora_features.is_empty() {
         let detail = sora_features.join(", ");
         return Err(
             Report::new(ConfigError::SoraProfileRequired).attach(format!(
@@ -6184,10 +6246,10 @@ fn read_config_and_genesis_with_filesystem_space(
     if config.kura.init_mode != InitMode::Fast {
         preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
     }
-    // An offline configuration check never starts a VM or worker pool. Keep
-    // stdout reserved for its single Ready/Pending result, and leave scheduler
-    // setup to the real daemon startup path.
-    if !args.startup.check_config {
+    // An offline configuration or storage check never starts a VM or worker pool. Keep
+    // stdout reserved for its single result, and leave scheduler setup to the real
+    // daemon startup path.
+    if !args.startup.check_config && !args.startup.check_storage {
         if config.kura.init_mode == InitMode::Fast {
             // Fast constructs one inert State VM for structural completeness. Cap
             // that VM at one minimum-stack worker and leave the global Rayon pool
@@ -8413,16 +8475,31 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         })
         .expect("spawn FASTPQ Metal queue telemetry thread");
 }
+/// Reject a second Pasta seed source for a stock `data_dir` launch, which reads its seed from the
+/// fixed `<data_dir>/secrets/mint_finality.seed`.
+fn verify_node_secrets_seed_source(
+    node_secrets_launch: bool,
+    config: &Config,
+) -> Result<(), &'static str> {
+    if node_secrets_launch && config.sumeragi.mint_finality_seed_fd.is_some() {
+        return Err(
+            "a data_dir node reads its mint-finality seed from secrets/mint_finality.seed; \
+             remove sumeragi.mint_finality_seed_fd",
+        );
+    }
+    Ok(())
+}
 /// Reject a missing Pasta seed source before contacting deployment providers.
 ///
-/// Registry providers have no Pasta slot; the fixed consumed descriptor and
-/// exact launcher factory are the only supported ways to provide local seed
-/// custody. A later check binds the resolved holder to the full signed record.
+/// Registry providers have no Pasta slot; the fixed consumed descriptor, the
+/// fixed `<data_dir>/secrets/mint_finality.seed` of a stock `data_dir` launch
+/// and the exact launcher factory are the only supported ways to provide local
+/// seed custody. A later check binds the resolved holder to the full signed record.
 fn verify_signed_genesis_mint_finality_source_before_providers(
     network_id: iroha_data_model::NetworkId,
     local_validator: &iroha_model_base::peer::PeerId,
     authenticated_authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
-    configured_seed_fd: bool,
+    configured_seed_source: bool,
     launcher_authority: bool,
 ) -> Result<(), String> {
     authenticated_authority
@@ -8435,7 +8512,7 @@ fn verify_signed_genesis_mint_finality_source_before_providers(
         .validators
         .iter()
         .any(|entry| &entry.validator == local_validator)
-        && !configured_seed_fd
+        && !configured_seed_source
         && !launcher_authority
     {
         return Err(
@@ -8539,15 +8616,26 @@ fn run_main_with_config_guard(
             ))
         })?;
     }
+    if args.startup.check_storage {
+        return compatibility_probe::run_check_storage(&config);
+    }
     if args.startup.check_config {
-        validate_config_for_check(
+        let validated_genesis = validate_config_and_genesis_for_check(
             &config,
             genesis.as_ref(),
             args.startup
                 .require_genesis_inrou_deployment_authority
                 .as_deref(),
         )?;
-        if genesis.is_some() {
+        if args.startup.json {
+            let compatibility = compatibility_probe::config_compatibility_v1(
+                &config,
+                genesis.as_ref().zip(validated_genesis.as_ref()),
+            )?;
+            let json = norito::json::to_json(&compatibility)
+                .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
+            println!("{json}");
+        } else if genesis.is_some() {
             println!("Ready: configuration and available genesis are valid");
         } else {
             println!(
@@ -8560,6 +8648,14 @@ fn run_main_with_config_guard(
     // static configuration has passed the same offline checks as
     // `--check-config`, and before Tokio or node-owned durable state starts.
     validate_startup_config_offline(&config).change_context(MainError::Config)?;
+    // A `data_dir` node started by the stock launcher reads its runtime secrets from fixed files
+    // under `<data_dir>/secrets/`; deployment launchers keep their own registries.
+    let node_secrets_launch = config.data_dir.is_some()
+        && !emergency_fast
+        && runtime_provider_registry.is_none()
+        && launcher_runtime_factory.is_none();
+    verify_node_secrets_seed_source(node_secrets_launch, &config)
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let authenticated_genesis = genesis
         .as_ref()
         .map(|local_genesis| {
@@ -8573,7 +8669,7 @@ fn run_main_with_config_guard(
             iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
             &config.common.peer.id,
             &context.kagemusha_mint_finality_authority,
-            config.sumeragi.mint_finality_seed_fd.is_some(),
+            config.sumeragi.mint_finality_seed_fd.is_some() || node_secrets_launch,
             launcher_runtime_factory.is_some(),
         )
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
@@ -8583,6 +8679,8 @@ fn run_main_with_config_guard(
             "emergency Fast startup skipped deployment runtime-provider projection and resolution"
         );
         IrohaRuntimeDeps::default()
+    } else if node_secrets_launch {
+        resolve_node_secrets_runtime_deps(&config, authenticated_genesis.as_ref())?
     } else {
         let stock_runtime_provider_registry = if runtime_provider_registry.is_none() {
             let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
@@ -8786,12 +8884,13 @@ fn run_main_with_config_guard(
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
 }
-/// Validate configuration and any locally available genesis without mutating durable state.
-fn validate_config_for_check(
+/// Validate configuration and any locally available genesis without mutating durable state,
+/// returning the authenticated genesis bootstrap when the signed genesis is available.
+fn validate_config_and_genesis_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
     required_inrou_deployment_authority: Option<&str>,
-) -> ReportResult<(), MainError> {
+) -> ReportResult<Option<iroha_core::sumeragi::GenesisV2Bootstrap>, MainError> {
     let _discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
         *config.common.chain_discriminant.value(),
     );
@@ -8818,12 +8917,54 @@ fn validate_config_for_check(
         .map_err(Report::new)
         .change_context(MainError::Config)
         .attach("failed to validate the public runtime-provider binding catalog")?;
-    if let Some(genesis) = genesis {
-        validate_available_genesis_for_check(config, genesis, required_authority.as_ref())?;
-    }
-    Ok(())
+    genesis
+        .map(|genesis| {
+            validate_available_genesis_for_check(config, genesis, required_authority.as_ref())
+                .map(|(bootstrap, _)| bootstrap)
+        })
+        .transpose()
 }
 
+/// Resolve the runtime secrets of a `data_dir` node for a real start.
+///
+/// Opens the fixed files under `<data_dir>/secrets/` through [`node_secrets::NodeSecretsV1`],
+/// resolves the Soracloud runtime signer and the global-beacon partial signer, and binds the
+/// KAGEMUSHA mint-finality authority from `secrets/mint_finality.seed` against the roster of the
+/// already authenticated local genesis.
+#[cfg(all(feature = "daemon", unix))]
+fn resolve_node_secrets_runtime_deps(
+    config: &Config,
+    authenticated_genesis: Option<&iroha_core::sumeragi::GenesisV2Bootstrap>,
+) -> ReportResult<IrohaRuntimeDeps, MainError> {
+    let secrets_error = |error: node_secrets::NodeSecretsErrorV1| {
+        Report::new(MainError::Config).attach(error.to_string())
+    };
+    let secrets = node_secrets::NodeSecretsV1::open(config)
+        .map_err(secrets_error)?
+        .ok_or_else(|| Report::new(MainError::Config).attach("node secrets require data_dir"))?;
+    let runtime_deps = secrets
+        .resolve_runtime_deps(config)
+        .map_err(secrets_error)?;
+    let Some(authenticated_genesis) = authenticated_genesis else {
+        if secrets.has_mint_finality_seed().map_err(secrets_error)? {
+            return Err(Report::new(MainError::Config).attach(
+                "secrets/mint_finality.seed needs the local signed genesis to authenticate its roster",
+            ));
+        }
+        return Ok(runtime_deps);
+    };
+    secrets
+        .bind_mint_finality_authority(config, authenticated_genesis, runtime_deps)
+        .map_err(secrets_error)
+}
+/// Non-Unix builds cannot enforce secret-file custody.
+#[cfg(not(all(feature = "daemon", unix)))]
+fn resolve_node_secrets_runtime_deps(
+    _config: &Config,
+    _authenticated_genesis: Option<&iroha_core::sumeragi::GenesisV2Bootstrap>,
+) -> ReportResult<IrohaRuntimeDeps, MainError> {
+    Err(Report::new(MainError::Config).attach("data_dir node secrets require a Unix daemon build"))
+}
 fn validate_available_genesis_for_check(
     config: &Config,
     genesis: &GenesisBlock,
@@ -9718,6 +9859,15 @@ async fn run_node(
         }
         default_hook(info);
     }));
+    if config.lifecycle.exit_on_stdin_close {
+        spawn_input_close_shutdown(std::io::stdin(), shutdown_on_panic.clone()).map_err(
+            |error| {
+                Report::new(MainError::IrohaStart).attach(format!(
+                    "failed to watch standard input for lifecycle.exit_on_stdin_close: {error}"
+                ))
+            },
+        )?;
+    }
     let start = Iroha::start_with_runtime_deps(
         config,
         genesis,
@@ -9731,6 +9881,39 @@ async fn run_node(
         .change_context(MainError::IrohaStart)?;
     supervisor_fut.await.change_context(MainError::IrohaRun)
 }
+/// Shut the daemon down once `input` reaches end-of-file (`lifecycle.exit_on_stdin_close`).
+///
+/// A supervising parent holds the write end of the child's stdin pipe. When the parent exits for
+/// any reason, including SIGKILL, the pipe closes and the node shuts down cleanly through the same
+/// signal a panic uses. Bytes written to the pipe are discarded; a read error also shuts down.
+fn spawn_input_close_shutdown(
+    input: impl std::io::Read + Send + 'static,
+    signal: ShutdownSignal,
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("stdin-close-shutdown".to_owned())
+        .spawn(move || {
+            drain_until_eof(input);
+            iroha_logger::info!("standard input closed, shutting down...");
+            signal.send();
+        })
+        .map(drop)
+}
+/// Read and discard `input` until end-of-file or a read error.
+fn drain_until_eof(mut input: impl std::io::Read) {
+    let mut buffer = [0_u8; 256];
+    loop {
+        match input.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
+}
+#[cfg(all(test, feature = "daemon", unix))]
+#[path = "main/node_file_tests.rs"]
+mod node_file_tests;
 /// Print a startup banner with applied Norito codec settings in a retro style.
 fn log_norito_banner(cfg: &Config) {
     // Snapshot core settings
@@ -10431,7 +10614,7 @@ mod tests {
         ));
         assert!(
             compact_source
-                .contains("if!args.startup.check_config{ifconfig.kura.init_mode==InitMode::Fast{")
+                .contains("if!args.startup.check_config&&!args.startup.check_storage{ifconfig.kura.init_mode==InitMode::Fast{")
         );
         assert!(compact_source.contains(
             "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
@@ -10693,7 +10876,7 @@ mod tests {
             .split_once("fnrun_main(")
             .expect("run_main source")
             .1
-            .split_once("fnvalidate_config_for_check(")
+            .split_once("fnvalidate_config_and_genesis_for_check(")
             .expect("run_main source boundary")
             .0;
         let run_node_source = compact_source
@@ -11925,6 +12108,75 @@ mod tests {
             )
             .expect("valid genesis should execute in the disposable overlay");
         }
+        /// `--check-config --json` with a local signed genesis reports `ready` and exactly the
+        /// genesis-bound values the running network attests: the signed context hashes, the
+        /// handshake configuration fingerprint and the build/configuration-bound values of the
+        /// `pending` report.
+        #[test]
+        fn check_config_json_reports_the_signed_genesis_compatibility_values() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let fixture = offline_semantic_genesis_fixture([]);
+            // The authenticated bootstrap `--check-config` hands the probe for a local genesis.
+            let bootstrap = validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("the signed genesis executes offline");
+            let ready = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                Some((&fixture.genesis, &bootstrap)),
+            )
+            .expect("ready compatibility values");
+            let pending = compatibility_probe::config_compatibility_v1(&fixture.config, None)
+                .expect("pending compatibility values");
+            let hex_hash = |hash: iroha_crypto::Hash| {
+                let bytes: &[u8; iroha_crypto::Hash::LENGTH] = hash.as_ref();
+                hex::encode(bytes)
+            };
+            assert_eq!(ready.status, "ready");
+            assert_eq!(pending.status, "pending");
+            assert_eq!(
+                ready.execution_policy_hash,
+                Some(hex::encode(fixture.parameters.execution_policy_hash))
+            );
+            assert_eq!(
+                ready.nexus_amx_context_hash,
+                Some(hex::encode(fixture.parameters.nexus_amx_context_hash))
+            );
+            assert_eq!(
+                ready.execution_policy_hash,
+                Some(hex_hash(bootstrap.context().execution_policy_hash))
+            );
+            assert_eq!(
+                ready.nexus_amx_context_hash,
+                Some(hex_hash(bootstrap.context().nexus_amx_context_hash))
+            );
+            let config_caps = build_consensus_config_caps(&fixture.config.nexus, None, None)
+                .expect("default consensus config caps");
+            let (_, _, handshake, _, _) = consensus_caps_from_genesis(
+                &fixture.genesis,
+                &config_caps,
+                &fixture.config.sumeragi,
+            )
+            .expect("canonical genesis consensus metadata");
+            assert_ne!(handshake.config.v2_config_fingerprint, [0; 32]);
+            assert_eq!(
+                ready.config_fingerprint,
+                Some(hex::encode(handshake.config.v2_config_fingerprint))
+            );
+            assert_eq!(ready.protocol_version, bootstrap.context().protocol_version);
+            // Build- and configuration-bound values do not depend on the genesis.
+            assert_eq!(ready.protocol_version, pending.protocol_version);
+            assert_eq!(ready.wire_schema_hash, pending.wire_schema_hash);
+            assert_eq!(ready.nexus_policy_digest, pending.nexus_policy_digest);
+            assert_eq!(ready.gas_schedule_hash, pending.gas_schedule_hash);
+        }
         #[test]
         fn check_config_offline_accepts_final_inrou_deployment_capability() {
             let _registry_guard = instruction_registry_test_guard();
@@ -12113,7 +12365,8 @@ mod tests {
                 *config.common.chain_discriminant.value(),
             );
             let account = AccountId::new(config.genesis.public_key.clone()).to_string();
-            let error = validate_config_for_check(&config, None, Some(&account))
+            let error = validate_config_and_genesis_for_check(&config, None, Some(&account))
+                .map(drop)
                 .expect_err("an unavailable genesis cannot satisfy deployment qualification");
             assert!(
                 format!("{error:?}").contains("cannot be qualified without the signed genesis")
@@ -12123,9 +12376,11 @@ mod tests {
                 format!(" {account}"),
                 format!("{account}@domain"),
             ] {
-                let error = validate_config_for_check(&config, None, Some(&invalid)).expect_err(
-                    "the authority must use the configured chain's canonical account encoding",
-                );
+                let error = validate_config_and_genesis_for_check(&config, None, Some(&invalid))
+                    .map(drop)
+                    .expect_err(
+                        "the authority must use the configured chain's canonical account encoding",
+                    );
                 assert!(
                     format!("{error:?}")
                         .contains("must be a canonical account ID for the configured chain")
@@ -12138,14 +12393,19 @@ mod tests {
             config.common.chain = ChainId::from("taira");
             config.confidential.enabled = true;
             config.confidential.assume_valid = false;
-            validate_config_for_check(&config, None, None)
+            validate_config_and_genesis_for_check(&config, None, None)
+                .map(drop)
                 .expect("Taira has universal offline primitives without backend enablement");
         }
         #[test]
         fn check_config_qualifies_the_fixed_moderation_strict_ingress() {
             let mut exact = sample_config();
             configure_exact_moderation_strict_ingress(&mut exact);
-            assert!(validate_config_for_check(&exact, None, None).is_ok());
+            assert!(
+                validate_config_and_genesis_for_check(&exact, None, None)
+                    .map(drop)
+                    .is_ok()
+            );
             for (mutation, expected) in [
                 (0, "runtime-provider binding is substituted"),
                 (1, "runtime-provider binding is stale or revoked"),
@@ -12163,7 +12423,8 @@ mod tests {
                 } else {
                     moderation.strict_ingress_revision += 1;
                 }
-                let report = validate_config_for_check(&invalid, None, None)
+                let report = validate_config_and_genesis_for_check(&invalid, None, None)
+                    .map(drop)
                     .expect_err("invalid fixed ingress binding must fail check-config");
                 assert!(format!("{report:#}").contains(expected));
             }
@@ -12338,6 +12599,8 @@ mod tests {
                 genesis_manifest_json: Some(manifest_path),
                 startup: StartupArgs {
                     check_config: false,
+                    json: false,
+                    check_storage: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12404,6 +12667,8 @@ mod tests {
                 genesis_manifest_json,
                 startup: StartupArgs {
                     check_config: false,
+                    json: false,
+                    check_storage: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,

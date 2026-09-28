@@ -31802,12 +31802,24 @@ async fn handler_bridge_finality_attestation(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    let result = handler_bridge_finality_attestation_inner(app, height, headers, remote).await;
+    let result =
+        handler_bridge_finality_attestation_inner(app, Some(height), headers, remote).await;
     Ok(finalize_bridge_finality_attestation_response(result))
 }
+/// `GET /v1/bridge/finality/attestation/latest`: the same challenge-bound
+/// statement for whatever height is the durable tip when the proof is built.
+async fn handler_bridge_finality_attestation_latest(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let result = handler_bridge_finality_attestation_inner(app, None, headers, remote).await;
+    Ok(finalize_bridge_finality_attestation_response(result))
+}
+/// Shared attestation boundary; `height = None` selects the durable tip.
 async fn handler_bridge_finality_attestation_inner(
     app: SharedAppState,
-    height: u64,
+    height: Option<u64>,
     headers: axum::http::HeaderMap,
     remote: std::net::SocketAddr,
 ) -> Result<AxResponse, Error> {
@@ -31819,6 +31831,7 @@ async fn handler_bridge_finality_attestation_inner(
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
+    // Both selectors share one bucket so `latest` cannot widen the proof budget.
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -31835,8 +31848,19 @@ async fn handler_bridge_finality_attestation_inner(
     // status is never published, so the endpoint reports consensus as uninitialized.
     let status = iroha_core::sumeragi::v2_status::v2_status_with_restart_required(restart_required);
     if let Some(reason) = bridge_attestation::startup_failure(restart_required, status.as_ref()) {
+        // Failure records require a positive selector; `latest` echoes the
+        // status tip, or genesis before anything has committed.
+        let failure_height = height.unwrap_or_else(|| {
+            status
+                .as_ref()
+                .map_or(1, |status| status.last_committed_height.max(1))
+        });
         return Ok(bridge_attestation::failure_response(
-            reason, challenge, height, None, format,
+            reason,
+            challenge,
+            failure_height,
+            None,
+            format,
         ));
     }
     let status = status.expect("startup classification requires an initialized status");
@@ -42984,6 +43008,7 @@ impl Torii {
             EVIDENCE_LIST => operator_get(handler_sumeragi_evidence, app_state);
             BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
             BRIDGE_FINALITY_ATTESTATION => public_get(handler_bridge_finality_attestation);
+            BRIDGE_FINALITY_ATTESTATION_LATEST => public_get(handler_bridge_finality_attestation_latest);
             BRIDGE_FINALITY_BUNDLE => public_get(handler_bridge_finality_bundle);
         );
         #[cfg(feature = "telemetry")]

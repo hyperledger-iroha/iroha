@@ -7,7 +7,7 @@
 //! reach a maintenance boundary fail closed because block headers do not commit
 //! the post-maintenance active-witness roster or witness permission mapping.
 //!
-//! TODO(ws39): the governed `DPoS` anchor (with its BLAKE2b hash), the anchor-based schedule
+//! TODO(ws39): the governed `DPoS` anchor (with its `BLAKE2b` hash), the anchor-based schedule
 //! replay and 27-header window, the proof work estimate and the retired SCCP transfer-call and
 //! replay-witness binding were cut. The v1 TRON light client (`light_client::tron`) rebuilds
 //! solidity from the header, signature and transaction-inclusion primitives kept here.
