@@ -5553,12 +5553,12 @@ pub struct IncentivesOpenDisputeArgs {
 impl Run for IncentivesOpenDisputeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = read_reward_instruction(&self.instruction)?;
-        let treasury = parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
+        // The dispute record does not carry the treasury, but the flag stays validated.
+        parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
         let requested_amount = parse_quantity_str(&self.requested_amount, "--requested-amount")?;
         let submitted_at = self.submitted_at.unwrap_or_else(unix_now);
-        let ledger = RelayPayoutLedger::new(treasury);
-        let dispute = ledger.open_dispute(
+        let dispute = RelayPayoutLedger::open_dispute(
             instruction,
             requested_amount,
             submitted_by,

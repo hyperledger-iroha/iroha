@@ -1094,10 +1094,6 @@ def main() -> int:
             ("Executable::IvmProved(proved)",),
         ),
         (
-            "crates/iroha_data_model/src/visit/mod.rs",
-            ("Executable::IvmProved(proved)", "visitor.visit_ivm(&proved.bytecode)"),
-        ),
-        (
             "crates/iroha_torii/src/lib.rs",
             ("derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context",),
         ),

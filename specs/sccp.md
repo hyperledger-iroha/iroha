@@ -2380,9 +2380,8 @@ allows proposing. Its grant and revoke rule is `OnlyGenesis`, as for
 operator's proposing account), and after genesis nobody can grant or revoke
 it. `CanManageSccpGovernance`, which today is the only grantor, is deleted,
 and no other manager role replaces it. A holder can only put proposals before
-the Parliament and pay their fees; bonded citizens can always propose. The
-default executor gets allow-visitors for the SCCP instructions; core enforces
-every SCCP rule. Implicit account registrations (a bridge key's account,
+the Parliament and pay their fees; bonded citizens can always propose. Core
+enforces every SCCP rule. Implicit account registrations (a bridge key's account,
 §4.2.2; a recipient at settlement, refund or stranded release, §4.12.3) have
 the effect and validation-fee DS classification of `Register<Account>`.
 

@@ -187,7 +187,8 @@ The canonical data model and hashing rules live in
 `crates/iroha_data_model/src/hijiri/mod.rs`. Validation-fee resolution and
 rounding live in `crates/iroha_core/src/validation_fee.rs`. Parameter transition
 validation lives in `crates/iroha_core/src/smartcontracts/isi/world.rs`, and
-authorization lives in both the initial and deployed default executors with its
+authorization lives in Core's initial executor
+(`crates/iroha_core/src/executor_initial_permission_authority.rs`) with its
 permission type in `crates/iroha_executor_data_model/src/permission.rs`. The
 native quote DTO and validation contract live in
 `crates/iroha_torii_shared/src/validation_fee_api.rs`; Torii's same-snapshot

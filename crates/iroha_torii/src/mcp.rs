@@ -10377,9 +10377,20 @@ mod tests {
             assert_eq!(effect, manual_tool_effect_from_name(&tool.name));
             assert_eq!(method, &Method::POST);
             let schema = tool.input_schema.as_object().expect("input schema");
+            // Flat top-level body shortcuts are retired: callers must pass `body`, and
+            // the sanitized advertised schema closes the top level.
+            assert_eq!(schema.get("additionalProperties"), None);
             assert_eq!(
-                schema.get("additionalProperties").and_then(Value::as_bool),
-                Some(true)
+                schema.get("required"),
+                Some(&norito::json!(["body"])),
+                "{} must require the raw `body` object",
+                tool.name
+            );
+            assert_eq!(
+                sanitize_tool_input_schema(&tool.input_schema)
+                    .get("additionalProperties")
+                    .and_then(Value::as_bool),
+                Some(false)
             );
             let properties = schema
                 .get("properties")

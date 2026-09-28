@@ -866,17 +866,31 @@ async fn long_poll_quota_preserves_capacity_for_bounded_tools() {
     let _held = long_poll
         .try_acquire_owned()
         .expect("test holds the only long-poll permit");
-    for (id, name) in [
-        (1_u64, "iroha.transactions.wait"),
-        (2, "iroha.transactions.submit_and_wait"),
-        (3, "iroha.contracts.call_and_wait"),
+    // Schema-valid arguments, so the long-poll admission check is what rejects each call.
+    for (id, name, arguments) in [
+        (
+            1_u64,
+            "iroha.transactions.wait",
+            norito::json!({ "query": { "hash": ("ab".repeat(32)) } }),
+        ),
+        (
+            2,
+            "iroha.transactions.submit_and_wait",
+            norito::json!({ "body_base64": "AA==" }),
+        ),
+        (
+            3,
+            "iroha.contracts.call_and_wait",
+            norito::json!({ "body": {} }),
+        ),
     ] {
+        let arguments = arguments.as_object().expect("object arguments");
         let wait_response = handle_named_tool_call(
             Some(Value::from(id)),
             std::sync::Arc::clone(&app),
             &HeaderMap::new(),
             name,
-            &Map::new(),
+            arguments,
         )
         .await;
         assert_eq!(

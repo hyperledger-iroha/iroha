@@ -465,8 +465,6 @@ impl norito::json::JsonDeserialize for Executor {
         Ok(Self { bytecode })
     }
 }
-/// Result type that every executor should return.
-pub type Result<T = (), E = crate::ValidationFail> = core::result::Result<T, E>;
 pub mod prelude {
     //! The prelude re-exports most commonly used traits, structs and macros from this crate.
     pub use super::{Executor, ExecutorDataModel};

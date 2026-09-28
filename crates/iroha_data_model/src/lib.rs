@@ -207,8 +207,6 @@ pub mod validation_fee;
 pub mod validator;
 /// Verification helper traits and host bindings.
 pub mod verification;
-/// Visitor traits for traversing data-model structures.
-pub mod visit;
 /// Compiled consensus and block wire-schema identity.
 pub mod wire_schema;
 /// Zero-knowledge proof payload types.

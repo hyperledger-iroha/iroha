@@ -27,7 +27,6 @@ MAX_MACRO_LINES = 85
 EXPECTED_TEST_IDS = (
     "handle_ok",
     "handle_err",
-    "handle_or_default_returns_default",
     "finish_token_stream_with_appends_tokens",
 )
 MACRO_CONSUMERS = {
@@ -76,7 +75,6 @@ def _emitter_behavior(source: str, owner: str, local: bool) -> None:
     }
     if local:
         expected.update({
-            "handle_or_default": "self.handle(result).unwrap_or_default()",
             "finish_token_stream": "self.finish_token_stream_with(TokenStream::new())",
             "finish_token_stream_with": "ifletErr(err)=self.into_result(){err.to_tokens(&muttokens);}tokens",
         })
@@ -99,7 +97,6 @@ def _local_tests(source: str, owner: str) -> None:
     tests = {
         "handle_ok": ("assert_eq!(value,Some(42));", "assert!(e.finish_token_stream().is_empty());"),
         "handle_err": ("assert!(value.is_none());", "assert!(!e.finish_token_stream().is_empty());"),
-        "handle_or_default_returns_default": ("assert_eq!(value,0);",),
         "finish_token_stream_with_appends_tokens": ("assert!(token_string.contains(", "assert!(token_string.len()>"),
     }
     for name, assertions in tests.items():
@@ -234,7 +231,6 @@ class SharedEmitterSourceTest(unittest.TestCase):
             for old, new, name in (
                 ("Some(value)", "None", "handle"),
                 ("self.emit(err);", "let _ = err;", "handle"),
-                ("self.handle(result).unwrap_or_default()", "Default::default()", "handle_or_default"),
                 ("self.finish_token_stream_with(TokenStream::new())", "TokenStream::new()", "finish_token_stream"),
                 ("err.to_tokens(&mut tokens);", "let _ = err;", "finish_token_stream_with"),
             ):

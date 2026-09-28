@@ -8426,8 +8426,8 @@ include!("executor_initial_permission_authority.rs");
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
     INITIAL_EXECUTOR_PERMISSION_NAMES.contains(&permission_name)
 }
-/// Parse the WAT-like template used in integration tests to embed a sequence
-/// of Norito-encoded ISIs into linear memory, then execute each instruction.
+/// Return the `Register<AssetDefinition>` carried by `instruction`, whether it is typed,
+/// wrapped in a [`RegisterBox`], or an encoded instruction of that concrete type.
 pub(crate) fn extract_register_asset_definition(
     instruction: &InstructionBox,
 ) -> Option<Register<AssetDefinition>> {

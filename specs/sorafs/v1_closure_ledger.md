@@ -727,7 +727,7 @@ A distinct registered observer needs `CanCheckSorafsFinalPromotion`; the origina
 operator must remain registered and currently authorized to Operate the deployment.
 Core applies both checks during native execution and at the authenticated applied
 cut, including direct/role permissions and exact original operation ownership.
-Initial/default executor dispatch and permission/schema registration use the same
+Initial executor dispatch and permission/schema registration use the same
 separate Check permission. Account-custody Check permission grants no receipt
 privilege. Reserve/Complete mutation authority is not granted by either Check.
 The existing complete signed-External proof, aligned successful result, committee
