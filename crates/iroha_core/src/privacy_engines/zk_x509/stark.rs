@@ -34,6 +34,8 @@ use super::p256_aggregate_adapter::{
     ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_V1, absorb_p256_terminal_claims_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_residues_v1;
 use super::{
     accumulator_air::{
@@ -622,6 +624,11 @@ pub(crate) enum ZkX509StarkErrorV1 {
     /// A bounded allocation failed.
     #[error("zk-X509 STARK bounded allocation failed")]
     AllocationFailure,
+    /// Device work has uncertain completion and still owns private staging.
+    /// A new proof cannot hide that retained payload by switching to CPU.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    #[error("zk-X509 prover device completion is uncertain; restart before proving again")]
+    AcceleratorCompletionUncertain,
     /// An invariant in the compiled prover implementation failed.
     #[error("zk-X509 STARK internal invariant failed")]
     InternalInvariant,
@@ -2609,6 +2616,13 @@ struct IoTraceMaterialV1 {
     fixed_columns: Vec<Vec<F>>,
 }
 #[cfg(test)]
+impl Drop for IoTraceMaterialV1 {
+    fn drop(&mut self) {
+        zeroize_field_rows_v1(&mut self.base_columns);
+        zeroize_field_rows_v1(&mut self.aux_columns);
+    }
+}
+#[cfg(test)]
 #[derive(Clone)]
 struct ProjectionTraceMaterialV1 {
     layout: SegmentLayoutV1,
@@ -3202,7 +3216,15 @@ fn build_io_base_and_fixed_columns_for_layout_v1(
     witnesses: &[ZkX509IoChannelWitnessV1],
     layout: SegmentLayoutV1,
     logical_active_rows: usize,
-) -> Result<(Vec<Vec<F>>, Vec<Vec<F>>, Vec<IoAccessV1>, Vec<IoAccessV1>), ZkX509StarkErrorV1> {
+) -> Result<
+    (
+        PrivateTableV1<Vec<F>>,
+        Vec<Vec<F>>,
+        PrivateTableV1<IoAccessV1>,
+        PrivateTableV1<IoAccessV1>,
+    ),
+    ZkX509StarkErrorV1,
+> {
     let fixed_schedule = MainIoFixedScheduleV1::compile_v1(layout, statement, logical_active_rows)?;
     build_io_base_and_fixed_columns_from_schedule_v1(statement, witnesses, &fixed_schedule)
 }
@@ -3211,7 +3233,15 @@ fn build_io_base_and_fixed_columns_from_schedule_v1(
     statement: &ZkX509IoStarkStatementV1,
     witnesses: &[ZkX509IoChannelWitnessV1],
     fixed_schedule: &MainIoFixedScheduleV1,
-) -> Result<(Vec<Vec<F>>, Vec<Vec<F>>, Vec<IoAccessV1>, Vec<IoAccessV1>), ZkX509StarkErrorV1> {
+) -> Result<
+    (
+        PrivateTableV1<Vec<F>>,
+        Vec<Vec<F>>,
+        PrivateTableV1<IoAccessV1>,
+        PrivateTableV1<IoAccessV1>,
+    ),
+    ZkX509StarkErrorV1,
+> {
     let layout = fixed_schedule.layout;
     let logical_active_rows = fixed_schedule.logical_active_rows;
     if witnesses.len() != statement.declarations.len()
@@ -3230,7 +3260,10 @@ fn build_io_base_and_fixed_columns_from_schedule_v1(
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
     fixed_schedule.validate_witness_topology_v1(&execution, &sorted)?;
-    let mut base_columns = allocate_column_matrix_v1(IO_BASE_WIDTH, layout.trace_size())?;
+    let mut base_columns = PrivateTableV1::new(
+        allocate_column_matrix_v1(IO_BASE_WIDTH, layout.trace_size())?,
+        zeroize_field_rows_v1,
+    );
     for index in 0..layout.trace_size() {
         let mut base = [F::ZERO; IO_BASE_WIDTH];
         if index < logical_active_rows {
@@ -3251,10 +3284,10 @@ fn build_io_base_and_fixed_columns_v1(
 ) -> Result<
     (
         SegmentLayoutV1,
+        PrivateTableV1<Vec<F>>,
         Vec<Vec<F>>,
-        Vec<Vec<F>>,
-        Vec<IoAccessV1>,
-        Vec<IoAccessV1>,
+        PrivateTableV1<IoAccessV1>,
+        PrivateTableV1<IoAccessV1>,
     ),
     ZkX509StarkErrorV1,
 > {
@@ -3278,7 +3311,7 @@ fn build_io_aux_columns_v1(
     logical_active_rows: usize,
     expected_execution: &[IoAccessV1],
     expected_sorted: &[IoAccessV1],
-) -> Result<Vec<Vec<F>>, ZkX509StarkErrorV1> {
+) -> Result<PrivateTableV1<Vec<F>>, ZkX509StarkErrorV1> {
     validate_io_logical_geometry_v1(layout, logical_active_rows)?;
     let trace = build_zk_x509_io_trace_v1(witnesses, challenges)?;
     if trace.declarations != statement.declarations
@@ -3294,7 +3327,10 @@ fn build_io_aux_columns_v1(
         .permutation_rows
         .last()
         .ok_or(ZkX509StarkErrorV1::IoWitness)?;
-    let mut aux_columns = allocate_column_matrix_v1(IO_AUX_WIDTH, layout.trace_size())?;
+    let mut aux_columns = PrivateTableV1::new(
+        allocate_column_matrix_v1(IO_AUX_WIDTH, layout.trace_size())?,
+        zeroize_field_rows_v1,
+    );
     let logical_active_rows_field =
         F(u64::try_from(logical_active_rows).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?);
     for index in 0..layout.trace_size() {
@@ -6116,8 +6152,8 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     let trace_material = IoTraceMaterialV1 {
         layout,
         logical_active_rows,
-        base_columns,
-        aux_columns,
+        base_columns: base_columns.into_vec(),
+        aux_columns: aux_columns.into_vec(),
         fixed_columns,
     };
     validate_io_base_constraints_v1(&trace_material, io_challenges)?;
@@ -10572,8 +10608,8 @@ fn compile_main_io_statement_from_source_v1(
     }
     let (declarations, execution, sorted) = build_zk_x509_io_base_tables_v1(&source.witnesses)?;
     if declarations != source.declarations
-        || execution != source.execution
-        || sorted != source.sorted
+        || execution.as_slice() != source.execution.as_slice()
+        || sorted.as_slice() != source.sorted.as_slice()
     {
         return Err(ZkX509StarkErrorV1::IoWitness);
     }
@@ -10629,7 +10665,9 @@ impl<'a> MainIoTraceGroupSourceV1<'a> {
                 &source.witnesses,
                 &fixed_schedule,
             )?;
-        if execution != source.execution || sorted != source.sorted {
+        if execution.as_slice() != source.execution.as_slice()
+            || sorted.as_slice() != source.sorted.as_slice()
+        {
             return Err(ZkX509StarkErrorV1::IoWitness);
         }
         validate_io_base_phase_shape_v1(
@@ -10642,7 +10680,7 @@ impl<'a> MainIoTraceGroupSourceV1<'a> {
             registration,
             statement: io_statement,
             source,
-            base_columns,
+            base_columns: base_columns.into_vec(),
             fixed_columns,
             aux_columns: None,
             post_base: None,
@@ -10678,7 +10716,7 @@ impl<'a> MainIoTraceGroupSourceV1<'a> {
             &self.fixed_columns,
             challenges,
         )?;
-        self.aux_columns = Some(aux_columns);
+        self.aux_columns = Some(aux_columns.into_vec());
         self.post_base = Some(post_base);
         Ok(())
     }
@@ -10709,13 +10747,13 @@ impl<'a> MainIoTraceGroupSourceV1<'a> {
     }
     fn zeroize_private_buffers_v1(&mut self) {
         for column in &mut self.base_columns {
-            column.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(column);
             column.clear();
         }
         self.base_columns.clear();
         if let Some(aux_columns) = &mut self.aux_columns {
             for column in aux_columns.iter_mut() {
-                column.fill(F::ZERO);
+                super::private_table::zeroize_fields_v1(column);
                 column.clear();
             }
             aux_columns.clear();

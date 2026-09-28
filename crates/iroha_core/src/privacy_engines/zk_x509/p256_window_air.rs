@@ -161,16 +161,29 @@ pub(crate) enum P256WindowExternalAddressV1 {
 }
 /// One complete 16-way point-selection trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct P256WindowTraceV1 {
     /// Verifier-regenerated topology.
     pub(crate) fixed: Vec<P256WindowFixedRowV1>,
     /// Committed witness rows.
     pub(crate) base: Vec<[F; P256_WINDOW_BASE_WIDTH_V1]>,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for P256WindowTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("P256WindowTraceV1 { <private trace redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256WindowTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
 /// One aggregate commitment layout for all 128 verifier-positioned windows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct P256WindowBatchStarkTraceV1 {
     /// Vertically concatenated and per-window padded selector rows.
     pub(crate) base: Vec<[F; P256_WINDOW_BASE_WIDTH_V1]>,
@@ -178,12 +191,24 @@ pub(crate) struct P256WindowBatchStarkTraceV1 {
     pub(crate) aux: Vec<[F; P256_WINDOW_STARK_AUX_WIDTH_V1]>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for P256WindowBatchStarkTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("P256WindowBatchStarkTraceV1 { <private trace redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256WindowBatchStarkTraceV1 {
+    fn drop(&mut self) {
+        super::private_table::zeroize_field_rows_v1(&mut self.base);
+        super::private_table::zeroize_field_rows_v1(&mut self.aux);
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256WindowTraceV1 {
     /// Overwrite every witness-bearing selector row.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        for row in &mut self.base {
-            row.fill(F::ZERO);
-        }
+        super::private_table::zeroize_field_rows_v1(&mut self.base);
         self.base.clear();
     }
     /// Validate the exact verifier-positioned lookup and all row identities.
@@ -280,7 +305,10 @@ pub(crate) fn build_p256_window_trace_v1(
     let table_limbs = table.map(point_limbs_v1);
     let selected_limbs = table_limbs[selected_index];
     let fixed = fixed_rows_v1(scalar, window);
-    let mut base = Vec::with_capacity(P256_WINDOW_ROWS_V1);
+    let mut base = super::private_table::PrivateTableV1::new(
+        Vec::with_capacity(P256_WINDOW_ROWS_V1),
+        super::private_table::zeroize_field_rows_v1,
+    );
     let mut accumulator = [F::ZERO; P256_WINDOW_COORDINATES_V1 * P256_WINDOW_COORDINATE_LIMBS_V1];
     let mut selected_count = F::ZERO;
     for (candidate, candidate_limbs) in table_limbs.iter().enumerate() {
@@ -328,7 +356,10 @@ pub(crate) fn build_p256_window_trace_v1(
         row[SELECTED_COUNT] = selected_count;
         base.push(row);
     }
-    let trace = P256WindowTraceV1 { fixed, base };
+    let trace = P256WindowTraceV1 {
+        fixed,
+        base: base.into_vec(),
+    };
     trace.validate_for_v1(scalar, window)?;
     Ok(trace)
 }
@@ -647,7 +678,10 @@ pub(crate) fn build_p256_window_batch_stark_trace_v1(
     if windows.len() != P256_WINDOW_BATCH_INSTANCES_V1 {
         return Err(P256WindowAirErrorV1::Topology);
     }
-    let mut base = Vec::new();
+    let mut base = super::private_table::PrivateTableV1::new(
+        Vec::new(),
+        super::private_table::zeroize_field_rows_v1,
+    );
     base.try_reserve_exact(P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1)
         .map_err(|_| P256WindowAirErrorV1::Allocation)?;
     for (index, trace) in windows.iter().enumerate() {
@@ -664,7 +698,10 @@ pub(crate) fn build_p256_window_batch_stark_trace_v1(
     }
     let aux =
         vec![[F::ZERO; P256_WINDOW_STARK_AUX_WIDTH_V1]; P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1];
-    Ok(P256WindowBatchStarkTraceV1 { base, aux })
+    Ok(P256WindowBatchStarkTraceV1 {
+        base: base.into_vec(),
+        aux,
+    })
 }
 fn stark_window_matching_bit_v1<A: PolynomialAirFieldV1>(bit: A, expected: A) -> A {
     expected
@@ -852,6 +889,32 @@ fn boolean_residue_v1<A: PolynomialAirFieldV1>(value: A) -> A {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_window_erasure_covers_drop_and_partially_built_batch() {
+        use super::super::private_table::inspection::observe_v1;
+        let trace = build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, table_v1(), [1, 0, 1, 0])
+            .unwrap();
+        assert_eq!(
+            format!("{trace:?}"),
+            "P256WindowTraceV1 { <private trace redacted> }"
+        );
+        let cells = trace.base.len() * P256_WINDOW_BASE_WIDTH_V1;
+        let (_, observed) = observe_v1(|| drop(trace));
+        assert_eq!(observed.iter().map(|item| item.cells).sum::<usize>(), cells);
+        assert!(observed.iter().any(|item| item.nonzero_before > 0));
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        let mut windows = window_batch_v1();
+        windows[1].fixed[0] = windows[0].fixed[0];
+        let (result, observed) = observe_v1(|| build_p256_window_batch_stark_trace_v1(&windows));
+        assert!(result.is_err());
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells >= cells && item.nonzero_before > 0)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+
     use super::*;
     fn point_v1(tag: u8) -> P256WindowPointV1 {
         let mut x = [0_u8; 32];

@@ -683,6 +683,23 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
     );
     let mut corrupted = fs::read(path)?;
     ensure!(corrupted.len() as u64 == chunk_length);
+    let expected_digest = blake3::hash(&corrupted);
+    // Keep unrelated healthy manifests available, but rule out every local copy of the
+    // missing content. Completion must exercise the authenticated remote repair source.
+    for manifest in fs::read_dir(published.providers[0].storage_dir.join("manifests"))? {
+        for candidate in fs::read_dir(manifest?.path().join("chunks"))? {
+            let candidate = candidate?.path();
+            if candidate == *path || fs::metadata(&candidate)?.len() != chunk_length {
+                continue;
+            }
+            let bytes = fs::read(&candidate)?;
+            ensure!(bytes.len() as u64 == chunk_length);
+            ensure!(
+                blake3::hash(&bytes) != expected_digest,
+                "remote repair qualification must not have a valid local source for the corrupted chunk"
+            );
+        }
+    }
     corrupted[0] ^= 0x80;
     let mut file = fs::OpenOptions::new()
         .write(true)

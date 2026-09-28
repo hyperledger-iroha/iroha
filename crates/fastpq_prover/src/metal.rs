@@ -37,9 +37,15 @@
 //! Metal GPU bindings for FASTPQ.
 #[path = "metal_digest384.rs"]
 pub(crate) mod digest384;
+#[path = "metal_exact_root.rs"]
+pub(crate) mod exact_root;
+#[path = "metal_ticket_lifetime.rs"]
+mod ticket_lifetime;
+use ticket_lifetime::{Completion, DrainBudget, DrainScope};
 
 #[cfg(test)]
 use crate::bn254;
+use crate::gpu_secret::SecretWords;
 use crate::{
     backend::GpuBackend,
     bn254_poseidon::Bn254PoseidonBatchSlice,
@@ -131,16 +137,18 @@ const MIN_QUEUE_COLUMN_THRESHOLD: u32 = 1;
 const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
 const MAX_BUFFER_POOL_PAGES_PER_BUFFER: usize = 1_024;
-const MAX_BUFFER_POOL_CACHED_PAGES: usize = 4_096;
+const MAX_BUFFER_POOL_CACHED_PAGES: usize =
+    crate::goldilocks_transform::EXACT_ROOT_METAL_POOL_CACHED_PAGES_V1;
 const MAX_RETAINED_DISPATCH_TICKETS: usize = 16;
 const MAX_RETAINED_TELEMETRY_SAMPLES: usize = 4_096;
 #[cfg(test)]
 const BN254_TWIDDLE_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
-const GOLDILOCKS_TWIDDLE_CACHE_MAX_ENTRIES: usize = 64;
+const GOLDILOCKS_TWIDDLE_CACHE_MAX_ENTRIES: usize =
+    crate::goldilocks_transform::EXACT_ROOT_METAL_TWIDDLE_ENTRIES_V1;
 // Metal's bytes-no-copy API requires both ends of the wrapped region to be
 // page-aligned. A 16 KiB region satisfies both 4 KiB Intel and 16 KiB Apple
 // Silicon macOS page sizes.
-const METAL_BUFFER_PAGE_BYTES: usize = 16 * 1024;
+const METAL_BUFFER_PAGE_BYTES: usize = crate::goldilocks_transform::EXACT_ROOT_METAL_PAGE_BYTES_V1;
 const METAL_BUFFER_PAGE_WORDS: usize = METAL_BUFFER_PAGE_BYTES / mem::size_of::<u64>();
 const GOLDILOCKS_TWO_ADICITY: u32 = 32;
 const DEFAULT_MAX_COMMAND_BUFFERS: usize = 4;
@@ -148,6 +156,46 @@ const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
 const ADAPTIVE_BACKOFF_RATIO: f64 = 1.3;
 const METAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+static BACKEND_QUARANTINED: AtomicBool = AtomicBool::new(false);
+
+/// Unknown completion can retain private storage; reuse needs a fresh process.
+pub(crate) fn backend_quarantined() -> bool {
+    #[cfg(test)]
+    if let Some(value) = TEST_QUARANTINE.with(std::cell::Cell::get) {
+        return value;
+    }
+    BACKEND_QUARANTINED.load(Ordering::Acquire)
+}
+
+fn quarantine_backend() {
+    #[cfg(test)]
+    if TEST_QUARANTINE.with(|state| {
+        if state.get().is_some() {
+            state.set(Some(true));
+            true
+        } else {
+            false
+        }
+    }) {
+        return;
+    }
+    BACKEND_QUARANTINED.store(true, Ordering::Release);
+}
+
+fn ensure_backend_available() -> MetalResult<()> {
+    if backend_quarantined() {
+        Err(GpuError::CompletionUncertain {
+            backend: GpuBackend::Metal,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_QUARANTINE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
 // Permit acquisition is host-side backpressure, so it must not fail before a
 // submitted command is considered hung.
 const METAL_COMMAND_PERMIT_TIMEOUT: Duration = METAL_COMMAND_TIMEOUT;
@@ -330,6 +378,8 @@ fn dispatch_bn254_fft_columns<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
 ) -> MetalResult<PendingColumns<'a>> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     bn254_validate_log(log_size)?;
     let element_extent = bn254_column_extent(columns)?;
     if element_extent == 0 {
@@ -437,6 +487,8 @@ fn dispatch_bn254_lde_columns(
     blowup_log: u32,
     coset: [u64; BN254_LIMBS],
 ) -> MetalResult<PendingLde> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     let (expected_trace, _, eval_len) = bn254_lde_domain_lengths(trace_log, blowup_log)?;
     let trace_extent = bn254_column_extent(coeffs)?;
     if trace_extent == 0 {
@@ -474,7 +526,7 @@ fn dispatch_bn254_lde_columns(
     let mut coeff_buffer = flatten_with_stats(coeffs, ColumnStagingPhase::Lde)?;
     let stats_enabled = LDE_STATS_ENABLED.load(Ordering::Acquire);
     let zero_timer = stats_enabled.then(|| Instant::now());
-    let mut eval_buffer = PooledBuffer::zeroed(eval_limbs)?;
+    let mut eval_buffer = PooledBuffer::sensitive_zeroed(eval_limbs)?;
     let host_stats = zero_timer.map(|start| LdeHostStats {
         zero_fill_bytes: eval_buffer.len().saturating_mul(mem::size_of::<u64>()),
         zero_fill_ms: elapsed_ms(start.elapsed()),
@@ -683,6 +735,18 @@ struct DispatchTicket {
     kernel_context: Option<KernelDispatchContext>,
     permit: CommandPermit,
     adaptive_sample: Option<AdaptiveSample>,
+    drain_budget: DrainBudget,
+    completion_checked: bool,
+}
+impl Drop for DispatchTicket {
+    fn drop(&mut self) {
+        if !self.completion_checked {
+            // A partially submitted operation may never publish its ticket.
+            // Drain it under the same group deadline, retaining uncertain
+            // device-owned buffers and callback-owned permits on timeout.
+            let _ = wait_for_ticket_inner(self, true);
+        }
+    }
 }
 impl DispatchTicket {
     fn with_adaptive_sample(mut self, sample: AdaptiveSample) -> Self {
@@ -1507,6 +1571,27 @@ pub struct MetalKernelDescriptor {
 }
 const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
     MetalKernelDescriptor {
+        entry_point: exact_root::BIT_REVERSE_KERNEL,
+        kind: KernelKind::Fft,
+        threadgroup_cap: Some(256),
+        tile_stage_cap: None,
+        notes: "Exact-root FFT preparation. Disjoint index/reversed-index pairs are swapped once; a device resource barrier precedes tile evaluation.",
+    },
+    MetalKernelDescriptor {
+        entry_point: exact_root::LOCAL_TILES_KERNEL,
+        kind: KernelKind::Fft,
+        threadgroup_cap: Some(256),
+        tile_stage_cap: Some(8),
+        notes: "One independent 256-word tile per threadgroup. Uses supplied stage roots and normalizes inverse transforms when this is the last stage.",
+    },
+    MetalKernelDescriptor {
+        entry_point: exact_root::GLOBAL_STAGE_KERNEL,
+        kind: KernelKind::Fft,
+        threadgroup_cap: Some(256),
+        tile_stage_cap: None,
+        notes: "One independent group per 2048 butterflies, with an explicit resource barrier between stages. Final inverse scaling occurs before publication.",
+    },
+    MetalKernelDescriptor {
         entry_point: "fastpq_fft_columns",
         kind: KernelKind::Fft,
         threadgroup_cap: Some(FFT_THREADGROUP_CAPACITY),
@@ -1691,7 +1776,7 @@ struct ColumnBatchTicket {
 }
 
 struct ColumnMutationRollback {
-    original: Option<Vec<Vec<u64>>>,
+    original: Option<Vec<SecretWords>>,
 }
 
 impl ColumnMutationRollback {
@@ -1701,11 +1786,9 @@ impl ColumnMutationRollback {
             GpuError::InvalidInput("Metal rollback column list exceeds available host memory")
         })?;
         for column in columns {
-            let mut snapshot = Vec::new();
-            snapshot.try_reserve_exact(column.len()).map_err(|_| {
+            let snapshot = SecretWords::copy_from(column).map_err(|_| {
                 GpuError::InvalidInput("Metal rollback column data exceeds available host memory")
             })?;
-            snapshot.extend_from_slice(column);
             original.push(snapshot);
         }
         Ok(Self {
@@ -1722,8 +1805,10 @@ impl ColumnMutationRollback {
             return;
         };
         debug_assert_eq!(columns.len(), original.len());
-        for (column, original_column) in columns.iter_mut().zip(original) {
-            *column = original_column;
+        for (column, mut original_column) in columns.iter_mut().zip(original) {
+            // Restore the original allocation. The guarded snapshot now owns
+            // and clears the partially transformed allocation it replaced.
+            original_column.swap_with(column);
         }
     }
 
@@ -1743,22 +1828,12 @@ fn rollback_columns_on_error<T>(
     result
 }
 
-fn try_clone_metal_words(words: &[u64], error: &'static str) -> MetalResult<Vec<u64>> {
-    let mut snapshot = Vec::new();
-    snapshot
-        .try_reserve_exact(words.len())
-        .map_err(|_| GpuError::InvalidInput(error))?;
-    snapshot.extend_from_slice(words);
-    Ok(snapshot)
+fn try_clone_metal_words(words: &[u64], error: &'static str) -> MetalResult<SecretWords> {
+    SecretWords::copy_from(words).map_err(|_| GpuError::InvalidInput(error))
 }
 
-fn try_zeroed_metal_words(len: usize, error: &'static str) -> MetalResult<Vec<u64>> {
-    let mut words = Vec::new();
-    words
-        .try_reserve_exact(len)
-        .map_err(|_| GpuError::InvalidInput(error))?;
-    words.resize(len, 0);
-    Ok(words)
+fn try_zeroed_metal_words(len: usize, error: &'static str) -> MetalResult<SecretWords> {
+    SecretWords::zeroed(len).map_err(|_| GpuError::InvalidInput(error))
 }
 
 #[cfg(test)]
@@ -2059,18 +2134,18 @@ impl PendingLde {
                     "Metal LDE output chunk length exceeds platform limits",
                 ))?;
         for column in 0..self.column_count {
-            let mut chunk = Vec::new();
-            chunk.try_reserve_exact(chunk_len).map_err(|_| {
+            let mut chunk = SecretWords::zeroed(chunk_len).map_err(|_| {
                 GpuError::InvalidInput("Metal LDE result column exceeds available host memory")
             })?;
-            chunk.resize(chunk_len, 0);
             let offset = column.checked_mul(chunk_len).ok_or(GpuError::InvalidInput(
                 "Metal LDE output offset exceeds platform limits",
             ))?;
             self.eval_buffer.copy_range_to_slice(offset, &mut chunk);
             result.push(chunk);
         }
-        Ok(Some(result))
+        Ok(Some(crate::gpu_secret::release_columns(result).map_err(
+            |_| GpuError::InvalidInput("Metal LDE output list exceeds available host memory"),
+        )?))
     }
     fn complete_dispatch(&mut self) -> MetalResult<()> {
         if self.completed {
@@ -2446,6 +2521,9 @@ struct MetalPipelines {
     fft: ComputePipelineState,
     lde: ComputePipelineState,
     post_tile: ComputePipelineState,
+    exact_root_bit_reverse: ComputePipelineState,
+    exact_root_local_tiles: ComputePipelineState,
+    exact_root_global_stage: ComputePipelineState,
     #[cfg(test)]
     bn254_fft: ComputePipelineState,
     #[cfg(test)]
@@ -2493,6 +2571,8 @@ pub(crate) fn digest384_hash_frames_v1(
     staged: &crate::digest384_gpu::StagedDigest384V1,
     output: &mut [u64],
 ) -> MetalResult<()> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     use crate::digest384_gpu::digest384_gpu_parameters_v1;
     if output.len() != staged.frame_count * 6 {
         return Err(GpuError::InvalidInput(
@@ -2550,7 +2630,9 @@ pub(crate) fn digest384_hash_frames_v1(
         },
     )?;
     if let Err(error) = wait_for_ticket(ticket) {
-        *quarantine = Some(buffers);
+        if matches!(error, GpuError::CompletionUncertain { .. }) {
+            *quarantine = Some(buffers);
+        }
         return Err(error);
     }
     buffers[3].0.copy_to_slice(output);
@@ -2564,6 +2646,8 @@ pub(crate) fn digest384_indexed_coordinates_v1(
     staged: &crate::digest384_indexed_gpu::StagedDigest384IndexedV1,
     output: &mut [u64],
 ) -> MetalResult<()> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     use crate::digest384_gpu::digest384_gpu_parameters_v1;
     if output.len() != staged.count
         || staged.count == 0
@@ -2622,7 +2706,9 @@ pub(crate) fn digest384_indexed_coordinates_v1(
         },
     )?;
     if let Err(error) = wait_for_ticket(ticket) {
-        *quarantine = Some(buffers);
+        if matches!(error, GpuError::CompletionUncertain { .. }) {
+            *quarantine = Some(buffers);
+        }
         return Err(error);
     }
     buffers[2].0.copy_to_slice(output);
@@ -2882,6 +2968,7 @@ fn embedded_metal_library_source() -> String {
     const PARAMS: &str = include_str!("../metal/include/params.h");
     const FIELD: &str = include_str!("../metal/kernels/field.metal");
     const NTT: &str = include_str!("../metal/kernels/ntt_stage.metal");
+    const EXACT_ROOT: &str = include_str!("../metal/kernels/exact_root.metal");
     const POSEIDON: &str = include_str!("../metal/kernels/poseidon.metal");
     const DIGEST384: &str = include_str!("../metal/kernels/digest384.metal");
     const BN254: &str = include_str!("../metal/kernels/bn254.metal");
@@ -2891,6 +2978,7 @@ fn embedded_metal_library_source() -> String {
             + PARAMS.len()
             + FIELD.len()
             + NTT.len()
+            + EXACT_ROOT.len()
             + POSEIDON.len()
             + DIGEST384.len()
             + BN254.len(),
@@ -2901,6 +2989,7 @@ fn embedded_metal_library_source() -> String {
     source.push_str(FIELD);
     source.push('\n');
     append_embedded_translation_unit(&mut source, NTT);
+    append_embedded_translation_unit(&mut source, EXACT_ROOT);
     append_embedded_translation_unit(&mut source, POSEIDON);
     append_embedded_translation_unit(&mut source, DIGEST384);
     append_embedded_translation_unit(&mut source, BN254);
@@ -2950,6 +3039,10 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     let fft = load_pipeline(&device, &library, FFT_KERNEL)?;
     let lde = load_pipeline(&device, &library, LDE_KERNEL)?;
     let post_tile = load_pipeline(&device, &library, POST_TILE_KERNEL)?;
+    let exact_root_bit_reverse = load_pipeline(&device, &library, exact_root::BIT_REVERSE_KERNEL)?;
+    let exact_root_local_tiles = load_pipeline(&device, &library, exact_root::LOCAL_TILES_KERNEL)?;
+    let exact_root_global_stage =
+        load_pipeline(&device, &library, exact_root::GLOBAL_STAGE_KERNEL)?;
     // The BN254 FFT/LDE kernels have no production dispatcher yet; only the
     // parity tests load them. BN254 Poseidon uses its own narrow context.
     #[cfg(test)]
@@ -2984,6 +3077,9 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         fft,
         lde,
         post_tile,
+        exact_root_bit_reverse,
+        exact_root_local_tiles,
+        exact_root_global_stage,
         #[cfg(test)]
         bn254_fft,
         #[cfg(test)]
@@ -3188,6 +3284,8 @@ fn dispatch_fft_columns<'a>(
     root: u64,
     inverse: bool,
 ) -> MetalResult<PendingColumns<'a>> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     let extent = goldilocks_domain_len(log_size)?;
     if columns.iter().any(|column| column.len() != extent) {
         return Err(GpuError::InvalidInput("columns must share length"));
@@ -3635,6 +3733,8 @@ pub(crate) fn lde_columns_async(
     lde_root: u64,
     coset: u64,
 ) -> MetalResult<PendingLde> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     let (trace_len, eval_log, eval_len) = goldilocks_lde_domain_lengths(trace_log, blowup_log)?;
     if coeffs.iter().any(|column| column.len() != trace_len) {
         return Err(GpuError::InvalidInput(
@@ -3667,7 +3767,7 @@ pub(crate) fn lde_columns_async(
     let stats_enabled = LDE_STATS_ENABLED.load(Ordering::Acquire);
     let queue_before = snapshot_queue_depth_stats();
     let zero_timer = stats_enabled.then(|| Instant::now());
-    let mut eval_buffer = PooledBuffer::zeroed(eval_elements)?;
+    let mut eval_buffer = PooledBuffer::sensitive_zeroed(eval_elements)?;
     let queue_after = snapshot_queue_depth_stats();
     let queue_delta = match (queue_before, queue_after) {
         (Some(before), Some(after)) => Some(after.delta_since(&before)),
@@ -3779,6 +3879,8 @@ pub(crate) fn lde_columns_async(
     ))
 }
 pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     if states.is_empty() {
         return Ok(());
     }
@@ -3878,6 +3980,8 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
     dispatch_result
 }
 pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     if batch.is_empty() {
         return Ok(Vec::new());
     }
@@ -3885,14 +3989,16 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
         return try_zeroed_metal_words(
             batch.columns(),
             "Metal Poseidon zero-block output exceeds available host memory",
-        );
+        )
+        .map(SecretWords::into_vec);
     }
     let padded_len = batch.padded_len();
     if padded_len == 0 {
         return try_zeroed_metal_words(
             batch.columns(),
             "Metal Poseidon empty-payload output exceeds available host memory",
-        );
+        )
+        .map(SecretWords::into_vec);
     }
     let context = metal_context()?;
     let column_count = u32::try_from(batch.columns())
@@ -3956,7 +4062,7 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
             .ok_or(GpuError::InvalidInput(
                 "poseidon state buffer length exceeds platform limits",
             ))?;
-        let mut state_chunk = PooledBuffer::zeroed(state_words)?;
+        let mut state_chunk = PooledBuffer::sensitive_zeroed(state_words)?;
         let state_buffer = shared_pooled_buffer(&context.device, &mut state_chunk)?;
         let slice_chunk = batch
             .rebased_slices(column_offset, count_usize)
@@ -4015,9 +4121,11 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     for ticket in slots.into_iter().flatten() {
         ticket.wait(&mut result, false)?;
     }
-    Ok(result)
+    Ok(result.into_vec())
 }
 pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     if columns.is_empty() {
         return Ok(Vec::new());
     }
@@ -4045,7 +4153,7 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
     validate_metal_pooled_word_len(&context.device, row_len)?;
     let mut column_chunk = flatten_with_stats(columns, ColumnStagingPhase::Poseidon)?;
     let column_buffer = shared_pooled_buffer(&context.device, &mut column_chunk)?;
-    let mut result = PooledBuffer::zeroed(row_len)?;
+    let mut result = PooledBuffer::sensitive_zeroed(row_len)?;
     let result_buffer = shared_pooled_buffer(&context.device, &mut result)?;
     let limits = pipeline_limits(&context.poseidon_hash_rows);
     let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
@@ -4223,6 +4331,8 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
 ) -> MetalResult<PendingBn254PoseidonWords> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     if slices.is_empty() {
         return Err(GpuError::InvalidInput(
             "BN254 Poseidon async dispatch requires at least one input",
@@ -4268,7 +4378,7 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     validate_metal_pooled_word_len(&context.device, params.round_constants.len())?;
     validate_metal_pooled_word_len(&context.device, params.mds.len())?;
     validate_metal_pooled_word_len(&context.device, output_len)?;
-    let mut word_chunk = PooledBuffer::from_slice(staged_words)?;
+    let mut word_chunk = PooledBuffer::sensitive_from_slice(staged_words)?;
     let word_buffer = shared_pooled_buffer(&context.device, &mut word_chunk)?;
     let slice_chunk = metal_slices;
     let slice_buffer = copied_buffer(&context.device, &slice_chunk)?;
@@ -4276,7 +4386,7 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     let round_buffer = shared_pooled_buffer(&context.device, &mut round_constants)?;
     let mut mds = PooledBuffer::from_slice(&params.mds)?;
     let mds_buffer = shared_pooled_buffer(&context.device, &mut mds)?;
-    let mut output = PooledBuffer::zeroed(output_len)?;
+    let mut output = PooledBuffer::sensitive_zeroed(output_len)?;
     let output_buffer = shared_pooled_buffer(&context.device, &mut output)?;
     let limits = pipeline_limits(&context.bn254_poseidon_hash);
     let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
@@ -4581,6 +4691,8 @@ where
             kernel_context,
             permit,
             adaptive_sample: None,
+            drain_budget: ticket_lifetime::ticket_budget(METAL_COMMAND_TIMEOUT),
+            completion_checked: false,
         })
     })
 }
@@ -4706,46 +4818,43 @@ fn pop_oldest_ticket_if_full<T>(tickets: &mut Vec<T>, depth: usize) -> Option<T>
     }
 }
 fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
+    wait_for_ticket_inner(&mut ticket, false)
+}
+
+fn wait_for_ticket_inner(ticket: &mut DispatchTicket, dropping: bool) -> MetalResult<()> {
     let trace_label = ticket.trace_label.clone();
     let timing_start = ticket.timing_start;
-    let wait_start = Instant::now();
-    let mut polls = 0usize;
-    let status = loop {
-        let status = ticket.command.status();
-        if matches!(
-            status,
-            MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
-        ) {
-            break status;
-        }
-        if wait_start.elapsed() >= METAL_COMMAND_TIMEOUT {
-            let duration = timing_start.map(|start| start.elapsed());
-            if let Some(label) = trace_label {
-                trace_dispatch_end_label(Some(label), duration.unwrap_or_default(), false);
-            }
-            return Err(GpuError::Execution {
-                backend: GpuBackend::Metal,
-                message: format!("command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"),
-            });
-        }
-        polls = polls.saturating_add(1);
-        if polls <= 64 {
-            thread::yield_now();
-        } else if polls <= 256 {
-            thread::sleep(Duration::from_micros(50));
-        } else {
-            thread::sleep(Duration::from_millis(1));
-        }
+    let poll = || match ticket.command.status() {
+        MTLCommandBufferStatus::Completed => Completion::Completed,
+        MTLCommandBufferStatus::Error => Completion::Failed,
+        _ => Completion::Pending,
     };
+    let status = if dropping {
+        ticket.drain_budget.wait(poll, backend_quarantined)
+    } else {
+        ticket.drain_budget.wait_one(poll, backend_quarantined)
+    };
+    if status == Completion::Uncertain {
+        // Establish the safety state before diagnostics can call a subscriber.
+        quarantine_backend();
+    }
+    ticket.completion_checked = true;
     let duration = timing_start.map(|start| start.elapsed());
     if let Some(label) = trace_label {
         trace_dispatch_end_label(
             Some(label),
             duration.unwrap_or_default(),
-            status == MTLCommandBufferStatus::Completed,
+            status == Completion::Completed,
         );
     }
-    if status == MTLCommandBufferStatus::Completed {
+    if status == Completion::Uncertain {
+        // Do not discharge the callback-owned permit or wipe any device
+        // allocation whose command may still be running.
+        return Err(GpuError::CompletionUncertain {
+            backend: GpuBackend::Metal,
+        });
+    }
+    if status == Completion::Completed {
         if let (Some(context), Some(elapsed)) = (ticket.kernel_context.as_ref(), duration) {
             record_kernel_stats(context, elapsed);
         }
@@ -4766,10 +4875,14 @@ fn wait_for_tickets<T>(tickets: T) -> MetalResult<()>
 where
     T: IntoIterator<Item = DispatchTicket>,
 {
+    let mut failure = None;
     for ticket in tickets {
-        wait_for_ticket(ticket)?;
+        if let Err(error) = wait_for_ticket(ticket) {
+            failure.get_or_insert(error);
+        }
     }
-    Ok(())
+    ensure_backend_available()?;
+    failure.map_or(Ok(()), Err)
 }
 fn record_lde_stats(stats: LdeHostStats) {
     if !LDE_STATS_ENABLED.load(Ordering::Acquire) {
@@ -4797,7 +4910,7 @@ fn clone_slice_with_stats(
     phase: ColumnStagingPhase,
 ) -> MetalResult<PooledBuffer> {
     let start = Instant::now();
-    let buffer = PooledBuffer::from_slice(elements)?;
+    let buffer = PooledBuffer::sensitive_from_slice(elements)?;
     record_staging_flatten(phase, start.elapsed());
     Ok(buffer)
 }
@@ -4920,6 +5033,7 @@ fn metal_buffer_page_count(word_len: usize) -> usize {
     word_len.div_ceil(METAL_BUFFER_PAGE_WORDS).max(1)
 }
 fn acquire_buffer(word_len: usize) -> MetalResult<Vec<MetalBufferPage>> {
+    ensure_backend_available()?;
     let page_count = metal_buffer_page_count(word_len);
     let mut pages = buffer_pool()
         .lock()
@@ -4993,6 +5107,8 @@ impl PooledBufferBacking {
             use zeroize::Zeroize as _;
             for page in &mut self.pages {
                 page.words.zeroize();
+                #[cfg(test)]
+                crate::gpu_secret::observe_cleared_words(&page.words);
             }
         }
     }
@@ -5042,7 +5158,7 @@ impl PooledBuffer {
                     "Metal pooled column buffer length exceeds platform limits",
                 ))
         })?;
-        let mut buffer = Self::zeroed(total_len)?;
+        let mut buffer = Self::sensitive_zeroed(total_len)?;
         let mut offset = 0usize;
         for column in columns {
             buffer.copy_from_slice_at(offset, column);
@@ -5418,6 +5534,7 @@ struct CommandPermit {
 }
 impl CommandPermit {
     fn try_new(queue_index: usize) -> MetalResult<Self> {
+        ensure_backend_available()?;
         let semaphore = command_semaphore();
         if !semaphore.acquire_timeout(METAL_COMMAND_PERMIT_TIMEOUT) {
             let snapshot = command_limit_snapshot();
@@ -6147,6 +6264,9 @@ mod tests {
         FFT_KERNEL,
         LDE_KERNEL,
         POST_TILE_KERNEL,
+        exact_root::BIT_REVERSE_KERNEL,
+        exact_root::LOCAL_TILES_KERNEL,
+        exact_root::GLOBAL_STAGE_KERNEL,
         BN254_FFT_KERNEL,
         BN254_LDE_KERNEL,
         BN254_POSEIDON_HASH_KERNEL,
@@ -6154,6 +6274,61 @@ mod tests {
         "digest384_hash_frames_v1",
         "digest384_indexed_first_coordinate_v1",
     ];
+    #[test]
+    fn private_column_rollback_clears_commit_restore_and_unwind_cells() {
+        use crate::gpu_secret::ErasureObservation;
+        let observed = ErasureObservation::begin();
+        let mut columns = vec![vec![11, 13], vec![17, 19]];
+        let mut rollback = ColumnMutationRollback::capture(&columns).unwrap();
+        columns[0].copy_from_slice(&[23, 29]);
+        rollback.commit();
+        assert_eq!(observed.counts(), (4, 0));
+        assert_eq!(columns, [vec![23, 29], vec![17, 19]]);
+
+        let mut rollback = ColumnMutationRollback::capture(&columns).unwrap();
+        columns[0].copy_from_slice(&[31, 37]);
+        columns[1].copy_from_slice(&[41, 43]);
+        let error: MetalResult<()> = Err(GpuError::InvalidInput("rollback error fixture"));
+        assert!(rollback_columns_on_error(error, &mut columns, &mut rollback).is_err());
+        assert_eq!(columns, [vec![23, 29], vec![17, 19]]);
+        assert_eq!(observed.counts(), (8, 0));
+
+        let unwind = std::panic::catch_unwind(|| {
+            let _rollback = ColumnMutationRollback::capture(&columns).unwrap();
+            panic!("rollback snapshot unwind fixture");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(observed.counts(), (12, 0));
+    }
+
+    #[test]
+    fn private_fft_staging_clears_pages_after_final_owner_drop_and_unwind() {
+        use crate::gpu_secret::ErasureObservation;
+        let observed = ErasureObservation::begin();
+        let columns = vec![vec![11, 13], vec![17, 19]];
+        let buffer = flatten_with_stats(&columns, ColumnStagingPhase::Fft).unwrap();
+        assert!(buffer.backing.sensitive);
+        assert_eq!(buffer.to_vec().unwrap(), [11, 13, 17, 19]);
+        let page_words = buffer.backing.pages.len() * METAL_BUFFER_PAGE_WORDS;
+        let retained = Arc::clone(&buffer.backing);
+        drop(buffer);
+        // A device/command owner may retain the backing. Never erase it early.
+        assert_eq!(observed.counts(), (0, 0));
+        assert_eq!(retained.pages[0].words[0], 11);
+        drop(retained);
+        assert_eq!(observed.counts(), (page_words, 0));
+        let unwind = std::panic::catch_unwind(|| {
+            let _buffer = clone_slice_with_stats(&[23, 29], ColumnStagingPhase::Fft).unwrap();
+            panic!("private pooled staging unwind fixture");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(observed.counts(), (page_words + METAL_BUFFER_PAGE_WORDS, 0));
+        let constants = PooledBuffer::from_slice(&[7, 11, 13]).unwrap();
+        assert!(!constants.backing.sensitive);
+        drop(constants);
+        assert_eq!(observed.counts(), (page_words + METAL_BUFFER_PAGE_WORDS, 0));
+    }
+
     #[test]
     fn embedded_metal_source_is_self_contained() {
         let source = embedded_metal_library_source();
@@ -7341,8 +7516,11 @@ mod tests {
     #[test]
     fn kernel_descriptors_cover_entry_points() {
         let descriptors = super::metal_kernel_descriptors();
-        assert_eq!(descriptors.len(), 9);
+        assert_eq!(descriptors.len(), 12);
         for name in [
+            exact_root::BIT_REVERSE_KERNEL,
+            exact_root::LOCAL_TILES_KERNEL,
+            exact_root::GLOBAL_STAGE_KERNEL,
             "fastpq_fft_columns",
             "fastpq_fft_post_tiling",
             "fastpq_lde_columns",
@@ -7368,5 +7546,96 @@ mod tests {
             bn254_poseidon.threadgroup_cap,
             Some(super::BN254_POSEIDON_THREADGROUP_CAPACITY)
         );
+    }
+
+    #[test]
+    fn uncertain_completion_blocks_all_new_staging_and_preserves_retained_cells() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                TEST_QUARANTINE.with(|state| state.set(None));
+            }
+        }
+        TEST_QUARANTINE.with(|state| assert_eq!(state.replace(Some(false)), None));
+        let _reset = Reset;
+        let observed = crate::gpu_secret::ErasureObservation::begin();
+        let staged = PooledBuffer::sensitive_from_slice(&[31, 37, 41]).unwrap();
+        let retained = staged.backing();
+        quarantine_backend();
+        assert!(backend_quarantined());
+        assert!(crate::gpu::transform_completion_uncertain_v1());
+        assert!(matches!(
+            crate::digest384_batch::preflight_last_fields_execution(crate::DigestExecutionV1::Cpu),
+            Err(crate::Error::NativeDigestExecution { details }) if details.contains("completion uncertain")
+        ));
+        assert!(matches!(
+            PooledBuffer::sensitive_zeroed(1),
+            Err(GpuError::CompletionUncertain {
+                backend: GpuBackend::Metal
+            })
+        ));
+        assert!(matches!(
+            CommandPermit::try_new(0),
+            Err(GpuError::CompletionUncertain {
+                backend: GpuBackend::Metal
+            })
+        ));
+        drop(staged);
+        assert_eq!(observed.counts(), (0, 0));
+        assert_eq!(&retained.pages[0].words[..3], &[31, 37, 41]);
+        drop(retained);
+        assert!(observed.counts().0 >= METAL_BUFFER_PAGE_WORDS);
+        assert_eq!(observed.counts().1, 0);
+        assert!(backend_quarantined());
+    }
+
+    #[test]
+    fn abandoned_fft_ticket_drains_before_release_and_partial_error_restores_inputs() {
+        if select_metal_device().is_none() {
+            return;
+        }
+        let _lane = crate::backend::acquire_gpu_lane();
+        let observed = crate::gpu_secret::ErasureObservation::begin();
+        let root = goldilocks_pow(GOLDILOCKS_GENERATOR, (FIELD_MODULUS - 1) >> 3);
+        let mut columns = sample_fft_columns(3, 2);
+        let mut expected = columns.clone();
+        for column in &mut expected {
+            crate::cyclotomic::fft(
+                column,
+                crate::cyclotomic::Domain {
+                    log_size: 3,
+                    generator: root,
+                },
+            );
+        }
+        let weak = autoreleasepool(|| {
+            let mut pending = dispatch_fft_columns(&mut columns, 3, root, false).unwrap();
+            assert_eq!(pending.pending_batches.len(), 1);
+            let batch = &mut pending.pending_batches[0];
+            let weak = batch.buffer.weak_backing_for_tests();
+            let ticket = batch.tickets.pop().unwrap();
+            let command = ticket.command.clone();
+            drop(ticket);
+            assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
+            drop(command);
+            pending.wait().unwrap();
+            weak
+        });
+        assert!(weak.upgrade().is_none());
+        assert_eq!(columns, expected);
+        assert!(observed.counts().0 >= METAL_BUFFER_PAGE_WORDS + 16);
+        assert_eq!(observed.counts().1, 0);
+        let before = columns.clone();
+        {
+            let _failure = fail_column_batch_wait_after(0);
+            assert!(
+                dispatch_fft_columns(&mut columns, 3, root, false)
+                    .unwrap()
+                    .wait()
+                    .is_err()
+            );
+        }
+        assert_eq!(columns, before);
+        assert!(!backend_quarantined());
     }
 }

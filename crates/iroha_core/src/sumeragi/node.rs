@@ -145,6 +145,10 @@ pub struct RunningNode {
     pub crypto: Arc<BlsCrypto>,
     identity: NodeIdentity,
     beacon: Arc<super::beacon::BeaconService>,
+    /// The node's lane instances.
+    pub lanes: super::lanes::runner::LaneRunner,
+    /// Routes inbound frames to the node's instances.
+    pub ingress: Arc<SumeragiIngress>,
 }
 
 impl RunningNode {
@@ -154,6 +158,7 @@ impl RunningNode {
             driver: self.driver.handle(),
             instance: self.instance,
             identity: self.identity.clone(),
+            lanes: self.lanes.handle(),
         }
     }
 }
@@ -164,6 +169,7 @@ pub struct NodeHandle {
     driver: DriverHandle,
     instance: Hash32,
     identity: NodeIdentity,
+    lanes: super::lanes::runner::LaneRunnerHandle,
 }
 
 /// Immutable identity and resolved configuration of the running consensus instance.
@@ -206,57 +212,66 @@ impl NodeHandle {
 
     /// The status the node serves (`/v1/sumeragi/status`; `None` before the core started).
     pub fn status_dto(&self) -> Option<SumeragiStatus> {
-        let status = self.status()?;
-        let key = |key: &PublicKey| iroha_key(key).ok();
-        let widen = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
-        let footprint = &status.footprint;
-        Some(SumeragiStatus {
-            instance: status.instance.0,
-            height: status.height,
-            view: status.view,
-            stage: status.stage,
-            leader: status.leader.as_ref().and_then(key),
-            proxy_tail: status.proxy_tail.as_ref().and_then(key),
-            high_qc_view: status.high_qc_view,
-            level: status.level,
-            start_level: status.start_level,
-            t_retx_ms: status.t_retx,
-            committed_height: status.committed_height,
-            applied_height: status.applied_height,
-            awaiting: status.awaiting,
-            signer: status.signer.as_ref().and_then(key),
-            unanchored: status.unanchored,
-            abstaining: status.abstaining,
-            halted: self.halted().map(|reason| match reason {
-                HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
-                HaltReason::SafetyRecordInconsistent => {
-                    SumeragiHaltReason::SafetyRecordInconsistent
-                }
-                HaltReason::SafetyViolation { height } => {
-                    SumeragiHaltReason::SafetyViolation(height)
-                }
-                HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
-                HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
-            }),
-            footprint: SumeragiFootprint {
-                votes: widen(footprint.votes),
-                timeouts: widen(footprint.timeouts),
-                blocks: widen(footprint.blocks),
-                exec_entries: widen(footprint.exec_entries),
-                wants: widen(footprint.wants),
-                pending_apply: widen(footprint.pending_apply),
-                sync_entries: widen(footprint.sync_entries),
-                sync_bytes: widen(footprint.sync_bytes),
-                peers: widen(footprint.peers),
-                recent_headers: widen(footprint.recent_headers),
-                configs: widen(footprint.configs),
-                cert_cache: widen(footprint.cert_cache),
-                evidence_keys: widen(footprint.evidence_keys),
-                probe: widen(footprint.probe),
-            },
-        })
+        status_dto(&self.driver)
     }
 
+    /// Every lane of the committed state with the node's instance of it
+    /// (`/v1/sumeragi/lanes`, `specs/sumeragi_lanes.md` §8).
+    pub fn lane_statuses(&self) -> Vec<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus> {
+        self.lanes.statuses()
+    }
+}
+
+/// The served status of the instance `driver` runs (`None` before its core started).
+pub(crate) fn status_dto(driver: &DriverHandle) -> Option<SumeragiStatus> {
+    let status = driver.status()?;
+    let key = |key: &PublicKey| iroha_key(key).ok();
+    let widen = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
+    let footprint = &status.footprint;
+    Some(SumeragiStatus {
+        instance: status.instance.0,
+        height: status.height,
+        view: status.view,
+        stage: status.stage,
+        leader: status.leader.as_ref().and_then(key),
+        proxy_tail: status.proxy_tail.as_ref().and_then(key),
+        high_qc_view: status.high_qc_view,
+        level: status.level,
+        start_level: status.start_level,
+        t_retx_ms: status.t_retx,
+        committed_height: status.committed_height,
+        applied_height: status.applied_height,
+        awaiting: status.awaiting,
+        signer: status.signer.as_ref().and_then(key),
+        unanchored: status.unanchored,
+        abstaining: status.abstaining,
+        halted: driver.halted().map(|reason| match reason {
+            HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
+            HaltReason::SafetyRecordInconsistent => SumeragiHaltReason::SafetyRecordInconsistent,
+            HaltReason::SafetyViolation { height } => SumeragiHaltReason::SafetyViolation(height),
+            HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
+            HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
+        }),
+        footprint: SumeragiFootprint {
+            votes: widen(footprint.votes),
+            timeouts: widen(footprint.timeouts),
+            blocks: widen(footprint.blocks),
+            exec_entries: widen(footprint.exec_entries),
+            wants: widen(footprint.wants),
+            pending_apply: widen(footprint.pending_apply),
+            sync_entries: widen(footprint.sync_entries),
+            sync_bytes: widen(footprint.sync_bytes),
+            peers: widen(footprint.peers),
+            recent_headers: widen(footprint.recent_headers),
+            configs: widen(footprint.configs),
+            cert_cache: widen(footprint.cert_cache),
+            evidence_keys: widen(footprint.evidence_keys),
+            probe: widen(footprint.probe),
+        },
+    })
+}
+
+impl NodeHandle {
     /// The instance halted or stopped: only a restart recovers the node's consensus.
     pub fn restart_required(&self) -> bool {
         // A clean shutdown retains diagnostics without recording a halt. Once
@@ -272,6 +287,7 @@ impl NodeHandle {
     /// An includable transaction entered the queue (the leader's `PayloadReady`).
     pub fn transactions_available(&self) {
         self.driver.transactions_available();
+        self.lanes.transactions_available();
     }
 
     /// The driver's handle (the transport's frame sink).
@@ -369,6 +385,9 @@ pub struct Prepared {
     blocks: Arc<KuraBlockStore>,
     executor: StateExecutor,
     consensus_mode: ConsensusMode,
+    applied_watch: Arc<crate::sumeragi::lanes::global::AppliedWatch>,
+    lane_stores: Arc<crate::sumeragi::lanes::registry::LaneStores>,
+    chain_id: String,
 }
 
 impl core::fmt::Debug for Prepared {
@@ -440,9 +459,20 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     let staging = Staging::new();
     let blocks = Arc::new(KuraBlockStore::new(
         Arc::clone(&kura),
-        shared,
+        Arc::clone(&shared),
         GENESIS_HEIGHT,
         staging.clone(),
+    ));
+    let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+        GENESIS_HEIGHT,
+        state.view().latest_block_hash(),
+    ));
+    // Lane blocks live next to Kura; replay merges from them as live execution does.
+    let lane_stores = Arc::new(crate::sumeragi::lanes::registry::LaneStores::new(
+        kura.store_root().join("lanes"),
+        *state.network_id_ref(),
+        chain_id.clone(),
+        shared,
     ));
     let mut executor = StateExecutor::spawn(ExecutorContext {
         state: Arc::clone(&state),
@@ -453,6 +483,8 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         consensus_mode,
         applied: (GENESIS_HEIGHT, tip.block_hash),
         crypto: Some(Arc::clone(&crypto)),
+        applied_watch: Arc::clone(&applied_watch),
+        lane_blocks: lane_stores.clone(),
     })
     .map_err(|error| NodeError::Driver(error.to_string()))?;
     admit_window(&state, &crypto, GENESIS_HEIGHT);
@@ -476,6 +508,9 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         blocks,
         executor,
         consensus_mode,
+        applied_watch,
+        lane_stores,
+        chain_id,
     })
 }
 
@@ -512,6 +547,9 @@ impl Prepared {
             blocks,
             executor,
             consensus_mode,
+            applied_watch,
+            lane_stores,
+            chain_id,
         } = self;
         let StartInputs {
             net,
@@ -522,7 +560,7 @@ impl Prepared {
             driver,
             beacon_signer,
         } = inputs;
-        executor.attach_queue(queue);
+        executor.attach_queue(Arc::clone(&queue));
         let beacon = super::beacon::BeaconService::spawn(
             Arc::clone(&state),
             instance,
@@ -605,6 +643,29 @@ impl Prepared {
         );
         let signer =
             KeyPairSigner::new(&key_pair).map_err(|error| NodeError::Key(error.to_string()))?;
+        // Inbound frames reach the driver of their instance: the global one and each lane's.
+        let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
+        // Lane instances (`specs/sumeragi_lanes.md` §4.1) share the transport, ingress,
+        // records, key and limits.
+        let lanes =
+            super::lanes::runner::LaneRunner::spawn(super::lanes::runner::LaneRunnerInputs {
+                state: Arc::clone(&state),
+                queue,
+                watch: applied_watch,
+                stores: lane_stores,
+                crypto: Arc::clone(&crypto),
+                net: net.clone(),
+                ingress: Some(Arc::clone(&ingress)),
+                records: Arc::clone(&records),
+                global_instance: instance,
+                bodies_dir: config.bodies_dir.clone(),
+                key_pair: key_pair.clone(),
+                local: config.local.clone(),
+                driver,
+                network: *state.network_id_ref(),
+                chain_id,
+            })
+            .map_err(|error| NodeError::Driver(format!("sumeragi lane runner: {error}")))?;
         let running = Driver::new(
             net,
             records,
@@ -629,12 +690,21 @@ impl Prepared {
         )
         .map_err(|error| NodeError::Driver(error.to_string()))?;
         beacon.set_wakeup(running.handle());
+        ingress.register(
+            instance,
+            Arc::new(super::beacon::BeaconFrameSink::new(
+                running.handle(),
+                Arc::clone(&beacon),
+            )),
+        );
         Ok(RunningNode {
             beacon,
             driver: running,
             instance,
             crypto,
             identity,
+            lanes,
+            ingress,
         })
     }
 
@@ -654,17 +724,11 @@ impl Prepared {
         let subscription = subscribe(network, fifo_capacity)
             .map_err(|error| NodeError::Driver(error.to_string()))?;
         let node = self.start(inputs)?;
-        let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
-        ingress.register(
-            node.instance,
-            Arc::new(super::beacon::BeaconFrameSink::new(
-                node.driver.handle(),
-                Arc::clone(&node.beacon),
-            )),
-        );
+        let ingress = Arc::clone(&node.ingress);
         let ingress_thread = match spawn_ingress(subscription, Arc::clone(&ingress)) {
             Ok(thread) => thread,
             Err(error) => {
+                node.lanes.shutdown();
                 node.beacon.shutdown();
                 node.driver.shutdown();
                 return Err(NodeError::Driver(format!(
@@ -698,6 +762,7 @@ impl NetworkedNode {
     /// Stop the instance and wait for its threads. The ingress thread ends with the network.
     pub fn shutdown(self) {
         self.ingress.unregister(&self.node.instance);
+        self.node.lanes.shutdown();
         self.node.beacon.shutdown();
         self.node.driver.shutdown();
         drop(self.ingress_thread);
@@ -791,7 +856,7 @@ pub fn configuration_fingerprint(
 }
 
 /// The core's local parameters for a committee of `n`, with the node's overrides.
-fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> LocalParams {
+pub(crate) fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> LocalParams {
     let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
     let defaults = LocalParams::for_committee_size(n);
     LocalParams {
@@ -833,7 +898,7 @@ fn admit_window(state: &State, crypto: &BlsCrypto, t: u64) {
 }
 
 /// A fresh nonce for the record-loss probe (§7.4 R2): distinct at every start.
-fn startup_nonce() -> u64 {
+pub(crate) fn startup_nonce() -> u64 {
     rand::random()
 }
 
@@ -922,7 +987,7 @@ mod tests {
     /// The in-memory transport: every node's handle, filled once the nodes started (frames
     /// sent before are dropped, and the core rebroadcasts).
     #[derive(Default)]
-    struct Registry(parking_lot::Mutex<HashMap<CoreKey, DriverHandle>>);
+    struct Registry(parking_lot::Mutex<HashMap<CoreKey, Arc<SumeragiIngress>>>);
 
     struct MemNet {
         from: CoreKey,
@@ -931,9 +996,9 @@ mod tests {
 
     impl Net for MemNet {
         fn send(&self, to: &CoreKey, frame: &Frame) {
-            let handle = self.registry.0.lock().get(to).cloned();
-            if let Some(handle) = handle {
-                handle.deliver(&self.from, &frame.bytes);
+            let ingress = self.registry.0.lock().get(to).cloned();
+            if let Some(ingress) = ingress {
+                ingress.deliver(&self.from, frame);
             }
         }
     }
@@ -964,6 +1029,16 @@ mod tests {
 
     /// A chain of `validators` with a 100 ms block time and the given idle interval.
     fn chain(validators: u8, payload_retry_interval_ms: u64) -> Chain {
+        chain_with(validators, payload_retry_interval_ms, |_| Vec::new())
+    }
+
+    /// [`chain`] whose genesis also sets the parameters `extra` derives from the validators'
+    /// keys (in canonical order).
+    fn chain_with(
+        validators: u8,
+        payload_retry_interval_ms: u64,
+        extra: impl FnOnce(&[KeyPair]) -> Vec<Parameter>,
+    ) -> Chain {
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("sumeragi-node-test");
         let mut keys = (0..validators)
@@ -988,13 +1063,18 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let extra = extra(&keys);
         // TODO(WP9): the genesis builder drops its v2 context requirement.
-        let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+        let mut builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
             .append_parameter(Parameter::Sumeragi(
                 SumeragiParameter::PayloadRetryIntervalMs(
                     NonZeroU64::new(payload_retry_interval_ms).expect("non-zero"),
                 ),
-            ))
+            ));
+        for parameter in extra {
+            builder = builder.append_parameter(parameter);
+        }
+        let genesis = builder
             .with_block_cadence_ms(NonZeroU64::new(100).expect("non-zero"))
             .set_topology(entries)
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
@@ -1018,6 +1098,7 @@ mod tests {
             [
                 Account::new(account.clone()).build(&account),
                 Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(second_shard_account()).build(&second_shard_account()),
             ],
             [],
         );
@@ -1103,7 +1184,7 @@ mod tests {
         for (key, validator) in chain.keys.iter().zip(&validators) {
             peers.insert(
                 core_key(key.public_key()).expect("BLS key"),
-                validator.node.driver.handle(),
+                Arc::clone(&validator.node.ingress),
             );
         }
         drop(peers);
@@ -1186,6 +1267,24 @@ mod tests {
         }
     }
 
+    /// The key of an account whose default route is the second of two shards (an elastic lane
+    /// next to lane 0).
+    fn second_shard_key() -> KeyPair {
+        (1u8..)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519))
+            .find(|key| {
+                crate::sumeragi::lanes::routing::default_shard(
+                    &AccountId::new(key.public_key().clone()),
+                    2,
+                ) == 1
+            })
+            .expect("a key on the second shard")
+    }
+
+    fn second_shard_account() -> AccountId {
+        AccountId::new(second_shard_key().public_key().clone())
+    }
+
     /// Submit a transaction to every validator's queue (the transaction gossip's job in the
     /// node) and tell the drivers.
     fn submit(
@@ -1193,14 +1292,24 @@ mod tests {
         validators: &[Validator],
         message: &str,
     ) -> HashOf<TransactionEntrypoint> {
+        submit_as(chain, validators, &ALICE_KEYPAIR, message)
+    }
+
+    /// [`submit`] signed by `key`'s account.
+    fn submit_as(
+        chain: &Chain,
+        validators: &[Validator],
+        key: &KeyPair,
+        message: &str,
+    ) -> HashOf<TransactionEntrypoint> {
         let network_id = NetworkId::from_genesis_hash(chain.genesis.hash());
         let signed = TransactionBuilder::new(
             network_id,
-            ALICE_ID.clone(),
+            AccountId::new(key.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, message.to_owned())])
-        .sign(ALICE_KEYPAIR.private_key());
+        .sign(key.private_key());
         let accepted = AcceptedTransaction::accept(
             signed,
             &network_id,
@@ -1253,6 +1362,284 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A lane policy pinning fixed lane 2 to the whole validator set and routing Alice's
+    /// transactions to it.
+    fn fixed_lane_policy(keys: &[KeyPair]) -> Vec<Parameter> {
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+        };
+        let policy = SumeragiLanePolicy {
+            anchor_freshness: 64,
+            max_merge_blocks: 16,
+            stall_window: 10_000,
+            lane_params: iroha_data_model::parameter::system::SumeragiParameters {
+                block_cadence_ms: NonZeroU64::new(100).expect("non-zero"),
+                payload_retry_interval_ms: NonZeroU64::new(200).expect("non-zero"),
+                ..iroha_data_model::parameter::system::SumeragiParameters::default()
+            },
+            fixed: vec![SumeragiFixedLane {
+                lane: iroha_model_base::topology::LaneId::new(2),
+                dataspace: iroha_model_base::topology::DataSpaceId::new(0),
+                committee: keys
+                    .iter()
+                    .map(|key| SumeragiLaneMember {
+                        peer: PeerId::new(key.public_key().clone()),
+                        pop: bls_normal_pop_prove(key.private_key()).expect("pop"),
+                    })
+                    .collect(),
+            }],
+            routes: vec![SumeragiLaneRoute {
+                lane: iroha_model_base::topology::LaneId::new(2),
+                account: Some(ALICE_ID.to_string()),
+                instruction: None,
+            }],
+            autoscale: None,
+        };
+        vec![Parameter::Custom(policy.into_custom_parameter())]
+    }
+
+    /// Transactions every validator's stored blocks executed from merged lane blocks.
+    fn merged_everywhere(validators: &[Validator], disks: &[Disk]) -> Vec<usize> {
+        validators
+            .iter()
+            .zip(disks)
+            .map(|(validator, disk)| {
+                (1..=validator.state.view().height())
+                    .filter_map(|height| {
+                        disk.kura
+                            .get_block(core::num::NonZeroUsize::new(height).expect("non-zero"))
+                    })
+                    .map(|block| block.merged_entrypoint_count())
+                    .sum::<usize>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_fixed_lane_carries_transactions_the_global_chain_merges() {
+        let lane = iroha_model_base::topology::LaneId::new(2);
+        let chain = chain_with(4, 200, fixed_lane_policy);
+        let disks = disks(&chain);
+        let validators = start_all(&chain, &disks, true);
+        // Genesis creates the lane, active from global height 3: until the global chain has
+        // applied it, Alice's transactions stay on lane 0.
+        for message in ["before the lane 1", "before the lane 2"] {
+            let hash = submit(&chain, &validators, message);
+            wait_until(&validators, Duration::from_secs(30), message, || {
+                committed_everywhere(&validators, hash)
+            });
+        }
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "every validator runs the lane",
+            || {
+                validators
+                    .iter()
+                    .all(|validator| validator.node.lanes.instances().len() == 1)
+            },
+        );
+        let hash = submit(&chain, &validators, "through the lane");
+        wait_until(
+            &validators,
+            Duration::from_secs(60),
+            "the lane's transaction merged",
+            || committed_everywhere(&validators, hash),
+        );
+        let frontier = |validators: &[Validator]| {
+            validators
+                .iter()
+                .map(|validator| {
+                    validator
+                        .state
+                        .view()
+                        .world()
+                        .sumeragi_lanes()
+                        .lane(lane)
+                        .expect("the lane")
+                        .merged
+                })
+                .collect::<Vec<_>>()
+        };
+        let merged = frontier(&validators);
+        assert!(merged[0].height >= 1, "a lane block was merged");
+        assert!(merged.iter().all(|frontier| *frontier == merged[0]));
+        assert_eq!(
+            merged_everywhere(&validators, &disks),
+            vec![1; 4],
+            "the transaction came through the lane"
+        );
+        shutdown(validators);
+
+        // Restart: replay re-executes the merged blocks from the lane stores on disk, the lane
+        // instances resume from their stores, and the lane keeps carrying transactions.
+        let validators = start_all(&chain, &disks, false);
+        assert!(committed_everywhere(&validators, hash));
+        assert_eq!(frontier(&validators), merged);
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "every validator runs the lane again",
+            || {
+                validators
+                    .iter()
+                    .all(|validator| validator.node.lanes.instances().len() == 1)
+            },
+        );
+        let hash = submit(&chain, &validators, "through the lane after restart");
+        wait_until(
+            &validators,
+            Duration::from_secs(60),
+            "the lane's transaction merged after restart",
+            || committed_everywhere(&validators, hash),
+        );
+        assert_eq!(merged_everywhere(&validators, &disks), vec![2; 4]);
+        assert!(frontier(&validators)[0].height > merged[0].height);
+        shutdown(validators);
+    }
+
+    /// A lane policy that autoscales one elastic lane (16) over the whole validator set.
+    fn elastic_lane_policy(_keys: &[KeyPair]) -> Vec<Parameter> {
+        use iroha_data_model::sumeragi_lanes::{SumeragiLaneAutoscale, SumeragiLanePolicy};
+        let policy = SumeragiLanePolicy {
+            anchor_freshness: 4,
+            max_merge_blocks: 16,
+            stall_window: 10_000,
+            lane_params: iroha_data_model::parameter::system::SumeragiParameters {
+                block_cadence_ms: NonZeroU64::new(100).expect("non-zero"),
+                payload_retry_interval_ms: NonZeroU64::new(200).expect("non-zero"),
+                ..iroha_data_model::parameter::system::SumeragiParameters::default()
+            },
+            fixed: Vec::new(),
+            routes: Vec::new(),
+            autoscale: Some(SumeragiLaneAutoscale {
+                min_lane: iroha_model_base::topology::LaneId::new(16),
+                max_lane_exclusive: iroha_model_base::topology::LaneId::new(17),
+                dataspace: iroha_model_base::topology::DataSpaceId::new(0),
+                committee_size: 4,
+                per_lane_target_tps: 10,
+                window: 3,
+                scale_out_permille: 300,
+                scale_in_permille: 150,
+                cooldown: 3,
+            }),
+        };
+        vec![Parameter::Custom(policy.into_custom_parameter())]
+    }
+
+    fn lane_record(
+        validator: &Validator,
+        lane: iroha_model_base::topology::LaneId,
+    ) -> Option<iroha_data_model::sumeragi_lanes::SumeragiLaneRecord> {
+        validator
+            .state
+            .view()
+            .world()
+            .sumeragi_lanes()
+            .lane(lane)
+            .cloned()
+    }
+
+    #[test]
+    fn autoscale_opens_an_elastic_lane_under_load_and_retires_it_when_idle() {
+        let elastic = iroha_model_base::topology::LaneId::new(16);
+        let chain = chain_with(4, 200, elastic_lane_policy);
+        let disks = disks(&chain);
+        let validators = start_all(&chain, &disks, true);
+        let mut round = 0usize;
+        let mut burst = |validators: &[Validator], size: usize| {
+            round += 1;
+            let hashes = (0..size)
+                .map(|index| submit(&chain, validators, &format!("load {round}.{index}")))
+                .collect::<Vec<_>>();
+            wait_until(
+                validators,
+                Duration::from_secs(60),
+                "a burst commits",
+                || {
+                    hashes
+                        .iter()
+                        .all(|hash| committed_everywhere(validators, *hash))
+                },
+            );
+        };
+        let running = |validators: &[Validator]| {
+            validators
+                .iter()
+                .map(|validator| validator.node.lanes.instances().len())
+                .collect::<Vec<_>>()
+        };
+        // Load opens the elastic lane; once the global chain applies its activation height,
+        // every validator runs it.
+        for _ in 0..16 {
+            if running(&validators) == vec![1; 4] {
+                break;
+            }
+            burst(&validators, 6);
+        }
+        assert_eq!(running(&validators), vec![1; 4], "the elastic lane runs");
+        let record = lane_record(&validators[0], elastic).expect("the elastic lane");
+        assert_eq!(record.committee.len(), 4, "drawn from the validators");
+        // The second shard's account is routed to the elastic lane.
+        let hash = submit_as(
+            &chain,
+            &validators,
+            &second_shard_key(),
+            "through the elastic lane",
+        );
+        wait_until(
+            &validators,
+            Duration::from_secs(60),
+            "the elastic lane's transaction merged",
+            || committed_everywhere(&validators, hash),
+        );
+        assert!(
+            merged_everywhere(&validators, &disks)
+                .iter()
+                .all(|merged| *merged >= 1)
+        );
+        // Idle: spaced transactions show low utilization and the lane closes.
+        for index in 0..12 {
+            if lane_record(&validators[0], elastic).is_none_or(|record| record.closing.is_some()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1_600));
+            let hash = submit(&chain, &validators, &format!("idle {index}"));
+            wait_until(
+                &validators,
+                Duration::from_secs(60),
+                "idle work commits",
+                || committed_everywhere(&validators, hash),
+            );
+        }
+        let closing = lane_record(&validators[0], elastic)
+            .and_then(|record| record.closing)
+            .expect("the idle lane closes");
+        // It retires at c + A + 1, and every validator stops its instance.
+        for _ in 0..16 {
+            if validators
+                .iter()
+                .all(|validator| lane_record(validator, elastic).is_none())
+            {
+                break;
+            }
+            burst(&validators, 1);
+        }
+        assert!(
+            validators
+                .iter()
+                .all(|validator| lane_record(validator, elastic).is_none()),
+            "the lane closed at {closing} retires"
+        );
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "every validator stops the retired lane",
+            || running(&validators) == vec![0; 4],
+        );
+        shutdown(validators);
     }
 
     #[test]
@@ -1332,6 +1719,11 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             applied: (GENESIS_HEIGHT, tip.block_hash),
             crypto: Some(Arc::clone(&crypto)),
+            applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+                GENESIS_HEIGHT,
+                state.view().latest_block_hash(),
+            )),
+            lane_blocks: std::sync::Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         })
         .expect("executor");
         admit_window(&state, &crypto, GENESIS_HEIGHT);

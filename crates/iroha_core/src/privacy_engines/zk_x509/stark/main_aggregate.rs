@@ -16,6 +16,9 @@ use super::*;
 #[path = "main_oods.rs"]
 mod main_oods;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_quotient_cache.rs"]
+mod main_quotient_cache;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_quotient_stripes.rs"]
 mod main_quotient_stripes;
 #[cfg(test)]
@@ -33,11 +36,17 @@ pub(super) enum MainTraceColumnKindV1 {
     Aux,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_deep_replay.rs"]
+mod main_deep_replay;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_resources.rs"]
 mod main_resources;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_trace_replay.rs"]
 mod main_trace_replay;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_transform.rs"]
+mod main_transform;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use main_trace_replay::MainTraceReplaySourcesV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -461,6 +470,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         &layout,
         MainTraceColumnKindV1::Base,
         &[],
+        assembly.allocated_payload_bytes_v1(),
         &MainTraceReplaySourcesV1::Base {
             assembly,
             sha: &sha,
@@ -616,6 +626,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             &layout,
             MainTraceColumnKindV1::Aux,
             &[],
+            assembly.allocated_payload_bytes_v1(),
             &MainTraceReplaySourcesV1::Bound {
                 log19: &log19,
                 projection: &projection,
@@ -849,12 +860,14 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             MainTraceColumnKindV1::Base,
             &opening_indices,
+            self.assembly.allocated_payload_bytes_v1(),
             &sources,
         )?;
         let aux_openings = self.aux_polynomials.commit_joined_v1(
             &self.layout,
             MainTraceColumnKindV1::Aux,
             &opening_indices,
+            self.assembly.allocated_payload_bytes_v1(),
             &sources,
         )?;
         let trace_group = self
@@ -1301,52 +1314,22 @@ fn main_registration_trace_columns_on_coset_v1(
     registration: RegisteredSegmentLayoutV1,
     sources: &MainTraceReplaySourcesV1<'_, '_>,
     stripe: main_quotient_stripes::MainQuotientStripeV1,
+    cache: &main_quotient_cache::MainQuotientReplayCacheV1,
 ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
     canonical_main_registration_index_v1(layout, registration)?;
-    let (start, end, width) = match kind {
-        MainTraceColumnKindV1::Base => (
-            registration.base_start,
-            registration.base_end()?,
-            registration.segment.base_width,
-        ),
-        MainTraceColumnKindV1::Aux => (
-            registration.aux_start,
-            registration.aux_end()?,
-            registration.segment.aux_width,
-        ),
+    let (start, width) = match kind {
+        MainTraceColumnKindV1::Base => (registration.base_start, registration.segment.base_width),
+        MainTraceColumnKindV1::Aux => (registration.aux_start, registration.segment.aux_width),
     };
-    let mut columns = ZeroizingBaseColumnsV1(Vec::new());
-    columns
-        .0
-        .try_reserve_exact(width)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    // Native replay stays serial. Only this fixed eight-column batch may own
-    // replayed coefficients or parallel FFT scratch at the same time.
-    for first in (start..end).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
-        let batch_end = end.min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
-        let replayed = (first..batch_end)
-            .map(|column| {
-                polynomials.replay_column_coefficients_v1(
-                    layout,
-                    kind,
-                    registration.trace_group,
-                    column,
-                    sources,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let evaluated = replayed
-            .par_iter()
-            .map(|coefficients| stripe.evaluate_v1(coefficients))
-            .collect::<Result<Vec<_>, _>>()?;
-        for column in evaluated {
-            columns.0.push(column.into_vec_v1());
-        }
-    }
-    if columns.len() != width || columns.iter().any(|column| column.len() != stripe.rows) {
-        return Err(ZkX509StarkErrorV1::InternalInvariant);
-    }
-    Ok(columns)
+    cache.evaluate_v1(kind, width, stripe, |columns| {
+        polynomials.replay_columns_coefficients_v1(
+            layout,
+            kind,
+            registration.trace_group,
+            start + columns.start..start + columns.end,
+            sources,
+        )
+    })
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_fixed_columns_on_coset_v1(
@@ -1487,6 +1470,24 @@ fn main_registration_composition_coefficient_chunks_v1(
     {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
+    let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(layout)?
+        .quotient_cache_plan_v1(layout, registration)?;
+    let cache = main_quotient_cache::MainQuotientReplayCacheV1::from_replay_v1(
+        cache_plan,
+        |kind, columns| {
+            let (polynomials, start) = match kind {
+                MainTraceColumnKindV1::Base => (base_polynomials, registration.base_start),
+                MainTraceColumnKindV1::Aux => (aux_polynomials, registration.aux_start),
+            };
+            polynomials.replay_columns_coefficients_v1(
+                layout,
+                kind,
+                registration.trace_group,
+                start + columns.start..start + columns.end,
+                sources,
+            )
+        },
+    )?;
     let mut quotients = (0..SECURITY_LANES)
         .map(|_| {
             let mut quotient = ZeroizingExtensionColumnV1(Vec::new());
@@ -1511,6 +1512,7 @@ fn main_registration_composition_coefficient_chunks_v1(
             registration,
             sources,
             stripe,
+            &cache,
         )?;
         let aux = main_registration_trace_columns_on_coset_v1(
             layout,
@@ -1519,6 +1521,7 @@ fn main_registration_composition_coefficient_chunks_v1(
             registration,
             sources,
             stripe,
+            &cache,
         )?;
         let fixed_columns = main_fixed_columns_on_coset_v1(fixed, stripe)?;
         // Each task owns disjoint windows of the canonical full quotient. Only
@@ -1570,6 +1573,8 @@ fn main_registration_composition_coefficient_chunks_v1(
                     )
             })?;
     }
+    // Coefficients are no longer needed once all original quotient rows exist.
+    drop(cache);
     let mut coefficient_chunks = Vec::new();
     coefficient_chunks
         .try_reserve_exact(SECURITY_LANES)
@@ -1844,55 +1849,65 @@ fn main_fri_bases_from_polynomials_v1(
         let native_root = goldilocks_primitive_root_v1(group_layout.native_trace_log2)
             .map_err(map_transparent_error_v1)?;
         let deep_next_point = deep_point.mul_base(native_root);
-        for column in 0..group_layout.base_width {
-            let coefficients = base_polynomials.replay_column_coefficients_v1(
-                layout,
+        let powers = main_deep_replay::MainDeepPointPowersV1::new_v1(
+            [deep_point, deep_next_point],
+            (1_usize << group_layout.native_trace_log2) + MASK_DEGREE + 1,
+        )?;
+        let mut weighted = (0..SECURITY_LANES)
+            .map(|_| main_deep_replay::MainGroupedDeepQuotientV1::new_v1(&powers))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (kind, polynomials, width, current, next) in [
+            (
                 MainTraceColumnKindV1::Base,
-                group_index,
-                column,
-                sources,
-            )?;
-            for lane in 0..SECURITY_LANES {
-                accumulate_base_deep_quotient_v1(
-                    &coefficients,
-                    deep_point,
-                    deep.base_current[column],
-                    group_mixes[lane].base[column],
-                    &mut accumulators[lane].0,
+                base_polynomials,
+                group_layout.base_width,
+                &deep.base_current,
+                &deep.base_next,
+            ),
+            (
+                MainTraceColumnKindV1::Aux,
+                aux_polynomials,
+                group_layout.aux_width,
+                &deep.aux_current,
+                &deep.aux_next,
+            ),
+        ] {
+            for first in (0..width).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+                let end = width.min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
+                let coefficients = polynomials.replay_columns_coefficients_v1(
+                    layout,
+                    kind,
+                    group_index,
+                    first..end,
+                    sources,
                 )?;
-                accumulate_base_deep_quotient_v1(
-                    &coefficients,
-                    deep_next_point,
-                    deep.base_next[column],
-                    group_mixes[lane].base_next[column],
-                    &mut accumulators[lane].0,
-                )?;
+                for (column, coefficients) in (first..end).zip(&coefficients) {
+                    for lane in 0..SECURITY_LANES {
+                        let scales = match kind {
+                            MainTraceColumnKindV1::Base => [
+                                group_mixes[lane].base[column],
+                                group_mixes[lane].base_next[column],
+                            ],
+                            MainTraceColumnKindV1::Aux => [
+                                group_mixes[lane].aux[column],
+                                group_mixes[lane].aux_next[column],
+                            ],
+                        };
+                        weighted[lane].add_v1(
+                            &powers,
+                            coefficients,
+                            [current[column], next[column]],
+                            scales,
+                        )?;
+                    }
+                }
             }
         }
-        for column in 0..group_layout.aux_width {
-            let coefficients = aux_polynomials.replay_column_coefficients_v1(
-                layout,
-                MainTraceColumnKindV1::Aux,
-                group_index,
-                column,
-                sources,
+        for (lane, weighted) in weighted.into_iter().enumerate() {
+            weighted.accumulate_v1(
+                group_layout.base_width + group_layout.aux_width,
+                &mut accumulators[lane].0,
             )?;
-            for lane in 0..SECURITY_LANES {
-                accumulate_base_deep_quotient_v1(
-                    &coefficients,
-                    deep_point,
-                    deep.aux_current[column],
-                    group_mixes[lane].aux[column],
-                    &mut accumulators[lane].0,
-                )?;
-                accumulate_base_deep_quotient_v1(
-                    &coefficients,
-                    deep_next_point,
-                    deep.aux_next[column],
-                    group_mixes[lane].aux_next[column],
-                    &mut accumulators[lane].0,
-                )?;
-            }
         }
     }
     for lane in 0..SECURITY_LANES {

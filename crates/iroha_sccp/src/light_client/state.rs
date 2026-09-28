@@ -136,6 +136,75 @@ pub fn same_checkpoint_block(a: &SccpLcCheckpointDataV1, b: &SccpLcCheckpointDat
         }
 }
 
+/// Collects the checkpoints an advance, proof or backfill records for one network, idempotent
+/// against stored ones and conflict-checked by content ([`same_checkpoint_block`]).
+pub(super) struct CheckpointRecorder<'a, V: SccpLcStateView + ?Sized> {
+    view: &'a V,
+    network: SccpNetworkV1,
+    origin: SccpLcCheckpointOriginV1,
+    now: u64,
+    pending: BTreeMap<u64, SccpLcCheckpointV1>,
+}
+
+impl<'a, V: SccpLcStateView + ?Sized> CheckpointRecorder<'a, V> {
+    pub(super) const fn new(
+        view: &'a V,
+        network: SccpNetworkV1,
+        origin: SccpLcCheckpointOriginV1,
+        now: u64,
+    ) -> Self {
+        Self {
+            view,
+            network,
+            origin,
+            now,
+            pending: BTreeMap::new(),
+        }
+    }
+
+    /// Record `data` unless an identical record exists; a different record at the same height
+    /// is a conflict.
+    pub(super) fn record(
+        &mut self,
+        data: SccpLcCheckpointDataV1,
+    ) -> Result<(), super::SccpLcError> {
+        let height = data.source_height;
+        let existing = self
+            .pending
+            .get(&height)
+            .map(|checkpoint| checkpoint.data)
+            .or_else(|| {
+                self.view
+                    .checkpoint(self.network, height)
+                    .map(|checkpoint| checkpoint.data)
+            });
+        match existing {
+            Some(existing) if !same_checkpoint_block(&existing, &data) => Err(
+                super::SccpLcError::ConflictsWithStoredData(super::SccpLcConflictV1::Checkpoint {
+                    source_height: height,
+                }),
+            ),
+            Some(_) => Ok(()),
+            None => {
+                self.pending.insert(
+                    height,
+                    SccpLcCheckpointV1 {
+                        data,
+                        recorded_at_taira_ms: self.now,
+                        origin: self.origin,
+                    },
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// The new checkpoints in height order.
+    pub(super) fn into_vec(self) -> Vec<SccpLcCheckpointV1> {
+        self.pending.into_values().collect()
+    }
+}
+
 /// Canonical light-client state bytes hashed into `state_hash`.
 #[derive(
     Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, norito::NoritoSchema,

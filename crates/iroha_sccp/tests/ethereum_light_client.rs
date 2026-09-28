@@ -1050,13 +1050,13 @@ fn initialize_light_client_requires_the_expected_state() {
     assert_eq!(
         light_client::initialize_light_client(
             &empty,
-            SccpNetworkV1::BscMainnet,
+            SccpNetworkV1::SoraTaira,
             SccpLcInitExpectationV1::Absent,
             &params(),
             &bootstrap,
             now
         ),
-        Err(SccpLcError::UnsupportedNetwork(SccpNetworkV1::BscMainnet))
+        Err(SccpLcError::UnsupportedNetwork(SccpNetworkV1::SoraTaira))
     );
 }
 
@@ -1701,15 +1701,18 @@ fn unsupported_networks_and_mismatched_frames_fail_closed() {
     let now = chain.slot_unix_ms(slot(300));
     let memory = installed(&chain, now);
     let bytes = advance_bytes(&advance(&chain, &[update_spec(&chain, slot(200))]));
+    assert_eq!(
+        light_client::apply_advance(&memory, SccpNetworkV1::SoraTaira, &bytes, now),
+        Err(SccpLcError::UnsupportedNetwork(SccpNetworkV1::SoraTaira))
+    );
     for network in [
         SccpNetworkV1::BscMainnet,
         SccpNetworkV1::TronMainnet,
         SccpNetworkV1::TonMainnet,
-        SccpNetworkV1::SoraTaira,
     ] {
         assert_eq!(
             light_client::apply_advance(&memory, network, &bytes, now),
-            Err(SccpLcError::UnsupportedNetwork(network))
+            Err(SccpLcError::NotInstalled(network))
         );
     }
     let bootstrap = SccpLcBootstrapV1 {

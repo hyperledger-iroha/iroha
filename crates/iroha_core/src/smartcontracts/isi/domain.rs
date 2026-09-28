@@ -1119,6 +1119,18 @@ pub mod isi {
                 )
                 .into());
             }
+            if crate::smartcontracts::isi::sccp::escrow::is_escrow(
+                &*state_transaction.world,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot register account {account_id}: its identity is reserved for an SCCP route escrow"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some(uaid) = account.uaid() {
                 if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -1266,6 +1278,16 @@ pub mod isi {
                 state_transaction,
                 &account_id,
             )?;
+            if crate::smartcontracts::isi::sccp::escrow::is_escrow(
+                &*state_transaction.world,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister account {account_id}: it is an SCCP route escrow")
+                        .into(),
+                )
+                .into());
+            }
             if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
                 &state_transaction.world,
                 &account_id,

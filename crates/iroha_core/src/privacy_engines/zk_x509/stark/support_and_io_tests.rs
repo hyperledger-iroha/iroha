@@ -347,8 +347,8 @@ fn fixture_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
 fn fixture_statement() -> ZkX509IoStarkStatementV1 {
     ZkX509IoStarkStatementV1::new(
         fixture_witnesses()
-            .into_iter()
-            .map(|witness| witness.declaration)
+            .iter()
+            .map(|witness| witness.declaration.clone())
             .collect(),
     )
     .expect("valid statement")
@@ -385,12 +385,68 @@ fn focused_io_material_fixture_v1() -> (IoTraceMaterialV1, ZkX509IoChallengesV1)
         IoTraceMaterialV1 {
             layout,
             logical_active_rows,
-            base_columns,
-            aux_columns,
+            base_columns: base_columns.into_vec(),
+            aux_columns: aux_columns.into_vec(),
             fixed_columns,
         },
         challenges,
     )
+}
+
+#[test]
+fn io_materializer_owners_clear_columns_on_validation_failure_and_unwind() {
+    use crate::privacy_engines::zk_x509::private_table::inspection::observe_v1;
+    for mode in 0..3 {
+        let (result, observations) = observe_v1(|| {
+            std::panic::catch_unwind(|| {
+                let (mut material, challenges) = focused_io_material_fixture_v1();
+                validate_io_base_constraints_v1(&material, challenges).unwrap();
+                if mode == 1 {
+                    material.aux_columns[0][0] =
+                        F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+                    assert!(validate_io_base_constraints_v1(&material, challenges).is_err());
+                }
+                if mode == 2 {
+                    panic!("injected after IO materializer transfer");
+                }
+                drop(material);
+            })
+        });
+        assert_eq!(result.is_err(), mode == 2);
+        assert!(observations.iter().any(|value| value.nonzero_before > 0));
+        assert!(observations.iter().all(|value| value.nonzero_after == 0));
+        assert!(
+            observations.iter().map(|value| value.cells).sum::<usize>()
+                > IO_BASE_WIDTH + IO_AUX_WIDTH
+        );
+    }
+}
+
+#[test]
+fn main_io_provider_uses_clearing_columns_and_preserves_borrowed_source() {
+    use crate::privacy_engines::zk_x509::private_table::inspection::observe_v1;
+    let (statement, source) = main_io_topology_source_fixture_v1(0);
+    let expected_source = source.clone();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    for unwind in [false, true] {
+        let provider = MainIoTraceGroupSourceV1::for_main_v1(&layout, &statement, &source).unwrap();
+        let private_cells = provider.base_columns.iter().map(Vec::len).sum::<usize>();
+        let (result, observations) = observe_v1(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _provider = provider;
+                if unwind {
+                    panic!("injected with admitted IO source provider");
+                }
+            }))
+        });
+        assert_eq!(result.is_err(), unwind);
+        assert!(observations.iter().map(|value| value.cells).sum::<usize>() >= private_cells);
+        assert!(observations.iter().any(|value| value.nonzero_before > 0));
+        assert!(observations.iter().all(|value| value.nonzero_after == 0));
+        assert_eq!(source.execution, expected_source.execution);
+        assert_eq!(source.sorted, expected_source.sorted);
+        assert_eq!(source.witnesses, expected_source.witnesses);
+    }
 }
 fn main_io_topology_source_fixture_v1(
     disclosures: usize,
@@ -411,8 +467,8 @@ fn main_io_topology_source_fixture_v1(
             witnesses,
             declarations,
             logical_active_rows: plan.logical_active_rows,
-            execution,
-            sorted,
+            execution: execution.into_vec(),
+            sorted: sorted.into_vec(),
         },
     )
 }
@@ -551,8 +607,8 @@ fn main_io_fixed_same_address_schedule_and_topology_are_independent_of_private_b
         )
         .expect("changed private bytes");
     assert_eq!(honest_fixed, changed_fixed);
-    assert_ne!(honest_execution, changed_execution);
-    assert_ne!(honest_sorted, changed_sorted);
+    assert_ne!(honest_execution.as_slice(), changed_execution.as_slice());
+    assert_ne!(honest_sorted.as_slice(), changed_sorted.as_slice());
     assert!(
         honest_fixed[FIX_SORT_SAME_ADDRESS_NEXT]
             .iter()
@@ -1474,7 +1530,8 @@ fn zero_p256_terminal_fixture(role: P256EcdsaRoleV1) -> P256TerminalRegistration
         sink: zero,
     }
 }
-pub(super) fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainPostBaseChallengesV1 {
+pub(super) fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainPostBaseChallengesV1
+{
     derive_zk_x509_credential_pre_aux_binding_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x71; 32],

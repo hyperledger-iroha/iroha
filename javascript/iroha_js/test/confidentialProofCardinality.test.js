@@ -2,74 +2,59 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createConfidentialProofBuilders } from "../src/confidentialProofBuilders.js";
+import { createConfidentialProverClass } from "../src/confidentialProofBuilders.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
-
 const hex = "11".repeat(32);
 const input = { amount: "7", rhoHex: hex, diversifierHex: hex, leafIndex: 0 };
 const output = { amount: "7", rhoHex: hex, ownerTagHex: hex };
-const backend = "halo2/ipa";
-const request = {
-  networkId: NetworkId.fromBytes(Buffer.alloc(32, 0x13)),
-  assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-  spendKey: Buffer.alloc(32, 0x42),
-  treeCommitments: [hex], inputs: [input], outputs: [output],
-  publicAmount: "7", rootHintHex: hex,
-  verifyingKey: {
-    id: { backend },
-    record: { circuit_id: "fixture-only", backend, inline_key: { backend, bytes_b64: "AQID" } },
-  },
-};
-const names = ["buildConfidentialTransferProofV2", "buildConfidentialUnshieldProofV2", "buildConfidentialUnshieldProofV3"];
-
-test("confidential shape limits reject before native dispatch or array entry reads", () => {
-  let called = false;
-  const api = createConfidentialProofBuilders(createNativeRuntime(Object.fromEntries(
-    names.map((name) => [name, () => { called = true; throw new Error("unexpected dispatch"); }]),
-  )));
+const request = { treeCommitments: [hex], inputs: [input], rootHex: hex };
+function fixture() {
+  const calls = [];
+  const capture = (kind, args, count) => {
+    calls.push([kind, args]);
+    return { nullifiers: args[4].map(() => Buffer.alloc(32, 1)), outputCommitments: Array.from({ length: count }, () => Buffer.alloc(32, 2)), root: Buffer.from(hex, "hex"), proof: Buffer.from([3]) };
+  };
+  const Prover = createConfidentialProverClass(createNativeRuntime({
+    proveConfidentialTransfer: (...args) => capture("transfer", args, args[5].length),
+    proveConfidentialRedemption: (...args) => capture("redemption", args, args[7] === undefined ? 0 : 1),
+  }));
+  return { calls, prover: new Prover({ networkId: NetworkId.fromBytes(Buffer.alloc(32, 0x13)), assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", spendKey: Buffer.alloc(32, 0x42) }) };
+}
+test("confidential shape limits reject before native dispatch or array entry reads", async () => {
+  const { prover, calls } = fixture();
   const oversized = new Array(3);
   Object.defineProperty(oversized, 0, { get() { throw new Error("unexpected entry read"); } });
-  for (const name of names) {
-    for (const inputs of [[], oversized]) {
-      assert.throws(() => api[name]({ ...request, inputs }), /inputs must contain between 1 and 2/u);
+  try {
+    for (const prove of [patch => prover.proveTransfer({ ...request, outputs: [output], ...patch }), patch => prover.proveRedemption({ ...request, publicAmount: 7, ...patch })]) {
+      for (const inputs of [[], oversized]) await assert.rejects(() => prove({ inputs }), /inputs must contain between 1 and 2/u);
+      await assert.rejects(() => prove({ inputs: new Array(1) }), /inputs\[0\] must be an object/u);
+      await assert.rejects(() => prove({ inputs: [{ ...input, leafIndex: 65536 }] }), /tree capacity/u);
+      await assert.rejects(() => prove({ treeCommitments: new Array(65537) }), /treeCommitments must contain between 1 and 65536/u);
     }
-    assert.throws(() => api[name]({ ...request, inputs: new Array(1) }), /inputs\[0\] must be an object/u);
-    assert.throws(() => api[name]({ ...request, inputs: [{ ...input, leafIndex: 65536 }] }), /tree capacity/u);
-    assert.throws(() => api[name]({ ...request, treeCommitments: new Array(65537) }), /treeCommitments must contain between 0 and 65536/u);
-  }
-  for (const outputs of [[], oversized]) {
-    assert.throws(() => api.buildConfidentialTransferProofV2({ ...request, outputs }), /outputs must contain between 1 and 2/u);
-  }
-  assert.throws(() => api.buildConfidentialUnshieldProofV3({ ...request, outputs: [output, output] }), /outputs must contain between 0 and 1/u);
-  assert.equal(called, false);
+    for (const outputs of [[], oversized]) await assert.rejects(() => prover.proveTransfer({ ...request, outputs }), /outputs must contain between 1 and 2/u);
+    await assert.rejects(() => prover.proveRedemption({ ...request, publicAmount: 5, change: [output, output] }), /change amount/u);
+    assert.equal(calls.length, 0);
+  } finally { prover.dispose(); }
 });
-
-test("single actual input at full tree capacity forwards without caller dummy notes", () => {
-  // This checks argument forwarding only; these synthetic commitments are not
-  // a cryptographically valid tree and the injected binding does not prove.
-  const calls = [];
-  const api = createConfidentialProofBuilders(createNativeRuntime(Object.fromEntries(
-    names.map((name) => [name, (...args) => {
-      calls.push([name, args]);
-      return {
-        nullifiers: [Buffer.alloc(32, 1)], root: Buffer.alloc(32, 2), proof: Buffer.from([3]),
-        ...(name === "buildConfidentialUnshieldProofV2" ? {} : { outputCommitments: [] }),
-      };
-    }]),
-  )));
+test("one actual input at full capacity forwards without dummy notes and two-note shapes remain exact", async () => {
+  const { prover, calls } = fixture();
+  // Synthetic public leaves exercise forwarding, not cryptographic validity.
   const fullTree = { ...request, treeCommitments: Array(65536).fill(hex), inputs: [{ ...input, leafIndex: 65535 }] };
-  api.buildConfidentialTransferProofV2(fullTree);
-  api.buildConfidentialUnshieldProofV2(fullTree);
-  api.buildConfidentialUnshieldProofV3({ ...fullTree, outputs: undefined });
-  for (const [, args] of calls) {
-    assert.equal(args[3].length, 65536);
-    assert.deepEqual(args[4], [{ ...input, leafIndex: 65535 }]);
-  }
-  assert.deepEqual(calls[2][1][5], []);
-  api.buildConfidentialTransferProofV2({ ...request, inputs: [input, { ...input, leafIndex: 1 }], outputs: [output, output] });
-  assert.equal(calls[3][1][4].length, 2);
-  assert.equal(calls[3][1][5].length, 2);
+  try {
+    await prover.proveTransfer({ ...fullTree, outputs: [output] });
+    await prover.proveRedemption({ ...fullTree, publicAmount: 7 });
+    await prover.proveRedemption({ ...fullTree, publicAmount: 6, change: { amount: 1, rhoHex: hex } });
+    for (const [, args] of calls) {
+      assert.equal(args[3].length, 65536);
+      assert.deepEqual(args[4], [{ ...input, leafIndex: 65535 }]);
+    }
+    assert.equal(calls[1][1][7], undefined);
+    assert.deepEqual(calls[2][1][7], { amount: "1", rhoHex: hex });
+    await prover.proveTransfer({ ...request, treeCommitments: [hex, hex], inputs: [input, { ...input, leafIndex: 1 }], outputs: [output, output] });
+    assert.equal(calls[3][1][4].length, 2);
+    assert.equal(calls[3][1][5].length, 2);
+  } finally { prover.dispose(); }
 });
 
 test("confidential TypeScript declarations enforce actual input and output counts", () => {

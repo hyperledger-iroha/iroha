@@ -104,9 +104,16 @@ fn native_error(error: impl core::fmt::Display) -> crate::Error {
 }
 
 /// Check the selected continuation backend using only a fixed public probe.
-/// CPU needs no device access. Required-device failure precedes witness expansion,
-/// entropy or transforms; the actual dispatch still rechecks quarantine later.
+/// CPU needs no device discovery. Unknown completion from an earlier device
+/// call blocks even CPU proving: selecting CPU does not discharge retained
+/// private staging. Failure precedes witness expansion, entropy or transforms.
 pub(crate) fn preflight_last_fields_execution(execution: DigestExecutionV1) -> crate::Result<()> {
+    #[cfg(feature = "fastpq-gpu")]
+    if crate::gpu::transform_completion_uncertain_v1() {
+        return Err(native_error(
+            "device completion uncertain; private staging may remain, restart process before proving",
+        ));
+    }
     match execution {
         DigestExecutionV1::Cpu => Ok(()),
         #[cfg(feature = "fastpq-gpu")]

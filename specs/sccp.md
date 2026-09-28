@@ -48,12 +48,13 @@ There are no testnet profiles, no alias profiles and no compatibility layouts.
 - Heights, epochs and timestamps refer to Taira unless qualified. On
   destinations `now_ms` is `block.timestamp × 1000` (EVM, TRON) or
   `now() × 1000` (TON).
-- A Taira height `h` is **durably final** on a node when Kura holds the v2
-  finality artifact of `h` (the Commit QC over the block and its
-  `ExecutionCommitment`, which is the condition under which
-  `Kura::replace_top_block` refuses to replace `h`) and the node's state at `h`
-  has the certified `post_state_root`. Everywhere in this spec, "committed"
-  means durably final.
+- A Taira height `h` is **durably final** on a node when Kura holds the
+  certified `SignedBlockWire` frame of `h` (the Sumeragi core's commit
+  certificate over the block, `specs/sumeragi.md`) and the node's state has
+  applied `h`. The Sumeragi core applies only certified blocks, so a committed
+  height never reverts. Everywhere in this spec, "committed" means durably
+  final. (Revision 4: this replaces the Sumeragi v2 finality artifact, which
+  the Sumeragi core retired; see §14.4.)
 - **Amounts.** Taira XOR amounts are `Numeric` values of the XOR definition
   (scale ≤ 9). `taira_units(q) = mantissa(q) × 10^(9 − scale(q))`; it MUST be
   an exact integer with `0 < taira_units(q) < 2^128`. Every destination token
@@ -526,10 +527,15 @@ long a kept destination trusts any generation, and 14 d validity leaves about
 
 Node-local behavior (key directory, submission cadence, keeper endpoints)
 lives in `iroha_config` `[sccp.attestor]` (§4.9) and `[sccp.light_client_keeper]`
-(§4.13.4), with defaults that need no operator input. Existing `[zk.sccp]`
-native verifier work limits stay in
-`iroha_config` and remain bound into the consensus policy hash; their
-pending-outbound, pairing and BLS-aggregate knobs are removed.
+(§4.13.4), with defaults that need no operator input. The `[zk.sccp]`
+native verifier work limits stay in `iroha_config` and remain bound into the
+consensus policy hash. Each category has a per-transaction and a per-block
+limit: proofs, proof bytes (plus a per-frame bound), native headers and header
+bytes, Ethereum light-client updates, BSC vote attestations, secp256k1
+recoveries (TRON) and Ed25519 signature checks (TON). Defaults admit one full
+advance of every chain in a transaction and four in a block. The
+pending-outbound, pairing, BLS-aggregate and TON validator-key knobs are
+removed.
 
 ### 4.2 Bridge keys
 
@@ -1174,10 +1180,12 @@ Validation:
    normalized source event `{ kind: TransferToTaira, emitter, message_id,
    sender, nonce, payload_hash }`. Its `emitter` equals revision `r`'s
    deployment address, and its fields equal those recomputed from `payload`.
-5. Verifier work is reserved through the existing `SccpVerifierWorkV1`
-   metering and `[zk.sccp]` limits. A transaction carries at most one inbound
-   or void proof, preceded by any number of `AdvanceSccpLightClientV1`
-   instructions within the work limits.
+5. Verifier work is estimated from the frame alone (`SccpVerifierWorkV1`)
+   and reserved under the `[zk.sccp]` transaction and block limits before any
+   cryptography runs; advances and equivocation evidence are reserved the same
+   way. A reservation reaches the block only when its transaction commits. A
+   transaction carries at most one inbound or void proof, preceded by any
+   number of `AdvanceSccpLightClientV1` instructions within the work limits.
 
 Effect: insert `sccp_inbound_messages[message_id] = SccpInboundRecordV1
 { network, revision, payload, source_locator, proven_at_height, fee_due,
@@ -1340,14 +1348,69 @@ light client continues with no Parliament action, freeze or re-initialization.
 | TRON | The active witness set of each maintenance period (27 witness accounts with signing keys) and threshold 19 of those 27 | Header segments of ≤ 128 parent-linked headers. A segment need not link to the stored head; it authenticates itself. A header is solid when ≥ 19 distinct members of the active set of its maintenance period produced headers after it. The active set of period `p` is the set of distinct producers of the first 27 slots after `p`'s maintenance boundary, accepted once those headers are solid under period `p−1`'s set. Witnesses outside the set are evicted at the boundary. A witness's rotated signing key is learned from its solid headers | The segment in which `B` becomes solid, plus the transaction path in the SHA-256 promote-odd binary Merkle tree under `txTrieRoot` (not an MPT). Older events: unsigned `raw_data` headers parent-linked from `B` to a stored checkpoint (≤ 1 200 per proof, or `Backfill`) | 7 d (TRON unstaking is 14 d) |
 | TON | Validator epoch per key block (config 34, 28, 15) | ≤ 16 key-block hops, each signed by the current subset, with `prev_key_block_seqno` = stored latest key block | Any masterchain block signed by the epoch named by its `prev_key_block_seqno`, or an `OldMcBlocksInfo` back-link from a fresh block. Then the shard registration, a ≤ 32 shard-block `prev_ref` walk (both predecessors after a merge; `before_split` allowed), and the account transaction and out-message | `utime_until + stake_held_for − margin` |
 
+**BSC details.** A stored set is keyed by the height of the epoch checkpoint that
+announced it and records the set that finalized that checkpoint. It covers vote
+targets from `checkpoint + (n_prev / 2 + 1) · turn_prev` (Parlia switches after
+`minerHistoryCheckLen` blocks of the previous set, and checks the votes on a
+target against the set of the target's parent). A finality proof is one
+attestation `(S → S + 1)`: it names the covering set, and the set's successor
+when it is not the newest set, so the target must precede the successor's first
+covered height. A superseded set stays fresh until `ws_bound_ms` after its
+successor's checkpoint time. The newest set stays fresh until `ws_bound_ms`
+after the newest finalized block, so the keeper's unchanged-set advances keep it
+fresh. A transition step starts at the announcing checkpoint and must be
+attested by the newest set before the new set takes over. Any other epoch
+checkpoint above the newest set's checkpoint, in an advance, proof or evidence
+record, must announce the newest set, so every transition is learned in order.
+The bootstrap carries the trusted checkpoint and the checkpoint one epoch
+earlier, whose set size and turn length fix the new set's first covered height.
+Proofs name sets from `GET /v1/sccp/light-clients/{network}/sets`.
+
+**TRON details.** Maintenance periods follow the compiled grid
+`T_p = p · 21 600 000` ms (00:00, 06:00, 12:00 and 18:00 UTC);
+builders check it against `/wallet/getnextmaintenancetime`. A header belongs to
+the period of its timestamp; the maintenance block (the first header at or after
+`T_p`) is still produced by the outgoing set. A header `x` is solid when at least
+19 distinct members of the set of `x`'s period signed later headers of the
+segment with their stored keys. Set `p + 1` is learned only from a segment that
+contains its maintenance block and parent and extends past the learning window
+(the first 27 slots plus the two skipped slots): the window's distinct producers
+(account and recovered signer), each solid under set `p`, at least 19 of them.
+Periods cannot be skipped; each advance segment must make a header solid, and
+the newest solid header becomes the checkpoint and head. A rotated witness key
+is learned at the next boundary. A superseded set is fresh until `ws_bound_ms`
+after its period ends. TRON burns are proven from the call itself: the
+normalized event carries the caller and the canonical `transferToTaira`
+arguments, and Taira rebuilds the payload from them (§4.12.2). A void proof
+carries the destination's void call (`voidExpired*` binds by nonce).
+
+**TON details.** A stored epoch is keyed by its key block's seqno and holds
+config 34 (with the config-28 shuffle flag) and config 15 `stake_held_for`, read
+from a proof of the key block's state rooted at its `state_update` new hash. A
+masterchain block is verified under the stored epoch its `prev_key_block_seqno`
+names: the masterchain subset for the block's catchain session (the first `main`
+validators, shuffled when config 28 says so) must carry the block's
+`validator_list_hash_short`, and signatures of more than two thirds of the subset
+weight must verify (ordinary or Simplex transcripts). An epoch is fresh until
+`(utime_until + stake_held_for) · 1000 − 1 h` (TON light clients store
+`ws_bound_ms = 0`). A hop's key block must name the newest epoch; re-proving a
+stored hop is a no-op. A proof walks from the shard block the anchoring
+masterchain block registers for the minter's shard down to the event block
+(`TON_MAX_SHARD_LINKS = 32`), and the event block's proof must reach the minter's
+transaction, whose cell may be pruned there and is then supplied in full. The
+normalized sender is codec 7 (`int32 0 ‖ account`). TON records no checkpoints.
+The keeper looks for a new key block hourly.
+
 Approximate advance traffic to stay fresh: Ethereum, one update per sync
 period (~27 h, ~25 KB). BSC, one skipping advance per validator-set change
 (about daily, ~3 KB). TRON, one segment per maintenance period (4 per day,
 ~20 KB each). TON, one key-block hop per validator round (~18 h, ~20–60 KB).
 
 The existing per-chain verifiers in `iroha_sccp` (`ethereum_native.rs`,
-`ethereum_source.rs`, `bsc_native.rs`, `tron_native.rs`, `ton_native.rs`) are
-kept and refactored into these stateless checks. The following are removed:
+`ethereum_source.rs`, `ton_native.rs`) are kept and refactored into these
+stateless checks; the Parlia header, roster and vote-attestation primitives now
+live in `light_client/bsc.rs` and the TRON header, signature, transaction and
+Merkle primitives in `light_client/tron.rs`. The following are removed:
 
 - `SccpNativeTrustAnchorV1`, the anchor preimage DTOs, the anchor interval
   cutoff and `sccp_inbound_anchor_high_water`;
@@ -1969,6 +2032,20 @@ an SCCP attempt is active.
    - submits a tick (one `Log` instruction, ordinary fee) whenever the tip
      has been idle for `tick_interval_ms` (default 4 000), so the windows
      elapse and the beacon pulses the attempt requested are produced.
+
+   The driver reads `GET /v1/sccp/governance/proposals` and, per active
+   attempt, `GET /v1/gov/parliament/attempts/{id}/plan`. Core computes the
+   plan over one committed view by trial-applying every permissionless
+   transition to the reducer at the execution height of a transaction sent
+   now (tip + 3 under `QueuePlan`): the due transitions go out in one
+   transaction; each exact-height checkpoint (registration close, survivor
+   freeze, ballot registration) goes out alone when the tip is 3 blocks
+   before its height, and also at 4 blocks before in case admission slips a
+   block (the early copy fails harmlessly);
+   ballots in `TimedCommitment` are relayed from published records and
+   ballots in `Opening` finalized from the signer peers' partials. A missed
+   checkpoint is failed by the next plan, and the retry ballot is planned
+   automatically.
 
    Anyone may run a driver. Several drivers are harmless (a duplicate
    transition fails and pays its fee), and a driver has no discretion.
@@ -3012,8 +3089,8 @@ these bytes: signatures, proofs and digests are verified locally (§7).
 | `sccp.control.proof` | `GET /v1/sccp/controls/{network}/{revision}/{control_nonce}/proof?attestation=own\|latest\|<height>` | `SccpControlProofBundleV1`: control fields, leaf index, message count, path, attestation statement + digest, roster, signature set (≥ t, ascending), optional history proof; ready for one `applyControl` or `sccp_apply_control`. 409 `sccp_attestation_pending` until attested |
 | `sccp.history.proof` | `GET /v1/sccp/history/{height}?size=S` | history leaf and path within `history_root(S)` |
 | `sccp.bridge_keys` | `GET /v1/sccp/bridge-keys` | active, pending and retired keys with their accounts (`account_of(key)`); `barred`; binding nonces |
-| `sccp.light_clients` | `GET /v1/sccp/light-clients`, `/{network}`, `/{network}/checkpoints?covering=N` | light-client summary; exact canonical state bytes and `state_hash`; freshness; weak-subjectivity deadline; `supported_until` of the running release's compiled profile (§4.13.2); claim windows (§4.13.5); the nearest retained checkpoint ≥ N |
-| `sccp.governance` | `GET /v1/sccp/governance`, `/proposals?status&after`, `/proposals/{proposal_id}` | `sccp_governance_revisions` per subject; SCCP Parliament proposals with the **full `SccpGovernanceProposalV1` body**, subjects and `base_revisions`, whether they are still current (so a reviewer sees a proposal that will be superseded), the expected head frozen into each attempt, a diff against current state for `SetParameters` and activation changes, Parliament attempt id, stage and status, and enactment outcome; `readiness`: eligible citizens against the `[gov]` body sizes, beacon session active and matching the current roster, TLE session active with its remaining fresh-ballot capacity, and every active SCCP attempt with its next due checkpoint height and last progress height (§4.14.5) |
+| `sccp.light_clients` | `GET /v1/sccp/light-clients`, `/{network}`, `/{network}/sets`, `/{network}/checkpoints?covering=N` | light-client summary; exact canonical state bytes and `state_hash`; freshness; weak-subjectivity deadline; `supported_until` of the running release's compiled profile (§4.13.2); claim windows (§4.13.5); the nearest retained checkpoint ≥ N |
+| `sccp.governance` | `GET /v1/sccp/governance`, `/proposals?status&after`, `/proposals/{proposal_id}` | Implemented today: the revisions, and `/proposals` listing every open proposal oldest first with its full body, whether a new attempt would pass the preflight, and its newest attempt. Target: `sccp_governance_revisions` per subject; SCCP Parliament proposals with the **full `SccpGovernanceProposalV1` body**, subjects and `base_revisions`, whether they are still current (so a reviewer sees a proposal that will be superseded), the expected head frozen into each attempt, a diff against current state for `SetParameters` and activation changes, Parliament attempt id, stage and status, and enactment outcome; `readiness`: eligible citizens against the `[gov]` body sizes, beacon session active and matching the current roster, TLE session active with its remaining fresh-ballot capacity, and every active SCCP attempt with its next due checkpoint height and last progress height (§4.14.5) |
 
 Writes use the generic `POST /v1/pipeline/transactions`,
 `GET /v1/pipeline/transactions/{hash}/status` and `POST /v1/fees/quote`. There
@@ -3682,9 +3759,10 @@ sign|submit` and `bridge-key register` commands. None may be added.
   ingress policy; and catalog entries for all of these. The governance draft
   route is kept with the new payload.
 - **`iroha_config`:** `[torii.sccp_replay_archive]`; the `[zk.sccp]`
-  pending-outbound, pairing and BLS-aggregate knobs; `SCCP_LAUNCH_MODE`.
-  Added: `[sccp.attestor]` (§4.9) and `[sccp.light_client_keeper]`
-  (§4.13.4).
+  pending-outbound, pairing, BLS-aggregate and TON validator-key knobs;
+  `SCCP_LAUNCH_MODE`. Added: `[sccp.attestor]` (§4.9),
+  `[sccp.light_client_keeper]` (§4.13.4) and the `[zk.sccp]` BSC
+  vote-attestation limits.
 - **Executor:** `CanManageSccpGovernance` with its grant rules and deny
   visitors. `CanProposeSccpRouteGovernance` is kept, and its grant and revoke
   rule, which today requires `CanManageSccpGovernance`, becomes genesis-only
@@ -4120,3 +4198,28 @@ Sumeragi v2 code. Findings and where they were applied:
 | Cross-subject enactment preconditions | Adopted: ensure semantics for both pauses; destination-word check at proposal and attempt creation, distinct deployment addresses in tooling | §4.14.3, §7.4 |
 | Exact-JSON `u64` invariant | Adopted: SCCP arm; TON chain data as opaque BoC bytes | §4.14.3 |
 | Per-subject head implementation details | Adopted as implementation notes | §4.14.3 |
+
+### 14.4 Revision 4 (2026-09-28): the Sumeragi core
+
+The Sumeragi core replaced Sumeragi v2 (`HeightContext`, `V2FinalityArtifact`,
+`BridgeFinalityProof` and `next_epoch_snapshot` are gone). SCCP keeps every
+rule above and changes only where its consensus inputs come from:
+
+- **Finality.** A height is durably final once its certified frame is in Kura
+  and applied (§0). The attestor signs only such heights.
+- **Height inputs.** The post-execution hook reads the core's lag-2
+  `consensus_schedule` (three consecutive scheduled heights), which the
+  output-seal finalizer advances for the block just before the hook runs.
+  `epoch` and `epoch_end_height` follow the fixed-length epochs of
+  `specs/sumeragi.md` §11.7 (`sumeragi_epoch(h, genesis_height,
+  epoch_length_blocks)`; the genesis block and the first `epoch_length`
+  heights form epoch 0). The roster of `h` is the scheduled committee of `h`;
+  at a boundary the next roster is the scheduled committee of `h + 1`. Where
+  this spec says `HeightContext(h)` or `ctx.next_epoch_snapshot`, read these
+  scheduled values. A block whose inputs are not scheduled fails SCCP roster
+  derivation closed; block execution is unaffected.
+- **Bridge-key epochs.** Activation and the once-per-epoch exempt binding use
+  the same fixed-length epochs (`current_epoch` of the next height).
+- **Parliament ballot anchoring.** Clients re-anchor Parliament ballot
+  evidence on the core's `SumeragiFinalityVerifier`; the retired `ballot
+  anchor` CLI subcommand is removed.

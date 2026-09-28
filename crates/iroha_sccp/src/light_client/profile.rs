@@ -10,8 +10,6 @@
 //! bounds, so peers running releases with different profiles cannot silently diverge once it is
 //! bound into the consensus policy hash.
 
-use iroha_data_model::bridge::SccpNetworkV1;
-
 use crate::{
     ethereum_native::{
         EthereumLightClientError, FINALITY_PARTICIPANT_THRESHOLD, ForkActivation, ForkSchedule,
@@ -220,22 +218,262 @@ impl EthereumChainProfileV1 {
     }
 }
 
-/// Placeholder for a source chain whose light client lands in a later workstream.
+/// BNB Smart Chain mainnet EIP-155 chain id.
+pub const BSC_MAINNET_CHAIN_ID: u64 = 56;
+/// Parlia epoch length after Maxwell (blocks between validator-set checkpoints).
+pub const BSC_EPOCH_LENGTH: u64 = 1_000;
+/// Mainnet time (ms) at which Osaka and Mendel activate together: the first supported header
+/// layout (21 fields, millisecond timestamps in the mix digest).
+pub const BSC_MAINNET_SUPPORTED_FROM_MS: u64 = 1_777_343_400_000;
+/// Last BSC mainnet time (ms) this release supports (2027-06-30T00:00:00Z).
 ///
-/// Its policy bytes name the network and mark it pending, so filling the profile changes the
-/// policy hash.
+/// No fork after Mendel is compiled. Each release moves this bound to the last block before the
+/// next scheduled fork, or to its own support horizon while none is scheduled; wallets stop
+/// burning seven days before it (§7.2).
+pub const BSC_MAINNET_SUPPORTED_UNTIL_MS: u64 = 1_814_313_600_000;
+/// Hard bound on steps in one BSC advance (§4.13.3).
+pub const BSC_MAX_STEPS_PER_ADVANCE: usize = 16;
+/// Hard bound on parent-linked headers in one BSC step, proof ancestry or backfill.
+pub const BSC_MAX_SEGMENT_HEADERS: usize = 256;
+/// Largest Parlia validator set (the vote bitmap is a `u64`).
+pub const BSC_MAX_VALIDATORS: usize = 64;
+
+/// Compiled BSC chain profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PendingChainProfileV1 {
-    /// Source chain.
-    pub network: SccpNetworkV1,
+pub struct BscChainProfileV1 {
+    /// EIP-155 chain id.
+    pub chain_id: u64,
+    /// Parlia epoch length.
+    pub epoch_length: u64,
+    /// First supported header time (ms); earlier headers fail closed.
+    pub supported_from_ms: u64,
+    /// Last supported header time (ms); later headers fail closed.
+    pub supported_until_ms: u64,
 }
 
-impl PendingChainProfileV1 {
-    /// Canonical bytes committed by the policy hash.
+/// BSC mainnet profile compiled into this release.
+pub const BSC_MAINNET: BscChainProfileV1 = BscChainProfileV1 {
+    chain_id: BSC_MAINNET_CHAIN_ID,
+    epoch_length: BSC_EPOCH_LENGTH,
+    supported_from_ms: BSC_MAINNET_SUPPORTED_FROM_MS,
+    supported_until_ms: BSC_MAINNET_SUPPORTED_UNTIL_MS,
+};
+
+impl BscChainProfileV1 {
+    /// The same profile with another `supported_until` time (a release extending the profile).
     #[must_use]
-    pub fn policy_bytes(self) -> Vec<u8> {
-        let mut out = b"SCCP/LC/PROFILE/PENDING/V1".to_vec();
-        out.extend_from_slice(self.network.profile_key().as_bytes());
+    pub const fn with_supported_until_ms(mut self, until_ms: u64) -> Self {
+        self.supported_until_ms = until_ms;
+        self
+    }
+
+    /// The same profile with another first supported time (synthetic test chains).
+    #[must_use]
+    pub const fn with_supported_from_ms(mut self, from_ms: u64) -> Self {
+        self.supported_from_ms = from_ms;
+        self
+    }
+
+    /// Whether a header timestamped `time_ms` lies in the supported fork window.
+    #[must_use]
+    pub const fn supports_time(&self, time_ms: u64) -> bool {
+        self.supported_from_ms <= time_ms && time_ms <= self.supported_until_ms
+    }
+
+    /// Whether `height` is an epoch checkpoint.
+    #[must_use]
+    pub const fn is_epoch_checkpoint(&self, height: u64) -> bool {
+        self.epoch_length != 0 && height % self.epoch_length == 0
+    }
+
+    /// Canonical fixed-layout bytes committed by the policy hash.
+    #[must_use]
+    pub fn policy_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(96);
+        out.extend_from_slice(b"SCCP/LC/PROFILE/BSC/V1");
+        for value in [
+            self.chain_id,
+            self.epoch_length,
+            self.supported_from_ms,
+            self.supported_until_ms,
+        ] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        for bound in [
+            BSC_MAX_STEPS_PER_ADVANCE,
+            BSC_MAX_SEGMENT_HEADERS,
+            BSC_MAX_VALIDATORS,
+        ] {
+            out.extend_from_slice(&u64::try_from(bound).unwrap_or(u64::MAX).to_be_bytes());
+        }
+        out.extend_from_slice(&MAX_SOURCE_FUTURE_MS.to_be_bytes());
+        out
+    }
+}
+
+/// TRON maintenance interval (ms): the active witness set is re-elected every six hours.
+pub const TRON_MAINTENANCE_INTERVAL_MS: u64 = 21_600_000;
+/// Offset of the TRON maintenance grid from the Unix epoch (ms). java-tron advances
+/// `nextMaintenanceTime` from zero in whole intervals, so maintenances fall at 00:00, 06:00,
+/// 12:00 and 18:00 UTC and `T_p = p · 21 600 000`. The builders check it against
+/// `/wallet/getnextmaintenancetime` and fail closed on a mismatch.
+pub const TRON_MAINTENANCE_ORIGIN_MS: u64 = 0;
+/// TRON block interval (ms).
+pub const TRON_BLOCK_INTERVAL_MS: u64 = 3_000;
+/// Slots skipped after a maintenance block.
+pub const TRON_MAINTENANCE_SKIP_SLOTS: u64 = 2;
+/// Active witnesses (super representatives) per maintenance period.
+pub const TRON_ACTIVE_WITNESSES: usize = 27;
+/// Distinct active witnesses that must build on a block for it to be solid (70 % of 27).
+pub const TRON_SOLID_THRESHOLD: usize = 19;
+/// Last TRON mainnet time (ms) this release supports (2027-06-30T00:00:00Z).
+pub const TRON_MAINNET_SUPPORTED_UNTIL_MS: u64 = 1_814_313_600_000;
+/// Hard bound on segments in one TRON advance.
+pub const TRON_MAX_SEGMENTS_PER_ADVANCE: usize = 16;
+/// Hard bound on signed headers in one TRON segment (§4.13.3).
+pub const TRON_MAX_SEGMENT_HEADERS: usize = 128;
+/// Hard bound on unsigned `raw_data` headers from an event block to a stored checkpoint.
+pub const TRON_MAX_ANCESTRY_HEADERS: usize = 1_200;
+
+/// Compiled TRON chain profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TronChainProfileV1 {
+    /// Maintenance interval (ms).
+    pub maintenance_interval_ms: u64,
+    /// Maintenance grid origin (ms).
+    pub maintenance_origin_ms: u64,
+    /// Block interval (ms).
+    pub block_interval_ms: u64,
+    /// Slots skipped after a maintenance block.
+    pub maintenance_skip_slots: u64,
+    /// Last supported header time (ms); later headers fail closed.
+    pub supported_until_ms: u64,
+}
+
+/// TRON mainnet profile compiled into this release.
+pub const TRON_MAINNET: TronChainProfileV1 = TronChainProfileV1 {
+    maintenance_interval_ms: TRON_MAINTENANCE_INTERVAL_MS,
+    maintenance_origin_ms: TRON_MAINTENANCE_ORIGIN_MS,
+    block_interval_ms: TRON_BLOCK_INTERVAL_MS,
+    maintenance_skip_slots: TRON_MAINTENANCE_SKIP_SLOTS,
+    supported_until_ms: TRON_MAINNET_SUPPORTED_UNTIL_MS,
+};
+
+impl TronChainProfileV1 {
+    /// The same profile with another `supported_until` time.
+    #[must_use]
+    pub const fn with_supported_until_ms(mut self, until_ms: u64) -> Self {
+        self.supported_until_ms = until_ms;
+        self
+    }
+
+    /// The maintenance period a header timestamped `time_ms` belongs to (`0` before the origin).
+    #[must_use]
+    pub const fn period_at(&self, time_ms: u64) -> u64 {
+        if time_ms < self.maintenance_origin_ms || self.maintenance_interval_ms == 0 {
+            return 0;
+        }
+        (time_ms - self.maintenance_origin_ms) / self.maintenance_interval_ms
+    }
+
+    /// Start of maintenance period `period` (ms), or `None` on overflow.
+    #[must_use]
+    pub const fn period_start_ms(&self, period: u64) -> Option<u64> {
+        match period.checked_mul(self.maintenance_interval_ms) {
+            Some(offset) => self.maintenance_origin_ms.checked_add(offset),
+            None => None,
+        }
+    }
+
+    /// End of maintenance period `period` (the next period's start, ms).
+    #[must_use]
+    pub const fn period_end_ms(&self, period: u64) -> Option<u64> {
+        match period.checked_add(1) {
+            Some(next) => self.period_start_ms(next),
+            None => None,
+        }
+    }
+
+    /// Length of the witness-learning window after a maintenance block (ms): the first 27
+    /// production slots plus the skipped slots.
+    #[must_use]
+    pub const fn learning_window_ms(&self) -> u64 {
+        (TRON_ACTIVE_WITNESSES as u64 + self.maintenance_skip_slots) * self.block_interval_ms
+    }
+
+    /// Canonical fixed-layout bytes committed by the policy hash.
+    #[must_use]
+    pub fn policy_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(128);
+        out.extend_from_slice(b"SCCP/LC/PROFILE/TRON/V1");
+        for value in [
+            self.maintenance_interval_ms,
+            self.maintenance_origin_ms,
+            self.block_interval_ms,
+            self.maintenance_skip_slots,
+            self.supported_until_ms,
+        ] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        for bound in [
+            TRON_ACTIVE_WITNESSES,
+            TRON_SOLID_THRESHOLD,
+            TRON_MAX_SEGMENTS_PER_ADVANCE,
+            TRON_MAX_SEGMENT_HEADERS,
+            TRON_MAX_ANCESTRY_HEADERS,
+        ] {
+            out.extend_from_slice(&u64::try_from(bound).unwrap_or(u64::MAX).to_be_bytes());
+        }
+        out.extend_from_slice(&MAX_SOURCE_FUTURE_MS.to_be_bytes());
+        out
+    }
+}
+
+/// Margin subtracted from a TON epoch's `utime_until + stake_held_for` (ms): one hour.
+pub const TON_FRESHNESS_MARGIN_MS: u64 = 3_600_000;
+/// Last TON mainnet time (ms) this release supports (2027-06-30T00:00:00Z).
+pub const TON_MAINNET_SUPPORTED_UNTIL_MS: u64 = 1_814_313_600_000;
+/// Hard bound on key-block hops in one TON advance.
+pub const TON_MAX_HOPS_PER_ADVANCE: usize = 16;
+/// Hard bound on shard blocks walked in one TON proof.
+pub const TON_MAX_SHARD_LINKS: usize = 32;
+
+/// Compiled TON chain profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TonChainProfileV1 {
+    /// Margin subtracted from an epoch's end of stake lock (ms).
+    pub freshness_margin_ms: u64,
+    /// Last supported block time (ms); later blocks fail closed.
+    pub supported_until_ms: u64,
+}
+
+/// TON mainnet profile compiled into this release (global id −239, zero state and TL-B layouts
+/// are fixed by `ton_native`).
+pub const TON_MAINNET: TonChainProfileV1 = TonChainProfileV1 {
+    freshness_margin_ms: TON_FRESHNESS_MARGIN_MS,
+    supported_until_ms: TON_MAINNET_SUPPORTED_UNTIL_MS,
+};
+
+impl TonChainProfileV1 {
+    /// The same profile with another `supported_until` time.
+    #[must_use]
+    pub const fn with_supported_until_ms(mut self, until_ms: u64) -> Self {
+        self.supported_until_ms = until_ms;
+        self
+    }
+
+    /// Canonical fixed-layout bytes committed by the policy hash.
+    #[must_use]
+    pub fn policy_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(64);
+        out.extend_from_slice(b"SCCP/LC/PROFILE/TON/V1");
+        for value in [self.freshness_margin_ms, self.supported_until_ms] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        for bound in [TON_MAX_HOPS_PER_ADVANCE, TON_MAX_SHARD_LINKS] {
+            out.extend_from_slice(&u64::try_from(bound).unwrap_or(u64::MAX).to_be_bytes());
+        }
+        out.extend_from_slice(&MAX_SOURCE_FUTURE_MS.to_be_bytes());
         out
     }
 }
@@ -245,26 +483,20 @@ impl PendingChainProfileV1 {
 pub struct SccpChainProfilesV1 {
     /// Ethereum mainnet.
     pub ethereum: EthereumChainProfileV1,
-    /// BSC mainnet. TODO(ws38): compile the BSC fork schedule with `supported_until`.
-    pub bsc: PendingChainProfileV1,
-    /// TRON mainnet. TODO(ws39): compile the TRON profile with `supported_until`.
-    pub tron: PendingChainProfileV1,
-    /// TON mainnet. TODO(ws3A): compile the TON profile with `supported_until`.
-    pub ton: PendingChainProfileV1,
+    /// BSC mainnet.
+    pub bsc: BscChainProfileV1,
+    /// TRON mainnet.
+    pub tron: TronChainProfileV1,
+    /// TON mainnet.
+    pub ton: TonChainProfileV1,
 }
 
 /// The profiles compiled into this release.
 pub const COMPILED_PROFILES: SccpChainProfilesV1 = SccpChainProfilesV1 {
     ethereum: ETHEREUM_MAINNET,
-    bsc: PendingChainProfileV1 {
-        network: SccpNetworkV1::BscMainnet,
-    },
-    tron: PendingChainProfileV1 {
-        network: SccpNetworkV1::TronMainnet,
-    },
-    ton: PendingChainProfileV1 {
-        network: SccpNetworkV1::TonMainnet,
-    },
+    bsc: BSC_MAINNET,
+    tron: TRON_MAINNET,
+    ton: TON_MAINNET,
 };
 
 impl SccpChainProfilesV1 {
@@ -278,6 +510,27 @@ impl SccpChainProfilesV1 {
     #[must_use]
     pub const fn with_ethereum(mut self, ethereum: EthereumChainProfileV1) -> Self {
         self.ethereum = ethereum;
+        self
+    }
+
+    /// The same profiles with another BSC profile.
+    #[must_use]
+    pub const fn with_bsc(mut self, bsc: BscChainProfileV1) -> Self {
+        self.bsc = bsc;
+        self
+    }
+
+    /// The same profiles with another TRON profile.
+    #[must_use]
+    pub const fn with_tron(mut self, tron: TronChainProfileV1) -> Self {
+        self.tron = tron;
+        self
+    }
+
+    /// The same profiles with another TON profile.
+    #[must_use]
+    pub const fn with_ton(mut self, ton: TonChainProfileV1) -> Self {
+        self.ton = ton;
         self
     }
 
@@ -383,6 +636,44 @@ mod tests {
     }
 
     #[test]
+    fn bsc_window_and_epochs_are_inclusive() {
+        let profile = BSC_MAINNET;
+        assert!(profile.supports_time(BSC_MAINNET_SUPPORTED_FROM_MS));
+        assert!(!profile.supports_time(BSC_MAINNET_SUPPORTED_FROM_MS - 1));
+        assert!(profile.supports_time(BSC_MAINNET_SUPPORTED_UNTIL_MS));
+        assert!(!profile.supports_time(BSC_MAINNET_SUPPORTED_UNTIL_MS + 1));
+        assert!(profile.with_supported_from_ms(0).supports_time(0));
+        assert!(profile.is_epoch_checkpoint(52_000_000));
+        assert!(!profile.is_epoch_checkpoint(52_000_001));
+        assert!(
+            profile
+                .policy_bytes()
+                .starts_with(b"SCCP/LC/PROFILE/BSC/V1")
+        );
+    }
+
+    #[test]
+    fn tron_periods_follow_the_utc_maintenance_grid() {
+        let profile = TRON_MAINNET;
+        // Mainnet `getnextmaintenancetime` returned 2026-09-28T12:00:00Z.
+        let maintenance = 1_790_596_800_000;
+        let period = profile.period_at(maintenance);
+        assert_eq!(profile.period_start_ms(period), Some(maintenance));
+        assert_eq!(profile.period_at(maintenance - 1), period - 1);
+        assert_eq!(
+            profile.period_end_ms(period),
+            Some(maintenance + TRON_MAINTENANCE_INTERVAL_MS)
+        );
+        assert_eq!(profile.period_at(0), 0);
+        assert_eq!(profile.learning_window_ms(), 87_000);
+        assert!(
+            profile
+                .policy_bytes()
+                .starts_with(b"SCCP/LC/PROFILE/TRON/V1")
+        );
+    }
+
+    #[test]
     fn policy_hash_binds_every_profile_field() {
         let compiled = *SccpChainProfilesV1::compiled();
         assert_eq!(policy_hash_contribution(), compiled.policy_hash());
@@ -391,15 +682,11 @@ mod tests {
         let mut other_root = compiled;
         other_root.ethereum.genesis_validators_root[0] ^= 1;
         assert_ne!(other_root.policy_hash(), compiled.policy_hash());
-        let mut other_pending = compiled;
-        other_pending.ton.network = SccpNetworkV1::BscMainnet;
-        assert_ne!(other_pending.policy_hash(), compiled.policy_hash());
-        assert!(
-            PendingChainProfileV1 {
-                network: SccpNetworkV1::TronMainnet
-            }
-            .policy_bytes()
-            .ends_with(b"tron-mainnet")
-        );
+        let later_bsc = compiled.with_bsc(BSC_MAINNET.with_supported_until_ms(1));
+        assert_ne!(later_bsc.policy_hash(), compiled.policy_hash());
+        let later_ton = compiled.with_ton(TON_MAINNET.with_supported_until_ms(1));
+        assert_ne!(later_ton.policy_hash(), compiled.policy_hash());
+        let later_tron = compiled.with_tron(TRON_MAINNET.with_supported_until_ms(1));
+        assert_ne!(later_tron.policy_hash(), compiled.policy_hash());
     }
 }

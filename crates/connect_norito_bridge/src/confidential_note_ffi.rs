@@ -16,6 +16,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, block::BlockHeader};
 use libc::{c_int, c_uchar, c_ulong};
 use std::{ptr, slice, str};
+use zeroize::Zeroizing;
 const DIGEST_BYTES: usize = 32;
 const MAX_DIVERSIFIER_SEED_BYTES: usize = 4_096;
 const MAX_ASSET_DEFINITION_ID_BYTES: usize = 512;
@@ -84,9 +85,9 @@ fn derive_diversifier_v3(seed: &[u8]) -> Result<[u8; DIGEST_BYTES], c_int> {
     Ok(diversifier)
 }
 fn derive_owner_tag_v3(spend_key: &[u8], diversifier: &[u8]) -> Result<[u8; DIGEST_BYTES], c_int> {
-    let spend_key = fixed_nonzero::<DIGEST_BYTES>(spend_key)?;
+    let spend_key = Zeroizing::new(fixed_nonzero::<DIGEST_BYTES>(spend_key)?);
     let diversifier = fixed_nonzero::<DIGEST_BYTES>(diversifier)?;
-    derive_confidential_owner_tag_v3_with_diversifier(&spend_key, diversifier)
+    derive_confidential_owner_tag_v3_with_diversifier(spend_key.as_slice(), diversifier)
         .map_err(|_| ERR_CONFIDENTIAL_DERIVATION)
 }
 fn derive_asset_tag_v3(asset: &[u8]) -> Result<[u8; DIGEST_BYTES], c_int> {
@@ -105,9 +106,9 @@ fn derive_note_commitment_v3(
 ) -> Result<[u8; DIGEST_BYTES], c_int> {
     let asset_tag = derive_asset_tag_v3(asset)?;
     let amount = canonical_positive_u128(amount)?;
-    let rho = fixed_nonzero::<DIGEST_BYTES>(rho)?;
+    let rho = Zeroizing::new(fixed_nonzero::<DIGEST_BYTES>(rho)?);
     let owner_tag = fixed_nonzero::<DIGEST_BYTES>(owner_tag)?;
-    derive_confidential_note_v3(asset_tag, amount, rho, owner_tag)
+    derive_confidential_note_v3(asset_tag, amount, *rho, owner_tag)
         .map_err(|_| ERR_CONFIDENTIAL_DERIVATION)
 }
 fn derive_nullifier_v3(
@@ -118,9 +119,9 @@ fn derive_nullifier_v3(
 ) -> Result<[u8; DIGEST_BYTES], c_int> {
     let network_tag = derive_network_tag_v3(network_id)?;
     let asset_tag = derive_asset_tag_v3(asset)?;
-    let spend_key = fixed_nonzero::<DIGEST_BYTES>(spend_key)?;
-    let rho = fixed_nonzero::<DIGEST_BYTES>(rho)?;
-    derive_confidential_nullifier_v3(&spend_key, rho, asset_tag, network_tag)
+    let spend_key = Zeroizing::new(fixed_nonzero::<DIGEST_BYTES>(spend_key)?);
+    let rho = Zeroizing::new(fixed_nonzero::<DIGEST_BYTES>(rho)?);
+    derive_confidential_nullifier_v3(spend_key.as_slice(), *rho, asset_tag, network_tag)
         .map_err(|_| ERR_CONFIDENTIAL_DERIVATION)
 }
 fn decode_commitments(value: &[u8]) -> Result<Vec<[u8; DIGEST_BYTES]>, c_int> {
@@ -556,24 +557,27 @@ mod jni_exports {
         objects::{JByteArray, JClass},
         sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong},
     };
-    use zeroize::Zeroizing;
-    fn read(env: &mut JNIEnv<'_>, value: JByteArray<'_>, maximum: usize) -> Option<Vec<u8>> {
+    fn read(
+        env: &mut JNIEnv<'_>,
+        value: JByteArray<'_>,
+        maximum: usize,
+    ) -> Option<Zeroizing<Vec<u8>>> {
         let length = usize::try_from(env.get_array_length(&value).ok()?).ok()?;
         if length == 0 || length > maximum {
             return None;
         }
-        env.convert_byte_array(&value).ok()
+        env.convert_byte_array(&value).ok().map(Zeroizing::new)
     }
     fn read_allow_empty(
         env: &mut JNIEnv<'_>,
         value: JByteArray<'_>,
         maximum: usize,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<Zeroizing<Vec<u8>>> {
         let length = usize::try_from(env.get_array_length(&value).ok()?).ok()?;
         if length > maximum {
             return None;
         }
-        env.convert_byte_array(&value).ok()
+        env.convert_byte_array(&value).ok().map(Zeroizing::new)
     }
     fn output(env: &mut JNIEnv<'_>, digest: Result<[u8; DIGEST_BYTES], c_int>) -> jbyteArray {
         digest
@@ -598,7 +602,6 @@ mod jni_exports {
         let Some(spend_key) = read(env, spend_key, DIGEST_BYTES) else {
             return ptr::null_mut();
         };
-        let spend_key = Zeroizing::new(spend_key);
         let Some(diversifier) = read(env, diversifier, DIGEST_BYTES) else {
             return ptr::null_mut();
         };
@@ -656,7 +659,6 @@ mod jni_exports {
         let Some(spend_key) = read(env, spend_key, DIGEST_BYTES) else {
             return ptr::null_mut();
         };
-        let spend_key = Zeroizing::new(spend_key);
         let Some(rho) = read(env, rho, DIGEST_BYTES) else {
             return ptr::null_mut();
         };

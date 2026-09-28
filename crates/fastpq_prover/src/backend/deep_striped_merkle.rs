@@ -4,13 +4,15 @@
 //! per row j, then stream each completed B-leaf subtree into one upper stack.
 //! For N=65536/B=128 this uses 7*N digest slots instead of a complete M-leaf
 //! tree. Every leaf/parent keeps its natural coordinate and existing hash role.
-//! A second replay captures exactly the existing multiproof's ordered frontier.
-//! No leaf values or full tree are retained. Digest scratch is erased on drop.
+//! First commitments retain bounded internal nodes; selected-leaf replay later
+//! reconstructs the original canonical frontier without rehashing the full tree.
+//! No full leaf-value oracle is retained. Digest owners are erased on drop.
 //!
 //! The producer binds each completed root into the typed DEEP transcript.
 //! A computed commitment or frontier alone supplies no hiding or source authority.
 
 use super::{
+    deep_node_cache::{CommittedNodes, CompletedNodes, NodeCachePlan, PendingNodes},
     merkle_multiproof::{MultiproofLimits, MultiproofPlan, SiblingPosition},
     secret_polynomial::SecretPolynomial,
 };
@@ -117,6 +119,17 @@ impl StripedMerklePlan {
     }
 
     pub(super) fn start(self) -> Result<StripedMerkle> {
+        self.start_inner(None)
+    }
+
+    pub(super) fn start_cached(self, cache: PendingNodes) -> Result<StripedMerkle> {
+        if cache.leaves() != self.leaves {
+            return Err(invalid("cached tree shape differs from canonical stream"));
+        }
+        self.start_inner(Some(cache))
+    }
+
+    fn start_inner(self, cache: Option<PendingNodes>) -> Result<StripedMerkle> {
         let lower = SecretPolynomial::zeroed(self.rows * self.lower_levels)?;
         let upper = SecretPolynomial::zeroed(self.upper_levels)?;
         let siblings = SecretPolynomial::zeroed(
@@ -133,6 +146,7 @@ impl StripedMerklePlan {
             captured: 0,
             parents: 0,
             failed: false,
+            cache,
         })
     }
 }
@@ -147,10 +161,12 @@ pub(super) struct StripedMerkle {
     captured: usize,
     parents: usize,
     failed: bool,
+    cache: Option<PendingNodes>,
 }
 
 /// Public commitment and canonical frontier after the entire traversal succeeds.
 pub(super) struct StreamedCommitment {
+    pub(super) cache: Option<CompletedNodes>,
     pub(super) root: Digest,
     pub(super) siblings: Vec<Digest>,
     #[cfg(test)]
@@ -170,6 +186,7 @@ impl StripedMerkle {
         mut hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
     ) -> Result<()> {
         if self.failed || self.seen >= self.plan.leaves {
+            self.failed = true;
             return Err(invalid(
                 "striped commitment stream is failed or already complete",
             ));
@@ -184,7 +201,7 @@ impl StripedMerkle {
             ));
         }
         let mut value = leaf;
-        self.capture(0, index, value);
+        self.capture(0, index, value)?;
         let mut level = 0;
         while level < self.plan.lower_levels {
             let slot = level * self.plan.rows + row;
@@ -199,7 +216,7 @@ impl StripedMerkle {
             level += 1;
             value = hash(level, index >> level, left, value)?;
             self.parents += 1;
-            self.capture(level, index >> level, value);
+            self.capture(level, index >> level, value)?;
         }
         let mut upper = 0;
         while (row >> upper) & 1 == 1 {
@@ -209,7 +226,7 @@ impl StripedMerkle {
             level += 1;
             value = hash(level, index >> level, left, value)?;
             self.parents += 1;
-            self.capture(level, index >> level, value);
+            self.capture(level, index >> level, value)?;
         }
         self.upper[upper] = value.words();
         self.seen += 1;
@@ -230,6 +247,7 @@ impl StripedMerkle {
         mut upper_hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
     ) -> Result<()> {
         if self.failed || self.seen >= self.plan.leaves {
+            self.failed = true;
             return Err(invalid(
                 "striped commitment stream is failed or already complete",
             ));
@@ -252,7 +270,7 @@ impl StripedMerkle {
             ));
         }
         for (&index, &words) in indices.iter().zip(values.iter()) {
-            self.capture(0, index, digest(words));
+            self.capture(0, index, digest(words))?;
         }
         let mut parent_indices = [0; super::deep_leaf_batch::CAPACITY];
         for level in 0..self.plan.lower_levels {
@@ -286,7 +304,7 @@ impl StripedMerkle {
             }
             self.parents += values.len();
             for (&index, &words) in parent_indices.iter().zip(values.iter()) {
-                self.capture(level + 1, index, digest(words));
+                self.capture(level + 1, index, digest(words))?;
             }
         }
         for (offset, (&index, words)) in indices.iter().zip(values.iter_mut()).enumerate() {
@@ -300,7 +318,7 @@ impl StripedMerkle {
                 level += 1;
                 value = upper_hash(level, index >> level, left, value)?;
                 self.parents += 1;
-                self.capture(level, index >> level, value);
+                self.capture(level, index >> level, value)?;
             }
             *words = value.words();
             self.upper[upper] = *words;
@@ -310,9 +328,14 @@ impl StripedMerkle {
         Ok(())
     }
 
-    fn capture(&mut self, level: usize, index: usize, value: Digest) {
+    fn capture(&mut self, level: usize, index: usize, value: Digest) -> Result<()> {
+        if level > 0 {
+            if let Some(cache) = &mut self.cache {
+                cache.record(level, index, value)?;
+            }
+        }
         let Some(plan) = &self.plan.openings else {
-            return;
+            return Ok(());
         };
         if let Ok(position) = plan
             .sibling_positions()
@@ -321,6 +344,7 @@ impl StripedMerkle {
             self.siblings[position] = value.words();
             self.captured += 1;
         }
+        Ok(())
     }
 
     /// Preserve the existing duplicated sole-leaf parent rule and exact counts.
@@ -336,6 +360,7 @@ impl StripedMerkle {
         let mut root = digest(self.upper[self.plan.upper_levels - 1]);
         if self.plan.leaves == 1 {
             root = hash(1, 0, root, root)?;
+            self.capture(1, 0, root)?;
             self.parents += 1;
         }
         if self.parents != self.plan.parent_hashes {
@@ -348,7 +373,13 @@ impl StripedMerkle {
             .try_reserve_exact(self.siblings.len())
             .map_err(|_| invalid("striped commitment frontier allocation failed"))?;
         siblings.extend(self.siblings.iter().copied().map(digest));
+        let cache = self
+            .cache
+            .take()
+            .map(|cache| cache.finish(root))
+            .transpose()?;
         Ok(StreamedCommitment {
+            cache,
             root,
             siblings,
             #[cfg(test)]
@@ -398,6 +429,31 @@ impl<'a> RowCommitmentPlan<'a> {
             payload_bytes,
         })
     }
+    pub(super) fn commit(
+        self,
+        replay: &mut super::deep_masked_replay::MaskedTraceReplay,
+        binding: &super::deep_binding::Context,
+    ) -> Result<RowCommitment> {
+        if !self.queries.is_empty()
+            || replay.plan() != self.replay
+            || !replay.has_candidate_geometry()
+        {
+            return Err(invalid(
+                "cached row commitment requires its exact root phase",
+            ));
+        }
+        replay.ensure_pass_available()?;
+        let cache = NodeCachePlan::new(super::deep_binding::Oracle::Row)?.start(binding)?;
+        stream_rows(
+            replay,
+            binding,
+            self.queries,
+            self.tree,
+            self.digest_execution,
+            Some(cache),
+        )
+    }
+    #[cfg(test)]
     pub(super) fn build(
         self,
         replay: &mut super::deep_masked_replay::MaskedTraceReplay,
@@ -413,12 +469,14 @@ impl<'a> RowCommitmentPlan<'a> {
             self.queries,
             self.tree,
             self.digest_execution,
+            None,
         )
     }
 }
 
 /// Complete public row commitment and final selected-opening DTOs after success.
 pub(super) struct RowCommitment {
+    pub(super) cache: Option<CompletedNodes>,
     pub(super) root: Digest,
     pub(super) siblings: Vec<Digest>,
     pub(super) rows: Vec<super::deep_proof::RowOpening>,
@@ -447,6 +505,7 @@ fn stream_rows(
     queries: &[usize],
     tree: StripedMerklePlan,
     execution: crate::DigestExecutionV1,
+    cache: Option<PendingNodes>,
 ) -> Result<RowCommitment> {
     use super::{
         compact_public_columns::COMMITTED_COLUMN_COUNT as WIDTH,
@@ -469,7 +528,11 @@ fn stream_rows(
             "DEEP row frontier differs from selected row positions",
         ));
     }
-    let mut stream = tree.start()?;
+    let mut stream = if let Some(cache) = cache {
+        tree.start_cached(cache)?
+    } else {
+        tree.start()?
+    };
     let mut row = SecretPolynomial::zeroed(WIDTH)?;
     const BATCH: usize = super::deep_leaf_batch::CAPACITY;
     let mut bytes = SecretPolynomial::zeroed(BATCH * WIDTH * 8)?;
@@ -537,11 +600,69 @@ fn stream_rows(
         });
     }
     Ok(RowCommitment {
+        cache: finished.cache,
         root: finished.root,
         siblings: finished.siblings,
         rows,
     })
 }
+
+/// Regenerate only queried rows and leaf siblings under the committed mask owner.
+pub(super) fn open_cached_rows(
+    cache: CommittedNodes<'_>,
+    replay: &mut super::deep_masked_replay::MaskedTraceReplay,
+    queries: &[usize],
+    execution: crate::DigestExecutionV1,
+) -> Result<RowCommitment> {
+    use super::{
+        compact_public_columns::COMMITTED_COLUMN_COUNT as WIDTH,
+        deep_binding::Oracle,
+        deep_proof::{RowOpening, RowValues},
+    };
+    if cache.oracle() != Oracle::Row
+        || !replay.has_candidate_geometry()
+        || queries.len() != super::deep_geometry::QUERY_COUNT
+    {
+        return Err(invalid("cached row openings differ from the exact profile"));
+    }
+    let opened = cache.open(queries, execution, |indices, output| {
+        let mut row = SecretPolynomial::zeroed(WIDTH)?;
+        replay.visit_selected_stripes(indices, |stripe| {
+            for (&index, target) in indices.iter().zip(output.chunks_exact_mut(WIDTH * 8)) {
+                if index % replay_stripes() == stripe.stripe_index() {
+                    stripe.fill_row(index / replay_stripes(), &mut row)?;
+                    for (&value, word) in row.iter().zip(target.chunks_exact_mut(8)) {
+                        word.copy_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+            Ok(())
+        })
+    })?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(queries.len())
+        .map_err(|_| invalid("cached row opening allocation failed"))?;
+    for (&index, bytes) in queries.iter().zip(opened.values()) {
+        let values = bytes
+            .chunks_exact(8)
+            .map(|word| u64::from_le_bytes(word.try_into().expect("exact row cell")))
+            .collect::<Vec<_>>();
+        rows.push(RowOpening {
+            index: index as u32,
+            values: RowValues::new(values)?,
+        });
+    }
+    Ok(RowCommitment {
+        root: opened.root,
+        siblings: opened.siblings,
+        rows,
+        cache: None,
+    })
+}
+fn replay_stripes() -> usize {
+    super::deep_geometry::LDE_ROWS / super::deep_geometry::TRACE_ROWS
+}
+
 fn binding_error(error: super::deep_binding::BindingError) -> Error {
     Error::InvalidTraceShape {
         details: format!("DEEP streamed commitment: {error}"),

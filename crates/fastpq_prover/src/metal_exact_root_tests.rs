@@ -1,0 +1,179 @@
+//! Arithmetic, atomic publication and clearing controls for staged Metal FFTs.
+
+use super::*;
+use crate::cyclotomic::{self, Domain};
+use crate::gpu_secret::ErasureObservation;
+
+fn source(log: u32, columns: usize) -> Vec<Vec<u64>> {
+    (0..columns)
+        .map(|column| {
+            (0..(1_usize << log))
+                .map(|row| match row % 29 {
+                    0 => 0,
+                    1 => FIELD_MODULUS - 1,
+                    _ => {
+                        let index = (row + (column << log)) as u64;
+                        (index.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (index >> 3)) % FIELD_MODULUS
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn host_arguments_and_global_butterfly_partition_match_kernel_contract() {
+    assert_eq!(mem::size_of::<ExactRootFftArgs>(), 32);
+    assert_eq!(mem::offset_of!(ExactRootFftArgs, log_len), 16);
+    for log in 9..=15 {
+        let rows = 1_u64 << log;
+        let root = goldilocks_pow(7, (FIELD_MODULUS - 1) >> log);
+        for stage in LOCAL_LOG..log {
+            let half = 1_u64 << stage;
+            let step = goldilocks_pow(root, rows >> (stage + 1));
+            let stride = goldilocks_pow(step, LANES);
+            let mut visits = vec![0_u8; rows as usize];
+            for group in 0..(rows / 2).div_ceil(BUTTERFLIES_PER_GROUP) {
+                for lane in 0..LANES {
+                    let mut butterfly = group * BUTTERFLIES_PER_GROUP + lane;
+                    let first = goldilocks_pow(step, butterfly & (half - 1));
+                    let mut twiddle = first;
+                    for _ in 0..8 {
+                        if butterfly >= rows / 2 {
+                            break;
+                        }
+                        let offset = butterfly & (half - 1);
+                        let low = (butterfly - offset) * 2 + offset;
+                        assert!(low + half < rows);
+                        visits[low as usize] += 1;
+                        visits[(low + half) as usize] += 1;
+                        assert_eq!(twiddle, goldilocks_pow(step, offset));
+                        twiddle = if offset + LANES >= half {
+                            first
+                        } else {
+                            goldilocks_mul(twiddle, stride)
+                        };
+                        butterfly += LANES;
+                    }
+                }
+            }
+            assert!(visits.iter().all(|visits| *visits == 1));
+        }
+    }
+}
+
+#[test]
+fn malformed_shapes_fail_before_device_or_private_staging() {
+    let observed = ErasureObservation::begin();
+    for (mut columns, log) in [
+        (Vec::new(), 3),
+        (vec![vec![1]], 0),
+        (vec![vec![1; 8]; 9], 3),
+        (vec![vec![1; 8], vec![1; 4]], 3),
+        (vec![vec![1]], 33),
+    ] {
+        let original = columns.clone();
+        assert!(transform(&mut columns, log, 7, false).is_err());
+        assert_eq!(columns, original);
+    }
+    assert_eq!(observed.counts(), (0, 0));
+}
+
+#[test]
+fn staged_dense_forward_and_inverse_match_cpu_across_tile_and_group_boundaries() {
+    if select_metal_device().is_none() {
+        return;
+    }
+    let _lane = crate::backend::acquire_gpu_lane();
+    for log in [1, 2, 7, 8, 9, 10, 11, 12, 15] {
+        for odd in [1, 3, 5] {
+            let root = goldilocks_pow(goldilocks_pow(7, (FIELD_MODULUS - 1) >> log), odd);
+            for inverse in [false, true] {
+                let mut actual = source(log, 3);
+                let mut expected = actual.clone();
+                for column in &mut expected {
+                    let domain = Domain {
+                        log_size: log,
+                        generator: root,
+                    };
+                    if inverse {
+                        cyclotomic::ifft(column, domain);
+                    } else {
+                        cyclotomic::fft(column, domain);
+                    }
+                }
+                transform(&mut actual, log, root, inverse).unwrap();
+                assert_eq!(
+                    actual, expected,
+                    "log={log}, root_power={odd}, inverse={inverse}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn success_failure_and_unwind_clear_real_staging_without_partial_publication() {
+    if select_metal_device().is_none() {
+        return;
+    }
+    let _lane = crate::backend::acquire_gpu_lane();
+    let observed = ErasureObservation::begin();
+    let log = 12;
+    let root = goldilocks_pow(7, (FIELD_MODULUS - 1) >> log);
+    let original = source(log, 2);
+    let mut actual = original.clone();
+    autoreleasepool(|| transform(&mut actual, log, root, false).unwrap());
+    let after_success = observed.counts().0;
+    assert!(after_success >= 8192);
+    assert_eq!(observed.counts().1, 0);
+    actual = original.clone();
+    autoreleasepool(|| {
+        let _failure = fail_column_batch_wait_after(0);
+        assert!(transform(&mut actual, log, root, false).is_err());
+    });
+    assert_eq!(actual, original);
+    assert!(observed.counts().0 >= after_success + 8192);
+    assert_eq!(observed.counts().1, 0);
+    assert!(!backend_quarantined());
+
+    let weak = autoreleasepool(|| {
+        let _scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+        let context = metal_context().unwrap();
+        let twiddles = context.stage_twiddle_buffer(log, root, false).unwrap();
+        let mut buffer = PooledBuffer::from_columns(&original).unwrap();
+        let metal_buffer = shared_pooled_buffer(&context.device, &mut buffer).unwrap();
+        let weak = buffer.weak_backing_for_tests();
+        let ticket = submit(
+            context,
+            &metal_buffer,
+            &twiddles,
+            ExactRootFftArgs {
+                column_len: 1 << log,
+                normalization: 1,
+                log_len: log,
+                column_count: 2,
+                stage: 0,
+                padding: 0,
+            },
+        )
+        .unwrap();
+        let command = ticket.command.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _pending = ColumnBatchTicket {
+                range: 0..2,
+                buffer,
+                metal_buffer,
+                tickets: smallvec::smallvec![ticket],
+            };
+            panic!("exercise staged exact-root unwind after actual submission");
+        }));
+        assert!(result.is_err());
+        assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
+        drop(command);
+        weak
+    });
+    assert!(weak.upgrade().is_none());
+    assert_eq!(actual, original);
+    assert_eq!(observed.counts().1, 0);
+}

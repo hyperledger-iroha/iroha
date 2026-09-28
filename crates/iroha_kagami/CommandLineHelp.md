@@ -573,6 +573,7 @@ Generate a genesis configuration and standard-output in JSON format
 
   Possible values: `permissioned`, `npos`
 
+* `--lane-policy <PATH>` — Optional path to a JSON Sumeragi lane policy (fixed lanes, routes, autoscale) to set in genesis. If omitted, the chain has lane 0 only until governance sets a policy
 * `--sm-openssl-preview <BOOL>` — Toggle the OpenSSL-backed SM preview helpers in the generated manifest
 
   Possible values: `true`, `false`

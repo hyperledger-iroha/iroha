@@ -20,7 +20,6 @@ MANIFEST_PATHS = (
         "falcon512/assets/manifest.json"
     ),
     Path("crates/iroha_core/src/privacy_engines/zk_x509/assets/manifest.json"),
-    Path("crates/iroha_sccp/src/assets/manifest.json"),
     Path("crates/ivm/src/assets/manifest.json"),
     Path("crates/ivm/src/assets/iso20022_schema_v1/manifest.json"),
     Path("crates/ivm/src/assets/text_v1/manifest.json"),

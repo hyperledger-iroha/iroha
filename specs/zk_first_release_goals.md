@@ -87,25 +87,139 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   note openings, checks shape/amount/path-index errors before key preparation,
   and selects transfer/full-redemption/private-change circuits internally.
   `ConfidentialProverError` distinguishes preflight, key and proving failures
-  without string parsing. A runnable local redemption example and three real
-  native workflow controls are queued. These produce local proof artifacts;
+  without string parsing. The six caller-selected-key Rust builders and their
+  three result types are now internal to the ZK module; six external rustdoc
+  rejection guards await compilation with the final Core candidate. Public
+  note/tree and verifier-key registry primitives remain available. Rust's
+  consuming `change.into_input(index)` helper restores the correct default
+  change owner; shape and nondefault-input-to-change redemption tests await
+  the same final Core run. The three earlier real native workflow controls
+  pass; the
+  runnable local redemption example awaits its fresh executable check. These produce local proof artifacts;
   they do not restore retired ledger instructions or authorize value movement.
   Secret note/path and internal witness Debug output is redacted. JavaScript's
   `ConfidentialProver` delegates to that Core owner, without caller circuit
   or key selection. Its proof methods now return promises and execute native
   proof work on a worker; the native job owns clearing input copies and consumes
   them exactly once. Disposing the wallet closes future work while queued jobs
-  finish independently. Thirteen current JavaScript/cardinality/TypeScript checks
+  finish independently. All three caller-key JavaScript builders and their native
+  exports are removed. Twenty-one current boundary/cardinality/TypeScript checks
   pass, including deferred success, worker rejection, immediate FFI-key cleanup,
-  reentrant disposal and non-Error input failures.
-  Nine native worker and parsing tests pass, including a real full-redemption
-  proof that is self-verified on a worker thread. Packaged-addon execution remains
-  unqualified. Managed JavaScript witness strings do not carry an erasure guarantee.
+  reentrant disposal, retired-option rejection and non-Error input failures.
+  A bounded asynchronous root helper and executable redemption recipe use the
+  public API; the recipe queues work, closes the owner and observes event-loop
+  progress while the accepted job finishes.
+  Ten native worker and parsing tests pass in 37.91 seconds, including public
+  root-helper parity and a real full-redemption proof self-verified on a worker.
+  The normal macOS builder disables stripping only for the final addon, fixing
+  the actual loader's misaligned string-pool rejection; 133 build/provenance
+  controls pass. The frozen candidate builds and publishes through normal
+  provenance checks, passes 24 captured SDK/native/TypeScript controls with no
+  skips, and exposes its native root helper through the public dist entrypoint.
+  Its redemption recipe self-verifies a 13,741-byte proof after disposal while
+  recording 2,717 event-loop ticks. This qualifies the captured source/dist
+  loader; a clean installed package still requires release native distribution
+  and provenance qualification. Newer change helpers are outside that snapshot.
+  Managed JavaScript witness strings do not carry an erasure guarantee.
   The [September 28 wallet/kernel receipt](../docs/history/2026-09-28/zk-wallet-and-x509-kernels.md)
   separates mocked API, real native wallet, arithmetic and source-contract evidence.
   The rewritten public anonymous-transaction page and 20 translations pass their
   scoped i18n/content checks; independent language and native SDK qualification
   remain open.
+- Python now has the same typed `ConfidentialProver` workflow through the Core
+  owner, with automatic key/relation selection, context-managed closure and
+  explicit error codes. Native proof work releases the GIL and retains its own
+  clearing key/note lifetime; bounded parsing rejects malformed evidence before
+  proving. The four old caller-selected-key Python proof builders are removed;
+  their exact NetworkId assertions move to the canonical wallet owner. Seven
+  mocked boundary controls plus six native-free identity checks pass. The first
+  native run passes six controls and exposes a test fixture that encoded path
+  directions as Python bytes instead of the public helper's integer list. The
+  fixture now calls that actual helper. The fresh native retry passes all seven
+  controls in 30.86 seconds, including the real proof and independent Python
+  thread progress while proving. All four
+  Python wheels build and install in an isolated environment, but the first
+  packaged example is rejected by the macOS loader for a misaligned Mach-O
+  string pool. Target-only native stripping is disabled in the normal Maturin
+  configuration; the rebuilt wheel installs and loads normally. The public
+  example then exposed an export-order bug, now fixed by adding the wallet
+  symbols to the package's base export list. The rebuilt pure SDK wheel and
+  native wheel produce a locally verified 13,741-byte full-redemption proof
+  through the installed public API. The refreshed native wheel passes all three
+  installed regression tests in 79.919 seconds: real proof with independent Python
+  thread progress, early typed amount rejection, closed-owner rejection, public
+  exports and creating then redeeming retained change through the default-owner
+  helper. Its installed example passes in 33.528 seconds. The installed Python
+  modules match their captured source bytes. This is local
+  arm64 macOS/Python 3.12 evidence, not every supported host or ledger admission.
+- Swift and Kotlin now delegate local confidential proving to the same shared
+  C/JNI Rust owner, with bounded note/path DTOs, automatic circuit/key selection,
+  stable errors and explicit closure. Accepted jobs retain their native key until
+  completion. Swift's five injected-driver lifecycle checks, eight actual native
+  note derivation/encryption/change-helper checks and Kotlin's eight boundary
+  controls pass. Swift's
+  executable consumer now links after narrowing force-loading to NoritoBridge.
+  The shared C bridge passes all nine native controls in 33.45 seconds, including
+  a real proof after owner closure, output allocation/free, non-reused handles,
+  partial-input cleanup and stable amount errors. The fresh normal JNI build
+  passes all four real Kotlin consumer tests in 71.751 seconds, including three
+  complete proofs and restoring then redeeming retained change. The public Kotlin
+  example locally verifies a 13,741-byte proof in a 32-second Gradle run. These
+  are macOS arm64 results; Android devices and authenticated XCFramework consumer
+  proofs remain pending. The first JNI build stopped on
+  six unrelated SCCP BSC integration compile errors; those sources have since
+  changed; the successful JNI retry uses the retained SDK candidate with all
+  nine relevant bridge/wallet source files verified equal to the current checkout.
+  The frozen Apple artifact build was restarted after storage exhaustion, with
+  unchanged source and provenance checks. Both have executable public-API redemption
+  examples. The artifact export inventories require the new C/JNI contract.
+- SDK change-note helpers retain amount/rho and obtain the protocol default
+  diversifier through the native Core API; they do not reuse the input note's
+  potentially different diversifier. Developers securely retain the opening
+  before proving and supply an authenticated change index/root when spending it.
+  Swift native-note and Python/JS/Kotlin boundary controls pass. Python's new
+  two-proof change-then-redemption control passes through its installed wheel;
+  Kotlin's equivalent two-proof cycle now passes through the actual JNI library;
+  corresponding Swift/JS native controls await refreshed artifacts.
+- Entropy samplers now guard raw bytes, partial Fp4 coefficients and the final
+  mask owner before any fallible random draw. The actual-source isolated
+  regression observes initialized cells clearing on entropy error, unwind and
+  normal drop. Its integrated Core rerun remains pending.
+- X509 private owners now cover partial DER parsing, parsed certificate/CRL
+  precursors, semantic witnesses, I/O materialization and assembly construction.
+  The DER parser borrows header and extension spans; displaced trace allocations
+  are wiped before replacement. All 35 actual-source DER controls pass. The
+  private-witness codec establishes recursive ownership before decoding and
+  reserves its exact encoded size before writing private bytes; all 14 isolated
+  codec/owner controls and the retired-codec guard pass. The fresh integrated
+  Core candidate compiled, but storage exhaustion during stripping prevented
+  any tests from running. A fresh integrated run and complete proof evidence
+  remain open.
+  A subsequent repository-policy audit found that the local `IRX509W1` witness
+  container had no independent protocol requirement. It is replaced by one
+  bounded, explicitly headed Norito schema; the old decoder is removed.
+  Streaming encoding and partial decoding retain clearing ownership throughout.
+  The derived maximum frame is 20,398 bytes, and all 20 actual-source codec/owner
+  controls pass, including checksum-valid malformed fields, old-format rejection,
+  stricter outer budgets and partial-copy erasure. Native Core and regenerated
+  preparation-schema profile pins remain pending. Mathematical DER preimages and
+  the separately specified proof transcript are unchanged by this DTO replacement.
+- Private CUDA FFT/LDE/Poseidon workspaces and pinned host buffers now erase full
+  capacities after completion before pool reuse or replacement. Unknown in-flight
+  completion quarantines allocations without touching or freeing active memory.
+  A compiled host harness runs the actual CUDA host cleanup code across success,
+  output-copy ordering, growth, drop, partial failure and quarantine paths and
+  passes. Physical CUDA execution remains unqualified. Rust GPU host owners and
+  Metal private staging now use clearing guards. Abandoned and failed Metal
+  dispatches drain their outstanding tickets under one cleanup deadline. Unknown
+  completion retains device-owned buffers and blocks subsequent proof admission,
+  including a CPU retry, instead of spending another proof's memory allowance.
+  The final lifetime snapshot passes 177 focused controls, 12 public API checks,
+  13 transform/Poseidon checks and three required-device dispatch controls.
+  The revised exact-root Metal transform also passes full-size eight-column
+  native19/common22 CPU parity and independent Horner checks through the actual
+  Rust API; current timings include staging, wait and cleanup. Its integration
+  into X509 still needs a source-bound Core rerun. These checks do not establish side-channel resistance.
 - ZK-ACE's concatenated private identity preimage has a borrowed clearing guard.
   Client preparation checks compiled availability before hashing that witness.
   Its seven focused prover tests pass, including early availability/entropy checks.
@@ -142,10 +256,21 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   [September 28 receipt](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
   Independent
   sequencing review found no blocker in the retained masked construction. The
-  full-size RequiredMetal child-proof run has started under unchanged limits;
-  no result or peak memory is inferred from kernel timing. Whole-proof
-  memory/time measurements, complete hiding
-  and soundness review, and source-bound network qualification remain open.
+  full-size RequiredMetal child-proof run completes successfully: 482,978
+  canonical bytes, 4,344.265 seconds construction/self-check, and 1,118,158,848
+  bytes process maximum RSS. This is actual masked proof generation and
+  independent verification under the unchanged limits on the captured binary;
+  the host was heavily contended, so it is not throughput qualification.
+  The normal public AXT facade now generates and independently verifies a
+  484,750-byte artifact containing a 481,729-byte child proof, with all context,
+  cap, shape and transport rejection controls passing. Construction/self-check
+  takes 2,045.209 seconds with 1,109,753,856-byte maximum RSS on the contended host.
+  The ordinary facade also passes on the same immutable final-lifetime capture:
+  485,600-byte artifact, 483,777-byte child, 5,247.025 seconds construction/self-check
+  and 1,110,228,992-byte maximum RSS. Its same-artifact controls pass in 2.405
+  seconds. Both timings are contended observations, not latency qualification.
+  Complete hiding and soundness review,
+  maximum application shapes and source-bound network qualification remain open.
   Core's ordinary lane uses the canonical masked artifact against its exact
   finalized statement; its roots cover the touched-balance tree. Relay records
   separately authenticate finalized QC-bound roots. AXT artifact consistency
@@ -160,9 +285,17 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   29-check Python selection. The retired-codec guard passes. The current JS
   confidential input and TypeScript checks pass 6 cases including mocked
   full-capacity one-input forwarding. Native SDK execution is separate; the
-  existing addon rejects the changed source tree's provenance. Workspace
+  refreshed frozen addon now has the scoped native evidence above. Workspace
   formatting check finds concurrent unfinished
   formatting, so it is not a pass; changed files are formatted by their owners.
+- X509 replay now batches native interpolation and SHA extraction, groups DEEP
+  division while checking every individual claim, and caches a public prefix of
+  quotient coefficients within the unchanged arithmetic/source envelope.
+  Independent actual-source kernel controls pass; the fixed-layout cache census
+  reduces quotient IFFT replays from 20,126 to 8,281. Current/next polynomial
+  values, masks, transcript, proof encoding and caps remain unchanged. Full Core
+  and maximum-proof qualification are still pending. Exact scope and baseline
+  corrections are in the [September 28 X509 work record](../docs/history/2026-09-28/zk-x509-exact-root-and-deep-work.md).
 - X509 now joins all six native MAIN column groups under one base and one
   auxiliary commitment while preserving all 49 registrations. The codec opens
   only the authenticated current rows; full Fp4 DEEP checks bind both current
@@ -172,8 +305,8 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   real compact-CA proof roundtrip, credential-context, public/root/DEEP/FRI/query/
   frontier mutation and resource-gate controls pass. Native I/O and projection
   proofs verify and re-encode canonically; their obsolete KAT literals and the
-  independently computed 29-field engine pin are updated, with fresh pinned
-  assertions pending. No maximum-shape proof or
+  independently computed 29-field engine pin are updated, and fresh pinned
+  assertions pass. No maximum-shape proof or
   resource qualification is claimed from this bound. Independent code review
   found no reduced-opening arithmetic or joined-root binding blocker.
   All component-family polynomial kernels and verifier-derived fixed schedules
@@ -190,15 +323,19 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   Quotient evaluation uses interleaved stripes of at most 2^19 rows, including
   all higher masked coefficients and exact native-next translation. Six isolated
   native tests using the actual field/FFT, stripe and private-owner source pass;
-  the complete
-  Core integration remains pending. Private replay/quotient/composition owners
+  the refreshed Core kernel and ownership selection also passes. Private replay/quotient/composition owners
   now use guaranteed zeroization. The transformed-buffer ledger and recursive
   borrowed assembly/P256/DER capacity checks are implemented. Preconstruction
   forecasts admit source dimensions against separate source/scratch allowances;
   actual capacities are rechecked before masking, binding and finishing. Native
-  integration, maximum-shape assembly admission and actual peak memory/time
-  measurements remain open. No whole-prover memory compliance is inferred from
-  reduced coefficient storage or the explicit runtime reserve.
+  structural maximum-shape assembly admits 288,345,698 bytes of owned source
+  payload against its 600,114,496-byte allowance and constructs in 4.734 seconds
+  (474,808,320 bytes process maximum RSS). This is assembly, not a complete proof.
+  Measured common-domain CPU transforms imply a forward-only linear estimate of
+  428 seconds, already above the 300-second whole-proof target. A bounded exact-root
+  GPU adapter with explicit scratch admission is in progress. Full maximum proof
+  time/memory measurements remain open; no whole-prover compliance is inferred
+  from component measurements or the explicit runtime reserve.
 - The first Core build stopped on variant-size lints before producing key
   digests. The typed-error enum and an explicitly justified bounded inline
   consensus-parent enum expectation resolve those source blockers. The rebuilt
@@ -214,15 +351,21 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   three are ignored. All ten failures are repaired in source: three engine-pin
   dependent checks, two protocol KAT literals, one SHA block-count expectation
   and four positive fixtures still using a retired circuit-ID label. A fresh
-  targeted run checks these repairs, latest private owners and row-batch parity.
+  targeted run compiles and completes with 236 passes, two failures and three
+  ignored checks in 302.29 seconds. All repaired ZK pins, KATs, circuit and private
+  owner controls pass. The two failures are direct SCCP component fixtures that
+  opened unauthenticated raw transactions; both now use the existing explicit
+  component-test constructor and await their focused rerun. Production transaction
+  authentication is unchanged. A separate full P-256 trace/cross-table selection
+  passes all 19 tests in 12.55 seconds.
   The complete 49-family MAIN OODS differential test, typed relation-confusion
   negatives and unavailable RAM-LFE preflight pass in the broad run. The refreshed
   source-contract/geometry selection separately passes 21 checks; the codec and
   historical archive guards also pass.
-- The renamed CLI graph checks pass 5 focused tests under Python 3.12. Its wider
-  10-test module has four observed mock-boundary failures (`/fixed/cargo`), and
-  the workspace target inventory reports a concurrently added KAGEMUSHA binary
-  outside the reviewed inventory. Neither check is recorded as a pass.
+- The renamed CLI graph's complete 10-test module now passes under Python 3.12
+  on the current source, including the earlier four mock-boundary failures.
+  The workspace target inventory separately reports a concurrently added
+  KAGEMUSHA binary outside the reviewed inventory; that check is not a pass.
 
 ## Evidence discipline
 
@@ -232,3 +375,10 @@ physical hardware, signed artifact or network qualification requirements.
 Keep historical observations in dated validation records and current blockers
 in this goal ledger. Do not remove failed checks or bless changed source hashes
 without reviewing the behavior and test coverage they protect.
+
+- The C# SDK inventory found no equivalent local confidential wallet workflow.
+  A typed disposable owner, bounded note/path values, asynchronous proving and
+  retained-change redemption are being added over the existing shared C ABI.
+  Required-symbol packaging checks and executable native consumer tests are
+  part of this work; five-RID distribution qualification remains separate from
+  local macOS host evidence.

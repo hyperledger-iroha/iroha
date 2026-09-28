@@ -529,6 +529,27 @@ impl SumeragiIngress {
         routed
     }
 
+    /// Route a frame an in-process transport carries from the authenticated consensus key
+    /// `from` (the same instance routing and class caps as [`Self::route`]).
+    pub fn deliver(&self, from: &PublicKey, frame: &super::driver::traits::Frame) -> Routed {
+        let routed = if frame.bytes.len() > self.caps.of(frame.class) {
+            Routed::Oversize
+        } else {
+            match self.routes.read().get(&frame.instance).cloned() {
+                None => Routed::UnknownInstance,
+                Some(sink) if sink.deliver(from, &frame.bytes) => Routed::Delivered,
+                Some(_) => Routed::Refused,
+            }
+        };
+        let counter = if routed == Routed::Delivered {
+            &self.delivered
+        } else {
+            &self.dropped
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        routed
+    }
+
     /// [`SumeragiIngress::route`] of a message from `origin`, received over the
     /// authenticated connection of `via`.
     fn route_parts(&self, origin: &PeerId, via: &PeerId, payload: &NetworkMessage) -> Routed {

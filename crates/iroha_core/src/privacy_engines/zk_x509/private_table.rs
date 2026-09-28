@@ -11,6 +11,12 @@ pub(super) struct PrivateTableV1<T> {
     erase: fn(&mut [T]),
 }
 
+impl<T> core::fmt::Debug for PrivateTableV1<T> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("PrivateTableV1 { <private table redacted> }")
+    }
+}
+
 impl<T> PrivateTableV1<T> {
     /// Guard an allocation before the first private value is written to it.
     pub(super) fn new(rows: Vec<T>, erase: fn(&mut [T])) -> Self {
@@ -46,23 +52,50 @@ impl<T> Drop for PrivateTableV1<T> {
 /// Overwrite each initialized field cell without releasing its allocation.
 pub(super) fn zeroize_field_rows_v1<R: AsMut<[F]>>(rows: &mut [R]) {
     #[cfg(test)]
-    let mut observation = inspection::ErasureObservationV1::default();
-    for row in rows {
-        for value in row.as_mut() {
-            #[cfg(test)]
-            {
+    if inspection::enabled_v1() {
+        let mut observation = inspection::ErasureObservationV1::default();
+        for row in rows {
+            for value in row.as_mut() {
                 observation.cells += 1;
                 observation.nonzero_before += usize::from(*value != F::ZERO);
-            }
-            value.zeroize_v1();
-            #[cfg(test)]
-            {
+                value.zeroize_v1();
                 observation.nonzero_after += usize::from(*value != F::ZERO);
             }
         }
+        inspection::record_v1(observation);
+        return;
     }
+    for row in rows {
+        for value in row.as_mut() {
+            value.zeroize_v1();
+        }
+    }
+}
+
+/// Overwrite a flat field column while preserving its initialized length.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(super) fn zeroize_fields_v1(mut fields: &mut [F]) {
+    zeroize_field_rows_v1(core::slice::from_mut(&mut fields));
+}
+
+/// Overwrite private primitive words before their containing allocation is freed.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(super) fn zeroize_words_v1<T: zeroize::Zeroize + Default + PartialEq>(words: &mut [T]) {
     #[cfg(test)]
-    inspection::record_v1(observation);
+    if inspection::enabled_v1() {
+        let mut observation = inspection::ErasureObservationV1::default();
+        for word in words {
+            observation.cells += 1;
+            observation.nonzero_before += usize::from(*word != T::default());
+            word.zeroize();
+            observation.nonzero_after += usize::from(*word != T::default());
+        }
+        inspection::record_v1(observation);
+        return;
+    }
+    for word in words {
+        word.zeroize();
+    }
 }
 
 /// Test observations contain counts only, captured before the allocation frees.
@@ -80,6 +113,10 @@ pub(super) mod inspection {
 
     thread_local! {
         static OBSERVATIONS: RefCell<Option<Vec<ErasureObservationV1>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn enabled_v1() -> bool {
+        OBSERVATIONS.with_borrow(Option::is_some)
     }
 
     pub(super) fn record_v1(observation: ErasureObservationV1) {
@@ -162,5 +199,33 @@ mod tests {
         let mut rows = [[F(5), F(8)]; 3];
         zeroize_field_rows_v1(&mut rows);
         assert_eq!(rows, [[F::ZERO; 2]; 3]);
+    }
+    #[test]
+    fn flat_fields_and_primitive_words_are_observed_before_release() {
+        let mut fields = [F(7), F(11)];
+        let mut bytes = [19u8; 3];
+        let mut limbs = [23u16; 5];
+        let (_, observations) = inspection::observe_v1(|| {
+            zeroize_fields_v1(&mut fields);
+            zeroize_words_v1(&mut bytes);
+            zeroize_words_v1(&mut limbs);
+        });
+        assert_eq!(fields, [F::ZERO; 2]);
+        assert_eq!(bytes, [0; 3]);
+        assert_eq!(limbs, [0; 5]);
+        assert_eq!(
+            observations.iter().map(|item| item.cells).sum::<usize>(),
+            10
+        );
+        assert_eq!(
+            observations
+                .iter()
+                .map(|item| item.nonzero_before)
+                .sum::<usize>(),
+            10
+        );
+        assert!(observations.iter().all(|item| item.nonzero_after == 0));
+        // Measurements outside an observation scope use only the real eraser.
+        assert!(!inspection::enabled_v1());
     }
 }

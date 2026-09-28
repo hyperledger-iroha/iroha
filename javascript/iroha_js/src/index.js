@@ -384,9 +384,6 @@ export {
   buildSetRwaKeyValueTransaction,
   buildRemoveRwaKeyValueTransaction,
   buildCreateKaigiTransaction,
-  buildConfidentialTransferProofV2,
-  buildConfidentialUnshieldProofV2,
-  buildConfidentialUnshieldProofV3,
   buildJoinKaigiTransaction,
   buildLeaveKaigiTransaction,
   buildEndKaigiTransaction,
@@ -683,4 +680,4 @@ export {
 
 export { buildCanonicalMultisigContractCall } from "./multisigContractCall.js";
 
-export { ConfidentialProver, ConfidentialProverError } from "./confidentialProofBuilders.js";
+export { ConfidentialProver, ConfidentialProverError, computeConfidentialRoot, defaultConfidentialDiversifier, confidentialChangeToInput } from "./confidentialProofBuilders.js";

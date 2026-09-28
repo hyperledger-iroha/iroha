@@ -105,6 +105,8 @@ fn build_context() -> MetalResult<Digest384Context> {
 pub(crate) fn hash_last_fields(
     jobs: &[Digest384LastFieldJob<'_>],
 ) -> MetalResult<Vec<GoldilocksDigest384V1>> {
+    let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
+    ensure_backend_available()?;
     if jobs.is_empty() {
         return Ok(Vec::new());
     }
@@ -187,7 +189,9 @@ fn retain_on_uncertain_completion(
     job_count: usize,
 ) -> MetalResult<Vec<GoldilocksDigest384V1>> {
     if let Err(error) = completion {
-        *quarantine = Some(buffers);
+        if matches!(error, GpuError::CompletionUncertain { .. }) {
+            *quarantine = Some(buffers);
+        }
         return Err(error);
     }
     let output = buffers.get(3).ok_or(GpuError::InvalidInput(
@@ -404,9 +408,8 @@ mod tests {
 
     #[test]
     fn failed_completion_quarantines_without_inspecting_output() {
-        let error = GpuError::Execution {
+        let error = GpuError::CompletionUncertain {
             backend: GpuBackend::Metal,
-            message: "injected uncertain completion".to_owned(),
         };
         let mut quarantine = None;
         assert!(
@@ -414,6 +417,20 @@ mod tests {
                 .is_err()
         );
         assert!(quarantine.is_some());
+    }
+
+    #[test]
+    fn completed_failure_does_not_retain_a_quarantine_allocation() {
+        let mut quarantine = None;
+        let error = GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: "completed command error".into(),
+        };
+        assert!(
+            retain_on_uncertain_completion(Err(error), Vec::new(), &mut quarantine, usize::MAX)
+                .is_err()
+        );
+        assert!(quarantine.is_none());
     }
 
     #[test]

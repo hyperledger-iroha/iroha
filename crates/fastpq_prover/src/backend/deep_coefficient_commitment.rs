@@ -1,8 +1,9 @@
 //! Existing typed quotient/FRI/terminal commitments from bounded coefficient replay.
 //!
 //! This owner streams canonical leaves and the exact natural-order Merkle tree,
-//! then retains only selected values and the existing minimal frontier. The
-//! terminal retains all 128 values. No full oracle or full digest tree is stored.
+//! retaining internal Merkle nodes until transcript-selected openings regenerate
+//! their leaves and authenticate the existing minimal frontier. The terminal
+//! retains all 128 values. No full oracle or leaf-digest array is stored.
 //! The producer consumes this owner for roots and openings.
 //! TODO: Cryptographically qualify the complete construction; this owner computes
 //! commitments, while the independent engine verifies the complete proof.
@@ -11,6 +12,7 @@ use super::{
     deep_binding::{BindingError, Context, Oracle},
     deep_coefficient_replay::{CoefficientReplay, CoefficientReplayPlan},
     deep_geometry::{FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, QUERY_COUNT},
+    deep_node_cache::{CommittedNodes, CompletedNodes, NodeCachePlan},
     deep_striped_merkle::{StreamLimits, StripedMerklePlan},
     secret_polynomial::SecretPolynomial,
 };
@@ -106,10 +108,30 @@ impl<'a> CoefficientCommitmentPlan<'a> {
     }
 
     /// Consume one preplanned replay pass; failed traversals return no commitment.
+    #[cfg(test)]
     pub(super) fn build(
         self,
         replay: &mut CoefficientReplay<'_>,
         binding: &Context,
+    ) -> Result<CoefficientCommitment> {
+        self.build_inner(replay, binding, false)
+    }
+    /// Root phase: retain each nonterminal tree's internal nodes once.
+    pub(super) fn commit(
+        self,
+        replay: &mut CoefficientReplay<'_>,
+        binding: &Context,
+    ) -> Result<CoefficientCommitment> {
+        if !self.queries.is_empty() {
+            return Err(invalid("cached coefficient commitment requires root phase"));
+        }
+        self.build_inner(replay, binding, true)
+    }
+    fn build_inner(
+        self,
+        replay: &mut CoefficientReplay<'_>,
+        binding: &Context,
+        retain_nodes: bool,
     ) -> Result<CoefficientCommitment> {
         if replay.plan() != self.replay {
             return Err(invalid(
@@ -117,7 +139,12 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             ));
         }
         replay.ensure_pass_available()?;
-        let mut tree = self.tree.start()?;
+        let mut tree = if retain_nodes && self.oracle != Oracle::Terminal {
+            self.tree
+                .start_cached(NodeCachePlan::new(self.oracle)?.start(binding)?)?
+        } else {
+            self.tree.start()?
+        };
         let mut values = SecretPolynomial::zeroed(self.fields)?;
         let capacity = if self.oracle == Oracle::Terminal {
             1
@@ -214,6 +241,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
         }
         let result = tree.finish(parent)?;
         Ok(CoefficientCommitment {
+            cache: result.cache,
             root: result.root,
             siblings: result.siblings,
             selected,
@@ -224,6 +252,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
 
 /// Public commitment/frontier, with retained field values under clearing ownership.
 pub(super) struct CoefficientCommitment {
+    pub(super) cache: Option<CompletedNodes>,
     pub(super) root: Digest,
     pub(super) siblings: Vec<Digest>,
     selected: SecretPolynomial<F>,
@@ -241,6 +270,62 @@ impl CoefficientCommitment {
         }
         Ok(&self.selected)
     }
+}
+/// Regenerate complete selected quotient triples or FRI fibers, then authenticate
+/// them with the original context-bound internal nodes before exposing fields.
+pub(super) fn open_cached(
+    cache: CommittedNodes<'_>,
+    replay: &mut CoefficientReplay<'_>,
+    queries: &[usize],
+    execution: crate::DigestExecutionV1,
+) -> Result<CoefficientCommitment> {
+    let oracle = cache.oracle();
+    let plan = replay.plan();
+    let (_, _, leaves, leaf_bytes) = oracle.shape().map_err(binding_error)?;
+    if oracle == Oracle::Row
+        || oracle == Oracle::Terminal
+        || leaves != plan.rows() / plan.arity()
+        || leaf_bytes != plan.width() * plan.arity() * F::BYTES
+    {
+        return Err(invalid(
+            "cached coefficient source differs from exact oracle",
+        ));
+    }
+    let fields = leaf_bytes / F::BYTES;
+    let opened = cache.open(queries, execution, |indices, output| {
+        let mut values = SecretPolynomial::zeroed(fields)?;
+        replay.visit_selected_stripes(indices, |stripe| {
+            for (&index, target) in indices.iter().zip(output.chunks_exact_mut(leaf_bytes)) {
+                if index % plan.stripes() != stripe.stripe_index() {
+                    continue;
+                }
+                let row = index / plan.stripes();
+                if oracle == Oracle::QuotientAndMask {
+                    for (column, value) in values.iter_mut().enumerate() {
+                        *value = stripe.value(column, row)?;
+                    }
+                } else {
+                    stripe.fiber(row, &mut values)?;
+                }
+                pack(&values, target)?;
+            }
+            Ok(())
+        })
+    })?;
+    let mut selected = SecretPolynomial::zeroed(queries.len() * fields)?;
+    for (bytes, values) in opened.values().zip(selected.chunks_exact_mut(fields)) {
+        for (encoded, value) in bytes.chunks_exact(F::BYTES).zip(values) {
+            *value = F::from_le_bytes(encoded.try_into().expect("exact Fp4 bytes"))
+                .ok_or_else(|| invalid("cached coefficient opening is noncanonical"))?;
+        }
+    }
+    Ok(CoefficientCommitment {
+        root: opened.root,
+        siblings: opened.siblings,
+        selected,
+        fields,
+        cache: None,
+    })
 }
 fn pack(values: &[F], output: &mut [u8]) -> Result<()> {
     if output.len() != values.len() * F::BYTES {

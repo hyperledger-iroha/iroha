@@ -1075,7 +1075,6 @@ def main() -> int:
         ivm_overlay_path,
         read(ivm_overlay_path),
         (
-            "pub(crate) fn sccp_ivm_proved_execution_binding",
             "fn tx_overlay_from_ivm_proved_replay",
             "Executable::IvmProved(proved)",
             "enforce_ivm_proved_completed_axt_admission",
@@ -1101,14 +1100,6 @@ def main() -> int:
         (
             "crates/iroha_torii/src/lib.rs",
             ("derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context",),
-        ),
-        (
-            "crates/iroha_sccp/src/test_fixtures.rs",
-            (
-                "vk_ref: SccpPortableVerifyingKeyRefV1",
-                "Executable::IvmProved(proved) => proved.overlay.iter().collect()",
-                ".with_executable(Executable::IvmProved(IvmProved {",
-            ),
         ),
     ):
         require_all(ivm_path, read(ivm_path), bindings)
@@ -1843,7 +1834,7 @@ def main() -> int:
     )
     manager_partition = section(
         world,
-        "const fn parliament_transition_requires_manager_v1(",
+        "fn parliament_transition_requires_manager_v1(",
         "fn parliament_certificate_enactment_height_v1(",
         world_path,
     )
@@ -1851,6 +1842,8 @@ def main() -> int:
         world_path,
         manager_partition,
         (
+            # SCCP route governance has no clerk (specs/sccp.md §4.14.5 item 3).
+            "Some(ProposalKind::SccpRouteGovernance(_))",
             "ParliamentLifecycleTransitionKindV1::ConsumeSortitionPulseBatch",
             "ParliamentLifecycleTransitionKindV1::BeginInvitationAcceptance",
             "ParliamentLifecycleTransitionKindV1::FailBodyElectionNoRoster",

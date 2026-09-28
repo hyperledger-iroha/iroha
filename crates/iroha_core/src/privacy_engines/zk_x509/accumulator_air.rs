@@ -11,6 +11,9 @@
 //! adapter parses the complete signed CRL and proves the leaf serial differs
 //! from every canonical entry, while the shared SHA adapter binds the exact
 //! signed-DER and governance-record commitments.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::private_table::{PrivateTableV1, zeroize_words_v1};
+
 use super::merkle::{
     ZK_X509_CA_COMPACT_TREE_CAPACITY_V1, ZK_X509_CA_COMPACT_TREE_DEPTH_V1,
     ZK_X509_CA_SPKI_DER_BYTES_V1,
@@ -135,6 +138,15 @@ struct CaAccumulatorRowV1 {
     io_word_acc: u32,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Default for CaAccumulatorRowV1 {
+    fn default() -> Self {
+        Self::padding()
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::DefaultIsZeroes for CaAccumulatorRowV1 {}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl CaAccumulatorRowV1 {
     const fn padding() -> Self {
         Self {
@@ -214,13 +226,19 @@ impl core::fmt::Debug for ZkX509CaAccumulatorTraceV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509CaAccumulatorTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509CaAccumulatorTraceV1 {
     /// Overwrite the private path, derived row state, and all SHA preimages.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.witness.root_spki_der.fill(0);
-        self.witness.path.index = 0;
-        self.witness.path.siblings.fill([0; 32]);
-        self.rows.fill(CaAccumulatorRowV1::padding());
+        zeroize_words_v1(&mut self.witness.root_spki_der);
+        zeroize_words_v1(core::slice::from_mut(&mut self.witness.path.index));
+        zeroize_words_v1(&mut self.witness.path.siblings);
+        zeroize_words_v1(&mut self.rows);
         for witness in &mut self.hash_witnesses {
             witness.zeroize_private_v1();
         }
@@ -353,9 +371,12 @@ fn compile_ca_accumulator_trace_v1(
         return Err(ZkX509AccumulatorAirErrorV1::Index);
     }
     let index_bits = core::array::from_fn(|bit| u8::from(witness.path.index & (1_u16 << bit) != 0));
-    let leaf_preimage = ca_leaf_preimage_v1(&witness.root_spki_der)?;
+    let leaf_preimage = PrivateTableV1::new(
+        ca_leaf_preimage_v1(&witness.root_spki_der)?,
+        zeroize_words_v1,
+    );
     let leaf_digest = ca_leaf_v1(&witness.root_spki_der)?;
-    let mut rows = Vec::new();
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_words_v1);
     let mut hash_witnesses = Vec::new();
     rows.try_reserve_exact(ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1)
         .map_err(|_| ZkX509AccumulatorAirErrorV1::Resource)?;
@@ -375,7 +396,7 @@ fn compile_ca_accumulator_trace_v1(
     });
     hash_witnesses.push(ZkX509ShaCallWitnessV1 {
         role: ZkX509ShaCallRoleV1::CaLeaf,
-        message: leaf_preimage,
+        message: leaf_preimage.into_vec(),
         digest: leaf_digest,
     });
     let mut current = leaf_digest;
@@ -386,7 +407,8 @@ fn compile_ca_accumulator_trace_v1(
         } else {
             (sibling, current)
         };
-        let preimage = ca_node_preimage_v1(level, &left, &right)?;
+        let preimage =
+            PrivateTableV1::new(ca_node_preimage_v1(level, &left, &right)?, zeroize_words_v1);
         let digest = ca_node_v1(level, &left, &right)?;
         rows.push(CaAccumulatorRowV1 {
             current,
@@ -403,7 +425,7 @@ fn compile_ca_accumulator_trace_v1(
             role: ZkX509ShaCallRoleV1::CaNode(
                 u8::try_from(level).map_err(|_| ZkX509AccumulatorAirErrorV1::Resource)?,
             ),
-            message: preimage,
+            message: preimage.into_vec(),
             digest,
         });
         current = digest;
@@ -441,15 +463,18 @@ fn compile_ca_accumulator_trace_v1(
             io_word_acc: word_acc,
         });
     }
+    let hash_witnesses = hash_witnesses
+        .try_into()
+        .map_err(|_: Vec<ZkX509ShaCallWitnessV1>| ZkX509AccumulatorAirErrorV1::Topology)?;
+    let rows = rows
+        .as_slice()
+        .try_into()
+        .map_err(|_| ZkX509AccumulatorAirErrorV1::Topology)?;
     Ok(ZkX509CaAccumulatorTraceV1 {
         statement,
         witness,
-        rows: rows
-            .try_into()
-            .map_err(|_: Vec<CaAccumulatorRowV1>| ZkX509AccumulatorAirErrorV1::Topology)?,
-        hash_witnesses: hash_witnesses
-            .try_into()
-            .map_err(|_: Vec<ZkX509ShaCallWitnessV1>| ZkX509AccumulatorAirErrorV1::Topology)?,
+        rows,
+        hash_witnesses,
     })
 }
 /// Evaluate the exact base-only residue vector at one current/next row.
@@ -683,6 +708,49 @@ mod tests {
                 path,
             },
         )
+    }
+    #[test]
+    fn owned_ca_source_erasure_covers_drop_invalid_root_and_unwind() {
+        use super::super::private_table::inspection;
+        let (statement, witness) = fixture();
+        let original = build_ca_accumulator_trace_v1(statement, witness).unwrap();
+        for mode in 0..3 {
+            let trace = original.clone();
+            let (result, observed) = inspection::observe_v1(|| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut trace = trace;
+                    if mode == 0 {
+                        trace.zeroize_private_v1();
+                        assert!(trace.private_is_zeroized_v1());
+                        assert_eq!(trace.statement, statement);
+                        Ok(())
+                    } else if mode == 1 {
+                        Err(())
+                    } else {
+                        panic!("injected CA source unwind")
+                    }
+                }))
+            });
+            assert_eq!(result.is_err(), mode == 2);
+            assert!(observed.iter().any(|item| item.cells
+                == ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1
+                && item.nonzero_before >= ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1));
+            assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        }
+        let mut wrong_root = statement;
+        wrong_root.governed_root[0] ^= 1;
+        let (result, observed) =
+            inspection::observe_v1(|| build_ca_accumulator_trace_v1(wrong_root, witness));
+        assert!(matches!(result, Err(ZkX509AccumulatorAirErrorV1::Root)));
+        // Root comparison fails after all thirteen private path rows have been
+        // written, before any final trace owner exists.
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells == ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1
+                    && item.nonzero_before == item.cells)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
     }
     #[test]
     fn compact_trace_is_exact_and_uses_only_thirteen_sha_calls() {

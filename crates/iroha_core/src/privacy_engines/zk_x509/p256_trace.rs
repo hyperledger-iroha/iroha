@@ -209,18 +209,36 @@ impl core::fmt::Debug for P256EcdsaTraceMaterialV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256EcdsaTraceMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_initial_values_v1(values: &mut [P256InitialValueBindingV1]) {
+    for value in values {
+        super::private_table::zeroize_words_v1(&mut value.value);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_linked_operations_v1(operations: &mut [P256LinkedOperationV1]) {
+    for linked in operations {
+        super::p256_air::zeroize_p256_operations_v1(core::slice::from_mut(&mut linked.operation));
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256EcdsaTraceMaterialV1 {
     /// Recursively overwrite every witness-derived scalar, coordinate, and
     /// committed field row while leaving only public topology metadata.
     pub(crate) fn zeroize_private_v1(&mut self) {
         for initial in &mut self.initial_values {
-            initial.value.fill(0);
+            super::private_table::zeroize_words_v1(&mut initial.value[..]);
         }
         self.initial_values.clear();
         for linked in &mut self.linked_operations {
-            linked.operation.a.fill(0);
-            linked.operation.b.fill(0);
-            linked.operation.c.fill(0);
+            super::private_table::zeroize_words_v1(&mut linked.operation.a[..]);
+            super::private_table::zeroize_words_v1(&mut linked.operation.b[..]);
+            super::private_table::zeroize_words_v1(&mut linked.operation.c[..]);
         }
         self.linked_operations.clear();
         self.equalities.clear();
@@ -232,7 +250,9 @@ impl P256EcdsaTraceMaterialV1 {
         for reduction in &mut self.reductions {
             match &mut reduction.source {
                 P256ReductionSourceV1::Digest { word_be }
-                | P256ReductionSourceV1::BaseCoordinate { word_be, .. } => word_be.fill(0),
+                | P256ReductionSourceV1::BaseCoordinate { word_be, .. } => {
+                    super::private_table::zeroize_words_v1(&mut word_be[..])
+                }
             }
             reduction.trace.zeroize_private_v1();
         }
@@ -264,6 +284,10 @@ impl P256EcdsaTraceMaterialV1 {
             .iter()
             .map(|linked| linked.operation)
             .collect::<Vec<_>>();
+        let operations = super::private_table::PrivateTableV1::new(
+            operations,
+            super::p256_air::zeroize_p256_operations_v1,
+        );
         build_zk_x509_p256_arithmetic_trace_v1(&operations)
     }
     fn value_free_topology_v1(&self) -> Result<P256EcdsaTopologyV1, P256TraceCompilerErrorV1> {
@@ -468,6 +492,41 @@ struct P256TraceCompilerV1 {
     windows: Vec<SymbolicWindowV1>,
     reductions: Vec<SymbolicReductionV1>,
     low_s: Vec<SymbolicLowSV1>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256TraceCompilerV1 {
+    fn drop(&mut self) {
+        for value in &mut self.values {
+            super::private_table::zeroize_words_v1(&mut value.value_be);
+        }
+        for operation in &mut self.operations {
+            super::p256_air::zeroize_p256_operations_v1(core::slice::from_mut(
+                &mut operation.operation,
+            ));
+        }
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for SymbolicReductionV1 {
+    fn drop(&mut self) {
+        match &mut self.source {
+            SymbolicReductionSourceV1::Digest { word_be }
+            | SymbolicReductionSourceV1::BaseCoordinate { word_be, .. } => {
+                super::private_table::zeroize_words_v1(word_be)
+            }
+        }
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256BoundReductionTraceV1 {
+    fn drop(&mut self) {
+        match &mut self.source {
+            P256ReductionSourceV1::Digest { word_be }
+            | P256ReductionSourceV1::BaseCoordinate { word_be, .. } => {
+                super::private_table::zeroize_words_v1(word_be)
+            }
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TopologyValueRecordV1 {
@@ -1120,6 +1179,38 @@ impl P256EcdsaInputSourceV1<P256TopologyCompilerV1> for P256TopologyInputSourceV
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256TraceCompilerV1 {
+    fn with_topology_capacity_v1(
+        topology: &P256EcdsaTopologyV1,
+    ) -> Result<Self, P256TraceCompilerErrorV1> {
+        let mut compiler = Self::default();
+        let values = topology
+            .initial_values
+            .len()
+            .checked_add(topology.linked_operations.len())
+            .ok_or(P256TraceCompilerErrorV1::Resource)?;
+        compiler
+            .values
+            .try_reserve_exact(values)
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        compiler
+            .operations
+            .try_reserve_exact(topology.linked_operations.len())
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        compiler
+            .windows
+            .try_reserve_exact(topology.windows.len())
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        compiler
+            .reductions
+            .try_reserve_exact(topology.reductions.len())
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        compiler
+            .low_s
+            .try_reserve_exact(topology.low_s.len())
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        Ok(compiler)
+    }
+
     fn record(&self, handle: usize) -> Result<SymbolicValueRecordV1, P256TraceCompilerErrorV1> {
         self.values
             .get(handle)
@@ -1141,6 +1232,9 @@ impl P256TraceCompilerV1 {
         }
         let initial = self.initial_handles.len();
         let handle = self.values.len();
+        if self.values.len() == self.values.capacity() {
+            return Err(P256TraceCompilerErrorV1::Resource);
+        }
         self.values.push(SymbolicValueRecordV1 {
             modulus,
             value_be,
@@ -1174,11 +1268,17 @@ impl P256TraceCompilerV1 {
         }
         let operation = self.operations.len();
         let c = self.values.len();
+        if self.values.len() == self.values.capacity() {
+            return Err(P256TraceCompilerErrorV1::Resource);
+        }
         self.values.push(SymbolicValueRecordV1 {
             modulus,
             value_be: c_be,
             origin: SymbolicOriginV1::Derived { operation },
         });
+        if self.operations.len() == self.operations.capacity() {
+            return Err(P256TraceCompilerErrorV1::Resource);
+        }
         self.operations.push(RecordedOperationV1 {
             a,
             b,
@@ -1541,7 +1641,12 @@ impl P256TraceCompilerV1 {
         assigned: P256EcdsaAssignedV1<P256ScalarValueV1, P256BaseValueV1>,
     ) -> Result<P256EcdsaTraceMaterialV1, P256TraceCompilerErrorV1> {
         self.validate_final_topology_v1(role, &assigned)?;
-        let initial_values = self
+        let mut initial_values =
+            super::private_table::PrivateTableV1::new(Vec::new(), zeroize_initial_values_v1);
+        initial_values
+            .try_reserve_exact(self.initial_handles.len())
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        for value in self
             .initial_handles
             .iter()
             .copied()
@@ -1567,8 +1672,15 @@ impl P256TraceCompilerV1 {
                     kind,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        let linked_operations = self
+        {
+            initial_values.push(value?);
+        }
+        let mut linked_operations =
+            super::private_table::PrivateTableV1::new(Vec::new(), zeroize_linked_operations_v1);
+        linked_operations
+            .try_reserve_exact(self.operations.len())
+            .map_err(|_| P256TraceCompilerErrorV1::Resource)?;
+        for value in self
             .operations
             .iter()
             .enumerate()
@@ -1589,7 +1701,9 @@ impl P256TraceCompilerV1 {
                     operation: operation.operation,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+        {
+            linked_operations.push(value?);
+        }
         let equalities = self
             .equalities
             .iter()
@@ -1672,34 +1786,35 @@ impl P256TraceCompilerV1 {
                 })
             })
             .collect::<Result<Vec<_>, P256TraceCompilerErrorV1>>()?;
+        let assigned = P256ResolvedEcdsaAssignedV1 {
+            public_key: P256ProjectiveValueV1 {
+                x: self.resolve_id_v1(assigned.public_key.x.0)?,
+                y: self.resolve_id_v1(assigned.public_key.y.0)?,
+                z: self.resolve_id_v1(assigned.public_key.z.0)?,
+            },
+            r: self.resolve_id_v1(assigned.r.0)?,
+            s: self.resolve_id_v1(assigned.s.0)?,
+            z: self.resolve_id_v1(assigned.z.0)?,
+            u1: self.resolve_id_v1(assigned.u1.0)?,
+            u2: self.resolve_id_v1(assigned.u2.0)?,
+            result: P256ProjectiveValueV1 {
+                x: self.resolve_id_v1(assigned.result.x.0)?,
+                y: self.resolve_id_v1(assigned.result.y.0)?,
+                z: self.resolve_id_v1(assigned.result.z.0)?,
+            },
+            result_x: self.resolve_id_v1(assigned.result_x.0)?,
+            reduced_x: self.resolve_id_v1(assigned.reduced_x.0)?,
+        };
         Ok(P256EcdsaTraceMaterialV1 {
             role,
-            initial_values,
-            linked_operations,
+            initial_values: initial_values.into_vec(),
+            linked_operations: linked_operations.into_vec(),
             equalities,
             boolean_bridges: Vec::new(),
             windows,
             reductions,
             low_s,
-            assigned: P256ResolvedEcdsaAssignedV1 {
-                public_key: P256ProjectiveValueV1 {
-                    x: self.resolve_id_v1(assigned.public_key.x.0)?,
-                    y: self.resolve_id_v1(assigned.public_key.y.0)?,
-                    z: self.resolve_id_v1(assigned.public_key.z.0)?,
-                },
-                r: self.resolve_id_v1(assigned.r.0)?,
-                s: self.resolve_id_v1(assigned.s.0)?,
-                z: self.resolve_id_v1(assigned.z.0)?,
-                u1: self.resolve_id_v1(assigned.u1.0)?,
-                u2: self.resolve_id_v1(assigned.u2.0)?,
-                result: P256ProjectiveValueV1 {
-                    x: self.resolve_id_v1(assigned.result.x.0)?,
-                    y: self.resolve_id_v1(assigned.result.y.0)?,
-                    z: self.resolve_id_v1(assigned.result.z.0)?,
-                },
-                result_x: self.resolve_id_v1(assigned.result_x.0)?,
-                reduced_x: self.resolve_id_v1(assigned.reduced_x.0)?,
-            },
+            assigned,
         })
     }
 }
@@ -1871,6 +1986,9 @@ impl P256WindowCircuitV1 for P256TraceCompilerV1 {
         ];
         let trace = build_p256_window_trace_v1(role, window as u8, candidate_points, bit_values)
             .map_err(|_| P256TraceCompilerErrorV1::WindowTopology)?;
+        if self.windows.len() == self.windows.capacity() {
+            return Err(P256TraceCompilerErrorV1::Resource);
+        }
         self.windows.push(SymbolicWindowV1 {
             trace,
             candidates: candidate_handles,
@@ -1955,6 +2073,9 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
             trace.reduced_be_v1(),
             P256InitialValueKindV1::Input,
         )?;
+        if self.reductions.len() == self.reductions.capacity() {
+            return Err(P256TraceCompilerErrorV1::Resource);
+        }
         self.reductions.push(SymbolicReductionV1 {
             source: SymbolicReductionSourceV1::Digest { word_be: digest_be },
             output,
@@ -1977,6 +2098,9 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
             trace.reduced_be_v1(),
             P256InitialValueKindV1::Input,
         )?;
+        if self.reductions.len() == self.reductions.capacity() {
+            return Err(P256TraceCompilerErrorV1::Resource);
+        }
         self.reductions.push(SymbolicReductionV1 {
             source: SymbolicReductionSourceV1::BaseCoordinate {
                 handle: coordinate.0,
@@ -2009,6 +2133,9 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         let record = self.record(scalar.0)?;
         let trace = build_p256_low_s_trace_v1(record.value_be)
             .map_err(|_| P256TraceCompilerErrorV1::Reduction)?;
+        if self.low_s.len() == self.low_s.capacity() {
+            return Err(P256TraceCompilerErrorV1::Resource);
+        }
         self.low_s.push(SymbolicLowSV1 {
             scalar: scalar.0,
             trace,
@@ -2037,16 +2164,80 @@ pub(crate) fn compile_p256_ecdsa_trace_material_v1(
     role: P256EcdsaRoleV1,
     witness: P256EcdsaWitnessV1,
 ) -> Result<P256EcdsaTraceMaterialV1, P256TraceCompilerErrorV1> {
-    let mut compiler = P256TraceCompilerV1::default();
+    let topology = compile_p256_ecdsa_topology_v1(role)?;
+    let mut compiler = P256TraceCompilerV1::with_topology_capacity_v1(&topology)?;
     let generator_table = compiler.generator_table_v1()?;
     let assigned = constrain_p256_ecdsa_v1(&mut compiler, &generator_table, role, witness)?;
     let material = compiler.finalize_v1(role, assigned)?;
-    let topology = compile_p256_ecdsa_topology_v1(role)?;
     material.validate_topology_v1(&topology)?;
     Ok(material)
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_compiler_erasure_covers_failure_and_preserves_preallocated_addresses() {
+        use super::super::private_table::inspection::observe_v1;
+        // This fixture checks all five private allocation addresses across compilation.
+        let (mut compiler, assigned) = valid_compiler_v1();
+        compiler.initial_handles[0] = usize::MAX;
+        let (result, observed) =
+            observe_v1(|| compiler.finalize_v1(P256EcdsaRoleV1::WalletOwnership, assigned));
+        assert!(result.is_err());
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells == 32 && item.nonzero_before > 0)
+        );
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells > 32 && item.nonzero_before > 0)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        let topology = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::WalletOwnership).unwrap();
+        let mut compiler = P256TraceCompilerV1::with_topology_capacity_v1(&topology).unwrap();
+        // Exhaustion rejects before Vec can move a populated private allocation.
+        let address = compiler.values.as_ptr();
+        compiler.values.resize(
+            compiler.values.capacity(),
+            SymbolicValueRecordV1 {
+                modulus: ZkX509P256ModulusV1::BaseField,
+                value_be: [1; 32],
+                origin: SymbolicOriginV1::Initial {
+                    index: 0,
+                    kind: P256InitialValueKindV1::Input,
+                },
+            },
+        );
+        assert_eq!(
+            compiler.push_initial_v1(
+                ZkX509P256ModulusV1::BaseField,
+                [2; 32],
+                P256InitialValueKindV1::Input
+            ),
+            Err(P256TraceCompilerErrorV1::Resource)
+        );
+        assert_eq!(address, compiler.values.as_ptr());
+    }
+
+    #[test]
+    fn owned_material_erasure_clears_private_words_and_nested_trace_rows() {
+        use super::super::private_table::inspection::observe_v1;
+        let material = valid_material_v1();
+        let (_, observed) = observe_v1(|| drop(material));
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells == 32 && item.nonzero_before > 0)
+        );
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells > 32 && item.nonzero_before > 0)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+
     use super::*;
     use crate::privacy_engines::zk_x509::p256_group_air::P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1;
     use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
@@ -2081,7 +2272,15 @@ mod tests {
         let digest = core::array::from_fn(|index| (index as u8).wrapping_mul(37).wrapping_add(11));
         let signature: Signature = key.sign_prehash(&digest).expect("sign");
         let signature = signature.normalize_s().unwrap_or(signature);
-        let mut compiler = P256TraceCompilerV1::default();
+        let topology = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::WalletOwnership).unwrap();
+        let mut compiler = P256TraceCompilerV1::with_topology_capacity_v1(&topology).unwrap();
+        let addresses = (
+            compiler.values.as_ptr(),
+            compiler.operations.as_ptr(),
+            compiler.windows.as_ptr(),
+            compiler.reductions.as_ptr(),
+            compiler.low_s.as_ptr(),
+        );
         let generator = compiler.generator_table_v1().expect("generator table");
         let assigned = constrain_p256_ecdsa_v1(
             &mut compiler,
@@ -2090,6 +2289,16 @@ mod tests {
             witness_v1(&key, digest, signature),
         )
         .expect("compile symbolic equation");
+        assert_eq!(
+            addresses,
+            (
+                compiler.values.as_ptr(),
+                compiler.operations.as_ptr(),
+                compiler.windows.as_ptr(),
+                compiler.reductions.as_ptr(),
+                compiler.low_s.as_ptr()
+            )
+        );
         (compiler, assigned)
     }
     fn valid_material_v1() -> P256EcdsaTraceMaterialV1 {

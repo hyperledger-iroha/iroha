@@ -295,15 +295,35 @@ pub(crate) struct P256ValueBusBaseCellV1 {
     /// and inactive cells must be zero.
     pub(crate) value: F,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl AsMut<[F]> for P256ValueBusBaseCellV1 {
+    fn as_mut(&mut self) -> &mut [F] {
+        core::slice::from_mut(&mut self.value)
+    }
+}
+
 /// One challenge-independent execution or writer-first endpoint.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct P256ValueBusBaseEndpointTraceV1 {
     /// Execution or sorted endpoint identity.
     pub(crate) endpoint: P256ValueBusEndpointV1,
     /// Exact logical factor rows, including canonical 64-row segment padding.
     pub(crate) rows: Vec<P256ValueBusBaseCellV1>,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for P256ValueBusBaseEndpointTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("P256ValueBusBaseEndpointTraceV1 { <private trace redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256ValueBusBaseEndpointTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBaseEndpointTraceV1 {
     /// Exact number of complete logical segments.
@@ -331,9 +351,7 @@ impl P256ValueBusBaseEndpointTraceV1 {
         Ok((row.fixed, row.value))
     }
     fn zeroize_private_v1(&mut self) {
-        for row in &mut self.rows {
-            row.value = F::ZERO;
-        }
+        super::private_table::zeroize_field_rows_v1(&mut self.rows);
         self.rows.clear();
     }
     #[cfg(test)]
@@ -379,6 +397,10 @@ impl P256ValueBusBaseMaterialV1 {
             .iter()
             .map(|linked| linked.operation)
             .collect::<Vec<_>>();
+        let operations = super::private_table::PrivateTableV1::new(
+            operations,
+            super::p256_air::zeroize_p256_operations_v1,
+        );
         let arithmetic_trace =
             build_zk_x509_p256_arithmetic_trace_v1(&operations).map_err(map_arithmetic_error_v1)?;
         let execution_events = execution_events_v1(
@@ -489,7 +511,7 @@ impl P256ValueBusBaseMaterialV1 {
         validate_base_endpoint_against_fixed_v1(&self.execution, &execution_fixed)?;
         validate_base_endpoint_against_fixed_v1(&self.sorted, &sorted_fixed)?;
         let expected_sorted = sorted_base_cells_v1(&self.execution.rows)?;
-        if self.sorted.rows != expected_sorted {
+        if self.sorted.rows.as_slice() != expected_sorted.as_slice() {
             return Err(P256ValueBusErrorV1::Adjacency);
         }
         validate_base_equality_segments_v1(
@@ -1007,6 +1029,13 @@ struct ExpectedAccessV1 {
     source_bound: bool,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl AsMut<[F]> for ExpectedAccessV1 {
+    fn as_mut(&mut self) -> &mut [F] {
+        core::slice::from_mut(&mut self.value)
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpectedAccessV1 {
     const fn inactive() -> Self {
         Self {
@@ -1023,7 +1052,7 @@ fn execution_events_v1(
     equalities: &[P256EqualityBindingV1],
     boolean_bridges: &[P256BooleanBridgeBindingV1],
     arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
-) -> Result<Vec<ExpectedAccessV1>, P256ValueBusErrorV1> {
+) -> Result<super::private_table::PrivateTableV1<ExpectedAccessV1>, P256ValueBusErrorV1> {
     let metadata = validate_value_topology_v1(
         initial_values,
         linked_operations,
@@ -1048,7 +1077,10 @@ fn execution_events_v1(
     let rows = segments
         .checked_mul(P256_VALUE_BUS_SEGMENT_ROWS_V1)
         .ok_or(P256ValueBusErrorV1::Resource)?;
-    let mut events = Vec::new();
+    let mut events = super::private_table::PrivateTableV1::new(
+        Vec::new(),
+        super::private_table::zeroize_field_rows_v1,
+    );
     events
         .try_reserve_exact(rows)
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
@@ -1159,7 +1191,7 @@ fn validate_value_topology_v1(
     linked_operations: &[P256LinkedOperationV1],
     equalities: &[P256EqualityBindingV1],
     boolean_bridges: &[P256BooleanBridgeBindingV1],
-) -> Result<Vec<ValueMetadataV1>, P256ValueBusErrorV1> {
+) -> Result<super::private_table::PrivateTableV1<ValueMetadataV1>, P256ValueBusErrorV1> {
     if initial_values.is_empty()
         || linked_operations.is_empty()
         || initial_values.len() > linked_operations.len()
@@ -1171,7 +1203,12 @@ fn validate_value_topology_v1(
         .checked_add(linked_operations.len())
         .ok_or(P256ValueBusErrorV1::Resource)?;
     let _last_id = u32::try_from(value_count - 1).map_err(|_| P256ValueBusErrorV1::Resource)?;
-    let mut metadata = Vec::new();
+    let mut metadata =
+        super::private_table::PrivateTableV1::new(Vec::new(), |rows: &mut [ValueMetadataV1]| {
+            for row in rows {
+                super::private_table::zeroize_words_v1(&mut row.limbs);
+            }
+        });
     metadata
         .try_reserve_exact(value_count)
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
@@ -1320,8 +1357,11 @@ fn validate_unique_writers_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sorted_events_v1(
     execution: &[ExpectedAccessV1],
-) -> Result<Vec<ExpectedAccessV1>, P256ValueBusErrorV1> {
-    let mut active = Vec::new();
+) -> Result<super::private_table::PrivateTableV1<ExpectedAccessV1>, P256ValueBusErrorV1> {
+    let mut active = super::private_table::PrivateTableV1::new(
+        Vec::new(),
+        super::private_table::zeroize_field_rows_v1,
+    );
     active
         .try_reserve_exact(execution.len())
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
@@ -1330,14 +1370,14 @@ fn sorted_events_v1(
             active.push(event);
         }
     }
-    active.sort_by_key(|event| fixed_sort_key_v1(event.fixed));
+    // Equal addressed accesses have identical private values in a valid trace.
+    // Sorting in place avoids an unowned private merge-sort allocation.
+    active.sort_unstable_by_key(|event| fixed_sort_key_v1(event.fixed));
+    let padding = execution.len() - active.len();
     active
-        .try_reserve_exact(execution.len() - active.len())
+        .try_reserve_exact(padding)
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
-    active.extend(core::iter::repeat_n(
-        ExpectedAccessV1::inactive(),
-        execution.len() - active.len(),
-    ));
+    active.extend(core::iter::repeat_n(ExpectedAccessV1::inactive(), padding));
     Ok(active)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1415,8 +1455,13 @@ fn build_base_endpoint_v1(
     if events.is_empty() || !events.len().is_multiple_of(P256_VALUE_BUS_SEGMENT_ROWS_V1) {
         return Err(P256ValueBusErrorV1::Topology);
     }
-    let mut rows = Vec::new();
-    rows.try_reserve_exact(events.len())
+    let mut trace = P256ValueBusBaseEndpointTraceV1 {
+        endpoint,
+        rows: Vec::new(),
+    };
+    trace
+        .rows
+        .try_reserve_exact(events.len())
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
     for event in events {
         let cell = P256ValueBusBaseCellV1 {
@@ -1424,9 +1469,9 @@ fn build_base_endpoint_v1(
             value: event.value,
         };
         validate_base_cell_v1(cell)?;
-        rows.push(cell);
+        trace.rows.push(cell);
     }
-    Ok(P256ValueBusBaseEndpointTraceV1 { endpoint, rows })
+    Ok(trace)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_base_cell_v1(cell: P256ValueBusBaseCellV1) -> Result<(), P256ValueBusErrorV1> {
@@ -1446,8 +1491,11 @@ fn validate_base_cell_v1(cell: P256ValueBusBaseCellV1) -> Result<(), P256ValueBu
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sorted_base_cells_v1(
     execution: &[P256ValueBusBaseCellV1],
-) -> Result<Vec<P256ValueBusBaseCellV1>, P256ValueBusErrorV1> {
-    let mut sorted = Vec::new();
+) -> Result<super::private_table::PrivateTableV1<P256ValueBusBaseCellV1>, P256ValueBusErrorV1> {
+    let mut sorted = super::private_table::PrivateTableV1::new(
+        Vec::new(),
+        super::private_table::zeroize_field_rows_v1,
+    );
     sorted
         .try_reserve_exact(execution.len())
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
@@ -1457,13 +1505,14 @@ fn sorted_base_cells_v1(
             .copied()
             .filter(|row| row.fixed != P256ValueBusFixedAccessV1::Inactive),
     );
-    sorted.sort_by_key(|row| fixed_sort_key_v1(row.fixed));
+    sorted.sort_unstable_by_key(|row| fixed_sort_key_v1(row.fixed));
+    let padding = execution.len() - sorted.len();
     sorted.extend(core::iter::repeat_n(
         P256ValueBusBaseCellV1 {
             fixed: P256ValueBusFixedAccessV1::Inactive,
             value: F::ZERO,
         },
-        execution.len() - sorted.len(),
+        padding,
     ));
     Ok(sorted)
 }
@@ -2506,8 +2555,8 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ValueBusStarkAuxSourceV1<'_> {
     fn drop(&mut self) {
-        self.running.fill(F::ZERO);
-        self.terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.terminal[..]);
         self.next_row = self.trace_size;
     }
 }
@@ -2960,8 +3009,8 @@ impl P256ValueBusBoundSourceV1 {
     /// an aliased test-only owner before the final owner drops.
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.post_base = None;
-        self.execution_terminal.fill(F::ZERO);
-        self.sorted_terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.execution_terminal[..]);
+        super::private_table::zeroize_fields_v1(&mut self.sorted_terminal[..]);
         if let Some(material) = self.material.as_mut()
             && let Some(material) = Arc::get_mut(material)
         {
@@ -3295,6 +3344,60 @@ pub(crate) fn evaluate_p256_value_bus_stark_terminal_opened_rows_v1(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_value_erasure_covers_partial_endpoint_and_in_place_sort_parity() {
+        use super::super::private_table::inspection::observe_v1;
+        let program = program(1);
+        let execution = execution_events_v1(
+            &program.initial,
+            &program.linked,
+            &program.equalities,
+            &program.bridges,
+            &program.arithmetic,
+        )
+        .unwrap();
+        let mut reference = execution.to_vec();
+        reference.sort_by_key(|event| fixed_sort_key_v1(event.fixed));
+        let sorted = sorted_events_v1(&execution).unwrap();
+        // Only fixed address and value are committed. `source_bound` is an
+        // execution-only validation hint and need not order equal sorted reads.
+        assert_eq!(
+            sorted
+                .iter()
+                .map(|event| (event.fixed, event.value))
+                .collect::<Vec<_>>(),
+            reference
+                .iter()
+                .map(|event| (event.fixed, event.value))
+                .collect::<Vec<_>>(),
+        );
+        let event = *execution
+            .iter()
+            .find(|event| event.value != F::ZERO)
+            .unwrap();
+        let mut invalid = vec![event; P256_VALUE_BUS_SEGMENT_ROWS_V1];
+        invalid[1].value = F(u64::from(u16::MAX) + 1);
+        let (result, observed) =
+            observe_v1(|| build_base_endpoint_v1(P256ValueBusEndpointV1::Execution, &invalid));
+        assert_eq!(result, Err(P256ValueBusErrorV1::Range));
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells == 1 && item.nonzero_before == 1)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        let (_, observed) = observe_v1(|| {
+            drop(execution);
+            drop(sorted);
+        });
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells > 1 && item.nonzero_before > 0)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+
     use super::super::p256_air::{
         ZkX509P256ArithmeticKindV1, build_zk_x509_p256_arithmetic_trace_v1,
     };
@@ -5416,6 +5519,13 @@ mod tests {
     }
     #[test]
     fn phased_private_material_zeroizes_recursively() {
+        let (_, observations) = super::super::private_table::inspection::observe_v1(
+            phased_private_material_zeroizes_recursively_body_v1,
+        );
+        assert!(observations.iter().any(|item| item.nonzero_before > 0));
+        assert!(observations.iter().all(|item| item.nonzero_after == 0));
+    }
+    fn phased_private_material_zeroizes_recursively_body_v1() {
         let program = program(1);
         let mut material = base_material_v1(&program);
         material.zeroize_private_v1();

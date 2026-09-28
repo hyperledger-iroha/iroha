@@ -46,7 +46,7 @@ const _: () = assert!(ZK_X509_CA_COMPACT_TREE_CAPACITY_V1 == 1 << ZK_X509_CA_COM
 pub(crate) type ZkX509MerkleDigestV1 = [u8; 32];
 /// Fixed-shape compact-tree membership witness.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::SerializePayload)]
 pub(crate) struct ZkX509CaMembershipPathV1 {
     /// Canonical sorted-leaf index.  Only the low twelve bits are legal.
     pub(crate) index: u16,

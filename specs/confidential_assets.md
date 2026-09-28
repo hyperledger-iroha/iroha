@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 # Confidential Assets & Protocol-Bound ZK Design
 
 ## Motivation
-- Deliver opt-in shielded asset flows so domains can preserve transactional privacy without altering transparent circulation.
+- Define local confidential note proofs and their protocol-owned admission boundaries.
 - Provide auditors and operators with lifecycle controls (activation, rotation, revocation) for circuits and cryptographic parameters.
 
 ## Threat Model
@@ -17,7 +17,9 @@ The Rust wallet entrypoint is `iroha_core::zk::confidential::ConfidentialProver`
 It binds a typed `NetworkId`, canonical `AssetDefinitionId`, and an owned
 `Zeroizing<[u8; 32]>` spend key. `prove_transfer` and `prove_unshield` select the
 canonical relation/key internally, consume zeroizing note openings, and
-self-verify the resulting proof. `ConfidentialTree` accepts a complete commitment
+self-verify the resulting proof. The circuit-specific builders are internal to
+Core; wallet callers cannot supply a circuit identifier or verifier key.
+`ConfidentialTree` accepts a complete commitment
 prefix or one membership path per actual input; no dummy path is exposed.
 The executable source example is
 [`confidential_redemption.rs`](../crates/iroha_core/examples/confidential_redemption.rs),
@@ -25,11 +27,27 @@ run with `cargo run -p iroha_core --example confidential_redemption`.
 It is local proof construction; active-key, authenticated-root, nullifier and
 transaction authority checks remain owned by ledger admission. Secret opening
 and prover `Debug` output is redacted; returned public proof material is inspectable.
+Persist a private change opening securely before proving consumes it. Once its
+new leaf index is authenticated, restore the opening and call
+`ConfidentialUnshieldOutputV3::into_input(index)`. This consumes it into an input
+using the wallet's default diversifier, even if the previous input used a
+different diversifier. The helper checks shape; proving still checks membership.
 
-- Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
-- Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
-  - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
-  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || network_id)`, where `network_id` is the exact genesis-derived `NetworkId`, independent of note ordering. The Poseidon byte preimage is terminated with `0x01` and zero-padded to an eight-byte boundary before field-sponge padding.
+Consumed note commitments are public and link spends to their inputs. These
+relations hide note amounts, nonces, spend keys and paths; the public redemption
+amount remains visible. They provide neither transaction unlinkability nor
+account/network anonymity. The current data model has no generic `Shield`,
+`ZkTransfer` or `Unshield` instruction. A proof artifact cannot authorize a
+ledger change without an implemented protocol's independent state checks.
+
+- Local notes bind `(asset_tag, amount, owner_tag, rho)` through the fixed Pasta
+  Poseidon construction in `crates/iroha_core/src/zk/confidential_v2.rs`:
+  - Commitment: `Poseidon(NOTE_DOMAIN, [amount, rho_scalar, owner_tag, asset_tag])`.
+  - Owner tag: `Poseidon(OWNER_DOMAIN, [spend_scalar, diversifier])`.
+  - Nullifier: `Poseidon(NULLIFIER_DOMAIN, [spend_scalar, rho_scalar, asset_tag, network_tag])`.
+    The spend key and nonce use distinct domain-separated hash-to-scalar labels.
+    Asset and network tags use separate domains, with the latter binding the
+    exact genesis-derived `NetworkId`. Note position is absent from this input.
   - Encrypted payload: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
 - Specialized confidential protocols transport Norito-encoded proof payloads containing:
   - Public inputs: Merkle anchor, nullifiers, new commitments, asset id, circuit version.
@@ -241,7 +259,9 @@ deterministic and wallets have time to adjust.
   impossible cardinalities, capacities and indices before Merkle hashing. Every
   generated envelope passes purpose-bound local verification for its fixed
   transfer, full-unshield or change-unshield relation within the 192 KiB cap.
-- Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, network_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
+- The same spend key, nonce, asset tag and network tag produce the same nullifier
+  independently of note position or anchor changes. This does not replace
+  protocol-owned replay checks or authenticated historical-root admission.
 
 ### V1 public-amount proof scalars
 
@@ -566,7 +586,8 @@ or encoders. SDK manifests and generated
 instruction catalogs must omit all three retired data-model types and their
 wire fingerprints.
 
-`vk_unshield` is the only first-release generic confidential-asset verifier binding. Neither grants KAGEMUSHA authority.
+`vk_unshield` is the only first-release generic confidential-asset verifier
+binding; it grants no KAGEMUSHA authority.
 Wallet implementations must build and sign the complete KAGEMUSHA V1 object;
 a proof envelope, amount, nullifier list, or opaque commitment is never
 sufficient authority on its own.

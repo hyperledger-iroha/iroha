@@ -1,33 +1,19 @@
-import {
-  buildConfidentialTransferProofV2, buildConfidentialUnshieldProofV2, buildConfidentialUnshieldProofV3,
-} from "../../../index.js";
-
-type Transfer = Parameters<typeof buildConfidentialTransferProofV2>[0];
-type Unshield = Parameters<typeof buildConfidentialUnshieldProofV3>[0];
-declare const request: Transfer;
-declare const note: Transfer["inputs"][0];
-declare const output: Transfer["outputs"][0];
-declare const unshield: Unshield;
-buildConfidentialTransferProofV2({ ...request, inputs: [note], outputs: [output] });
-buildConfidentialTransferProofV2({ ...request, inputs: [note, note], outputs: [output, output] });
-buildConfidentialUnshieldProofV2({ ...unshield, inputs: [note] });
-buildConfidentialUnshieldProofV3({ ...unshield, inputs: [note], outputs: [] });
-buildConfidentialUnshieldProofV3({ ...unshield, inputs: [note, note], outputs: [output] });
-// @ts-expect-error A transfer cannot consume zero actual inputs.
-buildConfidentialTransferProofV2({ ...request, inputs: [] });
-// @ts-expect-error This circuit has two input slots.
-buildConfidentialTransferProofV2({ ...request, inputs: [note, note, note] });
-// @ts-expect-error A transfer requires an actual output.
-buildConfidentialTransferProofV2({ ...request, outputs: [] });
-// @ts-expect-error This circuit has two output slots.
-buildConfidentialTransferProofV2({ ...request, outputs: [output, output, output] });
-// @ts-expect-error Unshield also requires an actual input.
-buildConfidentialUnshieldProofV2({ ...unshield, inputs: [] });
-// @ts-expect-error V3 unshield has at most one change output.
-buildConfidentialUnshieldProofV3({ ...unshield, outputs: [output, output] });
-
 import { ConfidentialProver, ConfidentialProverError, type ConfidentialProof } from "../../../index.js";
 declare const wallet: ConfidentialProver;
+type Transfer = Parameters<ConfidentialProver["proveTransfer"]>[0];
+declare const note: Transfer["inputs"][0];
+declare const output: Transfer["outputs"][0];
+declare const request: Transfer;
+wallet.proveTransfer({ ...request, inputs: [note], outputs: [output] });
+wallet.proveTransfer({ ...request, inputs: [note, note], outputs: [output, output] });
+// @ts-expect-error There are two input slots.
+wallet.proveTransfer({ ...request, inputs: [note, note, note] });
+// @ts-expect-error A transfer needs an actual output.
+wallet.proveTransfer({ ...request, outputs: [] });
+// @ts-expect-error There are two output slots.
+wallet.proveTransfer({ ...request, outputs: [output, output, output] });
+// @ts-expect-error Redemption also requires an actual input.
+wallet.proveRedemption({ ...request, inputs: [], publicAmount: 7n });
 const pendingProof: Promise<ConfidentialProof> = wallet.proveTransfer({ inputs: [note], outputs: [output], treeCommitments: [], rootHex: "" });
 // @ts-expect-error Proving is asynchronous and cannot be treated as an immediate proof.
 const immediateProof: ConfidentialProof = pendingProof;
@@ -42,3 +28,23 @@ void failureCode;
 wallet.proveTransfer({ inputs: [], outputs: [output], treeCommitments: [], rootHex: "" });
 // @ts-expect-error The private change is a single note, not a circuit-specific output vector.
 wallet.proveRedemption({ inputs: [note], publicAmount: 5n, change: [output], treeCommitments: [], rootHex: "" });
+
+import { computeConfidentialRoot } from "../../../index.js";
+const pendingRoot: Promise<Buffer> = computeConfidentialRoot({ commitments: [] });
+void pendingRoot;
+// @ts-expect-error Root computation uses the canonical fixed depth.
+computeConfidentialRoot({ commitments: [], depth: 1 });
+// @ts-expect-error Circuit and verifying-key selection belongs to the prover.
+wallet.proveTransfer({ ...request, verifyingKey: {} });
+// @ts-expect-error Caller-selected proof builders are absent from the first-release API.
+const retiredBuilder: typeof import("../../../index.js")["buildConfidentialTransferProofV2"] = undefined;
+void retiredBuilder;
+
+import { confidentialChangeToInput, defaultConfidentialDiversifier } from "../../../index.js";
+const changeInput: Transfer["inputs"][0] = confidentialChangeToInput({ amount: 2n, rhoHex: "" }, 1);
+const defaultDiversifier: Buffer = defaultConfidentialDiversifier();
+void changeInput; void defaultDiversifier;
+// @ts-expect-error Change ownership uses the native default, not a caller-selected diversifier.
+confidentialChangeToInput({ amount: 2n, rhoHex: "", diversifierHex: "" }, 1);
+// @ts-expect-error Leaf indices have the same numeric type as actual input notes.
+confidentialChangeToInput({ amount: 2n, rhoHex: "" }, 1n);

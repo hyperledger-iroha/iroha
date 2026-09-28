@@ -370,7 +370,8 @@ fn python_confidential_transfer_input_requires_canonical_diversifier() {
     Python::attach(|py| {
         let input_with_diversifier = |key: Option<&str>| {
             let input = PyDict::new(py);
-            input.set_item("amount", "7").expect("amount field");
+            input.set_item("amount", 7).expect("amount field");
+            input.set_item("leaf_index", 0).expect("leaf index");
             input
                 .set_item("rho", PyBytes::new(py, &[0x51; 32]))
                 .expect("rho field");
@@ -381,33 +382,27 @@ fn python_confidential_transfer_input_requires_canonical_diversifier() {
             }
             input
         };
-        let parsed = parse_confidential_transfer_input_py(
-            input_with_diversifier(Some("diversifier")).as_any(),
-            0,
-        )
-        .expect("canonical diversifier accepted");
+        let parsed =
+            confidential_wallet::input(input_with_diversifier(Some("diversifier")).as_any())
+                .expect("canonical diversifier accepted");
         assert_eq!(parsed.diversifier, [0x52; 32]);
-        let missing =
-            parse_confidential_transfer_input_py(input_with_diversifier(None).as_any(), 0)
-                .expect_err("missing diversifier rejected");
+        let missing = confidential_wallet::input(input_with_diversifier(None).as_any())
+            .expect_err("missing diversifier rejected");
         assert!(
             missing
                 .value(py)
                 .to_string()
-                .contains("inputs[0].diversifier is required"),
+                .contains("missing a required canonical field"),
             "unexpected missing-diversifier error: {}",
             missing.value(py)
         );
         for alias in ["diversifier_hex", "diversifierHex"] {
-            let err = parse_confidential_transfer_input_py(
-                input_with_diversifier(Some(alias)).as_any(),
-                0,
-            )
-            .expect_err("retired diversifier alias rejected");
+            let err = confidential_wallet::input(input_with_diversifier(Some(alias)).as_any())
+                .expect_err("retired diversifier alias rejected");
             assert!(
                 err.value(py)
                     .to_string()
-                    .contains("inputs[0].diversifier must use canonical diversifier"),
+                    .contains("requires canonical diversifier; aliases are rejected"),
                 "unexpected alias error for {alias}: {}",
                 err.value(py)
             );

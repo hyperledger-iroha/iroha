@@ -121,6 +121,8 @@ pub mod finality;
 /// Genesis-bound consensus metadata derived from the staged genesis state.
 pub mod genesis_meta;
 pub(crate) mod lane_planner;
+/// Lanes of the global chain: identity, pinned configuration, batches and admission.
+pub mod lanes;
 pub mod message;
 /// The Sumeragi driver's P2P transport: the frame envelope, traffic classes, egress and
 /// ingress.

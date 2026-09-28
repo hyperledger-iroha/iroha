@@ -1,13 +1,8 @@
 //! SCCP v1 core: state access, block hooks, admission and the ten v1 instructions
 //! (`specs/sccp.md` §4).
 //!
-//! ws20 installed this skeleton so that later workstreams fill disjoint files without touching
-//! shared ones. [`store`], [`leaves`], [`params`], [`height`] and [`witness`] are complete, as
-//! are the queue/validation exemption-shape rule in [`admission`] and the [`Execute`]
-//! implementations below, which delegate each v1 instruction to exactly one entry point. Every
-//! other entry point already has its final signature and fails closed with [`not_wired`] (or
-//! returns the neutral value its documentation names) until the owner in its module
-//! documentation implements it:
+//! The [`Execute`] implementations below delegate each v1 instruction to exactly one entry
+//! point. The modules, by the workstream that owns them:
 //!
 //! | Modules | Owner |
 //! |---|---|
@@ -16,6 +11,7 @@
 //! | [`outbound`], [`escrow`], [`recipients`] | ws32 |
 //! | [`registry`], [`governance`], [`controls`], [`light_clients`] (Parliament half) | ws33 |
 //! | [`light_clients`] (advance half), [`inbound`], [`settle`], [`voids`], [`self_claim`] | ws41 |
+//! | [`read`] (views and proof bundles served by Torii) | ws35 |
 //!
 //! With SCCP absent (no `sccp_parameters`), every hook is a no-op and admission classifies no
 //! transaction as SCCP-exempt, so block production and queue behavior are unchanged.
@@ -38,6 +34,7 @@ pub mod light_clients;
 pub mod outbound;
 pub mod params;
 pub mod prune;
+pub mod read;
 pub mod recipients;
 pub mod registry;
 pub mod roster;
@@ -66,15 +63,6 @@ use iroha_data_model::{
         },
     },
 };
-
-/// Build the fail-closed error of an SCCP entry point that is not implemented yet.
-///
-/// The message names the missing behavior and its owning workstream:
-/// `SCCP: <what> not implemented yet (TODO(<owner>))`.
-#[must_use]
-pub(crate) fn not_wired(what: &str, owner: &str) -> Error {
-    Error::InvariantViolation(format!("SCCP: {what} not implemented yet (TODO({owner}))").into())
-}
 
 /// Return whether `instruction` is one of the ten SCCP v1 instructions.
 ///
@@ -131,25 +119,6 @@ mod tests {
     };
     use iroha_data_model::isi::InstructionBox;
 
-    fn todo_owner(error: &Error) -> Option<String> {
-        let Error::InvariantViolation(message) = error else {
-            return None;
-        };
-        let (_, tail) = message.split_once("TODO(")?;
-        let (owner, _) = tail.split_once(')')?;
-        message.starts_with("SCCP: ").then(|| owner.to_owned())
-    }
-
-    #[test]
-    fn not_wired_names_the_missing_behavior_and_its_owner() {
-        let error = not_wired("widget", "ws99");
-        assert_eq!(
-            error,
-            Error::InvariantViolation("SCCP: widget not implemented yet (TODO(ws99))".into())
-        );
-        assert_eq!(todo_owner(&error).as_deref(), Some("ws99"));
-    }
-
     #[test]
     fn every_v1_instruction_is_recognized_and_nothing_else_is() {
         for instruction in SampleInstructions::all() {
@@ -163,36 +132,24 @@ mod tests {
     }
 
     #[test]
-    fn every_stub_instruction_fails_closed_with_its_owner() {
-        let expected = [
-            ("InitializeSccpV1", "ws31"),
-            ("SetSccpBridgeKeyV1", "ws31"),
-            ("SubmitSccpAttestationsV1", "ws31"),
-            ("SubmitSccpAttestationFaultV1", "ws31"),
-            ("RecordSccpMessage", "ws32"),
-            ("SubmitSccpInboundMessageV1", "ws41"),
-            ("SettleSccpV1", "ws41"),
-            ("SubmitSccpOutboundVoidV1", "ws41"),
-            ("AdvanceSccpLightClientV1", "ws41"),
-            ("ReportSccpLightClientEquivocationV1", "ws41"),
-        ];
+    fn every_instruction_fails_closed_without_sccp() {
+        // Genesis-only initialization refuses outside genesis; every other instruction refuses
+        // on a network without SCCP (or without the record it names).
         let state = blank_state();
         let mut block = state.block(header(2));
         let authority = authority(1);
-        for (instruction, (name, owner)) in SampleInstructions::all().into_iter().zip(expected) {
+        for instruction in SampleInstructions::all() {
             let mut stx = block.transaction();
             let error = crate::smartcontracts::isi::execute_borrowed_instruction(
                 &instruction,
                 &authority,
                 &mut stx,
             )
-            .expect_err("a skeleton SCCP instruction must fail closed");
-            assert_eq!(
-                todo_owner(&error).as_deref(),
-                Some(owner),
-                "{name}: {error}"
+            .expect_err("an SCCP instruction must fail closed without SCCP");
+            assert!(
+                !format!("{error}").contains("TODO("),
+                "{instruction:?}: {error}"
             );
-            assert!(format!("{error}").contains(name), "{name}: {error}");
         }
     }
 }

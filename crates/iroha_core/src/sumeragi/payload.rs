@@ -19,7 +19,10 @@ use crate::{
     state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
     tx::AcceptedTransaction,
 };
-use iroha_data_model::block::BlockExecutionContextBundle;
+use iroha_data_model::{
+    block::BlockExecutionContextBundle,
+    sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
+};
 
 /// How many queued transactions one build inspects at most.
 pub const MAX_QUEUE_SCAN: NonZeroUsize = NonZeroUsize::new(4096).expect("non-zero");
@@ -69,13 +72,49 @@ pub fn assemble(
 }
 
 /// Assemble actual transaction work together with an already finalized current pulse.
+///
+/// # Errors
+/// See [`assemble`].
 pub fn assemble_with_pulse(
     state: &State,
     assembly: Assembly<'_>,
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
     pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
-    if transactions.is_empty() {
+    assemble_with_merges(
+        state,
+        assembly,
+        transactions,
+        &MergeProposal::default(),
+        pulse,
+    )
+}
+
+/// The lane merges a leader proposes (`specs/sumeragi_lanes.md` §4.2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MergeProposal {
+    /// The merged ranges, lanes ascending.
+    pub merges: Vec<SumeragiLaneMerge>,
+    /// Transactions of the fresh merged blocks (the block capacity they reserve).
+    pub transactions: usize,
+    /// One millisecond after the latest creation time among those transactions.
+    pub time_floor_ms: u64,
+}
+
+/// Assemble the block's own transactions and its lane merges (`specs/sumeragi_lanes.md` §4.2)
+/// with an already finalized current pulse. Merged lane blocks are work: a block may carry
+/// merges alone.
+///
+/// # Errors
+/// There are neither transactions nor merges, or the canonical block time overflows.
+pub fn assemble_with_merges(
+    state: &State,
+    assembly: Assembly<'_>,
+    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+    merges: &MergeProposal,
+    pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+) -> Result<SignedBlock, PayloadError> {
+    if transactions.is_empty() && merges.merges.is_empty() {
         return Err(PayloadError::EmptyBlock);
     }
     let parent_time = assembly.parent.header().creation_time();
@@ -83,7 +122,7 @@ pub fn assemble_with_pulse(
         .checked_add(assembly.cadence)
         .ok_or(PayloadError::TimeOverflow)?;
     let build = |time: Duration| -> Result<SignedBlock, PayloadError> {
-        build_at(state, assembly, transactions, time, pulse)
+        build_at(state, assembly, transactions, merges, time, pulse)
     };
     let first = build(minimum)?;
     let canonical = ValidBlock::sumeragi_block_time(&first, parent_time, assembly.cadence)
@@ -99,6 +138,7 @@ fn build_at(
     state: &State,
     assembly: Assembly<'_>,
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+    merges: &MergeProposal,
     time: Duration,
     pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
@@ -116,7 +156,14 @@ fn build_at(
         .iter()
         .map(|(tx, plan)| execution_context_for_routing_plan(tx.hash_as_entrypoint(), plan))
         .collect::<Vec<_>>();
-    let execution_context = BlockExecutionContextBundle::new(contexts);
+    let mut execution_context = BlockExecutionContextBundle::new(contexts);
+    if !merges.merges.is_empty() {
+        execution_context.lane_merge = Some(SumeragiLaneMergeSection {
+            merges: merges.merges.clone(),
+            time_floor_ms: merges.time_floor_ms,
+            merged_count: 0,
+        });
+    }
     let builder = BlockBuilder::new_with_time_source(accepted, time_source)
         .chain(assembly.view, Some(assembly.parent))
         .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
@@ -130,12 +177,20 @@ fn build_at(
     Ok(builder.into_unsigned_proposal())
 }
 
+/// Whether a block carries work: its own transactions or lane merges.
+fn has_work(block: &SignedBlock) -> bool {
+    block.network_entrypoint_count() > 0
+        || block
+            .lane_merge()
+            .is_some_and(|section| !section.merges.is_empty())
+}
+
 /// The payload bytes of `block`: its canonical resultless proposal wire.
 ///
 /// # Errors
-/// The block contains no transactions or cannot be encoded.
+/// The block carries no work or cannot be encoded.
 pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
-    if block.network_entrypoint_count() == 0 {
+    if !has_work(block) {
         return Err(PayloadError::EmptyBlock);
     }
     block
@@ -153,7 +208,7 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
 pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
     let block = iroha_data_model::block::decode_versioned_signed_block(payload)
         .map_err(|error| PayloadError::NotCanonical(error.to_string()))?;
-    if block.network_entrypoint_count() == 0 {
+    if !has_work(&block) {
         return Err(PayloadError::EmptyBlock);
     }
     if !block.is_resultless_proposal() {
@@ -177,12 +232,14 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
 
 /// Select queued transactions for the block after `parent` (FIFO, peeked, never removed),
 /// within `max_bytes` of transaction bytes, the on-chain transaction cap and the FASTPQ source
-/// policy's Network input cap. Transactions the router cannot place and `QueuePlanSynced`
-/// inputs are skipped.
+/// policy's Network input cap less `reserved` (the block's merged lane transactions).
+/// Transactions the router cannot place, transactions routed to another lane and
+/// `QueuePlanSynced` inputs are skipped.
 pub fn select(
     state: &State,
     queue: &std::sync::Arc<Queue>,
     max_bytes: usize,
+    reserved: usize,
 ) -> Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> {
     let view = state.view();
     let block_parameters = view.world().parameters().block();
@@ -194,17 +251,47 @@ pub fn select(
         .map_or(0, |inputs| usize::try_from(inputs).unwrap_or(usize::MAX));
     let max_transactions = usize::try_from(block_parameters.max_transactions().get())
         .unwrap_or(usize::MAX)
-        .min(fastpq_inputs);
+        .min(fastpq_inputs)
+        .saturating_sub(reserved);
     let Some((pending, lease)) = queue.bounded_pending_snapshot(&view, MAX_QUEUE_SCAN) else {
         return Vec::new();
     };
-    drop(view);
     drop(lease);
+    // The global chain sequences lane 0; transactions routed to a lane reach it through that
+    // lane's merged blocks (`specs/sumeragi_lanes.md` §5).
+    let routing = super::lanes::routing::RoutingSnapshot::of(&view);
+    let height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let inputs = routing.inputs(view.world());
+    // A transaction routed to a lane that has not carried it for `2A` global block times is
+    // rescued by the global chain itself (§6.4): a stalled lane cannot hold transactions, and
+    // the rescue is the committed load that closes it.
+    let rescue_before_ms = routing.policy().map_or(0, |policy| {
+        let cadence = view.world().parameters().sumeragi().block_cadence_ms.get();
+        let parent_ms = view
+            .latest_block()
+            .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
+            .unwrap_or(0);
+        parent_ms.saturating_sub(
+            policy
+                .anchor_freshness
+                .saturating_mul(2)
+                .saturating_mul(cadence),
+        )
+    });
     let mut selected = Vec::new();
     let mut bytes = 0usize;
     for transaction in pending {
         if selected.len() >= max_transactions {
             break;
+        }
+        if routing.has_lanes()
+            && inputs.route(&transaction, height) != super::lanes::routing::GLOBAL_LANE
+            && u64::try_from(transaction.as_ref().creation_time().as_millis())
+                .is_ok_and(|created| created >= rescue_before_ms)
+        {
+            continue;
         }
         // TODO(WP8a): QueuePlanSynced is deleted with the lane machinery.
         if transaction.entrypoint().admission_intent()

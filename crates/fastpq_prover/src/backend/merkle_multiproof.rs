@@ -12,20 +12,65 @@
 //! digest types admit only six canonical Goldilocks coordinates; future wire
 //! decoding must preserve that admission boundary.
 //!
-//! The test-only compact protocol now wraps these plans in a distinct canonical
-//! shared-opening Norito DTO. TODO: Qualify the complete protocol/profile and
-//! bounded raw-byte admission before production integration. This helper changes
-//! neither production proof encoding nor verification.
+//! Both the bounded producer and verifier use this same canonical schedule.
+//! Reconstruction clears its digest frontiers even when authenticating a private
+//! cached opening fails before disclosure. Proof geometry and wire encoding are
+//! determined by the caller's fixed profile.
 
 #[cfg(test)]
 use fastpq_isi::GoldilocksDigest384DomainPrefixV1;
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
+use zeroize::Zeroize;
 
 #[cfg(test)]
 use super::{MERKLE_NODE_PHASE_V1, MerkleTreeRoleV1, digest_domain_prefix_v1, hash_at_prefix_v1};
 use crate::{Error, Result};
 
 const MAX_PARALLEL_PARENT_JOBS: usize = 32;
+
+// Reconstruction also authenticates private prover cache openings before they
+// become public proof values. Own each fixed-capacity frontier before inserting
+// digests, and clear every live tuple on success, errors and callback unwinding.
+// Each next frontier is no wider than its input, so pushes never grow the heap.
+struct DigestFrontier(Vec<(usize, Digest)>);
+impl DigestFrontier {
+    fn reserved(capacity: usize) -> Result<Self> {
+        Ok(Self(reserved(capacity)?))
+    }
+}
+impl core::ops::Deref for DigestFrontier {
+    type Target = Vec<(usize, Digest)>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for DigestFrontier {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for DigestFrontier {
+    fn drop(&mut self) {
+        self.0.iter_mut().for_each(Zeroize::zeroize);
+        #[cfg(test)]
+        FRONTIER_ERASURES.with(|observed| {
+            let (cells, bad) = observed.get();
+            observed.set((
+                cells + self.0.len(),
+                bad + self
+                    .0
+                    .iter()
+                    .filter(|(index, digest)| *index != 0 || digest.words() != [0; 6])
+                    .count(),
+            ));
+        });
+    }
+}
+#[cfg(test)]
+thread_local! {
+    static FRONTIER_ERASURES: core::cell::Cell<(usize, usize)> =
+        const { core::cell::Cell::new((0, 0)) };
+}
 
 // One immutable prefix is borrowed for every parent at the current level.
 // Reconstruction walks levels in order, so retaining earlier prefixes would
@@ -369,11 +414,11 @@ impl MultiproofPlan {
         if workers == 1 || self.indices.len() < MAX_PARALLEL_PARENT_JOBS {
             return self.verify_with(root, leaves, siblings, hash);
         }
-        let mut current = reserved(self.indices.len())?;
+        let mut current = DigestFrontier::reserved(self.indices.len())?;
         current.extend(self.indices.iter().copied().zip(leaves.iter().copied()));
         let mut consumed = 0;
         for level in 0..self.depth {
-            let mut next = reserved(current.len())?;
+            let mut next = DigestFrontier::reserved(current.len())?;
             let level_siblings = consumed;
             let mut position = 0;
             while position < current.len() {
@@ -460,11 +505,11 @@ impl MultiproofPlan {
         if self.leaf_count == 1 {
             return hash(1, 0, leaves[0], leaves[0]);
         }
-        let mut current = reserved(self.indices.len())?;
+        let mut current = DigestFrontier::reserved(self.indices.len())?;
         current.extend(self.indices.iter().copied().zip(leaves.iter().copied()));
         let mut consumed = 0;
         for level in 0..self.depth {
-            let mut next = reserved(current.len())?;
+            let mut next = DigestFrontier::reserved(current.len())?;
             let mut position = 0;
             while position < current.len() {
                 let (index, value) = current[position];
@@ -1240,6 +1285,65 @@ mod tests {
         let mut bad = levels;
         bad[4][0] = leaf(99);
         assert!(plan.open(role, &bad).is_err());
+    }
+
+    #[test]
+    fn reconstruction_frontiers_clear_live_cells_after_success_error_and_unwind() {
+        let role = MerkleTreeRoleV1::Lde;
+        let all_leaves = (0..64).map(leaf).collect::<Vec<_>>();
+        let levels = build_merkle_levels_with_mode(&all_leaves, role, ExecutionMode::Cpu).unwrap();
+        let indices = (0..64).step_by(2).collect::<Vec<_>>();
+        let plan = MultiproofPlan::new(64, &indices, limits()).unwrap();
+        let siblings = plan.open(role, &levels).unwrap();
+        let leaves = indices
+            .iter()
+            .map(|&index| all_leaves[index])
+            .collect::<Vec<_>>();
+        let root = levels.last().unwrap()[0];
+        // Four workers and 32 initial queries exercise actual parallel parents;
+        // one worker exercises the independent serial reconstruction owner.
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for failure in 0..3 {
+                        FRONTIER_ERASURES.with(|observed| observed.set((0, 0)));
+                        let result = std::panic::catch_unwind(|| {
+                            plan.verify_parallel_with(
+                                root,
+                                &leaves,
+                                &siblings,
+                                |level, index, left, right| {
+                                    if level == 1 && index == 2 {
+                                        match failure {
+                                            1 => return Err(shape("injected parent hash failure")),
+                                            2 => panic!("injected parent hash unwind"),
+                                            _ => {}
+                                        }
+                                    }
+                                    merkle_node_hash(role, level, index, left, right)
+                                },
+                            )
+                        });
+                        match failure {
+                            0 => assert_eq!(result.unwrap().unwrap(), plan.work()),
+                            1 => assert!(result.unwrap().is_err()),
+                            _ => assert!(result.is_err()),
+                        }
+                        let (cells, bad) = FRONTIER_ERASURES.with(core::cell::Cell::get);
+                        assert!(cells >= indices.len(), "input frontier must be erased");
+                        if failure == 0 {
+                            assert_eq!(cells, indices.len() + plan.work().parent_hashes);
+                        }
+                        assert_eq!(
+                            bad, 0,
+                            "actual frontier cells must be zero before deallocation"
+                        );
+                    }
+                });
+        }
     }
 
     #[test]

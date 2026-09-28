@@ -470,9 +470,12 @@ test("macOS native build seals SDK, deployment target, and Apple tools into Carg
       platform: "darwin",
       runTool,
       readSourceState: () => sourceState(),
-      runCargo(_cargo, _args, { cargoEnv }) {
+      runCargo(_cargo, args, { cargoEnv }) {
+        assert.equal(args[0], "rustc");
+        assert.deepEqual(args.slice(-3), ["--", "-C", "strip=none"]);
         assert.equal(cargoEnv.SDKROOT, sdkRoot);
         rustflags = cargoEnv.RUSTFLAGS;
+        assert.ok(!rustflags.includes("strip="), "do not change dependency stripping");
         writeNativeOutput(fixture, `macos-sdk-${version}`);
         return { status: 0, stdout: successfulCargoJson(fixture) };
       },

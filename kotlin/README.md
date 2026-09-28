@@ -39,6 +39,60 @@ execution still requires a same-source ABI-24 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
 
+## Local confidential proofs
+
+`ConfidentialProver` owns the spend key in native Core and selects the canonical
+transfer/full-redemption/change relation and key automatically. Supply typed
+`NetworkId`, a canonical asset-definition address, one or two actual input
+notes, and an authenticated tree root. `ConfidentialTreeEvidence.Paths` needs
+one 16-level path per actual input; a one-note spend needs no dummy path even
+when the tree is full. `ConfidentialNoteCommitment.derive(asset, amount, rho,
+ownerTag)` derives a commitment without retaining a spend-key opening.
+
+Run proving on your application's background executor; the methods block:
+
+```kotlin
+ConfidentialProver.create(networkId, assetDefinitionId, spendKey).use { prover ->
+    val proof = prover.proveUnshield(
+        ConfidentialTreeEvidence.Paths(root, listOf(inputPath)),
+        listOf(ConfidentialInputNote(amount, rho, diversifier, leafIndex)),
+        publicAmount = amount,
+    )
+    // Public local proof material; choose an implemented protocol admission path separately.
+}
+```
+
+Proving consumes and closes the note/tree owners on success and failure.
+`close()` rejects future jobs; work already accepted by the native owner can
+finish. Caller-owned arrays, immutable amounts and other JVM copies remain the
+application's responsibility. The proof does not submit a transaction, authorize
+value movement, or establish network activation.
+
+Persist the private change opening securely before proving consumes its
+`ConfidentialChangeNote` owner. Once the change commitment has an authenticated
+leaf index, reconstruct the saved opening and convert it to a later input:
+
+```kotlin
+val input = ConfidentialChangeNote(savedAmount, savedRho).use { restoredChange ->
+    restoredChange.toInput(authenticatedLeafIndex)
+}
+// Supply input with authenticated tree evidence to a later proving operation,
+// which consumes it; close input yourself if you abandon that operation.
+```
+
+Conversion uses Core's default change diversifier, which may differ from the
+original input note's diversifier. It copies the opening into an independent
+owner; closing the restored change leaves the new input intact. Conversion does
+not authenticate the supplied index or establish membership. Do not use a
+placeholder leaf index before the commitment has been located and authenticated.
+
+With a same-source rebuilt bridge in `IROHA_NATIVE_LIBRARY_PATH`, run
+`./gradlew :core-jvm:confidentialRedemptionExample --console=plain` for a disposable
+wallet using operating-system randomness. Native JNI checks are
+`./gradlew :core-jvm:test --tests '*ConfidentialProverNativeTests' --console=plain`;
+missing exports fail. JVM host evidence does not qualify an Android device or
+replace the native AAR packaging/provenance checks below.
+
 ## Artifacts
 
 Not published to Maven Central yet. Build locally and consume via `mavenLocal()`.

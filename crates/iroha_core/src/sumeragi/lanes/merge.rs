@@ -1,0 +1,472 @@
+//! The global chain's lane merge (`specs/sumeragi_lanes.md` §4.2–§4.3).
+//!
+//! A global block names, per lane, the next contiguous certified lane heights
+//! ([`SumeragiLaneMerge`]). [`expand`] checks those references against the committed lane state
+//! and the node's lane stores, and turns the merged lane blocks into the entrypoints the block
+//! executes after its own transactions: lanes ascending, lane heights ascending, batch order.
+//!
+//! A merged transaction that the global chain must not execute is dropped from the executed
+//! block with no effect and no fee: it is carried by a stale lane block, routed to another lane
+//! at this height, already committed or earlier in the block, or not admissible in a block at
+//! this height. Every such rule reads the committed pre-state and the block alone, so every
+//! honest node executes the same entrypoints. Only a malformed reference (a lane that is not
+//! active, a gap, an oversized range, a tip that differs from the lane's committed block, or
+//! more transactions than the block may execute) makes the global block invalid.
+
+use std::{borrow::Cow, collections::BTreeMap, time::Duration};
+
+use iroha_data_model::{
+    block::{ExternalExecutionContext, SignedBlock},
+    sumeragi_lanes::{SumeragiLaneMerge, SumeragiLanePolicy, SumeragiLaneState},
+    transaction::{SignedTransaction, TransactionAdmissionIntent, TransactionEntrypoint},
+};
+use iroha_model_base::topology::LaneId;
+use iroha_sumeragi::types::Hash32;
+
+use super::{LaneBatch, lane_policy, routing::GLOBAL_LANE};
+pub use crate::sumeragi::payload::MergeProposal;
+use crate::{
+    queue::{
+        evaluate_policy_plan_with_nexus_and_world_at_block_height,
+        execution_context_for_routing_plan,
+    },
+    state::{StateReadOnly, StateReadOnlyWithTransactions, WorldReadOnly},
+    tx::AcceptedTransaction,
+};
+
+/// A committed lane block as the node's lane store holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommittedLaneBlock {
+    /// Core block hash.
+    pub block_hash: Hash32,
+    /// Certified result `R`.
+    pub result: Hash32,
+    /// The decoded payload; `None` when a (Byzantine) lane committee certified bytes that are
+    /// not a lane batch — such a block is merged without effect.
+    pub batch: Option<LaneBatch>,
+}
+
+/// The node's committed lane blocks: the lane stores of the lane instances it follows.
+pub trait LaneBlockSource: Send + Sync {
+    /// The committed tip height of incarnation `incarnation` of `lane`, or `None` if the node
+    /// does not follow it.
+    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> Option<u64>;
+    /// The committed block at `height`.
+    fn block(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+        height: u64,
+    ) -> Option<CommittedLaneBlock>;
+    /// Block until the committed tip reaches `height` or `timeout` passes; whether it did.
+    fn wait_for(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+        height: u64,
+        timeout: Duration,
+    ) -> bool;
+}
+
+/// A node that follows no lane.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoLanes;
+
+impl LaneBlockSource for NoLanes {
+    fn tip(&self, _lane: LaneId, _incarnation: &[u8; 32]) -> Option<u64> {
+        None
+    }
+    fn block(
+        &self,
+        _lane: LaneId,
+        _incarnation: &[u8; 32],
+        _height: u64,
+    ) -> Option<CommittedLaneBlock> {
+        None
+    }
+    fn wait_for(
+        &self,
+        _lane: LaneId,
+        _incarnation: &[u8; 32],
+        _height: u64,
+        _timeout: Duration,
+    ) -> bool {
+        false
+    }
+}
+
+/// Why a global block's lane merge cannot be expanded.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MergeError {
+    /// The node has not committed the referenced lane blocks yet: execution waits.
+    #[error("lane blocks are not available yet: {0}")]
+    Pending(String),
+    /// The merge is malformed: the global block is invalid.
+    #[error("invalid lane merge: {0}")]
+    Invalid(String),
+}
+
+/// What the lane step of a global block reads (§4.3 step 4, §6.1).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaneStepInput {
+    /// The block's merges.
+    pub merges: Vec<SumeragiLaneMerge>,
+    /// Executed transactions per carrying lane (lane `0`: the block's own).
+    pub executed: BTreeMap<LaneId, u64>,
+    /// The block's own transactions routed to another lane, per lane (§6.4).
+    pub rescued: BTreeMap<LaneId, u64>,
+    /// The block's creation time (ms since the Unix epoch).
+    pub time_ms: u64,
+}
+
+/// A global block's merged entrypoints and its lane step input.
+#[derive(Clone, Debug, Default)]
+pub struct Expansion {
+    /// Merged entrypoints, in execution order.
+    pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Their execution contexts.
+    pub contexts: Vec<ExternalExecutionContext>,
+    /// The lane step input.
+    pub step: LaneStepInput,
+}
+
+impl Expansion {
+    /// The executed block: `proposal` with the merged entrypoints appended, or `proposal` itself
+    /// when it carries no merge section.
+    ///
+    /// # Errors
+    /// The proposal is not a resultless proposal that can take them.
+    pub fn apply(&self, proposal: SignedBlock) -> Result<SignedBlock, MergeError> {
+        if proposal.lane_merge().is_none() {
+            return Ok(proposal);
+        }
+        proposal
+            .with_merged_entrypoints(self.entrypoints.clone(), self.contexts.clone())
+            .map_err(|reason| MergeError::Invalid(reason.to_owned()))
+    }
+}
+
+/// The transactions a global block may execute at most: the on-chain transaction cap and the
+/// execution output's network input capacity.
+fn block_capacity(world: &impl WorldReadOnly) -> usize {
+    let parameters = world.parameters().block();
+    let inputs = parameters
+        .fastpq_source()
+        .maximum_network_inputs(parameters.execution_output())
+        .map_or(0, |inputs| usize::try_from(inputs).unwrap_or(usize::MAX));
+    usize::try_from(parameters.max_transactions().get())
+        .unwrap_or(usize::MAX)
+        .min(inputs)
+}
+
+/// Check the merge references of `proposal` (global height `h`) against the committed
+/// pre-state `view` and the node's lane stores, waiting up to `wait` for lane blocks, and
+/// expand them.
+///
+/// # Errors
+/// [`MergeError::Pending`] while referenced lane blocks are not committed locally;
+/// [`MergeError::Invalid`] for a malformed merge.
+pub fn expand<V: StateReadOnlyWithTransactions>(
+    view: &V,
+    proposal: &SignedBlock,
+    source: &dyn LaneBlockSource,
+    wait: Duration,
+) -> Result<Expansion, MergeError> {
+    let height = proposal.header().height().get();
+    let time_ms = u64::try_from(proposal.header().creation_time().as_millis()).unwrap_or(u64::MAX);
+    let policy = lane_policy(view.world());
+    let lanes = view.world().sumeragi_lanes();
+    let routing = super::routing::RoutingSnapshot::of(view);
+    let inputs = routing.inputs(view.world());
+    let own = proposal.external_entrypoints_slice();
+    let mut step = LaneStepInput {
+        time_ms,
+        ..LaneStepInput::default()
+    };
+    step.executed
+        .insert(GLOBAL_LANE, u64::try_from(own.len()).unwrap_or(u64::MAX));
+    if routing.has_lanes() {
+        for entrypoint in own {
+            if let TransactionEntrypoint::External(tx) = entrypoint {
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
+                let lane = inputs.route(&accepted, height);
+                if lane != GLOBAL_LANE {
+                    *step.rescued.entry(lane).or_default() += 1;
+                }
+            }
+        }
+    }
+    let Some(section) = proposal.lane_merge() else {
+        return Ok(Expansion {
+            step,
+            ..Expansion::default()
+        });
+    };
+    if section.merged_count != 0 {
+        return Err(MergeError::Invalid(
+            "a proposal carries merged entrypoints".into(),
+        ));
+    }
+    if section.merges.is_empty() {
+        return Err(MergeError::Invalid("an empty merge section".into()));
+    }
+    let Some(policy) = policy else {
+        return Err(MergeError::Invalid("the chain has no lane policy".into()));
+    };
+    let blocks = load(&section.merges, lanes, &policy, height, source, wait)?;
+    step.merges.clone_from(&section.merges);
+    // Candidates: the transactions of fresh merged blocks, in execution order.
+    let candidates = blocks
+        .into_iter()
+        .filter(|(_, stale, _)| !stale)
+        .filter_map(|(lane, _, block)| block.batch.map(|batch| (lane, batch.transactions)))
+        .flat_map(|(lane, transactions)| transactions.into_iter().map(move |tx| (lane, tx)))
+        .collect::<Vec<_>>();
+    if own.len().saturating_add(candidates.len()) > block_capacity(view.world()) {
+        return Err(MergeError::Invalid(
+            "the merged transactions exceed the block's capacity".into(),
+        ));
+    }
+    let floor = candidates
+        .iter()
+        .map(|(_, tx)| time_floor(std::slice::from_ref(tx)))
+        .max()
+        .unwrap_or(0);
+    if floor != section.time_floor_ms {
+        return Err(MergeError::Invalid(format!(
+            "the merge time floor is {} ms, not {floor} ms",
+            section.time_floor_ms
+        )));
+    }
+    let mut seen = own
+        .iter()
+        .map(TransactionEntrypoint::hash)
+        .collect::<std::collections::BTreeSet<_>>();
+    let admission = Admissibility::of(view);
+    let mut expansion = Expansion {
+        step,
+        ..Expansion::default()
+    };
+    for (lane, tx) in candidates {
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let hash = accepted.hash_as_entrypoint();
+        if inputs.route(&accepted, height) != lane
+            || view.has_entrypoint(hash)
+            || !seen.insert(hash)
+            || !admission.admits(accepted.as_ref(), proposal)
+        {
+            continue;
+        }
+        let Ok(plan) = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+            view.nexus(),
+            &accepted,
+            view.world(),
+            time_ms,
+            height,
+        ) else {
+            continue;
+        };
+        expansion
+            .contexts
+            .push(execution_context_for_routing_plan(hash, &plan));
+        expansion
+            .entrypoints
+            .push(TransactionEntrypoint::External(accepted.as_ref().clone()));
+        *expansion.step.executed.entry(lane).or_default() += 1;
+    }
+    Ok(expansion)
+}
+
+/// The merges a leader proposes at global height `height` over the committed state `view`
+/// (§4.2): per active lane, the next contiguous blocks its local store has committed, up to
+/// `max_merge_blocks` and the block's transaction capacity, and the merged transactions they
+/// reserve. Lanes take turns filling the capacity (rotating by height) so none starves; the
+/// merges themselves are listed in ascending lane order.
+#[must_use]
+pub fn propose<V: StateReadOnly>(
+    view: &V,
+    source: &dyn LaneBlockSource,
+    height: u64,
+) -> MergeProposal {
+    let Some(policy) = lane_policy(view.world()) else {
+        return MergeProposal::default();
+    };
+    let capacity = block_capacity(view.world());
+    let lanes = view.world().sumeragi_lanes();
+    let active = lanes
+        .lanes
+        .iter()
+        .filter(|record| height > record.active_from)
+        .collect::<Vec<_>>();
+    if active.is_empty() {
+        return MergeProposal::default();
+    }
+    let start = usize::try_from(height % u64::try_from(active.len()).unwrap_or(1)).unwrap_or(0);
+    let mut used = 0usize;
+    let mut time_floor_ms = 0u64;
+    let mut merges = Vec::new();
+    for offset in 0..active.len() {
+        let record = active[(start + offset) % active.len()];
+        let Some(tip) = source.tip(record.lane, &record.incarnation) else {
+            continue;
+        };
+        let from = record.merged.height.saturating_add(1);
+        let last = tip.min(
+            record
+                .merged
+                .height
+                .saturating_add(u64::from(policy.max_merge_blocks)),
+        );
+        let mut end = None;
+        for lane_height in from..=last {
+            let Some(block) = source.block(record.lane, &record.incarnation, lane_height) else {
+                break;
+            };
+            let fresh = block
+                .batch
+                .as_ref()
+                .filter(|batch| !record.is_stale(batch.anchor_height, height))
+                .map_or(&[][..], |batch| batch.transactions.as_slice());
+            if used.saturating_add(fresh.len()) > capacity {
+                break;
+            }
+            used = used.saturating_add(fresh.len());
+            time_floor_ms = time_floor_ms.max(time_floor(fresh));
+            end = Some((lane_height, block));
+        }
+        if let Some((to, block)) = end {
+            merges.push(SumeragiLaneMerge {
+                lane: record.lane,
+                incarnation: record.incarnation,
+                from,
+                to,
+                tip_hash: block.block_hash.0,
+                tip_result: block.result.0,
+            });
+        }
+    }
+    merges.sort_by_key(|merge| merge.lane);
+    MergeProposal {
+        merges,
+        transactions: used,
+        time_floor_ms,
+    }
+}
+
+/// One millisecond after the latest creation time among `transactions` (`0` for none).
+fn time_floor(transactions: &[SignedTransaction]) -> u64 {
+    transactions
+        .iter()
+        .map(|tx| {
+            u64::try_from(tx.creation_time().as_millis())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Check each merge against the committed lane records and load its blocks from the node's lane
+/// stores: `(lane, stale, block)` in execution order.
+fn load(
+    merges: &[SumeragiLaneMerge],
+    lanes: &SumeragiLaneState,
+    policy: &SumeragiLanePolicy,
+    height: u64,
+    source: &dyn LaneBlockSource,
+    wait: Duration,
+) -> Result<Vec<(LaneId, bool, CommittedLaneBlock)>, MergeError> {
+    let invalid =
+        |lane: LaneId, reason: &str| MergeError::Invalid(format!("lane {lane}: {reason}"));
+    let mut previous: Option<LaneId> = None;
+    let mut blocks = Vec::new();
+    for merge in merges {
+        let lane = merge.lane;
+        if previous.is_some_and(|previous| previous >= lane) {
+            return Err(invalid(lane, "merges are not in ascending lane order"));
+        }
+        previous = Some(lane);
+        let Some(record) = lanes.lane(lane) else {
+            return Err(invalid(lane, "no such lane"));
+        };
+        if record.incarnation != merge.incarnation {
+            return Err(invalid(lane, "another incarnation"));
+        }
+        if height <= record.active_from {
+            return Err(invalid(lane, "the lane is not active yet"));
+        }
+        if merge.from != record.merged.height.saturating_add(1) || merge.is_empty() {
+            return Err(invalid(
+                lane,
+                "the range does not continue the merged frontier",
+            ));
+        }
+        if merge.len() > u64::from(policy.max_merge_blocks) {
+            return Err(invalid(lane, "the range exceeds max_merge_blocks"));
+        }
+        if !source.wait_for(lane, &merge.incarnation, merge.to, wait) {
+            return Err(MergeError::Pending(format!(
+                "lane {lane} has not committed height {}",
+                merge.to
+            )));
+        }
+        for lane_height in merge.from..=merge.to {
+            let Some(block) = source.block(lane, &merge.incarnation, lane_height) else {
+                return Err(MergeError::Pending(format!(
+                    "lane {lane} block {lane_height} is not in the local store"
+                )));
+            };
+            if lane_height == merge.to
+                && (block.block_hash.0 != merge.tip_hash || block.result.0 != merge.tip_result)
+            {
+                return Err(invalid(lane, "the tip is not the lane's committed block"));
+            }
+            let stale = block
+                .batch
+                .as_ref()
+                .is_none_or(|batch| record.is_stale(batch.anchor_height, height));
+            blocks.push((lane, stale, block));
+        }
+    }
+    Ok(blocks)
+}
+
+/// The per-transaction checks a block applies (`ValidBlock` static validation): a merged
+/// transaction failing one is dropped instead of invalidating the global block.
+struct Admissibility {
+    network: iroha_data_model::NetworkId,
+    max_clock_drift: Duration,
+    limits: iroha_data_model::parameter::TransactionParameters,
+    crypto: std::sync::Arc<iroha_config::parameters::actual::Crypto>,
+}
+
+impl Admissibility {
+    fn of(view: &impl StateReadOnly) -> Self {
+        let parameters = view.world().parameters();
+        Self {
+            network: *view.network_id(),
+            max_clock_drift: parameters.sumeragi().max_clock_drift(),
+            limits: parameters.transaction(),
+            crypto: view.crypto(),
+        }
+    }
+
+    fn admits(&self, tx: &SignedTransaction, block: &SignedBlock) -> bool {
+        let now = block.header().creation_time();
+        tx.admission_intent() == TransactionAdmissionIntent::Ordinary
+            && tx.creation_time() < now
+            && AcceptedTransaction::validate_with_now(
+                tx,
+                &self.network,
+                self.max_clock_drift,
+                self.limits,
+                &self.crypto,
+                now,
+            )
+            .is_ok()
+    }
+}
+
+#[cfg(test)]
+#[path = "merge_tests.rs"]
+mod tests;

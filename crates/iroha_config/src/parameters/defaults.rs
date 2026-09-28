@@ -3956,9 +3956,11 @@ pub mod zk {
         /// Maximum aggregate SCCP proof bytes committed in one block.
         pub const MAX_PROOF_BYTES_PER_BLOCK: NonZeroU64 = nonzero!(32_u64 * 1024 * 1024);
         /// Maximum native-finality continuation headers in one transaction.
-        pub const MAX_NATIVE_HEADERS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_004_u32);
+        ///
+        /// A full BSC advance carries 16 steps of at most 256 headers apiece.
+        pub const MAX_NATIVE_HEADERS_PER_TRANSACTION: NonZeroU32 = nonzero!(4_096_u32);
         /// Maximum native-finality continuation headers committed in one block.
-        pub const MAX_NATIVE_HEADERS_PER_BLOCK: NonZeroU32 = nonzero!(4_016_u32);
+        pub const MAX_NATIVE_HEADERS_PER_BLOCK: NonZeroU32 = nonzero!(16_384_u32);
         /// Maximum Ethereum light-client updates in one transaction.
         pub const MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_TRANSACTION: NonZeroU32 = nonzero!(128_u32);
         /// Maximum Ethereum light-client updates committed in one block.
@@ -3969,24 +3971,26 @@ pub mod zk {
         /// Maximum framed native-finality header bytes committed in one block.
         pub const MAX_NATIVE_HEADER_BYTES_PER_BLOCK: NonZeroU64 = nonzero!(32_u64 * 1024 * 1024);
         /// Maximum secp256k1 recoveries in one transaction.
-        pub const MAX_SECP256K1_RECOVERIES_PER_TRANSACTION: NonZeroU32 = nonzero!(1_005_u32);
+        ///
+        /// A full TRON advance carries 16 segments of at most 128 signed headers apiece.
+        pub const MAX_SECP256K1_RECOVERIES_PER_TRANSACTION: NonZeroU32 = nonzero!(2_048_u32);
         /// Maximum secp256k1 recoveries committed in one block.
-        pub const MAX_SECP256K1_RECOVERIES_PER_BLOCK: NonZeroU32 = nonzero!(4_020_u32);
+        pub const MAX_SECP256K1_RECOVERIES_PER_BLOCK: NonZeroU32 = nonzero!(8_192_u32);
         /// Maximum Ed25519 signature checks in one transaction.
         ///
-        /// A TON V1 native proof carries at most 64 masterchain continuations with at most
-        /// 1,024 signatures apiece.
+        /// A full TON advance carries 16 key-block hops signed by at most 1,024 validators
+        /// apiece; the bound leaves room for evidence and proof anchors.
         pub const MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(65_536_u32);
         /// Maximum Ed25519 signature checks committed in one block.
         pub const MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(262_144_u32);
-        /// Maximum TON Ed25519 validator-key checks in one transaction.
+        /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) in one
+        /// transaction.
         ///
-        /// This is the native verifier's exact V1 upper bound: two 1,024-key anchor rosters plus
-        /// three possible 1,024-key roster passes for each of 64 continuation blocks.
-        pub const MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION: NonZeroU32 =
-            nonzero!(198_656_u32);
-        /// Maximum TON Ed25519 validator-key checks committed in one block.
-        pub const MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(794_624_u32);
+        /// A full BSC advance carries 16 attestations, one per step.
+        pub const MAX_BLS_VOTE_ATTESTATIONS_PER_TRANSACTION: NonZeroU32 = nonzero!(64_u32);
+        /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) committed in
+        /// one block.
+        pub const MAX_BLS_VOTE_ATTESTATIONS_PER_BLOCK: NonZeroU32 = nonzero!(256_u32);
     }
     /// FASTPQ prover defaults.
     pub mod fastpq {

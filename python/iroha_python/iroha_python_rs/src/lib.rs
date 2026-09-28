@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 mod committed_transaction_verification;
+mod confidential_wallet;
 mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
@@ -106,7 +107,7 @@ use iroha_data_model::{
         PrivacyX509ExtendedKeyUsageV1, PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
     },
     proof::{
-        ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
+        ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId,
         proof_box_max_proof_bytes_v1, verifying_key_id_field_is_portable,
     },
     query::{
@@ -866,22 +867,6 @@ fn py_bytes_or_hex(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>>
         .extract::<Vec<u8>>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes or hex string")))
 }
-fn py_bytes_or_base64(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
-    if let Ok(text) = value.extract::<String>() {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err(PyValueError::new_err(format!(
-                "{context} must be non-empty"
-            )));
-        }
-        return BASE64.decode(trimmed.as_bytes()).map_err(|err| {
-            PyValueError::new_err(format!("failed to decode base64 {context}: {err}"))
-        });
-    }
-    value
-        .extract::<Vec<u8>>()
-        .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes or base64 string")))
-}
 fn py_fixed_array<const N: usize>(value: &Bound<'_, PyAny>, context: &str) -> PyResult<[u8; N]> {
     let bytes = py_bytes_or_hex(value, context)?;
     fixed_array::<N>(&bytes, context)
@@ -917,11 +902,6 @@ fn dict_get_alias<'py>(
         }
     }
     Ok(None)
-}
-fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
-    value.trim().parse::<u128>().map_err(|err| {
-        PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
-    })
 }
 #[cfg(test)]
 fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
@@ -4862,152 +4842,14 @@ fn dict_require_alias<'py>(
         .ok_or_else(|| PyValueError::new_err(format!("{context} is required")))
 }
 fn parse_confidential_amount_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u128> {
-    if let Ok(text) = value.extract::<String>() {
-        return parse_u128_text(&text, context);
+    if value.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{context} must be a whole-number amount"
+        )));
     }
     value
         .extract::<u128>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be a whole-number amount")))
-}
-fn parse_confidential_leaf_index_py(
-    value: Option<Bound<'_, PyAny>>,
-    context: &str,
-) -> PyResult<usize> {
-    let Some(value) = value else {
-        return Ok(0);
-    };
-    value
-        .extract::<usize>()
-        .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned integer")))
-}
-fn parse_confidential_transfer_input_py(
-    item: &Bound<'_, PyAny>,
-    index: usize,
-) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialTransferInputV2> {
-    let dict = item
-        .cast::<PyDict>()
-        .map_err(|_| PyTypeError::new_err(format!("inputs[{index}] must be a mapping")))?;
-    let amount = dict_require_alias(dict, &["amount"], &format!("inputs[{index}].amount"))?;
-    let rho = dict_require_alias(
-        dict,
-        &["rho", "rho_hex", "rhoHex"],
-        &format!("inputs[{index}].rho"),
-    )?;
-    if dict_get_alias(dict, &["diversifier_hex", "diversifierHex"])?.is_some() {
-        return Err(PyValueError::new_err(format!(
-            "inputs[{index}].diversifier must use canonical diversifier"
-        )));
-    }
-    let diversifier = dict_require_alias(
-        dict,
-        &["diversifier"],
-        &format!("inputs[{index}].diversifier"),
-    )?;
-    let leaf_index = dict_get_alias(dict, &["leaf_index", "leafIndex"])?;
-    Ok(
-        iroha_core::zk::confidential_v2::ConfidentialTransferInputV2 {
-            amount: parse_confidential_amount_py(&amount, &format!("inputs[{index}].amount"))?,
-            rho: py_fixed_array::<32>(&rho, &format!("inputs[{index}].rho"))?,
-            diversifier: py_fixed_array::<32>(
-                &diversifier,
-                &format!("inputs[{index}].diversifier"),
-            )?,
-            leaf_index: parse_confidential_leaf_index_py(
-                leaf_index,
-                &format!("inputs[{index}].leaf_index"),
-            )?,
-        },
-    )
-}
-fn parse_confidential_transfer_inputs_py(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferInputV2>> {
-    py_sequence_items(value, "inputs")?
-        .iter()
-        .enumerate()
-        .map(|(index, item)| parse_confidential_transfer_input_py(item, index))
-        .collect()
-}
-fn parse_confidential_unshield_inputs_py(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldInputV2>> {
-    parse_confidential_transfer_inputs_py(value).map(|inputs| {
-        inputs
-            .into_iter()
-            .map(
-                |input| iroha_core::zk::confidential_v2::ConfidentialUnshieldInputV2 {
-                    amount: input.amount,
-                    rho: input.rho,
-                    diversifier: input.diversifier,
-                    leaf_index: input.leaf_index,
-                },
-            )
-            .collect()
-    })
-}
-fn parse_confidential_transfer_output_py(
-    item: &Bound<'_, PyAny>,
-    index: usize,
-) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2> {
-    let dict = item
-        .cast::<PyDict>()
-        .map_err(|_| PyTypeError::new_err(format!("outputs[{index}] must be a mapping")))?;
-    let amount = dict_require_alias(dict, &["amount"], &format!("outputs[{index}].amount"))?;
-    let rho = dict_require_alias(
-        dict,
-        &["rho", "rho_hex", "rhoHex"],
-        &format!("outputs[{index}].rho"),
-    )?;
-    let owner_tag = dict_require_alias(
-        dict,
-        &["owner_tag", "owner_tag_hex", "ownerTag", "ownerTagHex"],
-        &format!("outputs[{index}].owner_tag"),
-    )?;
-    Ok(
-        iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2 {
-            amount: parse_confidential_amount_py(&amount, &format!("outputs[{index}].amount"))?,
-            rho: py_fixed_array::<32>(&rho, &format!("outputs[{index}].rho"))?,
-            owner_tag: py_fixed_array::<32>(&owner_tag, &format!("outputs[{index}].owner_tag"))?,
-        },
-    )
-}
-fn parse_confidential_transfer_outputs_py(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2>> {
-    py_sequence_items(value, "outputs")?
-        .iter()
-        .enumerate()
-        .map(|(index, item)| parse_confidential_transfer_output_py(item, index))
-        .collect()
-}
-fn parse_confidential_unshield_output_py(
-    item: &Bound<'_, PyAny>,
-    index: usize,
-) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3> {
-    let dict = item
-        .cast::<PyDict>()
-        .map_err(|_| PyTypeError::new_err(format!("outputs[{index}] must be a mapping")))?;
-    let amount = dict_require_alias(dict, &["amount"], &format!("outputs[{index}].amount"))?;
-    let rho = dict_require_alias(
-        dict,
-        &["rho", "rho_hex", "rhoHex"],
-        &format!("outputs[{index}].rho"),
-    )?;
-    Ok(
-        iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3 {
-            amount: parse_confidential_amount_py(&amount, &format!("outputs[{index}].amount"))?,
-            rho: py_fixed_array::<32>(&rho, &format!("outputs[{index}].rho"))?,
-        },
-    )
-}
-fn parse_confidential_unshield_outputs_py(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3>> {
-    py_sequence_items(value, "outputs")?
-        .iter()
-        .enumerate()
-        .map(|(index, item)| parse_confidential_unshield_output_py(item, index))
-        .collect()
 }
 fn parse_confidential_merkle_path_py(
     item: &Bound<'_, PyAny>,
@@ -5051,15 +4893,6 @@ fn parse_confidential_merkle_path_py(
         root: py_fixed_array::<32>(&root, &format!("input_paths[{index}].root"))?,
     })
 }
-fn parse_confidential_merkle_paths_py(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialMerklePathV2>> {
-    py_sequence_items(value, "input_paths")?
-        .iter()
-        .enumerate()
-        .map(|(index, item)| parse_confidential_merkle_path_py(item, index))
-        .collect()
-}
 fn confidential_bytes_list_py<const N: usize>(
     py: Python<'_>,
     items: &[[u8; N]],
@@ -5091,162 +4924,6 @@ fn confidential_merkle_path_v2_py_dict(
     )?;
     result.set_item("root", PyBytes::new(py, &path.root))?;
     Ok(result.unbind())
-}
-fn confidential_transfer_proof_v2_py_dict(
-    py: Python<'_>,
-    proof: iroha_core::zk::confidential_v2::ConfidentialTransferProofV2,
-) -> PyResult<Py<PyDict>> {
-    let result = PyDict::new(py);
-    result.set_item(
-        "nullifiers",
-        confidential_bytes_list_py(py, &proof.nullifiers)?,
-    )?;
-    result.set_item(
-        "output_commitments",
-        confidential_bytes_list_py(py, &proof.output_commitments)?,
-    )?;
-    result.set_item("root", PyBytes::new(py, &proof.root))?;
-    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
-    Ok(result.unbind())
-}
-fn confidential_unshield_proof_v3_py_dict(
-    py: Python<'_>,
-    proof: iroha_core::zk::confidential_v2::ConfidentialUnshieldProofV3,
-) -> PyResult<Py<PyDict>> {
-    let result = PyDict::new(py);
-    result.set_item(
-        "nullifiers",
-        confidential_bytes_list_py(py, &proof.nullifiers)?,
-    )?;
-    result.set_item(
-        "output_commitments",
-        confidential_bytes_list_py(py, &proof.output_commitments)?,
-    )?;
-    result.set_item("root", PyBytes::new(py, &proof.root))?;
-    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
-    Ok(result.unbind())
-}
-#[pyfunction]
-#[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
-    network_id,
-    asset_definition_id,
-    spend_key,
-    tree_commitments,
-    inputs,
-    outputs,
-    root_hint,
-    vk_backend,
-    vk_circuit_id,
-    vk_bytes
-))]
-#[allow(clippy::too_many_arguments)]
-fn build_confidential_transfer_proof_v2_py(
-    py: Python<'_>,
-    network_id: &PyNetworkId,
-    asset_definition_id: &str,
-    spend_key: &Bound<'_, PyAny>,
-    tree_commitments: &Bound<'_, PyAny>,
-    inputs: &Bound<'_, PyAny>,
-    outputs: &Bound<'_, PyAny>,
-    root_hint: &Bound<'_, PyAny>,
-    vk_backend: &str,
-    vk_circuit_id: &str,
-    vk_bytes: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyDict>> {
-    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        PyValueError::new_err(format!(
-            "invalid asset definition id `{asset_definition_id}`: {err}"
-        ))
-    })?;
-    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
-    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
-    let inputs = parse_confidential_transfer_inputs_py(inputs)?;
-    let outputs = parse_confidential_transfer_outputs_py(outputs)?;
-    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
-    let vk_backend = vk_backend.trim();
-    if vk_backend.is_empty() {
-        return Err(PyValueError::new_err("vk_backend must be non-empty"));
-    }
-    let vk_circuit_id = vk_circuit_id.trim();
-    if vk_circuit_id.is_empty() {
-        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
-    }
-    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
-    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
-    let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
-        network_id.as_inner(),
-        &asset_definition_id.to_string(),
-        &spend_key,
-        &tree_commitments,
-        &inputs,
-        &outputs,
-        root_hint,
-        vk_circuit_id,
-        &vk_box,
-    )
-    .map_err(PyValueError::new_err)?;
-    confidential_transfer_proof_v2_py_dict(py, proof)
-}
-#[pyfunction]
-#[pyo3(name = "build_confidential_transfer_proof_v2_with_paths", signature = (
-    network_id,
-    asset_definition_id,
-    spend_key,
-    input_paths,
-    inputs,
-    outputs,
-    root_hint,
-    vk_backend,
-    vk_circuit_id,
-    vk_bytes
-))]
-#[allow(clippy::too_many_arguments)]
-fn build_confidential_transfer_proof_v2_with_paths_py(
-    py: Python<'_>,
-    network_id: &PyNetworkId,
-    asset_definition_id: &str,
-    spend_key: &Bound<'_, PyAny>,
-    input_paths: &Bound<'_, PyAny>,
-    inputs: &Bound<'_, PyAny>,
-    outputs: &Bound<'_, PyAny>,
-    root_hint: &Bound<'_, PyAny>,
-    vk_backend: &str,
-    vk_circuit_id: &str,
-    vk_bytes: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyDict>> {
-    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        PyValueError::new_err(format!(
-            "invalid asset definition id `{asset_definition_id}`: {err}"
-        ))
-    })?;
-    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
-    let input_paths = parse_confidential_merkle_paths_py(input_paths)?;
-    let inputs = parse_confidential_transfer_inputs_py(inputs)?;
-    let outputs = parse_confidential_transfer_outputs_py(outputs)?;
-    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
-    let vk_backend = vk_backend.trim();
-    if vk_backend.is_empty() {
-        return Err(PyValueError::new_err("vk_backend must be non-empty"));
-    }
-    let vk_circuit_id = vk_circuit_id.trim();
-    if vk_circuit_id.is_empty() {
-        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
-    }
-    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
-    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
-    let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2_with_paths(
-        network_id.as_inner(),
-        &asset_definition_id.to_string(),
-        &spend_key,
-        &input_paths,
-        &inputs,
-        &outputs,
-        root_hint,
-        vk_circuit_id,
-        &vk_box,
-    )
-    .map_err(PyValueError::new_err)?;
-    confidential_transfer_proof_v2_py_dict(py, proof)
 }
 #[pyfunction]
 #[pyo3(name = "compute_confidential_root_v2", signature = (tree_commitments))]
@@ -5290,12 +4967,21 @@ fn derive_confidential_next_zero_path_v2_py(
     confidential_merkle_path_v2_py_dict(py, leaf_index, [0u8; 32], path)
 }
 #[pyfunction]
+#[pyo3(name = "default_confidential_diversifier_v2")]
+fn default_confidential_diversifier_v2_py(py: Python<'_>) -> Py<PyBytes> {
+    PyBytes::new(
+        py,
+        &iroha_core::zk::confidential_v2::default_confidential_diversifier_v2(),
+    )
+    .unbind()
+}
+#[pyfunction]
 #[pyo3(name = "derive_confidential_diversifier_v2", signature = (seed))]
 fn derive_confidential_diversifier_v2_py(
     py: Python<'_>,
     seed: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyBytes>> {
-    let seed = py_bytes_or_hex(seed, "seed")?;
+    let seed = confidential_wallet::secret_bytes(seed, 1024 * 1024)?;
     if seed.is_empty() {
         return Err(PyValueError::new_err(
             "confidential diversifier seed must not be empty",
@@ -5311,15 +4997,15 @@ fn derive_confidential_owner_tag_v2_py(
     spend_key: &Bound<'_, PyAny>,
     diversifier: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyBytes>> {
-    let spend_key = py_bytes_or_hex(spend_key, "spend_key")?;
+    let spend_key = confidential_wallet::secret_bytes(spend_key, 1024 * 1024)?;
     if spend_key.is_empty() {
         return Err(PyValueError::new_err("spend_key must not be empty"));
     }
-    let diversifier = py_fixed_array::<32>(diversifier, "diversifier")?;
+    let diversifier = confidential_wallet::secret_word(diversifier)?;
     let owner_tag =
         iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
             &spend_key,
-            diversifier,
+            *diversifier,
         )
         .map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &owner_tag).unbind())
@@ -5344,147 +5030,17 @@ fn derive_confidential_note_v2_py(
             "asset_definition_id must be non-empty",
         ));
     }
-    let amount = parse_confidential_amount_py(amount, "amount")?;
-    let rho = py_fixed_array::<32>(rho, "rho")?;
-    let owner_tag = py_fixed_array::<32>(owner_tag, "owner_tag")?;
+    let amount = Zeroizing::new(parse_confidential_amount_py(amount, "amount")?);
+    let rho = confidential_wallet::secret_word(rho)?;
+    let owner_tag = confidential_wallet::secret_word(owner_tag)?;
     let note_commitment = iroha_core::zk::confidential_v2::derive_confidential_note_v2(
         asset_definition_id,
-        amount,
-        rho,
-        owner_tag,
+        *amount,
+        *rho,
+        *owner_tag,
     )
     .map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &note_commitment).unbind())
-}
-#[pyfunction]
-#[pyo3(name = "build_confidential_unshield_proof_v3", signature = (
-    network_id,
-    asset_definition_id,
-    spend_key,
-    tree_commitments,
-    inputs,
-    outputs,
-    public_amount,
-    root_hint,
-    vk_backend,
-    vk_circuit_id,
-    vk_bytes
-))]
-#[allow(clippy::too_many_arguments)]
-fn build_confidential_unshield_proof_v3_py(
-    py: Python<'_>,
-    network_id: &PyNetworkId,
-    asset_definition_id: &str,
-    spend_key: &Bound<'_, PyAny>,
-    tree_commitments: &Bound<'_, PyAny>,
-    inputs: &Bound<'_, PyAny>,
-    outputs: &Bound<'_, PyAny>,
-    public_amount: &Bound<'_, PyAny>,
-    root_hint: &Bound<'_, PyAny>,
-    vk_backend: &str,
-    vk_circuit_id: &str,
-    vk_bytes: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyDict>> {
-    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        PyValueError::new_err(format!(
-            "invalid asset definition id `{asset_definition_id}`: {err}"
-        ))
-    })?;
-    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
-    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
-    let inputs = parse_confidential_unshield_inputs_py(inputs)?;
-    let outputs = parse_confidential_unshield_outputs_py(outputs)?;
-    let public_amount = parse_confidential_amount_py(public_amount, "public_amount")?;
-    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
-    let vk_backend = vk_backend.trim();
-    if vk_backend.is_empty() {
-        return Err(PyValueError::new_err("vk_backend must be non-empty"));
-    }
-    let vk_circuit_id = vk_circuit_id.trim();
-    if vk_circuit_id.is_empty() {
-        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
-    }
-    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
-    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
-    let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3(
-        network_id.as_inner(),
-        &asset_definition_id.to_string(),
-        &spend_key,
-        &tree_commitments,
-        &inputs,
-        &outputs,
-        public_amount,
-        root_hint,
-        vk_circuit_id,
-        &vk_box,
-    )
-    .map_err(PyValueError::new_err)?;
-    confidential_unshield_proof_v3_py_dict(py, proof)
-}
-#[pyfunction]
-#[pyo3(name = "build_confidential_unshield_proof_v3_with_paths", signature = (
-    network_id,
-    asset_definition_id,
-    spend_key,
-    input_paths,
-    inputs,
-    outputs,
-    public_amount,
-    root_hint,
-    vk_backend,
-    vk_circuit_id,
-    vk_bytes
-))]
-#[allow(clippy::too_many_arguments)]
-fn build_confidential_unshield_proof_v3_with_paths_py(
-    py: Python<'_>,
-    network_id: &PyNetworkId,
-    asset_definition_id: &str,
-    spend_key: &Bound<'_, PyAny>,
-    input_paths: &Bound<'_, PyAny>,
-    inputs: &Bound<'_, PyAny>,
-    outputs: &Bound<'_, PyAny>,
-    public_amount: &Bound<'_, PyAny>,
-    root_hint: &Bound<'_, PyAny>,
-    vk_backend: &str,
-    vk_circuit_id: &str,
-    vk_bytes: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyDict>> {
-    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        PyValueError::new_err(format!(
-            "invalid asset definition id `{asset_definition_id}`: {err}"
-        ))
-    })?;
-    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
-    let input_paths = parse_confidential_merkle_paths_py(input_paths)?;
-    let inputs = parse_confidential_unshield_inputs_py(inputs)?;
-    let outputs = parse_confidential_unshield_outputs_py(outputs)?;
-    let public_amount = parse_confidential_amount_py(public_amount, "public_amount")?;
-    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
-    let vk_backend = vk_backend.trim();
-    if vk_backend.is_empty() {
-        return Err(PyValueError::new_err("vk_backend must be non-empty"));
-    }
-    let vk_circuit_id = vk_circuit_id.trim();
-    if vk_circuit_id.is_empty() {
-        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
-    }
-    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
-    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
-    let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3_with_paths(
-        network_id.as_inner(),
-        &asset_definition_id.to_string(),
-        &spend_key,
-        &input_paths,
-        &inputs,
-        &outputs,
-        public_amount,
-        root_hint,
-        vk_circuit_id,
-        &vk_box,
-    )
-    .map_err(PyValueError::new_err)?;
-    confidential_unshield_proof_v3_py_dict(py, proof)
 }
 #[pyfunction]
 #[pyo3(name = "seal_connect_payload")]
@@ -15396,6 +14952,7 @@ fn canonical_genesis_header_hash_v1_py(
 }
 #[pymodule]
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    confidential_wallet::register(module)?;
     identity_codec_v1::register(module)?;
     module.add(
         "SorafsMultiFetchError",
@@ -15661,17 +15218,13 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         confidential_unshield_v3_verifying_key_registration_payload_v1_py,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(
-        build_confidential_transfer_proof_v2_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        build_confidential_transfer_proof_v2_with_paths_py,
-        module
-    )?)?;
     module.add_function(wrap_pyfunction!(compute_confidential_root_v2_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         derive_confidential_next_zero_path_v2_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        default_confidential_diversifier_v2_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
@@ -15683,14 +15236,6 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(derive_confidential_note_v2_py, module)?)?;
-    module.add_function(wrap_pyfunction!(
-        build_confidential_unshield_proof_v3_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        build_confidential_unshield_proof_v3_with_paths_py,
-        module
-    )?)?;
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         privacy_capability_manifest::privacy_exact12_capability_manifest_v1_py,

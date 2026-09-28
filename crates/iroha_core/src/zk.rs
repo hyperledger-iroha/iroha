@@ -47,7 +47,7 @@ use std::{
 /// Wallet-facing confidential proving with canonical relation and key selection.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential;
-/// Confidential transfer v2 helpers, circuits, and proof builders.
+/// Shared confidential note, tree, and verifier-key primitives.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential_v2;
 mod verification;

@@ -89,7 +89,9 @@ fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocati
     assert!(plan.payload_bytes < 2 * 1024 * 1024 * 1024);
     assert!(plan.payload_bytes > plan.quotient.payload_bytes);
     assert!(plan.work_units > plan.quotient.work_units);
-    assert!(plan.hash_calls > 4 * (2 * LDE_ROWS - 1));
+    assert!(plan.hash_calls > 2 * (2 * LDE_ROWS - 1));
+    assert!(plan.hash_calls < 3 * (2 * LDE_ROWS - 1));
+    assert!(plan.payload_bytes > 1_800_000_000);
     let exact = ConstructionLimits {
         digest_execution: DigestExecutionV1::Cpu,
         max_payload_bytes: plan.payload_bytes,
@@ -193,7 +195,7 @@ fn complete_native_masked_deep_producer_roundtrip_and_statement_rejection() {
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 #[test]
-#[ignore = "explicit complete 8M-row proof with required Metal leaves and CPU parents; measure first"]
+#[ignore = "explicit complete 8M-row proof with required Metal leaves/lower parents; measure separately"]
 fn complete_required_metal_masked_deep_producer_roundtrip_and_statement_rejection() {
     let _lane = crate::backend::acquire_gpu_lane();
     complete_masked_producer(DigestExecutionV1::Device(
@@ -281,6 +283,16 @@ fn complete_masked_producer(execution: DigestExecutionV1) {
         iroha_crypto::Hash::new(&proof),
     );
     assert!(proof.len() <= deep_proof::MAX_FRAME_BYTES);
+    assert_eq!(
+        proof.len(),
+        482_978,
+        "pre-cache complete seeded proof byte length"
+    );
+    assert_eq!(
+        iroha_crypto::Hash::new(&proof).to_string(),
+        "7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507",
+        "pre-cache complete seeded proof bytes"
+    );
     assert_eq!(
         deep_engine::verify(&air, &proof, deep_proof::PROOF_BYTE_TARGET)
             .unwrap()

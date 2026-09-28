@@ -14,3 +14,7 @@
 -keep,allowoptimization class com.github.luben.zstd.ZstdOutputStreamNoFinalizer { native <methods>; }
 -keep,allowoptimization class com.github.luben.zstd.util.Native { native <methods>; }
 -dontwarn com.github.luben.zstd.**
+
+# Local confidential proving JNI names and the native-thrown stable error constructor.
+-keep,allowoptimization class org.hyperledger.iroha.sdk.privacy.ConfidentialProverNative { native <methods>; }
+-keep,allowoptimization class org.hyperledger.iroha.sdk.privacy.ConfidentialProverException { public <init>(int); }

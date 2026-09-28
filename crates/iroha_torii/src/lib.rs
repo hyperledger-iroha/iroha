@@ -78,6 +78,8 @@ pub mod privacy_issuance_api;
 pub mod profile_stats;
 #[cfg(feature = "push")]
 mod push;
+/// SCCP v1 public read API.
+mod sccp;
 #[cfg(any(test, feature = "bench"))]
 #[doc(hidden)]
 pub mod query_load_profiles;
@@ -1183,7 +1185,8 @@ pub use gov::{
     ReferendumGetResponse, TallyGetResponse, handle_gov_capabilities, handle_gov_citizen_draft,
     handle_gov_citizen_status, handle_gov_contract_get, handle_gov_get_locks,
     handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
-    handle_gov_parliament_attempt_draft, handle_gov_parliament_attempt_read,
+    handle_gov_parliament_attempt_draft, handle_gov_parliament_attempt_plan,
+    handle_gov_parliament_attempt_read,
     handle_gov_parliament_tle_release_context_read, handle_gov_parliament_transition_draft,
     handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
 };
@@ -7735,6 +7738,23 @@ async fn handler_gov_parliament_attempt_read(
     )
     .await?;
     crate::gov::handle_gov_parliament_attempt_read(app.state.clone(), governance_attempt_id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_attempt_plan(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(governance_attempt_id): AxPath<String>,
+) -> Result<JsonBody<iroha_torii_shared::parliament_api::ParliamentAttemptPlanResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/attempts/{governance_attempt_id}/plan",
+    )
+    .await?;
+    crate::gov::handle_gov_parliament_attempt_plan(app.state.clone(), governance_attempt_id).await
 }
 
 #[cfg(feature = "app_api")]
@@ -31454,6 +31474,39 @@ async fn handler_sumeragi_status(
         .map(axum::response::IntoResponse::into_response)
 }
 #[cfg(feature = "telemetry")]
+async fn handler_sumeragi_lanes(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    validate_api_token(app.as_ref(), &headers)?;
+    let key = rate_limit_key(
+        &headers,
+        Some(remote.ip()),
+        "v1/sumeragi/lanes",
+        app.authenticated_api_token_principal(&headers),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    if !app.telemetry.allows_metrics() {
+        return Ok(telemetry_unavailable_response(
+            "/v1/sumeragi/lanes",
+            &app.telemetry,
+        ));
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    let lanes = app
+        .sumeragi
+        .as_ref()
+        .map(iroha_core::sumeragi::node::NodeHandle::lane_statuses);
+    routing::handle_v1_sumeragi_lanes(accept, lanes)
+        .await
+        .map(axum::response::IntoResponse::into_response)
+}
+#[cfg(feature = "telemetry")]
 async fn handler_sumeragi_diagnostics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -42825,6 +42878,7 @@ impl Torii {
                 STATUS => operator_get(handler_sumeragi_status, app_state);
                 DIAGNOSTICS => operator_get(handler_sumeragi_diagnostics, app_state);
                 STATUS_SSE => operator_get(handler_sumeragi_status_sse, app_state);
+                LANES => operator_get(handler_sumeragi_lanes, app_state);
                 BLS_KEYS => operator_get(handler_sumeragi_bls_keys, app_state);
                 CONSENSUS_KEYS => operator_get(handler_sumeragi_consensus_keys, app_state);
                 PARAMETERS => operator_get(handler_sumeragi_params, app_state);
@@ -43040,6 +43094,25 @@ impl Torii {
                     app_state,
                     iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES,
                 ),
+        );
+    }
+    /// SCCP v1 public read routes (`specs/sccp.md` §6).
+    #[allow(clippy::unused_self)]
+    fn add_sccp_routes(&self, builder: &mut RouterBuilder) {
+        mount_catalog_route_rows!(
+            builder, sccp;
+            CAPABILITIES => public_get(sccp::handler_capabilities);
+            GOVERNANCE => public_get(sccp::handler_governance);
+            GOVERNANCE_PROPOSALS => public_get(sccp::handler_governance_proposals);
+            LIGHT_CLIENTS => public_get(sccp::handler_light_clients);
+            LIGHT_CLIENT_SETS => public_get(sccp::handler_light_client_sets);
+            REGISTRY => public_get(sccp::handler_registry);
+            MESSAGE => public_get(sccp::handler_message);
+            MESSAGE_PROOF => public_get(sccp::handler_message_proof);
+            CONTROL_PROOF => public_get(sccp::handler_control_proof);
+            ROSTER_CURRENT => public_get(sccp::handler_roster_current);
+            ROSTER_ROTATIONS => public_get(sccp::handler_rotations);
+            ROSTER => public_get(sccp::handler_roster);
         );
     }
     /// Musubi Kotodama package-registry routes.
@@ -44122,6 +44195,7 @@ impl Torii {
                 GOV_CITIZEN_DRAFT => canonical_account_post(handler_gov_citizen_draft, app_state, runtime_governance_body_limit);
                 GOV_PARLIAMENT_ATTEMPT_DRAFT => canonical_account_post(handler_gov_parliament_attempt_draft, app_state, runtime_governance_body_limit);
                 GOV_PARLIAMENT_ATTEMPT_READ => canonical_account_get(handler_gov_parliament_attempt_read, app_state, 0);
+                GOV_PARLIAMENT_ATTEMPT_PLAN => canonical_account_get(handler_gov_parliament_attempt_plan, app_state, 0);
                 GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ => canonical_account_get(handler_gov_parliament_timed_ovn_casting_context_read, app_state, 0);
                 GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF => canonical_account_post(handler_gov_parliament_timed_ovn_casting_proof, app_state, runtime_governance_body_limit);
                 GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ => canonical_account_get(handler_gov_parliament_tle_release_context_read, app_state, 0);
@@ -47174,6 +47248,7 @@ impl Torii {
         // Transaction, Contracts, VK
         self.add_transaction_routes(&mut builder);
         self.add_da_routes(&mut builder);
+        self.add_sccp_routes(&mut builder);
         self.add_contracts_and_vk_routes(&mut builder);
         // Signed Norito query and proof endpoints
         self.add_query_routes(&mut builder);

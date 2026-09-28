@@ -209,10 +209,94 @@ pub fn prove_confidential_redemption(
     }))
 }
 
+/// Return the canonical default owner diversifier used by private redemption change.
+#[napi]
+pub fn default_confidential_diversifier() -> Buffer {
+    Buffer::from(confidential_v2::default_confidential_diversifier_v2().to_vec())
+}
+
+/// Owned public commitment history computed off the JavaScript thread.
+pub struct ConfidentialRootTask {
+    commitments: Vec<[u8; 32]>,
+}
+
+impl napi::Task for ConfidentialRootTask {
+    type Output = [u8; 32];
+    type JsValue = Buffer;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        confidential_v2::compute_confidential_root_v3(&self.commitments).map_err(norito_to_napi)
+    }
+
+    fn resolve(&mut self, _env: napi::Env, root: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(Buffer::from(root.to_vec()))
+    }
+}
+
+/// Compute the fixed-depth local history root without authenticating ledger state.
+#[napi]
+pub fn compute_confidential_root(
+    commitments: Vec<String>,
+) -> napi::Result<AsyncTask<ConfidentialRootTask>> {
+    if commitments.len() > (1 << confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential tree exceeds its capacity",
+        ));
+    }
+    Ok(AsyncTask::new(ConfidentialRootTask {
+        commitments: parse_confidential_tree_commitments(commitments)?,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use napi::Task;
+
+    #[test]
+    fn default_diversifier_matches_core_and_change_owner_derivation() {
+        let value = default_confidential_diversifier();
+        let expected = confidential_v2::default_confidential_diversifier_v2();
+        assert_eq!(value.as_ref(), expected.as_slice());
+        let explicit = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+            &[91; 32],
+            value.as_ref().try_into().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            explicit,
+            confidential_v2::derive_confidential_owner_tag_v2(&[91; 32]).unwrap()
+        );
+    }
+
+    #[test]
+    fn local_root_matches_core_paths_and_rejects_capacity_before_parsing() {
+        let error = compute_confidential_root(vec![String::new(); 65_537])
+            .err()
+            .unwrap();
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert_eq!(error.reason, "confidential tree exceeds its capacity");
+        assert!(compute_confidential_root(vec!["FF".repeat(32)]).is_err());
+        for commitments in [vec![], vec![[1; 32]], vec![[1; 32], [2; 32], [3; 32]]] {
+            let mut task = ConfidentialRootTask {
+                commitments: commitments.clone(),
+            };
+            let root = task.compute().unwrap();
+            assert_eq!(
+                root,
+                confidential_v2::compute_confidential_root_v3(&commitments).unwrap()
+            );
+            for index in 0..commitments.len() {
+                assert_eq!(
+                    root,
+                    confidential_v2::compute_confidential_merkle_path_v2(&commitments, index)
+                        .unwrap()
+                        .root
+                );
+            }
+        }
+    }
 
     #[test]
     fn owned_worker_produces_a_self_verified_full_redemption() {

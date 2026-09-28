@@ -5960,7 +5960,11 @@ pub struct NetworkBuilder {
     #[cfg(unix)]
     disposable_mint_finality_custody: bool,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
+    topology_genesis_isi: Vec<Arc<TopologyGenesisIsi>>,
 }
+/// Post-topology genesis instructions derived from the signed voting topology (peer ids and
+/// proofs of possession, in topology order).
+type TopologyGenesisIsi = dyn Fn(&[GenesisTopologyEntry]) -> Vec<InstructionBox> + Send + Sync;
 type InitialConsensusMessageControlFactory =
     dyn Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync;
 #[derive(Clone)]
@@ -7112,6 +7116,7 @@ impl NetworkBuilder {
             #[cfg(unix)]
             disposable_mint_finality_custody: false,
             initial_consensus_message_control: None,
+            topology_genesis_isi: Vec::new(),
         };
         let mut default_layer = Table::new();
         let mut writer = TomlWriter::new(&mut default_layer);
@@ -7673,6 +7678,16 @@ impl NetworkBuilder {
         }
         self
     }
+    /// Append a post-topology genesis transaction whose instructions `build` derives from the
+    /// signed voting topology (each peer's id and proof of possession, in topology order), e.g.
+    /// a lane policy whose committee is the validators.
+    pub fn with_genesis_post_topology_isi_from<F>(mut self, build: F) -> Self
+    where
+        F: Fn(&[GenesisTopologyEntry]) -> Vec<InstructionBox> + Send + Sync + 'static,
+    {
+        self.topology_genesis_isi.push(Arc::new(build));
+        self
+    }
     /// Start a new empty transaction in the genesis block.
     pub fn next_genesis_transaction(mut self) -> Self {
         self.genesis_isi.push(Vec::new());
@@ -7819,6 +7834,7 @@ impl NetworkBuilder {
             #[cfg(unix)]
             disposable_mint_finality_custody,
             initial_consensus_message_control,
+            topology_genesis_isi,
         } = self;
         #[cfg(unix)]
         if disposable_mint_finality_custody {
@@ -8022,6 +8038,16 @@ impl NetworkBuilder {
             "every signed observer must provide a BLS PoP"
         );
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
+        for build in &topology_genesis_isi {
+            assert!(
+                custom_genesis.is_none(),
+                "custom genesis owns its topology-derived instructions"
+            );
+            let isi = build(&topology_entries);
+            if !isi.is_empty() {
+                genesis_post_topology_isi.push(isi);
+            }
+        }
         if genesis_committee_keys_for_global_peers {
             assert!(
                 custom_genesis.is_none(),

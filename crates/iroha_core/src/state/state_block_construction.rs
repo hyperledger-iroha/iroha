@@ -301,11 +301,14 @@ impl State {
                 privacy_budget_in_block: privacy_budget_in_block
                     .take()
                     .expect("prepared State input"),
+                sccp_verifier_work_in_block:
+                    iroha_sccp::light_client::SccpVerifierWorkV1::default(),
                 implicit_account_creations_in_block: 0,
                 gas_limit_per_block: gas_limit_per_block.take().expect("prepared State input"),
                 frozen_execution_output_capacity: None,
                 execution_output_plan: None,
                 sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep::Off,
+                sumeragi_lanes_step: crate::sumeragi::lanes::step::LaneStep::Off,
                 #[cfg(feature = "telemetry")]
                 telemetry: &self.telemetry,
                 state_write_lock: &self.state_write_lock,

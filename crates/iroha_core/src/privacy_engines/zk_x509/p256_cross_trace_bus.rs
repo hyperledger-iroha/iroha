@@ -661,7 +661,6 @@ pub(crate) fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
 /// Construction makes one compact logical-row pass to validate local equalities and compute the
 /// terminal. Consumers then pull the exact padded row sequence in a second pass. No million-row
 /// auxiliary or fixed `Vec` is retained.
-#[derive(Debug)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceSinkStreamV1<'a> {
     binding: &'a P256ExternalBindingTraceV1,
@@ -671,6 +670,23 @@ pub(crate) struct P256CrossTraceSinkStreamV1<'a> {
     running: [F; P256_CROSS_TRACE_LANES_V1],
     next_row: usize,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for P256CrossTraceSinkStreamV1<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("P256CrossTraceSinkStreamV1 { <private stream redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256CrossTraceSinkStreamV1<'_> {
+    fn drop(&mut self) {
+        super::private_table::zeroize_fields_v1(&mut self.running);
+        super::private_table::zeroize_fields_v1(&mut self.terminal);
+        for lane in &mut self.challenges.lanes {
+            super::private_table::zeroize_fields_v1(&mut lane.terms);
+        }
+    }
+}
+
 /// Prepare the binder sink stream from the binder's committed base copies.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_p256_cross_trace_sink_v1(
@@ -922,6 +938,23 @@ pub(crate) struct P256CrossTraceWriterSourceStreamV1<'a> {
     running: [F; P256_CROSS_TRACE_LANES_V1],
     next_row: usize,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for P256CrossTraceWriterSourceStreamV1<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("P256CrossTraceWriterSourceStreamV1 { <private stream redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256CrossTraceWriterSourceStreamV1<'_> {
+    fn drop(&mut self) {
+        super::private_table::zeroize_fields_v1(&mut self.running);
+        super::private_table::zeroize_fields_v1(&mut self.terminal);
+        for lane in &mut self.challenges.lanes {
+            super::private_table::zeroize_fields_v1(&mut lane.terms);
+        }
+    }
+}
+
 impl P256CrossTraceWriterSourceFixedV1 {
     /// Allocated compact verifier schedule payload.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1367,6 +1400,49 @@ pub(crate) const fn p256_cross_trace_events_v1(role: P256EcdsaRoleV1) -> usize {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_cross_stream_erasure_clears_live_products_and_redacts_debug() {
+        use super::super::private_table::inspection::observe_v1;
+        let fixture = wallet_sink_fixture_v1();
+        let mut sink =
+            build_zk_x509_p256_cross_trace_sink_v1(&fixture.binding, challenges_v1()).unwrap();
+        sink.next_row_v1().unwrap().unwrap();
+        let endpoint = P256ValueBusBaseEndpointTraceV1 {
+            endpoint: super::super::p256_value_bus::P256ValueBusEndpointV1::Execution,
+            rows: Vec::new(),
+        };
+        let writer = P256CrossTraceWriterSourceStreamV1 {
+            value_bus: &endpoint,
+            fixed: Arc::new(P256CrossTraceWriterSourceFixedV1 {
+                multiplicities: Vec::new(),
+            }),
+            challenges: challenges_v1(),
+            terminal: [F(17); P256_CROSS_TRACE_LANES_V1],
+            running: [F(19); P256_CROSS_TRACE_LANES_V1],
+            next_row: 7,
+        };
+        assert_eq!(
+            format!("{sink:?}"),
+            "P256CrossTraceSinkStreamV1 { <private stream redacted> }"
+        );
+        assert_eq!(
+            format!("{writer:?}"),
+            "P256CrossTraceWriterSourceStreamV1 { <private stream redacted> }"
+        );
+        let (_, observed) = observe_v1(|| {
+            drop(sink);
+            drop(writer);
+        });
+        assert!(
+            observed
+                .iter()
+                .map(|item| item.nonzero_before)
+                .sum::<usize>()
+                >= 4 * P256_CROSS_TRACE_LANES_V1
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+
     use super::*;
     use crate::privacy_engines::zk_x509::{
         p256_air::ZkX509P256ModulusV1,

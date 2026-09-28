@@ -161,6 +161,60 @@ fn sum(values: &[usize]) -> Result<usize, ZkX509StarkErrorV1> {
     })
 }
 
+/// Conservative simultaneous owners for one registration, excluding replay/cache.
+fn registration_quotient_payload_v1(
+    layout: &AggregateProofLayoutV1,
+    registration: RegisteredSegmentLayoutV1,
+    degree_cap: usize,
+) -> Result<usize, ZkX509StarkErrorV1> {
+    let segment = registration.segment;
+    let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2)?;
+    let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
+        segment.trace_log2,
+        plan.quotient_coset_log2,
+        0,
+    )?;
+    let field = core::mem::size_of::<F>();
+    let extension = core::mem::size_of::<E>();
+    // Trace stripe, fixed coefficients, quotient plus IFFT copy, and both
+    // accumulated/incoming chunks stay charged even where lifetimes separate.
+    sum(&[
+        product(&[
+            sum(&[segment.base_width, segment.aux_width, segment.fixed_width])?,
+            stripe.rows,
+            field,
+        ])?,
+        product(&[segment.fixed_width, segment.trace_size(), field])?,
+        product(&[2, SECURITY_LANES, plan.quotient_coset_rows, extension])?,
+        product(&[
+            2,
+            SECURITY_LANES,
+            COMPOSITION_DEGREE_CHUNKS,
+            degree_cap,
+            extension,
+        ])?,
+    ])
+}
+
+/// Changing to CPU does not discharge allocations still owned by device work.
+fn check_device_completion_v1(uncertain: bool) -> Result<(), ZkX509StarkErrorV1> {
+    if uncertain {
+        Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn uncertain_device_completion_rejects_new_cpu_or_gpu_proof_admission() {
+    assert!(matches!(
+        check_device_completion_v1(true),
+        Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
+    ));
+    assert!(check_device_completion_v1(false).is_ok());
+}
+
 impl MainProverBufferPlanV1 {
     /// Inspect private source extents before constructing any corresponding
     /// matrix; forecast arithmetic must fit the admitted source allowances.
@@ -179,8 +233,8 @@ impl MainProverBufferPlanV1 {
             ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(shape)
                 .map_err(map_main_sha_source_error_v1)?,
         ])?;
-        // Sources replay serially. The eight-way parallel stage starts only
-        // after their native columns have become coefficient owners.
+        // Sources construct serially. The eight-way parallel interpolation
+        // starts only after all native columns have clearing owners.
         let scratch = small_scratch
             .max(P256MainBaseSourceV1::replay_scratch_forecast_v1()?)
             .max(
@@ -201,6 +255,9 @@ impl MainProverBufferPlanV1 {
         &self,
         assembly_payload: usize,
     ) -> Result<usize, ZkX509StarkErrorV1> {
+        check_device_completion_v1(
+            fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
+        )?;
         self.check_source_payloads_v1(
             &[assembly_payload, MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1],
             MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1,
@@ -245,6 +302,43 @@ impl MainProverBufferPlanV1 {
         sum(&[self.maximum_live_buffers, required])
     }
 
+    /// Reuse only already admitted arithmetic headroom. Source/scratch/runtime
+    /// allowances and the global maximum remain reserved at their original size.
+    pub(super) fn quotient_cache_plan_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<main_quotient_cache::MainQuotientCachePlanV1, ZkX509StarkErrorV1> {
+        canonical_main_registration_index_v1(layout, registration)?;
+        let degree_cap = layout
+            .as_shared()?
+            .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+            .map_err(map_aggregate_error_v1)?;
+        let charged = sum(&[
+            self.masks,
+            self.replay_batch,
+            registration_quotient_payload_v1(layout, registration, degree_cap)?,
+        ])?;
+        let budget = self
+            .maximum_live_buffers
+            .checked_sub(charged)
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let segment = registration.segment;
+        let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2)?;
+        let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
+            segment.trace_log2,
+            plan.quotient_coset_log2,
+            0,
+        )?;
+        main_quotient_cache::MainQuotientCachePlanV1::from_budget_v1(
+            segment.base_width,
+            segment.aux_width,
+            sum(&[segment.trace_size(), MASK_DEGREE + 1])?,
+            stripe.count,
+            budget,
+        )
+    }
+
     pub(super) fn new_v1(layout: &AggregateProofLayoutV1) -> Result<Self, ZkX509StarkErrorV1> {
         layout.validate_exact_full_profile_registration_v1()?;
         let shared = layout.as_shared()?;
@@ -275,7 +369,8 @@ impl MainProverBufferPlanV1 {
             >(),
         ])?;
         // Eight original coefficient owners and eight common-domain FFT outputs;
-        // one additional native/IFFT column covers serial reconstruction overlap.
+        // two native columns cover source/interpolation or mask-replacement
+        // overlap. The latter is smaller than two maximum native columns.
         let replay_batch = sum(&[
             product(&[
                 aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
@@ -285,6 +380,23 @@ impl MainProverBufferPlanV1 {
             product(&[aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, rows, field])?,
             product(&[2, maximum_native, field])?,
         ])?;
+        // DEEP has no common-domain evaluation batch: two point-power arrays
+        // and two weighted arrays per lane replace that reserved storage.
+        let deep_replay = sum(&[
+            product(&[
+                2 + 2 * SECURITY_LANES,
+                maximum_native + MASK_DEGREE + 1,
+                extension,
+            ])?,
+            product(&[
+                aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                maximum_native + MASK_DEGREE + 1,
+                field,
+            ])?,
+        ])?;
+        if deep_replay > replay_batch || maximum_native + MASK_DEGREE + 1 > 2 * maximum_native {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
         let composition = product(&[
             SECURITY_LANES,
             COMPOSITION_DEGREE_CHUNKS,
@@ -293,31 +405,7 @@ impl MainProverBufferPlanV1 {
         ])?;
         let mut quotient_stage = 0;
         for registration in &layout.registered_segments {
-            let segment = registration.segment;
-            let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2)?;
-            let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
-                segment.trace_log2,
-                plan.quotient_coset_log2,
-                0,
-            )?;
-            // One complete registration stripe; its fixed native coefficients;
-            // quotient evaluations plus IFFT copy; accumulated and incoming chunks.
-            let candidate = sum(&[
-                product(&[
-                    sum(&[segment.base_width, segment.aux_width, segment.fixed_width])?,
-                    stripe.rows,
-                    field,
-                ])?,
-                product(&[segment.fixed_width, segment.trace_size(), field])?,
-                product(&[2, SECURITY_LANES, plan.quotient_coset_rows, extension])?,
-                product(&[
-                    2,
-                    SECURITY_LANES,
-                    COMPOSITION_DEGREE_CHUNKS,
-                    degree_cap,
-                    extension,
-                ])?,
-            ])?;
+            let candidate = registration_quotient_payload_v1(layout, *registration, degree_cap)?;
             quotient_stage = quotient_stage.max(candidate);
         }
         // Mask coefficients/evaluations and all binary digest-tree levels, plus

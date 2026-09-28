@@ -123,8 +123,8 @@ The ignored release-only `maximum_profile_assembly_payload_and_source_admission_
 constructs the complete deterministic maximum structural fixture, records actual
 assembly capacities and construction time, and checks unchanged source admission.
 `maximum_profile_streaming_hash_cost_diagnostic` measures the actual joined row
-hashing with the full column widths and a smaller public row sample, comparing
-one-column and eight-column batches under fixed worker counts. Its linear timing
+hashing with all 5,623 columns and 128 public rows, comparing one-column and
+eight-column batches with one worker. It does not measure parallel throughput. Its linear timing
 estimate excludes source replay, FFTs, quotient/DEEP/FRI and CA work, and differs in
 cache residency from a full proof. `maximum_profile_replay_fft_cost_diagnostic`
 measures eight actual masked log19-to-log22 transforms, validates sampled outputs

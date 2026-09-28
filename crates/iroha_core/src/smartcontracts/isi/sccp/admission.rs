@@ -286,12 +286,27 @@ pub fn classify(
                     .with_exclusive(&instruction.peer),
             ))
         }
-        // TODO(ws31): pre-verify faults (§4.11); TODO(ws41): keeper advances (§4.13.4) and
-        // self-claims (§4.12.4). Until then these shapes are admitted as ordinary fee-paying
-        // transactions.
-        SccpExemptClassV1::Fault
-        | SccpExemptClassV1::KeeperAdvance { .. }
-        | SccpExemptClassV1::SelfClaim => Ok(None),
+        SccpExemptClassV1::Fault => {
+            let instruction = single
+                .and_then(downcast::<SubmitSccpAttestationFaultV1>)
+                .ok_or_else(|| SccpAdmissionRejectV1::new("malformed fault shape"))?;
+            super::faults::preverify(world, digests, next_block_height, instruction).map(Some)
+        }
+        SccpExemptClassV1::KeeperAdvance { .. } => {
+            let instruction = single
+                .and_then(downcast::<AdvanceSccpLightClientV1>)
+                .ok_or_else(|| SccpAdmissionRejectV1::new("malformed keeper-advance shape"))?;
+            super::light_clients::preverify_keeper_advance(
+                world,
+                digests.committed_time_ms(),
+                instruction,
+                &payload.authority,
+            )
+            .map(Some)
+        }
+        SccpExemptClassV1::SelfClaim => {
+            super::self_claim::preverify(world, digests, &payload.authority, transaction).map(Some)
+        }
     }
 }
 

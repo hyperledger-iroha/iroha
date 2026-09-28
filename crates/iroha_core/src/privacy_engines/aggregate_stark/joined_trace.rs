@@ -150,6 +150,11 @@ impl JoinedTraceCommitmentPlanV1 {
         domains: AggregateStarkDomainsV1,
         opening_indices: &[usize],
         mut coefficients: impl FnMut(usize, usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
+        mut evaluate: impl FnMut(
+            &[ZeroizingFieldColumnV1],
+            u8,
+            u8,
+        ) -> Result<Vec<ZeroizingFieldColumnV1>, AggregateStarkErrorV1>,
     ) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
         domains.validate()?;
         let rows = checked_domain_size_v1(self.commitment_lde_log2)?;
@@ -176,18 +181,12 @@ impl JoinedTraceCommitmentPlanV1 {
                 for column in start..end {
                     batch.push(ZeroizingFieldColumnV1(coefficients(group, column)?));
                 }
-                let evaluations = batch
-                    .par_iter()
-                    .map(|column| {
-                        masked_trace_coefficients_on_coset_v1(
-                            column,
-                            *native,
-                            self.commitment_lde_log2,
-                        )
-                        .map(ZeroizingFieldColumnV1)
-                        .map_err(map_transparent_error_v1)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let evaluations = evaluate(&batch, *native, self.commitment_lde_log2)?;
+                if evaluations.len() != batch.len()
+                    || evaluations.iter().any(|column| column.len() != rows)
+                {
+                    return Err(AggregateStarkErrorV1::InvalidLayout);
+                }
                 commitment.absorb_columns_v1(&evaluations)?;
             }
         }

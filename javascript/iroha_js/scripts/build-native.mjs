@@ -1119,7 +1119,7 @@ export function runNativeBuild({
   const outputBefore = cargoArtifactIdentityOrNull(nativePath);
   invalidateProvenance(nativePath);
   const buildArgs = [
-    "build",
+    platform === "darwin" ? "rustc" : "build",
     "--locked",
     "--offline",
     "--jobs",
@@ -1137,6 +1137,10 @@ export function runNativeBuild({
     target.canonicalPath,
     "--message-format=json-render-diagnostics",
     ...cargoBuildArgsForNativeProfile(cargoProfile),
+    // rustc's debug-info stripping can leave a misaligned Mach-O LINKEDIT
+    // string pool that dyld refuses to load. Override only the final addon;
+    // dependency profiles and the authenticated toolchain remain unchanged.
+    ...(platform === "darwin" ? ["--", "-C", "strip=none"] : []),
   ];
   const cargoEnv = {
     ...(macosBuild === undefined ? env : macosCargoEnvironment(env, macosBuild)),

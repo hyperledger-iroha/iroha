@@ -385,9 +385,8 @@ by a production confidential wallet or prover. The JavaScript SDK does not
 synthesize a fee spend from an action hash, amount, and verifier key because
 those values do not include the spend key, input-note witnesses, Merkle path,
 or output-note witnesses required for a valid confidential transfer. The
-typed `buildConfidentialTransferProofV2()` API remains available when the
-caller supplies that complete witness material; it is not an automatic Private
-Kaigi fee-spend adapter.
+`ConfidentialProver` creates local proof artifacts when the caller supplies
+complete witness material; it is not an automatic Private Kaigi fee-spend adapter.
 
 For local wallet proving, use `ConfidentialProver` with a network, canonical asset
 ID and mutable 32-byte spend key. `proveTransfer()` and `proveRedemption()` select
@@ -421,8 +420,34 @@ strings remain managed by the JavaScript runtime; this API does not promise
 secure erasure of those strings. The native runtime must be rebuilt from the
 current source to expose these wallet methods.
 
-Confidential proof builders take one or two actual input notes. Transfers take
-one or two output notes; V3 unshield accepts zero or one change output. The SDK
+Persist the private change opening securely before proving. Redemption change
+belongs to the spender's native default diversifier, which may differ from the
+input note's diversifier. After the change commitment has an authenticated leaf
+index, use `confidentialChangeToInput(retainedChange, authenticatedLeafIndex)` to
+create a later spend input. `defaultConfidentialDiversifier()` exposes the same
+Core value for commitment derivation; callers do not need to encode a scalar.
+The conversion leaves the source opening available to the caller and does not
+authenticate its index, create a ledger note, or prove membership.
+
+Use `await computeConfidentialRoot({ commitments })` to check a local history
+with the native fixed-depth Merkle implementation. It accepts zero through
+65,536 canonical commitments and runs off the JavaScript thread. Computing a
+root does not authenticate it against ledger state. The source-only
+[`confidential_redemption.mjs`](recipes/confidential_redemption.mjs) recipe uses
+OS randomness and these public APIs to generate and locally verify a real proof;
+it creates no ledger note and submits no transaction. After rebuilding the
+verified native addon, run `node recipes/confidential_redemption.mjs`.
+
+The source-only [`confidential_change_redemption.mjs`](recipes/confidential_change_redemption.mjs)
+recipe retains a change opening, proves partial redemption, converts that change
+with its native default diversifier, and spends it in a second locally verified
+proof. It imports the public package entrypoint and checks event-loop progress
+and completion after disposal. After `npm run build:native && npm run build:dist`,
+run `node recipes/confidential_change_redemption.mjs`. Its constructed history is
+only a disposable fixture, not authenticated ledger state.
+
+Confidential wallet proofs take one or two actual input notes. Transfers take
+one or two output notes; redemption accepts one change note when a remainder exists. The SDK
 checks these counts and the 65,536-leaf tree capacity before native proving.
 Supply only the actual inputs, including when spending the final leaf of a full
 tree: the native prover supplies any absent second input internally. These APIs

@@ -206,12 +206,48 @@ impl<'a> CoefficientReplay<'a> {
     }
     pub(super) fn visit_all(
         &mut self,
+        visit: impl FnMut(CoefficientStripe<'_>) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_selected(|_| true, visit)
+    }
+    /// Selected natural leaf groups retain every FRI fiber coordinate.
+    pub(super) fn visit_selected_stripes(
+        &mut self,
+        indices: &[usize],
+        visit: impl FnMut(CoefficientStripe<'_>) -> Result<()>,
+    ) -> Result<()> {
+        if indices.is_empty()
+            || indices.len() > 2 * super::deep_geometry::QUERY_COUNT
+            || indices
+                .iter()
+                .any(|&i| i >= self.plan.rows / self.plan.arity)
+            || indices.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(invalid(
+                "selected coefficient groups must be sorted, unique and bounded",
+            ));
+        }
+        let mut selected = [false; 64];
+        if self.plan.stripes > selected.len() {
+            return Err(invalid("coefficient stripe count exceeds fixed geometry"));
+        }
+        for &index in indices {
+            selected[index % self.plan.stripes] = true;
+        }
+        self.visit_selected(|stripe| selected[stripe], visit)
+    }
+    fn visit_selected(
+        &mut self,
+        selected: impl Fn(usize) -> bool,
         mut visit: impl FnMut(CoefficientStripe<'_>) -> Result<()>,
     ) -> Result<()> {
         self.ensure_pass_available()?;
         self.remaining_passes -= 1;
         let mut lanes = SecretPolynomial::<u64>::zeroed(self.plan.stripe_bytes / 8)?;
         for stripe in 0..self.plan.stripes {
+            if !selected(stripe) {
+                continue;
+            }
             let offset = self.plan.domain.point(stripe);
             lanes
                 .par_chunks_mut(self.plan.degree)
@@ -248,6 +284,9 @@ pub(super) struct CoefficientStripe<'a> {
     lanes: &'a [u64],
 }
 impl CoefficientStripe<'_> {
+    pub(super) fn stripe_index(&self) -> usize {
+        self.stripe
+    }
     pub(super) fn rows(&self) -> usize {
         self.plan.degree
     }

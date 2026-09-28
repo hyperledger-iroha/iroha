@@ -8628,9 +8628,15 @@ pub mod isi {
                     )
             }
             ProposalKind::SccpRouteGovernance(payload) => {
-                crate::smartcontracts::isi::sccp::governance::expected_head(
-                    state_transaction,
+                // The head is scoped to the proposal's subjects (`specs/sccp.md` §4.14.3).
+                let (version, heads) = crate::smartcontracts::isi::sccp::governance::subject_heads(
+                    &*state_transaction.world,
                     &payload.proposal,
+                )?;
+                parliament_present_head_root_v1(
+                    subject_id,
+                    version,
+                    parliament_governance_head_root_v1(&heads),
                 )
             }
             ProposalKind::SorafsProviderGovernance(payload) => {
@@ -9171,9 +9177,32 @@ pub mod isi {
         Ok(())
     }
 
-    const fn parliament_transition_requires_manager_v1(
+    /// Return whether `kind` needs `CanManageParliament` for an attempt of `proposal`.
+    ///
+    /// SCCP route governance has no clerk (`specs/sccp.md` §4.14.5 item 3): every manager
+    /// transition of an SCCP attempt is permissionless because its content is core-derived.
+    /// The fields of `SubmitParliamentLifecycleTransitionV1` that a manager would otherwise
+    /// choose are already fixed by the executor and reducer for every kind:
+    ///
+    /// - `CompleteQualification` and `RegisterInitialSortition` carry no field.
+    /// - `RegisterSortitionRequest`: `request_height` is the containing block, `pulse_height`
+    ///   is `request_height + sortition_pulse_delay_blocks`, `beacon_session_id` is the
+    ///   network's logical beacon, `target_seats` is the configured body size, the candidate
+    ///   root and count are the canonical citizen snapshot, and every id is derived.
+    /// - `AdvanceBodyPhase`: the body is the attempt's active body and `target` is the only
+    ///   next phase the reducer accepts.
+    /// - `RegisterBallotAttempt`: `ballot_attempt_id` and `tle_session_id` are derived,
+    ///   `release_height` is the configured schedule, the beacon session is the logical beacon
+    ///   and the TLE key session is the active one for new ballots.
+    /// - `EscalateRisk` would choose a tier; SCCP attempts start at the policy-derived
+    ///   `Constitutional` tier and the executor refuses to escalate them.
+    fn parliament_transition_requires_manager_v1(
         kind: gov::ParliamentLifecycleTransitionKindV1,
+        proposal: Option<&ProposalKind>,
     ) -> bool {
+        if matches!(proposal, Some(ProposalKind::SccpRouteGovernance(_))) {
+            return false;
+        }
         !matches!(
             kind,
             gov::ParliamentLifecycleTransitionKindV1::ConsumeSortitionPulseBatch
@@ -9220,7 +9249,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            require_parliament_manager(authority, state_transaction)?;
+            // SCCP attempts are permissionless and core-derived (`specs/sccp.md` §4.14.5).
+            if !matches!(self.proposal, ProposalKind::SccpRouteGovernance(_)) {
+                require_parliament_manager(authority, state_transaction)?;
+            }
             if let Some(reason) = self.proposal.first_release_exact_json_u64_invariant_error() {
                 return Err(InstructionExecutionError::InvariantViolation(reason.into()));
             }
@@ -9920,8 +9952,27 @@ pub mod isi {
             // the corpus or its result. The containing finalized block supplies consensus
             // height/order, while Core independently replays every pulse, deadline, roster,
             // corpus, release, certificate, and compare-and-set binding below.
-            if parliament_transition_requires_manager_v1(transition_kind) {
+            let attempt_proposal = state_transaction
+                .world
+                .parliament_attempts
+                .get(&self.governance_attempt_id)
+                .and_then(|attempt| {
+                    state_transaction
+                        .world
+                        .governance_proposals
+                        .get(attempt.proposal_content_id().as_bytes())
+                })
+                .map(|record| record.kind.clone());
+            if parliament_transition_requires_manager_v1(transition_kind, attempt_proposal.as_ref())
+            {
                 require_parliament_manager(authority, state_transaction)?;
+            }
+            if matches!(attempt_proposal, Some(ProposalKind::SccpRouteGovernance(_)))
+                && transition_kind == gov::ParliamentLifecycleTransitionKindV1::EscalateRisk
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP attempts keep their policy-derived risk tier".into(),
+                ));
             }
             validate_parliament_transition_static_v1(&self)?;
             let transition_digest = self.transition.digest_v1();
@@ -18671,6 +18722,19 @@ pub mod isi {
                 validate_hijiri_parameters(custom, state_transaction)?;
                 validate_da_ingest_admission_policy(custom, state_transaction)?;
                 validate_reputation_archive_retention_request(custom, state_transaction)?;
+                if let Some(policy) =
+                    iroha_data_model::sumeragi_lanes::SumeragiLanePolicy::from_custom_parameter(
+                        custom,
+                    )
+                {
+                    policy
+                        .and_then(|policy| crate::sumeragi::lanes::step::validate_policy(&policy))
+                        .map_err(|error| {
+                            invalid_smart_contract_parameter(format!(
+                                "invalid Sumeragi lane policy: {error}"
+                            ))
+                        })?;
+                }
                 match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
                     custom,
                 ) {
@@ -19375,7 +19439,7 @@ pub mod isi {
                 Kind::FreezeTimedOvnCorpus,
             ] {
                 assert!(
-                    !parliament_transition_requires_manager_v1(kind),
+                    !parliament_transition_requires_manager_v1(kind, None),
                     "objective Parliament progress must not depend on manager liveness: {kind:?}"
                 );
             }
@@ -19388,8 +19452,25 @@ pub mod isi {
                 Kind::RegisterBallotAttempt,
             ] {
                 assert!(
-                    parliament_transition_requires_manager_v1(kind),
+                    parliament_transition_requires_manager_v1(kind, None),
                     "intent-setting Parliament transition must retain manager authority: {kind:?}"
+                );
+                let sccp = ProposalKind::SccpRouteGovernance(
+                    iroha_data_model::governance::types::SccpRouteGovernanceProposal {
+                        proposal: Box::new(
+                            crate::smartcontracts::isi::sccp::test_support::sample_proposal(
+                                iroha_data_model::NetworkId::from_genesis_hash(
+                                    iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                                        b"sccp manager rule",
+                                    )),
+                                ),
+                            ),
+                        ),
+                    },
+                );
+                assert!(
+                    !parliament_transition_requires_manager_v1(kind, Some(&sccp)),
+                    "SCCP attempts have no clerk: {kind:?}"
                 );
             }
         }

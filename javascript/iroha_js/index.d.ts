@@ -10413,19 +10413,6 @@ export interface ConfidentialUnshieldProofOutputV3 {
   rhoHex: string;
 }
 
-export interface ConfidentialUnshieldProofResultV2 {
-  nullifiers: ReadonlyArray<Buffer>;
-  root: Buffer;
-  proof: Buffer;
-}
-
-export interface ConfidentialUnshieldProofResultV3 {
-  nullifiers: ReadonlyArray<Buffer>;
-  outputCommitments: ReadonlyArray<Buffer>;
-  root: Buffer;
-  proof: Buffer;
-}
-
 export interface RecordKaigiUsageTransactionInput {
   networkId: NetworkId;
   authority: string;
@@ -13442,37 +13429,6 @@ export function buildPrecommitTriggerAction(
 export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildConfidentialTransferProofV2(input: {
-  networkId: NetworkId;
-  assetDefinitionId: string;
-  spendKey: BinaryLike;
-  treeCommitments: ReadonlyArray<BinaryLike>;
-  inputs: ConfidentialProofInputsV2;
-  outputs: ConfidentialTransferProofOutputsV2;
-  rootHintHex: string;
-  verifyingKey: ToriiVerifyingKeyDetail;
-}): ConfidentialTransferProofResultV2;
-export function buildConfidentialUnshieldProofV2(input: {
-  networkId: NetworkId;
-  assetDefinitionId: string;
-  spendKey: BinaryLike;
-  treeCommitments: ReadonlyArray<BinaryLike>;
-  inputs: ConfidentialProofInputsV2;
-  publicAmount: NumericLike;
-  rootHintHex: string;
-  verifyingKey: ToriiVerifyingKeyDetail;
-}): ConfidentialUnshieldProofResultV2;
-export function buildConfidentialUnshieldProofV3(input: {
-  networkId: NetworkId;
-  assetDefinitionId: string;
-  spendKey: BinaryLike;
-  treeCommitments: ReadonlyArray<BinaryLike>;
-  inputs: ConfidentialProofInputsV2;
-  outputs?: readonly [] | readonly [ConfidentialUnshieldProofOutputV3];
-  publicAmount: NumericLike;
-  rootHintHex: string;
-  verifyingKey: ToriiVerifyingKeyDetail;
-}): ConfidentialUnshieldProofResultV3;
 export function buildJoinKaigiTransaction(
   input: JoinKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
@@ -14871,3 +14827,15 @@ export class ConfidentialProver {
   proveTransfer(request: ConfidentialSpend & { outputs: ConfidentialTransferProofOutputsV2 }): Promise<ConfidentialProof>;
   proveRedemption(request: ConfidentialSpend & { publicAmount: NumericLike; change?: ConfidentialUnshieldProofOutputV3 }): Promise<ConfidentialProof>;
 }
+
+/** Compute the fixed-depth local commitment-history root in native Core.
+ * Accepts at most 65,536 commitments; the result does not authenticate ledger state.
+ */
+export function computeConfidentialRoot(options: { commitments: ReadonlyArray<BinaryLike> }): Promise<Buffer>;
+
+/** Native canonical default diversifier used by redemption change. Returns a defensive copy. */
+export function defaultConfidentialDiversifier(): Buffer;
+/** Construct a later input from retained change and its authenticated leaf index.
+ * Does not consume the opening or authenticate membership. Private strings remain caller-owned.
+ */
+export function confidentialChangeToInput(change: ConfidentialUnshieldProofOutputV3, leafIndex: number): ConfidentialTransferProofInputV2;

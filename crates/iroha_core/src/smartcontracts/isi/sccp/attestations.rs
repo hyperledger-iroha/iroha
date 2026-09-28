@@ -250,6 +250,9 @@ mod tests {
                 iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([7; 32])),
             )
         }
+        fn committed_time_ms(&self) -> u64 {
+            0
+        }
     }
 
     struct Fixture {

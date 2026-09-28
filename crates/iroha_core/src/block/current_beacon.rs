@@ -183,6 +183,7 @@ mod current_beacon_tests {
             chain.genesis_account(),
             Duration::from_millis(scheduled.params.block_time_ms),
             ConsensusMode::Permissioned,
+            crate::sumeragi::lanes::merge::LaneStepInput::default(),
             chain.state(),
         )
         .unpack(|_| {})
@@ -242,6 +243,10 @@ mod current_beacon_tests {
             consensus_mode: ConsensusMode::Permissioned,
             applied: (4, replay.committed(4).core_hash()),
             crypto: None,
+            applied_watch: std::sync::Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+                0, None,
+            )),
+            lane_blocks: std::sync::Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         })
         .unwrap();
         restarted

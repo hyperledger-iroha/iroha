@@ -6,6 +6,9 @@
 //! nesting, primitive canonicality, and DER `SET OF` ordering. The trace uses a fixed first-release
 //! capacity; no BER compatibility or alternate encoding path is accepted.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::private_table::{PrivateTableV1, zeroize_fields_v1, zeroize_words_v1};
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::der_limits::{
     ZK_X509_DER_MAX_DOCUMENT_BYTES_V1, ZK_X509_DER_MAX_NESTING_DEPTH_V1,
     ZK_X509_DER_MAX_VALUE_BYTES_V1, ZK_X509_DER_MAX_VALUES_V1,
@@ -70,8 +73,8 @@ pub(crate) struct ZkX509DerRangeWitnessV1<const BITS: usize> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<const BITS: usize> ZkX509DerRangeWitnessV1<BITS> {
     fn zeroize_private_v1(&mut self) {
-        self.value = F::ZERO;
-        self.bits.fill(F::ZERO);
+        zeroize_fields_v1(core::slice::from_mut(&mut self.value));
+        zeroize_fields_v1(&mut self.bits);
     }
     fn from_u64(value: u64) -> Self {
         Self {
@@ -257,6 +260,126 @@ pub(crate) struct ZkX509DerDocumentTraceV1 {
     pub(crate) set_order_rows: Vec<ZkX509DerSetOrderRowV1>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_node_rows_v1(rows: &mut [ZkX509DerNodeRowV1]) {
+    for row in rows {
+        row.ordinal.zeroize_private_v1();
+        row.start.zeroize_private_v1();
+        row.content_start.zeroize_private_v1();
+        row.content_len.zeroize_private_v1();
+        row.end.zeroize_private_v1();
+        row.depth.zeroize_private_v1();
+        row.tag_class.zeroize_private_v1();
+        zeroize_fields_v1(core::slice::from_mut(&mut row.constructed));
+        row.tag_number.zeroize_private_v1();
+        row.identifier_len.zeroize_private_v1();
+        row.length_len.zeroize_private_v1();
+        for value in &mut row.identifier {
+            value.zeroize_private_v1();
+        }
+        zeroize_fields_v1(&mut row.identifier_active);
+        zeroize_fields_v1(&mut row.tag_accumulators);
+        zeroize_fields_v1(core::slice::from_mut(&mut row.first_high_group_inverse));
+        row.tag_minus_31.zeroize_private_v1();
+        for value in &mut row.length {
+            value.zeroize_private_v1();
+        }
+        zeroize_fields_v1(&mut row.length_active);
+        zeroize_fields_v1(core::slice::from_mut(&mut row.first_long_body_inverse));
+        row.content_minus_128.zeroize_private_v1();
+        row.max_minus_content.zeroize_private_v1();
+        zeroize_fields_v1(&mut row.universal_selectors);
+        for value in &mut row.ancestor_ends {
+            value.zeroize_private_v1();
+        }
+        zeroize_fields_v1(&mut row.ancestor_active);
+        for value in &mut row.ancestor_gaps {
+            value.zeroize_private_v1();
+        }
+        zeroize_fields_v1(&mut row.ancestor_gap_inverses);
+        zeroize_fields_v1(&mut row.ancestor_gap_is_zero);
+        zeroize_fields_v1(core::slice::from_mut(&mut row.content_is_zero));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.content_inverse));
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_primitive_rows_v1(rows: &mut [ZkX509DerPrimitiveRowV1]) {
+    for row in rows {
+        row.node.zeroize_private_v1();
+        row.content_start.zeroize_private_v1();
+        row.content_offset.zeroize_private_v1();
+        row.document_offset.zeroize_private_v1();
+        row.value.zeroize_private_v1();
+        zeroize_fields_v1(core::slice::from_mut(&mut row.first));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.last));
+        row.tag_class.zeroize_private_v1();
+        row.tag_number.zeroize_private_v1();
+        zeroize_fields_v1(&mut row.universal_selectors);
+        zeroize_fields_v1(core::slice::from_mut(&mut row.oid_start_before));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.oid_start_after));
+        zeroize_fields_v1(&mut row.unused_bit_selectors);
+        zeroize_fields_v1(core::slice::from_mut(&mut row.first_zero_inverse));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.first_ff_inverse));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.first_is_zero));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.first_is_ff));
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_set_rows_v1(rows: &mut [ZkX509DerSetOrderRowV1]) {
+    for row in rows {
+        row.set_node.zeroize_private_v1();
+        row.left_node.zeroize_private_v1();
+        row.right_node.zeroize_private_v1();
+        row.offset.zeroize_private_v1();
+        row.left.zeroize_private_v1();
+        row.right.zeroize_private_v1();
+        zeroize_fields_v1(core::slice::from_mut(&mut row.equal_before));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.less_before));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.equal_after));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.less_after));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.bytes_equal));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.byte_difference_inverse));
+        row.comparison_difference.zeroize_private_v1();
+        zeroize_fields_v1(core::slice::from_mut(&mut row.comparison_borrow));
+    }
+}
+/// Preserve initialized row erasure when growing private witness storage.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn reserve_private_rows_v1<T: Clone>(
+    rows: &mut Vec<T>,
+    additional: usize,
+    erase: fn(&mut [T]),
+) -> Result<(), ZkX509DerAirErrorV1> {
+    let required = rows
+        .len()
+        .checked_add(additional)
+        .ok_or(ZkX509DerAirErrorV1::Resource)?;
+    if required <= rows.capacity() {
+        return Ok(());
+    }
+    let capacity = required
+        .max(
+            rows.capacity()
+                .checked_mul(2)
+                .ok_or(ZkX509DerAirErrorV1::Resource)?,
+        )
+        .max(4);
+    let mut replacement = PrivateTableV1::new(Vec::new(), erase);
+    replacement
+        .try_reserve_exact(capacity)
+        .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+    replacement.extend(rows.iter().cloned());
+    erase(rows);
+    rows.clear();
+    *rows = replacement.into_vec();
+    Ok(())
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerDocumentTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerDocumentTraceV1 {
     fn zeroize_private_v1(&mut self) {
         for row in &mut self.bytes {
@@ -264,82 +387,11 @@ impl ZkX509DerDocumentTraceV1 {
             row.value.zeroize_private_v1();
         }
         self.bytes.clear();
-        for row in &mut self.nodes {
-            row.ordinal.zeroize_private_v1();
-            row.start.zeroize_private_v1();
-            row.content_start.zeroize_private_v1();
-            row.content_len.zeroize_private_v1();
-            row.end.zeroize_private_v1();
-            row.depth.zeroize_private_v1();
-            row.tag_class.zeroize_private_v1();
-            row.constructed = F::ZERO;
-            row.tag_number.zeroize_private_v1();
-            row.identifier_len.zeroize_private_v1();
-            row.length_len.zeroize_private_v1();
-            for value in &mut row.identifier {
-                value.zeroize_private_v1();
-            }
-            row.identifier_active.fill(F::ZERO);
-            row.tag_accumulators.fill(F::ZERO);
-            row.first_high_group_inverse = F::ZERO;
-            row.tag_minus_31.zeroize_private_v1();
-            for value in &mut row.length {
-                value.zeroize_private_v1();
-            }
-            row.length_active.fill(F::ZERO);
-            row.first_long_body_inverse = F::ZERO;
-            row.content_minus_128.zeroize_private_v1();
-            row.max_minus_content.zeroize_private_v1();
-            row.universal_selectors.fill(F::ZERO);
-            for value in &mut row.ancestor_ends {
-                value.zeroize_private_v1();
-            }
-            row.ancestor_active.fill(F::ZERO);
-            for value in &mut row.ancestor_gaps {
-                value.zeroize_private_v1();
-            }
-            row.ancestor_gap_inverses.fill(F::ZERO);
-            row.ancestor_gap_is_zero.fill(F::ZERO);
-            row.content_is_zero = F::ZERO;
-            row.content_inverse = F::ZERO;
-        }
+        zeroize_node_rows_v1(&mut self.nodes);
         self.nodes.clear();
-        for row in &mut self.primitive_rows {
-            row.node.zeroize_private_v1();
-            row.content_start.zeroize_private_v1();
-            row.content_offset.zeroize_private_v1();
-            row.document_offset.zeroize_private_v1();
-            row.value.zeroize_private_v1();
-            row.first = F::ZERO;
-            row.last = F::ZERO;
-            row.tag_class.zeroize_private_v1();
-            row.tag_number.zeroize_private_v1();
-            row.universal_selectors.fill(F::ZERO);
-            row.oid_start_before = F::ZERO;
-            row.oid_start_after = F::ZERO;
-            row.unused_bit_selectors.fill(F::ZERO);
-            row.first_zero_inverse = F::ZERO;
-            row.first_ff_inverse = F::ZERO;
-            row.first_is_zero = F::ZERO;
-            row.first_is_ff = F::ZERO;
-        }
+        zeroize_primitive_rows_v1(&mut self.primitive_rows);
         self.primitive_rows.clear();
-        for row in &mut self.set_order_rows {
-            row.set_node.zeroize_private_v1();
-            row.left_node.zeroize_private_v1();
-            row.right_node.zeroize_private_v1();
-            row.offset.zeroize_private_v1();
-            row.left.zeroize_private_v1();
-            row.right.zeroize_private_v1();
-            row.equal_before = F::ZERO;
-            row.less_before = F::ZERO;
-            row.equal_after = F::ZERO;
-            row.less_after = F::ZERO;
-            row.bytes_equal = F::ZERO;
-            row.byte_difference_inverse = F::ZERO;
-            row.comparison_difference.zeroize_private_v1();
-            row.comparison_borrow = F::ZERO;
-        }
+        zeroize_set_rows_v1(&mut self.set_order_rows);
         self.set_order_rows.clear();
     }
 }
@@ -408,7 +460,7 @@ pub(crate) enum ZkX509DerAirErrorV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug)]
-struct ParsedHeaderV1 {
+struct ParsedHeaderV1<'a> {
     start: usize,
     content_start: usize,
     content_len: usize,
@@ -416,8 +468,8 @@ struct ParsedHeaderV1 {
     tag_class: u8,
     constructed: bool,
     tag_number: u32,
-    identifier: Vec<u8>,
-    length: Vec<u8>,
+    identifier: &'a [u8],
+    length: &'a [u8],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn inverse_or_zero_v1(value: F) -> F {
@@ -445,7 +497,7 @@ fn parse_header_v1(
     input: &[u8],
     start: usize,
     container_end: usize,
-) -> Result<ParsedHeaderV1, ZkX509DerAirErrorV1> {
+) -> Result<ParsedHeaderV1<'_>, ZkX509DerAirErrorV1> {
     if start >= container_end || container_end > input.len() {
         return Err(ZkX509DerAirErrorV1::Topology);
     }
@@ -483,8 +535,7 @@ fn parse_header_v1(
     }
     let identifier = input
         .get(start..cursor)
-        .ok_or(ZkX509DerAirErrorV1::Header)?
-        .to_vec();
+        .ok_or(ZkX509DerAirErrorV1::Header)?;
     if tag_class == 0 {
         if tag_number == 0 {
             return Err(ZkX509DerAirErrorV1::Header);
@@ -545,12 +596,12 @@ fn parse_header_v1(
         constructed,
         tag_number,
         identifier,
-        length: input[length_start..cursor].to_vec(),
+        length: &input[length_start..cursor],
     })
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_primitive_contents_v1(
-    header: &ParsedHeaderV1,
+    header: &ParsedHeaderV1<'_>,
     contents: &[u8],
 ) -> Result<(), ZkX509DerAirErrorV1> {
     if header.constructed || header.tag_class != 0 {
@@ -609,7 +660,7 @@ fn validate_primitive_contents_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_node_row_v1(
     ordinal: usize,
-    header: &ParsedHeaderV1,
+    header: &ParsedHeaderV1<'_>,
     ancestors: &[usize],
 ) -> Result<ZkX509DerNodeRowV1, ZkX509DerAirErrorV1> {
     let mut identifier = [ByteWitnessV1::zero(); ZK_X509_DER_AIR_IDENTIFIER_BYTES_V1];
@@ -739,13 +790,11 @@ fn build_node_row_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_primitive_rows_v1(
     node: usize,
-    header: &ParsedHeaderV1,
+    header: &ParsedHeaderV1<'_>,
     contents: &[u8],
     output: &mut Vec<ZkX509DerPrimitiveRowV1>,
 ) -> Result<(), ZkX509DerAirErrorV1> {
-    output
-        .try_reserve(contents.len())
-        .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+    reserve_private_rows_v1(output, contents.len(), zeroize_primitive_rows_v1)?;
     let mut oid_start = header.tag_class == 0 && header.tag_number == 6;
     let unused = if header.tag_class == 0 && header.tag_number == 3 {
         contents.first().copied()
@@ -829,9 +878,7 @@ fn build_set_comparison_rows_v1(
         return Err(ZkX509DerAirErrorV1::SetOrder);
     }
     let common = left_bytes.len().min(right_bytes.len());
-    output
-        .try_reserve(common)
-        .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+    reserve_private_rows_v1(output, common, zeroize_set_rows_v1)?;
     let mut equal = true;
     let mut less = false;
     for offset in 0..common {
@@ -882,9 +929,7 @@ fn build_set_comparison_rows_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct CompilerV1<'a> {
     input: &'a [u8],
-    nodes: Vec<ZkX509DerNodeRowV1>,
-    primitive_rows: Vec<ZkX509DerPrimitiveRowV1>,
-    set_order_rows: Vec<ZkX509DerSetOrderRowV1>,
+    trace: ZkX509DerDocumentTraceV1,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl CompilerV1<'_> {
@@ -897,15 +942,14 @@ impl CompilerV1<'_> {
         if ancestors.len() >= ZK_X509_DER_MAX_NESTING_DEPTH_V1 {
             return Err(ZkX509DerAirErrorV1::Resource);
         }
-        if self.nodes.len() >= ZK_X509_DER_MAX_VALUES_V1 {
+        if self.trace.nodes.len() >= ZK_X509_DER_MAX_VALUES_V1 {
             return Err(ZkX509DerAirErrorV1::Resource);
         }
         let header = parse_header_v1(self.input, start, container_end)?;
-        let ordinal = self.nodes.len();
-        self.nodes
-            .try_reserve(1)
-            .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
-        self.nodes
+        let ordinal = self.trace.nodes.len();
+        reserve_private_rows_v1(&mut self.trace.nodes, 1, zeroize_node_rows_v1)?;
+        self.trace
+            .nodes
             .push(build_node_row_v1(ordinal, &header, ancestors)?);
         if header.constructed {
             let mut cursor = header.content_start;
@@ -926,12 +970,15 @@ impl CompilerV1<'_> {
                             child,
                             span,
                             child_start..child_end,
-                            &mut self.set_order_rows,
+                            &mut self.trace.set_order_rows,
                         )?;
                     }
                     previous_child = Some((child, child_start..child_end));
                 }
                 cursor = child_end;
+            }
+            if let Some(last) = ancestors.last_mut() {
+                zeroize_words_v1(core::slice::from_mut(last));
             }
             ancestors.pop();
             if cursor != header.end {
@@ -940,7 +987,7 @@ impl CompilerV1<'_> {
         } else {
             let contents = &self.input[header.content_start..header.end];
             validate_primitive_contents_v1(&header, contents)?;
-            build_primitive_rows_v1(ordinal, &header, contents, &mut self.primitive_rows)?;
+            build_primitive_rows_v1(ordinal, &header, contents, &mut self.trace.primitive_rows)?;
         }
         Ok((ordinal, header.end))
     }
@@ -955,15 +1002,22 @@ pub(crate) fn build_strict_der_document_trace_v1(
     }
     let mut compiler = CompilerV1 {
         input,
-        nodes: Vec::new(),
-        primitive_rows: Vec::new(),
-        set_order_rows: Vec::new(),
+        trace: ZkX509DerDocumentTraceV1 {
+            bytes: Vec::new(),
+            nodes: Vec::new(),
+            primitive_rows: Vec::new(),
+            set_order_rows: Vec::new(),
+        },
     };
-    let (_, end) = compiler.compile_value(0, input.len(), &mut Vec::new())?;
+    let mut ancestors = PrivateTableV1::new(Vec::new(), zeroize_words_v1);
+    ancestors
+        .try_reserve_exact(ZK_X509_DER_MAX_NESTING_DEPTH_V1)
+        .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+    let (_, end) = compiler.compile_value(0, input.len(), &mut ancestors)?;
     if end != input.len() {
         return Err(ZkX509DerAirErrorV1::Topology);
     }
-    compiler.set_order_rows.sort_unstable_by_key(|row| {
+    compiler.trace.set_order_rows.sort_unstable_by_key(|row| {
         (
             row.set_node.value.0,
             row.left_node.value.0,
@@ -971,7 +1025,7 @@ pub(crate) fn build_strict_der_document_trace_v1(
             row.offset.value.0,
         )
     });
-    let mut bytes = Vec::new();
+    let bytes = &mut compiler.trace.bytes;
     bytes
         .try_reserve_exact(input.len())
         .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
@@ -983,12 +1037,7 @@ pub(crate) fn build_strict_der_document_trace_v1(
             value: ByteWitnessV1::from_u64(u64::from(value)),
         });
     }
-    let trace = ZkX509DerDocumentTraceV1 {
-        bytes,
-        nodes: compiler.nodes,
-        primitive_rows: compiler.primitive_rows,
-        set_order_rows: compiler.set_order_rows,
-    };
+    let trace = compiler.trace;
     trace.validate()?;
     Ok(trace)
 }
@@ -1923,6 +1972,17 @@ pub(crate) enum ZkX509DerEkuV1 {
     /// Iroha wallet-identity EKU.
     WalletIdentity,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Default for ZkX509DerEkuV1 {
+    fn default() -> Self {
+        Self::ClientAuthentication
+    }
+}
+// The valid default variant is the desired erased value; Zeroize writes it
+// through its volatile default-value implementation without invalid enum bytes.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::DefaultIsZeroes for ZkX509DerEkuV1 {}
+
 /// Verifier-fixed RFC 5280 predicates consumed by the DER/path segment.
 ///
 /// Certificate depth, encoded lengths, exact certificate validity intervals, and exact CRL update
@@ -2017,6 +2077,17 @@ pub(crate) enum ZkX509Rfc5280GrammarRoleV1 {
     EmbeddedEkuOid = 55,
     EmbeddedCrlNumber = 56,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Default for ZkX509Rfc5280GrammarRoleV1 {
+    fn default() -> Self {
+        Self::Certificate
+    }
+}
+// The valid default variant is the desired erased value; Zeroize writes it
+// through its volatile default-value implementation without invalid enum bytes.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::DefaultIsZeroes for ZkX509Rfc5280GrammarRoleV1 {}
+
 /// Verifier-fixed kind of a top-level or extension-embedded DER document.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -2031,6 +2102,17 @@ pub(crate) enum ZkX509Rfc5280DocumentKindV1 {
     ExtendedKeyUsage = 7,
     CrlNumber = 8,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Default for ZkX509Rfc5280DocumentKindV1 {
+    fn default() -> Self {
+        Self::Certificate
+    }
+}
+// The valid default variant is the desired erased value; Zeroize writes it
+// through its volatile default-value implementation without invalid enum bytes.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::DefaultIsZeroes for ZkX509Rfc5280DocumentKindV1 {}
+
 /// Exact strict-DER provenance of one semantic grammar node.
 ///
 /// `document` uses the DER aggregate's unified numbering: all top-level
@@ -2067,9 +2149,23 @@ pub(crate) struct ZkX509Rfc5280DocumentProvenanceV1 {
     /// Exactly one row per strict-DER node, in node-ordinal order.
     pub(crate) nodes: Vec<ZkX509Rfc5280NodeProvenanceV1>,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl ZkX509Rfc5280NodeProvenanceV1 {
+    /// Clear a copied grammar row before its scratch allocation is released.
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        zeroize_node_provenance_v1(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl ZkX509Rfc5280DocumentProvenanceV1 {
+    /// Clear all copied grammar rows and the document's private metadata.
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        zeroize_provenance_v1(self);
+    }
+}
 /// One parsed closed-profile distinguished name.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerNameV1 {
     /// Exact encoded Name.
     pub(crate) encoded: Vec<u8>,
@@ -2078,7 +2174,7 @@ pub(crate) struct ZkX509DerNameV1 {
 }
 /// One strict DER P-256 signature projection.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerSignatureV1 {
     /// Exact DER sequence.
     pub(crate) encoded: Vec<u8>,
@@ -2088,7 +2184,7 @@ pub(crate) struct ZkX509DerSignatureV1 {
 }
 /// Closed certificate extension projection.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerCertificateExtensionsV1 {
     pub(crate) authority_key_identifier: Vec<u8>,
     pub(crate) subject_key_identifier: Vec<u8>,
@@ -2099,7 +2195,7 @@ pub(crate) struct ZkX509DerCertificateExtensionsV1 {
 }
 /// One constrained certificate output.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerCertificateV1 {
     pub(crate) tbs_der: Vec<u8>,
     pub(crate) serial: Vec<u8>,
@@ -2114,7 +2210,7 @@ pub(crate) struct ZkX509DerCertificateV1 {
 }
 /// One constrained complete-CRL output.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerCrlV1 {
     pub(crate) tbs_der: Vec<u8>,
     pub(crate) issuer: ZkX509DerNameV1,
@@ -2190,8 +2286,34 @@ impl core::fmt::Debug for ZkX509Rfc5280TraceV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_embedded_rows_v1(rows: &mut [ZkX509DerEmbeddedByteRowV1]) {
+    for row in rows {
+        row.parent_document.zeroize_private_v1();
+        row.parent_content_start.zeroize_private_v1();
+        row.parent_offset.zeroize_private_v1();
+        row.embedded_document.zeroize_private_v1();
+        row.embedded_offset.zeroize_private_v1();
+        row.value.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_path_rows_v1(rows: &mut [ZkX509Rfc5280PathRowV1]) {
+    for row in rows {
+        row.certificate.zeroize_private_v1();
+        zeroize_fields_v1(core::slice::from_mut(&mut row.is_leaf));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.is_ca));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.is_root));
+        row.after_not_before.zeroize_private_v1();
+        row.before_not_after.zeroize_private_v1();
+        row.subordinate_ca_count.zeroize_private_v1();
+        row.path_len_slack.zeroize_private_v1();
+        zeroize_fields_v1(core::slice::from_mut(&mut row.issuer_name_matches_parent));
+        zeroize_fields_v1(core::slice::from_mut(&mut row.authority_key_matches_parent));
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_bytes_v1(bytes: &mut Vec<u8>) {
-    bytes.fill(0);
+    zeroize_words_v1(bytes);
     bytes.clear();
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2211,6 +2333,126 @@ fn zeroize_signature_v1(signature: &mut ZkX509DerSignatureV1) {
     zeroize_bytes_v1(&mut signature.s);
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_certificate_v1(certificate: &mut ZkX509DerCertificateV1) {
+    zeroize_bytes_v1(&mut certificate.tbs_der);
+    zeroize_bytes_v1(&mut certificate.serial);
+    zeroize_name_v1(&mut certificate.issuer);
+    zeroize_name_v1(&mut certificate.subject);
+    zeroize_words_v1(core::slice::from_mut(&mut certificate.not_before));
+    zeroize_words_v1(core::slice::from_mut(&mut certificate.not_after));
+    zeroize_bytes_v1(&mut certificate.spki_der);
+    zeroize_bytes_v1(&mut certificate.public_key);
+    zeroize_signature_v1(&mut certificate.signature);
+    zeroize_extensions_v1(&mut certificate.extensions);
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_crl_v1(crl: &mut ZkX509DerCrlV1) {
+    zeroize_bytes_v1(&mut crl.tbs_der);
+    zeroize_name_v1(&mut crl.issuer);
+    zeroize_words_v1(core::slice::from_mut(&mut crl.this_update));
+    zeroize_words_v1(core::slice::from_mut(&mut crl.next_update));
+    for serial in &mut crl.revoked_serials {
+        zeroize_bytes_v1(serial);
+    }
+    crl.revoked_serials.clear();
+    zeroize_bytes_v1(&mut crl.authority_key_identifier);
+    zeroize_words_v1(core::slice::from_mut(&mut crl.crl_number));
+    zeroize_signature_v1(&mut crl.signature);
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_node_provenance_v1(node: &mut ZkX509Rfc5280NodeProvenanceV1) {
+    zeroize_words_v1(core::slice::from_mut(&mut node.document));
+    zeroize_words_v1(core::slice::from_mut(&mut node.node));
+    zeroize_words_v1(core::slice::from_mut(&mut node.parent_node));
+    zeroize_words_v1(core::slice::from_mut(&mut node.child_ordinal));
+    zeroize_words_v1(core::slice::from_mut(&mut node.start));
+    zeroize_words_v1(core::slice::from_mut(&mut node.content_start));
+    zeroize_words_v1(core::slice::from_mut(&mut node.content_end));
+    zeroize_words_v1(core::slice::from_mut(&mut node.depth));
+    zeroize_words_v1(core::slice::from_mut(&mut node.tag_class));
+    zeroize_words_v1(core::slice::from_mut(&mut node.constructed));
+    zeroize_words_v1(core::slice::from_mut(&mut node.tag_number));
+    zeroize_words_v1(core::slice::from_mut(&mut node.role));
+    zeroize_words_v1(core::slice::from_mut(&mut node.role_instance));
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_optional_provenance_v1(rows: &mut [Option<ZkX509Rfc5280NodeProvenanceV1>]) {
+    for row in rows {
+        if let Some(node) = row {
+            zeroize_node_provenance_v1(node);
+        }
+        *row = None;
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_provenance_v1(document: &mut ZkX509Rfc5280DocumentProvenanceV1) {
+    zeroize_words_v1(core::slice::from_mut(&mut document.document));
+    zeroize_words_v1(core::slice::from_mut(&mut document.kind));
+    zeroize_words_v1(core::slice::from_mut(&mut document.parent_document));
+    zeroize_words_v1(core::slice::from_mut(&mut document.parent_node));
+    for node in &mut document.nodes {
+        zeroize_node_provenance_v1(node);
+    }
+    document.nodes.clear();
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_extensions_v1(extensions: &mut ZkX509DerCertificateExtensionsV1) {
+    zeroize_bytes_v1(&mut extensions.authority_key_identifier);
+    zeroize_bytes_v1(&mut extensions.subject_key_identifier);
+    zeroize_words_v1(core::slice::from_mut(&mut extensions.basic_constraints_ca));
+    zeroize_words_v1(core::slice::from_mut(
+        &mut extensions.basic_constraints_path_len,
+    ));
+    zeroize_words_v1(core::slice::from_mut(&mut extensions.key_usage));
+    if let Some(extended_key_usages) = &mut extensions.extended_key_usages {
+        zeroize_words_v1(extended_key_usages);
+        extended_key_usages.clear();
+    }
+    extensions.extended_key_usages = None;
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerNameV1 {
+    fn drop(&mut self) {
+        zeroize_name_v1(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerSignatureV1 {
+    fn drop(&mut self) {
+        zeroize_signature_v1(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerCertificateExtensionsV1 {
+    fn drop(&mut self) {
+        zeroize_extensions_v1(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerCertificateV1 {
+    fn drop(&mut self) {
+        zeroize_certificate_v1(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerCrlV1 {
+    fn drop(&mut self) {
+        zeroize_crl_v1(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509Rfc5280DocumentProvenanceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509Rfc5280TraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509Rfc5280TraceV1 {
     /// Recursively overwrite exact DER bytes, parsed semantic projections,
     /// path rows, and all witness-bearing field traces.
@@ -2223,82 +2465,12 @@ impl ZkX509Rfc5280TraceV1 {
             document.zeroize_private_v1();
         }
         self.embedded_documents.clear();
-        for row in &mut self.embedded_byte_rows {
-            row.parent_document.zeroize_private_v1();
-            row.parent_content_start.zeroize_private_v1();
-            row.parent_offset.zeroize_private_v1();
-            row.embedded_document.zeroize_private_v1();
-            row.embedded_offset.zeroize_private_v1();
-            row.value.zeroize_private_v1();
-        }
+        zeroize_embedded_rows_v1(&mut self.embedded_byte_rows);
         self.embedded_byte_rows.clear();
-        for certificate in &mut self.certificates {
-            zeroize_bytes_v1(&mut certificate.tbs_der);
-            zeroize_bytes_v1(&mut certificate.serial);
-            zeroize_name_v1(&mut certificate.issuer);
-            zeroize_name_v1(&mut certificate.subject);
-            certificate.not_before = 0;
-            certificate.not_after = 0;
-            zeroize_bytes_v1(&mut certificate.spki_der);
-            zeroize_bytes_v1(&mut certificate.public_key);
-            zeroize_signature_v1(&mut certificate.signature);
-            zeroize_bytes_v1(&mut certificate.extensions.authority_key_identifier);
-            zeroize_bytes_v1(&mut certificate.extensions.subject_key_identifier);
-            certificate.extensions.basic_constraints_ca = false;
-            certificate.extensions.basic_constraints_path_len = None;
-            certificate.extensions.key_usage = 0;
-            if let Some(extended_key_usages) = &mut certificate.extensions.extended_key_usages {
-                extended_key_usages.clear();
-            }
-            certificate.extensions.extended_key_usages = None;
-        }
         self.certificates.clear();
-        zeroize_bytes_v1(&mut self.crl.tbs_der);
-        zeroize_name_v1(&mut self.crl.issuer);
-        self.crl.this_update = 0;
-        self.crl.next_update = 0;
-        for serial in &mut self.crl.revoked_serials {
-            zeroize_bytes_v1(serial);
-        }
-        self.crl.revoked_serials.clear();
-        zeroize_bytes_v1(&mut self.crl.authority_key_identifier);
-        self.crl.crl_number = 0;
-        zeroize_signature_v1(&mut self.crl.signature);
-        for row in &mut self.path_rows {
-            row.certificate.zeroize_private_v1();
-            row.is_leaf = F::ZERO;
-            row.is_ca = F::ZERO;
-            row.is_root = F::ZERO;
-            row.after_not_before.zeroize_private_v1();
-            row.before_not_after.zeroize_private_v1();
-            row.subordinate_ca_count.zeroize_private_v1();
-            row.path_len_slack.zeroize_private_v1();
-            row.issuer_name_matches_parent = F::ZERO;
-            row.authority_key_matches_parent = F::ZERO;
-        }
+        zeroize_crl_v1(&mut self.crl);
+        zeroize_path_rows_v1(&mut self.path_rows);
         self.path_rows.clear();
-        for document in &mut self.semantic_provenance {
-            document.document = 0;
-            document.kind = ZkX509Rfc5280DocumentKindV1::Certificate;
-            document.parent_document = 0;
-            document.parent_node = 0;
-            for node in &mut document.nodes {
-                node.document = 0;
-                node.node = 0;
-                node.parent_node = 0;
-                node.child_ordinal = 0;
-                node.start = 0;
-                node.content_start = 0;
-                node.content_end = 0;
-                node.depth = 0;
-                node.tag_class = 0;
-                node.constructed = false;
-                node.tag_number = 0;
-                node.role = ZkX509Rfc5280GrammarRoleV1::Certificate;
-                node.role_instance = 0;
-            }
-            document.nodes.clear();
-        }
         self.semantic_provenance.clear();
     }
     #[cfg(test)]
@@ -2323,12 +2495,17 @@ impl ZkX509Rfc5280TraceV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn trace_bytes_v1(trace: &ZkX509DerDocumentTraceV1) -> Result<Vec<u8>, ZkX509DerAirErrorV1> {
-    trace
-        .bytes
-        .iter()
-        .map(|row| u8::try_from(row.value.value.0).map_err(|_| ZkX509DerAirErrorV1::Range))
-        .collect()
+fn trace_bytes_v1(
+    trace: &ZkX509DerDocumentTraceV1,
+) -> Result<PrivateTableV1<u8>, ZkX509DerAirErrorV1> {
+    let mut bytes = PrivateTableV1::new(Vec::new(), zeroize_words_v1);
+    bytes
+        .try_reserve_exact(trace.bytes.len())
+        .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+    for row in &trace.bytes {
+        bytes.push(u8::try_from(row.value.value.0).map_err(|_| ZkX509DerAirErrorV1::Range)?);
+    }
+    Ok(bytes)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn node_bounds_v1(
@@ -2343,16 +2520,13 @@ fn node_bounds_v1(
     ))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn node_encoded_v1(
+fn node_encoded_v1<'a>(
     trace: &ZkX509DerDocumentTraceV1,
-    bytes: &[u8],
+    bytes: &'a [u8],
     node: usize,
-) -> Result<Vec<u8>, ZkX509DerAirErrorV1> {
+) -> Result<&'a [u8], ZkX509DerAirErrorV1> {
     let (start, _, end) = node_bounds_v1(trace, node)?;
-    bytes
-        .get(start..end)
-        .map(<[u8]>::to_vec)
-        .ok_or(ZkX509DerAirErrorV1::Topology)
+    bytes.get(start..end).ok_or(ZkX509DerAirErrorV1::Topology)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn node_contents_v1<'a>(
@@ -2450,7 +2624,10 @@ fn unsigned_integer_u64_v1(
     node: usize,
     max_bytes: usize,
 ) -> Result<u64, ZkX509DerAirErrorV1> {
-    let magnitude = positive_integer_v1(trace, bytes, node, max_bytes, true)?;
+    let magnitude = PrivateTableV1::new(
+        positive_integer_v1(trace, bytes, node, max_bytes, true)?,
+        zeroize_words_v1,
+    );
     magnitude.iter().try_fold(0_u64, |value, byte| {
         value
             .checked_mul(256)
@@ -2464,11 +2641,11 @@ fn parse_signature_v1(encoded: &[u8]) -> Result<ZkX509DerSignatureV1, ZkX509DerA
     require_tag_v1(&trace, 0, 0, true, 16)?;
     let bytes = trace_bytes_v1(&trace)?;
     let [r, s] = require_children_v1::<2>(&trace, 0)?;
-    Ok(ZkX509DerSignatureV1 {
-        encoded: encoded.to_vec(),
-        r: positive_integer_v1(&trace, &bytes, r, 32, false)?,
-        s: positive_integer_v1(&trace, &bytes, s, 32, false)?,
-    })
+    let mut output = ZkX509DerSignatureV1::default();
+    output.encoded = encoded.to_vec();
+    output.r = positive_integer_v1(&trace, &bytes, r, 32, false)?;
+    output.s = positive_integer_v1(&trace, &bytes, s, 32, false)?;
+    Ok(output)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn parse_decimal_v1(bytes: &[u8]) -> Result<u16, ZkX509DerAirErrorV1> {
@@ -2560,7 +2737,7 @@ fn parse_name_v1(
     if rdns.is_empty() {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let mut attributes: [Option<Vec<u8>>; 4] = core::array::from_fn(|_| None);
+    let mut output = ZkX509DerNameV1::default();
     for rdn in rdns {
         require_tag_v1(trace, rdn, 0, true, 17)?;
         let values = child_nodes_v1(trace, rdn)?;
@@ -2629,29 +2806,28 @@ fn parse_name_v1(
             } else {
                 return Err(ZkX509DerAirErrorV1::Input);
             }
-            if attributes[index].replace(contents.to_vec()).is_some() {
+            if output.attributes[index].is_some() {
                 return Err(ZkX509DerAirErrorV1::Input);
             }
+            output.attributes[index] = Some(contents.to_vec());
         }
     }
-    Ok(ZkX509DerNameV1 {
-        encoded: node_encoded_v1(trace, bytes, node)?,
-        attributes,
-    })
+    output.encoded = node_encoded_v1(trace, bytes, node)?.to_vec();
+    Ok(output)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn parse_extension_v1(
+fn parse_extension_v1<'a>(
     trace: &ZkX509DerDocumentTraceV1,
-    bytes: &[u8],
+    bytes: &'a [u8],
     node: usize,
-) -> Result<(Vec<u8>, bool, Vec<u8>), ZkX509DerAirErrorV1> {
+) -> Result<(&'a [u8], bool, &'a [u8]), ZkX509DerAirErrorV1> {
     require_tag_v1(trace, node, 0, true, 16)?;
     let children = child_nodes_v1(trace, node)?;
     if !(2..=3).contains(&children.len()) {
         return Err(ZkX509DerAirErrorV1::Input);
     }
     require_tag_v1(trace, children[0], 0, false, 6)?;
-    let oid = node_contents_v1(trace, bytes, children[0])?.to_vec();
+    let oid = node_contents_v1(trace, bytes, children[0])?;
     let (critical, value) = if children.len() == 3 {
         require_tag_v1(trace, children[1], 0, false, 1)?;
         if node_contents_v1(trace, bytes, children[1])? != [0xff] {
@@ -2663,16 +2839,12 @@ fn parse_extension_v1(
         (false, children[1])
     };
     require_tag_v1(trace, value, 0, false, 4)?;
-    Ok((
-        oid,
-        critical,
-        node_contents_v1(trace, bytes, value)?.to_vec(),
-    ))
+    Ok((oid, critical, node_contents_v1(trace, bytes, value)?))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn embedded_trace_v1(
     encoded: &[u8],
-) -> Result<(ZkX509DerDocumentTraceV1, Vec<u8>), ZkX509DerAirErrorV1> {
+) -> Result<(ZkX509DerDocumentTraceV1, PrivateTableV1<u8>), ZkX509DerAirErrorV1> {
     let trace = build_strict_der_document_trace_v1(encoded)?;
     let bytes = trace_bytes_v1(&trace)?;
     Ok((trace, bytes))
@@ -2754,7 +2926,7 @@ fn parse_eku_inner_v1(encoded: &[u8]) -> Result<Vec<ZkX509DerEkuV1>, ZkX509DerAi
     if children.is_empty() {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let mut usages = Vec::new();
+    let mut usages = PrivateTableV1::new(Vec::new(), zeroize_words_v1);
     for node in children {
         require_tag_v1(&trace, node, 0, false, 6)?;
         let oid = node_contents_v1(&trace, &bytes, node)?;
@@ -2772,7 +2944,7 @@ fn parse_eku_inner_v1(encoded: &[u8]) -> Result<Vec<ZkX509DerEkuV1>, ZkX509DerAi
         }
         usages.push(usage);
     }
-    Ok(usages)
+    Ok(usages.into_vec())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn parse_certificate_extensions_v1(
@@ -2813,34 +2985,50 @@ fn parse_certificate_extensions_v1(
         }
         previous_rank = Some(rank);
         match rank {
-            0 if !critical && aki.is_none() => aki = Some(parse_aki_inner_v1(&value)?),
-            1 if !critical && ski.is_none() => ski = Some(parse_ski_inner_v1(&value)?),
+            0 if !critical && aki.is_none() => {
+                aki = Some(PrivateTableV1::new(
+                    parse_aki_inner_v1(value)?,
+                    zeroize_words_v1,
+                ))
+            }
+            1 if !critical && ski.is_none() => {
+                ski = Some(PrivateTableV1::new(
+                    parse_ski_inner_v1(value)?,
+                    zeroize_words_v1,
+                ))
+            }
             2 if critical && key_usage.is_none() => {
                 key_usage = Some(parse_key_usage_inner_v1(&value)?)
             }
             3 if critical && basic.is_none() => {
                 basic = Some(parse_basic_constraints_inner_v1(&value)?)
             }
-            4 if critical && eku.is_none() => eku = Some(parse_eku_inner_v1(&value)?),
+            4 if critical && eku.is_none() => {
+                eku = Some(PrivateTableV1::new(
+                    parse_eku_inner_v1(value)?,
+                    zeroize_words_v1,
+                ))
+            }
             _ => return Err(ZkX509DerAirErrorV1::Input),
         }
     }
     let (basic_constraints_ca, basic_constraints_path_len) =
         basic.ok_or(ZkX509DerAirErrorV1::Input)?;
-    Ok(ZkX509DerCertificateExtensionsV1 {
-        authority_key_identifier: aki.ok_or(ZkX509DerAirErrorV1::Input)?,
-        subject_key_identifier: ski.ok_or(ZkX509DerAirErrorV1::Input)?,
-        basic_constraints_ca,
-        basic_constraints_path_len,
-        key_usage: key_usage.ok_or(ZkX509DerAirErrorV1::Input)?,
-        extended_key_usages: eku,
-    })
+    let mut output = ZkX509DerCertificateExtensionsV1::default();
+    output.authority_key_identifier = aki.ok_or(ZkX509DerAirErrorV1::Input)?.into_vec();
+    output.subject_key_identifier = ski.ok_or(ZkX509DerAirErrorV1::Input)?.into_vec();
+    output.basic_constraints_ca = basic_constraints_ca;
+    output.basic_constraints_path_len = basic_constraints_path_len;
+    output.key_usage = key_usage.ok_or(ZkX509DerAirErrorV1::Input)?;
+    output.extended_key_usages = eku.map(PrivateTableV1::into_vec);
+    Ok(output)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn parse_certificate_document_v1(
     trace: &ZkX509DerDocumentTraceV1,
 ) -> Result<ZkX509DerCertificateV1, ZkX509DerAirErrorV1> {
     trace.validate()?;
+    let mut output = ZkX509DerCertificateV1::default();
     let bytes = trace_bytes_v1(trace)?;
     require_tag_v1(trace, 0, 0, true, 16)?;
     let [tbs, outer_algorithm, signature_value] = require_children_v1::<3>(trace, 0)?;
@@ -2853,7 +3041,7 @@ fn parse_certificate_document_v1(
     if signature_content.first() != Some(&0) {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let signature = parse_signature_v1(&signature_content[1..])?;
+    output.signature = parse_signature_v1(&signature_content[1..])?;
     let fields = child_nodes_v1(trace, tbs)?;
     if fields.len() != 8 {
         return Err(ZkX509DerAirErrorV1::Input);
@@ -2863,19 +3051,19 @@ fn parse_certificate_document_v1(
     if node_contents_v1(trace, &bytes, version)? != [0x02, 0x01, 0x02] {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let serial = positive_integer_v1(trace, &bytes, fields[1], 20, false)?;
+    output.serial = positive_integer_v1(trace, &bytes, fields[1], 20, false)?;
     if node_encoded_v1(trace, &bytes, fields[2])? != ECDSA_SHA256_ALGORITHM_V1 {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let issuer = parse_name_v1(trace, &bytes, fields[3])?;
+    output.issuer = parse_name_v1(trace, &bytes, fields[3])?;
     require_tag_v1(trace, fields[4], 0, true, 16)?;
     let [not_before_node, not_after_node] = require_children_v1::<2>(trace, fields[4])?;
-    let not_before = parse_time_node_v1(trace, &bytes, not_before_node)?;
-    let not_after = parse_time_node_v1(trace, &bytes, not_after_node)?;
-    if not_after < not_before {
+    output.not_before = parse_time_node_v1(trace, &bytes, not_before_node)?;
+    output.not_after = parse_time_node_v1(trace, &bytes, not_after_node)?;
+    if output.not_after < output.not_before {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let subject = parse_name_v1(trace, &bytes, fields[5])?;
+    output.subject = parse_name_v1(trace, &bytes, fields[5])?;
     require_tag_v1(trace, fields[6], 0, true, 16)?;
     let [algorithm, key_value] = require_children_v1::<2>(trace, fields[6])?;
     if node_encoded_v1(trace, &bytes, algorithm)? != P256_ALGORITHM_V1 {
@@ -2889,19 +3077,11 @@ fn parse_certificate_document_v1(
     {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let extensions = parse_certificate_extensions_v1(trace, &bytes, fields[7])?;
-    Ok(ZkX509DerCertificateV1 {
-        tbs_der: node_encoded_v1(trace, &bytes, tbs)?,
-        serial,
-        issuer,
-        subject,
-        not_before,
-        not_after,
-        spki_der: node_encoded_v1(trace, &bytes, fields[6])?,
-        public_key: key_content[1..].to_vec(),
-        signature,
-        extensions,
-    })
+    output.extensions = parse_certificate_extensions_v1(trace, &bytes, fields[7])?;
+    output.tbs_der = node_encoded_v1(trace, &bytes, tbs)?.to_vec();
+    output.spki_der = node_encoded_v1(trace, &bytes, fields[6])?.to_vec();
+    output.public_key = key_content[1..].to_vec();
+    Ok(output)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn parse_crl_extensions_v1(
@@ -2933,7 +3113,10 @@ fn parse_crl_extensions_v1(
         }
         previous_rank = Some(rank);
         if rank == 0 && aki.is_none() {
-            aki = Some(parse_aki_inner_v1(&value)?);
+            aki = Some(PrivateTableV1::new(
+                parse_aki_inner_v1(value)?,
+                zeroize_words_v1,
+            ));
         } else if rank == 1 && crl_number.is_none() {
             let (inner, inner_bytes) = embedded_trace_v1(&value)?;
             crl_number = Some(unsigned_integer_u64_v1(&inner, &inner_bytes, 0, 8)?);
@@ -2941,16 +3124,16 @@ fn parse_crl_extensions_v1(
             return Err(ZkX509DerAirErrorV1::Input);
         }
     }
-    Ok((
-        aki.ok_or(ZkX509DerAirErrorV1::Input)?,
-        crl_number.ok_or(ZkX509DerAirErrorV1::Input)?,
-    ))
+    let aki = aki.ok_or(ZkX509DerAirErrorV1::Input)?;
+    let crl_number = crl_number.ok_or(ZkX509DerAirErrorV1::Input)?;
+    Ok((aki.into_vec(), crl_number))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn parse_crl_document_v1(
     trace: &ZkX509DerDocumentTraceV1,
 ) -> Result<ZkX509DerCrlV1, ZkX509DerAirErrorV1> {
     trace.validate()?;
+    let mut output = ZkX509DerCrlV1::default();
     let bytes = trace_bytes_v1(trace)?;
     require_tag_v1(trace, 0, 0, true, 16)?;
     let [tbs, outer_algorithm, signature_value] = require_children_v1::<3>(trace, 0)?;
@@ -2963,7 +3146,7 @@ fn parse_crl_document_v1(
     if signature_content.first() != Some(&0) {
         return Err(ZkX509DerAirErrorV1::Input);
     }
-    let signature = parse_signature_v1(&signature_content[1..])?;
+    output.signature = parse_signature_v1(&signature_content[1..])?;
     let fields = child_nodes_v1(trace, tbs)?;
     if !(6..=7).contains(&fields.len()) {
         return Err(ZkX509DerAirErrorV1::Input);
@@ -2974,10 +3157,10 @@ fn parse_crl_document_v1(
         return Err(ZkX509DerAirErrorV1::Input);
     }
     require_tag_v1(trace, fields[0], 0, false, 2)?;
-    let issuer = parse_name_v1(trace, &bytes, fields[2])?;
-    let this_update = parse_time_node_v1(trace, &bytes, fields[3])?;
-    let next_update = parse_time_node_v1(trace, &bytes, fields[4])?;
-    if next_update <= this_update {
+    output.issuer = parse_name_v1(trace, &bytes, fields[2])?;
+    output.this_update = parse_time_node_v1(trace, &bytes, fields[3])?;
+    output.next_update = parse_time_node_v1(trace, &bytes, fields[4])?;
+    if output.next_update <= output.this_update {
         return Err(ZkX509DerAirErrorV1::Input);
     }
     let (entries, extension_index) = if fields.len() == 7 {
@@ -2986,7 +3169,6 @@ fn parse_crl_document_v1(
     } else {
         (None, 5)
     };
-    let mut revoked_serials = Vec::new();
     if let Some(entries) = entries {
         let entry_nodes = child_nodes_v1(trace, entries)?;
         if entry_nodes.is_empty() || entry_nodes.len() > 64 {
@@ -2995,25 +3177,20 @@ fn parse_crl_document_v1(
         for entry in entry_nodes {
             require_tag_v1(trace, entry, 0, true, 16)?;
             let [serial, revocation_time] = require_children_v1::<2>(trace, entry)?;
-            let serial = positive_integer_v1(trace, &bytes, serial, 20, false)?;
-            if parse_time_node_v1(trace, &bytes, revocation_time)? > this_update {
+            let serial = PrivateTableV1::new(
+                positive_integer_v1(trace, &bytes, serial, 20, false)?,
+                zeroize_words_v1,
+            );
+            if parse_time_node_v1(trace, &bytes, revocation_time)? > output.this_update {
                 return Err(ZkX509DerAirErrorV1::Input);
             }
-            revoked_serials.push(serial);
+            output.revoked_serials.push(serial.into_vec());
         }
     }
-    let (authority_key_identifier, crl_number) =
+    (output.authority_key_identifier, output.crl_number) =
         parse_crl_extensions_v1(trace, &bytes, fields[extension_index])?;
-    Ok(ZkX509DerCrlV1 {
-        tbs_der: node_encoded_v1(trace, &bytes, tbs)?,
-        issuer,
-        this_update,
-        next_update,
-        revoked_serials,
-        authority_key_identifier,
-        crl_number,
-        signature,
-    })
+    output.tbs_der = node_encoded_v1(trace, &bytes, tbs)?.to_vec();
+    Ok(output)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn extension_value_nodes_v1(
@@ -3073,13 +3250,13 @@ fn build_embedded_der_v1(
 ) -> Result<
     (
         Vec<ZkX509DerDocumentTraceV1>,
-        Vec<ZkX509DerEmbeddedByteRowV1>,
+        PrivateTableV1<ZkX509DerEmbeddedByteRowV1>,
     ),
     ZkX509DerAirErrorV1,
 > {
     let value_nodes = embedded_value_nodes_v1(documents, certificate_count)?;
     let mut embedded_documents = Vec::new();
-    let mut rows = Vec::new();
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_embedded_rows_v1);
     embedded_documents
         .try_reserve_exact(value_nodes.len())
         .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
@@ -3090,8 +3267,7 @@ fn build_embedded_der_v1(
             .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
         let contents = node_contents_v1(parent_trace, &parent_bytes, node)?;
         let embedded = build_strict_der_document_trace_v1(contents)?;
-        rows.try_reserve(contents.len())
-            .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+        reserve_private_rows_v1(&mut rows, contents.len(), zeroize_embedded_rows_v1)?;
         for (embedded_offset, value) in contents.iter().copied().enumerate() {
             rows.push(ZkX509DerEmbeddedByteRowV1 {
                 parent_document: ZkX509DerRangeWitnessV1::from_u64(
@@ -3125,7 +3301,7 @@ fn build_embedded_der_v1(
 struct SemanticProvenanceBuilderV1<'a> {
     trace: &'a ZkX509DerDocumentTraceV1,
     document: u8,
-    rows: Vec<Option<ZkX509Rfc5280NodeProvenanceV1>>,
+    rows: PrivateTableV1<Option<ZkX509Rfc5280NodeProvenanceV1>>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> SemanticProvenanceBuilderV1<'a> {
@@ -3136,7 +3312,10 @@ impl<'a> SemanticProvenanceBuilderV1<'a> {
         Ok(Self {
             trace,
             document: u8::try_from(document).map_err(|_| ZkX509DerAirErrorV1::Resource)?,
-            rows: vec![None; trace.nodes.len()],
+            rows: PrivateTableV1::new(
+                vec![None; trace.nodes.len()],
+                zeroize_optional_provenance_v1,
+            ),
         })
     }
     fn assign(
@@ -3190,17 +3369,12 @@ impl<'a> SemanticProvenanceBuilderV1<'a> {
         Ok(())
     }
     fn finish(
-        self,
+        mut self,
         kind: ZkX509Rfc5280DocumentKindV1,
         parent_document: Option<usize>,
         parent_node: Option<usize>,
     ) -> Result<ZkX509Rfc5280DocumentProvenanceV1, ZkX509DerAirErrorV1> {
-        let nodes = self
-            .rows
-            .into_iter()
-            .collect::<Option<Vec<_>>>()
-            .ok_or(ZkX509DerAirErrorV1::Topology)?;
-        Ok(ZkX509Rfc5280DocumentProvenanceV1 {
+        let mut output = ZkX509Rfc5280DocumentProvenanceV1 {
             document: self.document,
             kind,
             parent_document: parent_document.map_or(Ok(u8::MAX), |document| {
@@ -3209,8 +3383,18 @@ impl<'a> SemanticProvenanceBuilderV1<'a> {
             parent_node: parent_node.map_or(Ok(u16::MAX), |node| {
                 u16::try_from(node).map_err(|_| ZkX509DerAirErrorV1::Resource)
             })?,
-            nodes,
-        })
+            nodes: Vec::new(),
+        };
+        output
+            .nodes
+            .try_reserve_exact(self.rows.len())
+            .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+        for row in self.rows.iter_mut() {
+            output
+                .nodes
+                .push(row.take().ok_or(ZkX509DerAirErrorV1::Topology)?);
+        }
+        Ok(output)
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -3840,8 +4024,8 @@ pub(crate) fn evaluate_embedded_byte_constraints_v1(row: &ZkX509DerEmbeddedByteR
 fn build_path_rows_v1(
     statement: &ZkX509Rfc5280StatementV1,
     certificates: &[ZkX509DerCertificateV1],
-) -> Result<Vec<ZkX509Rfc5280PathRowV1>, ZkX509DerAirErrorV1> {
-    let mut rows = Vec::new();
+) -> Result<PrivateTableV1<ZkX509Rfc5280PathRowV1>, ZkX509DerAirErrorV1> {
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_path_rows_v1);
     rows.try_reserve_exact(certificates.len())
         .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
     for (index, certificate) in certificates.iter().enumerate() {
@@ -4058,11 +4242,11 @@ pub(crate) fn build_zk_x509_rfc5280_trace_v1(
     let trace = ZkX509Rfc5280TraceV1 {
         documents,
         embedded_documents,
-        embedded_byte_rows,
+        embedded_byte_rows: embedded_byte_rows.into_vec(),
         certificates,
         crl,
         statement,
-        path_rows,
+        path_rows: path_rows.into_vec(),
         semantic_provenance,
     };
     trace.validate()?;
@@ -4093,6 +4277,7 @@ fn push_rfc5280_io_channel_v1(
     mut consumers: Vec<ZkX509IoEndpointV1>,
     value: Vec<u8>,
 ) -> Result<(), ZkX509DerAirErrorV1> {
+    let value = PrivateTableV1::new(value, zeroize_words_v1);
     consumers.sort_unstable();
     if consumers.is_empty() || consumers.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(ZkX509DerAirErrorV1::Topology);
@@ -4105,7 +4290,7 @@ fn push_rfc5280_io_channel_v1(
     if byte_len == 0 {
         return Err(ZkX509DerAirErrorV1::Topology);
     }
-    witnesses.push(ZkX509IoChannelWitnessV1 {
+    let mut witness = ZkX509IoChannelWitnessV1 {
         declaration: ZkX509IoChannelDeclarationV1 {
             channel,
             producer,
@@ -4113,9 +4298,17 @@ fn push_rfc5280_io_channel_v1(
             byte_len,
             public_value: None,
         },
-        producer_value: value.clone(),
-        consumer_values: vec![value; consumers.len()],
-    });
+        producer_value: value.into_vec(),
+        consumer_values: Vec::new(),
+    };
+    witness
+        .consumer_values
+        .try_reserve_exact(consumers.len())
+        .map_err(|_| ZkX509DerAirErrorV1::Resource)?;
+    for _ in &consumers {
+        witness.consumer_values.push(witness.producer_value.clone());
+    }
+    witnesses.push(witness);
     Ok(())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -4523,7 +4716,7 @@ impl ZkX509Rfc5280TraceV1 {
         let (expected_embedded_documents, expected_embedded_byte_rows) =
             build_embedded_der_v1(&self.documents, self.certificates.len())?;
         if self.embedded_documents != expected_embedded_documents
-            || self.embedded_byte_rows != expected_embedded_byte_rows
+            || self.embedded_byte_rows.as_slice() != expected_embedded_byte_rows.as_slice()
             || self.embedded_documents.len() > ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1
         {
             return Err(ZkX509DerAirErrorV1::ByteBinding);
@@ -4546,7 +4739,9 @@ impl ZkX509Rfc5280TraceV1 {
         }
         validate_rfc5280_semantics_v1(&self.statement, &self.certificates, &self.crl)?;
         let expected_rows = build_path_rows_v1(&self.statement, &self.certificates)?;
-        if self.path_rows != expected_rows || self.path_rows.len() != self.certificates.len() {
+        if self.path_rows.as_slice() != expected_rows.as_slice()
+            || self.path_rows.len() != self.certificates.len()
+        {
             return Err(ZkX509DerAirErrorV1::Topology);
         }
         for (index, row) in self.path_rows.iter().enumerate() {
@@ -5840,5 +6035,6 @@ mod tests {
             Err(ZkX509DerAirErrorV1::ByteBinding)
         );
     }
+    include!("der_air_cleanup_tests.rs");
     include!("der_air_rfc5280_io_tests.rs");
 }

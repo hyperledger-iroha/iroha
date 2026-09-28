@@ -385,18 +385,24 @@ impl core::fmt::Debug for P256ExternalBindingTraceV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_external_binding_rows_v1(rows: &mut [P256ExternalBindingRowV1]) {
+    for row in rows {
+        super::private_table::zeroize_fields_v1(&mut row.writer_cells);
+        super::private_table::zeroize_fields_v1(&mut row.external_cells);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ExternalBindingTraceV1 {
     /// Recursively overwrite every private source and copied witness cell.
     ///
     /// Fixed addresses and ownership manifests are public topology, but the row allocation is
     /// cleared as well so no stale cells remain reachable after an error path or ordinary drop.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        for row in &mut self.rows {
-            row.writer_cells.fill(F::ZERO);
-            row.external_cells.fill(F::ZERO);
-        }
+        zeroize_external_binding_rows_v1(&mut self.rows);
         self.rows.clear();
-        self.input_selection.active = F::ZERO;
+        super::private_table::zeroize_fields_v1(core::slice::from_mut(
+            &mut self.input_selection.active,
+        ));
         self.input_selection.real.zeroize_private_v1();
         self.input_selection.selected.zeroize_private_v1();
     }
@@ -850,7 +856,8 @@ fn build_external_binding_from_execution_endpoint_v1(
     {
         return Err(P256ExternalBindingErrorV1::Topology);
     }
-    let mut rows = Vec::new();
+    let mut rows =
+        super::private_table::PrivateTableV1::new(Vec::new(), zeroize_external_binding_rows_v1);
     rows.try_reserve_exact(row_count)
         .map_err(|_| P256ExternalBindingErrorV1::Resource)?;
     for chunk in expected.chunks_exact(P256_EXTERNAL_BINDINGS_PER_ROW_V1) {
@@ -864,7 +871,7 @@ fn build_external_binding_from_execution_endpoint_v1(
     let selected = p256_byte_io_witness_v1(material, topology.byte_io)?;
     let trace = P256ExternalBindingTraceV1 {
         role: material.role,
-        rows,
+        rows: rows.into_vec(),
         byte_io: topology.byte_io,
         input_selection: P256OptionalCertificateSelectionV1 {
             active: F::ONE,
@@ -1115,10 +1122,17 @@ impl ExpectedBindingV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_expected_bindings_v1(bindings: &mut [ExpectedBindingV1]) {
+    for binding in bindings {
+        super::private_table::zeroize_fields_v1(core::slice::from_mut(&mut binding.writer));
+        super::private_table::zeroize_fields_v1(core::slice::from_mut(&mut binding.external));
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_slots_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
-) -> Result<Vec<ExpectedBindingV1>, P256ExternalBindingErrorV1> {
+) -> Result<super::private_table::PrivateTableV1<ExpectedBindingV1>, P256ExternalBindingErrorV1> {
     let topology = validate_material_topology_v1(material)?;
     expected_slots_with_topology_v1(material, value_bus, &topology)
 }
@@ -1127,12 +1141,13 @@ fn expected_slots_with_topology_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     topology: &ExpectedTopologyV1,
-) -> Result<Vec<ExpectedBindingV1>, P256ExternalBindingErrorV1> {
+) -> Result<super::private_table::PrivateTableV1<ExpectedBindingV1>, P256ExternalBindingErrorV1> {
     let active = p256_external_binding_active_equalities_v1(material.role);
     let slots = p256_external_binding_rows_v1(material.role)
         .checked_mul(P256_EXTERNAL_BINDINGS_PER_ROW_V1)
         .ok_or(P256ExternalBindingErrorV1::Resource)?;
-    let mut expected = Vec::new();
+    let mut expected =
+        super::private_table::PrivateTableV1::new(Vec::new(), zeroize_expected_bindings_v1);
     expected
         .try_reserve_exact(slots)
         .map_err(|_| P256ExternalBindingErrorV1::Resource)?;
@@ -2050,6 +2065,28 @@ fn map_writer_error_v1(error: P256ValueBusErrorV1) -> P256ExternalBindingErrorV1
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_expected_binding_erasure_clears_live_private_projection_cells() {
+        use super::super::private_table::{PrivateTableV1, inspection::observe_v1};
+        let rows = PrivateTableV1::new(
+            vec![ExpectedBindingV1 {
+                fixed: P256ExternalBindingFixedAccessV1::Inactive,
+                writer: F(17),
+                external: F(19),
+            }],
+            zeroize_expected_bindings_v1,
+        );
+        let (_, observed) = observe_v1(|| drop(rows));
+        assert_eq!(
+            observed
+                .iter()
+                .map(|item| item.nonzero_before)
+                .sum::<usize>(),
+            2
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+
     use super::*;
     use crate::privacy_engines::zk_x509::{
         credential_pre_aux::{
@@ -2543,6 +2580,12 @@ mod tests {
     }
     #[test]
     fn production_base_source_path_matches_projection_binds_once_and_zeroizes_recursively() {
+        let (_, observations) = super::super::private_table::inspection::observe_v1(production_base_source_path_matches_projection_binds_once_and_zeroizes_recursively_body_v1);
+        assert!(observations.iter().any(|item| item.nonzero_before > 0));
+        assert!(observations.iter().all(|item| item.nonzero_after == 0));
+    }
+    fn production_base_source_path_matches_projection_binds_once_and_zeroizes_recursively_body_v1()
+    {
         let fixture = wallet_fixture_v1();
         let mut base = P256ValueBusBaseSourceV1::new_v1(&fixture.material)
             .expect("validated challenge-independent value-bus source");

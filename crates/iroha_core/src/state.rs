@@ -1219,6 +1219,7 @@ macro_rules! with_world_overlay_fields {
             consensus_schedule,
             consensus_keys,
             consensus_keys_by_pk,
+            sumeragi_lanes,
             domain_committees,
             domain_endorsement_policies,
             domain_endorsements,
@@ -5840,6 +5841,8 @@ pub struct WorldData {
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk:
         Storage<String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
+    /// The global chain's lanes and autoscale history (`specs/sumeragi_lanes.md` §2, §6).
+    pub(crate) sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6510,6 +6513,9 @@ pub struct WorldBlockFields<'world> {
     pub(crate) consensus_keys: StorageField<'world, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk: StorageField<'world, String, Vec<ConsensusKeyId>>,
+    /// The global chain's lanes and autoscale history.
+    pub(crate) sumeragi_lanes:
+        CellField<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -7810,6 +7816,7 @@ impl WorldBlock<'_> {
             soracloud_sequence_watermark,
             merge_hint_roots,
             merge_global_state_root,
+            sumeragi_lanes,
         );
         append_merge_executor_delta(&mut out, "executor", &self.executor);
         self.triggers.append_merge_execution_write_set(&mut out);
@@ -8152,6 +8159,9 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) consensus_keys: StorageTransaction<'block, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk: StorageTransaction<'block, String, Vec<ConsensusKeyId>>,
+    /// The global chain's lanes and autoscale history.
+    pub(crate) sumeragi_lanes:
+        CellTransaction<'block, 'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -10628,6 +10638,9 @@ pub struct WorldView<'world> {
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk:
         StorageView<'world, String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
+    /// The global chain's lanes and autoscale history.
+    pub(crate) sumeragi_lanes:
+        CellView<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -14830,6 +14843,8 @@ pub struct StateBlockFields<'state> {
     pub zk_proof_bytes_in_block: u64,
     /// Consensus privacy action/byte budget committed by accepted transactions.
     privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1,
+    /// SCCP verifier work committed by accepted transactions (`[zk.sccp]` block limits).
+    sccp_verifier_work_in_block: iroha_sccp::light_client::SccpVerifierWorkV1,
     /// Implicit accounts created so far in this block.
     pub implicit_account_creations_in_block: u32,
     /// Gas limit per block (read from on-chain parameters or defaults).
@@ -14841,6 +14856,8 @@ pub struct StateBlockFields<'state> {
     execution_output_plan: Option<output_capacity::ExecutionOutputPlanState>,
     /// The Sumeragi schedule step of this block (run by the output seal's finalizer).
     pub(crate) sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep,
+    /// The lane step of this block (run by the output seal's finalizer).
+    pub(crate) sumeragi_lanes_step: crate::sumeragi::lanes::step::LaneStep,
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -16486,6 +16503,12 @@ pub struct StateTransaction<'block, 'state> {
     privacy_budget_after_block: crate::privacy::PrivacyBlockBudgetV1,
     /// Parent block privacy budget, updated only when this transaction commits.
     block_privacy_budget: &'block mut crate::privacy::PrivacyBlockBudgetV1,
+    /// SCCP verifier work reserved by this transaction.
+    sccp_verifier_work_in_tx: iroha_sccp::light_client::SccpVerifierWorkV1,
+    /// SCCP verifier work of the parent block after this transaction.
+    sccp_verifier_work_after_block: iroha_sccp::light_client::SccpVerifierWorkV1,
+    /// Parent block SCCP verifier work, updated only when this transaction commits.
+    block_sccp_verifier_work: &'block mut iroha_sccp::light_client::SccpVerifierWorkV1,
     /// Total confidential nullifiers consumed so far in this transaction.
     pub zk_nullifiers_in_tx: u32,
     /// Total confidential commitments created so far in this transaction.
@@ -23486,6 +23509,8 @@ macro_rules! world_ro_accessors {
             storage consensus_keys: ConsensusKeyId => ConsensusKeyRecord;
             /// Index mapping consensus public keys to registered identifiers.
             storage consensus_keys_by_pk: String => Vec<ConsensusKeyId>;
+            /// The global chain's lanes and autoscale history (read-only).
+            ref sumeragi_lanes: iroha_data_model::sumeragi_lanes::SumeragiLaneState;
             /// Pedersen parameter registry (read-only).
             storage pedersen_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>
@@ -27236,6 +27261,7 @@ impl WorldTransaction<'_, '_> {
             verifying_keys_by_circuit: _,
             consensus_keys: _,
             consensus_keys_by_pk: _,
+            sumeragi_lanes: _,
             pedersen_params: _,
             poseidon_params: _,
             runtime_upgrades: _,
@@ -27463,6 +27489,7 @@ impl WorldTransaction<'_, '_> {
         self.verifying_keys_by_circuit.apply();
         self.consensus_keys.apply();
         self.consensus_keys_by_pk.apply();
+        self.sumeragi_lanes.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
         self.runtime_upgrades.apply();
@@ -51895,13 +51922,18 @@ fn zk_policy_put_option_vk_ref(
 ///
 /// The retired governed SCCP registry is gone: SCCP v1 consensus parameters live in world state
 /// and change only through Parliament enactment (`specs/sccp.md` §4.1), and the `[zk.sccp]` native
-/// verifier work limits are bound through [`compute_zk_consensus_policy_hash`]. The SCCP input is
-/// therefore a fixed domain-separated constant.
-/// TODO(ws20): bind any SCCP v1 input here if a later wave makes one node-local.
+/// verifier work limits are bound through [`compute_zk_consensus_policy_hash`]. The SCCP input
+/// binds the compiled light-client chain profiles and verifier bounds
+/// (`iroha_sccp::light_client::profile::policy_hash_contribution`), so peers that would verify
+/// source-chain proofs differently cannot agree on a policy (`specs/sccp.md` §4.13).
 #[must_use]
 pub fn sccp_policy_hash_v1() -> [u8; 32] {
     let mut hasher = Sha256::new();
     zk_policy_put_bytes(&mut hasher, b"iroha:sccp:policy:v1");
+    zk_policy_put_bytes(
+        &mut hasher,
+        &iroha_sccp::light_client::profile::policy_hash_contribution(),
+    );
     Sha2Digest::finalize(hasher).into()
 }
 /// Combine the pure ZK consensus policy with the SCCP policy input ([`sccp_policy_hash_v1`]).
@@ -52063,13 +52095,13 @@ pub fn compute_zk_consensus_policy_hash(
     );
     zk_policy_put_u32(
         &mut h,
-        "sccp.max_ed25519_validator_key_checks_per_transaction",
-        sccp.max_ed25519_validator_key_checks_per_transaction.get(),
+        "sccp.max_bls_vote_attestations_per_transaction",
+        sccp.max_bls_vote_attestations_per_transaction.get(),
     );
     zk_policy_put_u32(
         &mut h,
-        "sccp.max_ed25519_validator_key_checks_per_block",
-        sccp.max_ed25519_validator_key_checks_per_block.get(),
+        "sccp.max_bls_vote_attestations_per_block",
+        sccp.max_bls_vote_attestations_per_block.get(),
     );
     zk_policy_put_usize(&mut h, "ballot_history_cap", zk_config.ballot_history_cap);
     zk_policy_put_usize(&mut h, "preverify_max_bytes", zk_config.preverify_max_bytes);
@@ -53389,6 +53421,7 @@ impl<'state> StateBlock<'state> {
         let executor_fuel_remaining = world.parameters.get().executor().fuel.get();
         let zk = fields.zk.clone();
         let privacy_budget_after_block = fields.privacy_budget_in_block;
+        let sccp_verifier_work_after_block = fields.sccp_verifier_work_in_block;
         let nexus = fields.nexus.clone();
         let lane_manifests = Arc::clone(&fields.lane_manifests);
         let lane_privacy_registry = Arc::clone(&fields.lane_privacy_registry);
@@ -53478,6 +53511,9 @@ impl<'state> StateBlock<'state> {
             privacy_bytes_in_tx: 0,
             privacy_budget_after_block,
             block_privacy_budget: &mut fields.privacy_budget_in_block,
+            sccp_verifier_work_in_tx: iroha_sccp::light_client::SccpVerifierWorkV1::default(),
+            sccp_verifier_work_after_block,
+            block_sccp_verifier_work: &mut fields.sccp_verifier_work_in_block,
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
             active_trigger_execution_depth: 0,
@@ -61853,6 +61889,41 @@ impl StateTransaction<'_, '_> {
         self.validate_privacy_action_reservation(action_index, encoded_action_bytes)
             .map(|_| ())
     }
+    /// Reserve one SCCP verifier call's `work` under the `[zk.sccp]` limits before the verifier
+    /// runs (`specs/sccp.md` §4.12.1 step 5).
+    ///
+    /// Like privacy actions, the reservation is staged in this transaction and reaches the
+    /// parent block only through [`Self::apply`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the name of the first `[zk.sccp]` limit the call, the transaction or the block
+    /// would exceed, without reserving anything.
+    pub(crate) fn reserve_sccp_verifier_work(
+        &mut self,
+        work: &iroha_sccp::light_client::SccpVerifierWorkV1,
+    ) -> Result<(), &'static str> {
+        const OVERFLOW: &str = "verifier work counters";
+        let in_tx = self
+            .sccp_verifier_work_in_tx
+            .checked_add(work)
+            .ok_or(OVERFLOW)?;
+        let after_block = self
+            .sccp_verifier_work_after_block
+            .checked_add(work)
+            .ok_or(OVERFLOW)?;
+        if let Some(limit) = crate::smartcontracts::isi::sccp::light_clients::exceeded_verifier_limit(
+            &self.zk.sccp,
+            work,
+            &in_tx,
+            &after_block,
+        ) {
+            return Err(limit);
+        }
+        self.sccp_verifier_work_in_tx = in_tx;
+        self.sccp_verifier_work_after_block = after_block;
+        Ok(())
+    }
     /// Reserve one canonically encoded first-release privacy action.
     ///
     /// The reservation is staged in this transaction. The parent block budget
@@ -62601,6 +62672,8 @@ impl StateTransaction<'_, '_> {
             block_zk,
             block_privacy_budget,
             privacy_budget_after_block,
+            block_sccp_verifier_work,
+            sccp_verifier_work_after_block,
             tx_call_hash,
             #[cfg(feature = "telemetry")]
             gas_used_in_block_so_far,
@@ -62658,6 +62731,7 @@ impl StateTransaction<'_, '_> {
         canonical_runtime.apply();
         *block_zk = zk;
         *block_privacy_budget = privacy_budget_after_block;
+        *block_sccp_verifier_work = sccp_verifier_work_after_block;
         if let Some(lane_id) = current_lane_id {
             touched_lanes.insert(lane_id);
         }

@@ -9,8 +9,12 @@
 //! so contract code is referenced by `(hash, depth)` alone ([`CellRef::opaque`]) and Taira can
 //! recompute a deployment address from the registered code references (§4.14.3).
 //!
+//! [`Cell::to_boc`] serializes a complete cell tree as a single-root bag of cells (message
+//! bodies, `StateInit`s and external messages) and [`cell_from_boc`] reads one back (contract
+//! code artifacts).
+//!
 //! TODO(ws3A): deduplicate the cell hashing with `crate::ton_native` once the retired TON
-//! proof code is purged, and add bag-of-cells serialization for the message bodies.
+//! proof code is purged.
 
 use std::sync::Arc;
 
@@ -153,6 +157,104 @@ impl Cell {
     pub fn representation(&self) -> Vec<u8> {
         representation(&self.data, self.bit_len, &self.refs)
     }
+
+    /// Serialize the complete tree as a single-root bag of cells: no index, no CRC, minimal
+    /// widths, one entry per distinct cell, parents before children.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TonCellError::OpaqueChild`] when a child is known only by hash and depth.
+    pub fn to_boc(&self) -> Result<Vec<u8>, TonCellError> {
+        fn visit<'a>(
+            cell: &'a Cell,
+            seen: &mut std::collections::BTreeSet<[u8; 32]>,
+            post: &mut Vec<&'a Cell>,
+        ) -> Result<(), TonCellError> {
+            if !seen.insert(cell.hash) {
+                return Ok(());
+            }
+            // Children in reverse, then the reversed post-order: the canonical proof order.
+            for child in cell.refs.iter().rev() {
+                visit(child.cell().ok_or(TonCellError::OpaqueChild)?, seen, post)?;
+            }
+            post.push(cell);
+            Ok(())
+        }
+        let mut post = Vec::new();
+        visit(self, &mut std::collections::BTreeSet::new(), &mut post)?;
+        post.reverse();
+        let index: std::collections::BTreeMap<[u8; 32], usize> = post
+            .iter()
+            .enumerate()
+            .map(|(position, cell)| (cell.hash, position))
+            .collect();
+        let width = |value: usize| {
+            usize::try_from((usize::BITS - value.leading_zeros()).div_ceil(8).max(1)).unwrap_or(8)
+        };
+        let be = |value: usize, bytes: usize| {
+            u64::try_from(value).unwrap_or(u64::MAX).to_be_bytes()[8 - bytes..].to_vec()
+        };
+        let size_bytes = width(post.len());
+        let mut body = Vec::new();
+        for cell in &post {
+            let representation = cell.representation();
+            body.extend_from_slice(&representation[..2 + cell.bit_len.div_ceil(8)]);
+            for child in &cell.refs {
+                body.extend_from_slice(&be(index[child.hash()], size_bytes));
+            }
+        }
+        let offset_bytes = width(body.len());
+        let mut out = vec![0xb5, 0xee, 0x9c, 0x72];
+        out.push(u8::try_from(size_bytes).map_err(|_| TonCellError::BitOverflow)?);
+        out.push(u8::try_from(offset_bytes).map_err(|_| TonCellError::BitOverflow)?);
+        out.extend_from_slice(&be(post.len(), size_bytes));
+        out.extend_from_slice(&be(1, size_bytes));
+        out.extend_from_slice(&be(0, size_bytes));
+        out.extend_from_slice(&be(body.len(), offset_bytes));
+        out.extend_from_slice(&be(0, size_bytes));
+        out.extend_from_slice(&body);
+        Ok(out)
+    }
+}
+
+/// Read a single-root bag of ordinary cells (for example a contract code artifact) as a
+/// complete cell tree.
+///
+/// # Errors
+///
+/// Returns [`TonCellError::BadSnake`] for a malformed bag, an exotic cell or a cell that does
+/// not fit the builder.
+pub fn cell_from_boc(bytes: &[u8]) -> Result<Cell, TonCellError> {
+    fn build(
+        boc: &crate::ton_native::TonBoc,
+        index: usize,
+        memo: &mut std::collections::BTreeMap<usize, Cell>,
+    ) -> Result<Cell, TonCellError> {
+        if let Some(cell) = memo.get(&index) {
+            return Ok(cell.clone());
+        }
+        let raw = boc.cells.get(index).ok_or(TonCellError::BadSnake)?;
+        if raw.exotic {
+            return Err(TonCellError::BadSnake);
+        }
+        let bits = crate::ton_native::ton_cell_serialized_bit_len(raw.data_descriptor, &raw.data)
+            .ok_or(TonCellError::BadSnake)?;
+        let mut builder = CellBuilder::new();
+        for bit in 0..bits {
+            builder.store_bit(raw.data[bit / 8] & (0x80 >> (bit % 8)) != 0)?;
+        }
+        for child in &raw.refs {
+            builder.store_ref(build(boc, *child, memo)?)?;
+        }
+        let cell = builder.build();
+        memo.insert(index, cell.clone());
+        Ok(cell)
+    }
+    let boc = crate::ton_native::parse_ton_boc(bytes).ok_or(TonCellError::BadSnake)?;
+    let [root] = boc.roots.as_slice() else {
+        return Err(TonCellError::BadSnake);
+    };
+    build(&boc, *root, &mut std::collections::BTreeMap::new())
 }
 
 fn representation(data: &[u8], bit_len: usize, refs: &[CellRef]) -> Vec<u8> {
@@ -489,6 +591,37 @@ pub struct TonMinterDataV1 {
 ///
 /// Returns [`TonCellError::BadRoster`] or [`TonCellError::CoinsTooLarge`].
 pub fn minter_initial_data(init: &TonMinterInitV1) -> Result<TonMinterDataV1, TonCellError> {
+    minter_initial_data_with_code(init, init.wallet_code.into(), init.bucket_code.into())
+}
+
+/// [`minter_initial_data`] with the complete wallet and bucket code cells, so the data can be
+/// serialized in a deployment `StateInit`; the codes must match `init`'s references.
+///
+/// # Errors
+///
+/// Returns [`TonCellError::OpaqueChild`] when a code cell does not match its reference, or the
+/// errors of [`minter_initial_data`].
+pub fn minter_deployment_data(
+    init: &TonMinterInitV1,
+    wallet_code: Cell,
+    bucket_code: Cell,
+) -> Result<TonMinterDataV1, TonCellError> {
+    for (cell, reference) in [
+        (&wallet_code, init.wallet_code),
+        (&bucket_code, init.bucket_code),
+    ] {
+        if *cell.hash() != reference.hash || cell.depth() != reference.depth {
+            return Err(TonCellError::OpaqueChild);
+        }
+    }
+    minter_initial_data_with_code(init, wallet_code.into(), bucket_code.into())
+}
+
+fn minter_initial_data_with_code(
+    init: &TonMinterInitV1,
+    wallet_code: CellRef,
+    bucket_code: CellRef,
+) -> Result<TonMinterDataV1, TonCellError> {
     let roster_digest = init
         .roster
         .digest(&init.taira_network_id)
@@ -503,8 +636,8 @@ pub fn minter_initial_data(init: &TonMinterInitV1) -> Result<TonMinterDataV1, To
         .store_coins(init.max_supply)?
         .store_uint(u128::from(init.roster.generation), 64)?
         .store_bytes(&roster_digest)?
-        .store_ref(init.wallet_code)?
-        .store_ref(init.bucket_code)?;
+        .store_ref(wallet_code)?
+        .store_ref(bucket_code)?;
     let config = config.build();
 
     let members = member_chunks(&init.roster.members)?;
@@ -875,6 +1008,62 @@ mod tests {
             minter_initial_data(&init).unwrap_err(),
             TonCellError::CoinsTooLarge
         );
+    }
+
+    #[test]
+    fn deployment_data_embeds_the_complete_code_cells() {
+        let (mut init, _) = fixture_n4();
+        let wallet = CellBuilder::new().store_uint(1, 8).unwrap().build();
+        let bucket = CellBuilder::new().store_uint(2, 8).unwrap().build();
+        init.wallet_code = SccpTonCodeRefV1 {
+            hash: *wallet.hash(),
+            depth: wallet.depth(),
+        };
+        init.bucket_code = SccpTonCodeRefV1 {
+            hash: *bucket.hash(),
+            depth: bucket.depth(),
+        };
+        let full = minter_deployment_data(&init, wallet.clone(), bucket.clone()).unwrap();
+        assert_eq!(
+            full.root.hash(),
+            minter_initial_data(&init).unwrap().root.hash()
+        );
+        assert!(full.root.to_boc().is_ok());
+        assert_eq!(
+            minter_initial_data(&init).unwrap().root.to_boc(),
+            Err(TonCellError::OpaqueChild)
+        );
+        assert_eq!(
+            minter_deployment_data(&init, bucket, wallet).unwrap_err(),
+            TonCellError::OpaqueChild
+        );
+    }
+
+    #[test]
+    fn bags_of_cells_round_trip_through_the_proof_parser() {
+        let mut leaf = CellBuilder::new();
+        leaf.store_uint(0x5a, 7).expect("bits");
+        let leaf = leaf.build();
+        let mut root = CellBuilder::new();
+        root.store_bytes(&[1, 2, 3])
+            .expect("bytes")
+            .store_ref(leaf.clone())
+            .expect("ref")
+            .store_ref(leaf)
+            .expect("ref");
+        let root = root.build();
+        let boc = root.to_boc().expect("complete tree");
+        assert_eq!(
+            crate::ton_native::ton_canonical_boc_single_root_hash_v1(&boc),
+            Some(*root.hash())
+        );
+        assert_eq!(cell_from_boc(&boc).expect("parses"), root);
+        let opaque = CellBuilder::new()
+            .store_ref(CellRef::opaque([1; 32], 3))
+            .expect("ref")
+            .build();
+        assert_eq!(opaque.to_boc(), Err(TonCellError::OpaqueChild));
+        assert!(cell_from_boc(&[1, 2, 3]).is_err());
     }
 
     #[test]

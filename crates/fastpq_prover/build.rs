@@ -32,6 +32,7 @@ fn main() {
     println!("cargo:rerun-if-changed=metal/include/params.h");
     println!("cargo:rerun-if-changed=metal/kernels/field.metal");
     println!("cargo:rerun-if-changed=metal/kernels/ntt_stage.metal");
+    println!("cargo:rerun-if-changed=metal/kernels/exact_root.metal");
     println!("cargo:rerun-if-changed=metal/kernels/poseidon.metal");
     println!("cargo:rerun-if-changed=metal/kernels/digest384.metal");
     println!("cargo:rerun-if-changed=metal/kernels/bn254.metal");
@@ -149,6 +150,7 @@ fn compile_metal_shaders() -> Result<(), String> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
     let kernels = [
         ("ntt_stage", Path::new("metal/kernels/ntt_stage.metal")),
+        ("exact_root", Path::new("metal/kernels/exact_root.metal")),
         ("poseidon", Path::new("metal/kernels/poseidon.metal")),
         ("digest384", Path::new("metal/kernels/digest384.metal")),
         ("bn254", Path::new("metal/kernels/bn254.metal")),

@@ -275,6 +275,9 @@ pub(super) struct MaskedStripe<'a> {
 }
 
 impl MaskedStripe<'_> {
+    pub(super) fn stripe_index(&self) -> usize {
+        self.stripe
+    }
     pub(super) fn rows(&self) -> usize {
         self.plan.rows
     }
@@ -456,6 +459,27 @@ impl MaskedTraceReplay {
         self.replay_selected(|stripe| stripe % step == 0, |stripe| visit(stripe, step))
     }
 
+    /// Regenerate exact caller-selected natural rows, charging one full pass.
+    pub(super) fn visit_selected_stripes(
+        &mut self,
+        indices: &[usize],
+        visit: impl FnMut(MaskedStripe<'_>) -> Result<()>,
+    ) -> Result<()> {
+        if indices.is_empty()
+            || indices.len() > self.plan.max_selected
+            || indices.iter().any(|&i| i >= self.plan.lde_rows())
+            || indices.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(invalid(
+                "selected masked rows must be sorted, unique and bounded",
+            ));
+        }
+        let mut selected = [false; LDE_ROWS / TRACE_ROWS];
+        for &index in indices {
+            selected[index % self.plan.stripes] = true;
+        }
+        self.replay_selected(|stripe| selected[stripe], visit)
+    }
     fn replay_selected(
         &mut self,
         selected: impl Fn(usize) -> bool,

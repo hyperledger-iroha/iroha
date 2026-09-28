@@ -175,3 +175,55 @@ fn complete_terminal_and_phase_preflight_are_exact() {
     assert_eq!(quotient_plan.parent_hashes, 8_388_607);
     assert!(quotient_plan.build(&mut replay, &binding).is_err());
 }
+
+#[test]
+fn cached_fri_openings_are_byte_identical_to_full_reference_traversal() {
+    let binding = Context::new(b"actual cached FRI fiber parity").unwrap();
+    let plan = CoefficientReplayPlan::fri(4, replay_limits()).unwrap();
+    let coefficients = (0..plan.degree()).map(dense).collect::<Vec<_>>();
+    let sources = [&coefficients[..]];
+    for query in [
+        vec![0],
+        vec![127],
+        vec![0, 1, 63, 64, 126, 127],
+        (0..128).step_by(2).collect(),
+    ] {
+        let mut reference_replay = CoefficientReplay::new(plan, &sources).unwrap();
+        let reference =
+            CoefficientCommitmentPlan::new(plan, &binding, Oracle::Fri(4), &query, limits())
+                .unwrap()
+                .build(&mut reference_replay, &binding)
+                .unwrap();
+        let mut cached_replay = CoefficientReplay::new(plan, &sources).unwrap();
+        let mut committed =
+            CoefficientCommitmentPlan::new(plan, &binding, Oracle::Fri(4), &[], limits())
+                .unwrap()
+                .commit(&mut cached_replay, &binding)
+                .unwrap();
+        let cache = committed
+            .cache
+            .take()
+            .unwrap()
+            .bind(&binding, Oracle::Fri(4), committed.root)
+            .unwrap();
+        let opened = open_cached(
+            cache,
+            &mut cached_replay,
+            &query,
+            crate::DigestExecutionV1::Cpu,
+        )
+        .unwrap();
+        assert_eq!(opened.root, reference.root);
+        assert_eq!(opened.siblings, reference.siblings);
+        assert_eq!(
+            opened.openings().collect::<Vec<_>>(),
+            reference.openings().collect::<Vec<_>>()
+        );
+        let mut expected = vec![0; reference.selected.len() * F::BYTES];
+        let mut actual = vec![0; opened.selected.len() * F::BYTES];
+        pack(&reference.selected, &mut expected).unwrap();
+        pack(&opened.selected, &mut actual).unwrap();
+        assert_eq!(actual, expected);
+        assert!(cached_replay.ensure_pass_available().is_err());
+    }
+}

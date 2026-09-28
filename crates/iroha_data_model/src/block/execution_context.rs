@@ -371,6 +371,9 @@ pub struct BlockExecutionContextBundle {
     /// Shape alone grants no live, historical or application authority.
     #[norito(required)]
     pub native_lane_decisions: Option<Box<super::lane_decision_batch::LaneDecisionBatchV1>>,
+    /// The lane blocks this global block merges (`specs/sumeragi_lanes.md` §4.2).
+    #[norito(required)]
+    pub lane_merge: Option<crate::sumeragi_lanes::SumeragiLaneMergeSection>,
 }
 impl BlockExecutionContextBundle {
     /// Current supported bundle layout.
@@ -391,6 +394,7 @@ impl BlockExecutionContextBundle {
             queue_plan_admissions: Vec::new(),
             merge_entry: None,
             native_lane_decisions: None,
+            lane_merge: None,
         }
     }
     /// Attach globally anchored autonomous lane payloads to this bundle.
@@ -469,6 +473,7 @@ impl BlockExecutionContextBundle {
             && self.queue_plan_admissions.is_empty()
             && self.merge_entry.is_none()
             && self.native_lane_decisions.is_none()
+            && self.lane_merge.is_none()
     }
 }
 impl Default for BlockExecutionContextBundle {

@@ -122,7 +122,8 @@ pub(crate) enum AggregateStarkErrorV1 {
     #[error("aggregate STARK internal invariant failed")]
     InternalInvariant,
 }
-fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
+/// Preserve shared arithmetic and allocation failures at the aggregate boundary.
+pub(crate) fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
     match error {
         TransparentStarkErrorV1::RandomnessUnavailable => {
             AggregateStarkErrorV1::RandomnessUnavailable
@@ -2167,6 +2168,11 @@ pub(crate) struct StreamingTraceMaskSetV1 {
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
+    /// Transfer an already allocated private column into its clearing owner.
+    pub(crate) fn from_vec_v1(values: Vec<F>) -> Self {
+        Self(values)
+    }
+
     fn zeroize_v1(&mut self) {
         zeroize_field_column_v1(&mut self.0);
     }

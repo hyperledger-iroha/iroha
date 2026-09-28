@@ -78,7 +78,7 @@ use iroha_data_model::privacy::PrivacyConsensusLimitsV1;
 use rand::TryCryptoRng;
 use thiserror::Error;
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
-const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
+const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-norito-zk-x509-witness-v1-flags0+strict-reference-relation";
 const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // Independently encoded and SHA-256 checked from the exact ordered 29-field
@@ -87,8 +87,8 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // This identifies the sole compiled geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0xa9, 0x53, 0x0f, 0x22, 0x5b, 0x11, 0x2f, 0x50, 0xe1, 0xed, 0x11, 0x3b, 0x28, 0x5e, 0xb1, 0xec,
-    0x32, 0xb7, 0xa4, 0xe8, 0xcc, 0xde, 0xa7, 0x67, 0x6b, 0x97, 0xaf, 0xa6, 0xaf, 0xff, 0x93, 0x4e,
+    0xbb, 0xd1, 0xcc, 0x3f, 0xbe, 0xfd, 0x0f, 0x0a, 0xdb, 0xa9, 0x58, 0x31, 0x00, 0xa8, 0x21, 0x3d,
+    0x0c, 0x1e, 0xff, 0xc1, 0x09, 0xc1, 0x76, 0x91, 0x4e, 0xe1, 0x4c, 0x31, 0xdd, 0x4b, 0x2a, 0x67,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,6 +284,21 @@ pub(crate) fn verify_zk_x509_credential_proof_v1(
         envelope.ca_subproof,
     )
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn validate_witness_round_trip_v1(
+    witness: &ZkX509WitnessV1,
+    encoded_witness: &[u8],
+) -> Result<(), ZkX509EngineErrorV1> {
+    let canonical = super::private_table::PrivateTableV1::new(
+        witness.encode_v1()?,
+        super::private_table::zeroize_words_v1,
+    );
+    if canonical.as_slice() != encoded_witness {
+        return Err(ZkX509EngineErrorV1::WitnessRoundTripMismatch);
+    }
+    Ok(())
+}
+
 /// Decode and validate the exact prover input against trusted ledger state.
 ///
 /// This function performs no proof construction. Its output is the only
@@ -306,9 +321,7 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
     let witness = ZkX509WitnessV1::decode_exact_v1(encoded_witness)?;
     // Decode is already exact.  Re-encoding here is a deliberate differential
     // invariant for the eventual external prover boundary.
-    if witness.encode_v1()? != encoded_witness {
-        return Err(ZkX509EngineErrorV1::WitnessRoundTripMismatch);
-    }
+    validate_witness_round_trip_v1(&witness, encoded_witness)?;
     let trust_anchor = authoritative_state.trust_anchor();
     let crl = authoritative_state.crl_record();
     let governance = ZkX509GovernanceV1 {
@@ -634,6 +647,21 @@ mod tests {
         let recomputed =
             recompute_zk_x509_compiled_profile_digest_v1().expect("canonical manifest digest");
         assert_eq!(recomputed, independent);
+        if ZK_X509_COMPILED_PROFILE_DIGEST_V1 != Some(independent) {
+            // These are public profile descriptors, never witness material.
+            // Retain the exact independent inputs when a deliberate first-
+            // release protocol change requires a new native pin.
+            eprintln!(
+                "zk-x509-independent-compiled-profile-sha256={}",
+                hex::encode(independent)
+            );
+            for (index, field) in fields.iter().enumerate() {
+                eprintln!(
+                    "zk-x509-compiled-profile-field-{index}={}",
+                    hex::encode(field)
+                );
+            }
+        }
         assert_eq!(ZK_X509_COMPILED_PROFILE_DIGEST_V1, Some(independent));
         assert_eq!(
             construct_zk_x509_compiled_profile_v1()
@@ -810,3 +838,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "engine_prover_diagnostic.rs"]
+mod prover_diagnostic;

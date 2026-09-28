@@ -181,9 +181,11 @@ impl PublicationAuthorityFixture {
         ensure!(
             now >= material.issued_at
                 && expires_at < material.retention_epoch
-                && material.proposal.endpoints.iter().all(|endpoint| {
-                    expires_at <= endpoint.attestation.expires_at
-                }),
+                && material
+                    .proposal
+                    .endpoints
+                    .iter()
+                    .all(|endpoint| { expires_at <= endpoint.attestation.expires_at }),
             "advert operation window must fit within admission and endpoint validity"
         );
         let key = &self.advert_keys[index];
@@ -273,7 +275,24 @@ fn genesis_material_has_no_network_fixed_point_and_revoke_is_council_signed() ->
         projection.network_id == *network.as_bytes() && projection.council_signatures.is_empty()
     );
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    fixture.advert(0, network, now)?.verify_signature()?;
+    let advert = fixture.advert(0, network, now)?;
+    advert.verify_signature()?;
+    ensure!(advert.expires_at == now + ADVERT_VALIDITY_SECS);
+    // Even a source fetched at the end of delivery + submission + completion remains valid.
+    advert.validate(now + ADVERT_VALIDITY_SECS)?;
+    ensure!(matches!(
+        advert.validate(now + ADVERT_VALIDITY_SECS + 1),
+        Err(sorafs_manifest::provider_advert::AdvertValidationError::Expired { .. })
+    ));
+    ensure!(
+        fixture
+            .advert(
+                0,
+                network,
+                projection.retention_epoch - ADVERT_VALIDITY_SECS
+            )
+            .is_err()
+    );
     let proposal = fixture.revocation_proposal(0, network, now)?;
     let ProposalKind::SorafsProviderGovernance(proposal) = proposal else {
         unreachable!()

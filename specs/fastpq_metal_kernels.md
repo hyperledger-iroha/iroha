@@ -33,6 +33,9 @@ an end-to-end prover or production performance qualification.
 
 | Entry point | Operation | Threadgroup cap | Tile stage cap | Notes |
 | ----------- | --------- | --------------- | -------------- | ----- |
+| `exact_root_bit_reverse_v1` | Exact-root FFT preparation | 256 threads | — | Each lower index swaps its disjoint reversed-index pair once. A device resource barrier precedes tile evaluation. |
+| `exact_root_local_tiles_v1` | Exact-root FFT/IFFT local stages | 256 threads | 8 stages | Each group owns one 256-word tile. Small transforms apply inverse normalization in this final tile. |
+| `exact_root_global_stage_v1` | One exact-root FFT/IFFT global stage | 256 threads | — | Each group owns at most 2048 independent butterflies. The host inserts a resource barrier between stages; the last stage applies inverse normalization. |
 | `fastpq_fft_columns` | Forward FFT over trace columns | 256 threads | 8 stages | Uses shared-memory tiles for the first stages and applies inverse scaling when the planner requests an IFFT mode.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
 | `fastpq_fft_post_tiling` | Completes FFT/IFFT/LDE after the tile depth is reached | 256 threads | — | Runs the remaining butterflies directly out of device memory and handles the final coset/inverse factors before returning to the host.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
 | `fastpq_lde_columns` | Low-degree extension across columns | 256 threads | 8 stages | Copies coefficients into the evaluation buffer, executes tiled stages with the configured coset, and leaves the final stages to `fastpq_fft_post_tiling` when needed.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
@@ -46,6 +49,24 @@ an end-to-end prover or production performance qualification.
 The descriptors are available at runtime via
 `fastpq_prover::metal_kernel_descriptors()` for tooling that wants to display
 the same metadata.
+
+The bounded `goldilocks_transform` API selects the three `exact_root_*` kernels
+on Metal. Its supplied root is validated for exact order and its input words
+for canonicality before dispatch. One command contains bit reversal, local
+tiles, and the remaining stages; explicit resource barriers separate every
+dependent dispatch. Threadgroup barriers are used only within a tile. The
+implementation is `src/metal_exact_root.rs` and `metal/kernels/exact_root.metal`.
+
+One clearing shared buffer holds all accepted columns (at most eight). Caller
+columns are copied back only after successful completion of the entire command,
+so a drained failure leaves every original input intact. The existing bounded
+ticket owner drains abandoned commands; uncertain completion retains device
+ownership and makes subsequent bounded-prover admission fail. The public Metal
+payload allowance remains conservative: it reserves both a rollback-sized
+payload and staging, although this path only needs unpublished staging. This
+arithmetic implementation does not activate a proof profile or establish whole
+prover performance. The existing profile FFT/LDE callers still use their own
+dispatchers; their migration needs separate shape, coset and lifetime controls.
 
 ## Deterministic Goldilocks arithmetic
 

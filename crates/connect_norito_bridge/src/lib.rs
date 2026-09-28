@@ -281,6 +281,7 @@ use connect_approval_ffi::{
     parse_algorithm_cstr, validate_exact_connect_identity,
 };
 mod confidential_note_ffi;
+mod confidential_prover_ffi;
 mod private_settlement_ffi;
 pub use private_settlement_ffi::{
     CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,

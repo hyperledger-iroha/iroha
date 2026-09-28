@@ -41,12 +41,16 @@ mod field;
 #[cfg(test)]
 mod frame_tests;
 pub mod gadgets;
+/// Exact-root, bounded-column Goldilocks arithmetic with deterministic fallback.
+pub mod goldilocks_transform;
 #[cfg(feature = "fastpq-gpu")]
 #[path = "gpu.rs"]
 mod gpu;
 #[cfg(not(feature = "fastpq-gpu"))]
 #[path = "gpu_stub.rs"]
 mod gpu;
+#[cfg(feature = "fastpq-gpu")]
+mod gpu_secret;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
 mod metal_config;

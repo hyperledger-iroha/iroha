@@ -115,12 +115,14 @@ mod deep_engine;
 mod deep_geometry;
 #[path = "backend/deep_leaf_batch.rs"]
 mod deep_leaf_batch;
-#[path = "backend/deep_parent_batch.rs"]
-mod deep_parent_batch;
 #[path = "backend/deep_masked_quotient.rs"]
 mod deep_masked_quotient;
 #[path = "backend/deep_masked_replay.rs"]
 mod deep_masked_replay;
+#[path = "backend/deep_node_cache.rs"]
+mod deep_node_cache;
+#[path = "backend/deep_parent_batch.rs"]
+mod deep_parent_batch;
 #[path = "backend/deep_polynomial.rs"]
 mod deep_polynomial;
 #[path = "backend/deep_proof.rs"]
@@ -443,6 +445,10 @@ pub fn current_gpu_backend() -> Option<GpuBackend> {
     usable_runtime_backend(GPU_BACKEND.get().and_then(|backend| *backend))
 }
 fn usable_runtime_backend(backend: Option<GpuBackend>) -> Option<GpuBackend> {
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    if matches!(backend, Some(GpuBackend::Metal)) && crate::metal::backend_quarantined() {
+        return None;
+    }
     #[cfg(any(test, feature = "fastpq-gpu"))]
     let cuda_quarantined =
         matches!(backend, Some(GpuBackend::Cuda)) && crate::fastpq_cuda::backend_quarantined();
