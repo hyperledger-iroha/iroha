@@ -677,7 +677,7 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
         .ok_or_else(|| eyre!("native producer created no chunk files"))?;
     let chunk_length = fs::metadata(path)?.len();
     ensure!(
-        chunk_length > 0 && chunk_length <= sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES,
+        chunk_length > 0 && chunk_length <= u64::from(sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES),
         "corruption fixture must modify exactly one bounded persisted chunk"
     );
     let mut corrupted = fs::read(path)?;
