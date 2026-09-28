@@ -181,17 +181,6 @@ impl<'a> SnapshotJsonField<'a> {
             }),
         }
     }
-    fn validate_sccp_registry(&self) -> Result<(), json::Error> {
-        match self {
-            Self::Borrowed { raw } => validate_sccp_registry_cell_json_str(raw),
-            #[cfg(test)]
-            Self::Owned(value) => validate_sccp_registry_cell_json(value),
-        }
-        .map_err(|message| json::Error::InvalidField {
-            field: "sccp_registry".to_owned(),
-            message,
-        })
-    }
 }
 
 struct SnapshotJsonMap<'a> {
@@ -287,9 +276,6 @@ impl<'a> SnapshotJsonMap<'a> {
     }
     fn remove(&mut self, key: &str) -> Option<SnapshotJsonField<'a>> {
         self.fields.remove(key)
-    }
-    fn get(&self, key: &str) -> Option<&SnapshotJsonField<'a>> {
-        self.fields.get(key)
     }
     fn contains_key(&self, key: &str) -> bool {
         self.fields.contains_key(key)
@@ -397,16 +383,13 @@ impl KuraSeed {
     ///
     /// The caller has already authenticated the manifest signature. This constructor binds its
     /// exact height and terminal hash to Kura, maps the matching hash prefix read-only, and leaves
-    /// World, transaction history, consensus topology, and runtime Nexus state unopened. The
-    /// signed SCCP policy hash is retained separately because Fast mode never constructs the
-    /// potentially large governed registry.
+    /// World, transaction history, consensus topology, and runtime Nexus state unopened.
     pub(crate) fn into_state_from_emergency_fast_manifest(
         self,
         chain_id: ChainId,
         network_id: NetworkId,
         snapshot_height: usize,
         snapshot_tip: Option<HashOf<BlockHeader>>,
-        sccp_policy_hash: [u8; 32],
     ) -> Result<Box<State>, StateRestoreError> {
         let block_hashes =
             emergency_fast_block_hashes(self.kura.as_ref(), snapshot_height, snapshot_tip)?;
@@ -468,7 +451,6 @@ impl KuraSeed {
             true,
         )
         .map_err(durable_state_restore_error)?;
-        state.install_emergency_fast_sccp_policy_hash(sccp_policy_hash);
         Ok(state)
     }
     /// Decode canonical snapshot bytes without durable journal recovery for
@@ -604,6 +586,7 @@ impl KuraSeed {
             "soradns_rotation_policy",
             "soradns_last_publish_ms",
             "soradns_history_len",
+            "sccp",
             "commit_topology",
             "prev_commit_topology",
             "lane_consensus_contexts",
@@ -639,6 +622,7 @@ impl KuraSeed {
             "soradns_rotation_policy",
             "soradns_last_publish_ms",
             "soradns_history_len",
+            "sccp",
             "commit_topology",
             "prev_commit_topology",
             "lane_consensus_contexts",
@@ -782,6 +766,11 @@ impl KuraSeed {
             soradns_last_publish_ms: take_required(&mut map, "soradns_last_publish_ms")?,
             soradns_history_len: take_required(&mut map, "soradns_history_len")?,
         }
+        .restore(&mut world)?;
+        take_required::<sccp_snapshot_state::SnapshotSccpState>(
+            &mut map,
+            sccp_snapshot_state::SCCP_SNAPSHOT_MEMBER,
+        )?
         .restore(&mut world)?;
         let canonical_runtime: Cell<SnapshotNexusRuntime> =
             take_required(&mut map, "nexus_runtime")?;
@@ -1059,12 +1048,6 @@ impl KuraSeed {
             false,
         )
         .map_err(durable_state_restore_error)?;
-        super::validate_sccp_state_local_profile(&state).map_err(|message| {
-            json::Error::InvalidField {
-                field: "state.world.sccp".to_owned(),
-                message,
-            }
-        })?;
         Ok(state)
     }
 }
@@ -1921,163 +1904,7 @@ pub(super) fn validate_ram_lfe_program_policies(
     }
     Ok(())
 }
-fn validate_sccp_replay_forests(
-    forests: &Storage<SccpReplayAccumulatorIdV1, SccpReplayForestV1>,
-) -> Result<(), json::Error> {
-    for (id, forest) in forests.view().iter() {
-        if id.route_key.validate().is_err()
-            || !matches!(
-                id.boundary,
-                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock
-                    | iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease
-            )
-            || forest.validate().is_err()
-            || forest.leaf_count == 0
-        {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_replay_forests".to_owned(),
-                message: "replay forest must use a canonical SORA boundary, valid route key, nonempty root set, and checked monotonic counters".to_owned(),
-            });
-        }
-    }
-    Ok(())
-}
 
-fn validate_sccp_outbound_pending_messages(
-    messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
-) -> Result<(), json::Error> {
-    for (key, record) in messages.view().iter() {
-        crate::bridge::validate_sccp_outbound_message_record_v1(key, record).ok_or_else(|| {
-            json::Error::InvalidField {
-                field: "world.sccp_outbound_pending_messages".to_owned(),
-                message: "outbound replay entry must carry one bounded canonical payload bound to its exact lane, governed context, message id, and payload hash".to_owned(),
-            }
-        })?;
-    }
-    Ok(())
-}
-fn validate_sccp_outbound_pending_usage(
-    messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
-    usage: &Cell<SccpOutboundPendingUsageV1>,
-) -> Result<(), json::Error> {
-    let mut expected = SccpOutboundPendingUsageV1::default();
-    for (_, record) in messages.view().iter() {
-        expected = expected
-            .checked_add_payload(record.payload_bytes.len())
-            .ok_or_else(|| json::Error::InvalidField {
-                field: "world.sccp_outbound_pending_usage".to_owned(),
-                message: "pending outbound usage overflows its fixed counters".to_owned(),
-            })?;
-    }
-    let actual = *usage.view().get();
-    if !actual.is_structurally_valid() || actual != expected {
-        return Err(json::Error::InvalidField {
-            field: "world.sccp_outbound_pending_usage".to_owned(),
-            message: format!(
-                "pending outbound usage does not match payload-bearing records: expected {expected:?}, found {actual:?}"
-            ),
-        });
-    }
-    Ok(())
-}
-fn validate_sccp_outbound_indexes(
-    pending: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
-    locator: &Storage<[u8; 32], SccpOutboundMessageKeyV1>,
-    ordered: &Storage<SccpOutboundMessageIndexKeyV1, ()>,
-) -> Result<(), json::Error> {
-    let pending = pending.view();
-    let locator = locator.view();
-    let ordered = ordered.view();
-    let pending_len = pending.iter().count();
-    if pending_len != locator.iter().count() || pending_len != ordered.iter().count() {
-        return Err(json::Error::InvalidField {
-            field: "world.sccp_outbound_message_index".to_owned(),
-            message:
-                "pending outbound registry, global locator, and ordered index cardinalities differ"
-                    .to_owned(),
-        });
-    }
-    for (key, record) in pending.iter() {
-        if locator.get(&key.message_id) != Some(key) {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_locator".to_owned(),
-                message: "global message-id locator is missing or aliases another replay key"
-                    .to_owned(),
-            });
-        }
-        let index_key = SccpOutboundMessageIndexKeyV1::new(*key, record).ok_or_else(|| {
-            json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "authoritative outbound entry cannot form a valid ordered locator"
-                    .to_owned(),
-            }
-        })?;
-        if ordered.get(&index_key).is_none() {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "ordered outbound locator is missing".to_owned(),
-            });
-        }
-    }
-    for (message_id, key) in locator.iter() {
-        if *message_id != key.message_id || pending.get(key).is_none() {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_locator".to_owned(),
-                message: "global locator must name exactly one pending outbound entry".to_owned(),
-            });
-        }
-    }
-    let mut current_height = None;
-    let mut expected_commitment_index = 0_u32;
-    for (index_key, ()) in ordered.iter() {
-        if current_height != Some(index_key.recorded_at_height) {
-            current_height = Some(index_key.recorded_at_height);
-            expected_commitment_index = 0;
-        }
-        if expected_commitment_index
-            >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-        {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: format!(
-                    "height {} exceeds the fixed {}-message SCCP outbox bound",
-                    index_key.recorded_at_height,
-                    iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-                ),
-            });
-        }
-        if !index_key.is_well_formed() {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "ordered locator is malformed".to_owned(),
-            });
-        }
-        if index_key.commitment_index != expected_commitment_index {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: format!(
-                    "height {} commitment indices must be dense from zero: expected {}, found {}",
-                    index_key.recorded_at_height,
-                    expected_commitment_index,
-                    index_key.commitment_index
-                ),
-            });
-        }
-        let key = index_key.message_key();
-        let pending_index = pending
-            .get(&key)
-            .and_then(|record| SccpOutboundMessageIndexKeyV1::new(key, record));
-        if pending_index != Some(*index_key) {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "ordered locator height, commitment index, or replay key is inconsistent"
-                    .to_owned(),
-            });
-        }
-        expected_commitment_index += 1;
-    }
-    Ok(())
-}
 fn take_ram_lfe_program_policies(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {

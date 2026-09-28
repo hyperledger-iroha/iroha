@@ -2143,6 +2143,24 @@ mod tests {
         }
     }
     #[test]
+    fn p256_material_capacity_payload_includes_nested_window_allocations() {
+        use super::super::allocation_payload::{p256_material_v1, vector_v1};
+        let mut material = valid_material_v1();
+        let before = p256_material_v1(&material);
+        let old = vector_v1(&material.windows[0].trace.base);
+        material.windows[0].trace.base.reserve_exact(23);
+        assert_eq!(
+            p256_material_v1(&material),
+            before - old + vector_v1(&material.windows[0].trace.base)
+        );
+        material.windows[0].trace.base.clear();
+        assert_eq!(
+            p256_material_v1(&material),
+            before - old + vector_v1(&material.windows[0].trace.base)
+        );
+    }
+
+    #[test]
     fn independent_verifier_topology_matches_both_roles_and_is_deterministic() {
         let wallet = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::WalletOwnership)
             .expect("wallet topology");

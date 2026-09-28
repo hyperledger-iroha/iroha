@@ -6,8 +6,8 @@ those fields describe the fixture provenance.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_concrete_identity_frames.json` | 12 populated families, each as root, Vec, Some and BTreeMap: 48 frames | `9863f060024faac07731fea50438465b8688a23a234ca675d52acbb6309d7c33` |
-| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `7ccd7a69b10aea86929ba018c3765e395b4c7bff7431a73d0dfab8ab78cbf526` |
+| `model_concrete_identity_frames.json` | 12 populated families, each as root, Vec, Some and BTreeMap: 48 frames | `ba37c9b267242b2733972245fbeeca14b6e7653ebfd42f0b00b2ed261989b7d3` |
+| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `609a71f1cd38dd9b421b187cca8caaf6b38a533e0e2cf74b0d9e667f056d8cb5` |
 | `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `7a4bdb7eae4c9aca0351bd6549628e185d3e24da0aa03cf54669f9e853c14ae1` |
 
 The six concrete owners are Action, DataEvent, SmartContractContext,

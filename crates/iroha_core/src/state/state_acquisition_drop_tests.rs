@@ -403,34 +403,26 @@ fn acquired_runtime_result_drop_releases_membership_before_world_notification() 
 #[test]
 fn runtime_index_snapshots_notify_before_acquiring_original_writers() {
     for replacement in [false, true] {
-        for manifest_source in [false, true] {
-            let (state, _proposal, _topology, _context) = fixture();
-            let state: Arc<State> = Arc::from(state);
-            let membership = membership_probe_before_stage(&state);
-            let callback = membership_probe_callback(&state, membership);
-            let waker = Waker::from(Arc::clone(&callback));
-            let mut context = Context::from_waker(&waker);
-            // Observe an actual blocked index/cache acquisition, then physically
-            // unlock while retaining that release. The constructor's own read
-            // must deliver the first notification while membership is still free.
-            let (wait, original_release) = if manifest_source {
-                let held = state.lane_manifests.read();
-                let wait = state.lane_manifests.try_write_or_wait().err().unwrap();
-                (wait, held.release_deferred())
-            } else {
-                let held = state.sccp_registry_cache.lock();
-                let wait = state.sccp_registry_cache.try_lock_or_wait().err().unwrap();
-                (wait, held.release_deferred())
-            };
-            let mut future = Box::pin(wait.wait_for_release());
-            assert!(future.as_mut().poll(&mut context).is_pending());
-            let acquired = state.acquire_canonical_runtime_block(replacement).unwrap();
-            assert!(future.as_mut().poll(&mut context).is_ready());
-            assert_eq!(callback.observations(), [1, 1, 0, 0, 0]);
-            drop(acquired);
-            drop(callback.take_original());
-            drop(original_release);
-        }
+        let (state, _proposal, _topology, _context) = fixture();
+        let state: Arc<State> = Arc::from(state);
+        let membership = membership_probe_before_stage(&state);
+        let callback = membership_probe_callback(&state, membership);
+        let waker = Waker::from(Arc::clone(&callback));
+        let mut context = Context::from_waker(&waker);
+        // Observe an actual blocked index acquisition, then physically
+        // unlock while retaining that release. The constructor's own read
+        // must deliver the first notification while membership is still free.
+        let held = state.lane_manifests.read();
+        let wait = state.lane_manifests.try_write_or_wait().err().unwrap();
+        let original_release = held.release_deferred();
+        let mut future = Box::pin(wait.wait_for_release());
+        assert!(future.as_mut().poll(&mut context).is_pending());
+        let acquired = state.acquire_canonical_runtime_block(replacement).unwrap();
+        assert!(future.as_mut().poll(&mut context).is_ready());
+        assert_eq!(callback.observations(), [1, 1, 0, 0, 0]);
+        drop(acquired);
+        drop(callback.take_original());
+        drop(original_release);
     }
 }
 

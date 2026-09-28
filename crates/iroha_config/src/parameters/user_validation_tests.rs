@@ -198,35 +198,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
-    fn enabled_sccp_replay_snapshot_must_fit_the_norito_archive_limit() {
-        let mut config = load_user_root(base_table());
-        let replay_archive = &mut config.torii.sccp_replay_archive;
-        replay_archive.enabled = true;
-        replay_archive.state_dir = Some(PathBuf::from("/var/lib/iroha/sccp-replay"));
-        replay_archive.replicas = (1_u8..=3)
-            .map(|index| {
-                let key_pair = KeyPair::from_seed(vec![index; 32], Algorithm::Ed25519);
-                super::ToriiSccpReplayArchiveReplica {
-                    replica_id_hex: hex::encode([index; 32]),
-                    origin: super::Url::parse(&format!("https://replay-{index}.example/"))
-                        .expect("valid replica URL"),
-                    public_key: key_pair.public_key().clone(),
-                }
-            })
-            .collect();
-        replay_archive.max_snapshot_bytes = Bytes(32 * 1024 * 1024);
-        config.norito.max_archive_len = 16 * 1024 * 1024;
-
-        let error = config
-            .parse()
-            .expect_err("Norito must be able to decode every admitted replay snapshot");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(super::SCCP_REPLAY_NORITO_ARCHIVE_LIMIT_ERROR),
-            "{report}"
-        );
-    }
-    #[test]
     fn network_enum_labels_reject_aliases_without_panicking() {
         for (field, value) in [
             ("lane_profile", "CORE"),

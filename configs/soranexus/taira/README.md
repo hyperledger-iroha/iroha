@@ -464,6 +464,11 @@ read-only private descriptor. Assembly verifies all four validator configs and
 the dedicated key against the inventory; account and validator keys are separate
 credentials.
 
+Seat the SORA Parliament in the generated network and re-sign its genesis
+before anything consumes it ([SORA Parliament seating](#sora-parliament-seating));
+`prepare-public-inputs` refuses a network whose validator profile or genesis
+citizens cannot seat every Parliament body.
+
 Prepare the complete public bundle and nonce-bound beacon inputs natively before
 assembly. Paths are illustrative; use the approved release's actual generated
 network and canary public key, with fresh outputs in an owner-only runtime
@@ -664,6 +669,249 @@ the `universal` dataspace. Its token digest must match the owner-only token
 admitted by the reset closure; the raw token never enters the release bundle or
 repository.
 
+## SORA Parliament seating
+
+The SORA Parliament is the only SCCP governance authority
+([`specs/sccp.md`](../../../specs/sccp.md) §4.14.5, §4.18): without a seated
+Parliament no SCCP route can be registered, activated, paused or recovered, and
+no other Parliament proposal kind can pass either. A fresh Taira therefore
+seats the Parliament in genesis, and the reset tooling, `scripts/taira_devnet.py`
+and `iroha taira doctor` refuse or flag a network that cannot seat it.
+
+### Recommended profile
+
+`config.toml` carries the recommended `[gov]` profile. It is part of the
+consensus execution policy, so every validator uses exactly these values, and
+`iroha taira seat-parliament` copies the seating keys into every generated
+validator config before genesis is signed.
+
+| Setting | Value |
+|---|---|
+| genesis citizens `C` | 16 |
+| `citizenship_bond_amount` | 1 000 000 XOR (40 faucet claims) |
+| `rules_committee_size`, `agenda_council_size`, `interest_panel_size`, `review_panel_size`, `coordination_council_size`, `mpc_committee_size`, `fma_committee_size`, `oversight_committee_size` | 5 each |
+| `policy_jury_size` / `confirmation_jury_size` | 9 / 7 |
+| `parliament_alternate_size` | 3 |
+| `parliament_timed_ovn`: `max_corpus_entries`, `registration_phase_blocks`, `survivor_freeze_phase_blocks`, `commitment_phase_blocks`, `release_delay_blocks`, `opening_phase_blocks` | 16, 300, 100, 300, 50, 300 |
+| `parliament_invitation_phase_blocks` / `parliament_public_finding_phase_blocks` | 300 / 900 |
+| `min_enactment_delay` | 50 |
+| `parliament_tle_key_lifecycle`: `max_fresh_ballots_per_session`, `session_lifetime_blocks` | 8, 7 200 |
+| `[torii.faucet]` `pow_adaptive_claims_per_extra_bit` / `pow_adaptive_max_extra_bits` | 2 / 8 |
+| `[torii.faucet]` `pow_max_anchor_age_blocks` / `pow_adaptive_lookback_blocks` | 6 / 64 |
+| `gov.citizenship_escrow_account` | fresh per network, key discarded |
+
+`mpc_committee_size` is not in the spec table; it follows the same five-seat
+profile because validation-fee proposals also draw the MPC Committee. A Policy
+Jury of at most 20 seats never needs a Confirmation Jury, and the fixed windows
+of one round sum to about 1 104 blocks (about 74 minutes at 4 s per block)
+before deliberation.
+
+Adaptive faucet difficulty: the faucet pays 25 000 XOR at a 4-bit scrypt proof
+of work (`log_n = 13, r = 8`, about 8 MiB and tens of milliseconds per
+evaluation on a desktop core). Torii counts the claims committed in the 64
+blocks that end at the claimant's chosen anchor, plus queued claims, and every
+2 counted claims add one bit, up to 8 extra bits (12 in total). Because the
+claimant chooses the anchor, the window only sees claims older than the anchor
+age: under a 256-block anchor age a claimant pinning one old anchor would pay
+the 4-bit base for every one of 40 claims (640 evaluations). Taira therefore
+accepts anchors at most 6 blocks old (`pow_max_anchor_age_blocks = 6`, far
+below the 64-block lookback):
+
+- an occasional claim costs 2^4 = 16 evaluations, under a second on a desktop;
+- the cheapest burst of the 40 claims of one citizenship bond, one claim per
+  block with every claim pinned to the oldest accepted anchor, counts every
+  claim more than 6 blocks old and costs 81 984 evaluations (8 claims at the
+  base, then one extra bit per 2 counted claims up to the cap), roughly half an
+  hour to an hour of one desktop core instead of 640 evaluations;
+- the cap bounds an honest claim at 2^12 = 4 096 evaluations, a few minutes on a
+  desktop core and longer on a phone. Iroha produces no empty blocks, so on an
+  idle Taira the lookback can hold only faucet claims; a higher cap (for example
+  16 bits) would then price every onboarding wallet out, which is why the cap
+  stays at 8 extra bits;
+- the trade-off of the short anchor age: a proof must reach Torii within 6
+  committed blocks of its anchor, about 24 s while blocks come at the 4 s
+  target and longer on a quieter chain. A base-difficulty proof finishes in
+  about a second even on a phone; a slow solver near the cap during a burst may
+  see its anchor expire and must fetch a fresh puzzle.
+
+TODO(ws55): Torii's `faucet_pow_recent_claims` should count adaptive claims up
+to the current committed height, not up to the claimant-chosen anchor; the
+anchor age then stops mattering for the adaptive count.
+
+### Refusal rules
+
+`iroha taira seat-parliament`, `iroha taira public-reset prepare-public-inputs`
+and `scripts/taira_devnet.py` refuse a network when:
+
+- the eligible genesis citizens (bond at least `citizenship_bond_amount`) are
+  fewer than the largest body a proposal can require (every public body and the
+  Policy Jury);
+- `policy_jury_size > 20` and `policy_jury_size > C - 3`;
+- either jury is below the hidden-ballot anonymity floor of 3;
+- `max_corpus_entries` is below the larger jury, or the registration window is
+  not longer than `max_corpus_entries`, or the survivor-freeze window is shorter;
+- the bond is within 40 faucet claims (`citizenship_bond_amount < 40 × amount`);
+- adaptive faucet difficulty is off (lookback, claims per extra bit or maximum
+  extra bits is zero) while the faucet is enabled;
+- `pow_max_anchor_age_blocks` is not below `pow_adaptive_lookback_blocks`, or
+  the cheapest 40-claim burst (every claim pinned to the oldest accepted anchor)
+  costs no more than flat proof of work
+  (`faucet_anchor_age_below_lookback`);
+- `gov.citizenship_escrow_account` is unset, is the default governance account
+  or any other account whose key ships in this repository (`defaults/`, the
+  `iroha_test_samples` keys), or is not the fresh escrow the seating run
+  generated (`citizenship_escrow_is_custodial`); anyone holding that key could
+  drain every bond and register fully bonded Sybil citizens for free;
+- `coordination_council_size` is unset (its default is 150);
+- validators disagree on the seating profile, or genesis grants
+  `CanManageParliament` (SCCP attempts need no clerk).
+
+### Genesis citizens
+
+`iroha taira seat-parliament` renders the citizens into the freshly generated,
+not yet deployed Kagami network. `genesis.template.json` therefore carries no
+`RegisterCitizen`: citizen accounts are runtime-generated, like the other
+runtime signer identities, and never live in the repository. For each citizen
+the command generates an Ed25519 key and appends to genesis `Register<Account>`,
+a mint of the bond plus a fee float (1 000 XOR by default, for the ordinary
+fees of invitations, endorsements and ballots) and
+`RegisterCitizen { owner, amount = citizenship_bond_amount }`. The citizenship
+escrow is fresh for every network: the command generates an Ed25519 key,
+discards it without writing it anywhere, writes the account into every
+validator's `gov.citizenship_escrow_account` next to the other seating keys and
+registers it in the appended genesis transaction. No one ever needs that key:
+core locks the bond into the escrow on `RegisterCitizen` and releases it on
+unregistration itself. Kagami's default escrow is the governance account whose
+private key is published in `defaults/client.toml`, and the sample escrow in
+`config.toml` is an account with a published test key. The command grants the
+genesis-only `CanProposeSccpRouteGovernance` only to the account of
+`--sccp-proposer-public-key` (off by default for the public reset;
+`scripts/taira_devnet.py` grants it to its client account). Nobody receives
+`CanManageParliament`.
+
+The keys are runtime secrets: the command writes them to a fresh owner-only
+directory, by default `<network>/runtime/taira-parliament-citizens/`
+(mode 0700), as `citizen-NN.private_key` and a matching
+`citizen-NN.client.toml` (mode 0600 each), plus a public `citizens.json`
+manifest that also records the citizenship escrow account. Each client config is the network's `client.toml` with the citizen's
+public key, `account.private_key_file = "citizen-NN.private_key"` and
+`network_id_file` set to the absolute path of `<network>/genesis.expected_hash`,
+which re-signing rewrites. Hand each key to a distinct live participant, never
+commit it, and destroy the directory with the network. Anyone can join later
+with an ordinary `RegisterCitizen` at the configured bond.
+
+The command edits `genesis.json` and the validator configs only; re-sign
+genesis with the same-release Kagami before anything consumes it. Kagami never
+replaces a different published network identity and `peer0.toml` still reads
+the pre-seating one while signing, so publish the seated identity beside it and
+rename it over the old one afterwards (`scripts/taira_devnet.py` does the same):
+
+```bash
+iroha --config <network>/client.toml taira seat-parliament --localnet-dir <network>
+kagami genesis sign <network>/genesis.json \
+  --private-key-file <network>/genesis.private_key \
+  --config <network>/peer0.toml \
+  --out-file <network>/genesis.signed.nrt \
+  --bound-manifest-out <network>/genesis.json \
+  --expected-hash-out <network>/genesis.expected_hash.next
+mv <network>/genesis.expected_hash.next <network>/genesis.expected_hash
+```
+
+### Reset checklist
+
+1. Before the reset, enact one Parliament proposal that pauses every live SCCP
+   revision (`SetDestinationPaused`, `SetTairaPaused`) and apply the controls on
+   the destinations (§4.18); plan for at least one Parliament round.
+2. Generate the four-validator Taira network with Kagami, then seat the
+   Parliament and re-sign genesis as above.
+3. Continue with `materialize-validator-config`, `prepare-public-inputs`
+   (which refuses an unseated network) and the rest of the public reset.
+4. Distribute the citizen keys to distinct participants.
+5. In the reset ceremony, install the global-beacon session and the first
+   Parliament TLE session and keep every validator's beacon and TLE signers
+   running (§4.14.5 items 5 to 7). TODO(ws55): the in-node beacon/TLE DKG
+   automation and node-generated credentials replace the manual ceremony.
+6. Run a Parliament driver from a funded account. TODO(ws42):
+   `iroha sccp governance drive` is not available yet; until then drive
+   attempts by hand (`scripts/taira_devnet.py citizens` on devnets).
+7. Check the result with `iroha taira doctor --parliament`.
+
+### Doctor
+
+`iroha taira doctor` always runs two checks over the compiled canonical
+profile, named so that they cannot be read as live evidence and carrying an
+exact detail that says the live values are not verified:
+`canonical_bond_faucet_reach` (the live faucet amount against the compiled
+citizenship bond) and `canonical_profile_seating` (the compiled canonical
+profile against every static rule above; the escrow rule applies to generated
+networks, since seating replaces the checked-in sample escrow). A Taira still
+running an older live `[gov]` profile passes both. The live bond, escrow,
+timed-OVN windows, `max_corpus_entries` and body sizes are served by
+`/v1/gov/capabilities`, but that route is account-signed, Torii rejects an
+unregistered signer, and the doctor deliberately loads no signing identity.
+`--parliament` therefore adds one warning for each live requirement: the
+eligible citizen census against every body size, the live `[gov]` profile,
+escrow and adaptive faucet policy, the global-beacon session and roster, and
+the Parliament TLE session with its remaining fresh-ballot capacity and
+lifetime. TODO(ws35): a signer-free Parliament readiness projection turns these
+into live checks. SCCP attempt progress (next due checkpoint, last progress,
+tip growth) is reported once the SCCP Parliament driver lands.
+
+### Devnet citizens
+
+`scripts/taira_devnet.py up` seats the Parliament automatically (sixteen
+citizens, the genesis-only `CanProposeSccpRouteGovernance` for the devnet client
+account) and reports the seating under `parliament`; `check` revalidates it. The
+`citizens` subcommand acts for the genesis citizens through `iroha gov
+parliament`, each with its own generated client config:
+
+```bash
+python3 scripts/taira_devnet.py citizens list
+python3 scripts/taira_devnet.py citizens respond-invitation --iroha <iroha> \
+  --governance-attempt-id <hex> --election-attempt-id <hex> --body policy-jury
+python3 scripts/taira_devnet.py citizens endorse --iroha <iroha> \
+  --governance-attempt-id <hex> --body-instance-id <hex> --result-root <hex>
+python3 scripts/taira_devnet.py citizens ballot-register --iroha <iroha> \
+  --ballot-attempt-id <hex> [--anchor-height <height>]
+python3 scripts/taira_devnet.py citizens ballot-cast --iroha <iroha> \
+  --ballot-attempt-id <hex> --choice approve
+python3 scripts/taira_devnet.py citizens ballot-dropout --iroha <iroha> --ballot-attempt-id <hex>
+python3 scripts/taira_devnet.py citizens ballot-status --iroha <iroha> \
+  --governance-attempt-id <hex> [--ballot-attempt-id <hex>]
+```
+
+The actions map to `iroha gov parliament respond-invitation`, `endorse` and
+`ballot register|cast|relay|dropout|status|anchor`; each helper first proves the
+compiled CLI exposes the documented command and options and fails with a clear
+message otherwise. Every action runs for all citizens unless `--citizen N`
+selects some, and reports each citizen's result, since only drawn or seated
+citizens can act. Ballot keys live next to the citizen keys
+(`citizen-NN.ballot.key` and `citizen-NN.ballot-state.json`); a new state file
+is pinned to the finality anchor the devnet's own Torii serves at the current
+height (every devnet peer is operator-owned; public citizens compare the anchor
+with a source they trust). `ballot-cast` writes each public ballot record to
+`citizen-NN.ballot-<ballot>.record` and relays the records of citizens whose
+predecessors in the frozen survivor order had not cast yet.
+
+### Residual Sybil risk
+
+Citizenship is only as scarce as test XOR. The bond of 40 faucet claims and the
+adaptive faucet raise the cost of a burst-farmed citizen to about 82 000 scrypt
+evaluations, but a patient claimant who waits for the lookback to move past
+earlier claims (or fills it with cheap transactions of its own) pays the base
+difficulty, any holder of test XOR can transfer it, and
+citizens that accept seats and stay silent can stall every round, pauses
+included (§9.13). Proof of work is a speed bump, not an identity: treat the
+Taira Parliament as a test of the governance machinery, not as a Sybil-resistant
+body. All genesis citizens are provisioned by the reset operator,
+so until they are handed to independent participants the effective governance
+trust is that operator (§9.1). The citizenship escrow itself is custody-grade:
+seating gives every network a fresh escrow whose key no one holds. The other
+governance custody accounts (`bond_escrow_account`, `slash_receiver_account`
+and the viral-incentive accounts) still name the published sample key in
+Kagami's profile; they hold no citizenship bonds, but anyone can move what
+reaches them. TODO(ws55): give them fresh keyless accounts too.
+
 ## Public Taira endpoint checks
 
 The compiled CLI owns the current public API contract. Build it from the same
@@ -773,8 +1021,11 @@ authorization headers in this repository.
 
 - `config.toml` and `genesis.template.json` are canonical profile sources
   consumed by compiled Kagami/config/genesis tests. The genesis source omits
-  operator-owned mint-finality authority, is not a raw or signable manifest,
-  and is not an input to the disposable generator.
+  operator-owned mint-finality authority and the runtime-generated Parliament
+  citizens, is not a raw or signable manifest, and is not an input to the
+  disposable generator. `config.toml` is also the compiled source of the
+  Parliament seating profile used by `iroha taira seat-parliament` and
+  `iroha taira doctor`.
 - `privacy_bootstrap_plan.json` and `privacy_rollout_plan_v1.json` remain
   coupled to Kagami's compiled privacy bootstrap feature. Kagami emits one
   height-1 template of twelve ordered registration/explicit-activation pairs,

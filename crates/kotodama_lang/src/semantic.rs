@@ -9067,8 +9067,7 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::BuildSubmitBallotInline => M::Static(
             "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
         ),
-        Builtin::RecordSccpMessage
-        | Builtin::ScExecuteSubmitBallot
+        Builtin::ScExecuteSubmitBallot
         | Builtin::ZkVerifyBatch
         | Builtin::ZkVoteVerifyBallot
         | Builtin::ZkVoteVerifyTally => M::NameSuffix(

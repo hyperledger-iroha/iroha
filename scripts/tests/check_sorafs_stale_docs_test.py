@@ -260,8 +260,14 @@ def test_stream_token_runtime_has_separate_trust_and_one_body_recovery_owners() 
     assert "HistoricalFinalityV1::Custody(signing_anchor)" in lifecycle
     core_finality = read("crates/iroha_core/src/query/signer_finality.rs")
     assert "verify_signer_finality_v1(view, height, hash)" in finality
-    assert "v2_finality_artifact(height)" in core_finality and "proof.block_hash.as_ref()" in core_finality
-    assert "get_durable_block_hash" in core_finality and "view.block_hashes()" in finality
+    certified_chain = read("crates/iroha_core/src/sumeragi/certified_chain.rs")
+    assert "CertifiedChain::new(view)" in core_finality and ".certified(height)" in core_finality
+    assert "block.block_hash().as_ref() != block_hash" in core_finality
+    assert "canonical_block_by_height(index)" in certified_chain
+    assert "index.get() <= view.block_hashes().len()" in certified_chain
+    assert "verify_qc_signatures" in certified_chain and "verify_qc(" in certified_chain
+    assert "v2_finality_artifact(" not in core_finality
+    assert "view.block_hashes()" in finality
     assert "stream_token_binding_digest_v1(&binding)" in pins
     assert "u32::try_from(signer_backend.key_revision)" in pins
     assert "norito::encode_canonical(token)" in issuer

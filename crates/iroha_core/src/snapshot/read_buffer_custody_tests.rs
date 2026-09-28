@@ -653,14 +653,17 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     let root = tempdir().unwrap();
     let store = root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
-    let (state, _, pending) = state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
+    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let committed = signed_block_with_transaction(accepted_log_transaction("strict refund"));
+    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&committed));
+    store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[committed]);
     let key = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store, &key, TEST_CHUNK_SIZE).unwrap();
     let payload_path = current_generation_artifact(&store, SNAPSHOT_FILE_NAME);
     let payload = std::fs::read(&payload_path).unwrap();
     let pointer = std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
     let block = kura.get_block(nonzero!(1_usize)).unwrap();
-    let finality = kura.v2_finality_artifact_with_archive(1).unwrap().unwrap();
+    let finality = kura.v2_finality_artifact(1).unwrap().unwrap();
     let budget = AllocationBudget::new(payload.len() + 1);
     let _sentinel = budget.try_reserve_bytes(1).unwrap();
     let Err(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
@@ -686,9 +689,6 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
             .is_pending()
     );
     let calls = std::cell::Cell::new(0);
-    let mut incompatible = state.zk_snapshot();
-    incompatible.sccp.max_pending_outbound_payload_bytes =
-        NonZeroU64::new(u64::try_from(pending.payload_bytes.len()).unwrap() - 1).unwrap();
     let initialize = |restored: &mut State| {
         calls.set(calls.get() + 1);
         assert_eq!(budget.reserved_bytes(), payload.len() + 1);
@@ -700,11 +700,11 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
         if unwind {
             panic!("injected Strict initializer unwind after actual payload/State acquisition");
         }
-        // This is a real configuration refusal against the authenticated SCCP
-        // payload, not an invented decoder error or bypassed snapshot seal.
-        restored
-            .set_zk(incompatible.clone())
-            .map_err(TryReadError::ZkConfigInstall)
+        // The refusal happens after the authenticated payload was decoded into
+        // the restored State; the snapshot seal itself is never bypassed.
+        Err(TryReadError::SnapshotResourceLimit(
+            "strict initializer refused the restored State".to_owned(),
+        ))
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         strict_snapshot_read_for_custody_test(&store, &state, &kura, &key, &budget, &initialize)
@@ -720,9 +720,8 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     } else {
         assert!(matches!(
             result.unwrap(),
-            Err(TryReadError::ZkConfigInstall(
-                ZkConfigInstallError::SccpPendingUsageLimitExceeded { .. }
-            ))
+            Err(TryReadError::SnapshotResourceLimit(message))
+                if message == "strict initializer refused the restored State"
         ));
     }
     assert_eq!(calls.get(), 1);
@@ -744,10 +743,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     assert_eq!(kura.blocks_count(), 1);
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(kura.get_block(nonzero!(1_usize)), Some(block));
-    assert_eq!(
-        kura.v2_finality_artifact_with_archive(1).unwrap().unwrap(),
-        finality
-    );
+    assert_eq!(kura.v2_finality_artifact(1).unwrap().unwrap(), finality);
 
     let restored =
         strict_snapshot_read_for_custody_test(&store, &state, &kura, &key, &budget, &|restored| {

@@ -154,7 +154,8 @@ pub enum SecretFileProblem {
     Symlink,
     /// The path is not a regular file.
     NotRegularFile,
-    /// Group or other permission bits, or owner execute, are set.
+    /// Group or other permission bits, owner execute, or the setuid, setgid or
+    /// sticky bit are set.
     Permissions {
         /// The file's permission bits.
         mode: u32,
@@ -179,7 +180,10 @@ impl fmt::Display for SecretFileError {
                 write!(formatter, "`{path}` is unreadable: {kind}")
             }
             SecretFileProblem::Symlink => {
-                write!(formatter, "`{path}` is a symbolic link; use the file itself")
+                write!(
+                    formatter,
+                    "`{path}` is a symbolic link; use the file itself"
+                )
             }
             SecretFileProblem::NotRegularFile => {
                 write!(formatter, "`{path}` is not a regular file")
@@ -287,6 +291,12 @@ fn strip_line_break(value: &[u8]) -> &[u8] {
     value.strip_suffix(b"\r").unwrap_or(value)
 }
 
+/// Permission bits a secret header value file must not carry: setuid, setgid,
+/// sticky, owner execute and every group or other bit. What remains is `0600`
+/// or stricter.
+#[cfg(unix)]
+const OWNER_ONLY_FORBIDDEN_MODE_BITS: u32 = 0o7177;
+
 /// Reads an owner-only regular file into a zeroizing buffer.
 #[cfg(unix)]
 fn read_owner_only_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, SecretFileProblem> {
@@ -300,7 +310,7 @@ fn read_owner_only_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, SecretFilePro
             return Err(SecretFileProblem::NotRegularFile);
         }
         let mode = metadata.mode();
-        if mode & 0o177 != 0 {
+        if mode & OWNER_ONLY_FORBIDDEN_MODE_BITS != 0 {
             return Err(SecretFileProblem::Permissions { mode });
         }
         Ok(())
@@ -521,7 +531,10 @@ impl EndpointSet {
     ///
     /// # Errors
     /// As [`Self::new`], or if an entry is not a URL.
-    pub fn parse(urls: &[&str], secret_headers: &[SccpSecretHeader]) -> Result<Self, EndpointError> {
+    pub fn parse(
+        urls: &[&str],
+        secret_headers: &[SccpSecretHeader],
+    ) -> Result<Self, EndpointError> {
         let urls = urls
             .iter()
             .map(|raw| {
@@ -828,7 +841,8 @@ mod tests {
         assert!(
             EndpointSet::parse(&["https://a.example.org", "https://a.example.org"], &[]).is_err()
         );
-        let too_many: Vec<String> = (0..=defaults::sccp::light_client_keeper::MAX_ENDPOINTS_PER_LIST)
+        let too_many: Vec<String> = (0
+            ..=defaults::sccp::light_client_keeper::MAX_ENDPOINTS_PER_LIST)
             .map(|index| format!("https://rpc{index}.example.org"))
             .collect();
         let too_many: Vec<&str> = too_many.iter().map(String::as_str).collect();
@@ -845,10 +859,16 @@ mod tests {
             header("https://a.example.org/key", "X-Api-Key", "/k1"),
             header("https://other.example.org", "x-api-key", "/k2"),
         ];
-        let set = EndpointSet::parse(&["https://a.example.org/key", "https://b.example.org"], &headers)
-            .expect("list");
+        let set = EndpointSet::parse(
+            &["https://a.example.org/key", "https://b.example.org"],
+            &headers,
+        )
+        .expect("list");
         assert_eq!(set.endpoints()[0].secret_headers().len(), 1);
-        assert_eq!(set.endpoints()[0].secret_headers()[0].name().as_str(), "x-api-key");
+        assert_eq!(
+            set.endpoints()[0].secret_headers()[0].name().as_str(),
+            "x-api-key"
+        );
         assert_eq!(
             set.endpoints()[0].secret_headers()[0].value_file(),
             Path::new("/k1")
@@ -866,9 +886,13 @@ mod tests {
 
     #[test]
     fn debug_output_hides_paths_and_values() {
-        let headers = [header("https://a.example.org/v3/secretkey", "x-api-key", "/k1")];
-        let set = EndpointSet::parse(&["https://a.example.org/v3/secretkey"], &headers)
-            .expect("list");
+        let headers = [header(
+            "https://a.example.org/v3/secretkey",
+            "x-api-key",
+            "/k1",
+        )];
+        let set =
+            EndpointSet::parse(&["https://a.example.org/v3/secretkey"], &headers).expect("list");
         let debug = format!("{set:?}");
         assert!(debug.contains("https://a.example.org"));
         assert!(!debug.contains("secretkey"));
@@ -879,10 +903,16 @@ mod tests {
     fn request_urls_join_paths_and_queries() {
         let plain = Endpoint::new(url("https://rpc.example.org"));
         assert_eq!(
-            plain.request_url("/wallet/getnowblock").expect("url").as_str(),
+            plain
+                .request_url("/wallet/getnowblock")
+                .expect("url")
+                .as_str(),
             "https://rpc.example.org/wallet/getnowblock"
         );
-        assert_eq!(plain.request_url("").expect("url").as_str(), "https://rpc.example.org/");
+        assert_eq!(
+            plain.request_url("").expect("url").as_str(),
+            "https://rpc.example.org/"
+        );
         let keyed = Endpoint::new(url("https://rpc.example.org/tron/key/?network=main"));
         assert_eq!(
             keyed
@@ -904,7 +934,10 @@ mod tests {
             let ceiling = Duration::from_millis(100)
                 .saturating_mul(1_u32.checked_shl(round.min(31)).unwrap_or(u32::MAX))
                 .min(Duration::from_secs(1));
-            assert!(delay >= ceiling / 2 && delay <= ceiling, "round {round}: {delay:?}");
+            assert!(
+                delay >= ceiling / 2 && delay <= ceiling,
+                "round {round}: {delay:?}"
+            );
             assert_eq!(delay, backoff.delay(round));
         }
         let other = Backoff::new(Duration::from_millis(100), Duration::from_secs(1), 43);
@@ -933,15 +966,25 @@ mod tests {
             policy.round_delay(0, Some(Duration::from_secs(60))),
             Duration::from_secs(5)
         );
-        assert_eq!(FailoverPolicy::default().rounds.get(), DEFAULT_FAILOVER_ROUNDS);
+        assert_eq!(
+            FailoverPolicy::default().rounds.get(),
+            DEFAULT_FAILOVER_ROUNDS
+        );
         assert_eq!(FailoverPolicy::with_seed(9).backoff.seed(), 9);
-        assert_eq!(FailoverPolicy::with_seed(9).backoff.base(), DEFAULT_BACKOFF_BASE);
+        assert_eq!(
+            FailoverPolicy::with_seed(9).backoff.base(),
+            DEFAULT_BACKOFF_BASE
+        );
     }
 
     #[test]
     fn failover_walks_round_robin_and_sticks_to_the_answering_endpoint() {
         let set = EndpointSet::parse(
-            &["https://a.example.org", "https://b.example.org", "https://c.example.org"],
+            &[
+                "https://a.example.org",
+                "https://b.example.org",
+                "https://c.example.org",
+            ],
             &[],
         )
         .expect("list");
@@ -958,9 +1001,39 @@ mod tests {
         })
         .expect("third endpoint answers");
         assert_eq!(answer, 3);
-        assert_eq!(visited.len(), 3);
+        assert_eq!(
+            visited,
+            [
+                "https://a.example.org",
+                "https://b.example.org",
+                "https://c.example.org"
+            ]
+        );
         assert_eq!(set.preferred(), 2);
         assert!(sleeper.0.lock().expect("lock").is_empty());
+
+        // A failure of the preferred endpoint wraps around the list in order.
+        let mut wrapped = Vec::new();
+        let answer = run_with_failover(&set, &policy, &sleeper, |endpoint| {
+            wrapped.push(endpoint.origin().to_owned());
+            if endpoint.origin() == "https://b.example.org" {
+                Ok(2)
+            } else {
+                Err(timeout(endpoint))
+            }
+        })
+        .expect("second endpoint answers");
+        assert_eq!(answer, 2);
+        assert_eq!(
+            wrapped,
+            [
+                "https://c.example.org",
+                "https://a.example.org",
+                "https://b.example.org"
+            ]
+        );
+        assert_eq!(set.preferred(), 1);
+        set.set_preferred(2);
 
         let mut first = None;
         run_with_failover(&set, &policy, &sleeper, |endpoint| {
@@ -1057,12 +1130,25 @@ mod tests {
         fs::set_permissions(&file, fs::Permissions::from_mode(0o400)).expect("chmod");
         assert!(source.header_value().is_ok());
 
-        for mode in [0o640, 0o604, 0o700, 0o660] {
-            fs::set_permissions(&file, fs::Permissions::from_mode(mode)).expect("chmod");
+        for mode in [0o640, 0o604, 0o700, 0o660, 0o4600, 0o2600, 0o1600] {
+            // Some platforms refuse or silently drop special bits for
+            // unprivileged users; only modes that actually stick are checked.
+            if fs::set_permissions(&file, fs::Permissions::from_mode(mode)).is_err() {
+                continue;
+            }
+            let applied = fs::metadata(&file).expect("metadata").permissions().mode() & 0o7777;
+            if applied != mode {
+                continue;
+            }
             let error = source.header_value().expect_err("refused mode");
-            assert!(matches!(error.problem, SecretFileProblem::Permissions { .. }), "{mode:o}");
+            assert!(
+                matches!(error.problem, SecretFileProblem::Permissions { .. }),
+                "{mode:o}"
+            );
             assert!(!error.to_string().contains("s3cret"));
         }
+        assert_eq!(OWNER_ONLY_FORBIDDEN_MODE_BITS & 0o600, 0);
+        assert_eq!(OWNER_ONLY_FORBIDDEN_MODE_BITS | 0o600, 0o7777);
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("chmod");
 
         let link = dir.join("link");

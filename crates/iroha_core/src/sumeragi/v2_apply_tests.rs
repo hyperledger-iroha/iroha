@@ -7,8 +7,6 @@ pub(super) struct FailureInjection {
     successful_frontier_pause: std::sync::Mutex<Option<Arc<SuccessfulApplyFrontierPause>>>,
     pub(super) kura_store: std::sync::atomic::AtomicBool,
     pub(super) wsv_checkpoint: std::sync::atomic::AtomicBool,
-    pub(super) provider_ingest_archive_capture: std::sync::atomic::AtomicBool,
-    pub(super) reputation_archive_capture: std::sync::atomic::AtomicBool,
 }
 /// Arrival, release and worker exit belong to the same synchronized observation.
 #[derive(Default)]
@@ -290,10 +288,6 @@ pub(super) enum CrashPoint {
     KuraStore,
     /// After the staged WSV checkpoint.
     WsvCheckpoint,
-    /// After provider-ingest archive capture.
-    ProviderIngestArchiveCapture,
-    /// After reputation archive capture.
-    ReputationArchiveCapture,
 }
 /// Persist the exact payload, exact execution input, and immutable recovery
 /// record in crash-safe order after independently rebuilding every authority.
@@ -388,18 +382,6 @@ impl V2ApplyService {
                     .swap(false, std::sync::atomic::Ordering::Relaxed),
                 V2ApplyError::InjectedCrashAfterWsvCheckpoint,
             ),
-            CrashPoint::ProviderIngestArchiveCapture => (
-                self.test_failures
-                    .provider_ingest_archive_capture
-                    .swap(false, std::sync::atomic::Ordering::Relaxed),
-                V2ApplyError::InjectedCrashAfterProviderIngestArchiveCapture,
-            ),
-            CrashPoint::ReputationArchiveCapture => (
-                self.test_failures
-                    .reputation_archive_capture
-                    .swap(false, std::sync::atomic::Ordering::Relaxed),
-                V2ApplyError::InjectedCrashAfterReputationArchiveCapture,
-            ),
         };
         if requested { Err(error) } else { Ok(()) }
     }
@@ -413,18 +395,6 @@ impl V2ApplyService {
     fn fail_after_wsv_checkpoint_for_test(&self) {
         self.test_failures
             .wsv_checkpoint
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    #[cfg(test)]
-    fn fail_after_provider_ingest_archive_capture_for_test(&self) {
-        self.test_failures
-            .provider_ingest_archive_capture
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    #[cfg(test)]
-    fn fail_after_reputation_archive_capture_for_test(&self) {
-        self.test_failures
-            .reputation_archive_capture
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -640,7 +610,6 @@ fn install_live_lifecycle_cursor_for_apply_test(
 include!("tests/v2_apply_unsealed_00.rs");
 include!("tests/v2_apply_unsealed_01.rs");
 include!("tests/v2_apply_unsealed_02.rs");
-include!("v2_apply/archive_reservations_tests.rs");
 include!("v2_apply/native_preparation_error_tests.rs");
 
 /// Canonical height-one material for exercising the recovered Decision Apply

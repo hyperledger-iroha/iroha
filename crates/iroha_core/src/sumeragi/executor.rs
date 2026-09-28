@@ -82,6 +82,51 @@ pub struct ExecutorContext {
     pub crypto: Option<Arc<super::crypto::BlsCrypto>>,
 }
 
+/// Configured SoraFS archives captured from the exact committed State before apply completes.
+///
+/// The executor is their single capture producer. A failed capture keeps the committed decision
+/// pending, so the driver cannot acknowledge it or advance to another height before recovery.
+#[derive(Clone, Default)]
+pub struct FinalizedArchives {
+    /// Finalized provider assignments and completions.
+    pub provider_ingest:
+        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
+    /// Finalized provider reputation state.
+    pub reputation: Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
+}
+
+impl FinalizedArchives {
+    fn capture(&self, view: &impl StateReadOnly) -> Result<(), String> {
+        if let Some(archive) = &self.provider_ingest {
+            archive
+                .capture_certified_view(view, view.kura())
+                .map_err(|error| format!("provider-ingest archive capture failed: {error}"))?;
+        }
+        if let Some(archive) = &self.reputation {
+            archive
+                .capture_certified_view(view, view.kura())
+                .map_err(|error| format!("reputation archive capture failed: {error}"))?;
+        }
+        Ok(())
+    }
+}
+
+/// One State publication awaiting durable archive capture and its remaining notifications.
+struct PendingCommit {
+    header: iroha_sumeragi::message::BlockHeader,
+    qc: Qc,
+    state_hash: iroha_crypto::HashOf<IrohaHeader>,
+    next: HeightConfig,
+    hashes: Vec<iroha_crypto::HashOf<TransactionEntrypoint>>,
+    events: Vec<EventBox>,
+}
+
+impl PendingCommit {
+    fn matches(&self, block: &Block, qc: &Qc) -> bool {
+        self.header == block.header && self.qc == *qc
+    }
+}
+
 enum Request {
     Execute(Block, Hash32, mpsc::SyncSender<Option<ExecOutcome>>),
     Discard(u64, Vec<Hash32>),
@@ -91,6 +136,7 @@ enum Request {
     Reject(u64, u64, Hash32),
     AttachQueue(Arc<Queue>),
     AttachBeacon(Arc<super::beacon::BeaconService>),
+    AttachFinalizedArchives(FinalizedArchives, mpsc::SyncSender<Result<(), String>>),
 }
 
 /// The driver-facing handle of the executor thread.
@@ -130,6 +176,16 @@ impl StateExecutor {
     /// Attach the current pulse producer after replay, before the consensus driver starts.
     pub fn attach_beacon(&self, beacon: Arc<super::beacon::BeaconService>) {
         let _ = self.requests.send(Request::AttachBeacon(beacon));
+    }
+
+    /// Attach the configured archives once, after replay and before starting the driver.
+    /// This synchronously captures the reconciled tip before the executor acknowledges binding.
+    ///
+    /// # Errors
+    /// The executor is unavailable, already bound or executing, or the exact tip cannot be captured.
+    pub fn attach_finalized_archives(&self, archives: FinalizedArchives) -> Result<(), String> {
+        self.call(|reply| Request::AttachFinalizedArchives(archives, reply))
+            .unwrap_or_else(|| Err("executor thread stopped".into()))
     }
 
     /// Re-apply a block Kura already holds (startup replay): execute it on the applied tip
@@ -210,6 +266,8 @@ struct Worker<'s> {
     last_built: Option<(u64, u64, Vec<iroha_crypto::HashOf<TransactionEntrypoint>>)>,
     queue: Option<Arc<Queue>>,
     beacon: Option<Arc<super::beacon::BeaconService>>,
+    archives: Option<FinalizedArchives>,
+    pending_commit: Option<PendingCommit>,
 }
 
 fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
@@ -223,6 +281,8 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
         last_built: None,
         queue: context.queue.clone(),
         beacon: None,
+        archives: None,
+        pending_commit: None,
     };
     while let Ok(request) = requests.recv() {
         worker.serve(request);
@@ -248,12 +308,28 @@ impl Worker<'_> {
             Request::Reject(height, view, block_hash) => self.reject(height, view, block_hash),
             Request::AttachQueue(queue) => self.queue = Some(queue),
             Request::AttachBeacon(beacon) => self.beacon = Some(beacon),
+            Request::AttachFinalizedArchives(archives, reply) => {
+                let result = if self.archives.is_some()
+                    || self.live.is_some()
+                    || self.pending_commit.is_some()
+                {
+                    Err("finalized archives must be bound once before execution starts".into())
+                } else {
+                    archives
+                        .capture(&self.state.view())
+                        .map(|()| self.archives = Some(archives))
+                };
+                let _ = reply.send(result);
+            }
         }
     }
 
     /// Answer an `Execute` (O4): the live overlay or a remembered verdict, `None` while the
     /// parent is not applied, otherwise a fresh execution.
     fn execute(&mut self, block: &Block, block_hash: Hash32) -> Option<ExecOutcome> {
+        if self.pending_commit.is_some() {
+            return None;
+        }
         if let Some(live) = &self.live {
             if live.block_hash == block_hash {
                 return Some(ExecOutcome::Valid(live.result));
@@ -420,6 +496,13 @@ impl Worker<'_> {
 
     /// The local result of the committed block, staging it for the block store.
     fn prepare(&mut self, block: &Block, qc: &Qc) -> Result<Option<Hash32>, String> {
+        if let Some(pending) = &self.pending_commit {
+            return if pending.matches(block, qc) {
+                Ok(Some(pending.qc.result))
+            } else {
+                Err("another committed decision is awaiting archive capture".into())
+            };
+        }
         let block_hash = qc.block_hash;
         let reusable = self
             .live
@@ -452,6 +535,12 @@ impl Worker<'_> {
 
     /// Publish the prepared overlay (the block store already holds the block).
     fn commit(&mut self, block: &Block, qc: &Qc) -> Result<HeightConfig, String> {
+        if let Some(pending) = &self.pending_commit {
+            if !pending.matches(block, qc) {
+                return Err("another committed decision is awaiting archive capture".into());
+            }
+            return self.finish_commit();
+        }
         let live = match self.live.take() {
             Some(live) if live.block_hash == qc.block_hash && live.result == qc.result => live,
             other => {
@@ -460,7 +549,6 @@ impl Worker<'_> {
             }
         };
         let Live {
-            height,
             valid,
             mut overlay,
             witness,
@@ -468,7 +556,6 @@ impl Worker<'_> {
             next,
             committee,
             mut events,
-            block_hash,
             ..
         } = live;
         let certificate: CommitCertificate =
@@ -481,22 +568,56 @@ impl Worker<'_> {
             .apply_without_execution_with_sumeragi_commit(&committed, &certificate, committee)
             .map_err(|error| error.to_string())?;
         overlay.commit().map_err(|error| error.to_string())?;
-        self.applied = (height, block_hash);
-        self.results.retain(|_, (at, _)| *at > height);
-        let hashes = committed
+        self.pending_commit = Some(PendingCommit {
+            header: block.header.clone(),
+            qc: qc.clone(),
+            state_hash: committed.as_ref().hash(),
+            next,
+            hashes: committed
+                .as_ref()
+                .external_entrypoints_slice()
+                .iter()
+                .map(TransactionEntrypoint::hash)
+                .collect(),
+            events: events.into_iter().chain(state_events).collect(),
+        });
+        self.finish_commit()
+    }
+
+    /// Retry only capture after State publication. Never reapply a transaction or emit success
+    /// before every configured archive durably accepts this exact decision.
+    fn finish_commit(&mut self) -> Result<HeightConfig, String> {
+        let pending = self
+            .pending_commit
             .as_ref()
-            .external_entrypoints_slice()
-            .iter()
-            .map(TransactionEntrypoint::hash)
-            .collect::<Vec<_>>();
+            .ok_or_else(|| "no committed decision is awaiting completion".to_owned())?;
+        {
+            let view = self.state.view();
+            let height = u64::try_from(view.height()).map_err(|_| "State height exceeds u64")?;
+            if height != pending.header.height
+                || view.latest_block_hash() != Some(pending.state_hash)
+            {
+                return Err("State changed while committed archive capture was pending".into());
+            }
+            if let Some(archives) = &self.archives {
+                archives.capture(&view)?;
+            }
+        }
+        let pending = self
+            .pending_commit
+            .take()
+            .ok_or_else(|| "committed completion disappeared".to_owned())?;
+        let height = pending.header.height;
+        self.applied = (height, pending.qc.block_hash);
+        self.results.retain(|_, (at, _)| *at > height);
         if let Some(queue) = &self.queue {
-            queue.remove_committed_hashes(hashes, None);
+            queue.remove_committed_hashes(pending.hashes, None);
         }
         self.admit_scheduled(height.saturating_add(2));
-        for event in events.into_iter().chain(state_events) {
+        for event in pending.events {
             let _ = self.context.events.send(event);
         }
-        Ok(next)
+        Ok(pending.next)
     }
 
     fn pulse_for_height(
@@ -522,7 +643,7 @@ impl Worker<'_> {
 
     /// Build a payload for `(height, view)` over the applied tip (§6.10).
     fn build(&mut self, height: u64, view: u64, max_bytes: u32) -> (Vec<u8>, bool) {
-        if height != self.applied.0.saturating_add(1) {
+        if self.pending_commit.is_some() || height != self.applied.0.saturating_add(1) {
             return (Vec::new(), false);
         }
         let Some(parent) = self.state.view().latest_block() else {
@@ -813,3 +934,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod archive_tests;

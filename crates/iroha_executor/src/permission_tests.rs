@@ -466,6 +466,39 @@ fn governed_kagemusha_permissions_are_immutable_after_genesis() {
     }
 }
 #[test]
+fn sccp_proposer_permission_is_granted_and_revoked_only_in_genesis() {
+    let authority = make_account_id();
+    let previous = test_override::replace_permissions(vec![PermissionObject::from(
+        CanProposeSccpRouteGovernance,
+    )]);
+    let post_genesis = make_context(&authority, 2);
+    for result in [
+        CanProposeSccpRouteGovernance.validate_grant(&authority, &post_genesis, &Iroha),
+        CanProposeSccpRouteGovernance.validate_revoke(&authority, &post_genesis, &Iroha),
+    ] {
+        let error = result.expect_err("even a holder must not grant or revoke after genesis");
+        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("only allowed inside the genesis block"),
+            "unexpected CanProposeSccpRouteGovernance rejection: {error}",
+        );
+    }
+    test_override::replace_permissions(previous);
+    let genesis = make_context(&authority, 1);
+    assert!(
+        CanProposeSccpRouteGovernance
+            .validate_grant(&authority, &genesis, &Iroha)
+            .is_ok()
+    );
+    assert!(
+        CanProposeSccpRouteGovernance
+            .validate_revoke(&authority, &genesis, &Iroha)
+            .is_ok()
+    );
+}
+#[test]
 fn governed_kagemusha_permissions_can_only_be_seeded_in_genesis() {
     let genesis_authority = make_account_id();
     let context = make_context(&genesis_authority, 1);
@@ -621,7 +654,6 @@ fn exact_holder_dispatch_covers_each_corrected_delegation_family() {
         PermissionObject::from(CanEnrollFeeSponsorProgram {
             program_id: make_fee_sponsor_program_id(authority.clone(), "retail"),
         }),
-        PermissionObject::from(CanProposeSccpRouteGovernance),
     ];
     for raw in permissions {
         let name = raw.name().to_owned();

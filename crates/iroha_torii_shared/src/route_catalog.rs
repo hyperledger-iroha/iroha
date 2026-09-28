@@ -2576,7 +2576,7 @@ pub mod telemetry {
         ASSET_HOLDERS_QUERY,
     ];
 }
-/// Consensus evidence, SCCP, finality, and Sumeragi introspection routes.
+/// Consensus evidence, bridge finality, and Sumeragi introspection routes.
 pub mod sumeragi {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
@@ -2594,9 +2594,6 @@ pub mod sumeragi {
         )
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
-    }
-    const fn public_sccp_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        public_get(id, path).with_projections(RouteProjections::OPENAPI_AND_SDK)
     }
     const fn operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -2639,41 +2636,6 @@ pub mod sumeragi {
     /// List persisted consensus evidence records as an authenticated operator.
     pub const EVIDENCE_LIST: RouteDescriptor =
         operator_get("sumeragi.evidence.list", "/v1/sumeragi/evidence");
-    /// Read one generic SCCP message proof bundle.
-    pub const SCCP_MESSAGE_PROOF: RouteDescriptor = public_sccp_get(
-        "sccp.message_proof.read",
-        "/v1/sccp/proofs/message/{message_id}",
-    );
-    /// Read one exact state-derived SCCP proof request.
-    pub const SCCP_PROOF_REQUEST: RouteDescriptor = public_sccp_get(
-        "sccp.proof_request.read",
-        "/v1/sccp/proof-requests/{message_id}",
-    );
-    /// List recently committed SCCP messages.
-    pub const SCCP_MESSAGES_RECENT: RouteDescriptor =
-        public_sccp_get("sccp.message.list_recent", "/v1/sccp/messages/recent");
-    /// Discover supported SCCP proof capabilities.
-    pub const SCCP_CAPABILITIES: RouteDescriptor =
-        public_sccp_get("sccp.capability.list", "/v1/sccp/capabilities");
-    /// Read the authoritative SCCP route registry.
-    pub const SCCP_REGISTRY: RouteDescriptor =
-        public_sccp_get("sccp.registry.read", "/v1/sccp/registry");
-    /// Read the exact registered SORA-side IVM material for one enabled route.
-    pub const SCCP_SORA_OUTBOUND_MATERIAL: RouteDescriptor = public_sccp_get(
-        "sccp.sora_outbound_material.read",
-        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
-    );
-    /// Read one locally rebuilt, three-replica-authenticated SORA replay root.
-    pub const SCCP_REPLAY_ROOT: RouteDescriptor = public_sccp_get(
-        "sccp.replay.root.read",
-        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root",
-    );
-    /// Read one canonical SORA replay membership or non-membership witness.
-    pub const SCCP_REPLAY_WITNESS: RouteDescriptor = public_sccp_get(
-        "sccp.replay.witness.read",
-        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}",
-    );
-
     /// Read the authoritative Sumeragi status snapshot as an authenticated operator.
     pub const STATUS: RouteDescriptor =
         telemetry_operator_get("sumeragi.status.read", "/v1/sumeragi/status");
@@ -2716,14 +2678,6 @@ pub mod sumeragi {
     pub const ROUTES: &[RouteDescriptor] = &[
         EVIDENCE_COUNT,
         EVIDENCE_LIST,
-        SCCP_MESSAGE_PROOF,
-        SCCP_PROOF_REQUEST,
-        SCCP_MESSAGES_RECENT,
-        SCCP_CAPABILITIES,
-        SCCP_REGISTRY,
-        SCCP_SORA_OUTBOUND_MATERIAL,
-        SCCP_REPLAY_ROOT,
-        SCCP_REPLAY_WITNESS,
         STATUS,
         DIAGNOSTICS,
         STATUS_SSE,
@@ -4312,8 +4266,6 @@ pub mod contracts_and_verification_keys {
         CONTRACTS_CALL_POST => app_account_mutation_post("contracts.contracts_call_post", "/v1/contracts/call");
         CONTRACTS_CALL_BATCH_PREPARE_POST => app_account_compute_post("contracts.contracts_call_batch_prepare_post", "/v1/contracts/call/batch/prepare");
         CONTRACTS_CALL_SIMULATE_POST => app_account_compute_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
-        BRIDGE_PROOFS_SUBMIT_POST => app_account_mutation_post("contracts.bridge_proofs_submit_post", "/v1/bridge/proofs/submit");
-        BRIDGE_MESSAGES_POST => app_account_mutation_post("contracts.bridge_messages_post", "/v1/bridge/messages");
         CONTRACTS_VIEW_POST => app_account_compute_post("contracts.contracts_view_post", "/v1/contracts/view");
         CONTRACTS_VIEW_BATCH_POST => app_account_compute_post("contracts.contracts_view_batch_post", "/v1/contracts/view/batch");
         CONTRACTS_CALL_MULTISIG_PROPOSE_POST => app_account_mutation_post("contracts.contracts_call_multisig_propose_post", "/v1/contracts/call/multisig/propose");

@@ -2360,9 +2360,7 @@ fn validate_webhook_filter_value(
             &["Created", "Deleted", "PermissionAdded", "PermissionRemoved"],
             "a role event",
         ),
-        "configuration_event" => {
-            string_matches(&["Changed", "SccpRegistryChanged"], "a configuration event")
-        }
+        "configuration_event" => string_matches(&["Changed"], "a configuration event"),
         "executor_event" => string_matches(&["Upgraded"], "an executor event"),
         "trigger_completed_outcome" => string_matches(&["Success", "Failure"], "a trigger outcome"),
         "time_precommit" => value
@@ -2815,7 +2813,6 @@ fn data_webhook_event_fields(event: &DataEvent) -> norito::json::Map {
         DataEvent::Configuration(event) => {
             let kind = match event {
                 df::ConfigurationEvent::Changed(_) => "Changed",
-                df::ConfigurationEvent::SccpRegistryChanged(_) => "SccpRegistryChanged",
             };
             insert_data_event_kind(&mut fields, "configuration_event", kind);
         }

@@ -198,16 +198,21 @@ mod tests {
         assert_eq!(accumulator.root(), [0; 32]);
         assert_eq!(history_root(&[]).unwrap(), [0; 32]);
         for size in 1..=40_u64 {
-            accumulator.append(&all[size as usize - 1]).unwrap();
-            let prefix = &all[..size as usize];
+            let len = usize::try_from(size).unwrap();
+            accumulator.append(&all[len - 1]).unwrap();
+            let prefix = &all[..len];
             assert_eq!(accumulator.size(), size);
             assert_eq!(accumulator.peaks().len(), size.count_ones() as usize);
-            assert_eq!(accumulator.root(), history_root(prefix).unwrap(), "size {size}");
+            assert_eq!(
+                accumulator.root(),
+                history_root(prefix).unwrap(),
+                "size {size}"
+            );
             for index in 0..size {
                 let path = history_path(prefix, index).unwrap();
                 assert!(path.len() <= MAX_HISTORY_PATH);
                 verify_history_inclusion(
-                    &prefix[index as usize],
+                    &prefix[usize::try_from(index).unwrap()],
                     index,
                     size,
                     &path,

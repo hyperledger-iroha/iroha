@@ -82,11 +82,17 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   native workflow controls are queued. These produce local proof artifacts;
   they do not restore retired ledger instructions or authorize value movement.
   Secret note/path and internal witness Debug output is redacted. JavaScript's
-  `ConfidentialProver` now delegates to that Core owner, without caller circuit
-  or key selection; transfer/full/change workflows, exact amounts, failures,
-  key-copy disposal and TypeScript shapes pass 12 focused checks. Its new native
-  entrypoints and clearing hex/string decoding are queued for Rust validation.
-  Managed JavaScript witness strings do not carry an erasure guarantee.
+  `ConfidentialProver` delegates to that Core owner, without caller circuit
+  or key selection. Its proof methods now return promises and execute native
+  proof work on a worker; the native job owns clearing input copies and consumes
+  them exactly once. Disposing the wallet closes future work while queued jobs
+  finish independently. Thirteen current JavaScript/cardinality/TypeScript checks
+  pass, including deferred success, worker rejection, immediate FFI-key cleanup,
+  reentrant disposal and non-Error input failures.
+  Native worker and parsing tests remain queued. Managed JavaScript witness
+  strings do not carry an erasure guarantee.
+  The [September 28 wallet/kernel receipt](../docs/history/2026-09-28/zk-wallet-and-x509-kernels.md)
+  separates mocked API, native arithmetic and source-contract evidence.
   The rewritten public anonymous-transaction page and 20 translations pass their
   scoped i18n/content checks; independent language and native SDK qualification
   remain open.
@@ -114,12 +120,23 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   Bulk leaf hashing uses bounded 32-job batches and explicit CPU/required-device
   policy; parents and transcript hashes use CPU. Public device readiness precedes
   private work. There is no required-device fallback. The earlier 80 native
-  kernel passes predate this merged public route and do not validate it. Fresh
-  normal-library and focused native validation are queued; the current geometry,
-  hiding-screen and source-budget Python selection passes 37 checks. Independent
+  kernel passes predate this merged public route and do not validate it. The fresh normal-library
+  `cargo check --locked -p fastpq_prover --lib` passes on the recorded 202-file
+  source snapshot. The feature-enabled suite passes 128 native checks, with four
+  diagnostics ignored; two required-device Metal checks pass separately. The
+  full 8M-row four-lane FFT/inverse diagnostic also passes in 69 seconds with
+  553,549,824 bytes maximum RSS. This measures one transform pair, not a proof.
+  The current geometry, hiding-screen and source-budget Python selection passes
+  37 checks. Exact commands and scoped digests are in the
+  [September 28 receipt](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
+  Independent
   sequencing review found no blocker in the retained masked construction. The
-  full-size diagnostic, measured resource/performance results, complete hiding
-  and soundness review, and authoritative source-state admission remain open.
+  full-size producer, whole-proof memory/time measurements, complete hiding
+  and soundness review, and source-bound network qualification remain open.
+  Core's ordinary lane uses the canonical masked artifact against its exact
+  finalized statement; its roots cover the touched-balance tree. Relay records
+  separately authenticate finalized QC-bound roots. AXT artifact consistency
+  alone grants no remote-spend or business-effect authority.
 - Reviewed Halo2/note-STARK/FASTPQ source-contract repairs pass their focused
   29-check Python selection. The retired-codec guard passes. The current JS
   confidential input and TypeScript checks pass 6 cases including mocked
@@ -143,6 +160,22 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   degree ceiling, masking and quotient chunk counts. Activation still requires
   independent soundness and hiding review, real proof vectors, and resource
   evidence on the final candidate.
+  The whole-prover audit found that retaining all masked coefficients alone used
+  16,226,947,392 bytes, above the unchanged 12 GiB ceiling. The implementation now
+  retains the original 81,690,944 bytes of masks and replays columns from closed
+  immutable source owners, preserving entropy order and committed polynomials.
+  Quotient evaluation uses interleaved stripes of at most 2^19 rows, including
+  all higher masked coefficients and exact native-next translation. Six isolated
+  native tests using the actual field/FFT, stripe and private-owner source pass;
+  the complete
+  Core integration remains pending. Private replay/quotient/composition owners
+  now use guaranteed zeroization. The transformed-buffer ledger and recursive
+  borrowed assembly/P256/DER capacity checks are implemented. Preconstruction
+  forecasts admit source dimensions against separate source/scratch allowances;
+  actual capacities are rechecked before masking, binding and finishing. Native
+  integration, maximum-shape assembly admission and actual peak memory/time
+  measurements remain open. No whole-prover memory compliance is inferred from
+  reduced coefficient storage or the explicit runtime reserve.
 - The first Core build stopped on variant-size lints before producing key
   digests. The typed-error enum and an explicitly justified bounded inline
   consensus-parent enum expectation resolve those source blockers. The rebuilt
@@ -152,6 +185,10 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   locked rerun and the additional native commitment suites now pass. The next
   Core compile found a compact-CA alpha shape mismatch and a concurrent SoraFS
   fixture mutation error; both sources are repaired and the fresh run is queued.
+  The September 28 build reached Core but encountered a concurrent reputation/
+  archive API migration before executing tests. It yields no new profile/KAT
+  capture or Core pass; the source-contract/geometry selection separately passes
+  21 checks.
 - The renamed CLI graph checks pass 5 focused tests under Python 3.12. Its wider
   10-test module has four observed mock-boundary failures (`/fixed/cargo`), and
   the workspace target inventory reports a concurrently added KAGEMUSHA binary

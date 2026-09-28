@@ -1,0 +1,315 @@
+{
+  "exchanges": {
+    "block_26069527": {
+      "body": "block_26069527.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca17",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (163 hashes) removed; header fields unchanged"
+    },
+    "block_26069528": {
+      "body": "block_26069528.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca18",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (361 hashes) removed; header fields unchanged"
+    },
+    "block_26069529": {
+      "body": "block_26069529.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca19",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (225 hashes) removed; header fields unchanged"
+    },
+    "block_26069530": {
+      "body": "block_26069530.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca1a",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (221 hashes) removed; header fields unchanged"
+    },
+    "block_26069531": {
+      "body": "block_26069531.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca1b",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (226 hashes) removed; header fields unchanged"
+    },
+    "block_26069532": {
+      "body": "block_26069532.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca1c",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (214 hashes) removed; header fields unchanged"
+    },
+    "block_26069533": {
+      "body": "block_26069533.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca1d",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (269 hashes) removed; header fields unchanged"
+    },
+    "block_26069534": {
+      "body": "block_26069534.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca1e",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (224 hashes) removed; header fields unchanged"
+    },
+    "block_26069535": {
+      "body": "block_26069535.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca1f",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (276 hashes) removed; header fields unchanged"
+    },
+    "block_26069536": {
+      "body": "block_26069536.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca20",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (213 hashes) removed; header fields unchanged"
+    },
+    "block_26069537": {
+      "body": "block_26069537.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca21",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (200 hashes) removed; header fields unchanged"
+    },
+    "block_26069538": {
+      "body": "block_26069538.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca22",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (285 hashes) removed; header fields unchanged"
+    },
+    "block_26069539": {
+      "body": "block_26069539.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca23",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (271 hashes) removed; header fields unchanged"
+    },
+    "block_26069540": {
+      "body": "block_26069540.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca24",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (230 hashes) removed; header fields unchanged"
+    },
+    "block_26069541": {
+      "body": "block_26069541.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca25",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (232 hashes) removed; header fields unchanged"
+    },
+    "block_26069542": {
+      "body": "block_26069542.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca26",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (232 hashes) removed; header fields unchanged"
+    },
+    "block_26069543": {
+      "body": "block_26069543.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca27",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (289 hashes) removed; header fields unchanged"
+    },
+    "block_26069544": {
+      "body": "block_26069544.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca28",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (256 hashes) removed; header fields unchanged"
+    },
+    "block_26069545": {
+      "body": "block_26069545.json",
+      "request": {
+        "method": "eth_getBlockByNumber",
+        "params": [
+          "0x18dca29",
+          false
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions array (272 hashes) removed; header fields unchanged"
+    },
+    "bootstrap": {
+      "body": "bootstrap.json",
+      "request": {
+        "accept": "application/json",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/bootstrap/0xabd3ec63278be100d97b0c4d52bb1f9f33616719c0ad73796995fb276accbd25"
+      },
+      "source": "https://ethereum-beacon-api.publicnode.com",
+      "status": 200
+    },
+    "finality_update": {
+      "body": "finality_update.json",
+      "request": {
+        "accept": "application/json",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/finality_update"
+      },
+      "source": "https://ethereum-beacon-api.publicnode.com",
+      "status": 200
+    },
+    "history_proof": {
+      "body": "history_proof.json",
+      "request": {
+        "method": "eth_getProof",
+        "params": [
+          "0x0000F90827F1C53a10cb7A02335B175320002935",
+          [
+            "0x0000000000000000000000000000000000000000000000000000000000001685"
+          ],
+          "0x18dca29"
+        ]
+      },
+      "source": "https://eth.drpc.org",
+      "status": 200
+    },
+    "receipts_26069527": {
+      "body": "receipts_26069527.json",
+      "request": {
+        "method": "eth_getBlockReceipts",
+        "params": [
+          "0x18dca17"
+        ]
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "updates": {
+      "body": "updates.json",
+      "request": {
+        "accept": "application/json",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/updates?start_period=1867&count=2"
+      },
+      "source": "https://ethereum-beacon-api.publicnode.com",
+      "status": 200
+    }
+  },
+  "summary": {
+    "bootstrap_slot": 15301376,
+    "event_block": 26069527,
+    "finalized_block": 26069545,
+    "finalized_slot": 15308096,
+    "period": 1868,
+    "signature_slot": 15308190
+  }
+}

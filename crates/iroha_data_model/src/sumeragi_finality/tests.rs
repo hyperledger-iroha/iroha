@@ -11,16 +11,16 @@ use iroha_crypto::{KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::types::{Bitmap, ChainParams, HeightConfig};
 use std::{collections::BTreeSet, num::NonZeroU64};
 
-struct Fixture {
-    genesis: SignedBlock,
-    first: SumeragiFinalityProof,
-    second: SumeragiFinalityProof,
-    keys: Vec<KeyPair>,
-    validators: Vec<FinalityValidator>,
-    network: NetworkId,
+pub(super) struct Fixture {
+    pub(super) genesis: SignedBlock,
+    pub(super) first: SumeragiFinalityProof,
+    pub(super) second: SumeragiFinalityProof,
+    pub(super) keys: Vec<KeyPair>,
+    pub(super) validators: Vec<FinalityValidator>,
+    pub(super) network: NetworkId,
 }
 
-fn result(block: &SignedBlock, committee: Committee) -> ExecutionResultCommitment {
+pub(super) fn result(block: &SignedBlock, committee: Committee) -> ExecutionResultCommitment {
     let (len, hash) = block.executed_block_wire_identity().unwrap();
     ExecutionResultCommitment::new(
         ExecutionCommitment {
@@ -41,7 +41,7 @@ fn result(block: &SignedBlock, committee: Committee) -> ExecutionResultCommitmen
     )
 }
 
-fn sign_qc(qc: &mut Qc, keys: &[KeyPair], chosen: &[u32]) {
+pub(super) fn sign_qc(qc: &mut Qc, keys: &[KeyPair], chosen: &[u32]) {
     qc.signers = Bitmap::from_indices(keys.len(), chosen.iter().copied()).unwrap();
     let signatures: Vec<_> = chosen
         .iter()
@@ -63,7 +63,7 @@ fn sign_qc(qc: &mut Qc, keys: &[KeyPair], chosen: &[u32]) {
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let mut keys: Vec<_> = (1..=4)
             .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
             .collect();
@@ -168,7 +168,7 @@ impl Fixture {
             network,
         }
     }
-    fn verifier(&self) -> SumeragiFinalityVerifier {
+    pub(super) fn verifier(&self) -> SumeragiFinalityVerifier {
         SumeragiFinalityVerifier::new(
             &self.genesis,
             "portable-finality-test",
@@ -176,7 +176,7 @@ impl Fixture {
         )
         .unwrap()
     }
-    fn alternate(&self) -> SumeragiFinalityProof {
+    pub(super) fn alternate(&self) -> SumeragiFinalityProof {
         let mut proof = self.second.clone();
         let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
         let mut certificate = block.commit_certificate().unwrap().clone();

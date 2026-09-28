@@ -40,6 +40,8 @@ pub mod ram_lfe;
 pub mod repo;
 pub mod retail_daily_limit;
 pub mod rwa;
+/// SCCP v1 cross-chain core: state access, hooks, admission and instructions.
+pub mod sccp;
 pub mod settlement;
 /// SNS-backed ownership query handlers.
 pub mod sns;
@@ -583,9 +585,6 @@ define_instruction_handlers! {
     dispatch_instruction::<zk::PruneProofs>,
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::ApplySccpRouteGovernance>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,
@@ -707,6 +706,20 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    // Core enforces every SCCP v1 rule (`specs/sccp.md` §4.19); validation-fee DS effects are
+    // classified explicitly in `crate::validation_fee`.
+    dispatch_instruction::<iroha_data_model::isi::sccp::InitializeSccpV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::SetSccpBridgeKeyV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::SubmitSccpAttestationsV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::SubmitSccpAttestationFaultV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::RecordSccpMessage> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::SubmitSccpInboundMessageV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::SettleSccpV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::SubmitSccpOutboundVoidV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sccp::AdvanceSccpLightClientV1> => CoreAuthorized,
+    dispatch_instruction::<
+        iroha_data_model::isi::sccp::ReportSccpLightClientEquivocationV1
+    > => CoreAuthorized,
 }
 pub(crate) fn execute_borrowed_instruction(
     instruction: &InstructionBox,
@@ -836,6 +849,18 @@ mod registry_dispatch_tests {
                 >(),
             ]),
         );
+    }
+    #[test]
+    fn every_sccp_wire_instruction_has_a_reviewed_initial_disposition() {
+        assert_reviewed_initial_family("iroha_data_model::isi::sccp::", BTreeSet::new());
+        for instruction in crate::smartcontracts::isi::sccp::test_support::SampleInstructions::all()
+        {
+            assert_eq!(
+                registered_native_instruction_initial_admission(&instruction),
+                Some(InitialNativeInstructionAdmission::CoreAuthorized),
+                "{instruction:?}"
+            );
+        }
     }
     #[test]
     fn every_sorafs_wire_instruction_has_a_reviewed_initial_disposition() {

@@ -23,9 +23,9 @@ use crate::{DigestExecutionV1, gpu::GpuError};
 pub(crate) const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
 pub(crate) const STAGING_PAGE_BYTES: usize = 16 * 1024;
-/// Eight independent CPU known answers, eight device answers and one public probe.
+/// Eight CPU/device known answers and one CPU/device public probe.
 /// The enclosing prover charges this cold bound even for CPU or warm execution.
-pub(crate) const MAX_PREFLIGHT_HASH_CALLS: usize = 17;
+pub(crate) const MAX_PREFLIGHT_HASH_CALLS: usize = 18;
 
 /// Bound the four shared backing buffers, returned digests and fixed readiness payload.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
@@ -122,24 +122,10 @@ pub(crate) fn preflight_last_fields_execution(execution: DigestExecutionV1) -> c
                     return Ok(());
                 }
             }
-            let domain = fastpq_isi::GoldilocksDigestDomainV1 {
-                catalog: b"iroha-privacy-exact12-v1",
-                protocol: b"last-field-public-preflight-v1",
-                profile: b"stark-fri-poseidon-x7-goldilocks-6x64-v1",
-                role: b"public-availability",
-                phase: b"preflight",
-                level: 0,
-                index: 0,
-                counter: 0,
-            };
-            let bytes = b"public-probe";
-            let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain, &[], bytes.len())
-                .map_err(native_error)?;
-            let job = Digest384LastFieldJob::new(prefix, bytes).map_err(native_error)?;
-            // The executor runs its independent public KAT before this probe.
-            // Its readiness allocation is already in last_fields_payload_charge.
-            try_hash_last_fields_device(&[job], backend).map_err(native_error)?;
-            Ok(())
+            // Reuse the same verified public probe as the developer-facing
+            // preflight, including its exact expected digest comparison. The
+            // readiness allocation is already in last_fields_payload_charge.
+            preflight_digest384_continuation_v1(backend).map_err(native_error)
         }
     }
 }

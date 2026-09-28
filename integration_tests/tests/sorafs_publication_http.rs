@@ -7,7 +7,6 @@ use iroha::{
     crypto::{KeyPair, Signature},
 };
 use iroha_data_model::{
-    block::consensus_v2::finality::V2FinalityArtifact,
     isi::sorafs::AssertSorafsPublicationV1,
     prelude::*,
     sorafs::{
@@ -17,6 +16,10 @@ use iroha_data_model::{
             SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
             verify_sorafs_publication_v1,
         },
+    },
+    sumeragi_finality::{
+        FinalityValidator, MAX_FINALITY_BLOCK_BYTES, SumeragiFinalityCheckpoint,
+        SumeragiFinalityProof, SumeragiFinalityVerifier,
     },
 };
 use iroha_model_base::metadata::Metadata;
@@ -177,19 +180,55 @@ pub(super) fn decode<
     )?)
 }
 
-/// Start trust from the independently constructed signed genesis, never a queried arbitrary tip.
+/// Start trust from the independently constructed signed genesis and its registered roster.
+/// The current genesis certificate has no QC; certified successors authenticate its result binding.
 pub(super) async fn genesis_checkpoint(
     http: &reqwest::Client,
     network: &Network,
-) -> Result<V2FinalityArtifact> {
-    timeout_at(Instant::now() + DEADLINE, async {
+) -> Result<SumeragiFinalityCheckpoint> {
+    let provisioned = network.native_genesis_provisioning_bundle()?;
+    let manifest: iroha_genesis::RawGenesisTransaction =
+        norito::json::from_slice(&provisioned.manifest_json)?;
+    let genesis = iroha_genesis::validate_prepared_genesis_bundle(
+        &provisioned.signed_wire,
+        &manifest,
+        &provisioned.public_key,
+        provisioned.block_hash,
+    )?;
+    let validators = genesis
+        .validator_pops()
+        .iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key: public_key.clone(),
+            proof_of_possession: proof_of_possession.clone(),
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        validators.len() == 4,
+        "qualification requires exactly four independently registered validators"
+    );
+    let mut verifier = SumeragiFinalityVerifier::new(
+        genesis.block(),
+        &network.chain_id().to_string(),
+        validators,
+    )?;
+    ensure!(
+        NetworkId::from_genesis_hash(genesis.expected_hash()) == network.network_id(),
+        "independently constructed genesis differs from network identity"
+    );
+    let deadline = Instant::now() + DEADLINE;
+    timeout_at(deadline, async {
         loop {
+            let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
+                .path()
+                .replace("{height}", "1");
             let response = http
                 .get(format!(
-                    "{}/v1/ledger/state/1",
-                    network.peers()[0].torii_url().trim_end_matches('/')
+                    "{}{}",
+                    network.peers()[0].torii_url().trim_end_matches('/'),
+                    path
                 ))
-                .header("Accept", "application/json")
+                .header("Accept", "application/x-norito")
                 .send()
                 .await?;
             if response.status() == reqwest::StatusCode::NOT_FOUND
@@ -203,25 +242,19 @@ pub(super) async fn genesis_checkpoint(
                 "genesis finality endpoint rejected: {}",
                 response.status()
             );
-            let value: norito::json::Value =
-                norito::json::from_slice(&bytes(response, 4 * 1024 * 1024).await?)?;
-            let artifact: V2FinalityArtifact =
-                norito::json::from_value(value["finality_artifact"].clone())?;
-            artifact.verify()?;
-            artifact.validate_for_header(&network.genesis().0.header())?;
+            let maximum = MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
+            let proof: SumeragiFinalityProof = decode(&bytes(response, maximum).await?, maximum)?;
+            let verified = verifier.verify(&proof)?;
             ensure!(
-                artifact.height == 1
-                    && artifact.block_hash == network.genesis().0.hash()
-                    && artifact.height_context.network_id == network.network_id(),
+                verified.height() == 1 && verified.block().hash() == genesis.expected_hash(),
                 "queried checkpoint changed independent signed-genesis identity"
             );
+            let checkpoint = verifier.export_checkpoint(&proof)?;
             ensure!(
-                artifact.height_context.roster.len() == 4
-                    && artifact.validator_set_pops.len() == 4
-                    && artifact.commit_qc.signers.len() == 3,
-                "qualification requires actual three-of-four finality"
+                Instant::now() < deadline,
+                "genesis checkpoint verification exceeded its deadline"
             );
-            return Ok(artifact);
+            return Ok(checkpoint);
         }
     })
     .await?
@@ -281,10 +314,11 @@ pub(super) async fn prove(
     base: &str,
     publisher: &KeyPair,
     row: &SorafsPublicationPreparationV1,
-    floor: &V2FinalityArtifact,
+    floor: &SumeragiFinalityCheckpoint,
     completed: bool,
-) -> Result<V2FinalityArtifact> {
+) -> Result<SumeragiFinalityCheckpoint> {
     let deadline = Instant::now() + DEADLINE;
+    let network = *client.account_client().network_id();
     let challenge = *blake3::hash(&norito::to_bytes(&(
         row.pin.digest,
         completed,
@@ -300,8 +334,8 @@ pub(super) async fn prove(
             canonical_order_digest: *blake3::hash(&row.order.canonical_order).as_bytes(),
             require_complete: completed,
             challenge,
-            minimum_height: floor.height,
-            minimum_block_hash: *floor.block_hash.as_ref(),
+            minimum_height: floor.height(),
+            minimum_block_hash: *floor.block_hash().as_ref(),
         }],
         Metadata::default(),
     )
@@ -312,14 +346,14 @@ pub(super) async fn prove(
         .await?;
     let selector = SorafsPublicationProofRequestV1 {
         entry_hash: *signed.hash_as_entrypoint().as_ref(),
-        floor_height: floor.height,
-        floor_block_hash: *floor.block_hash.as_ref(),
+        floor_height: floor.height(),
+        floor_block_hash: *floor.block_hash().as_ref(),
     };
     timeout_at(deadline, async {
         loop {
             let response = post(
                 http,
-                &floor.height_context.network_id,
+                &network,
                 base,
                 publisher,
                 "v1/sorafs/publish/proof",
@@ -339,27 +373,25 @@ pub(super) async fn prove(
                 &bytes(response, PUBLICATION_PROOF_MAX_BYTES_V1).await?,
                 PUBLICATION_PROOF_MAX_BYTES_V1,
             )?;
-            let verified = verify_sorafs_publication_v1(
-                &floor.height_context.network_id,
-                floor,
-                &signed,
-                &proof,
-            )?;
+            let verified = verify_sorafs_publication_v1(&network, floor, &signed, &proof)?;
             ensure!(
                 verified.completed() == completed,
                 "publication phase substituted"
             );
             let mut malformed = proof.clone();
-            malformed.executed_block.clear();
+            malformed
+                .lineage
+                .last_mut()
+                .ok_or_else(|| eyre::eyre!("publication lineage missing"))?
+                .block_wire
+                .clear();
             ensure!(
-                verify_sorafs_publication_v1(
-                    &floor.height_context.network_id,
-                    floor,
-                    &signed,
-                    &malformed
-                )
-                .is_err(),
+                verify_sorafs_publication_v1(&network, floor, &signed, &malformed).is_err(),
                 "unexecuted claim accepted"
+            );
+            ensure!(
+                Instant::now() < deadline,
+                "publication verification exceeded its deadline"
             );
             return Ok(verified.finality().clone());
         }

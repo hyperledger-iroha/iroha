@@ -42,11 +42,19 @@ Strict non-secret `iroha_config` policy construction and the supervised
 finalized-query/threshold-signing/publication worker are implemented. The
 current-head `State` adapter was removed because it cannot satisfy an immutable
 historical exact-anchor query. Standard `irohad` now owns the configured compact
-archive, zero-gap reconciles its committed State tip against Kura-authenticated
-V2 finality before Sumeragi startup, installs the same archive in the V2 apply
-corridor, and constructs `ReputationFinalizedQueryV1` from it. Every fresh
-projection is captured after Kura finality and the durable WSV checkpoint but
-before live State publication; failure is restart-required. An independently
+archive, reconciles its recovered committed State tip against the current
+certified Kura chain with zero allowed gaps before runtime activation, and
+constructs `ReputationFinalizedQueryV1` from it. `capture_certified_view` binds
+one immutable committed State view to its exact durable Kura inventory and
+embedded commit certificate; genesis uses its validated signed-genesis
+boundary without inventing a quorum certificate. Capture never fills a missed
+historical height with a later projection. The current executor retains a
+failed exact capture for retry before advancing to another block. Qualification
+and retention take that same State view, revalidate durable boundary identity,
+and bind compacted floors to the certified header/result identity rather than
+a node-local choice of quorum signatures. Startup accepts an empty height-zero
+bootstrap or equal recovered State/Kura heights; retired sidecar receipts and
+pending-replay archive modes are removed. An independently
 authenticated journal-transaction submitter remains injected, and the daemon
 does not construct a queue-backed submitter or adapt the validator key. The
 committed publication projection is exposed to Torii only after a fresh
@@ -93,7 +101,7 @@ Checked-in response-file examples cover provider and metrics canaries.
 ## Target Architecture
 | Component | Responsibility | Notes |
 |-----------|----------------|-------|
-| Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration requires deployment-injected authenticated journal submission; no validator-key or queue-backed fallback is constructed. The standard daemon owns the compact Kura-authenticated historical archive/query and captures it at the V2 commit boundary. Integrated validation and reviewed deployment evidence remain open. |
+| Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration requires deployment-injected authenticated journal submission; no validator-key or queue-backed fallback is constructed. The standard daemon owns the compact Kura-authenticated historical archive/query and captures each exact current-consensus committed State boundary. Integrated validation and reviewed deployment evidence remain open. |
 | Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection. |
 | Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
 | API gateway (`sorafs_reputation_api`) | Exposes authenticated read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Exact empty-body GETs require the signature quartet or exact witness. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |

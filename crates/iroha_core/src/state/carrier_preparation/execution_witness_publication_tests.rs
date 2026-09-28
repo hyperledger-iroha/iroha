@@ -60,8 +60,6 @@ fn witness_fixture(foreign: bool) -> Box<Fixture> {
         .unwrap_or_else(|(_, error)| panic!("actual original execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(Reservation(Arc::clone(&released))),
         )
         .unwrap();

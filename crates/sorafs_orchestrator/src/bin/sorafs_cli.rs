@@ -587,6 +587,7 @@ struct DeployClientConfig {
     public_key: PublicKey,
     private_key: PrivateKey,
     network_id: NetworkId,
+    chain_id: ChainId,
     chain_discriminant: u16,
 }
 struct DeployPackArtifacts {
@@ -670,9 +671,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
     })?;
     let client_config = load_deploy_client_config(&client_config_path)?;
-    let finality_checkpoint = finality_checkpoint.ok_or_else(|| "deploy requires --finality-checkpoint=PATH containing an independently trusted canonical V2FinalityArtifact for the configured network".to_owned())?;
-    let checkpoint =
-        deploy_publication::load_checkpoint(&finality_checkpoint, &client_config.network_id)?;
+    let finality_checkpoint = finality_checkpoint.ok_or_else(|| "deploy requires --finality-checkpoint=PATH containing an independently trusted canonical SumeragiFinalityCheckpoint for the configured network and chain".to_owned())?;
+    let checkpoint = deploy_publication::load_checkpoint(
+        &finality_checkpoint,
+        &client_config.network_id,
+        &client_config.chain_id,
+    )?;
     let torii_url = torii_url_override
         .or(client_config.torii_url.clone())
         .ok_or_else(|| {
@@ -924,7 +928,7 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         .and_then(toml::Value::as_str)
         .ok_or_else(|| "client config `[account]` must define `private_key`".to_string())?;
     let chain_discriminant = resolve_deploy_chain_discriminant(&root, account)?;
-    let _display_chain_id = resolve_deploy_chain_id(&root, chain_discriminant)?;
+    let chain_id = resolve_deploy_chain_id(&root, chain_discriminant)?;
     let network_id = root
         .get("network_id")
         .and_then(toml::Value::as_str)
@@ -940,6 +944,7 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         public_key,
         private_key,
         network_id,
+        chain_id,
         chain_discriminant,
     })
 }

@@ -16,7 +16,6 @@ use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{blocking::Client, crypto::KeyPair};
 use iroha_data_model::{
-    block::consensus_v2::finality::V2FinalityArtifact,
     isi::sorafs::{
         DecideSorafsReserveMovement, RegisterCapacityDeclaration, RegisterPinManifest,
         RegisterSorafsReserveAccount, RequestSorafsReserveMovement, SetSorafsReservePolicy,
@@ -32,6 +31,9 @@ use iroha_data_model::{
             RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyV1, ReserveDuration,
             ReserveMovementKindV1, ReservePolicyV1, ReserveProviderTermsV1, ReserveTier,
         },
+    },
+    sumeragi_finality::{
+        MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
     },
 };
 use iroha_executor_data_model::permission::sorafs::{
@@ -60,7 +62,7 @@ use std::{
     borrow::Cow,
     fs,
     io::Write as _,
-    os::unix::fs::OpenOptionsExt as _,
+    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -75,7 +77,7 @@ pub(super) struct PublishedNetwork {
     pub layers: Vec<toml::Table>,
     pub http: reqwest::Client,
     pub manifest: ManifestV1,
-    pub floor: V2FinalityArtifact,
+    pub floor: SumeragiFinalityCheckpoint,
     pub payload: Vec<u8>,
     cli_binary: PathBuf,
     _runtime_directory: tempfile::TempDir,
@@ -501,8 +503,8 @@ pub(super) async fn create_and_publish(
         assignment_revision: row.order.assignment_revision,
         manifest_digest: *digest.as_bytes(),
         chunk_index: None,
-        floor_height: assigned_floor.height,
-        floor_block_hash: *assigned_floor.block_hash.as_ref(),
+        floor_height: assigned_floor.height(),
+        floor_block_hash: *assigned_floor.block_hash().as_ref(),
     };
     for (key, request) in [
         (&*ALICE_KEYPAIR, source_request),
@@ -671,8 +673,13 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
     let path = chunks
         .first()
         .ok_or_else(|| eyre!("native producer created no chunk files"))?;
+    let chunk_length = fs::metadata(path)?.len();
+    ensure!(
+        chunk_length > 0 && chunk_length <= sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES,
+        "corruption fixture must modify exactly one bounded persisted chunk"
+    );
     let mut corrupted = fs::read(path)?;
-    ensure!(!corrupted.is_empty());
+    ensure!(corrupted.len() as u64 == chunk_length);
     corrupted[0] ^= 0x80;
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -680,6 +687,7 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
         .open(path)?;
     file.write_all(&corrupted)?;
     file.sync_all()?;
+    drop(file);
     let node = &published.network.peers()[0];
     timeout(
         wire::DEADLINE,
@@ -698,6 +706,14 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
         "corrupt payload must remain unavailable after restart, got {}",
         unavailable.status()
     );
+    let unavailable_body = wire::bytes(unavailable, 65536).await?;
+    ensure!(
+        String::from_utf8(unavailable_body)?
+            .contains("manifest payload is quarantined pending verified repair"),
+        "an unrelated restart or finality error cannot establish payload quarantine"
+    );
+    // An unaffected replica remains available before any repair task can be claimed.
+    check_payload(published, 1).await?;
     refresh_adverts(published).await?;
     let report = RepairReportV1 {
         version: REPAIR_REPORT_VERSION_V1,
@@ -718,29 +734,76 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
         notes: None,
     };
     let operator = client(&published.network, 1, &ALICE_KEYPAIR);
+    let canonical_report = norito::encode_canonical(&report)?;
     submit_instruction(
         &operator,
-        SubmitSorafsRepairTask::new([0xD7; 32], norito::encode_canonical(&report)?),
+        SubmitSorafsRepairTask::new([0xD7; 32], canonical_report.clone()),
     )
     .await?;
-    timeout_at(Instant::now() + wire::DEADLINE, async {
+    let completed = timeout_at(Instant::now() + wire::DEADLINE, async {
         loop {
             let reader = client(&published.network, 1, &ALICE_KEYPAIR);
-            let task = read_on_dedicated_thread(move || {
+            let snapshot = read_on_dedicated_thread(move || {
                 Ok(reader
                     .client()
                     .query_single(FindSorafsRepairTask::new(TICKET.into(), None))?)
             })
             .await?;
-            if let Some(terminal) = task.task.terminal_outcome {
+            let task = &snapshot.task;
+            ensure!(
+                task.ticket_id == TICKET
+                    && task.canonical_report == canonical_report
+                    && task.manifest_digest == *digest.as_bytes()
+                    && task.provider_id == *published.providers[0].id.as_bytes()
+                    && task.source_identity == [0xD7; 32]
+                    && task.submitted_by == *ALICE_ID,
+                "repair query substituted the admitted publication task"
+            );
+            if let Some(terminal) = &task.terminal_outcome {
+                let RepairLedgerTerminalKindV1::Completed(completion) = &terminal.kind else {
+                    return Err(eyre!(
+                        "production repair did not complete: {:?}",
+                        terminal.kind
+                    ));
+                };
                 ensure!(
-                    matches!(terminal.kind, RepairLedgerTerminalKindV1::Completed(_)),
-                    "production repair did not complete: {:?}",
-                    terminal.kind
+                    completion.evidence_digest != [0; 32]
+                        && terminal.lease_generation > 0
+                        && terminal.finalized_by
+                            == AccountId::new(
+                                published.providers[0].role_keys[1].public_key().clone()
+                            )
+                        && terminal.finalized_at_unix_ms >= task.submitted_at_unix_ms
+                        && snapshot.finalized_cursor.height > 0
+                        && snapshot.finalized_cursor.block_hash != [0; 32],
+                    "completion did not bind the assigned native repair worker and finalized task"
                 );
-                break;
+                break Ok::<_, eyre::Report>(snapshot);
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await??;
+    // Query actual applied State on every validator, not only a local worker's completion.
+    timeout_at(Instant::now() + wire::DEADLINE, async {
+        for peer in 0..4 {
+            loop {
+                let reader = client(&published.network, peer, &ALICE_KEYPAIR);
+                let snapshot = read_on_dedicated_thread(move || {
+                    Ok(reader
+                        .client()
+                        .query_single(FindSorafsRepairTask::new(TICKET.into(), None))?)
+                })
+                .await?;
+                if snapshot.finalized_cursor.height >= completed.finalized_cursor.height {
+                    ensure!(
+                        snapshot.task == completed.task,
+                        "validator {peer} did not apply the exact terminal native repair task"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
         }
         Ok::<_, eyre::Report>(())
     })
@@ -803,7 +866,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     config_file.write_all(toml::to_string(&config)?.as_bytes())?;
     config_file.sync_all()?;
     let checkpoint = root.join("trusted-finality.to");
-    fs::write(&checkpoint, norito::encode_canonical(&published.floor)?)?;
+    fs::write(&checkpoint, published.floor.encode_canonical()?)?;
     let out_dir = root.join("output");
     let receipt = root.join("receipt.json");
     let log = root.join("cli.log");
@@ -832,7 +895,18 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     for peer in published.network.peers().iter().take(3) {
         command.arg(format!("--provider-url={}", peer.torii_url()));
     }
-    let status = timeout(Duration::from_secs(620), command.spawn()?.wait()).await??;
+    let mut child = command.spawn()?;
+    let status = match timeout(Duration::from_secs(620), child.wait()).await {
+        Ok(status) => status?,
+        Err(error) => {
+            // Reap our own test child before its private runtime directory is removed.
+            child
+                .kill()
+                .await
+                .wrap_err("terminate and reap timed-out publication CLI")?;
+            return Err(error).wrap_err("same-source publication CLI exceeded its deadline");
+        }
+    };
     ensure!(
         status.success(),
         "same-source sorafs_cli deploy failed; runtime log: {}",
@@ -848,6 +922,26 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
             && receipt["publication_verified"].as_bool() == Some(true)
             && receipt["gateway_verification"]["success"].as_bool() == Some(true),
         "CLI failed native finality or asset verification"
+    );
+    let successor_path = out_dir.join("publication.finality.to");
+    let successor_metadata = fs::metadata(&successor_path)?;
+    ensure!(
+        successor_metadata.len() <= MAX_FINALITY_CHECKPOINT_BYTES as u64,
+        "CLI finality checkpoint exceeded bound"
+    );
+    ensure!(
+        successor_metadata.permissions().mode() & 0o777 == 0o600,
+        "CLI finality checkpoint must be owner-only"
+    );
+    let successor = SumeragiFinalityCheckpoint::decode_canonical(&fs::read(successor_path)?)?;
+    SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &successor,
+        &published.network.network_id(),
+        &published.network.chain_id().to_string(),
+    )?;
+    ensure!(
+        successor.height() > published.floor.height(),
+        "CLI did not persist authenticated publication progress"
     );
     ensure!(fs::metadata(out_dir.join("native-cli.manifest.to"))?.len() <= 4 * 1024 * 1024);
     let manifest: ManifestV1 = wire::decode(

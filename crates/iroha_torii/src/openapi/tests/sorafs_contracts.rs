@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 16_090;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 16_498;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "b6580aa28360f8fefc460e6b818075133337ed84aa2458718a5384553d0120ce";
+    "00dd61298d1f22984ba421a48538d69acd21280ba216e68040543a07c8a9456a";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",
@@ -45,7 +45,7 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "fixture.execution.fields",
     "fixture.retired",
     "lifecycle.required",
-    "status.present",
+    "status.required",
     "status.absent",
     "native.receipt.required",
     "native.leg.required",
@@ -709,18 +709,10 @@ fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
         }
     }
     let car = openapi_operation(&document, "/v1/sorafs/storage/car/{manifest_id}", "get");
-    assert!(
-        car.get("responses")
-            .and_then(Value::as_object)
-            .is_some_and(|responses| {
-                !responses.contains_key("200")
-                    && responses
-                        .get("206")
-                        .and_then(|response| response.get("content"))
-                        .and_then(Value::as_object)
-                        .is_some_and(|content| content.contains_key("application/vnd.ipld.car"))
-            })
-    );
+    let responses = operation_responses(car);
+    member_contracts! { responses; Absent => ["200"]; }
+    let partial_content = response_content(car, "206");
+    member_contracts! { partial_content; Present => ["application/vnd.ipld.car"]; }
 }
 #[test]
 fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
@@ -956,20 +948,12 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
                 response.get("headers"),
                 &format!("{method} {path} HTTP {status} private headers"),
             );
-            let constant = |name| {
-                headers
-                    .get(name)
-                    .and_then(|header| header.get("schema"))
-                    .and_then(|schema| schema.get("const"))
-                    .and_then(Value::as_str)
-            };
-            assert_eq!(constant("Cache-Control"), Some("private, no-store"));
-            assert_eq!(
-                constant("Vary"),
-                Some(
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                )
-            );
+            for (name, expected) in contract_rows! {
+                "Cache-Control", "private, no-store";
+                "Vary", "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
+            } {
+                scalar_contracts! { headers.get(name).and_then(|header| header.get("schema")).and_then(|schema| schema.get("const")) => Text(expected); }
+            }
         }
     }
     for path in contract_words(

@@ -165,9 +165,6 @@ impl_direct_instruction_box!(crate::isi::private_settlement::AbortAtomicPrivateS
 impl_direct_instruction_box!(crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
 impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
-impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
-impl_direct_instruction_box!(crate::isi::bridge::ApplySccpRouteGovernance);
-impl_direct_instruction_box!(crate::isi::bridge::SubmitSccpTonBreakerObservationV1);
 impl_direct_instruction_box!(crate::isi::asset_alias::SetAssetDefinitionAlias);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferAvailability);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
@@ -333,6 +330,19 @@ impl_direct_instruction_box!(crate::isi::escrow::ExpireAssetLock);
 impl_direct_instruction_box!(crate::isi::vpn::OpenVpnLeaseEscrow);
 impl_direct_instruction_box!(crate::isi::vpn::SettleVpnLease);
 impl_direct_instruction_box!(crate::isi::vpn::RefundExpiredVpnLease);
+// Allow direct boxing of the SCCP v1 instructions (`specs/sccp.md` §4).
+impl_direct_instruction_box!(
+    crate::isi::sccp::InitializeSccpV1,
+    crate::isi::sccp::SetSccpBridgeKeyV1,
+    crate::isi::sccp::SubmitSccpAttestationsV1,
+    crate::isi::sccp::SubmitSccpAttestationFaultV1,
+    crate::isi::sccp::RecordSccpMessage,
+    crate::isi::sccp::SubmitSccpInboundMessageV1,
+    crate::isi::sccp::SettleSccpV1,
+    crate::isi::sccp::SubmitSccpOutboundVoidV1,
+    crate::isi::sccp::AdvanceSccpLightClientV1,
+    crate::isi::sccp::ReportSccpLightClientEquivocationV1,
+);
 // Allow direct boxing of SoraFS capacity marketplace instructions.
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterCapacityDeclaration);
 impl_direct_instruction_box!(crate::isi::sorafs::RecordCapacityTelemetry);
@@ -1880,6 +1890,7 @@ pub mod retail_daily_limit;
 pub mod runtime_upgrade;
 /// Real-world asset lot instructions.
 pub mod rwa;
+/// SCCP v1 cross-chain instructions (`specs/sccp.md` §4).
 pub mod sccp;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
@@ -2673,10 +2684,7 @@ pub mod prelude {
             SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
             SetAssetTransferControl,
         },
-        bridge::{
-            ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
-            SubmitSccpTonBreakerObservationV1,
-        },
+        bridge::{RecordBridgeReceipt, SubmitBridgeProof},
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,

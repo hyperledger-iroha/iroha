@@ -97,6 +97,20 @@ mod model {
         /// Native race events, optionally restricted to one race identifier.
         #[codec(index = 24)]
         GameSession(Option<iroha_crypto::Hash>),
+        /// Matches SCCP v1 cross-chain events.
+        #[codec(index = 25)]
+        Sccp(SccpEventFilter),
+    }
+    /// An event filter for [`crate::sccp::events::SccpEvent`] values (`specs/sccp.md` §4.17).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::filters::model::SccpEventFilter")]
+    pub struct SccpEventFilter {
+        /// If specified, matches only events that name this external network.
+        pub(super) network_matcher: Option<crate::bridge::SccpNetworkV1>,
+        /// Matches only events from this set.
+        pub(super) event_set: crate::sccp::events::SccpEventSet,
     }
     /// An event filter for [`super::proof::ProofEvent`] values.
     #[derive(
@@ -992,6 +1006,81 @@ impl Default for SocialEventFilter {
         Self::new()
     }
 }
+impl SccpEventFilter {
+    /// Creates a new [`SccpEventFilter`] accepting every SCCP event.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            network_matcher: None,
+            event_set: crate::sccp::events::SccpEventSet::all(),
+        }
+    }
+    /// Restricts matches to events that name `network` (events without a network never match).
+    #[must_use]
+    pub const fn for_network(mut self, network: crate::bridge::SccpNetworkV1) -> Self {
+        self.network_matcher = Some(network);
+        self
+    }
+    /// Restricts matches to the provided event set.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: crate::sccp::events::SccpEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+impl Default for SccpEventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+/// Return the external network an SCCP event names, if any.
+///
+/// Block, roster, attestation, bridge-key and fault events concern Taira itself and name no
+/// external network; the governance event names the subjects it changed instead.
+#[cfg(feature = "transparent_api")]
+fn sccp_event_network(
+    event: &crate::sccp::events::SccpEvent,
+) -> Option<crate::bridge::SccpNetworkV1> {
+    use crate::sccp::events::SccpEvent;
+    match event {
+        SccpEvent::MessageRecorded(ev) => Some(ev.network),
+        SccpEvent::InboundProven(ev) => Some(ev.network),
+        SccpEvent::RecipientRegistered(ev) => Some(ev.network),
+        SccpEvent::InboundReleased(ev) => Some(ev.network),
+        SccpEvent::InboundBounced(ev) => Some(ev.network),
+        SccpEvent::InboundLiabilityShortfall(ev) => Some(ev.network),
+        SccpEvent::OutboundVoided(ev) => Some(ev.network),
+        SccpEvent::OutboundRefunded(ev) => Some(ev.network),
+        SccpEvent::OutboundStranded(ev) => Some(ev.network),
+        SccpEvent::StrandedReleased(ev) => Some(ev.network),
+        SccpEvent::LightClientAdvanced(ev) => Some(ev.network),
+        SccpEvent::LightClientFrozen(ev) => Some(ev.network),
+        SccpEvent::LightClientInitialized(ev) => Some(ev.network),
+        SccpEvent::TrustedCheckpointInstalled(ev) => Some(ev.network),
+        SccpEvent::RevisionActivationChanged(ev) => Some(ev.network),
+        SccpEvent::ControlRecorded(ev) => Some(ev.network),
+        SccpEvent::BlockCommitted(_)
+        | SccpEvent::SubjectCreated(_)
+        | SccpEvent::AttestationSigned(_)
+        | SccpEvent::BlockAttested(_)
+        | SccpEvent::RosterGenerationCreated(_)
+        | SccpEvent::RosterDerivationFailed(_)
+        | SccpEvent::HandoffStalled(_)
+        | SccpEvent::BridgeKeySet(_)
+        | SccpEvent::AttestationFault(_)
+        | SccpEvent::GovernanceEnacted(_) => None,
+    }
+}
+#[cfg(feature = "transparent_api")]
+impl super::EventFilter for SccpEventFilter {
+    type Event = crate::sccp::events::SccpEvent;
+    fn matches(&self, event: &Self::Event) -> bool {
+        self.event_set.matches(event)
+            && self
+                .network_matcher
+                .is_none_or(|network| sccp_event_network(event) == Some(network))
+    }
+}
 impl Default for PeerEventFilter {
     fn default() -> Self {
         Self::new()
@@ -1804,6 +1893,7 @@ impl DataEventFilter {
                 updated |= replace_selector(&mut filter.buyer_matcher);
             }
             Self::GameSession(_)
+            | Self::Sccp(_)
             | Self::Any
             | Self::Peer(_)
             | Self::Domain(_)
@@ -1909,6 +1999,9 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::GameSession(id), DataEvent::GameSession(event)) => {
                 id.as_ref().is_none_or(|id| id == &event.session_id)
             }
+            (DataEventFilter::Sccp(filter), DataEvent::Sccp(sccp_event)) => {
+                filter.matches(sccp_event)
+            }
             (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
                 filter.matches(escrow_event)
             }
@@ -1982,9 +2075,9 @@ pub mod prelude {
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, ConfigurationEventFilter,
         DataEventFilter, DomainEventFilter, EscrowEventFilter, ExecutorEventFilter,
         MusubiEventFilter, NftEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter,
-        RuntimeUpgradeEventFilter, RwaEventFilter, SocialEventFilter, SoradnsDirectoryEventFilter,
-        SorafsGatewayEventFilter, SpaceDirectoryEventFilter, TriggerEventFilter,
-        VerifyingKeyEventFilter,
+        RuntimeUpgradeEventFilter, RwaEventFilter, SccpEventFilter, SocialEventFilter,
+        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, SpaceDirectoryEventFilter,
+        TriggerEventFilter, VerifyingKeyEventFilter,
     };
     pub use super::{BridgeEventFilter, OracleEventFilter};
 }
@@ -2711,3 +2804,78 @@ mod tag_tests;
 
 #[cfg(test)]
 mod captured_event_boundary_identity_tests;
+
+#[cfg(all(test, feature = "transparent_api"))]
+mod sccp_filter_tests {
+    use super::*;
+    use crate::{
+        bridge::SccpNetworkV1,
+        sccp::events::{SccpBlockCommittedV1, SccpEvent, SccpEventSet, SccpMessageRecordedV1},
+    };
+
+    fn recorded(network: SccpNetworkV1) -> SccpEvent {
+        SccpEvent::MessageRecorded(SccpMessageRecordedV1 {
+            message_id: [1; 32],
+            network,
+            revision: 1,
+            nonce: 0,
+            height: 9,
+            commitment_index: 0,
+            deadline_ms: 1,
+        })
+    }
+
+    fn committed() -> SccpEvent {
+        SccpEvent::BlockCommitted(SccpBlockCommittedV1 {
+            height: 9,
+            root: [2; 32],
+            count: 1,
+            history_size: 1,
+        })
+    }
+
+    #[test]
+    fn sccp_filter_matches_by_event_set_and_network() {
+        let any = SccpEventFilter::default();
+        assert!(any.matches(&recorded(SccpNetworkV1::TonMainnet)));
+        assert!(any.matches(&committed()));
+        let ton = SccpEventFilter::new().for_network(SccpNetworkV1::TonMainnet);
+        assert!(ton.matches(&recorded(SccpNetworkV1::TonMainnet)));
+        assert!(!ton.matches(&recorded(SccpNetworkV1::EthereumMainnet)));
+        assert!(
+            !ton.matches(&committed()),
+            "events without a network never match a network filter"
+        );
+        let blocks = SccpEventFilter::new().for_events(SccpEventSet::BlockCommitted);
+        assert!(blocks.matches(&committed()));
+        assert!(!blocks.matches(&recorded(SccpNetworkV1::TonMainnet)));
+    }
+
+    #[test]
+    fn data_event_filter_routes_sccp_events_to_the_sccp_filter() {
+        let event = DataEvent::Sccp(recorded(SccpNetworkV1::BscMainnet));
+        assert!(DataEventFilter::Any.matches(&event));
+        assert!(DataEventFilter::Sccp(SccpEventFilter::new()).matches(&event));
+        assert!(
+            !DataEventFilter::Sccp(SccpEventFilter::new().for_network(SccpNetworkV1::TonMainnet))
+                .matches(&event)
+        );
+        assert!(!DataEventFilter::GameSession(None).matches(&event));
+        let mut filter = DataEventFilter::Sccp(SccpEventFilter::new());
+        let account = |seed: u8| {
+            AccountId::new(
+                iroha_crypto::KeyPair::try_from_seed(
+                    vec![seed; 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+                .expect("deterministic seed")
+                .into_parts()
+                .0,
+            )
+        };
+        assert!(
+            !filter.replace_account_id(&account(1), &account(2)),
+            "SCCP filters carry no account selector"
+        );
+    }
+}

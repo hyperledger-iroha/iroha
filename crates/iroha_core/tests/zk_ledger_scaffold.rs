@@ -756,7 +756,7 @@ fn zk_roots_are_bounded_in_world_state() {
                 per_commitment: defaults::confidential::gas::PER_COMMITMENT,
             },
         })
-        .expect("empty SCCP outbox accepts bounded-roots test configuration");
+        .expect("empty state accepts bounded-roots test configuration");
     // Begin block/transaction
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
@@ -900,7 +900,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 per_commitment: defaults::confidential::gas::PER_COMMITMENT,
             },
         })
-        .expect("empty SCCP outbox accepts checkpoint test configuration");
+        .expect("empty state accepts checkpoint test configuration");
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(

@@ -22,9 +22,7 @@ fn state() -> Arc<State> {
 fn contents(state: &State) -> Vec<(&'static str, String)> {
     macro_rules! snapshot {
         ($($field:ident: $ty:ty,)*) => {{
-            let mut values = vec![$((stringify!($field), format!("{:?}", &*state.$field.read())),)*];
-            values.push(("sccp_registry_cache", format!("{:?}", &*state.sccp_registry_cache.lock())));
-            values
+            vec![$((stringify!($field), format!("{:?}", &*state.$field.read())),)*]
         }};
     }
     effect_indexes!(snapshot)
@@ -54,7 +52,7 @@ impl Probe {
             ($($field:ident: $ty:ty,)*) => {{
                 let mut free = 0;
                 $(free += usize::from(self.state.$field.try_write().is_some());)*
-                free + usize::from(self.state.sccp_registry_cache.try_lock().is_some())
+                free
             }};
         }
         let free = effect_indexes!(probe);
@@ -68,7 +66,7 @@ impl Probe {
 
     fn assert_originals_released(&self) {
         assert_eq!(self.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(self.indexes_free.load(Ordering::SeqCst), 12);
+        assert_eq!(self.indexes_free.load(Ordering::SeqCst), 11);
         assert_eq!(self.fence_free.load(Ordering::SeqCst), 1);
     }
 }
@@ -94,13 +92,7 @@ fn assert_physical_prefix(slot: &StateEffectLocks<'_>, blocked_index: usize) {
             index
         }};
     }
-    let sccp_index = effect_indexes!(inspect);
-    assert_eq!(sccp_index, 11);
-    assert!(slot.sccp_registry_cache.is_none());
-    assert_eq!(
-        slot.target.sccp_registry_cache.try_lock().is_none(),
-        blocked_index == sccp_index
-    );
+    assert_eq!(effect_indexes!(inspect), 11);
     assert!(!slot.complete);
 }
 
@@ -202,19 +194,6 @@ fn every_effect_reader_and_writer_refusal_retains_original_prefix_and_wait() {
     assert_eq!(effect_indexes!(check), 11);
 }
 
-#[test]
-fn sccp_refusal_retains_all_original_effect_writers() {
-    let state = state();
-    let before = contents(&state);
-    let held = state.sccp_registry_cache.lock();
-    let expected = state
-        .sccp_registry_cache
-        .try_lock_or_wait()
-        .err()
-        .expect("actual original SCCP writer");
-    refusal(&state, held, expected, "sccp_registry_cache", 11, &before);
-}
-
 fn complete_scope(unwind: bool) {
     let state = state();
     let before = contents(&state);
@@ -263,7 +242,6 @@ fn complete_scope(unwind: bool) {
         ($($field:ident: $ty:ty,)*) => { $(assert!(state.$field.try_write().is_none(), "{} held", stringify!($field));)* };
     }
     effect_indexes!(held);
-    assert!(state.sccp_registry_cache.try_lock().is_none());
     let mut pending = state
         .latest_block_header
         .try_write_or_wait()
@@ -311,12 +289,12 @@ fn unwinding_effect_scope_releases_all_indexes_before_outer_fence_callbacks() {
 }
 
 #[test]
-fn synchronous_effect_preparation_releases_prefix_while_waiting_for_original_sccp() {
+fn synchronous_effect_preparation_releases_prefix_while_waiting_for_the_last_original_index() {
     use std::{sync::mpsc, time::Duration};
 
     let state = state();
     let before = contents(&state);
-    let blocker = state.sccp_registry_cache.lock();
+    let blocker = state.da_indexes_hydrated.write();
     let (started_tx, started_rx) = mpsc::sync_channel(1);
     let (done_tx, done_rx) = mpsc::sync_channel(1);
     let worker_state = Arc::clone(&state);
@@ -336,7 +314,6 @@ fn synchronous_effect_preparation_releases_prefix_while_waiting_for_original_scc
         ($($field:ident: $ty:ty,)*) => { [$(state.$field.try_write().is_some(),)*] };
     }
     let prefix = effect_indexes!(free_prefix);
-    let sccp_busy = state.sccp_registry_cache.try_lock().is_none();
     drop(blocker);
     let completed = if early.is_ok() {
         early.clone()
@@ -346,8 +323,12 @@ fn synchronous_effect_preparation_releases_prefix_while_waiting_for_original_scc
     let joined = worker.join();
     assert!(started.is_ok());
     assert_eq!(early, Err(mpsc::RecvTimeoutError::Timeout));
-    assert!(prefix.into_iter().all(|free| free));
-    assert!(sccp_busy);
+    let (last, released_prefix) = prefix.split_last().expect("effect indexes");
+    assert!(released_prefix.iter().all(|free| *free));
+    assert!(
+        !last,
+        "the external blocker still holds the last original index"
+    );
     assert_eq!(completed, Ok(true));
     assert!(joined.is_ok());
     assert_eq!(contents(&state), before);

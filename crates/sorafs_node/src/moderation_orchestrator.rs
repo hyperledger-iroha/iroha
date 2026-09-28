@@ -188,10 +188,6 @@ const SIGNED_TRANSACTION_LIMITS: DecodeLimits = DecodeLimits::new(
 /// One exact native moderation mutation.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationNativeActionV1")]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "boxing a variant would change the canonical public Norito action shape"
-)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 
 pub enum ModerationNativeActionV1 {

@@ -1,12 +1,17 @@
-//! Protocol-native Ethereum consensus light-client verification for SCCP.
+//! Protocol-native Ethereum consensus light-client primitives for SCCP v1 (`specs/sccp.md`
+//! §4.13.3).
 //!
-//! The module models the fixed SSZ types used by Ethereum light-client updates, validates a
-//! governed fork schedule and genesis validators root, and advances a light-client state without
-//! consulting a wall clock. Accepted updates must carry finality, the next sync committee, and at
-//! least the Ethereum mainnet two-thirds sync-committee threshold (342 of 512 positions).
+//! The module models the fixed SSZ types used by Ethereum light-client bootstraps and updates,
+//! validates a compiled fork schedule and genesis validators root, and checks one update or
+//! bootstrap at a time without consulting a wall clock or any stored state. Every accepted update
+//! carries a finality branch, satisfies `signature_slot > attested.slot >= finalized.slot` and the
+//! mainnet two-thirds threshold (`3 * participants >= 2 * 512`, at least 342 positions), and is
+//! verified by fast-aggregate BLS with the fork version of `max(signature_slot, 1) - 1`. A
+//! `next_sync_committee` is accepted only when the attested and finalized headers share a period,
+//! so committees are learned from finalized state only.
 //!
-//! This file is intentionally self-contained so it can be reviewed and tested
-//! before it is wired into the existing SCCP proof envelope.
+//! Stored sets, freshness, fork bounds and checkpoints are applied by
+//! [`crate::light_client::ethereum`], which composes these checks.
 use core::fmt;
 use iroha_crypto::{ethereum_bls_pop_fast_aggregate_verify, ethereum_bls_pop_validate_public_key};
 use sha2::{Digest as _, Sha256};
@@ -41,18 +46,18 @@ pub const NEXT_SYNC_COMMITTEE_GINDEX_ELECTRA: u64 = 87;
 /// `execution_payload` generalized index in `BeaconBlockBody`.
 pub const EXECUTION_PAYLOAD_GINDEX: u64 = 25;
 const ZERO_ROOT: Root = [0; 32];
-/// Errors returned while validating governed Ethereum light-client data.
+/// Errors returned while validating Ethereum light-client data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EthereumLightClientError {
-    /// The governed fork schedule is malformed.
+    /// The compiled fork schedule is malformed.
     InvalidForkSchedule(&'static str),
-    /// The governed genesis validators root is the zero sentinel.
+    /// The compiled genesis validators root is the zero sentinel.
     ZeroGenesisValidatorsRoot,
     /// The slot precedes the first supported fork.
     UnsupportedSlot(u64),
-    /// A header's closed fork variant disagrees with the governed schedule.
+    /// A header's closed fork variant disagrees with the compiled schedule.
     HeaderForkMismatch {
-        /// Fork selected by the governed schedule.
+        /// Fork selected by the compiled schedule.
         expected: EthereumFork,
         /// Fork variant supplied by the update.
         actual: EthereumFork,
@@ -61,8 +66,6 @@ pub enum EthereumLightClientError {
     ExtraDataTooLong(usize),
     /// A Capella-or-later execution payload branch was invalid.
     InvalidExecutionBranch,
-    /// The trusted block root did not match the bootstrap beacon header.
-    InvalidTrustedBlockRoot,
     /// The bootstrap current-committee branch used the wrong fork shape.
     CurrentCommitteeBranchForkMismatch,
     /// The bootstrap current-committee proof was invalid.
@@ -75,6 +78,9 @@ pub enum EthereumLightClientError {
     NextCommitteeBranchForkMismatch,
     /// The next sync-committee proof was invalid.
     InvalidNextCommitteeBranch,
+    /// A next sync committee was offered while the attested and finalized headers are in
+    /// different periods, so it is not finalized.
+    NextCommitteePeriodMismatch,
     /// A sync-committee public key failed BLS `KeyValidate`.
     InvalidCommitteePublicKey(usize),
     /// A sync committee's aggregate public key failed BLS `KeyValidate`.
@@ -83,18 +89,8 @@ pub enum EthereumLightClientError {
     InvalidSlotOrder,
     /// The update did not meet the 342-of-512 finality threshold.
     InsufficientParticipation(usize),
-    /// The update skipped a sync-committee period.
-    SkippedSyncCommitteePeriod,
-    /// The finalized header did not advance the immutable anchor.
-    StaleFinalizedHeader,
-    /// A period transition required a next committee that was not anchored.
-    MissingNextSyncCommittee,
-    /// An update for the current period changed an already anchored next committee.
-    ConflictingNextSyncCommittee,
     /// The standard Ethereum BLS aggregate signature was invalid.
     InvalidSyncCommitteeSignature,
-    /// A previously validated update was applied to a different state snapshot.
-    UpdateForDifferentState,
 }
 impl fmt::Display for EthereumLightClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -117,7 +113,6 @@ impl fmt::Display for EthereumLightClientError {
                 )
             }
             Self::InvalidExecutionBranch => formatter.write_str("invalid execution payload branch"),
-            Self::InvalidTrustedBlockRoot => formatter.write_str("invalid trusted block root"),
             Self::CurrentCommitteeBranchForkMismatch => {
                 formatter.write_str("current committee branch does not match the active fork")
             }
@@ -134,6 +129,9 @@ impl fmt::Display for EthereumLightClientError {
             Self::InvalidNextCommitteeBranch => {
                 formatter.write_str("invalid next sync committee branch")
             }
+            Self::NextCommitteePeriodMismatch => formatter.write_str(
+                "next sync committee is accepted only when attested and finalized share a period",
+            ),
             Self::InvalidCommitteePublicKey(position) => {
                 write!(
                     formatter,
@@ -148,22 +146,8 @@ impl fmt::Display for EthereumLightClientError {
                 formatter,
                 "sync committee participation {actual} is below the required 342"
             ),
-            Self::SkippedSyncCommitteePeriod => {
-                formatter.write_str("light-client update skipped a sync committee period")
-            }
-            Self::StaleFinalizedHeader => {
-                formatter.write_str("light-client update did not advance finality")
-            }
-            Self::MissingNextSyncCommittee => {
-                formatter.write_str("next sync committee is not anchored")
-            }
-            Self::ConflictingNextSyncCommittee => formatter
-                .write_str("light-client update conflicts with the anchored next committee"),
             Self::InvalidSyncCommitteeSignature => {
                 formatter.write_str("invalid Ethereum sync committee signature")
-            }
-            Self::UpdateForDifferentState => {
-                formatter.write_str("validated update belongs to a different state snapshot")
             }
         }
     }
@@ -189,7 +173,8 @@ pub enum EthereumFork {
     Fulu,
 }
 impl EthereumFork {
-    const ALL: [Self; 6] = [
+    /// Every supported fork in activation order.
+    pub const ALL: [Self; 6] = [
         Self::Altair,
         Self::Bellatrix,
         Self::Capella,
@@ -200,8 +185,12 @@ impl EthereumFork {
     const fn uses_electra_state_layout(self) -> bool {
         matches!(self, Self::Electra | Self::Fulu)
     }
+    /// Whether light-client headers of this fork carry an execution payload header.
+    pub const fn has_execution_payload(self) -> bool {
+        !matches!(self, Self::Altair | Self::Bellatrix)
+    }
 }
-/// Governed activation parameters for one fixed Ethereum fork.
+/// Activation parameters for one fixed Ethereum fork.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ForkActivation {
     epoch: u64,
@@ -221,7 +210,7 @@ impl ForkActivation {
         self.version
     }
 }
-/// Validated governed Ethereum fork schedule and genesis validators root.
+/// Validated Ethereum fork schedule and genesis validators root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ForkSchedule {
     genesis_validators_root: Root,
@@ -266,7 +255,7 @@ impl ForkSchedule {
             activations,
         })
     }
-    /// Return the governed genesis validators root.
+    /// Return the genesis validators root.
     pub const fn genesis_validators_root(&self) -> Root {
         self.genesis_validators_root
     }
@@ -274,11 +263,15 @@ impl ForkSchedule {
     pub const fn activation(&self, fork: EthereumFork) -> ForkActivation {
         self.activations[fork as usize]
     }
+    /// Return every activation in fork order.
+    pub const fn activations(&self) -> [ForkActivation; 6] {
+        self.activations
+    }
     /// Select the active fork for a slot.
     ///
     /// # Errors
     ///
-    /// Returns an error when the slot precedes the governed Altair activation.
+    /// Returns an error when the slot precedes the Altair activation.
     pub fn fork_at_slot(
         &self,
         slot: u64,
@@ -291,17 +284,6 @@ impl ForkSchedule {
             }
         }
         selected.ok_or(EthereumLightClientError::UnsupportedSlot(slot))
-    }
-    fn commitment(&self) -> Root {
-        let mut hasher = Sha256::new();
-        hasher.update(b"sccp:ethereum-fork-schedule:v1");
-        hasher.update(self.genesis_validators_root);
-        for (fork, activation) in EthereumFork::ALL.into_iter().zip(self.activations) {
-            hasher.update([fork as u8]);
-            hasher.update(activation.epoch.to_le_bytes());
-            hasher.update(activation.version);
-        }
-        hasher.finalize().into()
     }
 }
 /// Fork-dependent Ethereum light-client generalized indices.
@@ -420,9 +402,8 @@ pub struct CapellaExecutionPayloadHeader {
     pub withdrawals_root: Root,
 }
 impl CapellaExecutionPayloadHeader {
-    /// Compute the canonical Capella SSZ `hash_tree_root`.
-    pub fn hash_tree_root(&self) -> Root {
-        merkleize(&[
+    fn leaves(&self) -> Vec<Root> {
+        vec![
             self.parent_hash,
             byte_vector_root(&self.fee_recipient),
             self.state_root,
@@ -438,42 +419,18 @@ impl CapellaExecutionPayloadHeader {
             self.block_hash,
             self.transactions_root,
             self.withdrawals_root,
-        ])
+        ]
+    }
+    /// Compute the canonical Capella SSZ `hash_tree_root`.
+    pub fn hash_tree_root(&self) -> Root {
+        merkleize(&self.leaves())
     }
 }
 /// Official Deneb SSZ `ExecutionPayloadHeader`, also used by Electra and Fulu.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DenebExecutionPayloadHeader {
-    /// Parent execution block hash.
-    pub parent_hash: Root,
-    /// Execution fee recipient.
-    pub fee_recipient: [u8; 20],
-    /// Execution state root.
-    pub state_root: Root,
-    /// Execution receipts root.
-    pub receipts_root: Root,
-    /// Execution logs bloom.
-    pub logs_bloom: [u8; 256],
-    /// Previous RANDAO mix.
-    pub prev_randao: Root,
-    /// Execution block number.
-    pub block_number: u64,
-    /// Execution gas limit.
-    pub gas_limit: u64,
-    /// Execution gas used.
-    pub gas_used: u64,
-    /// Execution timestamp.
-    pub timestamp: u64,
-    /// Bounded execution extra data.
-    pub extra_data: ExtraData,
-    /// Base fee encoded as SSZ little-endian `uint256`.
-    pub base_fee_per_gas: [u8; 32],
-    /// Execution block hash.
-    pub block_hash: Root,
-    /// Transactions list root.
-    pub transactions_root: Root,
-    /// Withdrawals list root.
-    pub withdrawals_root: Root,
+    /// Capella-compatible fields.
+    pub capella: CapellaExecutionPayloadHeader,
     /// Blob gas used by the execution block.
     pub blob_gas_used: u64,
     /// Excess blob gas after the execution block.
@@ -482,25 +439,10 @@ pub struct DenebExecutionPayloadHeader {
 impl DenebExecutionPayloadHeader {
     /// Compute the canonical Deneb SSZ `hash_tree_root`.
     pub fn hash_tree_root(&self) -> Root {
-        merkleize(&[
-            self.parent_hash,
-            byte_vector_root(&self.fee_recipient),
-            self.state_root,
-            self.receipts_root,
-            byte_vector_root(&self.logs_bloom),
-            self.prev_randao,
-            uint64_root(self.block_number),
-            uint64_root(self.gas_limit),
-            uint64_root(self.gas_used),
-            uint64_root(self.timestamp),
-            self.extra_data.hash_tree_root(),
-            self.base_fee_per_gas,
-            self.block_hash,
-            self.transactions_root,
-            self.withdrawals_root,
-            uint64_root(self.blob_gas_used),
-            uint64_root(self.excess_blob_gas),
-        ])
+        let mut leaves = self.capella.leaves();
+        leaves.push(uint64_root(self.blob_gas_used));
+        leaves.push(uint64_root(self.excess_blob_gas));
+        merkleize(&leaves)
     }
 }
 /// Fixed execution-payload Merkle branch at generalized index 25.
@@ -555,17 +497,21 @@ pub enum LightClientHeader {
         execution_branch: ExecutionBranch,
     },
 }
-/// Execution-layer roots authenticated by a Capella-or-later light-client header.
+/// Execution-layer fields authenticated by a Capella-or-later light-client header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuthenticatedExecutionBlock {
     /// Consensus fork whose light-client header authenticated the payload.
     pub fork: EthereumFork,
+    /// Parent execution block hash.
+    pub parent_hash: Root,
     /// Execution state trie root.
     pub state_root: Root,
     /// Execution receipts trie root.
     pub receipts_root: Root,
     /// Execution block number.
     pub block_number: u64,
+    /// Execution timestamp in seconds.
+    pub timestamp: u64,
     /// Execution block hash.
     pub block_hash: Root,
 }
@@ -596,101 +542,75 @@ impl LightClientHeader {
     ///
     /// Altair and Bellatrix light-client headers do not carry an execution
     /// payload proof and therefore return `None`.
-    pub const fn authenticated_execution_block(&self) -> Option<AuthenticatedExecutionBlock> {
+    pub fn authenticated_execution_block(&self) -> Option<AuthenticatedExecutionBlock> {
+        let capella = match self {
+            Self::Altair { .. } | Self::Bellatrix { .. } => return None,
+            Self::Capella { execution, .. } => execution.as_ref(),
+            Self::Deneb { execution, .. }
+            | Self::Electra { execution, .. }
+            | Self::Fulu { execution, .. } => &execution.capella,
+        };
+        Some(AuthenticatedExecutionBlock {
+            fork: self.fork(),
+            parent_hash: capella.parent_hash,
+            state_root: capella.state_root,
+            receipts_root: capella.receipts_root,
+            block_number: capella.block_number,
+            timestamp: capella.timestamp,
+            block_hash: capella.block_hash,
+        })
+    }
+    fn execution_root_and_branch(&self) -> Option<(Root, &ExecutionBranch)> {
         match self {
             Self::Altair { .. } | Self::Bellatrix { .. } => None,
-            Self::Capella { execution, .. } => Some(AuthenticatedExecutionBlock {
-                fork: EthereumFork::Capella,
-                state_root: execution.state_root,
-                receipts_root: execution.receipts_root,
-                block_number: execution.block_number,
-                block_hash: execution.block_hash,
-            }),
-            Self::Deneb { execution, .. } => Some(AuthenticatedExecutionBlock {
-                fork: EthereumFork::Deneb,
-                state_root: execution.state_root,
-                receipts_root: execution.receipts_root,
-                block_number: execution.block_number,
-                block_hash: execution.block_hash,
-            }),
-            Self::Electra { execution, .. } => Some(AuthenticatedExecutionBlock {
-                fork: EthereumFork::Electra,
-                state_root: execution.state_root,
-                receipts_root: execution.receipts_root,
-                block_number: execution.block_number,
-                block_hash: execution.block_hash,
-            }),
-            Self::Fulu { execution, .. } => Some(AuthenticatedExecutionBlock {
-                fork: EthereumFork::Fulu,
-                state_root: execution.state_root,
-                receipts_root: execution.receipts_root,
-                block_number: execution.block_number,
-                block_hash: execution.block_hash,
-            }),
+            Self::Capella {
+                execution,
+                execution_branch,
+                ..
+            } => Some((execution.hash_tree_root(), execution_branch)),
+            Self::Deneb {
+                execution,
+                execution_branch,
+                ..
+            }
+            | Self::Electra {
+                execution,
+                execution_branch,
+                ..
+            }
+            | Self::Fulu {
+                execution,
+                execution_branch,
+                ..
+            } => Some((execution.hash_tree_root(), execution_branch)),
         }
     }
     /// Compute the canonical fork-specific SSZ `hash_tree_root`.
     pub fn hash_tree_root(&self) -> Root {
-        match self {
-            Self::Altair { beacon } | Self::Bellatrix { beacon } => beacon.hash_tree_root(),
-            Self::Capella {
-                beacon,
-                execution,
-                execution_branch,
-            } => merkleize(&[
-                beacon.hash_tree_root(),
-                execution.hash_tree_root(),
-                merkleize(execution_branch),
-            ]),
-            Self::Deneb {
-                beacon,
-                execution,
-                execution_branch,
-            }
-            | Self::Electra {
-                beacon,
-                execution,
-                execution_branch,
-            }
-            | Self::Fulu {
-                beacon,
-                execution,
-                execution_branch,
-            } => merkleize(&[
-                beacon.hash_tree_root(),
-                execution.hash_tree_root(),
+        match self.execution_root_and_branch() {
+            None => self.beacon().hash_tree_root(),
+            Some((execution_root, execution_branch)) => merkleize(&[
+                self.beacon().hash_tree_root(),
+                execution_root,
                 merkleize(execution_branch),
             ]),
         }
     }
-    fn validate(&self, schedule: &ForkSchedule) -> Result<(), EthereumLightClientError> {
+    /// Check the fork variant against the schedule and the execution payload branch against the
+    /// beacon body root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the slot precedes Altair, the fork variant differs from the
+    /// schedule, or the execution branch does not prove the payload header.
+    pub fn validate(&self, schedule: &ForkSchedule) -> Result<(), EthereumLightClientError> {
         let (expected, _) = schedule.fork_at_slot(self.beacon().slot)?;
         let actual = self.fork();
         if expected != actual {
             return Err(EthereumLightClientError::HeaderForkMismatch { expected, actual });
         }
-        let (execution_root, execution_branch) = match self {
-            Self::Altair { .. } | Self::Bellatrix { .. } => return Ok(()),
-            Self::Capella {
-                execution,
-                execution_branch,
-                ..
-            } => (execution.hash_tree_root(), execution_branch),
-            Self::Deneb {
-                execution,
-                execution_branch,
-                ..
-            }
-            | Self::Electra {
-                execution,
-                execution_branch,
-                ..
-            }
-            | Self::Fulu {
-                execution,
-                execution_branch,
-                ..
-            } => (execution.hash_tree_root(), execution_branch),
+        let Some((execution_root, execution_branch)) = self.execution_root_and_branch() else {
+            return Ok(());
         };
         if merkle_root_from_branch(execution_root, EXECUTION_PAYLOAD_GINDEX, execution_branch)
             != Some(self.beacon().body_root)
@@ -772,7 +692,12 @@ impl SyncCommittee {
             &self.aggregate_pubkey.hash_tree_root(),
         )
     }
-    fn validate(&self) -> Result<(), EthereumLightClientError> {
+    /// Run BLS `KeyValidate` over every position and the aggregate key.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first invalid position, or the aggregate-key error.
+    pub fn validate(&self) -> Result<(), EthereumLightClientError> {
         for (position, public_key) in self.pubkeys.iter().enumerate() {
             ethereum_bls_pop_validate_public_key(&public_key.0)
                 .map_err(|_| EthereumLightClientError::InvalidCommitteePublicKey(position))?;
@@ -837,12 +762,6 @@ impl CurrentSyncCommitteeBranch {
             _ => Err(EthereumLightClientError::CurrentCommitteeBranchForkMismatch),
         }
     }
-    fn hash_tree_root(&self) -> Root {
-        match self {
-            Self::PreElectra(branch) => merkleize(branch),
-            Self::Electra(branch) => merkleize(branch),
-        }
-    }
 }
 /// Fork-shaped finalized-checkpoint branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -858,12 +777,6 @@ impl FinalityBranch {
             (false, Self::PreElectra(branch)) => Ok(branch),
             (true, Self::Electra(branch)) => Ok(branch),
             _ => Err(EthereumLightClientError::FinalityBranchForkMismatch),
-        }
-    }
-    fn hash_tree_root(&self) -> Root {
-        match self {
-            Self::PreElectra(branch) => merkleize(branch),
-            Self::Electra(branch) => merkleize(branch),
         }
     }
 }
@@ -883,17 +796,11 @@ impl NextSyncCommitteeBranch {
             _ => Err(EthereumLightClientError::NextCommitteeBranchForkMismatch),
         }
     }
-    fn hash_tree_root(&self) -> Root {
-        match self {
-            Self::PreElectra(branch) => merkleize(branch),
-            Self::Electra(branch) => merkleize(branch),
-        }
-    }
 }
-/// Official SSZ `LightClientBootstrap` used to validate a governed anchor.
+/// Official SSZ `LightClientBootstrap`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LightClientBootstrap {
-    /// Header matching the governed trusted block root.
+    /// Header whose beacon state commits to the current committee.
     pub header: LightClientHeader,
     /// Current sync committee committed by the header's beacon state.
     pub current_sync_committee: SyncCommittee,
@@ -901,29 +808,48 @@ pub struct LightClientBootstrap {
     pub current_sync_committee_branch: CurrentSyncCommitteeBranch,
 }
 impl LightClientBootstrap {
-    /// Compute the canonical fork-specific SSZ `hash_tree_root`.
-    pub fn hash_tree_root(&self) -> Root {
-        merkleize(&[
-            self.header.hash_tree_root(),
+    /// Check the header, every committee key and the current-committee branch.
+    ///
+    /// The bootstrap's trust comes from the Parliament that enacts it; this check only proves
+    /// that the committee belongs to the header's beacon state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the fork layout, a committee key or the branch is invalid.
+    pub fn verify(&self, schedule: &ForkSchedule) -> Result<(), EthereumLightClientError> {
+        self.header.validate(schedule)?;
+        let fork = self.header.fork();
+        let branch = self.current_sync_committee_branch.as_slice_for_fork(fork)?;
+        if merkle_root_from_branch(
             self.current_sync_committee.hash_tree_root(),
-            self.current_sync_committee_branch.hash_tree_root(),
-        ])
+            generalized_indices(fork).current_sync_committee,
+            branch,
+        ) != Some(self.header.beacon().state_root)
+        {
+            return Err(EthereumLightClientError::InvalidCurrentCommitteeBranch);
+        }
+        self.current_sync_committee.validate()
     }
 }
-/// Official finalized SSZ `LightClientUpdate` subset admitted by SCCP.
+/// A next sync committee and its branch in the attested beacon state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NextSyncCommitteeProof {
+    /// Next sync committee committed by the attested beacon state.
+    pub committee: SyncCommittee,
+    /// Fork-shaped next sync-committee branch.
+    pub branch: NextSyncCommitteeBranch,
+}
+/// Finalized SSZ `LightClientUpdate` subset admitted by SCCP.
 ///
-/// Ethereum's network type also permits zero/default finality or next-committee
-/// fields. SCCP intentionally admits only full updates: both branches must be
-/// present and valid, and finality must advance. The field order and each field's
-/// SSZ root remain identical to the consensus `LightClientUpdate` container.
+/// The finality branch is mandatory; the next committee is optional (finality updates from
+/// `/light_client/finality_update` carry none). The consensus type's zero-filled fields are not
+/// accepted as substitutes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LightClientUpdate {
     /// Header signed by the sync committee.
     pub attested_header: LightClientHeader,
-    /// Next sync committee committed by the attested beacon state.
-    pub next_sync_committee: SyncCommittee,
-    /// Fork-shaped next sync-committee branch.
-    pub next_sync_committee_branch: NextSyncCommitteeBranch,
+    /// Next sync committee committed by the attested beacon state, if carried.
+    pub next_sync_committee: Option<NextSyncCommitteeProof>,
     /// Finalized header committed by the attested beacon state.
     pub finalized_header: LightClientHeader,
     /// Fork-shaped finalized-checkpoint branch.
@@ -934,265 +860,84 @@ pub struct LightClientUpdate {
     pub signature_slot: u64,
 }
 impl LightClientUpdate {
-    /// Compute the canonical fork-specific SSZ `hash_tree_root`.
-    pub fn hash_tree_root(&self) -> Root {
-        merkleize(&[
-            self.attested_header.hash_tree_root(),
-            self.next_sync_committee.hash_tree_root(),
-            self.next_sync_committee_branch.hash_tree_root(),
-            self.finalized_header.hash_tree_root(),
-            self.finality_branch.hash_tree_root(),
-            self.sync_aggregate.hash_tree_root(),
-            uint64_root(self.signature_slot),
-        ])
+    /// Period of the committee that must have signed the update.
+    pub const fn signature_period(&self) -> u64 {
+        sync_committee_period_at_slot(self.signature_slot)
     }
-}
-/// Immutable validated Ethereum light-client state.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EthereumLightClientState {
-    schedule: ForkSchedule,
-    finalized_header: LightClientHeader,
-    current_sync_committee: SyncCommittee,
-    next_sync_committee: Option<SyncCommittee>,
-}
-impl EthereumLightClientState {
-    /// Validate a bootstrap against a governed trusted beacon block root.
+    /// Check everything except the signature: header forks and execution branches, slot order,
+    /// the participation threshold, the finality branch and, when present, the next committee
+    /// (same-period rule, keys and branch).
+    ///
+    /// Cheap checks run before key validation.
     ///
     /// # Errors
     ///
-    /// Returns an error when the fork layout, trusted root, committee keys, or
-    /// current-committee state branch is invalid.
-    pub fn from_trusted_anchor(
-        schedule: ForkSchedule,
-        trusted_block_root: Root,
-        bootstrap: LightClientBootstrap,
-    ) -> Result<Self, EthereumLightClientError> {
-        bootstrap.header.validate(&schedule)?;
-        if bootstrap.header.beacon().hash_tree_root() != trusted_block_root {
-            return Err(EthereumLightClientError::InvalidTrustedBlockRoot);
-        }
-        bootstrap.current_sync_committee.validate()?;
-        let (fork, _) = schedule.fork_at_slot(bootstrap.header.beacon().slot)?;
-        let indices = generalized_indices(fork);
-        let branch = bootstrap
-            .current_sync_committee_branch
-            .as_slice_for_fork(fork)?;
-        if merkle_root_from_branch(
-            bootstrap.current_sync_committee.hash_tree_root(),
-            indices.current_sync_committee,
-            branch,
-        ) != Some(bootstrap.header.beacon().state_root)
-        {
-            return Err(EthereumLightClientError::InvalidCurrentCommitteeBranch);
-        }
-        Ok(Self {
-            schedule,
-            finalized_header: bootstrap.header,
-            current_sync_committee: bootstrap.current_sync_committee,
-            next_sync_committee: None,
-        })
-    }
-    /// Return the governed fork schedule.
-    pub const fn schedule(&self) -> &ForkSchedule {
-        &self.schedule
-    }
-    /// Return the latest validated finalized header.
-    pub const fn finalized_header(&self) -> &LightClientHeader {
-        &self.finalized_header
-    }
-    /// Return the committee for the state's current sync-committee period.
-    pub const fn current_sync_committee(&self) -> &SyncCommittee {
-        &self.current_sync_committee
-    }
-    /// Return the anchored next sync committee, when learned.
-    pub const fn next_sync_committee(&self) -> Option<&SyncCommittee> {
-        self.next_sync_committee.as_ref()
-    }
-    /// Validate an update against this exact immutable state snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid fork layouts, slot/period transitions,
-    /// committee branches, participant thresholds, keys, or BLS signatures.
-    pub fn validate_update(
+    /// Returns the first violated rule.
+    pub fn verify_structure(
         &self,
-        update: LightClientUpdate,
-    ) -> Result<ValidatedLightClientUpdate, EthereumLightClientError> {
-        update.attested_header.validate(&self.schedule)?;
-        update.finalized_header.validate(&self.schedule)?;
-        let attested_slot = update.attested_header.beacon().slot;
-        let finalized_slot = update.finalized_header.beacon().slot;
-        if update.signature_slot <= attested_slot || attested_slot < finalized_slot {
+        schedule: &ForkSchedule,
+    ) -> Result<(), EthereumLightClientError> {
+        let attested_slot = self.attested_header.beacon().slot;
+        let finalized_slot = self.finalized_header.beacon().slot;
+        if self.signature_slot <= attested_slot || attested_slot < finalized_slot {
             return Err(EthereumLightClientError::InvalidSlotOrder);
         }
-        if finalized_slot <= self.finalized_header.beacon().slot {
-            return Err(EthereumLightClientError::StaleFinalizedHeader);
-        }
-        let participants = update.sync_aggregate.participant_count();
+        let participants = self.sync_aggregate.participant_count();
         if participants < FINALITY_PARTICIPANT_THRESHOLD {
             return Err(EthereumLightClientError::InsufficientParticipation(
                 participants,
             ));
         }
-        let store_period = sync_committee_period_at_slot(self.finalized_header.beacon().slot);
-        let signature_period = sync_committee_period_at_slot(update.signature_slot);
-        let attested_period = sync_committee_period_at_slot(attested_slot);
-        let finalized_period = sync_committee_period_at_slot(finalized_slot);
-        if signature_period < store_period
-            || signature_period > store_period.saturating_add(1)
-            || attested_period < store_period
-            || attested_period > store_period.saturating_add(1)
-            || finalized_period < store_period
-            || finalized_period > store_period.saturating_add(1)
-        {
-            return Err(EthereumLightClientError::SkippedSyncCommitteePeriod);
-        }
-        if signature_period == store_period.saturating_add(1) && self.next_sync_committee.is_none()
-        {
-            return Err(EthereumLightClientError::MissingNextSyncCommittee);
-        }
-        if finalized_period == store_period.saturating_add(1) && self.next_sync_committee.is_none()
-        {
-            return Err(EthereumLightClientError::MissingNextSyncCommittee);
-        }
-        let (attested_fork, _) = self.schedule.fork_at_slot(attested_slot)?;
+        self.attested_header.validate(schedule)?;
+        self.finalized_header.validate(schedule)?;
+        let attested_fork = self.attested_header.fork();
         let indices = generalized_indices(attested_fork);
-        let finality_branch = update.finality_branch.as_slice_for_fork(attested_fork)?;
+        let finality_branch = self.finality_branch.as_slice_for_fork(attested_fork)?;
         if merkle_root_from_branch(
-            update.finalized_header.beacon().hash_tree_root(),
+            self.finalized_header.beacon().hash_tree_root(),
             indices.finalized_root,
             finality_branch,
-        ) != Some(update.attested_header.beacon().state_root)
+        ) != Some(self.attested_header.beacon().state_root)
         {
             return Err(EthereumLightClientError::InvalidFinalityBranch);
         }
-        update.next_sync_committee.validate()?;
-        let next_branch = update
-            .next_sync_committee_branch
-            .as_slice_for_fork(attested_fork)?;
-        if merkle_root_from_branch(
-            update.next_sync_committee.hash_tree_root(),
-            indices.next_sync_committee,
-            next_branch,
-        ) != Some(update.attested_header.beacon().state_root)
-        {
-            return Err(EthereumLightClientError::InvalidNextCommitteeBranch);
-        }
-        if attested_period == store_period
-            && let Some(anchored_next) = &self.next_sync_committee
-            && anchored_next != &update.next_sync_committee
-        {
-            return Err(EthereumLightClientError::ConflictingNextSyncCommittee);
-        }
-        let signing_committee = if signature_period == store_period {
-            &self.current_sync_committee
-        } else {
-            self.next_sync_committee
-                .as_ref()
-                .ok_or(EthereumLightClientError::MissingNextSyncCommittee)?
-        };
-        let participant_public_keys =
-            selected_participant_public_keys(signing_committee, update.sync_aggregate.bits());
-        let signing_root = sync_committee_signing_root(
-            &update.attested_header,
-            update.signature_slot,
-            &self.schedule,
-        )?;
-        let signature = update.sync_aggregate.signature().to_bytes();
-        ethereum_bls_pop_fast_aggregate_verify(&participant_public_keys, &signing_root, &signature)
-            .map_err(|_| EthereumLightClientError::InvalidSyncCommitteeSignature)?;
-        Ok(ValidatedLightClientUpdate {
-            parent_state_commitment: self.state_commitment(),
-            update,
-        })
-    }
-    /// Apply a validated update and return a new immutable state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the validated update belongs to another state or
-    /// its required next committee is unavailable.
-    pub fn apply_validated_update(
-        &self,
-        validated: ValidatedLightClientUpdate,
-    ) -> Result<Self, EthereumLightClientError> {
-        if validated.parent_state_commitment != self.state_commitment() {
-            return Err(EthereumLightClientError::UpdateForDifferentState);
-        }
-        let update = validated.update;
-        let store_period = sync_committee_period_at_slot(self.finalized_header.beacon().slot);
-        let finalized_period = sync_committee_period_at_slot(update.finalized_header.beacon().slot);
-        let (current_sync_committee, next_sync_committee) = if self.next_sync_committee.is_none() {
-            if finalized_period != store_period {
-                return Err(EthereumLightClientError::MissingNextSyncCommittee);
+        if let Some(next) = &self.next_sync_committee {
+            if sync_committee_period_at_slot(attested_slot)
+                != sync_committee_period_at_slot(finalized_slot)
+            {
+                return Err(EthereumLightClientError::NextCommitteePeriodMismatch);
             }
-            (
-                self.current_sync_committee.clone(),
-                Some(update.next_sync_committee),
-            )
-        } else if finalized_period == store_period.saturating_add(1) {
-            (
-                self.next_sync_committee
-                    .clone()
-                    .ok_or(EthereumLightClientError::MissingNextSyncCommittee)?,
-                Some(update.next_sync_committee),
-            )
-        } else {
-            (
-                self.current_sync_committee.clone(),
-                self.next_sync_committee.clone(),
-            )
-        };
-        Ok(Self {
-            schedule: self.schedule,
-            finalized_header: update.finalized_header,
-            current_sync_committee,
-            next_sync_committee,
-        })
+            let branch = next.branch.as_slice_for_fork(attested_fork)?;
+            if merkle_root_from_branch(
+                next.committee.hash_tree_root(),
+                indices.next_sync_committee,
+                branch,
+            ) != Some(self.attested_header.beacon().state_root)
+            {
+                return Err(EthereumLightClientError::InvalidNextCommitteeBranch);
+            }
+            next.committee.validate()?;
+        }
+        Ok(())
     }
-    /// Validate and atomically derive the next immutable state.
+    /// Verify the aggregate signature against the committee of `period(signature_slot)`.
     ///
     /// # Errors
     ///
-    /// Returns any update-validation or immutable-state application error.
-    pub fn validate_and_apply(
+    /// Returns an error when no fork covers the signature domain slot or the fast-aggregate BLS
+    /// check fails.
+    pub fn verify_signature(
         &self,
-        update: LightClientUpdate,
-    ) -> Result<Self, EthereumLightClientError> {
-        let validated = self.validate_update(update)?;
-        self.apply_validated_update(validated)
-    }
-    /// Return a deterministic commitment to this exact state snapshot.
-    pub fn state_commitment(&self) -> Root {
-        let mut hasher = Sha256::new();
-        hasher.update(b"sccp:ethereum-light-client-state:v1");
-        hasher.update(self.schedule.commitment());
-        hasher.update(self.finalized_header.hash_tree_root());
-        hasher.update(self.current_sync_committee.hash_tree_root());
-        if let Some(committee) = &self.next_sync_committee {
-            hasher.update([1]);
-            hasher.update(committee.hash_tree_root());
-        } else {
-            hasher.update([0]);
-            hasher.update(ZERO_ROOT);
-        }
-        hasher.finalize().into()
-    }
-}
-/// An update validated against one exact immutable light-client state.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ValidatedLightClientUpdate {
-    parent_state_commitment: Root,
-    update: LightClientUpdate,
-}
-impl ValidatedLightClientUpdate {
-    /// Return the state commitment against which the update was validated.
-    pub const fn parent_state_commitment(&self) -> Root {
-        self.parent_state_commitment
-    }
-    /// Borrow the validated protocol update.
-    pub const fn update(&self) -> &LightClientUpdate {
-        &self.update
+        committee: &SyncCommittee,
+        schedule: &ForkSchedule,
+    ) -> Result<(), EthereumLightClientError> {
+        let participant_public_keys =
+            selected_participant_public_keys(committee, self.sync_aggregate.bits());
+        let signing_root =
+            sync_committee_signing_root(&self.attested_header, self.signature_slot, schedule)?;
+        let signature = self.sync_aggregate.signature().to_bytes();
+        ethereum_bls_pop_fast_aggregate_verify(&participant_public_keys, &signing_root, &signature)
+            .map_err(|_| EthereumLightClientError::InvalidSyncCommitteeSignature)
     }
 }
 /// Compute the native Ethereum `DOMAIN_SYNC_COMMITTEE` signing root.
@@ -1203,7 +948,7 @@ impl ValidatedLightClientUpdate {
 ///
 /// # Errors
 ///
-/// Returns an error when the governed schedule has no supported fork at the
+/// Returns an error when the schedule has no supported fork at the
 /// signature domain's previous slot.
 pub fn sync_committee_signing_root(
     attested_header: &LightClientHeader,
@@ -1247,7 +992,8 @@ fn selected_participant_public_keys(
     }
     selected
 }
-fn hash_nodes(left: &Root, right: &Root) -> Root {
+/// SSZ node hash: `sha256(left ‖ right)`.
+pub fn hash_nodes(left: &Root, right: &Root) -> Root {
     let mut hasher = Sha256::new();
     hasher.update(left);
     hasher.update(right);
@@ -1275,7 +1021,8 @@ fn byte_vector_root(bytes: &[u8]) -> Root {
         .collect();
     merkleize(&chunks)
 }
-fn merkleize(leaves: &[Root]) -> Root {
+/// SSZ `merkleize` of `leaves`, padded with zero roots to the next power of two.
+pub fn merkleize(leaves: &[Root]) -> Root {
     if leaves.is_empty() {
         return ZERO_ROOT;
     }
@@ -1292,7 +1039,10 @@ fn merkleize(leaves: &[Root]) -> Root {
     }
     level[0]
 }
-fn merkle_root_from_branch(leaf: Root, gindex: u64, branch: &[Root]) -> Option<Root> {
+/// Recompute the root proven by a single-leaf SSZ branch at generalized index `gindex`.
+///
+/// Returns `None` when the branch length differs from `floorlog2(gindex)`.
+pub fn merkle_root_from_branch(leaf: Root, gindex: u64, branch: &[Root]) -> Option<Root> {
     if gindex < 2 {
         return None;
     }
@@ -1316,12 +1066,6 @@ mod tests {
     use std::collections::BTreeMap;
     const GENERATOR_PUBLIC_KEY: [u8; 48] = [
         0x97, 0xf1, 0xd3, 0xa7, 0x31, 0x97, 0xd7, 0x94, 0x26, 0x95, 0x63, 0x8c, 0x4f, 0xa9, 0xac,
-        0x0f, 0xc3, 0x68, 0x8c, 0x4f, 0x97, 0x74, 0xb9, 0x05, 0xa1, 0x4e, 0x3a, 0x3f, 0x17, 0x1b,
-        0xac, 0x58, 0x6c, 0x55, 0xe8, 0x3f, 0xf9, 0x7a, 0x1a, 0xef, 0xfb, 0x3a, 0xf0, 0x0a, 0xdb,
-        0x22, 0xc6, 0xbb,
-    ];
-    const NEGATED_GENERATOR_PUBLIC_KEY: [u8; 48] = [
-        0xb7, 0xf1, 0xd3, 0xa7, 0x31, 0x97, 0xd7, 0x94, 0x26, 0x95, 0x63, 0x8c, 0x4f, 0xa9, 0xac,
         0x0f, 0xc3, 0x68, 0x8c, 0x4f, 0x97, 0x74, 0xb9, 0x05, 0xa1, 0x4e, 0x3a, 0x3f, 0x17, 0x1b,
         0xac, 0x58, 0x6c, 0x55, 0xe8, 0x3f, 0xf9, 0x7a, 0x1a, 0xef, 0xfb, 0x3a, 0xf0, 0x0a, 0xdb,
         0x22, 0xc6, 0xbb,
@@ -1405,31 +1149,22 @@ mod tests {
             },
         }
     }
-    fn anchored_state() -> EthereumLightClientState {
-        let schedule = altair_schedule();
-        let current = committee(GENERATOR_PUBLIC_KEY);
+    fn altair_bootstrap(current: SyncCommittee) -> LightClientBootstrap {
         let mut explicit = BTreeMap::new();
         explicit.insert(
             CURRENT_SYNC_COMMITTEE_GINDEX_PRE_ELECTRA,
             current.hash_tree_root(),
         );
         let state_root = sparse_node(1, 5, &explicit);
-        let header = altair_header(1, state_root);
-        let trusted = header.beacon().hash_tree_root();
         let branch: [Root; 5] =
             sparse_branch(CURRENT_SYNC_COMMITTEE_GINDEX_PRE_ELECTRA, 5, &explicit)
                 .try_into()
                 .expect("current branch length");
-        EthereumLightClientState::from_trusted_anchor(
-            schedule,
-            trusted,
-            LightClientBootstrap {
-                header,
-                current_sync_committee: current,
-                current_sync_committee_branch: CurrentSyncCommitteeBranch::PreElectra(branch),
-            },
-        )
-        .expect("valid anchor")
+        LightClientBootstrap {
+            header: altair_header(1, state_root),
+            current_sync_committee: current,
+            current_sync_committee_branch: CurrentSyncCommitteeBranch::PreElectra(branch),
+        }
     }
     fn participant_bits(count: usize) -> [u8; SYNC_COMMITTEE_BITS_BYTES] {
         let mut bits = [0; SYNC_COMMITTEE_BITS_BYTES];
@@ -1467,8 +1202,10 @@ mod tests {
                 .expect("next branch length");
         LightClientUpdate {
             attested_header,
-            next_sync_committee: next,
-            next_sync_committee_branch: NextSyncCommitteeBranch::PreElectra(next_branch),
+            next_sync_committee: Some(NextSyncCommitteeProof {
+                committee: next,
+                branch: NextSyncCommitteeBranch::PreElectra(next_branch),
+            }),
             finalized_header,
             finality_branch: FinalityBranch::PreElectra(finality_branch),
             sync_aggregate: SyncAggregate::new(
@@ -1498,23 +1235,8 @@ mod tests {
         }
     }
     fn blank_deneb_execution() -> DenebExecutionPayloadHeader {
-        let capella = blank_capella_execution();
         DenebExecutionPayloadHeader {
-            parent_hash: capella.parent_hash,
-            fee_recipient: capella.fee_recipient,
-            state_root: capella.state_root,
-            receipts_root: capella.receipts_root,
-            logs_bloom: capella.logs_bloom,
-            prev_randao: capella.prev_randao,
-            block_number: capella.block_number,
-            gas_limit: capella.gas_limit,
-            gas_used: capella.gas_used,
-            timestamp: capella.timestamp,
-            extra_data: capella.extra_data,
-            base_fee_per_gas: capella.base_fee_per_gas,
-            block_hash: capella.block_hash,
-            transactions_root: capella.transactions_root,
-            withdrawals_root: capella.withdrawals_root,
+            capella: blank_capella_execution(),
             blob_gas_used: 17,
             excess_blob_gas: 18,
         }
@@ -1541,6 +1263,10 @@ mod tests {
             generalized_indices(EthereumFork::Fulu),
             generalized_indices(EthereumFork::Electra)
         );
+        assert!(!EthereumFork::Bellatrix.has_execution_payload());
+        assert!(EthereumFork::Capella.has_execution_payload());
+        assert_eq!(sync_committee_period_at_slot(8_191), 0);
+        assert_eq!(sync_committee_period_at_slot(8_192), 1);
     }
     #[test]
     fn ssz_roots_match_official_consensus_spec_vectors() {
@@ -1599,7 +1325,7 @@ mod tests {
         );
     }
     #[test]
-    fn fork_schedule_is_closed_ordered_and_governed() {
+    fn fork_schedule_is_closed_ordered_and_validated() {
         assert_eq!(
             ForkSchedule::new(root(1), [ForkActivation::new(0, [0; 4]); 6]),
             Err(EthereumLightClientError::InvalidForkSchedule(
@@ -1621,6 +1347,22 @@ mod tests {
         assert_eq!(
             ForkSchedule::new(ZERO_ROOT, [ForkActivation::new(0, [1, 0, 0, 0]); 6]),
             Err(EthereumLightClientError::ZeroGenesisValidatorsRoot)
+        );
+        let schedule = schedule_with_epochs([1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            schedule.fork_at_slot(0),
+            Err(EthereumLightClientError::UnsupportedSlot(0))
+        );
+        assert_eq!(
+            schedule
+                .fork_at_slot(6 * SLOTS_PER_EPOCH)
+                .map(|(fork, _)| fork),
+            Ok(EthereumFork::Fulu)
+        );
+        assert_eq!(schedule.activations()[2].epoch(), 3);
+        assert_eq!(
+            schedule.activation(EthereumFork::Deneb).version(),
+            [4, 0, 0, 0]
         );
     }
     #[test]
@@ -1658,6 +1400,12 @@ mod tests {
         );
         assert_eq!(header.hash_tree_root(), expected_header_root);
         header.validate(&schedule).expect("valid execution branch");
+        let block = header
+            .authenticated_execution_block()
+            .expect("Capella carries execution");
+        assert_eq!(block.block_number, 7);
+        assert_eq!(block.timestamp, 10);
+        assert_eq!(block.parent_hash, root(1));
         let mut tampered = header.clone();
         if let LightClientHeader::Capella { beacon, .. } = &mut tampered {
             beacon.body_root[0] ^= 1;
@@ -1674,9 +1422,19 @@ mod tests {
                 actual: EthereumFork::Altair,
             })
         );
+        assert!(wrong_variant.authenticated_execution_block().is_none());
     }
     #[test]
-    fn electra_anchor_requires_the_electra_branch_shape_and_gindex() {
+    fn deneb_execution_root_extends_capella_leaves() {
+        let deneb = blank_deneb_execution();
+        let mut leaves = deneb.capella.leaves();
+        leaves.push(uint64_root(17));
+        leaves.push(uint64_root(18));
+        assert_eq!(deneb.hash_tree_root(), merkleize(&leaves));
+        assert_ne!(deneb.hash_tree_root(), deneb.capella.hash_tree_root());
+    }
+    #[test]
+    fn electra_bootstrap_requires_the_electra_branch_shape_and_gindex() {
         let schedule = schedule_with_epochs([0, 0, 0, 0, 0, u64::MAX]);
         let current = committee(GENERATOR_PUBLIC_KEY);
         let mut explicit = BTreeMap::new();
@@ -1704,33 +1462,25 @@ mod tests {
             execution: Box::new(execution),
             execution_branch,
         };
-        let trusted = header.beacon().hash_tree_root();
         let branch: [Root; 6] = sparse_branch(CURRENT_SYNC_COMMITTEE_GINDEX_ELECTRA, 6, &explicit)
             .try_into()
             .expect("Electra current branch length");
-        let state = EthereumLightClientState::from_trusted_anchor(
-            schedule,
-            trusted,
-            LightClientBootstrap {
-                header: header.clone(),
-                current_sync_committee: current.clone(),
-                current_sync_committee_branch: CurrentSyncCommitteeBranch::Electra(branch),
-            },
-        )
-        .expect("Electra anchor validates with gindex 86");
-        assert_eq!(state.finalized_header().fork(), EthereumFork::Electra);
+        LightClientBootstrap {
+            header: header.clone(),
+            current_sync_committee: current.clone(),
+            current_sync_committee_branch: CurrentSyncCommitteeBranch::Electra(branch),
+        }
+        .verify(&schedule)
+        .expect("Electra bootstrap validates with gindex 86");
         assert_eq!(
-            EthereumLightClientState::from_trusted_anchor(
-                schedule,
-                trusted,
-                LightClientBootstrap {
-                    header,
-                    current_sync_committee: current,
-                    current_sync_committee_branch: CurrentSyncCommitteeBranch::PreElectra(
-                        [ZERO_ROOT; 5],
-                    ),
-                },
-            ),
+            LightClientBootstrap {
+                header,
+                current_sync_committee: current,
+                current_sync_committee_branch: CurrentSyncCommitteeBranch::PreElectra(
+                    [ZERO_ROOT; 5],
+                ),
+            }
+            .verify(&schedule),
             Err(EthereumLightClientError::CurrentCommitteeBranchForkMismatch)
         );
     }
@@ -1741,72 +1491,40 @@ mod tests {
             ExtraData::new(vec![0; 33]),
             Err(EthereumLightClientError::ExtraDataTooLong(33))
         );
+        assert_eq!(
+            ExtraData::new(vec![1, 2]).expect("bounded").as_slice(),
+            &[1, 2]
+        );
     }
     #[test]
-    fn bootstrap_rejects_wrong_trust_root_branch_and_key() {
-        let state = anchored_state();
-        assert_eq!(state.finalized_header().beacon().slot, 1);
+    fn bootstrap_rejects_wrong_branch_and_key() {
         let schedule = altair_schedule();
-        let current = committee(GENERATOR_PUBLIC_KEY);
-        let header = altair_header(1, root(9));
+        let bootstrap = altair_bootstrap(committee(GENERATOR_PUBLIC_KEY));
+        bootstrap.verify(&schedule).expect("valid bootstrap");
+        let mut wrong_branch = bootstrap.clone();
+        wrong_branch.current_sync_committee_branch =
+            CurrentSyncCommitteeBranch::PreElectra([ZERO_ROOT; 5]);
         assert_eq!(
-            EthereumLightClientState::from_trusted_anchor(
-                schedule,
-                root(8),
-                LightClientBootstrap {
-                    header: header.clone(),
-                    current_sync_committee: current.clone(),
-                    current_sync_committee_branch: CurrentSyncCommitteeBranch::PreElectra(
-                        [ZERO_ROOT; 5]
-                    ),
-                },
-            ),
-            Err(EthereumLightClientError::InvalidTrustedBlockRoot)
-        );
-        assert_eq!(
-            EthereumLightClientState::from_trusted_anchor(
-                schedule,
-                header.beacon().hash_tree_root(),
-                LightClientBootstrap {
-                    header: header.clone(),
-                    current_sync_committee: current,
-                    current_sync_committee_branch: CurrentSyncCommitteeBranch::PreElectra(
-                        [ZERO_ROOT; 5]
-                    ),
-                },
-            ),
+            wrong_branch.verify(&schedule),
             Err(EthereumLightClientError::InvalidCurrentCommitteeBranch)
         );
-        let invalid = committee([0xff; 48]);
+        let invalid = altair_bootstrap(committee([0xff; 48]));
         assert_eq!(
-            EthereumLightClientState::from_trusted_anchor(
-                schedule,
-                header.beacon().hash_tree_root(),
-                LightClientBootstrap {
-                    header,
-                    current_sync_committee: invalid,
-                    current_sync_committee_branch: CurrentSyncCommitteeBranch::PreElectra(
-                        [ZERO_ROOT; 5]
-                    ),
-                },
-            ),
+            invalid.verify(&schedule),
             Err(EthereumLightClientError::InvalidCommitteePublicKey(0))
         );
     }
     #[test]
-    fn update_rejects_threshold_slot_branch_and_signature_attacks() {
-        let state = anchored_state();
+    fn update_structure_rejects_threshold_slot_and_branch_attacks() {
+        let schedule = altair_schedule();
         let mut update = unsigned_update(2, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
-        assert_eq!(
-            state.validate_update(update.clone()),
-            Err(EthereumLightClientError::InvalidSyncCommitteeSignature)
-        );
+        update.verify_structure(&schedule).expect("valid structure");
         update.sync_aggregate = SyncAggregate::new(
             participant_bits(FINALITY_PARTICIPANT_THRESHOLD - 1),
             BlsSignature::new([0; 96]),
         );
         assert_eq!(
-            state.validate_update(update.clone()),
+            update.verify_structure(&schedule),
             Err(EthereumLightClientError::InsufficientParticipation(341))
         );
         update.sync_aggregate = SyncAggregate::new(
@@ -1815,77 +1533,81 @@ mod tests {
         );
         update.signature_slot = update.attested_header.beacon().slot;
         assert_eq!(
-            state.validate_update(update.clone()),
+            update.verify_structure(&schedule),
             Err(EthereumLightClientError::InvalidSlotOrder)
         );
-        let mut stale_update = unsigned_update(1, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
+        let finalized_after_attested =
+            unsigned_update(4, 3, 5, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
         assert_eq!(
-            state.validate_update(stale_update.clone()),
-            Err(EthereumLightClientError::StaleFinalizedHeader)
-        );
-        stale_update.finality_branch = FinalityBranch::Electra([ZERO_ROOT; 7]);
-        // Staleness is intentionally rejected before untrusted branch work.
-        assert_eq!(
-            state.validate_update(stale_update),
-            Err(EthereumLightClientError::StaleFinalizedHeader)
+            finalized_after_attested.verify_structure(&schedule),
+            Err(EthereumLightClientError::InvalidSlotOrder)
         );
         let mut bad_branch = unsigned_update(2, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
         if let FinalityBranch::PreElectra(branch) = &mut bad_branch.finality_branch {
             branch[0][0] ^= 1;
         }
         assert_eq!(
-            state.validate_update(bad_branch),
+            bad_branch.verify_structure(&schedule),
             Err(EthereumLightClientError::InvalidFinalityBranch)
+        );
+        let mut wrong_shape = unsigned_update(2, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
+        wrong_shape.finality_branch = FinalityBranch::Electra([ZERO_ROOT; 7]);
+        assert_eq!(
+            wrong_shape.verify_structure(&schedule),
+            Err(EthereumLightClientError::FinalityBranchForkMismatch)
         );
         let mut bad_next_branch =
             unsigned_update(2, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
-        if let NextSyncCommitteeBranch::PreElectra(branch) =
-            &mut bad_next_branch.next_sync_committee_branch
+        if let Some(NextSyncCommitteeProof {
+            branch: NextSyncCommitteeBranch::PreElectra(branch),
+            ..
+        }) = &mut bad_next_branch.next_sync_committee
         {
             branch[0][0] ^= 1;
         }
         assert_eq!(
-            state.validate_update(bad_next_branch),
+            bad_next_branch.verify_structure(&schedule),
             Err(EthereumLightClientError::InvalidNextCommitteeBranch)
         );
-        let invalid_next = committee([0xff; 48]);
-        let invalid_key_update = unsigned_update(2, 3, 4, invalid_next, [0; 96]);
+        let invalid_key_update = unsigned_update(2, 3, 4, committee([0xff; 48]), [0; 96]);
         assert_eq!(
-            state.validate_update(invalid_key_update),
+            invalid_key_update.verify_structure(&schedule),
             Err(EthereumLightClientError::InvalidCommitteePublicKey(0))
         );
-        let mut wrong_shape = unsigned_update(2, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
-        wrong_shape.next_sync_committee_branch = NextSyncCommitteeBranch::Electra([ZERO_ROOT; 6]);
+        let mut next_shape = unsigned_update(2, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
+        if let Some(next) = &mut next_shape.next_sync_committee {
+            next.branch = NextSyncCommitteeBranch::Electra([ZERO_ROOT; 6]);
+        }
         assert_eq!(
-            state.validate_update(wrong_shape),
+            next_shape.verify_structure(&schedule),
             Err(EthereumLightClientError::NextCommitteeBranchForkMismatch)
-        );
-        let transition_without_next = unsigned_update(
-            SLOTS_PER_SYNC_COMMITTEE_PERIOD,
-            SLOTS_PER_SYNC_COMMITTEE_PERIOD + 1,
-            SLOTS_PER_SYNC_COMMITTEE_PERIOD + 2,
-            committee(GENERATOR_PUBLIC_KEY),
-            [0; 96],
-        );
-        assert_eq!(
-            state.validate_update(transition_without_next),
-            Err(EthereumLightClientError::MissingNextSyncCommittee)
-        );
-        let skipped = unsigned_update(
-            2,
-            3,
-            2 * SLOTS_PER_SYNC_COMMITTEE_PERIOD,
-            committee(GENERATOR_PUBLIC_KEY),
-            [0; 96],
-        );
-        assert_eq!(
-            state.validate_update(skipped),
-            Err(EthereumLightClientError::SkippedSyncCommitteePeriod)
         );
     }
     #[test]
-    fn exact_threshold_update_with_duplicate_positions_advances_immutably() {
-        let state = anchored_state();
+    fn next_committee_requires_attested_and_finalized_in_one_period() {
+        let schedule = altair_schedule();
+        let boundary = SLOTS_PER_SYNC_COMMITTEE_PERIOD;
+        let crossing = unsigned_update(
+            boundary - 1,
+            boundary,
+            boundary + 1,
+            committee(GENERATOR_PUBLIC_KEY),
+            [0; 96],
+        );
+        assert_eq!(
+            crossing.verify_structure(&schedule),
+            Err(EthereumLightClientError::NextCommitteePeriodMismatch)
+        );
+        let mut without_next = crossing;
+        without_next.next_sync_committee = None;
+        without_next
+            .verify_structure(&schedule)
+            .expect("a finality-only update may cross a period boundary");
+    }
+    #[test]
+    fn exact_threshold_update_with_duplicate_positions_verifies() {
+        let schedule = altair_schedule();
+        let bootstrap = altair_bootstrap(committee(GENERATOR_PUBLIC_KEY));
         let update = unsigned_update(
             2,
             3,
@@ -1894,48 +1616,37 @@ mod tests {
             FIXTURE_AGGREGATE_SIGNATURE,
         );
         assert_eq!(
-            sync_committee_signing_root(
-                &update.attested_header,
-                update.signature_slot,
-                state.schedule(),
-            ),
-            Ok(FIXTURE_SIGNING_ROOT)
-        );
-        assert_eq!(
             update.sync_aggregate.participant_count(),
             FINALITY_PARTICIPANT_THRESHOLD
         );
-        assert!(state.next_sync_committee().is_none());
-        let validated = state
-            .validate_update(update)
+        assert_eq!(update.signature_period(), 0);
+        update.verify_structure(&schedule).expect("valid structure");
+        update
+            .verify_signature(&bootstrap.current_sync_committee, &schedule)
             .expect("342 duplicate positions form a valid aggregate");
-        assert_eq!(
-            validated.parent_state_commitment(),
-            state.state_commitment()
+        let mut wrong_signature = update.clone();
+        wrong_signature.sync_aggregate = SyncAggregate::new(
+            participant_bits(343),
+            BlsSignature::new(FIXTURE_AGGREGATE_SIGNATURE),
         );
-        let next = state
-            .apply_validated_update(validated.clone())
-            .expect("validated update applies to its parent snapshot");
-        assert_eq!(state.finalized_header().beacon().slot, 1);
-        assert_eq!(next.finalized_header().beacon().slot, 2);
-        assert!(state.next_sync_committee().is_none());
-        assert!(next.next_sync_committee().is_some());
         assert_eq!(
-            next.apply_validated_update(validated),
-            Err(EthereumLightClientError::UpdateForDifferentState)
+            wrong_signature.verify_signature(&bootstrap.current_sync_committee, &schedule),
+            Err(EthereumLightClientError::InvalidSyncCommitteeSignature)
         );
-        let conflicting_committee = SyncCommittee::new(
-            boxed_public_keys(GENERATOR_PUBLIC_KEY),
-            BlsPublicKey::new(NEGATED_GENERATOR_PUBLIC_KEY),
-        );
-        let conflicting = unsigned_update(3, 4, 5, conflicting_committee, [0; 96]);
+        let wrong_fork_version =
+            schedule_with_epochs([0, 0, u64::MAX, u64::MAX, u64::MAX, u64::MAX]);
+        // Bellatrix at genesis changes the domain, so the Altair-domain aggregate fails.
+        let mut bellatrix = update;
+        bellatrix.attested_header = LightClientHeader::Bellatrix {
+            beacon: *bellatrix.attested_header.beacon(),
+        };
         assert_eq!(
-            next.validate_update(conflicting),
-            Err(EthereumLightClientError::ConflictingNextSyncCommittee)
+            bellatrix.verify_signature(&bootstrap.current_sync_committee, &wrong_fork_version),
+            Err(EthereumLightClientError::InvalidSyncCommitteeSignature)
         );
     }
     #[test]
-    fn signing_root_uses_previous_slot_fork_and_governed_genesis_root() {
+    fn signing_root_uses_previous_slot_fork_and_genesis_root() {
         let schedule = schedule_with_epochs([0, 1, u64::MAX, u64::MAX, u64::MAX, u64::MAX]);
         let header = LightClientHeader::Altair {
             beacon: BeaconBlockHeader {
@@ -1949,7 +1660,7 @@ mod tests {
             .expect("previous slot selects Bellatrix");
         assert_ne!(at_boundary, after_boundary);
         let other_schedule =
-            ForkSchedule::new(root(0xa6), schedule.activations).expect("second governed schedule");
+            ForkSchedule::new(root(0xa6), schedule.activations).expect("second schedule");
         assert_ne!(
             at_boundary,
             sync_committee_signing_root(&header, 32, &other_schedule)
@@ -1958,14 +1669,26 @@ mod tests {
     }
     #[test]
     fn fixture_signing_root_is_stable() {
-        let state = anchored_state();
         let update = unsigned_update(2, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
         let signing_root = sync_committee_signing_root(
             &update.attested_header,
             update.signature_slot,
-            state.schedule(),
+            &altair_schedule(),
         )
         .expect("fixture root");
         assert_eq!(signing_root, FIXTURE_SIGNING_ROOT);
+    }
+    #[test]
+    fn merkle_helpers_reject_bad_branch_lengths() {
+        assert_eq!(merkle_root_from_branch(root(1), 1, &[]), None);
+        assert_eq!(merkle_root_from_branch(root(1), 5, &[root(2)]), None);
+        let branch = [root(2), root(3)];
+        let proven = merkle_root_from_branch(root(1), 5, &branch).expect("depth 2");
+        assert_eq!(
+            proven,
+            hash_nodes(&hash_nodes(&root(2), &root(1)), &root(3))
+        );
+        assert_eq!(merkleize(&[]), ZERO_ROOT);
+        assert_eq!(merkleize(&[root(9)]), root(9));
     }
 }

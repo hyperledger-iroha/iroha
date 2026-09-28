@@ -7,7 +7,7 @@
 use iroha_data_model::{
     account::AccountId,
     governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash, ProposalContentId},
-    isi::bridge::SccpRouteGovernanceActionV1,
+    sccp::governance::SccpGovernanceProposalV1,
     smart_contract::{ContractAddress, ContractAlias, manifest::ManifestProvenance},
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -79,7 +79,7 @@ pub struct DeployContractProposalDraftRequestV1 {
     pub manifest_provenance: Option<ManifestProvenance>,
 }
 
-/// Strict request for one SCCP route-governance proposal instruction draft.
+/// Strict request for one SCCP Parliament proposal instruction draft (`specs/sccp.md` §4.14.3).
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -89,8 +89,8 @@ pub struct DeployContractProposalDraftRequestV1 {
     name = "iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftRequestV1"
 )]
 pub struct SccpRouteGovernanceProposalDraftRequestV1 {
-    /// Atomic closed registry action proposed for enactment.
-    pub action: SccpRouteGovernanceActionV1,
+    /// Complete network-bound proposal: base revisions of its subjects and 1..=16 actions.
+    pub proposal: SccpGovernanceProposalV1,
 }
 
 /// One canonical proposal instruction returned for local signing.
@@ -138,7 +138,7 @@ pub struct DeployContractProposalDraftResponseV1 {
 pub struct SccpRouteGovernanceProposalDraftResponseV1 {
     /// Fingerprint of the complete stored [`iroha_data_model::governance::types::ProposalKind`].
     pub proposal_id: ProposalContentId,
-    /// Exactly one typed SCCP route-governance proposal instruction.
+    /// Exactly one typed `ProposeSccpRouteGovernance` instruction.
     #[norito(json = "one_instruction")]
     pub tx_instructions: [GovernanceProposalInstructionDraftV1; 1],
 }
@@ -197,6 +197,77 @@ mod tests {
                 "SCCP response accepted {count} instructions"
             );
         }
+    }
+
+    fn sccp_draft_request() -> SccpRouteGovernanceProposalDraftRequestV1 {
+        use iroha_data_model::{
+            NetworkId,
+            block::BlockHeader,
+            sccp::{
+                governance::{
+                    SccpGovernanceActionV1, SccpGovernanceBaseRevisionV1, SccpGovernanceSubjectV1,
+                    SccpSetParametersActionV1,
+                },
+                params::SccpParametersV1,
+            },
+        };
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::new(
+                [0x5a; iroha_crypto::Hash::LENGTH],
+            )),
+        );
+        SccpRouteGovernanceProposalDraftRequestV1 {
+            proposal: SccpGovernanceProposalV1 {
+                network_id,
+                base_revisions: vec![SccpGovernanceBaseRevisionV1 {
+                    subject: SccpGovernanceSubjectV1::Parameters,
+                    revision: 0,
+                }],
+                actions: vec![SccpGovernanceActionV1::SetParameters(
+                    SccpSetParametersActionV1 {
+                        next: SccpParametersV1::taira_default(),
+                    },
+                )],
+            },
+        }
+    }
+
+    #[test]
+    fn sccp_route_governance_draft_request_carries_exactly_one_v1_proposal() {
+        let request = sccp_draft_request();
+        let value = norito::json::to_value(&request).expect("encode SCCP draft request");
+        let fields = value.as_object().expect("request object");
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["proposal"]
+        );
+        let decoded: SccpRouteGovernanceProposalDraftRequestV1 =
+            norito::json::from_value(value.clone()).expect("decode SCCP draft request");
+        assert_eq!(decoded, request);
+        let bytes = norito::to_bytes(&request).expect("encode Norito request");
+        assert_eq!(
+            norito::decode_from_bytes::<SccpRouteGovernanceProposalDraftRequestV1>(&bytes)
+                .expect("decode Norito request"),
+            request
+        );
+
+        let mut retired = value.clone();
+        let object = retired.as_object_mut().expect("request object");
+        let proposal = object.remove("proposal").expect("proposal field");
+        object.insert("action".to_owned(), proposal);
+        assert!(
+            norito::json::from_value::<SccpRouteGovernanceProposalDraftRequestV1>(retired).is_err(),
+            "the retired single-action request shape must reject"
+        );
+        let mut extra = value;
+        extra
+            .as_object_mut()
+            .expect("request object")
+            .insert("anchor".to_owned(), norito::json::Value::Bool(true));
+        assert!(
+            norito::json::from_value::<SccpRouteGovernanceProposalDraftRequestV1>(extra).is_err(),
+            "unknown request fields must reject"
+        );
     }
 }
 

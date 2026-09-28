@@ -7,9 +7,8 @@ use crate::{
     query::store::LiveQueryStoreHandle,
     secure_file_metadata::{self, SecureMetadata},
     state::{
-        LaneIncarnationLineage, SnapshotNexusRuntime, State, StateBlock, ValidatedSccpRegistryV1,
-        ZkConfigInstallError, deserialize::KuraSeed, lane_incarnation_lineage_root,
-        snapshot_storage,
+        LaneIncarnationLineage, SnapshotNexusRuntime, State, StateBlock, ZkConfigInstallError,
+        deserialize::KuraSeed, lane_incarnation_lineage_root, snapshot_storage,
     },
 };
 use blake2::{Blake2b, digest::consts::U32};
@@ -25,7 +24,6 @@ use iroha_crypto::{
 use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
-    bridge::SccpRegistryV1,
     nexus::LaneCatalog,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -157,7 +155,7 @@ impl CapturedStateSnapshot {
             network_id: *state.network_id_ref(),
             height: view.block_hashes.len(),
             tip: view.block_hashes.last().copied(),
-            sccp_policy_hash: view.sccp_registry.policy_hash(),
+            sccp_policy_hash: crate::state::sccp_policy_hash_v1(),
             bootstrap: state.authenticated_snapshot_v2_bootstrap().cloned(),
         };
         // TODO: Bound the serializer's allocation while preserving the exact JSON
@@ -298,6 +296,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push(':');
     snapshot_storage::serialize(&state.world.space_directory_manifests, out);
     crate::state::snapshot_service_state::serialize(&state.world, out);
+    crate::state::sccp_snapshot_state::serialize(&state.world, out);
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
@@ -376,6 +375,7 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(':');
     snapshot_storage::serialize_block(&world.space_directory_manifests, out);
     crate::state::snapshot_service_state::serialize_block(world, out);
+    crate::state::sccp_snapshot_state::serialize_block(world, out);
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
@@ -2618,43 +2618,12 @@ fn canonical_snapshot_wsv_hash_with_overrides<'a>(
     update_snapshot_wsv_hash(&mut hasher, input, CanonicalWsvPath::Root, overrides)?;
     Ok(Hash::prehashed(hasher.finalize().into()))
 }
-fn validate_snapshot_sccp_registry_raw(input: &str) -> Result<(), TryReadError> {
-    let Some(world) = snapshot_object_field_raw(input, "world")? else {
-        return Ok(());
-    };
-    let Some(registry) = snapshot_object_field_raw(world, "sccp_registry")? else {
-        return Ok(());
-    };
-    crate::state::validate_sccp_registry_cell_json_str(registry)
-        .map_err(TryReadError::InvalidSccpRegistry)
-}
 
-fn snapshot_sccp_policy_hash_raw(input: &str) -> Result<[u8; 32], TryReadError> {
-    validate_snapshot_sccp_registry_raw(input)?;
-    let world = snapshot_object_field_raw(input, "world")?
-        .ok_or_else(|| TryReadError::Serialization(json::Error::missing_field("world")))?;
-    let registry = snapshot_object_field_raw(world, "sccp_registry")?.ok_or_else(|| {
-        TryReadError::Serialization(json::Error::missing_field("world.sccp_registry"))
-    })?;
-    let cell: Cell<SccpRegistryV1> =
-        json::from_str(registry).map_err(TryReadError::Serialization)?;
-    let validated = ValidatedSccpRegistryV1::try_from_wire(cell.view().get().clone())
-        .map_err(TryReadError::InvalidSccpRegistry)?;
-    Ok(validated.policy_hash())
-}
 #[cfg(test)]
 fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
     matches!(
         value,
         json::Value::Object(map) if map.contains_key("space_directory_manifests")
-    )
-}
-#[cfg(test)]
-fn snapshot_world_has_field(value: &json::Value, field: &str) -> bool {
-    matches!(
-        value,
-        json::Value::Object(map)
-            if matches!(map.get("world"), Some(json::Value::Object(world)) if world.contains_key(field))
     )
 }
 fn reconcile_emergency_fast_snapshot_boundary(
@@ -2897,6 +2866,15 @@ where
                 actual: fast_manifest.network_id,
             });
         }
+        if fast_manifest.sccp_policy_hash != crate::state::sccp_policy_hash_v1() {
+            return Err(TryReadError::SnapshotGenerationInvalid {
+                path: generation
+                    .generation_dir
+                    .join(SNAPSHOT_FAST_MANIFEST_FILE_NAME),
+                reason: "signed emergency Fast manifest carries a foreign SCCP policy hash"
+                    .to_owned(),
+            });
+        }
         let snapshot_height = usize::try_from(fast_manifest.committed_height).map_err(|_| {
             TryReadError::InvalidSnapshotBootstrap(
                 "emergency Fast manifest height exceeds this host's index width".to_owned(),
@@ -2924,7 +2902,6 @@ where
                 fast_manifest.network_id,
                 snapshot_height,
                 fast_manifest.tip_hash,
-                fast_manifest.sccp_policy_hash,
             )
             .map_err(TryReadError::from)?;
         initialize_state(&mut state)?;
@@ -2995,9 +2972,6 @@ where
     }
     let input = std::str::from_utf8(bytes)
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
-    // Check the governed registry before constructing any live State. Both
-    // cell roles decode directly into their final typed registry owners.
-    validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
         operation_index_budget: operation_index_budget.clone(),
         kura: Arc::clone(kura),
@@ -3106,13 +3080,10 @@ where
     if snapshot_height > 0 && !summary.has_space_directory_manifests {
         return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
     }
-    // Runtime configuration and the one-block SCCP rollback candidate are semantic checks on the
-    // newly decoded, still-isolated state. Canonicality was enforced while each
+    // Runtime configuration is a semantic check on the newly decoded, still-isolated state. Canonicality was enforced while each
     // borrowed field was typed-decoded, so no second full payload is built here.
     // All checks remain ahead of snapshot-driven Kura extension or pruning.
     initialize_state(&mut state)?;
-    crate::state::validate_sccp_snapshot_revert_candidate(&state)
-        .map_err(TryReadError::InvalidSccpRevert)?;
     validate_snapshot_wsv_checkpoint(snapshot_wsv_hash, &snapshot_hashes, kura)?;
     generation.verify_selection_unchanged()?;
     let hash_reconcile_started_at = Instant::now();
@@ -3142,8 +3113,8 @@ where
 /// # Errors
 ///
 /// Returns all ordinary snapshot read errors, plus
-/// [`TryReadError::ZkConfigInstall`] when the decoded committed SCCP outbox is
-/// incompatible with the actual configured pending limits.
+/// [`TryReadError::ZkConfigInstall`] when the decoded committed confidential-policy transitions
+/// are incompatible with the actual configured limits.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
@@ -4454,7 +4425,6 @@ fn validate_generated_snapshot_for_restart_with_policy(
     }
     let input = std::str::from_utf8(snapshot_bytes)
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
-    validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
         operation_index_budget: state.world.operation_index_budget().clone(),
         kura: state.kura_handle(),
@@ -4485,8 +4455,6 @@ fn validate_generated_snapshot_for_restart_with_policy(
     restored
         .install_zk_for_isolated_prevalidation(state.zk_snapshot())
         .map_err(TryReadError::ZkConfigInstall)?;
-    crate::state::validate_sccp_snapshot_revert_candidate(&restored)
-        .map_err(TryReadError::InvalidSccpRevert)?;
     Ok(())
 }
 /// Serialize, validate, and durably publish one canonical state snapshot.
@@ -4956,8 +4924,7 @@ fn geometry_checkpoint_from_snapshot(
         .collect();
     let state_hash =
         canonical_snapshot_wsv_hash(bytes).map_err(TryWriteError::RestartValidation)?;
-    let sccp_policy_hash =
-        snapshot_sccp_policy_hash_raw(input).map_err(TryWriteError::RestartValidation)?;
+    let sccp_policy_hash = crate::state::sccp_policy_hash_v1();
     Ok(DurableSnapshotGeometryCheckpoint {
         chain_id,
         network_id,

@@ -300,7 +300,10 @@ mod tests {
         );
         let mut long = path.clone();
         long.push([0; 32]);
-        assert_eq!(merkle_root(&l[2], 2, 6, &long), Err(MerkleError::PathTooLong));
+        assert_eq!(
+            merkle_root(&l[2], 2, 6, &long),
+            Err(MerkleError::PathTooLong)
+        );
         // Wrong index or count reaches a different root.
         assert_ne!(merkle_root(&l[2], 3, 6, &path).ok(), Some(tree.root()));
         assert_ne!(merkle_root(&l[2], 2, 3, &path).ok(), Some(tree.root()));

@@ -90,10 +90,6 @@ pub enum TryReadError {
         /// Exact network id recorded in the snapshot payload.
         actual: NetworkId,
     },
-    /// Snapshot contains an invalid governed SCCP registry (`{0}`)
-    InvalidSccpRegistry(String),
-    /// Snapshot contains invalid SCCP state in its one-block MV revert candidate (`{0}`)
-    InvalidSccpRevert(String),
     /// Snapshot bootstrap authorization or typed trust root is invalid (`{0}`)
     InvalidSnapshotBootstrap(String),
     /// Snapshot WSV checkpoint mismatch at height `{height}` (expected `{expected:?}`, got `{actual:?}`)

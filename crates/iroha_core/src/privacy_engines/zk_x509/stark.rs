@@ -4258,8 +4258,16 @@ impl core::ops::Deref for ZeroizingBaseColumnsV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingBaseColumnsV1 {
     fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::Zeroize for ZeroizingBaseColumnsV1 {
+    fn zeroize(&mut self) {
         for column in &mut self.0 {
-            column.fill(F::ZERO);
+            for value in column {
+                value.zeroize_v1();
+            }
         }
     }
 }
@@ -4275,7 +4283,15 @@ impl core::ops::Deref for ZeroizingExtensionColumnV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingExtensionColumnV1 {
     fn drop(&mut self) {
-        self.0.fill(E::ZERO);
+        zeroize::Zeroize::zeroize(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::Zeroize for ZeroizingExtensionColumnV1 {
+    fn zeroize(&mut self) {
+        for value in &mut self.0 {
+            value.zeroize_v1();
+        }
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -4286,14 +4302,24 @@ struct RetainedCompositionMaterialV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for RetainedCompositionMaterialV1 {
     fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(self);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::Zeroize for RetainedCompositionMaterialV1 {
+    fn zeroize(&mut self) {
         for lane in &mut self.evaluations {
             for chunk in lane {
-                chunk.fill(E::ZERO);
+                for value in chunk {
+                    value.zeroize_v1();
+                }
             }
         }
         for lane in &mut self.coefficient_chunks {
             for chunk in lane {
-                chunk.fill(E::ZERO);
+                for value in chunk {
+                    value.zeroize_v1();
+                }
             }
         }
     }
@@ -7000,7 +7026,9 @@ impl ZeroizingMainTraceColumnV1 {
         core::mem::take(&mut self.0)
     }
     fn zeroize_private_v1(&mut self) {
-        self.0.fill(F::ZERO);
+        for value in &mut self.0 {
+            value.zeroize_v1();
+        }
         self.0.clear();
     }
 }
@@ -8455,6 +8483,15 @@ struct MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'assembly, 'source> MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
+    /// This wrapper owns registration metadata; all native trace sources are borrowed.
+    fn allocated_payload_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            core::mem::size_of_val(self),
+            vector_v1(&self.registrations),
+            vector_v1(&self.p256_bindings),
+        ])
+    }
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
         assembly: &'assembly ZkX509MainTraceAssemblyV1,
@@ -8550,11 +8587,17 @@ impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn zeroize_main_der_trace_v1(trace: &mut ZkX509DerStarkTraceV1) {
-    trace.base.zeroize_private_v1();
-    for row in &mut trace.aux_rows {
-        row.fill(F::ZERO);
+fn zeroize_main_der_trace_cells_v1(trace: &mut ZkX509DerStarkTraceV1) {
+    trace.base.zeroize_private_cells_v1();
+    for value in trace.aux_rows.iter_mut().flatten() {
+        value.zeroize_v1();
     }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_main_der_trace_v1(trace: &mut ZkX509DerStarkTraceV1) {
+    zeroize_main_der_trace_cells_v1(trace);
+    trace.base.private_shape.document_lengths.clear();
+    trace.base.rows.clear();
     trace.aux_rows.clear();
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -8591,11 +8634,6 @@ struct MainLog19BoundTraceGroupSourceV1<'a> {
     der: ZkX509DerStarkTraceV1,
     der_fixed: ZkX509DerStarkFixedScheduleV1,
     rfc: ZkX509Rfc5280StarkColumnProviderV1<'a>,
-    #[expect(
-        dead_code,
-        reason = "construction validates every SHA segment base source; trace streaming reads only the auxiliary sources"
-    )]
-    sha_base: [ZkX509ShaBatchSegmentBaseSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
     sha_aux: [ZkX509ShaBatchSegmentAuxSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
     sha_fixed: ZkX509ShaBatchFixedProviderV1,
     p256: P256MainBoundSourceV1,
@@ -8604,6 +8642,21 @@ struct MainLog19BoundTraceGroupSourceV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
+    /// Capacity of the bound DER/P-256 owners plus independently retained fixed schedules.
+    /// The borrowed assembly and RFC/SHA witness storage are charged by their owner.
+    fn allocated_payload_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            core::mem::size_of_val(self) - core::mem::size_of_val(&self.p256),
+            self.p256.allocated_payload_bytes_v1(),
+            vector_v1(&self.registrations),
+            vector_v1(&self.p256_bindings),
+            vector_v1(&self.der.base.private_shape.document_lengths),
+            vector_v1(&self.der.base.rows),
+            vector_v1(&self.der.aux_rows),
+            self.sha_fixed.allocated_heap_bytes_v1(),
+        ])
+    }
     /// Consume every challenge-independent log19 child exactly once under the
     /// credential-derived X5B1 binding.
     ///
@@ -8693,8 +8746,6 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
         }
         let der_fixed = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
             .map_err(ZkX509StarkErrorV1::from)?;
-        let sha_base =
-            main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
         let sha_fixed = ZkX509ShaBatchFixedProviderV1::new_v1(assembly.sha_schedule.shape())
             .map_err(map_main_sha_source_error_v1)?;
         let der = der.take_v1()?;
@@ -8704,7 +8755,6 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             der,
             der_fixed,
             rfc,
-            sha_base,
             sha_aux,
             sha_fixed,
             p256,
@@ -10548,6 +10598,21 @@ struct MainIoTraceGroupSourceV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainIoTraceGroupSourceV1<'a> {
+    /// Capacity of retained native columns and cloned declaration topology.
+    fn allocated_payload_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{declaration_v1, sum_v1, vector_v1};
+        let columns = |values: &Vec<Vec<F>>| {
+            sum_v1([vector_v1(values), sum_v1(values.iter().map(vector_v1))])
+        };
+        sum_v1([
+            core::mem::size_of_val(self),
+            vector_v1(&self.statement.declarations),
+            sum_v1(self.statement.declarations.iter().map(declaration_v1)),
+            columns(&self.base_columns),
+            columns(&self.fixed_columns),
+            self.aux_columns.as_ref().map_or(0, columns),
+        ])
+    }
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
         statement: &IrohaZkX509StarkP256StatementV1,
@@ -10984,6 +11049,15 @@ struct MainProjectionTraceGroupSourceV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainProjectionTraceGroupSourceV1<'a> {
+    /// Capacity of the owned auxiliary trace; base/fixed rows belong to the assembly.
+    fn allocated_payload_bytes_v1(&self) -> usize {
+        super::allocation_payload::sum_v1([
+            core::mem::size_of_val(self),
+            self.aux
+                .as_ref()
+                .map_or(0, |aux| super::allocation_payload::vector_v1(&aux.rows)),
+        ])
+    }
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
         statement: &IrohaZkX509StarkP256StatementV1,

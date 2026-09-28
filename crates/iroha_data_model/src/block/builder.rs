@@ -129,10 +129,6 @@ impl BlockBuilder {
     pub fn set_execution_context(&mut self, context: Option<BlockExecutionContextBundle>) {
         self.execution_context = context.filter(|bundle| !bundle.is_empty());
     }
-    /// Commit an SCCP commitment root in the resulting block header.
-    pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
-        self.header.set_sccp_commitment_root(root);
-    }
     /// Build untrusted structural block data with the provided signatures.
     /// Native inputs are not execution authority; callers must attach
     /// actual full results through the checked setter and validate the carrier.

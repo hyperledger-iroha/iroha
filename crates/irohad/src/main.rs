@@ -1395,11 +1395,10 @@ mod snapshot_read_error_tests {
             }
         ));
         let incompatible_zk = TryReadSnapshotError::ZkConfigInstall(
-            iroha_core::state::ZkConfigInstallError::InvalidSccpPendingUsage {
-                usage: iroha_data_model::bridge::SccpOutboundPendingUsageV1 {
-                    message_count: 0,
-                    payload_bytes: 1,
-                },
+            iroha_core::state::ZkConfigInstallError::ConfidentialPolicyTransitionLimitExceeded {
+                effective_height: 1,
+                count: 2,
+                maximum: std::num::NonZeroU32::new(1).expect("nonzero transition cap"),
             },
         );
         assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
@@ -3002,11 +3001,6 @@ impl Iroha {
             );
             Some(prepared)
         };
-        // TODO(WP8c): the SoraFS archives read Sumeragi's startup boundary directly.
-        let v2_replay_plan = iroha_core::sumeragi::V2StartupReplayPlan::sumeragi_replayed(
-            kura.exact_durable_blocks_count()
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?,
-        );
         // Key admission and rotation read canonical WSV parameters. Local configuration must
         // match that authority rather than overwriting it without a block.
         state
@@ -3206,12 +3200,7 @@ impl Iroha {
         } else {
             let view = state.view();
             let height = u64::try_from(view.block_hashes().len()).expect("height fits into u64");
-            iroha_core::state::compute_confidential_feature_digest(
-                view.world(),
-                &view.zk,
-                view.sccp_registry.as_ref(),
-                height,
-            )
+            iroha_core::state::compute_confidential_feature_digest(view.world(), &view.zk, height)
         };
         iroha_logger::info!(
             mode=%consensus_caps.mode.tag(),
@@ -3561,7 +3550,6 @@ impl Iroha {
                         &config.kura.store_dir.resolve_relative_path(),
                         &state,
                         &kura,
-                        &v2_replay_plan,
                         runtime_deps
                             .sorafs_provider_ingest_retention_authority
                             .clone(),
@@ -3605,36 +3593,7 @@ impl Iroha {
                         "qualified daemon-owned finalized provider-ingest archive"
                     );
                 }
-                sorafs_provider_ingest_finalized_query::ProviderIngestFinalizedArchiveStartupModeV1::PendingTipReplay {
-                    pending_tip_height,
-                    qualification,
-                    activation_floor_created,
-                } => {
-                    if *activation_floor_created
-                        && let Some(qualification) = qualification
-                    {
-                        iroha_logger::warn!(
-                            activation_floor_height = qualification.activation_floor().height,
-                            "pending-tip provider-ingest recovery established an explicit activation floor; earlier historical coverage is unavailable"
-                        );
-                    }
-                    if let Some(qualification) = qualification {
-                        iroha_logger::info!(
-                            pending_tip_height = *pending_tip_height,
-                            activation_floor_height = qualification.activation_floor().height,
-                            archive_tip_height = qualification.archive_tip().height,
-                            kura_tip_height = qualification.kura_tip_height(),
-                            lag_blocks = qualification.lag_blocks(),
-                            "qualified daemon-owned finalized provider-ingest archive for exact pending-tip replay"
-                        );
-                    } else {
-                        iroha_logger::info!(
-                            pending_tip_height = *pending_tip_height,
-                            state_height = 0,
-                            "opened empty daemon-owned finalized provider-ingest archive for pending genesis replay"
-                        );
-                    }
-                }
+
             }
             Some(prepared)
         } else {
@@ -3677,7 +3636,6 @@ impl Iroha {
                         &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                         &state,
                         &kura,
-                        &v2_replay_plan,
                         sorafs_reputation_retention_authority.clone(),
                     )
                     .map_err(|error| {
@@ -3719,36 +3677,7 @@ impl Iroha {
                         "qualified daemon-owned finalized reputation archive"
                     );
                 }
-                sorafs_reputation_finalized_query::ReputationFinalizedArchiveStartupModeV1::PendingTipReplay {
-                    pending_tip_height,
-                    qualification,
-                    activation_floor_created,
-                } => {
-                    if *activation_floor_created
-                        && let Some(qualification) = qualification
-                    {
-                        iroha_logger::warn!(
-                            activation_floor_height = qualification.activation_floor().height,
-                            "pending-tip reputation recovery established an explicit activation floor; earlier historical coverage is unavailable"
-                        );
-                    }
-                    if let Some(qualification) = qualification {
-                        iroha_logger::info!(
-                            pending_tip_height = *pending_tip_height,
-                            activation_floor_height = qualification.activation_floor().height,
-                            archive_tip_height = qualification.archive_tip().height,
-                            kura_tip_height = qualification.kura_tip_height(),
-                            lag_blocks = qualification.lag_blocks(),
-                            "qualified daemon-owned finalized reputation archive for exact pending-tip replay"
-                        );
-                    } else {
-                        iroha_logger::info!(
-                            pending_tip_height = *pending_tip_height,
-                            state_height = 0,
-                            "opened empty daemon-owned finalized reputation archive for pending genesis replay"
-                        );
-                    }
-                }
+
             }
             Some(prepared)
         } else {
@@ -3809,16 +3738,20 @@ impl Iroha {
                 None
             }
             Some(prepared) => {
-                // TODO(WP6-sorafs): Sumeragi's executor captures committed blocks into the
-                // SoraFS finalized archives. Until it does, a configured archive would silently
-                // stop at the startup height, so the node refuses to start with one.
-                if prepared_sorafs_provider_ingest_archive.is_some()
-                    || prepared_sorafs_reputation_archive.is_some()
-                {
-                    return Err(Report::new(StartError::StartP2p).attach(
-                        "the SoraFS provider-ingest and reputation finalized archives are not yet captured by Sumeragi; disable those runtimes",
-                    ));
-                }
+                prepared
+                    .attach_finalized_archives(iroha_core::sumeragi::executor::FinalizedArchives {
+                        provider_ingest: prepared_sorafs_provider_ingest_archive
+                            .as_ref()
+                            .map(|prepared| Arc::clone(prepared.archive())),
+                        reputation: prepared_sorafs_reputation_archive
+                            .as_ref()
+                            .map(|prepared| Arc::clone(prepared.archive())),
+                    })
+                    .map_err(|error| {
+                        Report::new(StartError::StartP2p).attach(format!(
+                            "failed to bind current SoraFS finalized archive capture: {error}"
+                        ))
+                    })?;
                 let local_consensus_peer = config.common.trusted_peers.value().myself.id().clone();
                 // Active Parliament TLE custody is mandatory: private timed-OVN has no alternate
                 // ballot-opening path when this validator owns a release-share seat.
@@ -3835,7 +3768,9 @@ impl Iroha {
                             net: Arc::new(iroha_core::sumeragi::net::P2pNet::new(network.clone())),
                             queue: Arc::clone(&queue),
                             key_pair: config.common.key_pair.clone(),
-                            beacon_signer: runtime_deps.sumeragi_global_beacon_partial_signer.clone(),
+                            beacon_signer: runtime_deps
+                                .sumeragi_global_beacon_partial_signer
+                                .clone(),
                             config: sumeragi_node_config(
                                 &config,
                                 runtime_deps.sumeragi_assert_fresh_key(),
@@ -10422,7 +10357,19 @@ mod tests {
             sumeragi_start < provider_runtime_start,
             "the commit-capturing archive must be installed before its runtime reader starts"
         );
-        // TODO(WP6-sorafs): Sumeragi's executor captures commits into the prepared archive.
+        let archive_binding = source
+            .find(".attach_finalized_archives(")
+            .expect("synchronous current executor archive binding");
+        let consensus_driver_start = source[archive_binding..]
+            .find(".start_on_network(")
+            .map(|offset| archive_binding + offset)
+            .expect("current consensus driver startup");
+        assert!(
+            preparation < archive_binding
+                && archive_binding < consensus_driver_start
+                && consensus_driver_start < provider_runtime_start,
+            "the reconciled archive must bind to current commit capture before consensus or its reader starts"
+        );
         let runtime_wiring = &source[provider_runtime_start..];
         assert!(
             runtime_wiring.contains("sorafs_provider_ingest_finalized_query"),
@@ -10499,11 +10446,6 @@ mod tests {
             confidential_setup
                 .0
                 .contains("state.sccp_policy_hash_snapshot()")
-        );
-        assert!(
-            !confidential_setup
-                .0
-                .contains("state.sccp_registry_snapshot()")
         );
         assert!(!confidential_setup.0.contains("state.view()"));
         assert!(confidential_setup.1.contains("let view = state.view()"));
@@ -11274,9 +11216,9 @@ mod tests {
                 .expect("sample config should be readable")
                 .parse()
                 .expect("sample config should parse");
-            config.zk.sccp.max_pending_outbound_messages =
-                std::num::NonZeroU64::new(7).expect("nonzero message cap");
-            config.zk.sccp.max_pending_outbound_payload_bytes =
+            config.zk.sccp.max_proofs_per_transaction =
+                std::num::NonZeroU32::new(7).expect("nonzero proof cap");
+            config.zk.sccp.max_proof_bytes_per_proof =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
             let kagemusha_asset_definition_id = AssetDefinitionId::derive_from_components(
                 iroha_model_base::domain::DomainId::try_new("boi", "is")
@@ -11297,12 +11239,12 @@ mod tests {
                 .expect("fresh state accepts actual runtime configuration");
             let installed = state.zk_snapshot();
             assert_eq!(
-                installed.sccp.max_pending_outbound_messages,
-                config.zk.sccp.max_pending_outbound_messages
+                installed.sccp.max_proofs_per_transaction,
+                config.zk.sccp.max_proofs_per_transaction
             );
             assert_eq!(
-                installed.sccp.max_pending_outbound_payload_bytes,
-                config.zk.sccp.max_pending_outbound_payload_bytes
+                installed.sccp.max_proof_bytes_per_proof,
+                config.zk.sccp.max_proof_bytes_per_proof
             );
             assert_eq!(
                 state

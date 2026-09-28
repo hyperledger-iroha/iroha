@@ -1,0 +1,2408 @@
+//! Public-boundary tests for the SCCP v1 state, record, registry, light-client and event types and
+//! the v1 instruction structs.
+//!
+//! Covers `specs/sccp.md` (revision 3) §3.6.1, §4.2–§4.8, §4.11–§4.17 and §4.19: stable schema
+//! names and instruction ids, binary (bare, headered and slice) and JSON roundtrips of every type
+//! and instruction, closed JSON objects, unknown enum tags and trailing bytes, the route escrow
+//! derivation (deterministic, distinct per route and `NetworkId`, revision-free), the bridge-key
+//! binding domain and the bounds of the opaque proof, advance and evidence wrappers.
+
+use hex_literal::hex;
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    asset::AssetDefinitionId,
+    block::BlockHeader,
+    bridge::SccpNetworkV1,
+    isi::{
+        Instruction,
+        sccp::{
+            AdvanceSccpLightClientV1, InitializeSccpV1, RecordSccpMessage,
+            ReportSccpLightClientEquivocationV1, SccpSettleInboundV1, SccpSettleRefundV1,
+            SccpSettleTargetV1, SetSccpBridgeKeyV1, SettleSccpV1, SubmitSccpAttestationFaultV1,
+            SubmitSccpAttestationsV1, SubmitSccpInboundMessageV1, SubmitSccpOutboundVoidV1,
+        },
+    },
+    sccp::{
+        attestation::{
+            SCCP_HISTORY_MAX_SIZE_V1, SCCP_SIGNATURE_BYTES_V1, SccpAttestationSignatureV1,
+            SccpAttestationStatementV1, SccpAttestationStatusV1, SccpAttestationSubjectV1,
+            SccpBlockCommitmentV1, SccpHistoryStateV1, SccpStatementInvariantError,
+        },
+        bounded_bytes::SccpBoundedBytesError,
+        control::{
+            SCCP_FIRST_CONTROL_NONCE_V1, SccpControlLeafRefV1, SccpControlRecordV1, SccpLeafRefV1,
+            SccpTransferLeafRefV1,
+        },
+        deployment::{SccpDeploymentV1, SccpEvmDeploymentV1},
+        escrow::{
+            SCCP_ROUTE_ESCROW_DOMAIN_V1, SCCP_TAIRA_XOR_ASSET_DEFINITION_ID_V1,
+            SCCP_XOR_ASSET_ID_TEXT, sccp_route_escrow_account_id_v1,
+            sccp_taira_xor_asset_definition_id, sccp_xor_route_escrow_account_id_v1,
+        },
+        events::{
+            SccpAttestationFaultV1, SccpAttestationSignedV1, SccpBlockAttestedV1,
+            SccpBlockCommittedV1, SccpBounceReasonV1, SccpBridgeKeySetV1, SccpControlRecordedV1,
+            SccpEvent, SccpEventSet, SccpGovernanceEnactedV1, SccpHandoffStalledV1,
+            SccpInboundBouncedV1, SccpInboundLiabilityShortfallV1, SccpInboundProvenV1,
+            SccpInboundReleasedV1, SccpLightClientAdvancedV1, SccpLightClientFrozenV1,
+            SccpLightClientInitializedV1, SccpMessageRecordedV1, SccpOutboundRefundedV1,
+            SccpOutboundStrandedV1, SccpOutboundVoidedV1, SccpRecipientRegisteredV1,
+            SccpRevisionActivationChangedV1, SccpRosterDerivationFailedV1,
+            SccpRosterDerivationFailureV1, SccpRosterGenerationCreatedV1, SccpStrandedReleasedV1,
+            SccpSubjectCreatedV1, SccpTrustedCheckpointInstalledV1,
+        },
+        governance::SccpGovernanceSubjectV1,
+        inbound::{
+            SCCP_SOURCE_PROOF_MAX_BYTES_V1, SccpBounceStatusV1, SccpInboundRecordV1,
+            SccpInboundStatusV1, SccpPendingReasonV1, SccpPendingStatusV1, SccpSourceLocatorV1,
+            SccpSourceProofBytesV1,
+        },
+        keys::{
+            SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1, SCCP_BRIDGE_KEY_RETIRED_MAX_V1,
+            SCCP_BRIDGE_PUBLIC_KEY_BYTES_V1, SccpAttestationFaultRecordV1, SccpBridgeKeyBindingV1,
+            SccpBridgeKeyStateV1, SccpBridgeKeyV1, SccpFaultRefV1,
+        },
+        light_client::{
+            SCCP_LC_ADVANCE_MAX_BYTES_V1, SCCP_LC_EVIDENCE_MAX_BYTES_V1, SccpLcAdvanceBytesV1,
+            SccpLcConsensusSetV1, SccpLcEquivocationFreezeV1, SccpLcEvidenceBytesV1,
+            SccpLcFreezeReasonV1, SccpLcHeadV1, SccpLcParliamentFreezeV1, SccpLcPointV1,
+            SccpLightClientParamsV1, SccpLightClientV1,
+        },
+        outbound::{
+            SCCP_TRANSFER_PAYLOAD_MAX_BYTES_V1, SccpOutboundMessageRecordV1, SccpOutboundStatusV1,
+            SccpStatusHeightV1, SccpVoidKindV1, SccpVoidStatusV1,
+        },
+        params::SccpParametersV1,
+        registry::{
+            SCCP_ROUTE_ID_TAIRA_BSC_XOR_V1, SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1,
+            SCCP_ROUTE_ID_TAIRA_TON_XOR_V1, SCCP_ROUTE_ID_TAIRA_TRON_XOR_V1, SccpRouteActivationV1,
+            SccpRouteRevisionV1, SccpRouteV1, network_for_route_id, route_id_for,
+        },
+        roster::{
+            SCCP_ROSTER_MAX_MEMBERS_V1, SCCP_ROSTER_MIN_MEMBERS_V1, SccpBridgeRosterV1,
+            SccpRosterMemberV1, SccpRosterShapeError, sccp_roster_threshold_v1,
+        },
+    },
+};
+use iroha_model_base::peer::PeerId;
+use iroha_primitives::numeric::Numeric;
+use norito::{
+    NoritoSchema,
+    codec::{DecodeAll, Encode},
+    core::DecodeFromSlice,
+    json::Value,
+};
+use std::collections::{BTreeMap, BTreeSet};
+
+const ETH: SccpNetworkV1 = SccpNetworkV1::EthereumMainnet;
+const BSC: SccpNetworkV1 = SccpNetworkV1::BscMainnet;
+const TRON: SccpNetworkV1 = SccpNetworkV1::TronMainnet;
+const TON: SccpNetworkV1 = SccpNetworkV1::TonMainnet;
+const TAIRA: SccpNetworkV1 = SccpNetworkV1::SoraTaira;
+const EXTERNAL: [SccpNetworkV1; 4] = [ETH, BSC, TRON, TON];
+const ACTIVATIONS: [SccpRouteActivationV1; 5] = [
+    SccpRouteActivationV1::Staged,
+    SccpRouteActivationV1::Bidirectional,
+    SccpRouteActivationV1::Paused,
+    SccpRouteActivationV1::InboundOnly,
+    SccpRouteActivationV1::Retired,
+];
+
+// ---------------------------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------------------------
+
+fn network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        [seed; Hash::LENGTH],
+    )))
+}
+
+fn key_pair(seed: u8) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("deterministic Ed25519 seed")
+}
+
+fn peer(seed: u8) -> PeerId {
+    PeerId::new(key_pair(seed).public_key().clone())
+}
+
+fn account(seed: u8) -> AccountId {
+    AccountId::new(key_pair(seed.wrapping_add(0x80)).public_key().clone())
+}
+
+fn bridge_key(seed: u8, activation_epoch: u64) -> SccpBridgeKeyV1 {
+    let mut public_key = [seed; 33];
+    public_key[0] = 0x02;
+    SccpBridgeKeyV1 {
+        public_key,
+        address: [seed; 20],
+        activation_epoch,
+        registered_at_height: u64::from(seed) * 10,
+        faulted: false,
+    }
+}
+
+fn fault(seed: u8, height: u64) -> SccpFaultRefV1 {
+    SccpFaultRefV1 {
+        address: [seed; 20],
+        height,
+    }
+}
+
+fn roster(addresses: &[u8]) -> SccpBridgeRosterV1 {
+    let n = u8::try_from(addresses.len()).expect("small roster");
+    SccpBridgeRosterV1 {
+        generation: 2,
+        valid_from_ms: 1_758_000_000_000,
+        valid_until_ms: 1_759_209_600_000,
+        activation_height: 3_601,
+        handoff_height: None,
+        members: addresses
+            .iter()
+            .zip(1_u8..)
+            .map(|(address, seed)| SccpRosterMemberV1 {
+                address: [*address; 20],
+                peer: Some(peer(seed)),
+            })
+            .collect(),
+        threshold: sccp_roster_threshold_v1(n),
+        digest: [0xdd; 32],
+    }
+}
+
+fn subject() -> SccpAttestationSubjectV1 {
+    SccpAttestationSubjectV1 {
+        height: 3_600,
+        epoch: 0,
+        timestamp_ms: 1_758_000_000_000,
+        sccp_root: [1; 32],
+        message_count: 2,
+        history_root: [2; 32],
+        history_size: 5,
+        generation: 1,
+        roster_digest: [3; 32],
+        next_roster_digest: [4; 32],
+    }
+}
+
+fn entry(height: u64, signer_index: u8) -> SccpAttestationSignatureV1 {
+    SccpAttestationSignatureV1 {
+        height,
+        signer_index,
+        signature: [0x1b; 65],
+    }
+}
+
+fn evm(seed: u8) -> SccpDeploymentV1 {
+    SccpDeploymentV1::Evm(SccpEvmDeploymentV1 {
+        address: [seed; 20],
+        runtime_code_hash: [0xc0; 32],
+    })
+}
+
+fn revision(number: u32, activation: SccpRouteActivationV1) -> SccpRouteRevisionV1 {
+    SccpRouteRevisionV1 {
+        activation,
+        ever_activated: activation != SccpRouteActivationV1::Staged,
+        liability: u128::from(number) * 1_000_000_000,
+        next_outbound_nonce: u64::from(number) * 3,
+        ..SccpRouteRevisionV1::staged(
+            number,
+            evm(u8::try_from(number).expect("small revision")),
+            21_000_000_000_000_000,
+            1,
+            [0xab; 32],
+            100,
+        )
+    }
+}
+
+fn locator() -> SccpSourceLocatorV1 {
+    SccpSourceLocatorV1 {
+        source_height: 21_000_000,
+        block_hash: [0x77; 32],
+        index_in_block: 12,
+    }
+}
+
+fn point() -> SccpLcPointV1 {
+    SccpLcPointV1 {
+        source_height: 21_000_000,
+        block_hash: [0x21; 32],
+        source_time_ms: 1_758_000_000_000,
+    }
+}
+
+fn head() -> SccpLcHeadV1 {
+    SccpLcHeadV1 {
+        latest_set_id: 1_400,
+        latest_finalized: point(),
+        last_progress_taira_ms: 1_758_000_100_000,
+    }
+}
+
+fn freeze_reasons() -> [SccpLcFreezeReasonV1; 2] {
+    [
+        SccpLcFreezeReasonV1::Equivocation(SccpLcEquivocationFreezeV1 {
+            evidence_hash: [0x51; 32],
+        }),
+        SccpLcFreezeReasonV1::Parliament(SccpLcParliamentFreezeV1 {
+            proposal_id: [0x52; 32],
+        }),
+    ]
+}
+
+fn light_client(network: SccpNetworkV1, frozen: Option<SccpLcFreezeReasonV1>) -> SccpLightClientV1 {
+    SccpLightClientV1 {
+        params: SccpLightClientParamsV1::defaults_for(network).expect("external network"),
+        head: head(),
+        frozen,
+        state_hash: [0x61; 32],
+    }
+}
+
+fn outbound_statuses() -> [SccpOutboundStatusV1; 5] {
+    [
+        SccpOutboundStatusV1::Recorded,
+        SccpOutboundStatusV1::Voided(SccpVoidStatusV1 {
+            kind: SccpVoidKindV1::Expired,
+            proven_at_height: 10,
+            refund_pending: false,
+        }),
+        SccpOutboundStatusV1::Voided(SccpVoidStatusV1 {
+            kind: SccpVoidKindV1::Frozen,
+            proven_at_height: 11,
+            refund_pending: true,
+        }),
+        SccpOutboundStatusV1::Refunded(SccpStatusHeightV1 { height: 12 }),
+        SccpOutboundStatusV1::Stranded(SccpStatusHeightV1 { height: 13 }),
+    ]
+}
+
+fn outbound(status: SccpOutboundStatusV1) -> SccpOutboundMessageRecordV1 {
+    SccpOutboundMessageRecordV1 {
+        network: TON,
+        revision: 1,
+        nonce: 41,
+        height: 7_200,
+        commitment_index: 3,
+        deadline_ms: 1_758_604_800_000,
+        sender: account(1),
+        amount: (1_u128 << 96) - 1,
+        payload: vec![0x02, 0x01, 0x00, 0x00, 0x00, 0x00],
+        leaf: [0x99; 32],
+        status,
+    }
+}
+
+fn inbound_statuses() -> [SccpInboundStatusV1; 5] {
+    [
+        SccpInboundStatusV1::pending(SccpPendingReasonV1::Disabled),
+        SccpInboundStatusV1::pending(SccpPendingReasonV1::RevisionNotSettleable),
+        SccpInboundStatusV1::pending(SccpPendingReasonV1::LiabilityShortfall),
+        SccpInboundStatusV1::Released(SccpStatusHeightV1 { height: 90 }),
+        SccpInboundStatusV1::Bounced(SccpBounceStatusV1 {
+            bounce_message_id: [0x88; 32],
+        }),
+    ]
+}
+
+fn inbound(status: SccpInboundStatusV1) -> SccpInboundRecordV1 {
+    SccpInboundRecordV1 {
+        network: TRON,
+        revision: 2,
+        payload: vec![0x02, 0x01, 0x00, 0x00, 0x00, 0x05],
+        source_locator: locator(),
+        proven_at_height: 88,
+        fee_due: 10_000_000,
+        status,
+    }
+}
+
+fn proof(len: usize) -> SccpSourceProofBytesV1 {
+    SccpSourceProofBytesV1::new(vec![0x4e; len]).expect("bounded proof")
+}
+
+fn advance(len: usize) -> SccpLcAdvanceBytesV1 {
+    SccpLcAdvanceBytesV1::new(vec![0x41; len]).expect("bounded advance")
+}
+
+fn evidence(len: usize) -> SccpLcEvidenceBytesV1 {
+    SccpLcEvidenceBytesV1::new(vec![0x45; len]).expect("bounded evidence")
+}
+
+fn statement() -> SccpAttestationStatementV1 {
+    subject().statement([0xbb; 32])
+}
+
+fn set_bridge_key(public_key: Option<[u8; 33]>, nonce: u64) -> SetSccpBridgeKeyV1 {
+    let peer_keys = key_pair(1);
+    let peer = PeerId::new(peer_keys.public_key().clone());
+    let binding = SccpBridgeKeyBindingV1::new(network_id(7), peer.clone(), public_key, 3, nonce);
+    SetSccpBridgeKeyV1 {
+        peer,
+        public_key,
+        activation_epoch: 3,
+        binding_nonce: nonce,
+        peer_signature: SignatureOf::new(peer_keys.private_key(), &binding),
+        key_pop: public_key.map(|_| [0x1c; 65]),
+    }
+}
+
+/// One event of every §4.17 variant, in declaration order, with its JSON tag.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one literal per event variant keeps the inventory reviewable"
+)]
+fn every_event() -> Vec<(SccpEvent, &'static str)> {
+    vec![
+        (
+            SccpEvent::MessageRecorded(SccpMessageRecordedV1 {
+                message_id: [1; 32],
+                network: ETH,
+                revision: 1,
+                nonce: 0,
+                height: 10,
+                commitment_index: 0,
+                deadline_ms: 1_758_604_800_000,
+            }),
+            "message_recorded",
+        ),
+        (
+            SccpEvent::BlockCommitted(SccpBlockCommittedV1 {
+                height: 10,
+                root: [2; 32],
+                count: 512,
+                history_size: 4,
+            }),
+            "block_committed",
+        ),
+        (
+            SccpEvent::SubjectCreated(SccpSubjectCreatedV1 {
+                height: 10,
+                generation: 2,
+                message_count: 3,
+                rotation: false,
+            }),
+            "subject_created",
+        ),
+        (
+            SccpEvent::AttestationSigned(SccpAttestationSignedV1 {
+                height: 10,
+                generation: 2,
+                signer_index: 30,
+                address: [3; 20],
+            }),
+            "attestation_signed",
+        ),
+        (
+            SccpEvent::BlockAttested(SccpBlockAttestedV1 {
+                height: 10,
+                generation: 2,
+                signer_bitmap: u32::MAX >> 1,
+            }),
+            "block_attested",
+        ),
+        (
+            SccpEvent::RosterGenerationCreated(SccpRosterGenerationCreatedV1 {
+                generation: 3,
+                digest: [4; 32],
+                activation_height: 11,
+                valid_until_ms: 1_759_209_600_000,
+            }),
+            "roster_generation_created",
+        ),
+        (
+            SccpEvent::RosterDerivationFailed(SccpRosterDerivationFailedV1 {
+                height: 3_600,
+                generation: 2,
+                reason: SccpRosterDerivationFailureV1::MissingNextEpochSnapshot,
+                roster_size: 0,
+            }),
+            "roster_derivation_failed",
+        ),
+        (
+            SccpEvent::HandoffStalled(SccpHandoffStalledV1 {
+                height: 3_600,
+                generation: 2,
+            }),
+            "handoff_stalled",
+        ),
+        (
+            SccpEvent::BridgeKeySet(SccpBridgeKeySetV1 {
+                peer: peer(1),
+                address: Some([5; 20]),
+                account: Some(account(5)),
+                activation_epoch: 4,
+            }),
+            "bridge_key_set",
+        ),
+        (
+            SccpEvent::AttestationFault(SccpAttestationFaultV1 {
+                peer: peer(2),
+                address: [6; 20],
+                height: 9,
+                statement_hash: [7; 32],
+                reported_at_height: 12,
+            }),
+            "attestation_fault",
+        ),
+        (
+            SccpEvent::InboundProven(SccpInboundProvenV1 {
+                message_id: [8; 32],
+                network: TON,
+                revision: 1,
+                amount: u128::MAX,
+                source_locator: locator(),
+                fee_due: 0,
+            }),
+            "inbound_proven",
+        ),
+        (
+            SccpEvent::RecipientRegistered(SccpRecipientRegisteredV1 {
+                account: account(3),
+                network: TON,
+                message_id: None,
+            }),
+            "recipient_registered",
+        ),
+        (
+            SccpEvent::InboundReleased(SccpInboundReleasedV1 {
+                message_id: [8; 32],
+                network: TON,
+                revision: 1,
+                recipient: account(3),
+                amount: 5_000_000_000,
+                fee: 10_000_000,
+            }),
+            "inbound_released",
+        ),
+        (
+            SccpEvent::InboundBounced(SccpInboundBouncedV1 {
+                message_id: [10; 32],
+                network: BSC,
+                revision: 1,
+                bounce_message_id: [11; 32],
+                bounce_revision: 2,
+                amount: 7,
+                reason: SccpBounceReasonV1::CreditRefused,
+            }),
+            "inbound_bounced",
+        ),
+        (
+            SccpEvent::InboundLiabilityShortfall(SccpInboundLiabilityShortfallV1 {
+                message_id: [12; 32],
+                network: BSC,
+                revision: 1,
+                amount: 9,
+                liability: 8,
+            }),
+            "inbound_liability_shortfall",
+        ),
+        (
+            SccpEvent::OutboundVoided(SccpOutboundVoidedV1 {
+                message_id: [13; 32],
+                network: TRON,
+                revision: 1,
+                nonce: 4,
+                kind: SccpVoidKindV1::Expired,
+                refund_pending: false,
+            }),
+            "outbound_voided",
+        ),
+        (
+            SccpEvent::OutboundRefunded(SccpOutboundRefundedV1 {
+                message_id: [13; 32],
+                network: TRON,
+                revision: 1,
+                nonce: 4,
+                recipient: account(4),
+                amount: 1_000_000_000,
+            }),
+            "outbound_refunded",
+        ),
+        (
+            SccpEvent::OutboundStranded(SccpOutboundStrandedV1 {
+                message_id: [14; 32],
+                network: TRON,
+                revision: 1,
+                nonce: 5,
+                amount: 1_000_000_000,
+            }),
+            "outbound_stranded",
+        ),
+        (
+            SccpEvent::StrandedReleased(SccpStrandedReleasedV1 {
+                network: ETH,
+                recipient: account(6),
+                amount: 1_000_000_000,
+                memo: "return a stranded bounce".to_owned(),
+                proposal_id: [15; 32],
+            }),
+            "stranded_released",
+        ),
+        (
+            SccpEvent::LightClientAdvanced(SccpLightClientAdvancedV1 {
+                network: ETH,
+                latest_set_id: 1_400,
+                latest_finalized: point(),
+                state_hash: [16; 32],
+            }),
+            "light_client_advanced",
+        ),
+        (
+            SccpEvent::LightClientFrozen(SccpLightClientFrozenV1 {
+                network: BSC,
+                reason: freeze_reasons()[1],
+            }),
+            "light_client_frozen",
+        ),
+        (
+            SccpEvent::LightClientInitialized(SccpLightClientInitializedV1 {
+                network: TON,
+                latest_set_id: 44_000_000,
+                latest_finalized: point(),
+                state_hash: [18; 32],
+                proposal_id: [19; 32],
+            }),
+            "light_client_initialized",
+        ),
+        (
+            SccpEvent::TrustedCheckpointInstalled(SccpTrustedCheckpointInstalledV1 {
+                network: ETH,
+                source_height: 20_000_000,
+                block_hash: [20; 32],
+                proposal_id: [21; 32],
+            }),
+            "trusted_checkpoint_installed",
+        ),
+        (
+            SccpEvent::RevisionActivationChanged(SccpRevisionActivationChangedV1 {
+                network: ETH,
+                revision: 1,
+                from: Some(SccpRouteActivationV1::Bidirectional),
+                to: Some(SccpRouteActivationV1::Paused),
+            }),
+            "revision_activation_changed",
+        ),
+        (
+            SccpEvent::ControlRecorded(SccpControlRecordedV1 {
+                network: ETH,
+                revision: 1,
+                control_nonce: 1,
+                paused: true,
+                height: 30,
+                commitment_index: 0,
+            }),
+            "control_recorded",
+        ),
+        (
+            SccpEvent::GovernanceEnacted(SccpGovernanceEnactedV1 {
+                proposal_id: [22; 32],
+                subjects: vec![
+                    SccpGovernanceSubjectV1::Route(ETH),
+                    SccpGovernanceSubjectV1::RouteControl(ETH),
+                    SccpGovernanceSubjectV1::Parameters,
+                ],
+            }),
+            "governance_enacted",
+        ),
+    ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Codec helpers
+// ---------------------------------------------------------------------------------------------
+
+/// Assert the bare codec, the headered frame and JSON all roundtrip `value`.
+fn roundtrip<T>(value: &T)
+where
+    T: Encode
+        + DecodeAll
+        + norito::NoritoSerialize
+        + for<'a> norito::NoritoDeserialize<'a>
+        + norito::json::JsonSerialize
+        + norito::json::JsonDeserialize
+        + PartialEq
+        + core::fmt::Debug,
+{
+    let encoded = value.encode();
+    assert_eq!(
+        &T::decode_all(&mut encoded.as_slice()).expect("bare codec decodes"),
+        value
+    );
+    let framed = norito::to_bytes(value).expect("headered frame encodes");
+    assert_eq!(
+        &norito::decode_from_bytes::<T>(&framed).expect("headered frame decodes"),
+        value
+    );
+    let json = norito::json::to_json(value).expect("JSON serializes");
+    assert_eq!(
+        &norito::json::from_json::<T>(&json).expect("JSON deserializes"),
+        value,
+        "{json}"
+    );
+}
+
+/// [`roundtrip`] plus the zero-copy slice decoder, which must consume every byte.
+fn roundtrip_with_slice<T>(value: &T)
+where
+    T: Encode
+        + DecodeAll
+        + norito::NoritoSerialize
+        + for<'a> norito::NoritoDeserialize<'a>
+        + for<'a> DecodeFromSlice<'a>
+        + norito::json::JsonSerialize
+        + norito::json::JsonDeserialize
+        + PartialEq
+        + core::fmt::Debug,
+{
+    roundtrip(value);
+    let encoded = value.encode();
+    let (decoded, used) = T::decode_from_slice(&encoded).expect("slice decodes");
+    assert_eq!(used, encoded.len());
+    assert_eq!(&decoded, value);
+}
+
+fn json_value<T: norito::json::JsonSerialize>(value: &T) -> Value {
+    norito::json::to_value(value).expect("JSON value")
+}
+
+fn json_tag<T: norito::json::JsonSerialize>(value: &T, tag: &str) -> String {
+    json_value(value)
+        .get(tag)
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("JSON tag `{tag}` is absent"))
+        .to_owned()
+}
+
+/// Insert an unknown field into the JSON object reached by `path` (object keys, or decimal
+/// indices into arrays) and assert that decoding rejects it.
+fn assert_rejects_unknown_field<T>(value: &T, path: &[&str])
+where
+    T: norito::json::JsonSerialize + norito::json::JsonDeserialize + core::fmt::Debug,
+{
+    let mut json = json_value(value);
+    let mut current = &mut json;
+    for segment in path {
+        current = match current {
+            Value::Object(object) => object
+                .get_mut(*segment)
+                .unwrap_or_else(|| panic!("JSON path component `{segment}` is absent")),
+            Value::Array(items) => {
+                let index: usize = segment.parse().expect("array index");
+                items.get_mut(index).expect("array index in bounds")
+            }
+            other => panic!("JSON path component `{segment}` cannot descend into {other:?}"),
+        };
+    }
+    let Value::Object(object) = current else {
+        panic!("JSON target at {path:?} is not an object");
+    };
+    object.insert("adversarial_extension".to_owned(), Value::Null);
+    let hostile = norito::json::to_json(&json).expect("JSON serializes");
+    assert!(
+        norito::json::from_json::<T>(&hostile).is_err(),
+        "unknown JSON field at {path:?} must be rejected: {hostile}"
+    );
+}
+
+/// Remove `field` from the top-level JSON object of `value` and assert that decoding rejects it.
+fn assert_requires_field<T>(value: &T, field: &str)
+where
+    T: norito::json::JsonSerialize + norito::json::JsonDeserialize + core::fmt::Debug,
+{
+    let mut json = json_value(value);
+    json.as_object_mut()
+        .expect("JSON object")
+        .remove(field)
+        .unwrap_or_else(|| panic!("field `{field}` is present"));
+    let missing = norito::json::to_json(&json).expect("JSON serializes");
+    assert!(
+        norito::json::from_json::<T>(&missing).is_err(),
+        "missing `{field}` must be rejected: {missing}"
+    );
+}
+
+/// Assert that the bare decoder of `T` rejects every enum tag in `tags`.
+fn assert_rejects_tags<T: DecodeAll + core::fmt::Debug>(tags: &[u32], filler: usize) {
+    for tag in tags {
+        let mut encoded = tag.encode();
+        encoded.extend(std::iter::repeat_n(0x11, filler));
+        assert!(
+            T::decode_all(&mut encoded.as_slice()).is_err(),
+            "{} tag {tag}",
+            core::any::type_name::<T>()
+        );
+    }
+}
+
+/// Mirror of the private layout of the bounded byte wrappers, used to forge out-of-bounds
+/// encodings past their constructors.
+#[derive(Debug, Clone, norito::codec::Encode)]
+struct ForgedBytes {
+    bytes: Vec<u8>,
+}
+
+/// Mirror of the [`SubmitSccpOutboundVoidV1`] layout with a forgeable proof wrapper.
+#[derive(Debug, Clone, norito::codec::Encode)]
+struct ForgedOutboundVoid {
+    network: SccpNetworkV1,
+    revision: u32,
+    proof: ForgedBytes,
+}
+
+/// Assert that every decoder of the bounded wrapper `T` rejects `len` bytes.
+fn assert_wrapper_rejects<T>(len: usize)
+where
+    T: DecodeAll
+        + for<'a> norito::NoritoDeserialize<'a>
+        + for<'a> DecodeFromSlice<'a>
+        + norito::json::JsonDeserialize
+        + core::fmt::Debug,
+{
+    let forged = ForgedBytes {
+        bytes: vec![0x5a; len],
+    };
+    let encoded = forged.encode();
+    assert!(
+        T::decode_all(&mut encoded.as_slice()).is_err(),
+        "bare {len}"
+    );
+    assert!(T::decode_from_slice(&encoded).is_err(), "slice {len}");
+    let json = format!("{{\"bytes\":\"{}\"}}", base64_standard(&forged.bytes));
+    assert!(norito::json::from_json::<T>(&json).is_err(), "JSON {len}");
+}
+
+/// Standard padded base64, as `crate::json_helpers::base64_vec` writes it.
+fn base64_standard(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let triple = chunk.iter().enumerate().fold(0_u32, |acc, (index, byte)| {
+            acc | (u32::from(*byte) << (16 - 8 * index))
+        });
+        for position in 0..4 {
+            if position <= chunk.len() {
+                let sextet = (triple >> (18 - 6 * position)) & 0x3f;
+                let sextet = usize::try_from(sextet).expect("a sextet fits usize");
+                out.push(char::from(ALPHABET[sextet]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Constants, schema names and instruction ids
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn constants_match_the_spec() {
+    assert_eq!(
+        SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1,
+        "iroha.sccp.bridge_key.v1"
+    );
+    assert_eq!(SCCP_BRIDGE_KEY_RETIRED_MAX_V1, 16);
+    assert_eq!(SCCP_BRIDGE_PUBLIC_KEY_BYTES_V1, 33);
+    assert_eq!(SCCP_ROSTER_MIN_MEMBERS_V1, 4);
+    assert_eq!(SCCP_ROSTER_MAX_MEMBERS_V1, 31);
+    assert_eq!(SCCP_SIGNATURE_BYTES_V1, 65);
+    assert_eq!(SCCP_HISTORY_MAX_SIZE_V1, 1_u64 << 32);
+    assert_eq!(SCCP_FIRST_CONTROL_NONCE_V1, 1);
+    assert_eq!(SCCP_TRANSFER_PAYLOAD_MAX_BYTES_V1, 4_096);
+    // The proof bound equals the `[zk.sccp]` default per-proof byte limit (8 MiB).
+    assert_eq!(SCCP_SOURCE_PROOF_MAX_BYTES_V1, 8 * 1024 * 1024);
+    assert_eq!(SCCP_LC_ADVANCE_MAX_BYTES_V1, 1024 * 1024);
+    assert_eq!(SCCP_LC_EVIDENCE_MAX_BYTES_V1, 1024 * 1024);
+    assert_eq!(SCCP_ROUTE_ESCROW_DOMAIN_V1, b"iroha:sccp:v1:route-escrow");
+    assert_eq!(SCCP_XOR_ASSET_ID_TEXT, "xor");
+    assert_eq!(
+        SCCP_TAIRA_XOR_ASSET_DEFINITION_ID_V1,
+        "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+    );
+    assert_eq!(SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1, "taira_eth_xor");
+    assert_eq!(SCCP_ROUTE_ID_TAIRA_BSC_XOR_V1, "taira_bsc_xor");
+    assert_eq!(SCCP_ROUTE_ID_TAIRA_TRON_XOR_V1, "taira_tron_xor");
+    assert_eq!(SCCP_ROUTE_ID_TAIRA_TON_XOR_V1, "taira_ton_xor");
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pinned name per public type keeps the inventory reviewable"
+)]
+fn schema_names_are_stable() {
+    let cases = [
+        (
+            SccpBridgeKeyV1::nominal_name(),
+            "iroha_data_model::sccp::keys::SccpBridgeKeyV1",
+        ),
+        (
+            SccpBridgeKeyStateV1::nominal_name(),
+            "iroha_data_model::sccp::keys::SccpBridgeKeyStateV1",
+        ),
+        (
+            SccpBridgeKeyBindingV1::nominal_name(),
+            "iroha_data_model::sccp::keys::SccpBridgeKeyBindingV1",
+        ),
+        (
+            SccpAttestationFaultRecordV1::nominal_name(),
+            "iroha_data_model::sccp::keys::SccpAttestationFaultRecordV1",
+        ),
+        (
+            SccpRosterMemberV1::nominal_name(),
+            "iroha_data_model::sccp::roster::SccpRosterMemberV1",
+        ),
+        (
+            SccpBridgeRosterV1::nominal_name(),
+            "iroha_data_model::sccp::roster::SccpBridgeRosterV1",
+        ),
+        (
+            SccpAttestationStatementV1::nominal_name(),
+            "iroha_data_model::sccp::attestation::SccpAttestationStatementV1",
+        ),
+        (
+            SccpAttestationSubjectV1::nominal_name(),
+            "iroha_data_model::sccp::attestation::SccpAttestationSubjectV1",
+        ),
+        (
+            SccpAttestationStatusV1::nominal_name(),
+            "iroha_data_model::sccp::attestation::SccpAttestationStatusV1",
+        ),
+        (
+            SccpAttestationSignatureV1::nominal_name(),
+            "iroha_data_model::sccp::attestation::SccpAttestationSignatureV1",
+        ),
+        (
+            SccpBlockCommitmentV1::nominal_name(),
+            "iroha_data_model::sccp::attestation::SccpBlockCommitmentV1",
+        ),
+        (
+            SccpHistoryStateV1::nominal_name(),
+            "iroha_data_model::sccp::attestation::SccpHistoryStateV1",
+        ),
+        (
+            SccpTransferLeafRefV1::nominal_name(),
+            "iroha_data_model::sccp::control::SccpTransferLeafRefV1",
+        ),
+        (
+            SccpControlLeafRefV1::nominal_name(),
+            "iroha_data_model::sccp::control::SccpControlLeafRefV1",
+        ),
+        (
+            SccpLeafRefV1::nominal_name(),
+            "iroha_data_model::sccp::control::SccpLeafRefV1",
+        ),
+        (
+            SccpControlRecordV1::nominal_name(),
+            "iroha_data_model::sccp::control::SccpControlRecordV1",
+        ),
+        (
+            SccpVoidKindV1::nominal_name(),
+            "iroha_data_model::sccp::outbound::SccpVoidKindV1",
+        ),
+        (
+            SccpStatusHeightV1::nominal_name(),
+            "iroha_data_model::sccp::outbound::SccpStatusHeightV1",
+        ),
+        (
+            SccpVoidStatusV1::nominal_name(),
+            "iroha_data_model::sccp::outbound::SccpVoidStatusV1",
+        ),
+        (
+            SccpOutboundStatusV1::nominal_name(),
+            "iroha_data_model::sccp::outbound::SccpOutboundStatusV1",
+        ),
+        (
+            SccpOutboundMessageRecordV1::nominal_name(),
+            "iroha_data_model::sccp::outbound::SccpOutboundMessageRecordV1",
+        ),
+        (
+            SccpSourceProofBytesV1::nominal_name(),
+            "iroha_data_model::sccp::inbound::SccpSourceProofBytesV1",
+        ),
+        (
+            SccpSourceLocatorV1::nominal_name(),
+            "iroha_data_model::sccp::inbound::SccpSourceLocatorV1",
+        ),
+        (
+            SccpPendingReasonV1::nominal_name(),
+            "iroha_data_model::sccp::inbound::SccpPendingReasonV1",
+        ),
+        (
+            SccpPendingStatusV1::nominal_name(),
+            "iroha_data_model::sccp::inbound::SccpPendingStatusV1",
+        ),
+        (
+            SccpBounceStatusV1::nominal_name(),
+            "iroha_data_model::sccp::inbound::SccpBounceStatusV1",
+        ),
+        (
+            SccpInboundStatusV1::nominal_name(),
+            "iroha_data_model::sccp::inbound::SccpInboundStatusV1",
+        ),
+        (
+            SccpInboundRecordV1::nominal_name(),
+            "iroha_data_model::sccp::inbound::SccpInboundRecordV1",
+        ),
+        (
+            SccpRouteActivationV1::nominal_name(),
+            "iroha_data_model::sccp::registry::SccpRouteActivationV1",
+        ),
+        (
+            SccpRouteRevisionV1::nominal_name(),
+            "iroha_data_model::sccp::registry::SccpRouteRevisionV1",
+        ),
+        (
+            SccpRouteV1::nominal_name(),
+            "iroha_data_model::sccp::registry::SccpRouteV1",
+        ),
+        (
+            SccpLcAdvanceBytesV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcAdvanceBytesV1",
+        ),
+        (
+            SccpLcEvidenceBytesV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcEvidenceBytesV1",
+        ),
+        (
+            SccpLcPointV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcPointV1",
+        ),
+        (
+            SccpLcHeadV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcHeadV1",
+        ),
+        (
+            SccpLcEquivocationFreezeV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcEquivocationFreezeV1",
+        ),
+        (
+            SccpLcParliamentFreezeV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcParliamentFreezeV1",
+        ),
+        (
+            SccpLcFreezeReasonV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcFreezeReasonV1",
+        ),
+        (
+            SccpLightClientV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLightClientV1",
+        ),
+        (
+            SccpLcConsensusSetV1::nominal_name(),
+            "iroha_data_model::sccp::light_client::SccpLcConsensusSetV1",
+        ),
+    ];
+    let mut seen = BTreeSet::new();
+    for (actual, expected) in cases {
+        assert_eq!(actual, expected);
+        assert!(seen.insert(actual), "duplicate schema name {expected}");
+    }
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pinned name per public type keeps the inventory reviewable"
+)]
+fn event_schema_names_are_stable() {
+    let cases = [
+        (
+            SccpEvent::nominal_name(),
+            "iroha_data_model::sccp::events::SccpEvent",
+        ),
+        (
+            SccpEventSet::nominal_name(),
+            "iroha_data_model::sccp::events::SccpEventSet",
+        ),
+        (
+            SccpMessageRecordedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpMessageRecordedV1",
+        ),
+        (
+            SccpBlockCommittedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpBlockCommittedV1",
+        ),
+        (
+            SccpSubjectCreatedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpSubjectCreatedV1",
+        ),
+        (
+            SccpAttestationSignedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpAttestationSignedV1",
+        ),
+        (
+            SccpBlockAttestedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpBlockAttestedV1",
+        ),
+        (
+            SccpRosterGenerationCreatedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpRosterGenerationCreatedV1",
+        ),
+        (
+            SccpRosterDerivationFailureV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpRosterDerivationFailureV1",
+        ),
+        (
+            SccpRosterDerivationFailedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpRosterDerivationFailedV1",
+        ),
+        (
+            SccpHandoffStalledV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpHandoffStalledV1",
+        ),
+        (
+            SccpBridgeKeySetV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpBridgeKeySetV1",
+        ),
+        (
+            SccpAttestationFaultV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpAttestationFaultV1",
+        ),
+        (
+            SccpInboundProvenV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpInboundProvenV1",
+        ),
+        (
+            SccpRecipientRegisteredV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpRecipientRegisteredV1",
+        ),
+        (
+            SccpInboundReleasedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpInboundReleasedV1",
+        ),
+        (
+            SccpBounceReasonV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpBounceReasonV1",
+        ),
+        (
+            SccpInboundBouncedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpInboundBouncedV1",
+        ),
+        (
+            SccpInboundLiabilityShortfallV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpInboundLiabilityShortfallV1",
+        ),
+        (
+            SccpOutboundVoidedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpOutboundVoidedV1",
+        ),
+        (
+            SccpOutboundRefundedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpOutboundRefundedV1",
+        ),
+        (
+            SccpOutboundStrandedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpOutboundStrandedV1",
+        ),
+        (
+            SccpStrandedReleasedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpStrandedReleasedV1",
+        ),
+        (
+            SccpLightClientAdvancedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpLightClientAdvancedV1",
+        ),
+        (
+            SccpLightClientFrozenV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpLightClientFrozenV1",
+        ),
+        (
+            SccpLightClientInitializedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpLightClientInitializedV1",
+        ),
+        (
+            SccpTrustedCheckpointInstalledV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpTrustedCheckpointInstalledV1",
+        ),
+        (
+            SccpRevisionActivationChangedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpRevisionActivationChangedV1",
+        ),
+        (
+            SccpControlRecordedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpControlRecordedV1",
+        ),
+        (
+            SccpGovernanceEnactedV1::nominal_name(),
+            "iroha_data_model::sccp::events::SccpGovernanceEnactedV1",
+        ),
+    ];
+    let mut seen = BTreeSet::new();
+    for (actual, expected) in cases {
+        assert_eq!(actual, expected);
+        assert!(seen.insert(actual), "duplicate schema name {expected}");
+    }
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pinned name per public type keeps the inventory reviewable"
+)]
+fn instruction_schema_names_and_ids_are_stable() {
+    let schema_names = [
+        (
+            InitializeSccpV1::nominal_name(),
+            "iroha_data_model::isi::sccp::InitializeSccpV1",
+        ),
+        (
+            SetSccpBridgeKeyV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SetSccpBridgeKeyV1",
+        ),
+        (
+            SubmitSccpAttestationsV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SubmitSccpAttestationsV1",
+        ),
+        (
+            SubmitSccpAttestationFaultV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SubmitSccpAttestationFaultV1",
+        ),
+        (
+            RecordSccpMessage::nominal_name(),
+            "iroha_data_model::isi::sccp::RecordSccpMessage",
+        ),
+        (
+            SubmitSccpInboundMessageV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SubmitSccpInboundMessageV1",
+        ),
+        (
+            SccpSettleInboundV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SccpSettleInboundV1",
+        ),
+        (
+            SccpSettleRefundV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SccpSettleRefundV1",
+        ),
+        (
+            SccpSettleTargetV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SccpSettleTargetV1",
+        ),
+        (
+            SettleSccpV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SettleSccpV1",
+        ),
+        (
+            SubmitSccpOutboundVoidV1::nominal_name(),
+            "iroha_data_model::isi::sccp::SubmitSccpOutboundVoidV1",
+        ),
+        (
+            AdvanceSccpLightClientV1::nominal_name(),
+            "iroha_data_model::isi::sccp::AdvanceSccpLightClientV1",
+        ),
+        (
+            ReportSccpLightClientEquivocationV1::nominal_name(),
+            "iroha_data_model::isi::sccp::ReportSccpLightClientEquivocationV1",
+        ),
+    ];
+    for (actual, expected) in schema_names {
+        assert_eq!(actual, expected);
+    }
+
+    let ids = [
+        Instruction::id(&InitializeSccpV1 {
+            parameters: SccpParametersV1::taira_default(),
+            reset_nonce: [1; 32],
+        }),
+        Instruction::id(&set_bridge_key(None, 0)),
+        Instruction::id(&SubmitSccpAttestationsV1 {
+            entries: vec![entry(1, 0)],
+        }),
+        Instruction::id(&SubmitSccpAttestationFaultV1 {
+            statement: statement(),
+            signature: [0x1b; 65],
+        }),
+        Instruction::id(&RecordSccpMessage {
+            network: ETH,
+            expected_revision: 1,
+            amount: Numeric::from(1_u64),
+            recipient: vec![0x22; 20],
+        }),
+        Instruction::id(&SubmitSccpInboundMessageV1 {
+            network: ETH,
+            revision: 1,
+            payload: vec![2],
+            proof: proof(1),
+        }),
+        Instruction::id(&SettleSccpV1::inbound([0; 32])),
+        Instruction::id(&SubmitSccpOutboundVoidV1 {
+            network: ETH,
+            revision: 1,
+            proof: proof(1),
+        }),
+        Instruction::id(&AdvanceSccpLightClientV1 {
+            network: ETH,
+            expected_state_hash: None,
+            advance: advance(1),
+        }),
+        Instruction::id(&ReportSccpLightClientEquivocationV1 {
+            network: ETH,
+            a: evidence(1),
+            b: evidence(2),
+        }),
+    ];
+    assert_eq!(
+        ids,
+        [
+            "iroha_data_model::isi::sccp::InitializeSccpV1",
+            "iroha_data_model::isi::sccp::SetSccpBridgeKeyV1",
+            "iroha_data_model::isi::sccp::SubmitSccpAttestationsV1",
+            "iroha_data_model::isi::sccp::SubmitSccpAttestationFaultV1",
+            "iroha_data_model::isi::sccp::RecordSccpMessage",
+            "iroha_data_model::isi::sccp::SubmitSccpInboundMessageV1",
+            "iroha_data_model::isi::sccp::SettleSccpV1",
+            "iroha_data_model::isi::sccp::SubmitSccpOutboundVoidV1",
+            "iroha_data_model::isi::sccp::AdvanceSccpLightClientV1",
+            "iroha_data_model::isi::sccp::ReportSccpLightClientEquivocationV1",
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Roundtrips
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn key_and_roster_state_roundtrips() {
+    roundtrip(&bridge_key(7, 3));
+    roundtrip(&SccpBridgeKeyV1 {
+        faulted: true,
+        activation_epoch: u64::MAX,
+        ..bridge_key(8, 0)
+    });
+    roundtrip(&SccpBridgeKeyStateV1::default());
+    let mut state = SccpBridgeKeyStateV1 {
+        active: Some(bridge_key(1, 0)),
+        pending: Some(bridge_key(2, 5)),
+        pending_revocation_epoch: None,
+        retired: Vec::new(),
+        next_binding_nonce: 9,
+        last_exempt_binding_epoch: Some(4),
+        barred: Some(fault(3, 77)),
+    };
+    for seed in 10..(10 + 16) {
+        state.retire(bridge_key(seed, u64::from(seed)));
+    }
+    roundtrip(&state);
+    state.stage_revocation(12);
+    roundtrip(&state);
+    for binding in [
+        SccpBridgeKeyBindingV1::new(network_id(1), peer(2), Some([2; 33]), 6, 3),
+        SccpBridgeKeyBindingV1::new(network_id(1), peer(2), None, 6, 4),
+    ] {
+        roundtrip(&binding);
+    }
+    roundtrip(&SccpAttestationFaultRecordV1 {
+        peer: peer(3),
+        statement_hash: [0xab; 32],
+        reported_at_height: u64::MAX,
+    });
+
+    roundtrip(&SccpRosterMemberV1 {
+        address: [0; 20],
+        peer: None,
+    });
+    let mut generation = roster(&[0, 1, 2, 3]);
+    roundtrip(&generation);
+    generation.handoff_height = Some(7_200);
+    roundtrip(&generation);
+    roundtrip(&roster(&(1..=31).collect::<Vec<u8>>()));
+}
+
+#[test]
+fn attestation_state_roundtrips() {
+    let subject = subject();
+    roundtrip(&subject);
+    roundtrip(&statement());
+    roundtrip(&SccpAttestationStatusV1::default());
+    roundtrip(&SccpAttestationStatusV1 {
+        signer_bitmap: u32::MAX >> 1,
+        attested_at_height: Some(u64::MAX),
+    });
+    roundtrip(&entry(u64::MAX, 30));
+    roundtrip(&SccpBlockCommitmentV1 {
+        root: [4; 32],
+        message_count: 512,
+        history_index: u64::from(u32::MAX),
+    });
+    roundtrip(&SccpHistoryStateV1::default());
+    roundtrip(&SccpHistoryStateV1 {
+        size: 7,
+        peaks: vec![[5; 32], [6; 32], [7; 32]],
+    });
+}
+
+#[test]
+fn leaf_control_and_record_roundtrips() {
+    roundtrip(&SccpLeafRefV1::transfer([7; 32]));
+    for network in EXTERNAL {
+        roundtrip(&SccpLeafRefV1::control(network, 2, u64::MAX));
+    }
+    roundtrip(&SccpControlRecordV1 {
+        paused: false,
+        height: 99,
+        commitment_index: 511,
+        leaf: [3; 32],
+        proposal_id: [4; 32],
+    });
+    for status in outbound_statuses() {
+        roundtrip(&status);
+        roundtrip(&outbound(status));
+    }
+    for kind in [SccpVoidKindV1::Expired, SccpVoidKindV1::Frozen] {
+        roundtrip(&kind);
+    }
+    for status in inbound_statuses() {
+        roundtrip(&status);
+        roundtrip(&inbound(status));
+    }
+    roundtrip(&locator());
+}
+
+#[test]
+fn registry_roundtrips() {
+    for activation in ACTIVATIONS {
+        roundtrip(&activation);
+        roundtrip(&revision(3, activation));
+    }
+    for network in EXTERNAL {
+        let escrow =
+            sccp_xor_route_escrow_account_id_v1(&network_id(1), network).expect("external network");
+        let mut route = SccpRouteV1::empty(network, escrow).expect("external network");
+        roundtrip(&route);
+        route.stranded = u128::MAX;
+        route
+            .revisions
+            .insert(1, revision(1, SccpRouteActivationV1::InboundOnly));
+        route
+            .revisions
+            .insert(2, revision(2, SccpRouteActivationV1::Bidirectional));
+        route
+            .revisions
+            .insert(3, revision(3, SccpRouteActivationV1::Staged));
+        roundtrip(&route);
+    }
+}
+
+#[test]
+fn light_client_state_roundtrips() {
+    roundtrip(&point());
+    roundtrip(&head());
+    for reason in freeze_reasons() {
+        roundtrip(&reason);
+    }
+    for network in EXTERNAL {
+        roundtrip(&light_client(network, None));
+        for reason in freeze_reasons() {
+            roundtrip(&light_client(network, Some(reason)));
+        }
+    }
+    let mut set = SccpLcConsensusSetV1 {
+        set_id: 1_400,
+        valid_from_source_height: 11_468_800,
+        superseded_at_source_ms: None,
+        set_bytes: vec![0x4e, 0x52, 0x54, 0x30],
+    };
+    roundtrip(&set);
+    set.superseded_at_source_ms = Some(1_758_000_000_000);
+    roundtrip(&set);
+    roundtrip_with_slice(&proof(3));
+    roundtrip_with_slice(&advance(64));
+    roundtrip_with_slice(&evidence(2));
+}
+
+#[test]
+fn every_event_roundtrips_with_its_snake_case_tag() {
+    let events = every_event();
+    assert_eq!(events.len(), 26, "§4.17 lists 26 events");
+    let mut tags = BTreeSet::new();
+    for (index, (event, tag)) in events.iter().enumerate() {
+        roundtrip(event);
+        assert_eq!(json_tag(event, "event"), *tag);
+        assert!(tags.insert(*tag), "duplicate tag {tag}");
+        let codec_tag = u32::try_from(index).expect("small index").encode();
+        assert!(
+            event.encode().starts_with(&codec_tag),
+            "{tag} has codec index {index}"
+        );
+    }
+}
+
+#[test]
+fn event_set_selects_exactly_the_named_variants() {
+    let events = every_event();
+    for (event, _) in &events {
+        assert!(SccpEventSet::all().matches(event));
+        assert!(!SccpEventSet::empty().matches(event));
+    }
+    let set = SccpEventSet::InboundReleased
+        | SccpEventSet::OutboundRefunded
+        | SccpEventSet::GovernanceEnacted;
+    let matched: Vec<&str> = events
+        .iter()
+        .filter(|(event, _)| set.matches(event))
+        .map(|(_, tag)| *tag)
+        .collect();
+    assert_eq!(
+        matched,
+        vec![
+            "inbound_released",
+            "outbound_refunded",
+            "governance_enacted"
+        ]
+    );
+}
+
+#[test]
+fn every_instruction_roundtrips_through_every_decoder() {
+    roundtrip_with_slice(&InitializeSccpV1 {
+        parameters: SccpParametersV1::taira_default(),
+        reset_nonce: [0x5a; 32],
+    });
+    roundtrip_with_slice(&set_bridge_key(Some([2; 33]), 0));
+    roundtrip_with_slice(&set_bridge_key(None, 1));
+    roundtrip_with_slice(&SubmitSccpAttestationsV1 {
+        entries: vec![entry(9, 0), entry(9, 4), entry(10, 1)],
+    });
+    roundtrip_with_slice(&SubmitSccpAttestationFaultV1 {
+        statement: statement(),
+        signature: [0x1b; 65],
+    });
+    roundtrip_with_slice(&RecordSccpMessage {
+        network: TON,
+        expected_revision: 3,
+        amount: Numeric::new(1_500_000_000_u64, 9),
+        recipient: vec![0x22; 36],
+    });
+    roundtrip_with_slice(&SubmitSccpInboundMessageV1 {
+        network: TRON,
+        revision: 2,
+        payload: vec![2, 1, 0, 0, 0, 5],
+        proof: proof(128),
+    });
+    roundtrip_with_slice(&SettleSccpV1::inbound([6; 32]));
+    roundtrip_with_slice(&SettleSccpV1::refund(BSC, 1, u64::MAX));
+    roundtrip_with_slice(&SubmitSccpOutboundVoidV1 {
+        network: ETH,
+        revision: 1,
+        proof: proof(1),
+    });
+    roundtrip_with_slice(&AdvanceSccpLightClientV1 {
+        network: ETH,
+        expected_state_hash: Some([8; 32]),
+        advance: advance(64),
+    });
+    roundtrip_with_slice(&AdvanceSccpLightClientV1 {
+        network: TON,
+        expected_state_hash: None,
+        advance: advance(1),
+    });
+    roundtrip_with_slice(&ReportSccpLightClientEquivocationV1 {
+        network: BSC,
+        a: evidence(1),
+        b: evidence(2),
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// JSON shape
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn json_objects_are_closed_at_every_level() {
+    assert_rejects_unknown_field(&bridge_key(1, 1), &[]);
+    let state = SccpBridgeKeyStateV1 {
+        active: Some(bridge_key(1, 0)),
+        retired: vec![bridge_key(2, 0)],
+        barred: Some(fault(1, 1)),
+        ..SccpBridgeKeyStateV1::default()
+    };
+    assert_rejects_unknown_field(&state, &[]);
+    assert_rejects_unknown_field(&state, &["active"]);
+    assert_rejects_unknown_field(&state, &["retired", "0"]);
+    assert_rejects_unknown_field(&state, &["barred"]);
+    assert_rejects_unknown_field(
+        &SccpBridgeKeyBindingV1::new(network_id(1), peer(1), None, 1, 0),
+        &[],
+    );
+    let generation = roster(&[0, 1, 2, 3]);
+    assert_rejects_unknown_field(&generation, &[]);
+    assert_rejects_unknown_field(&generation, &["members", "1"]);
+    assert_rejects_unknown_field(&subject(), &[]);
+    assert_rejects_unknown_field(&statement(), &[]);
+    assert_rejects_unknown_field(&SccpAttestationStatusV1::default(), &[]);
+    assert_rejects_unknown_field(&SccpHistoryStateV1::default(), &[]);
+    assert_rejects_unknown_field(&SccpLeafRefV1::control(ETH, 1, 1), &["reference"]);
+    let record = outbound(outbound_statuses()[1]);
+    assert_rejects_unknown_field(&record, &[]);
+    assert_rejects_unknown_field(&record, &["status", "detail"]);
+    let record = inbound(inbound_statuses()[0]);
+    assert_rejects_unknown_field(&record, &[]);
+    assert_rejects_unknown_field(&record, &["source_locator"]);
+    assert_rejects_unknown_field(&record, &["status", "detail"]);
+    let mut route = SccpRouteV1::empty(ETH, account(1)).expect("external network");
+    route
+        .revisions
+        .insert(1, revision(1, SccpRouteActivationV1::Bidirectional));
+    assert_rejects_unknown_field(&route, &[]);
+    assert_rejects_unknown_field(&route, &["revisions", "1"]);
+    assert_rejects_unknown_field(&route, &["revisions", "1", "deployment", "deployment"]);
+    let client = light_client(ETH, Some(freeze_reasons()[0]));
+    assert_rejects_unknown_field(&client, &[]);
+    assert_rejects_unknown_field(&client, &["params"]);
+    assert_rejects_unknown_field(&client, &["head"]);
+    assert_rejects_unknown_field(&client, &["head", "latest_finalized"]);
+    assert_rejects_unknown_field(&client, &["frozen", "detail"]);
+    for (event, _) in every_event() {
+        assert_rejects_unknown_field(&event, &[]);
+        assert_rejects_unknown_field(&event, &["payload"]);
+    }
+    assert_rejects_unknown_field(&set_bridge_key(Some([2; 33]), 0), &[]);
+    assert_rejects_unknown_field(
+        &SubmitSccpAttestationsV1 {
+            entries: vec![entry(1, 0)],
+        },
+        &["entries", "0"],
+    );
+    assert_rejects_unknown_field(
+        &SubmitSccpAttestationFaultV1 {
+            statement: statement(),
+            signature: [0; 65],
+        },
+        &["statement"],
+    );
+    assert_rejects_unknown_field(&SettleSccpV1::refund(ETH, 1, 1), &["target", "detail"]);
+    assert_rejects_unknown_field(
+        &AdvanceSccpLightClientV1 {
+            network: ETH,
+            expected_state_hash: None,
+            advance: advance(1),
+        },
+        &["advance"],
+    );
+}
+
+#[test]
+fn optional_fields_are_explicit_in_json() {
+    let state = SccpBridgeKeyStateV1::default();
+    for field in [
+        "active",
+        "pending",
+        "pending_revocation_epoch",
+        "last_exempt_binding_epoch",
+        "barred",
+    ] {
+        assert_requires_field(&state, field);
+    }
+    assert_requires_field(
+        &SccpBridgeKeyBindingV1::new(network_id(1), peer(1), None, 1, 0),
+        "public_key",
+    );
+    assert_requires_field(
+        &SccpRosterMemberV1 {
+            address: [0; 20],
+            peer: None,
+        },
+        "peer",
+    );
+    assert_requires_field(&roster(&[1, 2, 3, 4]), "handoff_height");
+    assert_requires_field(&SccpAttestationStatusV1::default(), "attested_at_height");
+    assert_requires_field(&light_client(TON, None), "frozen");
+    assert_requires_field(
+        &SccpLcConsensusSetV1 {
+            set_id: 1,
+            valid_from_source_height: 1,
+            superseded_at_source_ms: None,
+            set_bytes: vec![1],
+        },
+        "superseded_at_source_ms",
+    );
+    assert_requires_field(&set_bridge_key(None, 0), "public_key");
+    assert_requires_field(&set_bridge_key(None, 0), "key_pop");
+    assert_requires_field(
+        &AdvanceSccpLightClientV1 {
+            network: ETH,
+            expected_state_hash: None,
+            advance: advance(1),
+        },
+        "expected_state_hash",
+    );
+}
+
+#[test]
+fn json_amounts_are_decimal_strings_and_bytes_are_base64() {
+    let record = outbound(SccpOutboundStatusV1::Recorded);
+    let json = json_value(&record);
+    assert_eq!(
+        json.get("amount").and_then(Value::as_str),
+        Some("79228162514264337593543950335")
+    );
+    assert_eq!(
+        json.get("payload").and_then(Value::as_str),
+        Some("AgEAAAAA")
+    );
+    let json = json_value(&inbound(inbound_statuses()[3]));
+    assert_eq!(
+        json.get("fee_due").and_then(Value::as_str),
+        Some("10000000")
+    );
+    let revision = revision(2, SccpRouteActivationV1::Bidirectional);
+    let json = json_value(&revision);
+    assert_eq!(
+        json.get("max_wrapped_supply").and_then(Value::as_str),
+        Some("21000000000000000")
+    );
+    assert_eq!(
+        json.get("liability").and_then(Value::as_str),
+        Some("2000000000")
+    );
+    let set = SccpLcConsensusSetV1 {
+        set_id: 1,
+        valid_from_source_height: 2,
+        superseded_at_source_ms: None,
+        set_bytes: vec![0xde, 0xad, 0xbe, 0xef],
+    };
+    assert_eq!(
+        json_value(&set).get("set_bytes").and_then(Value::as_str),
+        Some("3q2+7w==")
+    );
+    let record = RecordSccpMessage {
+        network: ETH,
+        expected_revision: 1,
+        amount: Numeric::from(1_u64),
+        recipient: vec![0xde, 0xad, 0xbe, 0xef],
+    };
+    assert_eq!(
+        json_value(&record).get("recipient").and_then(Value::as_str),
+        Some("3q2+7w==")
+    );
+    assert_eq!(
+        norito::json::to_json(&proof(3)).expect("JSON"),
+        "{\"bytes\":\"Tk5O\"}"
+    );
+    // A JSON number is not an amount.
+    let text = norito::json::to_json(&outbound(SccpOutboundStatusV1::Recorded)).expect("JSON");
+    let numeric = text.replace(
+        "\"amount\":\"79228162514264337593543950335\"",
+        "\"amount\":79228162514264337593543950335",
+    );
+    assert_ne!(numeric, text);
+    assert!(norito::json::from_json::<SccpOutboundMessageRecordV1>(&numeric).is_err());
+}
+
+#[test]
+fn enum_json_tags_are_snake_case() {
+    let cases = [
+        (
+            json_tag(&SccpLeafRefV1::transfer([0; 32]), "leaf"),
+            "transfer",
+        ),
+        (
+            json_tag(&SccpLeafRefV1::control(ETH, 1, 1), "leaf"),
+            "control",
+        ),
+        (json_tag(&SccpVoidKindV1::Expired, "kind"), "expired"),
+        (json_tag(&SccpVoidKindV1::Frozen, "kind"), "frozen"),
+        (json_tag(&outbound_statuses()[0], "status"), "recorded"),
+        (json_tag(&outbound_statuses()[1], "status"), "voided"),
+        (json_tag(&outbound_statuses()[3], "status"), "refunded"),
+        (json_tag(&outbound_statuses()[4], "status"), "stranded"),
+        (json_tag(&inbound_statuses()[0], "status"), "pending"),
+        (json_tag(&inbound_statuses()[3], "status"), "released"),
+        (json_tag(&inbound_statuses()[4], "status"), "bounced"),
+        (
+            json_tag(&SccpPendingReasonV1::RevisionNotSettleable, "reason"),
+            "revision_not_settleable",
+        ),
+        (
+            json_tag(&SccpPendingReasonV1::LiabilityShortfall, "reason"),
+            "liability_shortfall",
+        ),
+        (
+            json_tag(&SccpRouteActivationV1::InboundOnly, "activation"),
+            "inbound_only",
+        ),
+        (
+            json_tag(&SccpRouteActivationV1::Bidirectional, "activation"),
+            "bidirectional",
+        ),
+        (json_tag(&freeze_reasons()[0], "reason"), "equivocation"),
+        (json_tag(&freeze_reasons()[1], "reason"), "parliament"),
+        (
+            json_tag(
+                &SccpRosterDerivationFailureV1::MissingNextEpochSnapshot,
+                "failure",
+            ),
+            "missing_next_epoch_snapshot",
+        ),
+        (
+            json_tag(&SccpBounceReasonV1::UndecodableRecipient, "reason"),
+            "undecodable_recipient",
+        ),
+        (
+            json_tag(&SccpBounceReasonV1::InadmissibleController, "reason"),
+            "inadmissible_controller",
+        ),
+        (
+            json_tag(&SettleSccpV1::inbound([0; 32]).target, "target"),
+            "inbound",
+        ),
+        (
+            json_tag(&SettleSccpV1::refund(ETH, 1, 0).target, "target"),
+            "refund",
+        ),
+    ];
+    for (actual, expected) in cases {
+        assert_eq!(actual, expected);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Binary strictness
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn unknown_binary_tags_are_rejected() {
+    assert_rejects_tags::<SccpLeafRefV1>(&[2, u32::MAX], 64);
+    assert_rejects_tags::<SccpVoidKindV1>(&[2, u32::MAX], 0);
+    assert_rejects_tags::<SccpOutboundStatusV1>(&[4, u32::MAX], 64);
+    assert_rejects_tags::<SccpPendingReasonV1>(&[3, u32::MAX], 0);
+    assert_rejects_tags::<SccpInboundStatusV1>(&[3, u32::MAX], 64);
+    assert_rejects_tags::<SccpRouteActivationV1>(&[5, u32::MAX], 0);
+    assert_rejects_tags::<SccpLcFreezeReasonV1>(&[2, u32::MAX], 64);
+    assert_rejects_tags::<SccpRosterDerivationFailureV1>(&[2, u32::MAX], 0);
+    assert_rejects_tags::<SccpBounceReasonV1>(&[4, u32::MAX], 0);
+    assert_rejects_tags::<SccpEvent>(&[26, 27, u32::MAX], 256);
+    assert_rejects_tags::<SccpSettleTargetV1>(&[2, u32::MAX], 64);
+}
+
+#[test]
+fn trailing_bytes_are_rejected() {
+    fn assert_trailing_rejected<T: Encode + DecodeAll + core::fmt::Debug>(value: &T) {
+        let mut encoded = value.encode();
+        encoded.push(0);
+        assert!(
+            T::decode_all(&mut encoded.as_slice()).is_err(),
+            "{}",
+            core::any::type_name::<T>()
+        );
+    }
+    fn assert_slice_trailing_rejected<T>(value: &T)
+    where
+        T: Encode + for<'a> DecodeFromSlice<'a> + core::fmt::Debug,
+    {
+        let mut encoded = value.encode();
+        encoded.push(0);
+        assert!(
+            T::decode_from_slice(&encoded).is_err(),
+            "{}",
+            core::any::type_name::<T>()
+        );
+    }
+    assert_trailing_rejected(&SccpBridgeKeyStateV1::default());
+    assert_trailing_rejected(&roster(&[1, 2, 3, 4]));
+    assert_trailing_rejected(&subject());
+    assert_trailing_rejected(&outbound(SccpOutboundStatusV1::Recorded));
+    assert_trailing_rejected(&inbound(inbound_statuses()[0]));
+    assert_trailing_rejected(&revision(1, SccpRouteActivationV1::Staged));
+    assert_trailing_rejected(&light_client(ETH, None));
+    for (event, _) in every_event() {
+        assert_trailing_rejected(&event);
+    }
+    let instruction = SubmitSccpInboundMessageV1 {
+        network: ETH,
+        revision: 1,
+        payload: vec![2],
+        proof: proof(4),
+    };
+    assert_trailing_rejected(&instruction);
+    assert_slice_trailing_rejected(&instruction);
+    let instruction = SettleSccpV1::refund(TON, 1, 2);
+    assert_trailing_rejected(&instruction);
+    assert_slice_trailing_rejected(&instruction);
+    let instruction = SetSccpBridgeKeyV1 {
+        key_pop: Some([1; 65]),
+        ..set_bridge_key(Some([2; 33]), 0)
+    };
+    assert_trailing_rejected(&instruction);
+    assert_slice_trailing_rejected(&instruction);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Byte-wrapper bounds
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn byte_wrappers_hold_their_bounds_at_every_boundary() {
+    assert_eq!(
+        SccpSourceProofBytesV1::MAX_BYTES,
+        SCCP_SOURCE_PROOF_MAX_BYTES_V1
+    );
+    assert_eq!(
+        SccpLcAdvanceBytesV1::MAX_BYTES,
+        SCCP_LC_ADVANCE_MAX_BYTES_V1
+    );
+    assert_eq!(
+        SccpLcEvidenceBytesV1::MAX_BYTES,
+        SCCP_LC_EVIDENCE_MAX_BYTES_V1
+    );
+
+    // Constructors accept exactly 1..=MAX.
+    assert_eq!(
+        SccpSourceProofBytesV1::new(Vec::new()),
+        Err(SccpBoundedBytesError::Empty {
+            kind: "SCCP source proof"
+        })
+    );
+    assert_eq!(
+        SccpLcAdvanceBytesV1::new(vec![0; SCCP_LC_ADVANCE_MAX_BYTES_V1 + 1]),
+        Err(SccpBoundedBytesError::TooLong {
+            kind: "SCCP light-client advance",
+            len: SCCP_LC_ADVANCE_MAX_BYTES_V1 + 1,
+            max: SCCP_LC_ADVANCE_MAX_BYTES_V1,
+        })
+    );
+    assert_eq!(
+        SccpLcEvidenceBytesV1::new(Vec::new()),
+        Err(SccpBoundedBytesError::Empty {
+            kind: "SCCP light-client evidence"
+        })
+    );
+    assert!(SccpSourceProofBytesV1::new(vec![0; SCCP_SOURCE_PROOF_MAX_BYTES_V1 + 1]).is_err());
+    assert!(SccpLcEvidenceBytesV1::new(vec![0; SCCP_LC_EVIDENCE_MAX_BYTES_V1 + 1]).is_err());
+
+    let max_proof = proof(SCCP_SOURCE_PROOF_MAX_BYTES_V1);
+    assert_eq!(max_proof.len(), SCCP_SOURCE_PROOF_MAX_BYTES_V1);
+    assert!(!max_proof.is_empty());
+    roundtrip_with_slice(&max_proof);
+    roundtrip_with_slice(&advance(SCCP_LC_ADVANCE_MAX_BYTES_V1));
+    roundtrip_with_slice(&evidence(SCCP_LC_EVIDENCE_MAX_BYTES_V1));
+    roundtrip_with_slice(&proof(1));
+    assert_eq!(evidence(3).into_bytes(), vec![0x45; 3]);
+    assert_eq!(advance(2).as_bytes(), &[0x41, 0x41]);
+
+    // The forged mirror encodes exactly like an in-bounds wrapper.
+    assert_eq!(
+        ForgedBytes {
+            bytes: vec![0x4e; 5]
+        }
+        .encode(),
+        proof(5).encode()
+    );
+
+    // The JSON forgery helper writes what the wrapper's own serializer writes.
+    let text = format!("{{\"bytes\":\"{}\"}}", base64_standard(&[0x4e; 5]));
+    assert_eq!(text, norito::json::to_json(&proof(5)).expect("JSON"));
+    assert_eq!(
+        norito::json::from_json::<SccpSourceProofBytesV1>(&text).expect("in bounds"),
+        proof(5)
+    );
+
+    // Every decoder refuses empty and over-long wrappers forged past the constructor.
+    assert_wrapper_rejects::<SccpSourceProofBytesV1>(0);
+    assert_wrapper_rejects::<SccpSourceProofBytesV1>(SCCP_SOURCE_PROOF_MAX_BYTES_V1 + 1);
+    assert_wrapper_rejects::<SccpLcAdvanceBytesV1>(0);
+    assert_wrapper_rejects::<SccpLcAdvanceBytesV1>(SCCP_LC_ADVANCE_MAX_BYTES_V1 + 1);
+    assert_wrapper_rejects::<SccpLcEvidenceBytesV1>(0);
+    assert_wrapper_rejects::<SccpLcEvidenceBytesV1>(SCCP_LC_EVIDENCE_MAX_BYTES_V1 + 1);
+}
+
+#[test]
+fn instructions_reject_out_of_bounds_wrappers() {
+    let valid = AdvanceSccpLightClientV1 {
+        network: ETH,
+        expected_state_hash: None,
+        advance: advance(1),
+    };
+    let mut json = json_value(&valid);
+    json.as_object_mut()
+        .expect("object")
+        .insert("advance".to_owned(), norito::json!({ "bytes": "" }));
+    let empty = norito::json::to_json(&json).expect("JSON");
+    assert!(norito::json::from_json::<AdvanceSccpLightClientV1>(&empty).is_err());
+
+    let valid = ReportSccpLightClientEquivocationV1 {
+        network: ETH,
+        a: evidence(1),
+        b: evidence(1),
+    };
+    let mut json = json_value(&valid);
+    json.as_object_mut()
+        .expect("object")
+        .insert("b".to_owned(), norito::json!({ "bytes": "" }));
+    let empty = norito::json::to_json(&json).expect("JSON");
+    assert!(norito::json::from_json::<ReportSccpLightClientEquivocationV1>(&empty).is_err());
+
+    // A binary instruction whose proof is an empty or over-long forged wrapper fails every
+    // decoder. The mirror encodes exactly like the instruction while the proof is in bounds.
+    let mirror = |bytes: Vec<u8>| ForgedOutboundVoid {
+        network: ETH,
+        revision: 1,
+        proof: ForgedBytes { bytes },
+    };
+    let valid = SubmitSccpOutboundVoidV1 {
+        network: ETH,
+        revision: 1,
+        proof: proof(2),
+    };
+    assert_eq!(mirror(vec![0x4e; 2]).encode(), valid.encode());
+    for len in [0, SCCP_SOURCE_PROOF_MAX_BYTES_V1 + 1] {
+        let forged = mirror(vec![0x4e; len]).encode();
+        assert!(
+            SubmitSccpOutboundVoidV1::decode_all(&mut forged.as_slice()).is_err(),
+            "bare {len}"
+        );
+        assert!(
+            SubmitSccpOutboundVoidV1::decode_from_slice(&forged).is_err(),
+            "slice {len}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Escrow identity and the XOR definition
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn escrow_ids_are_deterministic_and_distinct_per_route_and_network_id() {
+    let routes = [
+        SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1,
+        SCCP_ROUTE_ID_TAIRA_BSC_XOR_V1,
+        SCCP_ROUTE_ID_TAIRA_TRON_XOR_V1,
+        SCCP_ROUTE_ID_TAIRA_TON_XOR_V1,
+    ];
+    let mut seen = BTreeMap::new();
+    for seed in [0x11_u8, 0x12, 0xff] {
+        let id = network_id(seed);
+        for route in routes {
+            let escrow = sccp_route_escrow_account_id_v1(&id, route, SCCP_XOR_ASSET_ID_TEXT);
+            assert_eq!(
+                escrow,
+                sccp_route_escrow_account_id_v1(&id, route, SCCP_XOR_ASSET_ID_TEXT),
+                "deterministic"
+            );
+            let signatory = escrow.try_signatory().expect("single-key escrow");
+            assert_eq!(signatory.algorithm(), Algorithm::Ed25519);
+            assert!(
+                seen.insert(escrow, (seed, route)).is_none(),
+                "escrow of {route} under NetworkId {seed:#x} collides"
+            );
+        }
+    }
+    assert_eq!(seen.len(), 12);
+    let id = network_id(0x11);
+    assert_ne!(
+        sccp_route_escrow_account_id_v1(&id, SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1, "xor"),
+        sccp_route_escrow_account_id_v1(&id, SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1, "val"),
+        "distinct per asset id"
+    );
+    assert_ne!(
+        sccp_route_escrow_account_id_v1(&id, "taira_eth_xorx", "or"),
+        sccp_route_escrow_account_id_v1(&id, "taira_eth_xor", "xor"),
+        "inputs are length-framed"
+    );
+}
+
+#[test]
+fn escrow_is_per_network_helper_and_revision_free() {
+    let id = network_id(0x11);
+    assert_eq!(sccp_xor_route_escrow_account_id_v1(&id, TAIRA), None);
+    let mut escrows = BTreeSet::new();
+    for network in EXTERNAL {
+        let route_id = route_id_for(network).expect("external route");
+        let escrow = sccp_xor_route_escrow_account_id_v1(&id, network).expect("external route");
+        assert_eq!(
+            escrow,
+            sccp_route_escrow_account_id_v1(&id, route_id, SCCP_XOR_ASSET_ID_TEXT)
+        );
+        assert!(escrows.insert(escrow.clone()), "distinct per network");
+
+        // Every revision of the route, whatever its state, shares the one escrow.
+        let mut route = SccpRouteV1::empty(network, escrow.clone()).expect("external route");
+        for (number, activation) in (1_u32..).zip(ACTIVATIONS) {
+            route.revisions.insert(number, revision(number, activation));
+            assert_eq!(
+                sccp_xor_route_escrow_account_id_v1(&id, route.network),
+                Some(route.escrow.clone())
+            );
+        }
+        assert_eq!(route.route_id, route_id);
+        assert_eq!(route.latest_revision(), 5);
+    }
+    assert_ne!(
+        sccp_xor_route_escrow_account_id_v1(&network_id(0x12), ETH),
+        sccp_xor_route_escrow_account_id_v1(&id, ETH),
+        "distinct per NetworkId"
+    );
+}
+
+#[test]
+fn escrow_derivation_is_pinned() {
+    // Golden vector: any change to the domain tag, the field framing or the hash-to-point
+    // sampling moves every escrow and is a consensus break.
+    let escrow = sccp_route_escrow_account_id_v1(
+        &network_id(0x11),
+        SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1,
+        SCCP_XOR_ASSET_ID_TEXT,
+    );
+    let (algorithm, payload) = escrow
+        .try_signatory()
+        .expect("single-key escrow")
+        .to_bytes();
+    assert_eq!(algorithm, Algorithm::Ed25519);
+    assert_eq!(
+        payload,
+        hex!("214d81aefee4a014c32164cc1b9e7b25fa838c9f5fb12b714afb6f21e789d0c3").as_slice()
+    );
+}
+
+#[test]
+fn escrow_is_not_a_seeded_signing_key() {
+    // The escrow point is rejection-sampled from a domain-separated transcript, not derived from
+    // a seed; it therefore differs from the key of any seeded account built from the same bytes.
+    let id = network_id(0x11);
+    let escrow = sccp_route_escrow_account_id_v1(&id, SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1, "xor");
+    for seed in [0x01_u8, 0x11, 0xff] {
+        assert_ne!(escrow, AccountId::new(key_pair(seed).public_key().clone()));
+    }
+}
+
+#[test]
+fn taira_xor_asset_definition_is_the_canonical_literal() {
+    let definition = sccp_taira_xor_asset_definition_id();
+    assert_eq!(
+        definition,
+        AssetDefinitionId::parse_address_literal("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
+            .expect("canonical literal")
+    );
+    assert_eq!(
+        definition.to_string(),
+        SCCP_TAIRA_XOR_ASSET_DEFINITION_ID_V1
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bridge keys and the binding domain
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn binding_domain_is_fixed_and_bound_into_the_frame() {
+    let binding = SccpBridgeKeyBindingV1::new(network_id(9), peer(9), Some([3; 33]), 1, 0);
+    assert_eq!(binding.domain(), "iroha.sccp.bridge_key.v1");
+    assert!(binding.has_canonical_domain());
+    assert_eq!(
+        json_value(&binding).get("domain").and_then(Value::as_str),
+        Some(SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1)
+    );
+    // A decoded binding with another domain is recognizably non-canonical and never equal.
+    let json = norito::json::to_json(&binding).expect("JSON");
+    let forged = json.replace(
+        SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1,
+        "iroha.sccp.bridge_key.v2",
+    );
+    let decoded = norito::json::from_json::<SccpBridgeKeyBindingV1>(&forged).expect("decodes");
+    assert!(!decoded.has_canonical_domain());
+    assert_ne!(decoded, binding);
+    assert_ne!(
+        norito::to_bytes(&decoded).expect("frame"),
+        norito::to_bytes(&binding).expect("frame")
+    );
+    // Every field changes the signed frame.
+    let frame = norito::to_bytes(&binding).expect("frame");
+    for variant in [
+        SccpBridgeKeyBindingV1::new(network_id(8), peer(9), Some([3; 33]), 1, 0),
+        SccpBridgeKeyBindingV1::new(network_id(9), peer(8), Some([3; 33]), 1, 0),
+        SccpBridgeKeyBindingV1::new(network_id(9), peer(9), None, 1, 0),
+        SccpBridgeKeyBindingV1::new(network_id(9), peer(9), Some([4; 33]), 1, 0),
+        SccpBridgeKeyBindingV1::new(network_id(9), peer(9), Some([3; 33]), 2, 0),
+        SccpBridgeKeyBindingV1::new(network_id(9), peer(9), Some([3; 33]), 1, 1),
+    ] {
+        assert_ne!(norito::to_bytes(&variant).expect("frame"), frame);
+    }
+}
+
+#[test]
+fn bridge_key_consent_is_bound_to_network_nonce_and_key() {
+    let instruction = set_bridge_key(Some([2; 33]), 5);
+    let peer_key = key_pair(1).public_key().clone();
+    let binding = instruction.binding(network_id(7));
+    assert!(binding.has_canonical_domain());
+    assert_eq!(binding.binding_nonce, 5);
+    instruction
+        .peer_signature
+        .verify(&peer_key, &binding)
+        .expect("consent verifies under the live NetworkId");
+    assert!(
+        instruction
+            .peer_signature
+            .verify(&peer_key, &instruction.binding(network_id(8)))
+            .is_err(),
+        "consent does not transfer to another NetworkId"
+    );
+    let replayed = SetSccpBridgeKeyV1 {
+        binding_nonce: 6,
+        ..instruction.clone()
+    };
+    assert!(
+        replayed
+            .peer_signature
+            .verify(&peer_key, &replayed.binding(network_id(7)))
+            .is_err(),
+        "consent does not transfer to another binding nonce"
+    );
+    let revocation = SetSccpBridgeKeyV1 {
+        public_key: None,
+        key_pop: None,
+        ..instruction.clone()
+    };
+    assert!(
+        revocation
+            .peer_signature
+            .verify(&peer_key, &revocation.binding(network_id(7)))
+            .is_err(),
+        "a registration consent does not authorize a revocation"
+    );
+    assert!(instruction.pop_matches_key_presence());
+    assert!(revocation.pop_matches_key_presence());
+    assert!(
+        !SetSccpBridgeKeyV1 {
+            key_pop: None,
+            ..instruction.clone()
+        }
+        .pop_matches_key_presence()
+    );
+    assert!(
+        !SetSccpBridgeKeyV1 {
+            key_pop: Some([0; 65]),
+            ..revocation
+        }
+        .pop_matches_key_presence()
+    );
+}
+
+#[test]
+fn bridge_key_lifecycle_promotes_retires_and_bars() {
+    let mut state = SccpBridgeKeyStateV1::default();
+    assert!(!state.is_barred());
+    state.stage_key(bridge_key(1, 0));
+    assert!(state.promote_for_epoch(0));
+    assert_eq!(state.active, Some(bridge_key(1, 0)));
+    state.stage_key(bridge_key(2, 4));
+    state.stage_key(bridge_key(3, 5));
+    assert_eq!(
+        state.pending,
+        Some(bridge_key(3, 5)),
+        "a later binding replaces"
+    );
+    assert!(!state.promote_for_epoch(4));
+    assert!(state.promote_for_epoch(5));
+    assert_eq!(state.active, Some(bridge_key(3, 5)));
+    assert_eq!(state.retired, vec![bridge_key(1, 0)]);
+    state.stage_revocation(6);
+    assert_eq!(state.pending, None);
+    assert!(state.promote_for_epoch(7));
+    assert_eq!(state.active, None);
+    assert_eq!(state.retired, vec![bridge_key(1, 0), bridge_key(3, 5)]);
+    for seed in 10..40 {
+        state.retire(bridge_key(seed, 0));
+    }
+    assert_eq!(state.retired.len(), SCCP_BRIDGE_KEY_RETIRED_MAX_V1);
+    assert_eq!(state.retired.first(), Some(&bridge_key(24, 0)));
+    state.barred = Some(fault(3, 9));
+    assert!(state.is_barred());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rosters, attestation and registry rules at the public boundary
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn roster_rules() {
+    for (n, t) in [(4_u8, 3_u8), (7, 5), (22, 15), (31, 21)] {
+        assert_eq!(sccp_roster_threshold_v1(n), t, "n = {n}");
+    }
+    let generation = roster(&[0, 0, 5, 9]);
+    assert_eq!(generation.member_count(), 4);
+    assert_eq!(generation.nonzero_member_count(), 2);
+    assert!(generation.is_inert());
+    assert_eq!(generation.validate_shape(), Ok(()));
+    let active = roster(&[0, 1, 2, 3]);
+    assert!(!active.is_inert());
+    assert!(active.signs_height(active.activation_height));
+    assert!(!active.signs_height(active.activation_height - 1));
+    assert_eq!(active.addresses().count(), 4);
+    assert_eq!(
+        roster(&[2, 1, 3, 4]).validate_shape(),
+        Err(SccpRosterShapeError::MemberOrder { index: 1 })
+    );
+    assert_eq!(
+        roster(&[1, 2, 3]).validate_shape(),
+        Err(SccpRosterShapeError::SizeOutOfRange { size: 3 })
+    );
+}
+
+#[test]
+fn attestation_rules() {
+    let subject = subject();
+    let statement = subject.statement([0xee; 32]);
+    assert_eq!(statement.block_hash, [0xee; 32]);
+    assert_eq!(statement.height, subject.height);
+    assert_eq!(statement.next_roster_digest, subject.next_roster_digest);
+    assert!(subject.is_rotation());
+    assert_eq!(statement.check_invariants(), Ok(()));
+    assert_eq!(
+        SccpAttestationStatementV1 {
+            message_count: 513,
+            ..statement
+        }
+        .check_invariants(),
+        Err(SccpStatementInvariantError::TooManyMessages { count: 513 })
+    );
+    assert_eq!(
+        SccpAttestationStatementV1 {
+            sccp_root: [0; 32],
+            ..statement
+        }
+        .check_invariants(),
+        Err(SccpStatementInvariantError::RootCountMismatch)
+    );
+    assert_eq!(
+        SccpAttestationStatementV1 {
+            history_size: 0,
+            ..statement
+        }
+        .check_invariants(),
+        Err(SccpStatementInvariantError::HistoryRootSizeMismatch)
+    );
+
+    let mut status = SccpAttestationStatusV1::default();
+    assert!(status.record_signer(3));
+    assert!(!status.record_signer(3));
+    assert!(status.has_signer(3));
+    assert_eq!(status.signer_count(), 1);
+    assert!(!status.is_attested());
+
+    assert!(
+        SccpHistoryStateV1 {
+            size: 5,
+            peaks: vec![[1; 32], [2; 32]],
+        }
+        .is_well_formed()
+    );
+    assert!(
+        !SccpHistoryStateV1 {
+            size: 5,
+            peaks: vec![[1; 32]],
+        }
+        .is_well_formed()
+    );
+
+    let batch = |entries| SubmitSccpAttestationsV1 { entries };
+    assert!(batch(vec![entry(1, 0), entry(1, 2), entry(2, 0)]).entries_strictly_ascending());
+    assert!(!batch(vec![entry(1, 2), entry(1, 2)]).entries_strictly_ascending());
+    assert!(!batch(vec![entry(2, 0), entry(1, 9)]).entries_strictly_ascending());
+}
+
+#[test]
+fn registry_rules() {
+    for network in EXTERNAL {
+        let route_id = route_id_for(network).expect("external route");
+        assert_eq!(network_for_route_id(route_id), Some(network));
+    }
+    assert_eq!(route_id_for(TAIRA), None);
+    assert_eq!(network_for_route_id("taira_xor"), None);
+    // (state, record, proofs, settles, live)
+    for (state, record, proofs, settles, live) in [
+        (SccpRouteActivationV1::Staged, false, false, false, false),
+        (SccpRouteActivationV1::Bidirectional, true, true, true, true),
+        (SccpRouteActivationV1::Paused, false, true, false, true),
+        (SccpRouteActivationV1::InboundOnly, false, true, true, false),
+        (SccpRouteActivationV1::Retired, false, true, false, false),
+    ] {
+        assert_eq!(state.accepts_record(), record, "{state:?}");
+        assert_eq!(state.accepts_proofs(), proofs, "{state:?}");
+        assert_eq!(state.settles(), settles, "{state:?}");
+        assert_eq!(state.is_live(), live, "{state:?}");
+    }
+    assert!(SccpRouteActivationV1::Staged.can_transition_to(SccpRouteActivationV1::Bidirectional));
+    assert!(SccpRouteActivationV1::Paused.can_transition_to(SccpRouteActivationV1::InboundOnly));
+    assert!(!SccpRouteActivationV1::Retired.can_transition_to(SccpRouteActivationV1::Staged));
+    assert!(!SccpRouteActivationV1::Staged.can_transition_to(SccpRouteActivationV1::Paused));
+
+    let staged = SccpRouteRevisionV1::staged(1, evm(9), 1_000, 2, [3; 32], 40);
+    assert_eq!(staged.destination_word, evm(9).destination_word());
+    assert_eq!(staged.next_control_nonce, SCCP_FIRST_CONTROL_NONCE_V1);
+    assert_eq!(staged.next_outbound_nonce, 0);
+    assert!(!staged.ever_activated);
+    assert_eq!(staged.headroom(), 1_000);
+
+    let mut route = SccpRouteV1::empty(ETH, account(1)).expect("external route");
+    route
+        .revisions
+        .insert(1, revision(1, SccpRouteActivationV1::InboundOnly));
+    route
+        .revisions
+        .insert(2, revision(2, SccpRouteActivationV1::Bidirectional));
+    assert_eq!(route.latest_revision(), 2);
+    assert_eq!(route.bidirectional_revision().map(|r| r.revision), Some(2));
+    assert_eq!(route.total_liability(), 3_000_000_000);
+}
+
+#[test]
+fn status_helpers() {
+    let [recorded, voided, pending_refund, refunded, stranded] = outbound_statuses();
+    assert!(recorded.is_recorded());
+    assert!(!voided.is_recorded());
+    assert!(pending_refund.is_refund_pending());
+    for status in [recorded, voided, refunded, stranded] {
+        assert!(!status.is_refund_pending());
+    }
+    let [disabled, paused, shortfall, released, bounced] = inbound_statuses();
+    for status in [disabled, paused, shortfall] {
+        assert!(status.is_pending());
+    }
+    assert!(!released.is_pending());
+    assert!(!bounced.is_pending());
+    assert_eq!(
+        disabled,
+        SccpInboundStatusV1::Pending(SccpPendingStatusV1 {
+            reason: SccpPendingReasonV1::Disabled
+        })
+    );
+    assert!(!light_client(ETH, None).is_frozen());
+    assert!(light_client(ETH, Some(freeze_reasons()[1])).is_frozen());
+    assert_eq!(
+        SccpLeafRefV1::control(TON, 2, 3),
+        SccpLeafRefV1::Control(SccpControlLeafRefV1 {
+            network: TON,
+            revision: 2,
+            control_nonce: 3,
+        })
+    );
+    assert_eq!(
+        SccpLeafRefV1::transfer([1; 32]),
+        SccpLeafRefV1::Transfer(SccpTransferLeafRefV1 {
+            message_id: [1; 32]
+        })
+    );
+    assert_eq!(
+        SettleSccpV1::refund(ETH, 1, 2).target,
+        SccpSettleTargetV1::Refund(SccpSettleRefundV1 {
+            network: ETH,
+            revision: 1,
+            nonce: 2,
+        })
+    );
+    assert_eq!(
+        SettleSccpV1::inbound([4; 32]).target,
+        SccpSettleTargetV1::Inbound(SccpSettleInboundV1 {
+            message_id: [4; 32]
+        })
+    );
+}

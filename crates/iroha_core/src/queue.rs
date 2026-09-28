@@ -205,6 +205,10 @@ use tokio::{
 };
 type EntrypointHash = HashOf<TransactionEntrypoint>;
 type PendingKagemushaOperationKey = [u8; 32];
+use crate::smartcontracts::isi::sccp::admission::{
+    SccpAdmissionKeysV1, SccpAdmissionRejectV1, SccpExemptBlockBudgetV1, SccpPendingClaimErrorV1,
+    SccpPendingIndexV1,
+};
 type QueuePlanJournalRemoval = (HashOf<TransactionEntrypoint>, Hash, Hash);
 #[cfg(test)]
 fn queue_test_network_id() -> iroha_data_model::NetworkId {
@@ -3915,6 +3919,9 @@ pub struct Queue {
     /// Every mutation is serialized by `push_remove_lock`; the inner mutex provides interior
     /// mutability without introducing an independent mutation order.
     pending_kagemusha_operations: parking_lot::Mutex<PendingKagemushaOperationIndex>,
+    /// Admission keys of every queued fee-exempt SCCP transaction (`specs/sccp.md` §4.19),
+    /// maintained atomically with `txs` under `push_remove_lock`.
+    pending_sccp_exempt: parking_lot::Mutex<SccpPendingIndexV1>,
     /// Cached count of transactions tracked by `txs`.
     active_count: AtomicUsize,
     /// Durable reservation owners whose transaction payload has not yet been
@@ -4647,6 +4654,9 @@ struct PreparedQueueAdmission {
     checked: CheckedTransaction<'static>,
     hash: EntrypointHash,
     kagemusha_operation: Option<PendingKagemushaOperationBinding>,
+    /// SCCP exemption keys claimed with the transaction (Ordinary admission and journal
+    /// replay).
+    sccp_exempt: Option<SccpAdmissionKeysV1>,
     routing_decision: RoutingDecision,
     routing_plan: RoutingPlan,
     encoded_len: usize,
@@ -4678,6 +4688,8 @@ struct PreparedQueuePlanReplay {
     fee_reservations: FeeAdmissionReservationStore,
     per_user_increments: HashMap<AccountId, usize>,
     pending_kagemusha_operations: PendingKagemushaOperationIndex,
+    /// SCCP exemption claims re-derived for the replayed transactions.
+    pending_sccp_exempt: SccpPendingIndexV1,
 }
 struct QueuePlanReplayReservationShape {
     durable_owned_hashes: HashSet<EntrypointHash>,
@@ -5472,6 +5484,12 @@ impl Drop for TransactionGuard {
 }
 trait QueueAdmissionStateAccess {
     fn authority_exists(&mut self, authority: &AccountId) -> bool;
+    /// Classify an external signed transaction's SCCP exemption against committed state
+    /// (`specs/sccp.md` §4.19).
+    fn sccp_exempt_admission(
+        &mut self,
+        transaction: &SignedTransaction,
+    ) -> Result<Option<SccpAdmissionKeysV1>, SccpAdmissionRejectV1>;
     fn manifest_authority_eligible_lanes(
         &mut self,
         lane_id: LaneId,
@@ -5522,6 +5540,16 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
 impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, W> {
     fn authority_exists(&mut self, authority: &AccountId) -> bool {
         self.world.accounts().get(authority).is_some()
+    }
+    fn sccp_exempt_admission(
+        &mut self,
+        transaction: &SignedTransaction,
+    ) -> Result<Option<SccpAdmissionKeysV1>, SccpAdmissionRejectV1> {
+        crate::smartcontracts::isi::sccp::admission::classify(
+            self.world,
+            self.next_block_height,
+            transaction,
+        )
     }
     fn manifest_authority_eligible_lanes(
         &mut self,
@@ -5650,6 +5678,58 @@ impl Queue {
             );
         }
         self.notify_lane_retirement_fault();
+    }
+
+    /// The signed transaction whose SCCP exemption admission classifies: the transaction of an
+    /// external or sealed-reveal entry point (`specs/sccp.md` §4.19).
+    fn sccp_signed_transaction(entrypoint: &TransactionEntrypoint) -> Option<&SignedTransaction> {
+        match entrypoint {
+            TransactionEntrypoint::External(transaction) => Some(transaction),
+            TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+            TransactionEntrypoint::SealedCommitment(_) => None,
+        }
+    }
+
+    /// Project the SCCP pending index of replayed admissions (`specs/sccp.md` §4.19). Claims
+    /// are re-derived at replay against current committed state; a claim that conflicts with
+    /// an earlier replayed one is dropped instead of failing startup, since pending limits only
+    /// throttle exempt admission and never affect block validity.
+    fn project_replayed_sccp_claims(
+        replayed: &[PreparedQueuePlanReplayAdmission],
+    ) -> SccpPendingIndexV1 {
+        let mut index = SccpPendingIndexV1::default();
+        for PreparedQueuePlanReplayAdmission { admission, .. } in replayed {
+            if let Some(keys) = admission.sccp_exempt.clone()
+                && let Err(error) = index.claim(admission.hash, keys)
+            {
+                iroha_logger::debug!(
+                    hash = %admission.hash,
+                    %error,
+                    "queue-plan journal replay dropped a conflicting SCCP exemption claim"
+                );
+            }
+        }
+        index
+    }
+
+    /// Release the SCCP exemption claim of a transaction leaving the queue while holding
+    /// `push_remove_lock`. Releasing a transaction without a claim is a no-op.
+    fn remove_pending_sccp_exempt_locked(&self, hash: EntrypointHash) {
+        self.pending_sccp_exempt.lock().release(&hash);
+    }
+
+    /// Map a refused SCCP pending claim onto the queue's admission errors: a transaction that
+    /// adds nothing new is a duplicate, and a held pending limit is an admission refusal.
+    fn sccp_pending_claim_error(error: SccpPendingClaimErrorV1) -> Error {
+        match error {
+            SccpPendingClaimErrorV1::EntrypointClaimed | SccpPendingClaimErrorV1::NothingNew => {
+                Error::IsInQueue
+            }
+            SccpPendingClaimErrorV1::ExclusiveHeld { .. } => Error::NexusFeeAdmissionRejected {
+                code: FeeRejectionCode::OperationNotAllowed,
+                reason: format!("SCCP exempt admission rejected: {error}"),
+            },
+        }
     }
 
     /// Remove an operation claim with its transaction while holding `push_remove_lock`.
@@ -11855,6 +11935,7 @@ impl Queue {
     fn ensure_plan_journal_replay_startup_shape_locked(&self) -> std::io::Result<()> {
         let materialized_shape_is_empty = self.txs.is_empty()
             && self.pending_kagemusha_operations.lock().is_empty()
+            && self.pending_sccp_exempt.lock().is_empty()
             && self.materialized_active_len() == 0
             && self.materialized_retained_bytes() == 0
             && self.tx_hashes.is_empty()
@@ -12361,6 +12442,7 @@ impl Queue {
                     checked,
                     hash,
                     kagemusha_operation,
+                    sccp_exempt: None,
                     enqueued_at_ms: enqueue_timestamp_ms,
                     admission_context: None,
                     global_admission_identity: None,
@@ -12443,6 +12525,15 @@ impl Queue {
                                 "deferred Ordinary queue journal transaction {hash} has an invalid operation carrier: {error}"
                             ))
                         })?;
+                    let sccp_exempt = Self::sccp_signed_transaction(
+                        checked.as_accepted().entrypoint(),
+                    )
+                    .and_then(|transaction| {
+                        state_access
+                            .sccp_exempt_admission(transaction)
+                            .ok()
+                            .flatten()
+                    });
                     let proposal_gas_cost =
                         Self::compute_proposal_gas_cost(checked.as_accepted()).map_err(|error| {
                             invalid(format!(
@@ -12458,6 +12549,7 @@ impl Queue {
                         routing_plan: recorded_routing_plan.clone(),
                         hash,
                         kagemusha_operation,
+                        sccp_exempt,
                         enqueued_at_ms: enqueue_timestamp_ms,
                         checked,
                         admission_context: None,
@@ -12795,6 +12887,7 @@ impl Queue {
                 journal_record_digest: replayed.claim.journal_record_digest,
             })
             .collect();
+        let pending_sccp_exempt = Self::project_replayed_sccp_claims(&admissions);
         projected_pending_kagemusha_operations
             .validate_bijection()
             .map_err(|error| {
@@ -12815,6 +12908,7 @@ impl Queue {
             fee_reservations: projected_fee_reservations,
             per_user_increments,
             pending_kagemusha_operations: projected_pending_kagemusha_operations,
+            pending_sccp_exempt,
         })
     }
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -12836,9 +12930,11 @@ impl Queue {
             fee_reservations,
             per_user_increments,
             pending_kagemusha_operations,
+            pending_sccp_exempt,
         } = replay;
         *self.fee_admission_reservations.lock() = fee_reservations;
         *self.pending_kagemusha_operations.lock() = pending_kagemusha_operations;
+        *self.pending_sccp_exempt.lock() = pending_sccp_exempt;
         *self.next_fifo_ordinal.lock() = next_fifo_ordinal;
         let mut notifications = Vec::with_capacity(admissions.len());
         for replayed in admissions {
@@ -12853,6 +12949,7 @@ impl Queue {
                 checked,
                 hash,
                 kagemusha_operation: _,
+                sccp_exempt: _,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -14668,6 +14765,7 @@ impl Queue {
                 pending_kagemusha_operations: parking_lot::Mutex::new(
                     PendingKagemushaOperationIndex::default(),
                 ),
+                pending_sccp_exempt: parking_lot::Mutex::new(SccpPendingIndexV1::default()),
                 active_count: AtomicUsize::new(0),
                 missing_reservation_payload_count: AtomicUsize::new(0),
                 removed_hashes: DashMap::new(),
@@ -15415,6 +15513,12 @@ impl Queue {
             .min(self.queued_count.load(Ordering::Relaxed));
         let mut seen = HashSet::with_capacity(scan_capacity);
         let mut pending_status_fault = None;
+        // A proposal carries at most `max_exempt_transactions_per_block` exempt-shaped SCCP
+        // transactions and one exempt-shaped keeper advance per network (`specs/sccp.md`
+        // §4.19); capping the candidate pool caps every proposal drawn from it. Shapes are
+        // counted from the entry points against the committed parameters, exactly as block
+        // validation counts them, never from admission-time classification.
+        let mut sccp_budget = SccpExemptBlockBudgetV1::new(state_view.world());
         let pending = age_ring
             .iter()
             .skip(scan_start)
@@ -15468,7 +15572,13 @@ impl Queue {
                     return None;
                 }
                 match self.pending_status(transaction.value().as_ref(), state_view) {
-                    Ok(true) => Some((*hash, Arc::clone(transaction.value()))),
+                    Ok(true) => sccp_budget
+                        .admit(
+                            crate::smartcontracts::isi::sccp::admission::exempt_shape_of_entrypoint(
+                                transaction.value().as_accepted().entrypoint(),
+                            ),
+                        )
+                        .then(|| (*hash, Arc::clone(transaction.value()))),
                     Ok(false) => None,
                     Err(reason) => {
                         pending_status_fault.get_or_insert((*hash, reason));
@@ -17839,6 +17949,7 @@ impl Queue {
                 checked,
                 hash,
                 kagemusha_operation,
+                sccp_exempt: None,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -17866,6 +17977,31 @@ impl Queue {
                 });
             }
         }
+        // Fee-exempt SCCP transactions are pre-verified against committed state and claim their
+        // pending keys at enqueue (`specs/sccp.md` §4.19), whether submitted directly or as a
+        // sealed reveal. A journal replay re-classifies against the current committed state; a
+        // replayed transaction whose pre-verification no longer holds stays queued without a
+        // claim, because its original admission was authentic and execution charges a failed
+        // exempt transaction the ordinary fee.
+        let sccp_exempt = match (
+            Self::sccp_signed_transaction(checked.as_accepted().entrypoint()),
+            preparation_mode,
+        ) {
+            (Some(transaction), QueueAdmissionPreparationMode::Ordinary) => state_access
+                .sccp_exempt_admission(transaction)
+                .map_err(|reject| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err: Error::NexusFeeAdmissionRejected {
+                        code: FeeRejectionCode::OperationNotAllowed,
+                        reason: reject.to_string(),
+                    },
+                })?,
+            (Some(transaction), QueueAdmissionPreparationMode::AtomicJournalReplay) => state_access
+                .sccp_exempt_admission(transaction)
+                .ok()
+                .flatten(),
+            _ => None,
+        };
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let fee_reservation = if checked.as_accepted().external().is_some() {
@@ -18221,6 +18357,7 @@ impl Queue {
             checked,
             hash,
             kagemusha_operation,
+            sccp_exempt,
             routing_decision,
             routing_plan,
             encoded_len,
@@ -18254,6 +18391,7 @@ impl Queue {
                 checked,
                 hash,
                 kagemusha_operation,
+                sccp_exempt,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -18375,6 +18513,15 @@ impl Queue {
                     }
                 }
             }
+            if let Some(keys) = sccp_exempt.as_ref()
+                && let Err(error) = self.pending_sccp_exempt.lock().validate_claim(&hash, keys)
+            {
+                failure = Some(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err: Self::sccp_pending_claim_error(error),
+                });
+                break;
+            }
             let restored_reservation =
                 match self.restored_reservation_matches_admission(hash, &checked, &routing_plan) {
                     Ok(restored) => restored,
@@ -18453,6 +18600,12 @@ impl Queue {
                     .claim(binding)
                     .expect("operation claim was validated under the same Queue mutation lock");
             }
+            if let Some(keys) = sccp_exempt {
+                self.pending_sccp_exempt
+                    .lock()
+                    .claim(hash, keys)
+                    .expect("SCCP claim was validated under the same Queue mutation lock");
+            }
             let tx_arc = Arc::new(checked);
             self.txs.insert(hash, Arc::clone(&tx_arc));
             self.track_active_transaction();
@@ -18522,6 +18675,7 @@ impl Queue {
                     );
                     self.txs.remove(&hash);
                     self.remove_pending_kagemusha_operation_locked(hash);
+                    self.remove_pending_sccp_exempt_locked(hash);
                     self.untrack_active_transaction();
                     if fee_reserved {
                         self.fee_admission_reservations.lock().release(&hash);
@@ -19164,6 +19318,7 @@ impl Queue {
             checked,
             hash,
             kagemusha_operation,
+            sccp_exempt: None,
             routing_decision,
             routing_plan,
             encoded_len,
@@ -19270,6 +19425,7 @@ impl Queue {
                 self.removed_hashes.remove(&hash);
             }
             self.pending_kagemusha_operations.lock().clear();
+            self.pending_sccp_exempt.lock().clear();
             while self.tx_gossip.pop().is_some() {}
             self.fee_admission_reservations
                 .lock()
@@ -19494,6 +19650,7 @@ impl Queue {
                     }
                     let removed = self.txs.remove(&hash).map(|(_, removed_tx)| {
                         self.remove_pending_kagemusha_operation_locked(hash);
+                        self.remove_pending_sccp_exempt_locked(hash);
                         self.fee_admission_reservations.lock().release(&hash);
                         self.untrack_active_transaction();
                         self.untrack_expiry_hash(&hash);
@@ -21481,6 +21638,7 @@ impl Queue {
             }
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
                 self.remove_pending_kagemusha_operation_locked(hash);
+                self.remove_pending_sccp_exempt_locked(hash);
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_active_transaction();
                 let (routing, _removed_plan, journal_removal) =
@@ -21603,6 +21761,7 @@ impl Queue {
         let hash = tx.hash_as_entrypoint();
         if self.txs.remove(&hash).is_some() {
             self.remove_pending_kagemusha_operation_locked(hash);
+            self.remove_pending_sccp_exempt_locked(hash);
             // Execution has materialized the authoritative vault/counter debit;
             // the in-memory queue hold is no longer needed.
             self.fee_admission_reservations.lock().release(&hash);
@@ -22312,6 +22471,7 @@ impl Queue {
                     .and_then(|plan| self.exact_plan_journal_removal(hash, plan.value().digest()));
                 let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
                 self.remove_pending_kagemusha_operation_locked(hash);
+                self.remove_pending_sccp_exempt_locked(hash);
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_expiry_hash(&hash);
                 let _ = self.routing_plans.remove(&hash);
@@ -31931,6 +32091,206 @@ pub mod tests {
             .push(transaction, state.view())
             .expect("push should succeed");
         assert!(matches!(wake_rx.try_recv(), Ok(())));
+    }
+    #[test]
+    fn bounded_pending_snapshot_caps_fee_exempt_sccp_transactions() {
+        use crate::smartcontracts::isi::sccp::{
+            admission::{self, SccpExemptClassV1},
+            test_support::SampleInstructions,
+        };
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        {
+            // A one-transaction cap written directly; real parameters are validated by
+            // `InitializeSccpV1` and `SetParameters`.
+            let mut parameters = iroha_data_model::sccp::params::SccpParametersV1::taira_default();
+            parameters.max_exempt_transactions_per_block = 1;
+            let mut world = state.world.block();
+            *world.sccp_parameters.get_mut() = Some(parameters);
+            world.commit();
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let attestation = |height| {
+            let mut instruction = SampleInstructions::attestations();
+            instruction.entries[0].height = height;
+            accepted_tx_with(
+                AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+                &ALICE_KEYPAIR,
+                &time_source,
+                vec![instruction.into()],
+                Metadata::default(),
+            )
+        };
+        let transactions = vec![
+            attestation(9),
+            attestation(10),
+            accepted_tx_by_someone(&time_source),
+        ];
+        let hashes = transactions
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>();
+        for transaction in transactions {
+            register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+            queue.push(transaction, state.view()).expect("push");
+        }
+        assert!(
+            queue.pending_sccp_exempt.lock().is_empty(),
+            "no admission-time claim exists, so the proposer cannot depend on one"
+        );
+        let (snapshot, _lease) = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(16_usize))
+            .expect("queue selection must remain healthy");
+        let selected = snapshot
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected,
+            vec![hashes[0], hashes[2]],
+            "one exempt-shaped SCCP transaction fits the cap; ordinary work is unaffected"
+        );
+        assert!(
+            queue.contains_entrypoint_hash(hashes[1]),
+            "the capped one stays queued"
+        );
+        let view = state.view();
+        let classes = snapshot
+            .iter()
+            .filter_map(|transaction| {
+                admission::exempt_shape_of_entrypoint(transaction.entrypoint())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(classes, vec![SccpExemptClassV1::Attestation]);
+        assert!(
+            admission::block_exempt_cap_ok(view.world(), &classes),
+            "block validation accepts exactly what the proposer selected"
+        );
+        assert!(!admission::block_exempt_cap_ok(
+            view.world(),
+            &[SccpExemptClassV1::Attestation; 2]
+        ));
+    }
+    #[test]
+    fn journal_replay_rebuilds_sccp_exemption_claims() {
+        use crate::smartcontracts::isi::sccp::{
+            admission::{SccpExemptClassV1, test_override},
+            test_support::SampleInstructions,
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("sccp_queue_plan_journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        install_single_validator_topology_for_queue_test(&mut state, 0xA1);
+        {
+            let mut world = state.world.block();
+            *world.sccp_parameters.get_mut() =
+                Some(iroha_data_model::sccp::params::SccpParametersV1::taira_default());
+            world.commit();
+        }
+        // Stand in for ws31's pre-verification: one pending attestation batch per authority.
+        let _classifier = test_override::install(|transaction| {
+            Ok(Some(
+                SccpAdmissionKeysV1::new(SccpExemptClassV1::Attestation)
+                    .with_exclusive(transaction.authority()),
+            ))
+        });
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, false)
+            .expect("install journal");
+        let attestation = |height| {
+            let mut instruction = SampleInstructions::attestations();
+            instruction.entries[0].height = height;
+            accepted_tx_with(
+                AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+                &ALICE_KEYPAIR,
+                &time_source,
+                vec![instruction.into()],
+                Metadata::default(),
+            )
+        };
+        let first = attestation(9);
+        register_accepted_tx_authority_for_queue_test(&mut state, &first);
+        let hash = first.hash_as_entrypoint();
+        let plan = queue.route_plan_with_state(&first, &state).expect("route");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(first, &state, plan)
+            .expect("strict durable admission");
+        assert_eq!(
+            queue.pending_sccp_exempt.lock().class_of(&hash),
+            Some(SccpExemptClassV1::Attestation)
+        );
+        let second = attestation(10);
+        let plan = queue.route_plan_with_state(&second, &state).expect("route");
+        let refusal = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(second, &state, plan)
+            .expect_err("the per-authority pending limit holds before the restart");
+        assert!(
+            matches!(&refusal.err, Error::NexusFeeAdmissionRejected { reason, .. } if reason.contains("SCCP")),
+            "{:?}",
+            refusal.err
+        );
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, false)
+                .expect("install replay journal"),
+            1
+        );
+        assert!(replay_queue.pending_sccp_exempt.lock().is_empty());
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay the journal");
+        assert_eq!(summary.replayed, 1);
+        assert_eq!(
+            replay_queue.pending_sccp_exempt.lock().class_of(&hash),
+            Some(SccpExemptClassV1::Attestation),
+            "replay re-derives the claim of the replayed transaction"
+        );
+        let third = attestation(11);
+        let plan = replay_queue
+            .route_plan_with_state(&third, &state)
+            .expect("route");
+        let refusal = replay_queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(third, &state, plan)
+            .expect_err("the per-authority pending limit survives the restart");
+        assert!(
+            matches!(&refusal.err, Error::NexusFeeAdmissionRejected { reason, .. } if reason.contains("SCCP")),
+            "{:?}",
+            refusal.err
+        );
+    }
+    #[test]
+    fn sccp_claim_refusals_map_onto_existing_admission_errors() {
+        assert!(matches!(
+            Queue::sccp_pending_claim_error(SccpPendingClaimErrorV1::NothingNew),
+            Error::IsInQueue
+        ));
+        assert!(matches!(
+            Queue::sccp_pending_claim_error(SccpPendingClaimErrorV1::EntrypointClaimed),
+            Error::IsInQueue
+        ));
+        let holder = HashOf::from_untyped_unchecked(Hash::prehashed([7; 32]));
+        assert!(matches!(
+            Queue::sccp_pending_claim_error(SccpPendingClaimErrorV1::ExclusiveHeld { holder }),
+            Error::NexusFeeAdmissionRejected {
+                code: FeeRejectionCode::OperationNotAllowed,
+                ..
+            }
+        ));
     }
     #[test]
     fn bounded_pending_snapshot_is_fifo_bounded_and_non_destructive() {

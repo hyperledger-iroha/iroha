@@ -145,6 +145,14 @@ fn joined_mixed_native_commitment_matches_independent_horner_rows_and_frontier()
         assert!(root_only.opened_rows.is_empty());
         let indices = [0, 1, 7, 63, 1024, 2047];
         let opened = plan.commit_v1(domains, &borrowed, &indices).unwrap();
+        let replayed = plan
+            .commit_replayed_v1(domains, &indices, |group, column| {
+                Ok(polynomials[group].column_coefficients_v1(column)?.to_vec())
+            })
+            .unwrap();
+        assert_eq!(replayed.commitment.root, opened.commitment.root);
+        assert_eq!(replayed.commitment.frontier, opened.commitment.frontier);
+        assert_eq!(replayed.opened_rows, opened.opened_rows);
         assert_eq!(opened.commitment.root, root_only.commitment.root);
         assert_eq!(
             opened.commitment.frontier,
@@ -252,6 +260,45 @@ fn joined_trace_rejects_group_width_domain_order_field_and_index_substitution() 
                 &[F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1); 3]
             ]
         )
+        .is_err()
+    );
+}
+
+#[test]
+fn joined_replayed_columns_reject_indices_before_source_and_abort_failed_batches() {
+    let (parameters, domains, layout) = fixture();
+    let plan =
+        JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
+            .unwrap();
+    let polynomials = polynomial_groups(&plan);
+    let mut calls = 0;
+    assert!(
+        plan.commit_replayed_v1(domains, &[2048], |_, _| {
+            calls += 1;
+            unreachable!()
+        })
+        .is_err()
+    );
+    assert_eq!(calls, 0);
+    assert!(
+        plan.commit_replayed_v1(domains, &[0], |group, column| {
+            calls += 1;
+            if group == 0 && column == 8 {
+                return Err(AggregateStarkErrorV1::AllocationFailure);
+            }
+            Ok(polynomials[group].column_coefficients_v1(column)?.to_vec())
+        })
+        .is_err()
+    );
+    assert_eq!(calls, 9);
+    assert!(
+        plan.commit_replayed_v1(domains, &[0], |group, column| {
+            let mut values = polynomials[group].column_coefficients_v1(column)?.to_vec();
+            if group == 1 && column == 2 {
+                values[0] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+            }
+            Ok(values)
+        })
         .is_err()
     );
 }

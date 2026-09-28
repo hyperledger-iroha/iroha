@@ -647,14 +647,18 @@ fn capture_values() -> Vec<Value> {
     rows
 }
 
-#[test]
-fn public_fresh_event_frames_match_capture() {
-    let evidence = norito::json!({
+fn current_identity_capture() -> Value {
+    norito::json!({
         "format_version": 1,
         "purpose": "public event owners before identity declaration",
         "default_encode_flags": (ncore::default_encode_flags()),
         "rows": (capture_values()),
-    });
+    })
+}
+
+#[test]
+fn public_fresh_event_frames_match_capture() {
+    let evidence = current_identity_capture();
     let mut captured: Value =
         norito::json::from_json(include_str!("../fixtures/fresh_event_identity_frames.json"))
             .expect("decode immutable actual pre-declaration capture");
@@ -679,4 +683,13 @@ fn public_fresh_event_frames_match_capture() {
             });
     }
     assert_eq!(evidence, captured);
+}
+
+#[test]
+#[ignore = "explicit first-release event wire fixture capture"]
+fn capture_current_fresh_event_identity_frames() {
+    eprintln!(
+        "FRESH_EVENT_CANONICAL_CAPTURE={}",
+        norito::json::to_json(&current_identity_capture()).expect("encode current event capture")
+    );
 }

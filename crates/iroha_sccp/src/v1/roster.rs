@@ -8,7 +8,7 @@
 //!
 //! `n` is in 4..=31, `t = ⌊2n/3⌋ + 1`, `generation ≥ 1`, and the members are all zero members
 //! first, then nonzero members strictly ascending as 160-bit integers. Every verifier checks the
-//! `n` range, the `t` formula and the ordering while hashing; `roster_digest_checked` does the
+//! `n` range, the `t` formula and the ordering while hashing; [`roster_digest_checked`] does the
 //! same over the packed form a destination receives.
 //!
 //! [`RosterStateV1`] mirrors the destination roster light client: acceptance of an attestation's
@@ -158,7 +158,7 @@ impl RosterV1 {
         threshold: u8,
         packed_members: &[u8],
     ) -> Result<Self, RosterError> {
-        if packed_members.len() % 20 != 0 {
+        if !packed_members.len().is_multiple_of(20) {
             return Err(RosterError::BadSize);
         }
         let members = packed_members
@@ -244,7 +244,6 @@ impl RosterV1 {
 /// # Errors
 ///
 /// Returns [`RosterError`] exactly where a destination reverts with `BadRoster()`.
-#[cfg(test)]
 pub fn roster_digest_checked(
     taira_network_id: &[u8; 32],
     generation: u64,
@@ -495,7 +494,7 @@ mod tests {
             members: (1..=4).map(member).collect(),
         };
         let digest = roster.digest(&TAIRA).unwrap();
-        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let hex = crate::v1::hashes::to_hex(&digest);
         assert_eq!(
             hex,
             "c9eed4f02ae435a8a7913451e107c5fc9085258bb4dd15e80c3f51c0f3cf5321"

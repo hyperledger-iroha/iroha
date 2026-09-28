@@ -1,6 +1,8 @@
 //! Bounded canonical leaf hashing under explicit CPU or required-device execution.
 
 use rayon::prelude::*;
+#[cfg(any(test, feature = "fastpq-gpu"))]
+use zeroize::Zeroize;
 
 use super::{
     compact_v1::{MAX_PREPARED_HASH_FRAME_BYTES, PreparedHashFrame},
@@ -14,6 +16,50 @@ use crate::{DigestExecutionV1, Error, Result};
 
 /// Independent of the worker count, witness, transcript and proof representation.
 pub(super) const CAPACITY: usize = 32;
+
+/// Own returned device digests immediately, including a malformed result shape.
+/// No pop/drain or growing allocation leaves private-derived cells unguarded.
+#[cfg(any(test, feature = "fastpq-gpu"))]
+struct ReturnedLeafDigests(Vec<fastpq_isi::GoldilocksDigest384V1>);
+
+#[cfg(any(test, feature = "fastpq-gpu"))]
+impl ReturnedLeafDigests {
+    fn write_to(self, output: &mut [[u64; 6]]) -> Result<()> {
+        if self.0.len() != output.len() {
+            return Err(invalid("DEEP leaf executor returned another digest count"));
+        }
+        for (destination, digest) in output.iter_mut().zip(&self.0) {
+            *destination = digest.words();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "fastpq-gpu"))]
+impl Drop for ReturnedLeafDigests {
+    fn drop(&mut self) {
+        for digest in &mut self.0 {
+            digest.zeroize();
+        }
+        // Observe real erased cells before Vec releases its allocation; no
+        // allocation is read after free and no secret is retained by the hook.
+        #[cfg(test)]
+        LEAF_ERASURES.with(|observed| {
+            let (cleared, uncleared) = observed.get();
+            let clean = self
+                .0
+                .iter()
+                .filter(|digest| digest.words() == [0; 6])
+                .count();
+            observed.set((cleared + clean, uncleared + self.0.len() - clean));
+        });
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static LEAF_ERASURES: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+}
 
 /// Packed payloads, clearing digest slots, ordered error results and one exact
 /// private canonical frame per possible concurrent hash. Worker stacks, allocator
@@ -73,20 +119,14 @@ pub(super) fn hash(
         let bytes = frames
             .iter()
             .try_fold(0usize, |sum, frame| add(sum, frame.payload_len()))?;
-        let digests = execute_last_fields_with_cpu(
+        let digests = ReturnedLeafDigests(execute_last_fields_with_cpu(
             frames.len(),
             bytes,
             execution,
             |index| frames[index].hash_cpu(),
             || frames.iter().map(PreparedHashFrame::job).collect(),
-        )?;
-        if digests.len() != output.len() {
-            return Err(invalid("DEEP leaf executor returned another digest count"));
-        }
-        for (destination, digest) in output.iter_mut().zip(digests) {
-            *destination = digest.words();
-        }
-        return Ok(());
+        )?);
+        return digests.write_to(output);
     }
     let _ = execution;
     let results: Vec<Result<()>> = output
@@ -124,6 +164,45 @@ mod tests {
     use super::*;
     use crate::backend::{deep_geometry::LDE_ROWS, secret_polynomial::SecretPolynomial};
     use fastpq_isi::GoldilocksDigest384V1 as Digest;
+
+    #[test]
+    fn returned_leaf_digests_clear_on_success_shape_error_and_partial_unwind() {
+        let source = [Digest::new([1, 2, 3, 5, 7, 11]).unwrap(); 4];
+        let before = LEAF_ERASURES.with(core::cell::Cell::get);
+        let mut output = SecretPolynomial::<[u64; 6]>::zeroed(4).unwrap();
+        ReturnedLeafDigests(source.to_vec())
+            .write_to(&mut output)
+            .unwrap();
+        assert!(output.iter().all(|&words| words == source[0].words()));
+        assert_eq!(
+            LEAF_ERASURES.with(core::cell::Cell::get),
+            (before.0 + 4, before.1)
+        );
+
+        assert!(
+            ReturnedLeafDigests(source.to_vec())
+                .write_to(&mut output[..3])
+                .is_err()
+        );
+        assert_eq!(
+            LEAF_ERASURES.with(core::cell::Cell::get),
+            (before.0 + 8, before.1)
+        );
+
+        let unwound = std::panic::catch_unwind(|| {
+            let returned = ReturnedLeafDigests(source.to_vec());
+            let mut partial = SecretPolynomial::<[u64; 6]>::zeroed(4).unwrap();
+            for (destination, digest) in partial.iter_mut().zip(&returned.0).take(2) {
+                *destination = digest.words();
+            }
+            panic!("test-only failure after partial returned-digest use");
+        });
+        assert!(unwound.is_err());
+        assert_eq!(
+            LEAF_ERASURES.with(core::cell::Cell::get),
+            (before.0 + 12, before.1)
+        );
+    }
 
     #[test]
     fn bounded_parallel_leaves_match_serial_hashes_in_exact_input_order() {

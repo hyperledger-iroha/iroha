@@ -131,8 +131,6 @@ fn carrier_capture_unlocks_state_topology_before_world_parameters_notification()
     let captured = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |inputs| {
                 admission_calls.fetch_add(1, Ordering::SeqCst);
                 admit_journals_for_test(inputs)
@@ -397,16 +395,12 @@ fn carrier_capture_refused_original_drop_releases_membership_before_world_notifi
     let error = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Err::<(), _>("original retention refusal"),
         )
         .err()
         .expect("real journal admission refuses");
     let CarrierJournalPreparationError::JournalAdmission {
         carrier,
-        provider,
-        reputation,
         error: reason,
         ..
     } = &error
@@ -414,7 +408,6 @@ fn carrier_capture_refused_original_drop_releases_membership_before_world_notifi
         panic!("retain the exact original carrier on normal refusal");
     };
     assert_eq!(*reason, "original retention refusal");
-    assert!(provider.is_none() && reputation.is_none());
     assert_eq!(std::ptr::from_ref(carrier.state()), original_state);
     assert_eq!(carrier.execution_prefix_commitment(), prefix);
     assert_eq!(callback.observations(), [0; 5]);
@@ -476,8 +469,6 @@ fn carrier_capture_admission_panic_releases_healthy_membership_before_world_noti
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         prepared.prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| -> Result<(), &'static str> {
                 panic!("injected actual carrier journal admission panic");
             },

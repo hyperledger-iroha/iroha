@@ -29,10 +29,7 @@ mod execution_prefix;
 )]
 mod journals;
 pub(super) mod queue_retirement;
-pub(crate) use journals::{
-    CarrierArchivePreparationError, CarrierJournalPreparationError, CarrierJournalShellReservation,
-    RetainedCarrier,
-};
+pub(crate) use journals::{CarrierJournalShellReservation, RetainedCarrier};
 pub(crate) use journals::{PublishedCarrier, PublishedNativeApply};
 
 /// A prepared candidate with all execution ownership retained and no Apply API.

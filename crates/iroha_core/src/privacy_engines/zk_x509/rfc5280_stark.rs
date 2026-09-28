@@ -6002,6 +6002,16 @@ impl core::fmt::Debug for ZkX509Rfc5280StarkBaseMaterialV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509Rfc5280StarkBaseMaterialV1 {
+    /// Allocated sparse row payload; providers only borrow these rows.
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            sum_v1(self.family_rows.iter().map(vector_v1)),
+            vector_v1(&self.schedule.profile_byte_table),
+            vector_v1(&self.schedule.public_numeric_table),
+            vector_v1(&self.schedule.output_topology),
+        ])
+    }
     /// Recursively overwrite every private shape cell and committed field row.
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.private_shape.chain_depth = 0;

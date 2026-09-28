@@ -134,7 +134,7 @@ fn zk_ballot_rejects_oversized_proof() {
     zk_cfg.preverify_max_bytes = 4;
     state
         .set_zk(zk_cfg)
-        .expect("empty SCCP outbox accepts governance test configuration");
+        .expect("empty state accepts governance test configuration");
     let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();

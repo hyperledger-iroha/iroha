@@ -23,13 +23,7 @@ pub(crate) enum V2ApplyError {
     #[error(transparent)]
     Kura(#[from] crate::kura::Error),
     /// A canonical storage read failed before it could authenticate local evidence.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("Sumeragi v2 canonical storage read requires restart recovery: {0}")]
     CanonicalStorageRead(#[source] crate::kura::Error),
     /// A committed local projection could not be reconstructed/authenticated.
@@ -51,23 +45,11 @@ pub(crate) enum V2ApplyError {
     #[error("Sumeragi v2 Apply task differs from its frozen context or body")]
     TaskMismatch,
     /// Height cannot be represented by local storage indexes.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("Sumeragi v2 decision height is not representable")]
     HeightOverflow,
     /// WSV is unexpectedly ahead of the decision.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("WSV height {state_height} is ahead of v2 decision height {decision_height}")]
     StateAhead {
         /// Current WSV height.
@@ -76,13 +58,7 @@ pub(crate) enum V2ApplyError {
         decision_height: usize,
     },
     /// More than one unapplied height separates WSV and the decision.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("WSV height {state_height} has a gap before v2 decision height {decision_height}")]
     StateGap {
         /// Current WSV height.
@@ -91,13 +67,7 @@ pub(crate) enum V2ApplyError {
         decision_height: usize,
     },
     /// WSV reports application but Kura has no canonical block.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("WSV is ahead of Kura while completing a Sumeragi v2 decision")]
     StateAheadOfKura,
     /// Deterministic validation rejected the exact durable body.
@@ -107,13 +77,7 @@ pub(crate) enum V2ApplyError {
     #[error("Sumeragi v2 proposal body must be resultless")]
     ResultBearingProposal,
     /// Deterministic validation did not produce the StateBlock execution witness.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("Sumeragi v2 validation produced no execution witness")]
     ExecutionCommitmentUnavailable,
     /// Execution-witness projection itself was malformed.
@@ -123,13 +87,7 @@ pub(crate) enum V2ApplyError {
     #[error("invalid canonical Sumeragi v2 block: {0}")]
     CanonicalBlock(String),
     /// The signed or persisted execution result differs from deterministic replay.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("Sumeragi v2 execution commitment differs from deterministic validation")]
     ExecutionCommitmentMismatch,
     /// The exact certified merge sidecar has not reached durable local storage yet.
@@ -139,13 +97,7 @@ pub(crate) enum V2ApplyError {
         reference: CertifiedMergeLedgerReference,
     },
     /// Certificate-aware block commit conversion failed.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
     /// Kura or WSV crossed the canonical commit point but the complete durable transition failed.
@@ -157,13 +109,7 @@ pub(crate) enum V2ApplyError {
         detail: String,
     },
     /// State refused publication after Kura committed; retain the original local owner diagnostic.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "TODO: native runner cutover"
-        )
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error(
         "Sumeragi v2 committed transition requires restart recovery at WSV publication after Kura commit: {0}"
     )]
@@ -176,14 +122,6 @@ pub(crate) enum V2ApplyError {
     #[cfg(test)]
     #[error("injected crash after staged WSV checkpoint and before WSV commit")]
     InjectedCrashAfterWsvCheckpoint,
-    /// Test-only crash boundary between provider-ingest archive and State publication.
-    #[cfg(test)]
-    #[error("injected crash after provider-ingest archive capture and before WSV commit")]
-    InjectedCrashAfterProviderIngestArchiveCapture,
-    /// Test-only crash boundary between reputation archive and State publication.
-    #[cfg(test)]
-    #[error("injected crash after reputation archive capture and before WSV commit")]
-    InjectedCrashAfterReputationArchiveCapture,
 }
 impl V2ApplyError {
     fn committed_recovery_required(stage: &'static str, error: &impl std::fmt::Display) -> Self {
@@ -207,10 +145,7 @@ impl V2ApplyError {
             | Self::LocalEvidenceCapacity { .. }
             | Self::StateAheadOfKura => true,
             #[cfg(test)]
-            Self::InjectedCrashAfterKuraStore
-            | Self::InjectedCrashAfterWsvCheckpoint
-            | Self::InjectedCrashAfterProviderIngestArchiveCapture
-            | Self::InjectedCrashAfterReputationArchiveCapture => true,
+            Self::InjectedCrashAfterKuraStore | Self::InjectedCrashAfterWsvCheckpoint => true,
             _ => false,
         }
     }
@@ -248,10 +183,7 @@ impl BodyValidationError for V2ApplyError {
             | Self::CommittedRecoveryRequired { .. }
             | Self::CommittedStatePublication(_) => None,
             #[cfg(test)]
-            Self::InjectedCrashAfterKuraStore
-            | Self::InjectedCrashAfterWsvCheckpoint
-            | Self::InjectedCrashAfterProviderIngestArchiveCapture
-            | Self::InjectedCrashAfterReputationArchiveCapture => None,
+            Self::InjectedCrashAfterKuraStore | Self::InjectedCrashAfterWsvCheckpoint => None,
         }
     }
 

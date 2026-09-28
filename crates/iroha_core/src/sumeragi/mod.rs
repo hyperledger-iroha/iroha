@@ -7107,14 +7107,6 @@ pub struct SumeragiStartArgs {
     pub queue: Arc<Queue>,
     /// Persistent block store interface.
     pub kura: Arc<Kura>,
-    /// Optional exact finalized provider-ingest archive captured at every v2
-    /// WSV commit boundary.
-    pub provider_ingest_finalized_archive:
-        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
-    /// Optional exact finalized reputation archive captured at every v2 WSV
-    /// commit boundary.
-    pub reputation_finalized_archive:
-        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     /// Runtime-only owner of this validator's adaptive global-beacon signing share.
     ///
     /// The owner is injected by the daemon/runtime boundary and is never
@@ -7206,8 +7198,6 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
             global_beacon_partial_signer,
             kagemusha_mint_finality_authority,
             startup_replay_plan,
@@ -7319,8 +7309,6 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
             global_beacon_partial_signer,
             kagemusha_mint_finality_authority,
             startup_replay_plan,
@@ -7540,10 +7528,6 @@ struct SumeragiWorker {
     state: Arc<State>,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
-    provider_ingest_finalized_archive:
-        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
-    reputation_finalized_archive:
-        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     global_beacon_partial_signer:
         Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
     kagemusha_mint_finality_authority:

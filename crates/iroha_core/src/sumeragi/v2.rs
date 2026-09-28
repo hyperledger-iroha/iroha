@@ -801,10 +801,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryInputsV1 {
     state: Arc<crate::state::State>,
     queue: Arc<crate::queue::Queue>,
     kura: Arc<Kura>,
-    provider_ingest_finalized_archive:
-        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
-    reputation_finalized_archive:
-        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     block_cadence: Duration,
     events_sender: crate::EventsSender,
     local_signer: KeyPair,

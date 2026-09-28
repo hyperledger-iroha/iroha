@@ -8515,8 +8515,6 @@ pub struct Torii {
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
     /// Optional authenticated native Bootle/Lantern blind-issuance service.
     pub privacy_bootle_lantern_issuer: Option<ToriiBootleLanternIssuer>,
-    /// Optional independently rebuilt SCCP replay archive service.
-    pub sccp_replay_archive: Option<ToriiSccpReplayArchive>,
     /// CIDRs whose effective transport sources bypass API rate limits only.
     pub api_rate_limit_bypass_cidrs: Vec<String>,
     /// Exact effective transport source hosts trusted for internal API reads and routing.
@@ -8768,7 +8766,6 @@ pub struct ToriiBootleLanternIssuer {
     /// Exact non-zero provider-registry public-policy digest.
     pub runtime_provider_registry_policy_digest: [u8; 32],
 }
-include!("actual/torii_sccp_replay_archive.rs");
 include!("actual/torii_tx_history.rs");
 /// Retail recipient lookup route configuration for Torii app API.
 #[derive(Debug, Clone)]
@@ -11914,10 +11911,6 @@ pub struct Zk {
 /// SCCP proof-admission and deterministic verifier-work limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sccp {
-    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-    pub max_pending_outbound_messages: NonZeroU64,
-    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
-    pub max_pending_outbound_payload_bytes: NonZeroU64,
     /// Maximum closed SCCP proofs in one transaction.
     pub max_proofs_per_transaction: NonZeroU32,
     /// Maximum closed SCCP proofs committed in one block.
@@ -11944,14 +11937,6 @@ pub struct Sccp {
     pub max_secp256k1_recoveries_per_transaction: NonZeroU32,
     /// Maximum secp256k1 recoveries committed in one block.
     pub max_secp256k1_recoveries_per_block: NonZeroU32,
-    /// Maximum BLS aggregate-signature checks in one transaction.
-    pub max_bls_aggregate_checks_per_transaction: NonZeroU32,
-    /// Maximum BLS aggregate-signature checks committed in one block.
-    pub max_bls_aggregate_checks_per_block: NonZeroU32,
-    /// Maximum BLS public-key contributions processed in one transaction.
-    pub max_bls_signer_contributions_per_transaction: NonZeroU32,
-    /// Maximum BLS public-key contributions committed in one block.
-    pub max_bls_signer_contributions_per_block: NonZeroU32,
     /// Maximum Ed25519 signature checks in one transaction.
     pub max_ed25519_signature_checks_per_transaction: NonZeroU32,
     /// Maximum Ed25519 signature checks committed in one block.
@@ -11960,20 +11945,9 @@ pub struct Sccp {
     pub max_ed25519_validator_key_checks_per_transaction: NonZeroU32,
     /// Maximum TON Ed25519 validator-key checks committed in one block.
     pub max_ed25519_validator_key_checks_per_block: NonZeroU32,
-    /// Maximum BN254 Groth16 pairing-product checks in one transaction.
-    pub max_bn254_pairing_checks_per_transaction: NonZeroU32,
-    /// Maximum BN254 Groth16 pairing-product checks committed in one block.
-    pub max_bn254_pairing_checks_per_block: NonZeroU32,
-    /// Maximum BLS12-381 Groth16 pairing-product checks in one transaction.
-    pub max_bls12_381_pairing_checks_per_transaction: NonZeroU32,
-    /// Maximum BLS12-381 Groth16 pairing-product checks committed in one block.
-    pub max_bls12_381_pairing_checks_per_block: NonZeroU32,
 }
 impl_default!(Sccp => {
         Self {
-            max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
-            max_pending_outbound_payload_bytes:
-                defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES,
             max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
             max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
             max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,
@@ -11994,14 +11968,6 @@ impl_default!(Sccp => {
                 defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_TRANSACTION,
             max_secp256k1_recoveries_per_block:
                 defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_BLOCK,
-            max_bls_aggregate_checks_per_transaction:
-                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION,
-            max_bls_aggregate_checks_per_block:
-                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK,
-            max_bls_signer_contributions_per_transaction:
-                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION,
-            max_bls_signer_contributions_per_block:
-                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK,
             max_ed25519_signature_checks_per_transaction:
                 defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION,
             max_ed25519_signature_checks_per_block:
@@ -12010,14 +11976,6 @@ impl_default!(Sccp => {
                 defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION,
             max_ed25519_validator_key_checks_per_block:
                 defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK,
-            max_bn254_pairing_checks_per_transaction:
-                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION,
-            max_bn254_pairing_checks_per_block:
-                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK,
-            max_bls12_381_pairing_checks_per_transaction:
-                defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_TRANSACTION,
-            max_bls12_381_pairing_checks_per_block:
-                defaults::zk::sccp::MAX_BLS12_381_PAIRING_CHECKS_PER_BLOCK,
         }
 });
 /// CABAC runtime mode compiled into the host.

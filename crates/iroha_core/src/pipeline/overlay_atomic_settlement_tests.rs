@@ -298,7 +298,6 @@ fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
             "{error}"
         );
         assert_eq!(observable(&state_tx), before);
-        assert!(state_tx.sccp_ivm_proved_execution_binding.is_none());
     }
 }
 
@@ -320,7 +319,6 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
             "{error:?}"
         );
         assert_eq!(observable(&state_tx), before);
-        assert!(state_tx.sccp_ivm_proved_execution_binding.is_none());
     }
 }
 

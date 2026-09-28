@@ -1,10 +1,13 @@
 //! Exact test-only finality descendants retain the opaque parent, fixed epoch and real BLS votes.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::*;
 use iroha_data_model::block::builder::BlockBuilder;
 use iroha_data_model::block::consensus_v2::finality::{
     validate_successor_height_context, verify_finality_successor,
 };
+use iroha_data_model::nexus::AxtPolicySnapshot;
 
 fn block(height: u64, parent: Option<&SccpFinalizedBlockTestFixtureV1>) -> SignedBlock {
     let key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519).unwrap();
@@ -22,10 +25,10 @@ fn block(height: u64, parent: Option<&SccpFinalizedBlockTestFixtureV1>) -> Signe
         .set_execution_outputs(
             Vec::new(),
             0,
-            Default::default(),
+            BTreeMap::default(),
             Vec::new(),
-            Default::default(),
-            Default::default(),
+            AxtPolicySnapshot::default(),
+            BTreeSet::default(),
             Vec::new(),
             &exact_fixture_output_limits(),
         )

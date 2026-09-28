@@ -1,4 +1,9 @@
-//! Attempt-based SORA Parliament draft and read commands.
+//! Attempt-based SORA Parliament draft, read, ballot and release commands.
+
+mod ballot;
+mod member;
+#[cfg(test)]
+mod test_context;
 
 use std::collections::BTreeMap;
 
@@ -475,6 +480,15 @@ pub enum ParliamentCommand {
     GetAttempt(GetAttemptArgs),
     /// Verify signer-peer shares and submit `FinalizeOpenedBallot` normally.
     FinalizeOpenedBallot(FinalizeOpenedBallotArgs),
+    /// Accept or decline one Parliament invitation addressed to this account.
+    RespondInvitation(member::RespondInvitationArgs),
+    /// Endorse one public-finding result root as a seated member.
+    Endorse(member::EndorseArgs),
+    /// Record this member's own absence from one attempt.
+    RecordAbsence(member::RecordAbsenceArgs),
+    /// Timed-OVN ballot participation: register keys, drop out, cast, relay, status.
+    #[command(subcommand)]
+    Ballot(ballot::BallotCommand),
 }
 
 impl Run for ParliamentCommand {
@@ -484,6 +498,10 @@ impl Run for ParliamentCommand {
             Self::DraftTransition(args) => args.run(context),
             Self::GetAttempt(args) => args.run(context),
             Self::FinalizeOpenedBallot(args) => args.run(context),
+            Self::RespondInvitation(args) => args.run(context),
+            Self::Endorse(args) => args.run(context),
+            Self::RecordAbsence(args) => args.run(context),
+            Self::Ballot(command) => command.run(context),
         }
     }
 }

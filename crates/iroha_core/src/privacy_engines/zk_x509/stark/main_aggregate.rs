@@ -15,9 +15,15 @@ use super::super::{
 use super::*;
 #[path = "main_oods.rs"]
 mod main_oods;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_quotient_stripes.rs"]
+mod main_quotient_stripes;
 #[cfg(test)]
 #[path = "main_resource_tests.rs"]
 mod main_resource_tests;
+#[cfg(test)]
+#[path = "main_secret_ownership_tests.rs"]
+mod main_secret_ownership_tests;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
 #[derive(Clone, Copy)]
@@ -26,95 +32,16 @@ pub(super) enum MainTraceColumnKindV1 {
     Base,
     Aux,
 }
-/// Exact ordered ownership of the six authenticated masked polynomial sets.
-///
-/// Each group retains only the coefficients of the polynomials that were streamed into its
-/// commitment. The native witness and a common-domain LDE matrix are neither retained nor
-/// reconstructed after commitment. This keeps the phase transition binding while avoiding
-/// terabyte-scale encrypted scratch for the full MAIN profile.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(super) struct MainTracePolynomialSetV1 {
-    groups: [aggregate::MaskedTracePolynomialSetV1; FULL_PROFILE_TRACE_GROUPS_V1],
-}
+#[path = "main_resources.rs"]
+mod main_resources;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-impl MainTracePolynomialSetV1 {
-    pub(super) fn from_ordered_v1(
-        layout: &AggregateProofLayoutV1,
-        kind: MainTraceColumnKindV1,
-        groups: Vec<aggregate::MaskedTracePolynomialSetV1>,
-    ) -> Result<Self, ZkX509StarkErrorV1> {
-        layout.validate_exact_full_profile_registration_v1()?;
-        let groups = groups
-            .try_into()
-            .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-        let set = Self { groups };
-        set.validate_v1(layout, kind)?;
-        Ok(set)
-    }
-    fn validate_v1(
-        &self,
-        layout: &AggregateProofLayoutV1,
-        kind: MainTraceColumnKindV1,
-    ) -> Result<(), ZkX509StarkErrorV1> {
-        layout.validate_exact_full_profile_registration_v1()?;
-        for (polynomials, group) in self.groups.iter().zip(&layout.trace_groups) {
-            let width = match kind {
-                MainTraceColumnKindV1::Base => group.base_width,
-                MainTraceColumnKindV1::Aux => group.aux_width,
-            };
-            if polynomials.width() != width
-                || polynomials.native_trace_log2() != group.native_trace_log2
-                || polynomials.commitment_lde_log2() != layout.common_lde_log2
-            {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-        }
-        Ok(())
-    }
-    fn joined_plan_v1(
-        &self,
-        layout: &AggregateProofLayoutV1,
-        kind: MainTraceColumnKindV1,
-    ) -> Result<aggregate::joined_trace::JoinedTraceCommitmentPlanV1, ZkX509StarkErrorV1> {
-        self.validate_v1(layout, kind)?;
-        aggregate::joined_trace::JoinedTraceCommitmentPlanV1::new_v1(
-            layout.parameters_v1(),
-            &layout.as_shared()?,
-            match kind {
-                MainTraceColumnKindV1::Base => {
-                    aggregate::joined_trace::JoinedTraceColumnKindV1::Base
-                }
-                MainTraceColumnKindV1::Aux => aggregate::joined_trace::JoinedTraceColumnKindV1::Aux,
-            },
-        )
-        .map_err(map_aggregate_error_v1)
-    }
-    fn commit_joined_v1(
-        &self,
-        layout: &AggregateProofLayoutV1,
-        kind: MainTraceColumnKindV1,
-        indices: &[usize],
-    ) -> Result<aggregate::StreamingRowCommitmentResultV1, ZkX509StarkErrorV1> {
-        self.joined_plan_v1(layout, kind)?
-            .commit_v1(
-                AGGREGATE_DOMAINS_V1,
-                &self.groups.iter().collect::<Vec<_>>(),
-                indices,
-            )
-            .map_err(map_aggregate_error_v1)
-    }
-    fn group_v1(
-        &self,
-        layout: &AggregateProofLayoutV1,
-        kind: MainTraceColumnKindV1,
-        group_index: usize,
-    ) -> Result<&aggregate::MaskedTracePolynomialSetV1, ZkX509StarkErrorV1> {
-        self.validate_v1(layout, kind)?;
-        self.groups
-            .get(group_index)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
-    }
-}
+#[path = "main_trace_replay.rs"]
+mod main_trace_replay;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use main_trace_replay::MainTraceReplaySourcesV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(super) use main_trace_replay::{MainTraceMaskGroupV1, MainTracePolynomialSetV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn registered_main_group_column_v1(
     layout: &AggregateProofLayoutV1,
@@ -162,7 +89,7 @@ fn sample_main_trace_group_v1<R: TryRngCore>(
     kind: MainTraceColumnKindV1,
     source: &mut dyn MainTraceGroupSourceV1,
     rng: &mut R,
-) -> Result<aggregate::MaskedTracePolynomialSetV1, ZkX509StarkErrorV1> {
+) -> Result<MainTraceMaskGroupV1, ZkX509StarkErrorV1> {
     layout.validate_exact_full_profile_registration_v1()?;
     let group = *layout
         .trace_groups
@@ -179,52 +106,24 @@ fn sample_main_trace_group_v1<R: TryRngCore>(
         MainTraceColumnKindV1::Base => group.base_width,
         MainTraceColumnKindV1::Aux => group.aux_width,
     };
-    let mut source_error = None;
-    let result = aggregate::MaskedTracePolynomialSetV1::sample_columns_v1(
+    MainTraceMaskGroupV1::sample_v1(
         group.native_trace_log2,
         layout.common_lde_log2,
         width,
-        MASK_DEGREE,
         rng,
         |column_index| {
             let (registration, local_column) =
-                registered_main_group_column_v1(layout, group_index, kind, column_index)
-                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
-            let column = match kind {
+                registered_main_group_column_v1(layout, group_index, kind, column_index)?;
+            match kind {
                 MainTraceColumnKindV1::Base => {
                     source.native_base_column_v1(registration, local_column)
                 }
                 MainTraceColumnKindV1::Aux => {
                     source.native_aux_column_v1(registration, local_column)
                 }
-            };
-            let column = match column {
-                Ok(column) => column,
-                Err(error) => {
-                    let aggregate_error = if matches!(&error, ZkX509StarkErrorV1::AllocationFailure)
-                    {
-                        AggregateStarkErrorV1::AllocationFailure
-                    } else {
-                        AggregateStarkErrorV1::InvalidLayout
-                    };
-                    source_error = Some(error);
-                    return Err(aggregate_error);
-                }
-            };
-            if column.len() != registration.segment.trace_size()
-                || column.iter().any(|value| F::canonical(value.0).is_none())
-            {
-                return Err(AggregateStarkErrorV1::InvalidLayout);
             }
-            Ok(column.into_vec_v1())
         },
-    );
-    match (result, source_error) {
-        (Ok(committed), None) => Ok(committed),
-        (Err(_), Some(error)) => Err(error),
-        (Err(error), None) => Err(map_aggregate_error_v1(error)),
-        (Ok(_), Some(_)) => Err(ZkX509StarkErrorV1::InternalInvariant),
-    }
+    )
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_trace_group_root_v1(
@@ -281,6 +180,15 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
         validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
+        main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?.check_native_sources_v1(
+            self.assembly.allocated_payload_bytes_v1(),
+            &[
+                self.p256.allocated_payload_bytes_v1(),
+                core::mem::size_of_val(&self.sha),
+                self.projection.allocated_payload_bytes_v1(),
+                self.io.allocated_payload_bytes_v1(),
+            ],
+        )?;
         self.base_polynomials
             .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
         if self.public.consensus_context_digest == [0_u8; 32]
@@ -329,6 +237,14 @@ impl ZkX509MainCompositionPhaseV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
         validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
+        main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?.check_native_sources_v1(
+            self.assembly.allocated_payload_bytes_v1(),
+            &[
+                self.log19.allocated_payload_bytes_v1(),
+                self.projection.allocated_payload_bytes_v1(),
+                self.io.allocated_payload_bytes_v1(),
+            ],
+        )?;
         self.base_polynomials
             .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
         self.aux_polynomials
@@ -414,6 +330,11 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             &self.base_polynomials,
             &self.aux_polynomials,
+            &MainTraceReplaySourcesV1::Bound {
+                log19: &self.log19,
+                projection: &self.projection,
+                io: &self.io,
+            },
             &providers,
             &self.alphas,
         )
@@ -439,6 +360,9 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     ZkX509StarkErrorV1,
 > {
     validate_zk_x509_main_proof_budget_v1()?;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+    let buffer_plan = main_resources::MainProverBufferPlanV1::new_v1(&layout)?;
+    buffer_plan.check_before_sources_v1(assembly.allocated_payload_bytes_v1())?;
     validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
     if public.consensus_context_digest == [0_u8; 32] {
         return Err(ZkX509StarkErrorV1::InvalidStatement);
@@ -448,7 +372,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     {
         return Err(ZkX509StarkErrorV1::WitnessStatementMismatch);
     }
-    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+    buffer_plan.check_source_shapes_v1(&layout, assembly)?;
     let p256 = P256MainBaseSourceV1::new_v1(assembly)?;
     let sha = main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
@@ -457,6 +381,15 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         &assembly.projection_trace,
     )?;
     let mut io = MainIoTraceGroupSourceV1::for_main_v1(&layout, statement, &assembly.io)?;
+    buffer_plan.check_native_sources_v1(
+        assembly.allocated_payload_bytes_v1(),
+        &[
+            p256.allocated_payload_bytes_v1(),
+            core::mem::size_of_val(&sha),
+            projection.allocated_payload_bytes_v1(),
+            io.allocated_payload_bytes_v1(),
+        ],
+    )?;
     let mut session = ZkX509MainBaseCommitmentSessionV1::new_v1(
         &layout,
         public.consensus_context_digest,
@@ -505,6 +438,16 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     {
         let mut source =
             MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
+        buffer_plan.check_native_sources_v1(
+            assembly.allocated_payload_bytes_v1(),
+            &[
+                p256.allocated_payload_bytes_v1(),
+                core::mem::size_of_val(&sha),
+                projection.allocated_payload_bytes_v1(),
+                io.allocated_payload_bytes_v1(),
+                source.allocated_payload_bytes_v1(),
+            ],
+        )?;
         let polynomials =
             sample_main_trace_group_v1(&layout, 5, MainTraceColumnKindV1::Base, &mut source, rng)?;
         base_polynomials.push(polynomials);
@@ -514,8 +457,18 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         MainTraceColumnKindV1::Base,
         base_polynomials,
     )?;
-    let commitment =
-        base_polynomials.commit_joined_v1(&layout, MainTraceColumnKindV1::Base, &[])?;
+    let commitment = base_polynomials.commit_joined_v1(
+        &layout,
+        MainTraceColumnKindV1::Base,
+        &[],
+        &MainTraceReplaySourcesV1::Base {
+            assembly,
+            sha: &sha,
+            p256: &p256,
+            projection: &projection,
+            io: &io,
+        },
+    )?;
     session.accept_streaming_base_commitment_v1(&commitment)?;
     let trace_groups = vec![main_trace_group_root_v1(
         MainTraceColumnKindV1::Base,
@@ -559,6 +512,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             // challenge-dependent child transition.
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
+        let buffer_plan = main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?;
+        buffer_plan.check_before_sources_v1(self.assembly.allocated_payload_bytes_v1())?;
         let ZkX509MainAwaitingCredentialBindingV1 {
             layout,
             statement,
@@ -581,6 +536,14 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         io.bind_challenges_v1(post_base)?;
         let mut log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
             &layout, assembly, sha, p256, binding,
+        )?;
+        buffer_plan.check_native_sources_v1(
+            assembly.allocated_payload_bytes_v1(),
+            &[
+                log19.allocated_payload_bytes_v1(),
+                projection.allocated_payload_bytes_v1(),
+                io.allocated_payload_bytes_v1(),
+            ],
         )?;
         let mut aux_polynomials = Vec::new();
         aux_polynomials
@@ -649,8 +612,16 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             MainTraceColumnKindV1::Aux,
             aux_polynomials,
         )?;
-        let commitment =
-            aux_polynomials.commit_joined_v1(&layout, MainTraceColumnKindV1::Aux, &[])?;
+        let commitment = aux_polynomials.commit_joined_v1(
+            &layout,
+            MainTraceColumnKindV1::Aux,
+            &[],
+            &MainTraceReplaySourcesV1::Bound {
+                log19: &log19,
+                projection: &projection,
+                io: &io,
+            },
+        )?;
         trace_groups[0].aux_root = commitment.commitment.root;
         aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
             .map_err(map_aggregate_error_v1)?;
@@ -683,8 +654,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
 impl ZkX509MainCompositionPhaseV1<'_> {
     /// Consume the X5B1-bound phase and construct the canonical X5M1 proof.
     ///
-    /// Every trace opening and DEEP value is replayed only from the retained
-    /// masked polynomial coefficients committed by the two earlier phases.
+    /// Every trace opening and DEEP value uses the original explicit masks
+    /// and immutable bound native sources committed by the two earlier phases.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn finish_v1_with_rng<R: TryRngCore>(
         mut self,
@@ -692,6 +663,11 @@ impl ZkX509MainCompositionPhaseV1<'_> {
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
         self.validate_v1()?;
         let composition_material = self.composition_material_v1()?;
+        let sources = MainTraceReplaySourcesV1::Bound {
+            log19: &self.log19,
+            projection: &self.projection,
+            io: &self.io,
+        };
         let compositions = &composition_material.evaluations;
         let shared_layout = self.layout.as_shared()?;
         let mut composition_roots = Vec::new();
@@ -746,22 +722,20 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         for group_index in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
-            let base = self.base_polynomials.group_v1(
+            let (base_current, base_next) = self.base_polynomials.deep_group_v1(
                 &self.layout,
                 MainTraceColumnKindV1::Base,
                 group_index,
+                deep_point,
+                &sources,
             )?;
-            let aux = self.aux_polynomials.group_v1(
+            let (aux_current, aux_next) = self.aux_polynomials.deep_group_v1(
                 &self.layout,
                 MainTraceColumnKindV1::Aux,
                 group_index,
+                deep_point,
+                &sources,
             )?;
-            let (base_current, base_next) =
-                aggregate::evaluate_masked_trace_polynomial_columns_at_deep_v1(base, deep_point)
-                    .map_err(map_aggregate_error_v1)?;
-            let (aux_current, aux_next) =
-                aggregate::evaluate_masked_trace_polynomial_columns_at_deep_v1(aux, deep_point)
-                    .map_err(map_aggregate_error_v1)?;
             deep_trace_groups.push(aggregate::AggregateDeepTraceGroupOpeningV1 {
                 base_current: fp4_values_to_wire_v1(base_current),
                 base_next: fp4_values_to_wire_v1(base_next),
@@ -794,6 +768,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             &self.base_polynomials,
             &self.aux_polynomials,
+            &sources,
             &composition_material.coefficient_chunks,
             &mixes,
             deep_point,
@@ -829,6 +804,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             &self.base_polynomials,
             &self.aux_polynomials,
+            &sources,
             &composition_material.coefficient_chunks,
             &mixes,
             deep_point,
@@ -873,11 +849,13 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             MainTraceColumnKindV1::Base,
             &opening_indices,
+            &sources,
         )?;
         let aux_openings = self.aux_polynomials.commit_joined_v1(
             &self.layout,
             MainTraceColumnKindV1::Aux,
             &opening_indices,
+            &sources,
         )?;
         let trace_group = self
             .trace_groups
@@ -1232,7 +1210,9 @@ struct ZeroizingMainFixedPolynomialSetV1 {
 impl Drop for ZeroizingMainFixedPolynomialSetV1 {
     fn drop(&mut self) {
         for column in &mut self.columns {
-            column.fill(F::ZERO);
+            for value in column {
+                value.zeroize_v1();
+            }
         }
     }
 }
@@ -1319,15 +1299,10 @@ fn main_registration_trace_columns_on_coset_v1(
     polynomials: &MainTracePolynomialSetV1,
     kind: MainTraceColumnKindV1,
     registration: RegisteredSegmentLayoutV1,
-    evaluation_log2: u8,
+    sources: &MainTraceReplaySourcesV1<'_, '_>,
+    stripe: main_quotient_stripes::MainQuotientStripeV1,
 ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
     canonical_main_registration_index_v1(layout, registration)?;
-    if evaluation_log2 <= registration.segment.trace_log2
-        || evaluation_log2 > layout.common_lde_log2
-    {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    let group = polynomials.group_v1(layout, kind, registration.trace_group)?;
     let (start, end, width) = match kind {
         MainTraceColumnKindV1::Base => (
             registration.base_start,
@@ -1340,33 +1315,35 @@ fn main_registration_trace_columns_on_coset_v1(
             registration.segment.aux_width,
         ),
     };
-    let evaluation_rows = 1_usize
-        .checked_shl(u32::from(evaluation_log2))
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    let evaluated = (start..end)
-        .into_par_iter()
-        .map(|column| {
-            group
-                .evaluate_column_on_coset_v1(column, evaluation_log2)
-                .map_err(map_aggregate_error_v1)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let mut columns = ZeroizingBaseColumnsV1(Vec::new());
     columns
         .0
         .try_reserve_exact(width)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    for evaluated in evaluated {
-        if evaluated.len() != evaluation_rows
-            || evaluated
-                .iter()
-                .any(|value| F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
+    // Native replay stays serial. Only this fixed eight-column batch may own
+    // replayed coefficients or parallel FFT scratch at the same time.
+    for first in (start..end).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        let batch_end = end.min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
+        let replayed = (first..batch_end)
+            .map(|column| {
+                polynomials.replay_column_coefficients_v1(
+                    layout,
+                    kind,
+                    registration.trace_group,
+                    column,
+                    sources,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let evaluated = replayed
+            .par_iter()
+            .map(|coefficients| stripe.evaluate_v1(coefficients))
+            .collect::<Result<Vec<_>, _>>()?;
+        for column in evaluated {
+            columns.0.push(column.into_vec_v1());
         }
-        columns.0.push(evaluated.into_vec_v1());
     }
-    if columns.len() != width {
+    if columns.len() != width || columns.iter().any(|column| column.len() != stripe.rows) {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
     Ok(columns)
@@ -1374,51 +1351,33 @@ fn main_registration_trace_columns_on_coset_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_fixed_columns_on_coset_v1(
     fixed: &ZeroizingMainFixedPolynomialSetV1,
-    evaluation_log2: u8,
+    stripe: main_quotient_stripes::MainQuotientStripeV1,
 ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
     let registration = fixed.registration;
-    if evaluation_log2 <= registration.segment.trace_log2
-        || fixed.columns.len() != registration.segment.fixed_width
+    if fixed.columns.len() != registration.segment.fixed_width
+        || fixed
+            .columns
+            .iter()
+            .any(|column| column.len() != registration.segment.trace_size())
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    let evaluation_rows = 1_usize
-        .checked_shl(u32::from(evaluation_log2))
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    let evaluation_root =
-        goldilocks_primitive_root_v1(evaluation_log2).map_err(map_transparent_error_v1)?;
-    if fixed.columns.iter().any(|coefficients| {
-        coefficients.len() != registration.segment.trace_size()
-            || coefficients
-                .iter()
-                .any(|value| F::canonical(value.0).is_none())
-    }) {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    let evaluated = fixed
-        .columns
-        .par_iter()
-        .map(|coefficients| {
-            goldilocks_evaluate_coset_v1(
-                coefficients,
-                evaluation_rows,
-                evaluation_root,
-                F(GOLDILOCKS_GENERATOR_V1),
-            )
-            .map(ZeroizingMainTraceColumnV1)
-            .map_err(map_transparent_error_v1)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let mut columns = ZeroizingBaseColumnsV1(Vec::new());
     columns
         .0
-        .try_reserve_exact(evaluated.len())
+        .try_reserve_exact(fixed.columns.len())
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    for evaluated in evaluated {
-        if evaluated.len() != evaluation_rows {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
+    for batch in fixed
+        .columns
+        .chunks(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+    {
+        let evaluated = batch
+            .par_iter()
+            .map(|coefficients| stripe.evaluate_v1(coefficients))
+            .collect::<Result<Vec<_>, _>>()?;
+        for column in evaluated {
+            columns.0.push(column.into_vec_v1());
         }
-        columns.0.push(evaluated.into_vec_v1());
     }
     Ok(columns)
 }
@@ -1501,6 +1460,7 @@ fn main_registration_composition_coefficient_chunks_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
     base_polynomials: &MainTracePolynomialSetV1,
     aux_polynomials: &MainTracePolynomialSetV1,
+    sources: &MainTraceReplaySourcesV1<'_, '_>,
     fixed: &ZeroizingMainFixedPolynomialSetV1,
     alphas: &[Vec<E>],
     shared_layout: &aggregate::AggregateProofLayoutV1,
@@ -1516,29 +1476,14 @@ fn main_registration_composition_coefficient_chunks_v1(
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    let base = main_registration_trace_columns_on_coset_v1(
-        layout,
-        base_polynomials,
-        MainTraceColumnKindV1::Base,
-        registration,
+    let first_stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
+        registration.segment.trace_log2,
         plan.quotient_coset_log2,
+        0,
     )?;
-    let aux = main_registration_trace_columns_on_coset_v1(
-        layout,
-        aux_polynomials,
-        MainTraceColumnKindV1::Aux,
-        registration,
-        plan.quotient_coset_log2,
-    )?;
-    let fixed = main_fixed_columns_on_coset_v1(fixed, plan.quotient_coset_log2)?;
-    if base.len() != registration.segment.base_width
-        || aux.len() != registration.segment.aux_width
-        || fixed.len() != registration.segment.fixed_width
-        || base
-            .iter()
-            .chain(aux.iter())
-            .chain(fixed.iter())
-            .any(|column| column.len() != plan.quotient_coset_rows)
+    if first_stripe.rows.checked_mul(first_stripe.count) != Some(plan.quotient_coset_rows)
+        || first_stripe.next_stride.checked_mul(first_stripe.count)
+            != Some(plan.quotient_next_stride)
     {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
@@ -1553,52 +1498,78 @@ fn main_registration_composition_coefficient_chunks_v1(
             Ok::<_, ZkX509StarkErrorV1>(quotient)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let coset_root =
-        goldilocks_primitive_root_v1(plan.quotient_coset_log2).map_err(map_transparent_error_v1)?;
-    // Each quotient row is independent after the trace, fixed-polynomial, and
-    // alpha schedules are frozen. The release runner owns an exact four-thread
-    // Rayon pool; fixed-size chunks avoid per-row allocation while preserving
-    // canonical row order and identical field values.
-    const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
-    quotients
-        .par_iter_mut()
-        .enumerate()
-        .try_for_each(|(lane, quotient)| {
-            quotient
-                .0
-                .par_chunks_mut(QUOTIENT_ROWS_PER_TASK_V1)
-                .enumerate()
-                .try_for_each_init(
-                    || MainQuotientRowScratchV1::new_v1(registration),
-                    |scratch, (chunk_index, output)| {
-                        let first_row = chunk_index
-                            .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
-                            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-                        let mut x =
-                            F(GOLDILOCKS_GENERATOR_V1).mul(coset_root.pow(first_row as u128));
-                        for (offset, target) in output.iter_mut().enumerate() {
-                            let row = first_row
-                                .checked_add(offset)
+    for ordinal in 0..first_stripe.count {
+        let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
+            registration.segment.trace_log2,
+            plan.quotient_coset_log2,
+            ordinal,
+        )?;
+        let base = main_registration_trace_columns_on_coset_v1(
+            layout,
+            base_polynomials,
+            MainTraceColumnKindV1::Base,
+            registration,
+            sources,
+            stripe,
+        )?;
+        let aux = main_registration_trace_columns_on_coset_v1(
+            layout,
+            aux_polynomials,
+            MainTraceColumnKindV1::Aux,
+            registration,
+            sources,
+            stripe,
+        )?;
+        let fixed_columns = main_fixed_columns_on_coset_v1(fixed, stripe)?;
+        // Each task owns disjoint windows of the canonical full quotient. Only
+        // this stripe's interleaved entries are written, so the original IFFT
+        // sees exactly its original domain ordering after every stripe.
+        const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
+        let task_entries = stripe
+            .count
+            .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+        quotients
+            .par_iter_mut()
+            .enumerate()
+            .try_for_each(|(lane, quotient)| {
+                quotient
+                    .0
+                    .par_chunks_mut(task_entries)
+                    .enumerate()
+                    .try_for_each_init(
+                        || MainQuotientRowScratchV1::new_v1(registration),
+                        |scratch, (chunk_index, output)| {
+                            let first_row = chunk_index
+                                .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
                                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-                            let next = (row + plan.quotient_next_stride) % plan.quotient_coset_rows;
-                            scratch.fill_v1(row, next, &base, &aux, &fixed);
-                            *target = provider.composition_value_v1(
-                                registration,
-                                x,
-                                scratch.opening_v1(),
-                                &scratch.fixed_current,
-                                &scratch.fixed_next,
-                                &alphas[lane],
-                            )?;
-                            x = x.mul(coset_root);
-                        }
-                        Ok::<_, ZkX509StarkErrorV1>(())
-                    },
-                )
-        })?;
-    drop(base);
-    drop(aux);
-    drop(fixed);
+                            let mut x = stripe.shift.mul(stripe.root.pow(first_row as u128));
+                            for (offset, target) in output
+                                .iter_mut()
+                                .skip(stripe.ordinal)
+                                .step_by(stripe.count)
+                                .enumerate()
+                            {
+                                let row = first_row
+                                    .checked_add(offset)
+                                    .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+                                let next = (row + stripe.next_stride) % stripe.rows;
+                                scratch.fill_v1(row, next, &base, &aux, &fixed_columns);
+                                *target = provider.composition_value_v1(
+                                    registration,
+                                    x,
+                                    scratch.opening_v1(),
+                                    &scratch.fixed_current,
+                                    &scratch.fixed_next,
+                                    &alphas[lane],
+                                )?;
+                                x = x.mul(stripe.root);
+                            }
+                            Ok::<_, ZkX509StarkErrorV1>(())
+                        },
+                    )
+            })?;
+    }
     let mut coefficient_chunks = Vec::new();
     coefficient_chunks
         .try_reserve_exact(SECURITY_LANES)
@@ -1723,6 +1694,7 @@ fn main_composition_material_from_polynomials_v1(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
     aux_polynomials: &MainTracePolynomialSetV1,
+    sources: &MainTraceReplaySourcesV1<'_, '_>,
     providers: &[MainProverConstraintProviderV1<'_, '_>],
     alphas: &[Vec<Vec<E>>],
 ) -> Result<RetainedCompositionMaterialV1, ZkX509StarkErrorV1> {
@@ -1778,6 +1750,7 @@ fn main_composition_material_from_polynomials_v1(
                 provider,
                 base_polynomials,
                 aux_polynomials,
+                sources,
                 fixed,
                 &alphas[registration_index],
                 &shared_layout,
@@ -1811,6 +1784,7 @@ fn main_fri_bases_from_polynomials_v1(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
     aux_polynomials: &MainTracePolynomialSetV1,
+    sources: &MainTraceReplaySourcesV1<'_, '_>,
     composition_coefficients: &[Vec<Vec<E>>],
     mixes: &[Vec<FriMixV1>],
     deep_point: E,
@@ -1854,10 +1828,6 @@ fn main_fri_bases_from_polynomials_v1(
             .trace_groups
             .get(group_index)
             .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-        let base_group =
-            base_polynomials.group_v1(layout, MainTraceColumnKindV1::Base, group_index)?;
-        let aux_group =
-            aux_polynomials.group_v1(layout, MainTraceColumnKindV1::Aux, group_index)?;
         let deep = deep_trace_groups
             .get(group_index)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -1874,20 +1844,24 @@ fn main_fri_bases_from_polynomials_v1(
         let native_root = goldilocks_primitive_root_v1(group_layout.native_trace_log2)
             .map_err(map_transparent_error_v1)?;
         let deep_next_point = deep_point.mul_base(native_root);
-        for column in 0..base_group.width() {
-            let coefficients = base_group
-                .column_coefficients_v1(column)
-                .map_err(map_aggregate_error_v1)?;
+        for column in 0..group_layout.base_width {
+            let coefficients = base_polynomials.replay_column_coefficients_v1(
+                layout,
+                MainTraceColumnKindV1::Base,
+                group_index,
+                column,
+                sources,
+            )?;
             for lane in 0..SECURITY_LANES {
                 accumulate_base_deep_quotient_v1(
-                    coefficients,
+                    &coefficients,
                     deep_point,
                     deep.base_current[column],
                     group_mixes[lane].base[column],
                     &mut accumulators[lane].0,
                 )?;
                 accumulate_base_deep_quotient_v1(
-                    coefficients,
+                    &coefficients,
                     deep_next_point,
                     deep.base_next[column],
                     group_mixes[lane].base_next[column],
@@ -1895,20 +1869,24 @@ fn main_fri_bases_from_polynomials_v1(
                 )?;
             }
         }
-        for column in 0..aux_group.width() {
-            let coefficients = aux_group
-                .column_coefficients_v1(column)
-                .map_err(map_aggregate_error_v1)?;
+        for column in 0..group_layout.aux_width {
+            let coefficients = aux_polynomials.replay_column_coefficients_v1(
+                layout,
+                MainTraceColumnKindV1::Aux,
+                group_index,
+                column,
+                sources,
+            )?;
             for lane in 0..SECURITY_LANES {
                 accumulate_base_deep_quotient_v1(
-                    coefficients,
+                    &coefficients,
                     deep_point,
                     deep.aux_current[column],
                     group_mixes[lane].aux[column],
                     &mut accumulators[lane].0,
                 )?;
                 accumulate_base_deep_quotient_v1(
-                    coefficients,
+                    &coefficients,
                     deep_next_point,
                     deep.aux_next[column],
                     group_mixes[lane].aux_next[column],

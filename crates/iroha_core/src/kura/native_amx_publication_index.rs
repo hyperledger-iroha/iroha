@@ -813,8 +813,8 @@ impl Kura {
                 "Native indexed publication startup changed canonical executed wire".to_owned(),
             ));
         }
-        let (_, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(carrier.height)?
+        let (_, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(carrier.height)?
             .ok_or(Error::MissingV2FinalityArtifact {
                 height: carrier.height,
             })?;

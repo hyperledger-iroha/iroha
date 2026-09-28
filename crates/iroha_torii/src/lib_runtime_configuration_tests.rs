@@ -210,40 +210,6 @@ mod universal_kagemusha_readiness_tests {
             .expect("liveness body");
         assert_eq!(&body[..], b"Alive");
     }
-    #[tokio::test]
-    async fn readiness_requires_replay_archive_for_every_committed_sccp_route() {
-        let app = super::mk_app_state_for_tests();
-        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        let (_, _, trust_anchor) =
-            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
-        app.state.set_sccp_registry_for_testing(
-            iroha_core::state::ValidatedSccpRegistryV1::try_from_wire(
-                iroha_data_model::bridge::SccpRegistryV1 {
-                    version: 1,
-                    lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
-                        lane_id: fixture.route.lane_id,
-                        native_trust_anchors: vec![trust_anchor],
-                        current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
-                        routes: vec![fixture.route],
-                    }],
-                },
-            )
-            .expect("exact SCCP route registry validates"),
-        );
-
-        let readiness = handler_readyz(axum::extract::State(app)).await;
-        assert_eq!(
-            readiness.status(),
-            axum::http::StatusCode::SERVICE_UNAVAILABLE
-        );
-        let body = axum::body::to_bytes(readiness.into_body(), usize::MAX)
-            .await
-            .expect("readiness body");
-        assert_eq!(
-            &body[..],
-            b"SCCP replay archive is not synchronized with finalized state"
-        );
-    }
     #[test]
     fn command_body_limits_match_signed_and_typed_contracts() {
         let redeem_protocol_max =

@@ -392,15 +392,18 @@ Kaigi fee-spend adapter.
 For local wallet proving, use `ConfidentialProver` with a network, canonical asset
 ID and mutable 32-byte spend key. `proveTransfer()` and `proveRedemption()` select
 the canonical circuit and key in Core and verify the generated proof before
-returning. Full redemption omits `change`; partial redemption supplies one exact
+resolving their promises. Native proof work runs off the JavaScript thread.
+Full redemption omits `change`; partial redemption supplies one exact
 change note. Supply `rootHex`, `treeCommitments` and the actual `inputs` from your
 authenticated wallet snapshot. No dummy note, circuit ID or verifying-key record
 is needed.
 
 ```js
+import { ConfidentialProver } from "@iroha/iroha-js";
+
 const prover = new ConfidentialProver({ networkId, assetDefinitionId, spendKey });
 try {
-  const proof = prover.proveRedemption({
+  const proof = await prover.proveRedemption({
     rootHex, treeCommitments, inputs, publicAmount: 42n,
   });
   // A local proof is not ledger authorization; use an implemented protocol's admission path.
@@ -411,7 +414,9 @@ try {
 
 `ConfidentialProverError.code` distinguishes `INVALID_INPUT`, `NATIVE_UNAVAILABLE`,
 `PROVING_FAILED` and `DISPOSED`. Use bigint or exact decimal strings for amounts
-outside JavaScript's safe integer range. Note openings expressed as JavaScript
+outside JavaScript's safe integer range. Disposing prevents new work and clears
+the wallet's key; an already queued job owns its inputs and finishes independently.
+Note openings expressed as JavaScript
 strings remain managed by the JavaScript runtime; this API does not promise
 secure erasure of those strings. The native runtime must be rebuilt from the
 current source to expose these wallet methods.

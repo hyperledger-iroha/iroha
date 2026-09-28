@@ -397,8 +397,6 @@ impl<A> PhysicallyPreparedCarrier<'_, A> {
             components,
             world_effects,
             geometry: _geometry,
-            provider_capture: _provider_capture,
-            reputation_capture: _reputation_capture,
             mut publication_events,
             tiered_snapshot,
             mut effects,
@@ -450,7 +448,6 @@ impl<A> PhysicallyPreparedCarrier<'_, A> {
             .da_commitments
             .take()
             .map(|effects| effects.publish(target, &mut effect_locks, &generation, true));
-        effect_locks.install_sccp(std::sync::Arc::clone(&effects.sccp_registry));
         hash_retirement = block_hashes.publish();
         **effect_locks
             .latest_block_header

@@ -183,34 +183,6 @@ fn reserve_record_page_queries_require_governance_permission() {
     );
 }
 #[test]
-fn sccp_and_generic_parameter_permissions_are_separated() {
-    let sccp = custom_parameter("sccp_registry_v1");
-    assert_denied_with_permission(
-        sccp.clone(),
-        PermissionObject::from(CanSetParameters),
-        parameter::visit_set_parameter,
-    );
-    assert_denied_with_permission(
-        sccp.clone(),
-        PermissionObject::from(CanManageSccpGovernance),
-        parameter::visit_set_parameter,
-    );
-    let mut genesis = MockExecutor::new(true);
-    parameter::visit_set_parameter(&mut genesis, &sccp);
-    assert!(genesis.verdict().is_err());
-    let unrelated = custom_parameter("unrelated_parameter");
-    assert_denied_with_permission(
-        unrelated.clone(),
-        PermissionObject::from(CanManageSccpGovernance),
-        parameter::visit_set_parameter,
-    );
-    assert_allowed_with_permission(
-        unrelated,
-        PermissionObject::from(CanSetParameters),
-        parameter::visit_set_parameter,
-    );
-}
-#[test]
 fn validation_fee_parameters_are_reserved_from_generic_set_parameter() {
     for id in [
         iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID,
@@ -274,9 +246,21 @@ fn raw_domain_registration_is_genesis_only() {
     domain::visit_register_domain(&mut genesis, &instruction);
     assert!(genesis.verdict().is_ok());
 }
+fn custom_parameter(name: &str) -> SetParameter {
+    let id = iroha_smart_contract::data_model::parameter::CustomParameterId::new(
+        name.parse().expect("test custom parameter id"),
+    );
+    SetParameter::new(Parameter::Custom(
+        iroha_smart_contract::data_model::parameter::CustomParameter::new(id, Json::new(())),
+    ))
+}
 #[test]
-fn genesis_cannot_bypass_typed_sccp_certificate_governance() {
-    let mut executor = MockExecutor::new(true);
-    bridge::visit_apply_sccp_route_governance(&mut executor, &remove_sccp_route());
-    assert!(executor.verdict().is_err());
+fn unrelated_custom_parameters_require_the_generic_parameter_permission() {
+    let unrelated = custom_parameter("unrelated_parameter");
+    assert_denied_without_permission(unrelated.clone(), parameter::visit_set_parameter);
+    assert_allowed_with_permission(
+        unrelated,
+        PermissionObject::from(CanSetParameters),
+        parameter::visit_set_parameter,
+    );
 }

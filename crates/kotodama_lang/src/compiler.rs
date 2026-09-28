@@ -5748,7 +5748,7 @@ seiyaku BallotAccess {
     }
     #[test]
     fn vendor_bridge_and_subscription_builtins_emit_syscalls() {
-        let src = include_str!("compiler/fixtures/v1/c085.ko");
+        let src = include_str!("compiler/fixtures/v1/c197.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
@@ -5769,29 +5769,22 @@ seiyaku BallotAccess {
             .filter(|window| *window == execute_instruction)
             .count();
         assert_eq!(
-            execute_instruction_count, 2,
-            "typed SCCP and governance operations should lower to SMARTCONTRACT_EXECUTE_INSTRUCTION"
+            execute_instruction_count, 1,
+            "the typed governance operation should lower to SMARTCONTRACT_EXECUTE_INSTRUCTION"
         );
-        for (tag, label) in [
-            (
-                ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-                "SubmitBallot",
-            ),
-            (
-                ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
-                "RecordSccpMessage",
-            ),
-        ] {
-            let tag_word =
-                encode_addi(11, 0, i16::try_from(tag).expect("instruction tag fits i16"))
-                    .expect("encode instruction tag")
-                    .to_le_bytes();
-            assert!(
-                code.windows(tag_word.len())
-                    .any(|window| window == tag_word),
-                "expected {label} operation tag in compiled code"
-            );
-        }
+        let tag_word = encode_addi(
+            11,
+            0,
+            i16::try_from(ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT)
+                .expect("instruction tag fits i16"),
+        )
+        .expect("encode instruction tag")
+        .to_le_bytes();
+        assert!(
+            code.windows(tag_word.len())
+                .any(|window| window == tag_word),
+            "expected SubmitBallot operation tag in compiled code"
+        );
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -5815,16 +5808,10 @@ seiyaku BallotAccess {
     }
     #[test]
     fn vendor_bridge_and_subscription_builtins_reject_invalid_arguments() {
-        for (src, expected) in [
-            (
-                include_str!("compiler/fixtures/v1/c086.ko"),
-                "ledger::sccp::record expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
-            ),
-            (
-                include_str!("compiler/fixtures/v1/c087.ko"),
-                "call `ledger::subscription::record_usage` expects at most 0 arguments",
-            ),
-        ] {
+        for (src, expected) in [(
+            include_str!("compiler/fixtures/v1/c087.ko"),
+            "call `ledger::subscription::record_usage` expects at most 0 arguments",
+        )] {
             let parsed = parse(src).expect("parse source");
             let err = analyze(&parsed)
                 .expect_err("semantic analysis should reject bridge/subscription args");
@@ -12309,9 +12296,6 @@ impl Compiler {
                             let operation_tag = match kind {
                                 ir::VendorInstructionKind::SubmitBallot => {
                                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT
-                                }
-                                ir::VendorInstructionKind::RecordSccpMessage => {
-                                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE
                                 }
                             };
                             push_word(
@@ -18994,7 +18978,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::VerifyProof { .. } => access_class_for_builtin(Builtin::VerifyProof),
         ir::Instr::VendorExecuteInstruction { kind, .. } => access_class_for_builtin(match kind {
             ir::VendorInstructionKind::SubmitBallot => Builtin::ScExecuteSubmitBallot,
-            ir::VendorInstructionKind::RecordSccpMessage => Builtin::RecordSccpMessage,
         }),
         ir::Instr::VendorExecuteQuery { .. } => access_class_for_builtin(Builtin::ExecuteQuery),
         ir::Instr::QueryExecuteNorito { .. } => {

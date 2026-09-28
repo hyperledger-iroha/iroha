@@ -480,15 +480,21 @@ impl core::fmt::Debug for ZkX509DerStarkBaseV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkBaseV1 {
+    /// Overwrite the live allocation before releasing any private field cells.
+    pub(crate) fn zeroize_private_cells_v1(&mut self) {
+        for length in &mut self.private_shape.document_lengths {
+            zeroize::Zeroize::zeroize(length);
+        }
+        zeroize::Zeroize::zeroize(&mut self.private_shape.parser_rows);
+        zeroize::Zeroize::zeroize(&mut self.private_shape.comparator_rows);
+        for value in self.rows.iter_mut().flatten() {
+            value.zeroize_v1();
+        }
+    }
     /// Recursively overwrite all private geometry and committed field rows.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.private_shape.document_lengths.fill(0);
+        self.zeroize_private_cells_v1();
         self.private_shape.document_lengths.clear();
-        self.private_shape.parser_rows = 0;
-        self.private_shape.comparator_rows = 0;
-        for row in &mut self.rows {
-            row.fill(F::ZERO);
-        }
         self.rows.clear();
     }
     #[cfg(test)]

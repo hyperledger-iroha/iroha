@@ -1965,6 +1965,19 @@ pub(crate) struct P256ValueBusStarkFixedProviderV1 {
     trace_size: usize,
 }
 impl P256ValueBusStarkFixedProviderV1 {
+    /// Allocated verifier-owned SSA and sorted-index payload.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            vector_v1(&self.initial_values),
+            vector_v1(&self.linked_operations),
+            vector_v1(&self.equalities),
+            vector_v1(&self.boolean_bridges),
+            vector_v1(&self.metadata),
+            vector_v1(&self.sorted_prefix),
+        ])
+    }
     /// Validate the complete SSA address topology and establish a padded native domain.
     pub(crate) fn new_v1(
         endpoint: P256ValueBusStarkEndpointV1,
@@ -2517,6 +2530,76 @@ fn compute_base_endpoint_terminal_v1(
     }
     Ok(terminal)
 }
+/// Conservative construction scratch for one serial value-source build.
+/// Charges the temporary arithmetic matrix, copied operations, four full event
+/// tables, four compact endpoint/sort tables, and compact topology overhead.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn p256_value_source_scratch_forecast_v1(
+    role: P256EcdsaRoleV1,
+) -> Result<usize, P256ValueBusErrorV1> {
+    use super::{
+        allocation_payload::sum_v1,
+        p256_air::{
+            P256_ARITHMETIC_BASE_WIDTH_V1, ZkX509P256ArithmeticFixedRowV1,
+            ZkX509P256ArithmeticOperationV1,
+        },
+    };
+    use core::mem::size_of;
+    let topology =
+        compile_p256_ecdsa_topology_v1(role).map_err(|_| P256ValueBusErrorV1::Topology)?;
+    let operations = topology.linked_operations.len();
+    let factors = (operations + topology.equalities.len() + topology.boolean_bridges.len())
+        * P256_VALUE_BUS_SEGMENT_ROWS_V1;
+    if factors > P256_VALUE_BUS_STARK_TRACE_SIZE_V1 * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+        return Err(P256ValueBusErrorV1::Topology);
+    }
+    Ok(sum_v1([
+        operations
+            * P256_ARITHMETIC_ROWS_PER_OPERATION_V1
+            * (size_of::<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>()
+                + size_of::<ZkX509P256ArithmeticFixedRowV1>()),
+        operations * size_of::<ZkX509P256ArithmeticOperationV1>(),
+        4 * factors * (size_of::<ExpectedAccessV1>() + size_of::<P256ValueBusBaseCellV1>()),
+        32 << 20,
+    ]))
+}
+
+/// Forecast the canonical retained value source before any private matrix is built.
+/// Only the compact, value-free verifier topology and fixed providers are allocated.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn p256_value_source_allocation_forecast_v1(
+    role: P256EcdsaRoleV1,
+) -> Result<usize, P256ValueBusErrorV1> {
+    use super::allocation_payload::{p256_topology_v1, sum_v1};
+    let topology =
+        compile_p256_ecdsa_topology_v1(role).map_err(|_| P256ValueBusErrorV1::Topology)?;
+    let provider = |endpoint| {
+        P256ValueBusStarkFixedProviderV1::new_v1(
+            endpoint,
+            &topology.initial_values,
+            &topology.linked_operations,
+            &topology.equalities,
+            &topology.boolean_bridges,
+            P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
+        )
+    };
+    let execution = provider(P256ValueBusStarkEndpointV1::Execution)?;
+    let sorted = provider(P256ValueBusStarkEndpointV1::Sorted)?;
+    let rows = execution.logical_factor_rows;
+    if rows != sorted.logical_factor_rows {
+        return Err(P256ValueBusErrorV1::Topology);
+    }
+    let arc_header = 2 * core::mem::size_of::<usize>();
+    Ok(sum_v1([
+        arc_header,
+        core::mem::size_of::<P256ValueBusBaseMaterialV1>(),
+        p256_topology_v1(&topology),
+        2 * rows * core::mem::size_of::<P256ValueBusBaseCellV1>(),
+        2 * (arc_header + core::mem::size_of::<P256ValueBusStarkFixedProviderV1>()),
+        execution.allocated_heap_bytes_v1(),
+        sorted.allocated_heap_bytes_v1(),
+    ]))
+}
 /// Pre-commitment value-bus capability.
 ///
 /// Binding is poison-on-attempt: the sole transition is consumed before any fallible validation. A
@@ -2540,6 +2623,36 @@ impl core::fmt::Debug for P256ValueBusBaseSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBaseSourceV1 {
+    /// Reachable allocation payload; shared replay handles do not duplicate it.
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{p256_topology_v1, sum_v1, vector_v1};
+        let arc_header = 2 * core::mem::size_of::<usize>();
+        sum_v1([
+            self.material.as_deref().map_or(0, |material| {
+                sum_v1([
+                    arc_header,
+                    core::mem::size_of_val(material),
+                    p256_topology_v1(&material.topology),
+                    vector_v1(&material.execution.rows),
+                    vector_v1(&material.sorted.rows),
+                ])
+            }),
+            self.execution_fixed.as_deref().map_or(0, |fixed| {
+                sum_v1([
+                    arc_header,
+                    core::mem::size_of_val(fixed),
+                    fixed.allocated_heap_bytes_v1(),
+                ])
+            }),
+            self.sorted_fixed.as_deref().map_or(0, |fixed| {
+                sum_v1([
+                    arc_header,
+                    core::mem::size_of_val(fixed),
+                    fixed.allocated_heap_bytes_v1(),
+                ])
+            }),
+        ])
+    }
     /// Validate canonical witness material and enter the challenge-independent base phase.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn new_v1(material: &P256EcdsaTraceMaterialV1) -> Result<Self, P256ValueBusErrorV1> {
@@ -2720,6 +2833,36 @@ impl core::fmt::Debug for P256ValueBusBoundSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBoundSourceV1 {
+    /// Reachable allocation payload; shared replay handles do not duplicate it.
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{p256_topology_v1, sum_v1, vector_v1};
+        let arc_header = 2 * core::mem::size_of::<usize>();
+        sum_v1([
+            self.material.as_deref().map_or(0, |material| {
+                sum_v1([
+                    arc_header,
+                    core::mem::size_of_val(material),
+                    p256_topology_v1(&material.topology),
+                    vector_v1(&material.execution.rows),
+                    vector_v1(&material.sorted.rows),
+                ])
+            }),
+            self.execution_fixed.as_deref().map_or(0, |fixed| {
+                sum_v1([
+                    arc_header,
+                    core::mem::size_of_val(fixed),
+                    fixed.allocated_heap_bytes_v1(),
+                ])
+            }),
+            self.sorted_fixed.as_deref().map_or(0, |fixed| {
+                sum_v1([
+                    arc_header,
+                    core::mem::size_of_val(fixed),
+                    fixed.allocated_heap_bytes_v1(),
+                ])
+            }),
+        ])
+    }
     fn material_v1(&self) -> Result<&P256ValueBusBaseMaterialV1, P256ValueBusErrorV1> {
         self.material.as_deref().ok_or(P256ValueBusErrorV1::Phase)
     }

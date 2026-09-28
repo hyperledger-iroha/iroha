@@ -29,7 +29,7 @@ pub(crate) struct StateViewReleases<'state> {
 /// This is only cleanup custody; it grants no read or publication authority.
 #[must_use = "retain original read notices through every enclosing physical owner"]
 pub(crate) struct StateViewRetirement {
-    _indexes: [DeferredReleaseBatch; 12],
+    _indexes: [DeferredReleaseBatch; 11],
     _hashes: Option<DeferredReleaseBatch>,
     _membership: DeferredReleaseBatch,
 }
@@ -55,7 +55,6 @@ impl<'state> StateViewReleases<'state> {
         self.state.try_view_once_with_index_releases(
             &mut self.lifecycle.header,
             &mut self.lifecycle.manifests,
-            &mut self.lifecycle.sccp,
             &mut self.lifecycle.hashes,
             &mut self.lifecycle.membership,
         )
@@ -75,7 +74,6 @@ impl<'state> StateViewReleases<'state> {
             hashes,
             membership,
             header,
-            sccp,
             merge_admission,
             relays,
             manifests,
@@ -90,7 +88,6 @@ impl<'state> StateViewReleases<'state> {
         StateViewRetirement {
             _indexes: [
                 header.into_releases(),
-                sccp.into_releases(),
                 merge_admission.into_releases(),
                 relays.into_releases(),
                 manifests.into_releases(),

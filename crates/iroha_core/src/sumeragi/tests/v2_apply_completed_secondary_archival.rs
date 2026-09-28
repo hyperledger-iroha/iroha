@@ -449,8 +449,6 @@ v2_apply_test!(
             Arc::clone(&fixture.state),
             Arc::clone(&queue),
             Arc::clone(&fixture.kura),
-            None,
-            None,
             fixture.service.block_cadence,
             fixture.service.genesis_account.clone(),
             events.clone(),

@@ -2,13 +2,18 @@
 //!
 //! [`HttpTransport`] is a `reqwest` blocking client over rustls bound to one
 //! [`EndpointSet`]. Every request runs through
-//! [`run_with_failover`](crate::endpoints::run_with_failover): transport
-//! errors, timeouts, HTTP 406, 408, 429 and 5xx, unusable secret headers and
-//! endpoints that answer a binary request with another content type move on to
-//! the next endpoint, and every fully failed round backs off exponentially with
-//! seeded jitter. Bodies are bounded by [`HttpConfig::max_response_bytes`];
-//! JSON bodies are parsed with `norito::json`, binary bodies are returned as
-//! bytes.
+//! [`run_with_failover`](crate::endpoints::run_with_failover). Errors that
+//! mean "this endpoint cannot serve this request now" move on to the next
+//! endpoint: transport errors, timeouts, HTTP 401, 403, 406, 408, 429 and 5xx,
+//! JSON-RPC rate-limit and method-unsupported error objects (also inside a
+//! batch), a JSON-RPC batch refused as a whole, a success body that is not
+//! JSON where JSON was asked for, unusable secret headers, and a binary request
+//! answered with another content type. Every fully failed round backs off
+//! exponentially with seeded jitter. Answers about the request itself (a
+//! missing block, bad parameters, a revert, malformed hex) are returned at
+//! once. Bodies are bounded by [`HttpConfig::max_response_bytes`]; JSON bodies
+//! are parsed with `norito::json` inside the attempt, binary bodies are
+//! returned as bytes.
 //!
 //! The client follows no redirects (a redirect could carry an endpoint's secret
 //! headers to another host), ignores proxy environment variables (runtime
@@ -54,6 +59,20 @@ use crate::endpoints::{
 pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 /// Most calls accepted in one JSON-RPC batch.
 pub const MAX_JSON_RPC_BATCH: usize = 100;
+/// JSON-RPC error codes that rate-limited endpoints answer with HTTP 200:
+/// EIP-1474 `-32005` ("limit exceeded") and the `429` some providers copy
+/// from HTTP. They fail over like HTTP 429.
+pub const JSON_RPC_RATE_LIMIT_CODES: [i64; 2] = [-32005, 429];
+/// JSON-RPC error codes of an endpoint that does not serve the called method:
+/// JSON-RPC 2.0 `-32601` ("method not found") and EIP-1474 `-32004` ("method
+/// not supported"). Public endpoints differ in the methods they serve
+/// (`eth_getProof`, `eth_getBlockReceipts`), so these fail over as well.
+pub const JSON_RPC_UNSUPPORTED_CODES: [i64; 2] = [-32601, -32004];
+/// HTTP statuses that fail over: 401 and 403 (the endpoint refuses this client,
+/// for example a missing, invalid or exhausted API key, or a provider that
+/// signals rate limits with 403), 406, 408 and 429. [`is_failover_status`]
+/// adds every 5xx.
+pub const FAILOVER_CLIENT_STATUSES: [u16; 5] = [401, 403, 406, 408, 429];
 /// `application/json`.
 pub const MEDIA_TYPE_JSON: &str = "application/json";
 /// `application/octet-stream`, the beacon API's SSZ media type.
@@ -169,8 +188,19 @@ pub enum RpcError {
         /// Why the owner-only file was refused.
         error: SecretFileError,
     },
-    /// The response is malformed: not JSON, a broken envelope, a missing field,
-    /// or non-canonical hex.
+    /// A success response that should carry JSON does not (for example a CDN
+    /// or captcha HTML page, or a truncated body); the endpoint did not serve
+    /// the request, so this fails over.
+    NotJson {
+        /// Endpoint origin.
+        endpoint: String,
+        /// Media type of the response, when present.
+        content_type: Option<String>,
+        /// Why the body is not JSON.
+        detail: String,
+    },
+    /// The response is malformed: a broken envelope, a missing field, or
+    /// non-canonical hex.
     InvalidResponse {
         /// What is wrong, without echoing large values.
         detail: String,
@@ -185,6 +215,14 @@ pub enum RpcError {
         message: String,
         /// Optional `data` member.
         data: Option<Value>,
+    },
+    /// A JSON-RPC batch was answered with one error object for the whole
+    /// batch: the endpoint does not serve batches, or not this one. This fails
+    /// over; a caller that sees it for every endpoint can send the calls one by
+    /// one.
+    BatchRejected {
+        /// The error object, as an [`RpcError::JsonRpc`].
+        error: Box<RpcError>,
     },
     /// An HTTP API reported an error in a success response (TRON `{"Error": …}`).
     Api {
@@ -201,17 +239,29 @@ pub enum RpcError {
 }
 
 impl RpcError {
-    /// Whether this error moves the request to the next endpoint: transport
-    /// failures, timeouts, HTTP 406, 408, 429 and 5xx, unusable secret headers
-    /// and unexpected binary content types. Every other error is an answer and
-    /// is returned at once.
+    /// Whether this error moves the request to the next endpoint because the
+    /// endpoint cannot serve it now: transport failures, timeouts, failover
+    /// HTTP statuses ([`is_failover_status`]), JSON-RPC rate limits
+    /// ([`JSON_RPC_RATE_LIMIT_CODES`]) and unsupported methods
+    /// ([`JSON_RPC_UNSUPPORTED_CODES`]), rejected batches, success bodies that
+    /// are not JSON, unusable secret headers and unexpected binary content
+    /// types. Every other error is an answer about the request (for example
+    /// HTTP 404 for an unknown beacon block, JSON-RPC `-32000` "header not
+    /// found", `-32602` bad parameters or a code-3 revert) and is returned at
+    /// once.
     pub fn is_failover(&self) -> bool {
         match self {
             Self::Transport { .. }
             | Self::Timeout { .. }
             | Self::UnexpectedContentType { .. }
-            | Self::SecretHeader { .. } => true,
-            Self::Status { status, .. } => matches!(status, 406 | 408 | 429 | 500..=599),
+            | Self::SecretHeader { .. }
+            | Self::NotJson { .. }
+            | Self::BatchRejected { .. } => true,
+            Self::Status { status, .. } => is_failover_status(*status),
+            Self::JsonRpc { code, .. } => {
+                JSON_RPC_RATE_LIMIT_CODES.contains(code)
+                    || JSON_RPC_UNSUPPORTED_CODES.contains(code)
+            }
             _ => false,
         }
     }
@@ -267,6 +317,15 @@ impl fmt::Display for RpcError {
             Self::SecretHeader { endpoint, error } => {
                 write!(formatter, "{endpoint}: secret header refused: {error}")
             }
+            Self::NotJson {
+                endpoint,
+                content_type,
+                detail,
+            } => write!(
+                formatter,
+                "{endpoint}: expected a JSON body, got {} ({detail})",
+                content_type.as_deref().unwrap_or("no content type")
+            ),
             Self::InvalidResponse { detail } => write!(formatter, "invalid RPC response: {detail}"),
             Self::JsonRpc {
                 endpoint,
@@ -274,7 +333,12 @@ impl fmt::Display for RpcError {
                 message,
                 ..
             } => write!(formatter, "{endpoint}: JSON-RPC error {code}: {message}"),
-            Self::Api { endpoint, message } => write!(formatter, "{endpoint}: API error: {message}"),
+            Self::BatchRejected { error } => {
+                write!(formatter, "JSON-RPC batch rejected: {error}")
+            }
+            Self::Api { endpoint, message } => {
+                write!(formatter, "{endpoint}: API error: {message}")
+            }
             Self::Exhausted { failures } => {
                 write!(
                     formatter,
@@ -295,9 +359,16 @@ impl StdError for RpcError {
         match self {
             Self::Endpoint(error) => Some(error),
             Self::SecretHeader { error, .. } => Some(error),
+            Self::BatchRejected { error } => Some(error.as_ref()),
             _ => None,
         }
     }
+}
+
+/// Whether an HTTP status fails over: [`FAILOVER_CLIENT_STATUSES`] and every
+/// 5xx. Other statuses (400, 404, 405, 413, …) answer the request itself.
+pub fn is_failover_status(status: u16) -> bool {
+    FAILOVER_CLIENT_STATUSES.contains(&status) || (500..=599).contains(&status)
 }
 
 impl From<EndpointError> for RpcError {
@@ -342,9 +413,13 @@ impl HttpResponse {
     /// Parses the body as JSON.
     ///
     /// # Errors
-    /// [`RpcError::InvalidResponse`] if the body is not UTF-8 JSON.
+    /// [`RpcError::NotJson`] (a failover error) if the body is not UTF-8 JSON.
     pub fn json(&self) -> Result<Value, RpcError> {
-        parse_json_body(&self.body)
+        json_body(&self.body).map_err(|detail| RpcError::NotJson {
+            endpoint: self.endpoint.clone(),
+            content_type: self.media_type(),
+            detail,
+        })
     }
 
     /// The media type of `Content-Type`, lowercase and without parameters.
@@ -538,22 +613,52 @@ impl HttpTransport {
         })
     }
 
-    /// `GET path` and parse the body as JSON.
+    /// `GET path` and parse the body as JSON inside the attempt, so an
+    /// endpoint whose success body is not JSON fails over.
     ///
     /// # Errors
     /// Any [`RpcError`].
     pub fn get_json(&self, path: &str) -> Result<Value, RpcError> {
-        self.get(path, MEDIA_TYPE_JSON)?.json()
+        let spec = RequestSpec {
+            method: Method::GET,
+            path,
+            accept: MEDIA_TYPE_JSON,
+            body: None,
+            required_media_type: None,
+        };
+        self.execute_then(&spec, |response| response.json())
     }
 
-    /// `POST path` with a JSON body and parse the JSON answer.
+    /// `POST path` with a JSON body and parse the JSON answer inside the
+    /// attempt, so an endpoint whose success body is not JSON fails over.
     ///
     /// # Errors
     /// Any [`RpcError`].
     pub fn post_json(&self, path: &str, body: &Value) -> Result<Value, RpcError> {
+        self.post_json_then(path, body, |_, value| Ok(value))
+    }
+
+    /// `POST path` with a JSON body; parses the answer and passes it with the
+    /// answering endpoint's origin to `decode`, both inside the attempt, so a
+    /// failover error from either moves on to the next endpoint.
+    pub(crate) fn post_json_then<T>(
+        &self,
+        path: &str,
+        body: &Value,
+        decode: impl Fn(&str, Value) -> Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
         let bytes = encode_json(body)?;
-        self.post(path, MEDIA_TYPE_JSON, &bytes, MEDIA_TYPE_JSON)?
-            .json()
+        let spec = RequestSpec {
+            method: Method::POST,
+            path,
+            accept: MEDIA_TYPE_JSON,
+            body: Some((MEDIA_TYPE_JSON, &bytes)),
+            required_media_type: None,
+        };
+        self.execute_then(&spec, |response| {
+            let value = response.json()?;
+            decode(&response.endpoint, value)
+        })
     }
 
     /// One JSON-RPC 2.0 call against the endpoint URL itself; returns `result`
@@ -566,17 +671,26 @@ impl HttpTransport {
     pub fn json_rpc(&self, method: &str, params: Vec<Value>) -> Result<Value, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let body = encode_json(&json_rpc_request(id, method, params))?;
-        let response = self.post("", MEDIA_TYPE_JSON, &body, MEDIA_TYPE_JSON)?;
-        decode_json_rpc_response(response.json()?, Some(id), &response.endpoint)
+        // Decoding runs inside the attempt, so a body that is not JSON, a
+        // rate-limit error object or an unsupported method fails over like
+        // HTTP 429.
+        self.execute_then(&json_rpc_spec(&body), |response| {
+            decode_json_rpc_response(response.json()?, Some(id), &response.endpoint)
+        })
     }
 
     /// One JSON-RPC 2.0 batch of 1..=[`MAX_JSON_RPC_BATCH`] calls; returns one
     /// result per call, in call order.
     ///
+    /// A batch fails over as a whole when the endpoint refuses it with one
+    /// error object ([`RpcError::BatchRejected`]) or rate-limits or does not
+    /// serve any of its calls; other per-call errors are returned in place.
+    ///
     /// # Errors
-    /// [`RpcError::InvalidRequest`] for an empty or oversized batch; an error
-    /// object answering the whole batch; [`RpcError::InvalidResponse`] if the
-    /// answers do not match the calls one to one; or any transport error.
+    /// [`RpcError::InvalidRequest`] for an empty or oversized batch;
+    /// [`RpcError::InvalidResponse`] if the answers do not match the calls one
+    /// to one; or any transport error, after every round failed for failover
+    /// errors.
     pub fn json_rpc_batch(
         &self,
         calls: Vec<JsonRpcCall>,
@@ -596,16 +710,29 @@ impl HttpTransport {
             .map(|(call, id)| json_rpc_request(id, &call.method, call.params))
             .collect();
         let body = encode_json(&Value::Array(requests))?;
-        let response = self.post("", MEDIA_TYPE_JSON, &body, MEDIA_TYPE_JSON)?;
-        decode_json_rpc_batch(response.json()?, first_id, count, &response.endpoint)
+        self.execute_then(&json_rpc_spec(&body), |response| {
+            let results =
+                decode_json_rpc_batch(response.json()?, first_id, count, &response.endpoint)?;
+            fail_over_unserved_batch(results)
+        })
     }
 
     fn execute(&self, spec: &RequestSpec<'_>) -> Result<HttpResponse, RpcError> {
+        self.execute_then(spec, Ok)
+    }
+
+    /// Sends `spec` with failover and decodes each successful response inside
+    /// its attempt, so failover errors raised by `decode` move on as well.
+    fn execute_then<T>(
+        &self,
+        spec: &RequestSpec<'_>,
+        decode: impl Fn(HttpResponse) -> Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
         run_with_failover(
             &self.endpoints,
             &self.policy,
             self.sleeper.as_ref(),
-            |endpoint| self.send_once(endpoint, spec),
+            |endpoint| decode(self.send_once(endpoint, spec)?),
         )
     }
 
@@ -670,6 +797,33 @@ impl HttpTransport {
     }
 }
 
+/// A JSON-RPC POST of `body` to the endpoint URL itself.
+fn json_rpc_spec(body: &[u8]) -> RequestSpec<'_> {
+    RequestSpec {
+        method: Method::POST,
+        path: "",
+        accept: MEDIA_TYPE_JSON,
+        body: Some((MEDIA_TYPE_JSON, body)),
+        required_media_type: None,
+    }
+}
+
+/// Turns a batch answer in which the endpoint rate-limited some calls or does
+/// not serve their method into a failover error, so the whole batch moves to
+/// the next endpoint.
+fn fail_over_unserved_batch(
+    mut results: Vec<Result<Value, RpcError>>,
+) -> Result<Vec<Result<Value, RpcError>>, RpcError> {
+    if let Some(index) = results
+        .iter()
+        .position(|result| result.as_ref().is_err_and(RpcError::is_failover))
+        && let Err(error) = results.swap_remove(index)
+    {
+        return Err(error);
+    }
+    Ok(results)
+}
+
 fn json_rpc_request(id: u64, method: &str, params: Vec<Value>) -> Value {
     let mut map = Map::new();
     map.insert("jsonrpc".to_owned(), Value::from("2.0"));
@@ -690,10 +844,15 @@ pub(crate) fn encode_json(value: &Value) -> Result<Vec<u8>, RpcError> {
 /// # Errors
 /// [`RpcError::InvalidResponse`] if the body is not UTF-8 or not JSON.
 pub fn parse_json_body(body: &[u8]) -> Result<Value, RpcError> {
-    let text = std::str::from_utf8(body)
-        .map_err(|_| invalid_response("the response body is not UTF-8"))?;
+    json_body(body).map_err(invalid_response)
+}
+
+/// Parses a UTF-8 JSON body, or says why it is not one.
+fn json_body(body: &[u8]) -> Result<Value, String> {
+    let text =
+        std::str::from_utf8(body).map_err(|_| "the response body is not UTF-8".to_owned())?;
     norito::json::parse_value(text)
-        .map_err(|error| invalid_response(format!("the response body is not JSON: {error}")))
+        .map_err(|error| sanitize_detail(&format!("the response body is not JSON: {error}")))
 }
 
 /// Decodes one JSON-RPC response object answering request `expected_id`
@@ -764,8 +923,12 @@ fn decode_json_rpc_batch(
 ) -> Result<Vec<Result<Value, RpcError>>, RpcError> {
     let items = match value {
         Value::Array(items) => items,
+        // One error object for the whole batch: the endpoint refused the batch.
         object @ Value::Object(_) => {
             return Err(match decode_json_rpc_response(object, None, endpoint) {
+                Err(error @ RpcError::JsonRpc { .. }) => RpcError::BatchRejected {
+                    error: Box::new(error),
+                },
                 Err(error) => error,
                 Ok(_) => invalid_response("a JSON-RPC batch was answered with one result"),
             });
@@ -835,19 +998,19 @@ fn read_error(endpoint: &str, error: io::Error) -> RpcError {
         };
     }
     let kind = error.kind();
-    match error.into_inner() {
-        Some(inner) => match inner.downcast::<reqwest::Error>() {
+    error.into_inner().map_or_else(
+        || RpcError::Transport {
+            endpoint: endpoint.to_owned(),
+            detail: format!("reading the body failed: {kind}"),
+        },
+        |inner| match inner.downcast::<reqwest::Error>() {
             Ok(reqwest_error) => send_error(endpoint, *reqwest_error),
             Err(other) => RpcError::Transport {
                 endpoint: endpoint.to_owned(),
                 detail: sanitize_detail(&other.to_string()),
             },
         },
-        None => RpcError::Transport {
-            endpoint: endpoint.to_owned(),
-            detail: format!("reading the body failed: {kind}"),
-        },
-    }
+    )
 }
 
 fn read_body(response: Response, limit: usize, endpoint: &str) -> Result<Vec<u8>, RpcError> {
@@ -1061,7 +1224,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1}"#,
             r#"{"jsonrpc":"2.0","id":1,"result":"0x1","error":{"code":1,"message":"x"}}"#,
             r#"{"jsonrpc":"2.0","id":"1","result":"0x1"}"#,
-            r#"[1]"#,
+            r"[1]",
         ] {
             assert!(
                 matches!(
@@ -1127,12 +1290,29 @@ mod tests {
             );
         }
         let whole = decode_json_rpc_batch(
-            parse(r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"batch unsupported"}}"#),
+            parse(
+                r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"batch unsupported"}}"#,
+            ),
             10,
             1,
             "e",
         );
-        assert!(matches!(whole, Err(RpcError::JsonRpc { code: -32600, .. })));
+        match whole {
+            Err(RpcError::BatchRejected { error }) => {
+                assert!(matches!(*error, RpcError::JsonRpc { code: -32600, .. }));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let malformed_whole = decode_json_rpc_batch(
+            parse(r#"{"jsonrpc":"2.0","id":null,"error":{"message":"no code"}}"#),
+            10,
+            1,
+            "e",
+        );
+        assert!(matches!(
+            malformed_whole,
+            Err(RpcError::InvalidResponse { .. })
+        ));
     }
 
     #[test]
@@ -1143,11 +1323,13 @@ mod tests {
             retry_after: None,
             message: None,
         };
-        for code in [406, 408, 429, 500, 502, 503, 525, 599] {
+        for code in [401, 403, 406, 408, 429, 500, 502, 503, 525, 599] {
             assert!(status(code).is_failover(), "{code}");
+            assert!(is_failover_status(code), "{code}");
         }
-        for code in [300, 400, 401, 404, 405, 413] {
+        for code in [300, 400, 404, 405, 413, 418, 600] {
             assert!(!status(code).is_failover(), "{code}");
+            assert!(!is_failover_status(code), "{code}");
         }
         assert!(
             RpcError::Timeout {
@@ -1155,16 +1337,119 @@ mod tests {
             }
             .is_failover()
         );
+        // Malformed envelopes and hex are answers; a body that is not JSON at
+        // all means the endpoint did not serve the request.
         assert!(!invalid_response("x").is_failover());
         assert!(
-            !RpcError::JsonRpc {
+            RpcError::NotJson {
                 endpoint: "e".to_owned(),
-                code: -32000,
-                message: String::new(),
-                data: None
+                content_type: Some("text/html".to_owned()),
+                detail: "x".to_owned(),
             }
             .is_failover()
         );
+        let json_rpc = |code| RpcError::JsonRpc {
+            endpoint: "e".to_owned(),
+            code,
+            message: String::new(),
+            data: None,
+        };
+        for code in [-32000, -32602, -32600, -32603, -32700, 3] {
+            assert!(!json_rpc(code).is_failover(), "{code}");
+        }
+        for code in JSON_RPC_RATE_LIMIT_CODES
+            .into_iter()
+            .chain(JSON_RPC_UNSUPPORTED_CODES)
+        {
+            assert!(json_rpc(code).is_failover(), "{code}");
+        }
+        assert!(
+            RpcError::BatchRejected {
+                error: Box::new(json_rpc(-32600)),
+            }
+            .is_failover()
+        );
+        assert!(
+            !RpcError::Api {
+                endpoint: "e".to_owned(),
+                message: "x".to_owned(),
+            }
+            .is_failover()
+        );
+    }
+
+    #[test]
+    fn unserved_batch_calls_fail_the_batch_over() {
+        let error_code = |code: i64| RpcError::JsonRpc {
+            endpoint: "e".to_owned(),
+            code,
+            message: "m".to_owned(),
+            data: None,
+        };
+        let kept = fail_over_unserved_batch(vec![Ok(Value::from("0x1")), Err(error_code(-32000))])
+            .expect("answers only");
+        assert_eq!(kept.len(), 2);
+        assert!(matches!(
+            kept[1],
+            Err(RpcError::JsonRpc { code: -32000, .. })
+        ));
+        for code in [-32005, 429, -32601, -32004] {
+            let error = fail_over_unserved_batch(vec![
+                Ok(Value::from("0x1")),
+                Err(error_code(-32000)),
+                Err(error_code(code)),
+            ])
+            .expect_err("unserved call");
+            assert!(
+                matches!(error, RpcError::JsonRpc { code: found, .. } if found == code),
+                "{code}"
+            );
+            assert!(error.is_failover());
+        }
+    }
+
+    #[test]
+    fn unserved_errors_display_and_chain_their_cause() {
+        let not_json = RpcError::NotJson {
+            endpoint: "https://rpc.example.org".to_owned(),
+            content_type: Some("text/html".to_owned()),
+            detail: "the response body is not JSON".to_owned(),
+        };
+        assert_eq!(
+            not_json.to_string(),
+            "https://rpc.example.org: expected a JSON body, got text/html (the response body \
+             is not JSON)"
+        );
+        assert!(not_json.source().is_none());
+        let rejected = RpcError::BatchRejected {
+            error: Box::new(RpcError::JsonRpc {
+                endpoint: "https://rpc.example.org".to_owned(),
+                code: -32600,
+                message: "batch requests are not supported".to_owned(),
+                data: None,
+            }),
+        };
+        assert_eq!(
+            rejected.to_string(),
+            "JSON-RPC batch rejected: https://rpc.example.org: JSON-RPC error -32600: batch \
+             requests are not supported"
+        );
+        assert!(
+            rejected
+                .source()
+                .is_some_and(|cause| cause.to_string().contains("-32600"))
+        );
+        assert_eq!(rejected.retry_after(), None);
+    }
+
+    #[test]
+    fn json_rpc_requests_post_json_to_the_endpoint_url() {
+        let spec = json_rpc_spec(b"{}");
+        assert_eq!(spec.method, Method::POST);
+        assert_eq!(spec.path, "");
+        assert_eq!(spec.accept, MEDIA_TYPE_JSON);
+        assert_eq!(spec.body, Some((MEDIA_TYPE_JSON, &b"{}"[..])));
+        assert_eq!(spec.required_media_type, None);
     }
 
     #[test]
@@ -1217,7 +1502,10 @@ mod tests {
         let value = parse(std::str::from_utf8(&body).expect("utf8"));
         assert_eq!(value.get("jsonrpc").and_then(Value::as_str), Some("2.0"));
         assert_eq!(value.get("id").and_then(Value::as_u64), Some(9));
-        assert_eq!(value.get("method").and_then(Value::as_str), Some("eth_chainId"));
+        assert_eq!(
+            value.get("method").and_then(Value::as_str),
+            Some("eth_chainId")
+        );
         assert_eq!(
             value.get("params").and_then(Value::as_array).map(Vec::len),
             Some(0)
@@ -1233,17 +1521,162 @@ mod tests {
         assert_eq!(optional_str(map, "b", "obj").expect("b"), None);
         assert!(optional_str(map, "d", "obj").is_err());
         assert_eq!(required_array(map, "c", "obj").expect("c").len(), 1);
-        assert!(optional_array(map, "missing", "obj").expect("empty").is_empty());
+        assert!(
+            optional_array(map, "missing", "obj")
+                .expect("empty")
+                .is_empty()
+        );
         assert!(required_array(map, "a", "obj").is_err());
         assert!(expect_object(&Value::Null, "obj").is_err());
-        assert!(parse_json_body(b"\xff").is_err());
-        assert!(parse_json_body(b"{").is_err());
+        assert!(matches!(
+            parse_json_body(b"\xff"),
+            Err(RpcError::InvalidResponse { detail }) if detail == "the response body is not UTF-8"
+        ));
+        assert!(matches!(
+            parse_json_body(b"{"),
+            Err(RpcError::InvalidResponse { .. })
+        ));
+        assert_eq!(json_body(b"[1]").expect("JSON"), parse("[1]"));
+        assert!(
+            json_body(b"<html>")
+                .expect_err("HTML")
+                .starts_with("the response body is not JSON")
+        );
+    }
+
+    #[test]
+    fn responses_expose_media_type_and_json() {
+        let response = HttpResponse {
+            endpoint: "https://rpc.example.org".to_owned(),
+            status: 200,
+            content_type: Some("Application/JSON; charset=utf-8".to_owned()),
+            consensus_version: None,
+            body: br#"{"a":1}"#.to_vec(),
+        };
+        assert_eq!(response.media_type().as_deref(), Some("application/json"));
+        assert_eq!(
+            response
+                .json()
+                .expect("json")
+                .get("a")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let html = HttpResponse {
+            content_type: Some("text/html; charset=utf-8".to_owned()),
+            body: b"<html>Just a moment...</html>".to_vec(),
+            ..response.clone()
+        };
+        let error = html.json().expect_err("HTML is not JSON");
+        assert!(error.is_failover());
+        assert!(
+            matches!(
+                &error,
+                RpcError::NotJson { endpoint, content_type: Some(media), .. }
+                    if endpoint == "https://rpc.example.org" && media == "text/html"
+            ),
+            "{error:?}"
+        );
+        let binary = HttpResponse {
+            content_type: None,
+            body: vec![0xff],
+            ..response
+        };
+        assert_eq!(binary.media_type(), None);
+        assert!(matches!(
+            binary.json(),
+            Err(RpcError::NotJson {
+                content_type: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn transports_validate_limits_and_follow_keeper_config() {
+        let endpoints =
+            EndpointSet::parse(&["https://rpc.example.org/v2/secret-key"], &[]).expect("list");
+        let zero_timeout = HttpConfig {
+            request_timeout: Duration::ZERO,
+            ..HttpConfig::default()
+        };
+        assert!(matches!(
+            HttpTransport::new(endpoints.clone(), zero_timeout, FailoverPolicy::default()),
+            Err(RpcError::InvalidRequest(_))
+        ));
+        let zero_bound = HttpConfig::default().with_max_response_bytes(0);
+        assert!(matches!(
+            HttpTransport::new(endpoints.clone(), zero_bound, FailoverPolicy::default()),
+            Err(RpcError::InvalidRequest(_))
+        ));
+        let transport =
+            HttpTransport::new(endpoints, HttpConfig::default(), FailoverPolicy::default())
+                .expect("transport");
+        assert!(!format!("{transport:?}").contains("secret-key"));
+
+        let keeper = SccpLightClientKeeper {
+            request_timeout: Duration::from_millis(2_500),
+            ..SccpLightClientKeeper::default()
+        };
+        let transport = HttpTransport::from_keeper_config(&keeper, HttpEndpointKind::Bsc, 5)
+            .expect("keeper transport");
+        assert_eq!(
+            transport.endpoints().endpoints(),
+            EndpointSet::compiled_defaults(HttpEndpointKind::Bsc).endpoints()
+        );
+        assert_eq!(
+            transport.config().request_timeout,
+            Duration::from_millis(2_500)
+        );
+        assert_eq!(transport.policy(), FailoverPolicy::with_seed(5));
+    }
+
+    #[test]
+    fn errors_name_endpoints_by_origin_and_list_every_failed_attempt() {
+        let error = RpcError::Exhausted {
+            failures: vec![
+                AttemptFailure {
+                    endpoint: "https://a.example.org".to_owned(),
+                    round: 0,
+                    error: RpcError::Timeout {
+                        endpoint: "https://a.example.org".to_owned(),
+                    },
+                },
+                AttemptFailure {
+                    endpoint: "https://b.example.org".to_owned(),
+                    round: 0,
+                    error: RpcError::Status {
+                        endpoint: "https://b.example.org".to_owned(),
+                        status: 429,
+                        retry_after: Some(Duration::from_secs(2)),
+                        message: Some("slow down".to_owned()),
+                    },
+                },
+            ],
+        };
+        assert_eq!(
+            error.to_string(),
+            "all endpoints failed after 2 attempt(s); round 0: https://a.example.org: request \
+             timed out; round 0: https://b.example.org: HTTP 429: slow down"
+        );
+        assert!(!error.is_failover());
+        assert_eq!(error.retry_after(), None);
+        assert_eq!(
+            error.last_failure().retry_after(),
+            Some(Duration::from_secs(2))
+        );
+        let endpoint_error =
+            RpcError::from(EndpointSet::parse(&[], &[]).expect_err("an empty list is refused"));
+        assert!(endpoint_error.source().is_some());
+        assert!(!endpoint_error.is_failover());
     }
 
     #[test]
     fn http_config_follows_keeper_config() {
-        let mut keeper = SccpLightClientKeeper::default();
-        keeper.request_timeout = Duration::from_millis(1_500);
+        let keeper = SccpLightClientKeeper {
+            request_timeout: Duration::from_millis(1_500),
+            ..SccpLightClientKeeper::default()
+        };
         let config = HttpConfig::from_keeper_config(&keeper);
         assert_eq!(config.request_timeout, Duration::from_millis(1_500));
         assert_eq!(config.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);

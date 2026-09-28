@@ -18,8 +18,8 @@ use iroha_core::{
     streaming::StreamingHandle,
 };
 use iroha_data_model::peer::Peer;
-use iroha_model_base::peer::PeerId;
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::{
     TransportAdmissionClass,
     network::{SubscriberFilter, message::Topic},

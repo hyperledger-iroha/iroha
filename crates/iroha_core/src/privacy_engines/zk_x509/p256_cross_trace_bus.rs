@@ -552,6 +552,11 @@ pub(crate) struct P256CrossTraceSinkFixedV1 {
     logical: Vec<[Option<P256ExternalBindingCrossSourceV1>; P256_EXTERNAL_BINDINGS_PER_ROW_V1]>,
 }
 impl P256CrossTraceSinkFixedV1 {
+    /// Allocated compact verifier schedule payload.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        super::allocation_payload::vector_v1(&self.logical)
+    }
     /// Compile the sole role-derived schedule without consulting a witness,
     /// proof, or prover-supplied metadata.
     pub(crate) fn compile_v1(role: P256EcdsaRoleV1) -> Result<Self, P256CrossTraceBusErrorV1> {
@@ -918,6 +923,11 @@ pub(crate) struct P256CrossTraceWriterSourceStreamV1<'a> {
     next_row: usize,
 }
 impl P256CrossTraceWriterSourceFixedV1 {
+    /// Allocated compact verifier schedule payload.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        super::allocation_payload::vector_v1(&self.multiplicities)
+    }
     /// Compile exact writer multiplicities from the verifier-only binding schedule.
     pub(crate) fn compile_v1(role: P256EcdsaRoleV1) -> Result<Self, P256CrossTraceBusErrorV1> {
         let rows = compile_zk_x509_p256_external_cross_sources_v1(role)?;

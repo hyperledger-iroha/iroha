@@ -347,11 +347,6 @@ denylist = [
 ]
 skip_optional_dependencies = true
 
-[[test]]
-name = "sccp_security"
-path = "tests/sccp_security.rs"
-required-features = ["iroha-core-tests"]
-
 # Real Kaigi IPA proofs remain an explicit focused target under the ZK test features.
 [[test]]
 name = "kaigi_privacy"
@@ -359,6 +354,11 @@ path = "tests/kaigi_privacy.rs"
 required-features = ["zk-tests", "zk-halo2", "halo2-dev-tests"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+# SCCP v1 core skeleton public-boundary tests (`specs/sccp.md` §4).
+[[test]]
+name = "sccp_skeleton"
+path = "tests/sccp_skeleton.rs"
 
 [[test]]
 name = "iroha_core_group_01"

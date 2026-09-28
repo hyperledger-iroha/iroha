@@ -215,8 +215,6 @@ contracts.account_recovery_finalize_post	POST	/v1/accounts/recovery/finalize	pub
 contracts.account_recovery_policy_set_post	POST	/v1/accounts/recovery/policy/set	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 contracts.account_recovery_propose_post	POST	/v1/accounts/recovery/propose	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 contracts.account_recovery_status_post	POST	/v1/accounts/recovery/status	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
-contracts.bridge_messages_post	POST	/v1/bridge/messages	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
-contracts.bridge_proofs_submit_post	POST	/v1/bridge/proofs/submit	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 contracts.contracts_aliases_post	POST	/v1/contracts/aliases	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 contracts.contracts_aliases_resolve_post	POST	/v1/contracts/aliases/resolve	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 contracts.contracts_call_batch_prepare_post	POST	/v1/contracts/call/batch/prepare	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
@@ -534,14 +532,6 @@ retail.recipient.route	POST	/v1/retail/recipients/route	public	canonical_account
 runtime.abi.active	GET	/v1/runtime/abi/active	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 runtime.abi.hash	GET	/v1/runtime/abi/hash	public	torii_default	public	read	http	always	true	true	false	false
 runtime.metrics	GET	/v1/runtime/metrics	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	false	true
-sccp.capability.list	GET	/v1/sccp/capabilities	public	torii_default	public	read	http	always	true	true	false	false
-sccp.message.list_recent	GET	/v1/sccp/messages/recent	public	torii_default	public	read	http	always	true	true	false	false
-sccp.message_proof.read	GET	/v1/sccp/proofs/message/{message_id}	public	torii_default	public	read	http	always	true	true	false	false
-sccp.proof_request.read	GET	/v1/sccp/proof-requests/{message_id}	public	torii_default	public	read	http	always	true	true	false	false
-sccp.registry.read	GET	/v1/sccp/registry	public	torii_default	public	read	http	always	true	true	false	false
-sccp.replay.root.read	GET	/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root	public	torii_default	public	read	http	always	true	true	false	false
-sccp.replay.witness.read	GET	/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}	public	torii_default	public	read	http	always	true	true	false	false
-sccp.sora_outbound_material.read	GET	/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material	public	torii_default	public	read	http	always	true	true	false	false
 soradns.directory.events	GET	/v1/soradns/directory/events	public	torii_default	public	read	http	feature(app_api)	false	true	false	false
 soradns.directory.latest	GET	/v1/soradns/directory/latest	public	torii_default	public	read	http	feature(app_api)	false	true	false	false
 sorafs.alias.list	GET	/v1/sorafs/aliases	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true

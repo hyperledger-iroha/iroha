@@ -62,7 +62,7 @@ SECTION_ORDER = (
     "fixture.execution.fields",
     "fixture.retired",
     "lifecycle.required",
-    "status.present",
+    "status.required",
     "status.absent",
     "native.receipt.required",
     "native.leg.required",
@@ -88,9 +88,12 @@ FINALITY_TESTS = (
     "bridge_finality_v2_schemas_are_exact_closed_and_bounded",
     "bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields",
     "ledger_state_endpoints_expose_one_closed_authenticated_v2_schema",
-    "bridge_finality_operations_describe_durable_v2_evidence",
+    "bridge_finality_operations_describe_current_durable_evidence",
+    "signed_status_documents_actual_driver_fields",
+    "current_finality_schemas_match_portable_wire_bounds",
     "generated_spec_documents_read_only_nexus_lifecycle_status",
-    "generated_spec_documents_exact_authoritative_sumeragi_v2_status",
+    "generated_spec_documents_exact_current_sumeragi_status",
+    "generated_spec_documents_exact_soracloud_priority_contracts",
     "generated_spec_documents_app_query_page_metadata",
     "alias_openapi_documents_optional_public_and_exact_restricted_auth",
     "protected_contract_identity_openapi_is_signed_and_exact",
@@ -159,7 +162,7 @@ def _rust_pins(source: str) -> tuple[int, str, int, tuple[str, ...]]:
 
 
 def _test_names(source: str) -> tuple[str, ...]:
-    return tuple(re.findall(r"(?m)^#\[test\]\nfn ([a-z0-9_]+)\(\)", source))
+    return tuple(re.findall(r"(?m)^#\[test\]\n(?:#\[[^\n]*\]\n)*fn ([a-z0-9_]+)\(\)", source))
 
 
 class ToriiOpenapiContractCompactionTests(unittest.TestCase):
@@ -200,7 +203,7 @@ class ToriiOpenapiContractCompactionTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaises(ContractAssetError):
                 _load_asset(encoded, len(encoded), hashlib.sha256(encoded).hexdigest())
 
-    def test_historical_test_inventory_and_typed_runner_architecture_are_frozen(self) -> None:
+    def test_current_test_inventory_and_typed_runner_architecture_are_exact(self) -> None:
         self.assertEqual(_test_names(self.finality), FINALITY_TESTS)
         self.assertEqual(_test_names(self.sorafs), SORAFS_TESTS)
         combined = self.sorafs + self.finality

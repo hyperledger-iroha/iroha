@@ -39,7 +39,7 @@ pub const SCCP_HISTORY_MAX_SIZE_V1: u64 = 1 << 32;
 pub struct SccpAttestationStatementV1 {
     /// Taira block height `h`.
     pub height: u64,
-    /// NPoS epoch of `h`.
+    /// `NPoS` epoch of `h`.
     pub epoch: u64,
     /// `creation_time_ms` of block `h`'s header.
     pub timestamp_ms: u64,
@@ -122,7 +122,7 @@ impl SccpAttestationStatementV1 {
 pub struct SccpAttestationSubjectV1 {
     /// Taira block height.
     pub height: u64,
-    /// NPoS epoch of the height.
+    /// `NPoS` epoch of the height.
     pub epoch: u64,
     /// Block `creation_time_ms`.
     pub timestamp_ms: u64,

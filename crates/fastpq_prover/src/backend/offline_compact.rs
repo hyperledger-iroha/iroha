@@ -1,4 +1,4 @@
-//! Fixed quantity-artifact production and verification for offline callers.
+//! Fixed quantity-artifact production and verification for local callers.
 //! Masked trace rows use fresh cryptographic entropy; a complete reviewed
 //! zero-knowledge guarantee remains a separate qualification requirement.
 //!
@@ -46,7 +46,7 @@ pub use resources::{QuantityArtifactResources, quantity_artifact_resources};
 /// Obtain these values from the surrounding application's trusted context. Copying
 /// them from the artifact being checked does not authenticate that artifact.
 /// Compute the statement digest from the independently authenticated complete
-/// statement as `Hash::new(norito::encode_canonical(statement)?)`. Its canonical
+/// statement with [`Self::from_statement`]. Its canonical
 /// frame includes every transcript header and occurrence. The caller owns the
 /// provenance of that expected digest; the verifier cannot establish it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,28 @@ pub struct ExpectedStatement {
 }
 
 impl ExpectedStatement {
+    /// Derive all expectations from the caller's independently trusted statement.
+    ///
+    /// This hashes the exact canonical Norito frame without retaining an encoded
+    /// frame copy. It does not authenticate or validate the supplied statement;
+    /// apply the application's source and admission limits before calling it.
+    /// Do not derive expectations from the artifact being verified.
+    ///
+    /// # Errors
+    /// Returns an encoding error without returning a partial statement digest.
+    pub fn from_statement(statement: &FastpqPublicTransferStatementV1) -> crate::Result<Self> {
+        let digest = iroha_crypto::Hash::new_from_writer(|writer| {
+            norito::core::write_canonical_to_writer(statement, writer)
+                .map_err(std::io::Error::other)
+        })
+        .map_err(norito::core::Error::Io)?;
+        Ok(Self {
+            inputs: statement.public_inputs,
+            ordering_hash: statement.ordering_hash,
+            public_statement_digest: digest.into(),
+        })
+    }
+
     pub(super) fn internal(self) -> PublicIO {
         PublicIO {
             dsid: self.inputs.dsid,

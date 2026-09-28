@@ -23,7 +23,7 @@ impl<Admission>
     ///
     /// Original target-Kura identity and source authentication precede this
     /// continuation. The caller retains one lease across source authentication,
-    /// witness/archive persistence and State preparation. No substitute witness
+    /// witness persistence and State preparation. No substitute witness
     /// or casting bindings are accepted, and no Kura fence is reacquired here.
     ///
     /// The final publisher reauthenticates the final sidecar under this same

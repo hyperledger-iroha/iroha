@@ -56,6 +56,12 @@ fn sorafs_publication_contracts_bind_canonical_account_auth_and_evidence_bounds(
     for requirement in [
         "CanReadAllLedgerData",
         "independent checkpoint",
+        "only lineage",
+        "SumeragiFinalityProof",
+        "SumeragiFinalityCheckpoint",
+        "configured network and chain label",
+        "embedded current commit certificate",
+        "cannot select its own trust root",
         "successful execution",
         "monotonic deadline",
     ] {

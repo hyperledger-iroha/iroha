@@ -1,10 +1,10 @@
-/// Hard limit for the retained record's fixed fields and SCCP archive.
+/// Hard limit for the retained record's fixed fields.
 ///
-/// The 512-message first-release cap and 4 KiB canonical payload cap require a
-/// little over 2 MiB at their joint maximum. Four MiB leaves deterministic
-/// framing/context headroom while preventing hostile on-disk data from turning
-/// startup or proof serving into an unbounded allocation.
-const MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
+/// The record holds only fixed-size hashes, lengths and one canonical block
+/// header. 64 KiB leaves deterministic framing headroom while preventing
+/// hostile on-disk data from turning startup or proof serving into an
+/// unbounded allocation.
+const MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES: usize = 64 * 1024;
 /// Hard limit for the compact merge reference in the current retained record.
 ///
 /// Consensus accepts at most a 4 MiB merge QC. The remaining 256 KiB bounds
@@ -18,16 +18,16 @@ const MAX_RETAINED_MERGE_REFERENCE_BYTES: usize = 4 * 1024 * 1024 + 256 * 1024;
 /// envelope delta instead of assuming those bytes disappear into either
 /// component's budget.
 const MAX_RETAINED_BLOCK_RECORD_FRAMING_BYTES: usize = 256 * 1024;
-/// Hard limit for one immutable version-three canonical block-retention record.
+/// Hard limit for one immutable version-four canonical block-retention record.
 ///
 /// This is the sum of the complete current base envelope and the independently
 /// bounded merge-reference witness. Keeping the joint maximum explicit prevents
-/// a valid near-maximum archive and merge QC from making finality persistence or
+/// a valid near-maximum merge QC from making finality persistence or
 /// pre-eviction retention fail.
 const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES
     + MAX_RETAINED_MERGE_REFERENCE_BYTES
     + MAX_RETAINED_BLOCK_RECORD_FRAMING_BYTES;
-const RETAINED_BLOCK_RECORD_VERSION: u16 = 3;
+const RETAINED_BLOCK_RECORD_VERSION: u16 = 4;
 /// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
 /// The maximum 31-validator revision-4 roster, its current PoPs, and a boundary

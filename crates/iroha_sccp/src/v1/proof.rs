@@ -9,13 +9,12 @@
 
 use iroha_data_model::bridge::SccpNetworkV1;
 
-#[cfg(test)]
-use super::merkle::{MerkleError, verify_block_inclusion};
 use super::{
     constants::{CODEC_TON_ACCOUNT36, CODEC_TRON_ADDRESS21, MAX_BLOCK_LEAVES},
     eip712::AttestationFieldsV1,
     hashes::{self, LeafError},
     history::verify_history_inclusion,
+    merkle::{MerkleError, verify_block_inclusion},
     payload::{PayloadError, SccpTransferPayloadV1},
 };
 
@@ -225,7 +224,6 @@ impl ControlProofV1 {
     }
 }
 
-#[cfg(test)]
 fn check_block(
     leaf: &[u8; 32],
     leaf_index: u32,
@@ -249,7 +247,6 @@ fn check_block(
 /// # Errors
 ///
 /// Returns the first failing [`ProofError`].
-#[cfg(test)]
 pub fn verify_transfer_direct(
     attestation: &AttestationFieldsV1,
     proof: &MessageProofV1,
@@ -276,7 +273,6 @@ pub fn verify_transfer_direct(
 /// # Errors
 ///
 /// Returns the first failing [`ProofError`].
-#[cfg(test)]
 pub fn verify_transfer_historical(
     attestation: &AttestationFieldsV1,
     history: &HistoryProofV1,
@@ -301,7 +297,6 @@ pub fn verify_transfer_historical(
 /// # Errors
 ///
 /// Returns the first failing [`ProofError`].
-#[cfg(test)]
 pub fn verify_control_direct(
     attestation: &AttestationFieldsV1,
     proof: &ControlProofV1,
@@ -327,7 +322,6 @@ pub fn verify_control_direct(
 /// # Errors
 ///
 /// Returns the first failing [`ProofError`].
-#[cfg(test)]
 pub fn verify_control_historical(
     attestation: &AttestationFieldsV1,
     history: &HistoryProofV1,
@@ -607,9 +601,9 @@ mod tests {
             route_revision: 1,
             destination_word: word,
         };
-        let mut tron = vec![0x41];
-        tron.extend_from_slice(&[0x22; 20]);
-        assert!(dest.is_self(CODEC_TRON_ADDRESS21, &tron));
+        let mut tvm_account = vec![0x41];
+        tvm_account.extend_from_slice(&[0x22; 20]);
+        assert!(dest.is_self(CODEC_TRON_ADDRESS21, &tvm_account));
         assert!(dest.is_self(2, &[0x22; 20]));
         assert!(!dest.is_self(2, &[0x23; 20]));
         let ton_dest = DestinationV1 {
@@ -617,10 +611,10 @@ mod tests {
             route_revision: 1,
             destination_word: [0x44; 32],
         };
-        let mut ton = vec![0; 4];
-        ton.extend_from_slice(&[0x44; 32]);
-        assert!(ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton));
-        ton[35] = 0;
-        assert!(!ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton));
+        let mut ton_account = vec![0; 4];
+        ton_account.extend_from_slice(&[0x44; 32]);
+        assert!(ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton_account));
+        ton_account[35] = 0;
+        assert!(!ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton_account));
     }
 }

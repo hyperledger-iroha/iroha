@@ -299,7 +299,6 @@ pub enum Builtin {
     QueryGetParameter,
     QueryGetContractManifest,
     QueryGetContractInstance,
-    RecordSccpMessage,
     ExecuteQuery,
     ScExecuteSubmitBallot,
     ResolveAccountAlias,
@@ -568,7 +567,6 @@ impl Builtin {
             "query_get_parameter" => Self::QueryGetParameter,
             "query_get_contract_manifest" => Self::QueryGetContractManifest,
             "query_get_contract_instance" => Self::QueryGetContractInstance,
-            "record_sccp_message" => Self::RecordSccpMessage,
             "execute_query" => Self::ExecuteQuery,
             "sc_execute_submit_ballot" => Self::ScExecuteSubmitBallot,
             "resolve_account_alias" => Self::ResolveAccountAlias,
@@ -838,7 +836,6 @@ impl Builtin {
             Self::QueryGetParameter => "ledger::query::parameter",
             Self::QueryGetContractManifest => "ledger::query::seiyaku_manifest",
             Self::QueryGetContractInstance => "ledger::query::seiyaku_instance",
-            Self::RecordSccpMessage => "ledger::sccp::record",
             Self::ResolveAccountAlias => "ledger::account::resolve_alias",
             Self::SubscriptionBill => "ledger::subscription::bill",
             Self::SubscriptionRecordUsage => "ledger::subscription::record_usage",
@@ -1073,7 +1070,7 @@ impl Builtin {
     /// Return the canonical effect classification for this builtin.
     pub const fn effects(self) -> BuiltinEffects {
         match self {
-            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot => BuiltinEffects::INSTRUCTION,
+            Self::ScExecuteSubmitBallot => BuiltinEffects::INSTRUCTION,
             Self::Ensure | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinEffects::DURABLE_STATE
             }
@@ -1203,8 +1200,7 @@ impl Builtin {
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally
             | Self::VrfEpochSeed => BuiltinAccess::LedgerRead,
-            Self::RecordSccpMessage
-            | Self::ContractInvokeQuantity2
+            Self::ContractInvokeQuantity2
             | Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
@@ -1408,9 +1404,7 @@ impl Builtin {
             Self::QueryGetParameter => &[s::SYSCALL_QUERY_GET_PARAMETER],
             Self::QueryGetContractManifest => &[s::SYSCALL_QUERY_GET_CONTRACT_MANIFEST],
             Self::QueryGetContractInstance => &[s::SYSCALL_QUERY_GET_CONTRACT_INSTANCE],
-            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot => {
-                &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
-            }
+            Self::ScExecuteSubmitBallot => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION],
             Self::ExecuteQuery => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY],
             Self::ResolveAccountAlias => &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS],
             Self::SubscriptionBill => &[s::SYSCALL_SUBSCRIPTION_BILL],
@@ -1749,7 +1743,7 @@ impl Builtin {
                 &["string", "bytes", "bytes", "string", "bytes", "bytes"],
                 "bytes",
             ),
-            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot => S::new(&["bytes"], "()"),
+            Self::ScExecuteSubmitBallot => S::new(&["bytes"], "()"),
             Self::ExecuteQuery => S::new(&["bytes"], "bytes"),
             Self::ResolveAccountAlias => S::new(&["string|bytes"], "AccountId"),
             Self::SubscriptionBill | Self::SubscriptionRecordUsage => S::new(&[], "()"),
@@ -2997,6 +2991,28 @@ mod tests {
                 "{source_name}"
             );
         }
+    }
+    #[test]
+    fn cross_chain_transfers_have_no_contract_builtin() {
+        // SCCP v1 sends are signed `RecordSccpMessage` instructions only (specs/sccp.md §4.4);
+        // contracts cannot record cross-chain messages.
+        for builtin in Builtin::all() {
+            let source_name = builtin.source_name();
+            assert!(
+                !source_name.split("::").any(|segment| segment == "sccp"),
+                "{builtin:?} exposes the retired cross-chain source name {source_name}"
+            );
+            assert_ne!(
+                builtin.name(),
+                "record_sccp_message",
+                "{builtin:?} keeps the retired cross-chain builtin"
+            );
+        }
+        assert_eq!(Builtin::from_name("record_sccp_message"), None);
+        assert_eq!(
+            Builtin::ScExecuteSubmitBallot.operation_syscalls(),
+            &[ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
+        );
     }
     #[test]
     fn compiler_internal_numeric_negation_registry_excludes_quantity() {

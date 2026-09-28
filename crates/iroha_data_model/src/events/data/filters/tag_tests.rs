@@ -104,6 +104,7 @@ fn canonical_cases() -> Vec<(&'static str, u32, DataEventFilter)> {
             DataEventFilter::Governance(GovernanceEventFilter::new()),
         ),
         ("GameSession", 24, DataEventFilter::GameSession(None)),
+        ("Sccp", 25, DataEventFilter::Sccp(SccpEventFilter::new())),
     ]
 }
 
@@ -177,8 +178,29 @@ fn game_session_filter_preserves_tag_and_optional_identity() {
 }
 
 #[test]
+fn sccp_filter_preserves_tag_network_and_event_set() {
+    let values = [
+        SccpEventFilter::new(),
+        SccpEventFilter::new().for_network(crate::bridge::SccpNetworkV1::TonMainnet),
+        SccpEventFilter::new().for_events(
+            crate::sccp::events::SccpEventSet::MessageRecorded
+                | crate::sccp::events::SccpEventSet::ControlRecorded,
+        ),
+    ];
+    for value in values.map(DataEventFilter::Sccp) {
+        for flags in layouts() {
+            let bytes = payload(&value, flags);
+            assert_eq!(&bytes[..4], &25_u32.to_le_bytes());
+            let decoded = decode(&bytes, flags).expect("decode SCCP filter");
+            assert_eq!(decoded, value);
+            assert_eq!(payload(&decoded, flags), bytes);
+        }
+    }
+}
+
+#[test]
 fn data_event_filter_rejects_unassigned_tags() {
-    for tag in [25_u32, u32::MAX] {
+    for tag in [26_u32, u32::MAX] {
         for flags in layouts() {
             assert!(matches!(
                 decode(&tag.to_le_bytes(), flags),

@@ -47,16 +47,44 @@ slices. Their polynomials are sampled in canonical provider/column order, then
 streamed into one common-domain base root. X5B1 binds that root and the CA base
 root before deriving its existing 272 ordered challenges. Auxiliary polynomials
 are then sampled and committed into one separate joined root. Query replay
-reuses the retained masked coefficients and checks both reconstructed roots.
+reuses the original explicit masks and immutable native sources, and checks both
+reconstructed roots. Every coefficient replay reconstructs the same polynomial;
+no mask is resampled and no seed-based random generator is introduced.
 The wire, transcript, leaf hashing and frontier accounting share one immutable
 layout; proof bytes cannot select a fallback. The joined leaf marker `u16::MAX`
 cannot alias an individual group index. Base and auxiliary roles remain distinct.
 
-The joined owner retains native coefficient vectors, at most eight zeroizing
-LDE columns, and one wiping digest state per common-domain row. Requested row
-openings are counted separately. Packing buffers and incomplete private opening
-scratch clear on failure/drop. This is an allocation design, not measured RSS.
-The complete prover still needs maximum-profile time/memory qualification.
+Retaining every native coefficient would require 16,226,947,392 payload bytes,
+already above the unchanged 12 GiB ceiling. The MAIN owner instead retains
+81,690,944 bytes of original mask coefficients and reconstructs columns from its
+closed phase owners. Commitment passes retain at most eight clearing coefficient
+and LDE columns and one wiping digest state per common-domain row. The quotient
+stage evaluates one registration in interleaved stripes of at most 524,288 rows;
+it folds coefficients modulo the stripe polynomial before FFT, preserving the
+original full-domain values, native translations and final quotient IFFT.
+
+`stark/main_resources.rs` counts these transform and commitment buffers from the
+actual layout, including composition, FRI masks/trees, openings and wire scratch.
+Before source construction or mask sampling, the prover charges the borrowed
+assembly's actual vector capacities and reserves a 6 GiB native-source allocation
+allowance, a separate 1 GiB construction/replay allowance and 1 GiB of process
+headroom against the same 12 GiB ceiling. A second preallocation check validates
+DER/I/O/projection extents and combines their full-width forecasts with the
+canonical P-256 source layout and all 29 SHA fixed schedules. Serial SHA scratch
+includes raw circuits, nested event vectors and complete base/fixed/aux matrices.
+Every phase rechecks actual retained
+source capacities, including the assembly, bound DER copy, P-256 sources, SHA
+fixed schedules, I/O columns and projection auxiliary rows. Unused vector capacity
+is charged. These allowances are admission policy, not measured allocator or RSS
+bounds. Source construction/replay peaks and maximum-profile time/memory still
+require native qualification. Packing buffers, replay coefficients, incomplete
+private opening scratch and retained DER/SHA source cells use guaranteed clearing.
+Private word-event allocations move between clearing owners; public fixed schedules
+retain their original values. This does not claim erasure of every transient
+compiler-generated scalar or stack copy.
+The conservative early reservation currently leaves about 600 MB for the borrowed
+assembly. A complete maximum-profile assembly has not yet been admitted or measured;
+the allocation plan does not assert that every supported maximum witness fits.
 
 Binary FRI authenticates each ordered `(low, high)` pair in one 64-byte leaf,
 including the terminal tree. Every query still discloses both values and uses

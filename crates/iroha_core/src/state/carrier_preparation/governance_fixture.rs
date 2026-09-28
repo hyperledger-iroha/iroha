@@ -93,8 +93,6 @@ pub(crate) fn publish_governance_fixture(
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(()),
         )
         .unwrap_or_else(|error| panic!("capture original governance journals: {error}"));

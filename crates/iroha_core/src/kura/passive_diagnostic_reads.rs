@@ -203,11 +203,9 @@ impl Kura {
         let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
             .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
         let block = self.get_block_without_merge_sidecar(height);
-        let finality = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
-                record.block_height,
-            )?
-            .map(|(header, finality, _)| (header, finality));
+        let finality = self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(
+            record.block_height,
+        )?;
         let (header, finality) = match (block, finality) {
             (Some(block), Some((header, finality))) => {
                 self.validate_merge_carrier_record_against_entry_without_append_repair(

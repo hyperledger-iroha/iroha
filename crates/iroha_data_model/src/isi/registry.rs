@@ -6,8 +6,8 @@ use crate::{
         InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
         bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
         game, identifier, kaigi, ministry, musubi, nexus, nft_market, oracle, privacy, ram_lfe,
-        repo, runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns,
-        sorafs, space_directory,
+        repo, runtime_upgrade, rwa, sccp, settlement, smart_contract_code, social, soracloud,
+        soradns, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -359,11 +359,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 377;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 384;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 377;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 384;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 359;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 366;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -413,9 +413,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "84bdf6ba339676993ceb66311bb1f117a64b4235598e0c13fd92c9d694dac03e";
+            "f60fd06020e0e3f83e49304e1eac02be6ecb9b8ee38d8f4dde497d054f6a8b3f";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "caba1c7a6b8d8720bb5c4dc1193335a163f9bbb73ad02be66d72db64e7aa35c7";
+            "3744dcad43ecdc5194383ce63a43c5bcd779296cbf1a71a97fee852abb467c22";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1301,9 +1301,6 @@ mod tests {
         assert!(registry.contains(rwa::RwaInstructionBox::WIRE_ID));
         assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
         assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
-        let type_name = std::any::type_name::<bridge::ApplySccpRouteGovernance>();
-        assert!(registry.wire_id(type_name).is_some());
-        assert!(!registry.contains(type_name));
     }
     #[test]
     fn instruction_registry_registers_and_decodes_standalone_surface() {

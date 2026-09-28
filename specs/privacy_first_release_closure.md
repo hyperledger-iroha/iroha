@@ -37,10 +37,12 @@ checks without equaling any of the 400 authenticated native rows, and direct
 cross-characteristic residue lifts do not preserve low degree. A source-bound
 opening relation, soundness/privacy argument and complete resource accounting
 remain prerequisites; the size-only geometry does not authorize production.
-The FASTPQ compact review likewise computes a 1,050,000-byte raw opening
-minimum for the current 375-query, 342-column segment before authentication,
+The September 23 FASTPQ compact review computed a 1,050,000-byte raw opening
+minimum for its 375-query, 342-column segment before authentication,
 already above both its 512-KiB target and AXT's 1-MiB inner envelope. Its
-opening protocol, not merely its codec, still needs redesign.
+opening protocol, not merely its codec, required redesign. The current masked
+DEEP replacement and its separate evidence are recorded in the
+[ZK remediation goals](zk_first_release_goals.md).
 The September 23 geometry screen rejects a hypothetical 474,213-byte
 64-query/narrow-column segment: its current conditional soundness bound is
 below the required security target and its raw LDE alone reaches 2 GiB.
@@ -167,7 +169,7 @@ implementation markers must not be substituted for the qualification record in
 | Component | Completion criterion still required |
 | --- | --- |
 | Generic native STARK | Current Binding and Explicit paths reconstruct the complete public trace/composition roots and enforce a zero terminal value. A future hidden-trace AIR still needs a verified initial degree/proximity argument; binary fold consistency alone is insufficient. Standalone public-padding verification remains unavailable, and BFV/Soracloud callers must complete explicit material replay. |
-| FASTPQ | The sole offline compact V1 owner now compiles with six-lane commitments, complete typed context and fixed field tapes; accepted compact SHAKE/prototype selectors are removed. Complete actual full-domain proofs and fresh artifacts, replace the production replay representation, and finish the bounded-opening AIR/FRI and witness-privacy arguments within unchanged production proof limits. Complete protocol-specific qROM analysis and independent permutation/construction reproduction. |
+| FASTPQ | Core ordinary and AXT wrappers select canonical masked DEEP artifacts with bounded verification, six-lane commitments and the complete typed statement. Finish actual full-domain ordinary/AXT proof execution, source-bound admission tests, whole-proof memory/time measurement and independent AIR/FRI, witness-privacy and qROM review within unchanged proof/resource limits. Focused native, actual Metal leaf and full transform checks do not qualify a complete proof. |
 | AXT | Both Core execution pipelines now commit exact ordered canonical transaction wires; missing block-owned commitments cannot be synthesized from transcript identities. Anchor-bound proof verification checks ordered wire membership, exact public roots and context, and mandatory expiry. Consensus witness roots and transfer-batch trees still commit subsets, which cannot substitute for full persisted WSV roots. Complete successful-execution/transfer binding, rooted state witnesses, immutable anchor resolution and durable spend nonces. |
 | BFV/Soracloud | Complete the full BFV-RNS relation, full-size/eight-party KAT, resource measurements and governed parameter/lattice/noise/qROM evidence. The artifact-aware native wrapper is a replay check, not production qualification. |
 | MKHE | Complete the separate atomic 40-limb source/materialization/packing/cross-field/padding verifier and production composite within the unchanged qPCS resource limits. Unavailable stages cannot issue receipts. |
@@ -176,7 +178,7 @@ implementation markers must not be substituted for the qualification record in
 | Kaigi | Final 31-row authorization and 25-row usage proofs; retained original-account participation, exact keys/schema, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |
 | Elections | Complete Parliament private ballot/deadline/retry, finalized-beacon, rollback/restore and independent timed-OVN/threshold-BLS review on four validators. The separate standalone election product also requires final credential-linked ballot and closed-corpus tally relations, key custody, SDK fixtures and native/network qualification; see [the election statement boundary](zk_audit_matrix.md#election-statement-completion). |
 | SDKs and fixtures | Rust, Kotlin/Java consumers, Swift, JavaScript, Python and C# use the same final canonical bytes and native admission; signed same-source native packages and target-platform execution. Structural parser/source tests alone cannot qualify an SDK. |
-| Hardware | Final FASTPQ six-lane hashes and polynomial derivation currently execute on CPU. Old scalar-permutation/FFT preflights cannot qualify final V1 GPU proofs. The allocation-free typed frame now shares CPU, streaming and hardware input framing. Dedicated Metal digest dispatch and cleanup/quarantine tests pass locally; CUDA compilation/device evidence and full proof routing remain outstanding. Complete real mode propagation; then execute CPU/NEON/SIMD/Metal/CUDA parity, fault quarantine and measured memory/throughput. A feature build or selected mode is not device execution. |
+| Hardware | FASTPQ's masked producer dispatches bounded leaf batches through explicit CPU or required-device policy; parent hashes, transcript and polynomial work use CPU. Actual Metal tests cover every leaf oracle and readiness without a CPU fallback. Complete whole-proof hardware/resource evidence, device-buffer erasure, CUDA execution and target-specific side-channel review; earlier scalar-permutation/FFT preflights cannot qualify the final protocol. A feature build or selected mode is not device execution. |
 | Release and deployment | Clean signed source/lock/toolchain identity, complete independent audit classes and finding dispositions, real 48-stage/54-artifact evidence, exact four-validator quorum, staged restart/canary/convergence and authenticated endpoint readback. |
 
 The SDK release matrix retains ten consumers in this order: `kotlin_jvm`,

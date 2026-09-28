@@ -17,9 +17,10 @@ use std::sync::Arc;
 use iroha_data_model::sccp::deployment::SccpTonCodeRefV1;
 use sha2::{Digest as _, Sha256};
 
-use super::constants::{TON_HASH_CHUNK_HASHES, TON_MEMBER_CHUNK_ADDRESSES};
-#[cfg(test)]
-use super::{constants::TON_SNAKE_CHUNK_BYTES, roster::RosterV1};
+use super::{
+    constants::{TON_HASH_CHUNK_HASHES, TON_MEMBER_CHUNK_ADDRESSES, TON_SNAKE_CHUNK_BYTES},
+    roster::RosterV1,
+};
 
 /// Maximum data bits of one cell.
 pub const MAX_CELL_BITS: usize = 1023;
@@ -161,7 +162,7 @@ fn representation(data: &[u8], bit_len: usize, refs: &[CellRef]) -> Vec<u8> {
     out.push(u8::try_from(refs.len()).expect("at most 4 references"));
     out.push(u8::try_from(full_bytes + data_bytes).expect("at most 256 data bytes"));
     out.extend_from_slice(&data[..data_bytes]);
-    if bit_len % 8 != 0 {
+    if !bit_len.is_multiple_of(8) {
         let last = out.len() - 1;
         out[last] |= 0x80 >> (bit_len % 8);
     }
@@ -204,7 +205,7 @@ impl CellBuilder {
         if self.bit_len >= MAX_CELL_BITS {
             return Err(TonCellError::BitOverflow);
         }
-        if self.bit_len % 8 == 0 {
+        if self.bit_len.is_multiple_of(8) {
             self.data.push(0);
         }
         if bit {
@@ -348,7 +349,6 @@ impl CellBuilder {
 /// # Errors
 ///
 /// Returns [`TonCellError::Empty`] for no bytes.
-#[cfg(test)]
 pub fn snake_bytes(bytes: &[u8]) -> Result<Cell, TonCellError> {
     if bytes.is_empty() {
         return Err(TonCellError::Empty);
@@ -372,12 +372,11 @@ pub fn snake_bytes(bytes: &[u8]) -> Result<Cell, TonCellError> {
 ///
 /// Returns [`TonCellError::BadSnake`], [`TonCellError::SnakeTooLong`] or
 /// [`TonCellError::OpaqueChild`].
-#[cfg(test)]
 pub fn parse_snake_bytes(cell: &Cell, max_bytes: usize) -> Result<Vec<u8>, TonCellError> {
     let mut out = Vec::new();
     let mut current = cell;
     loop {
-        if current.bit_len % 8 != 0 || current.refs.len() > 1 {
+        if !current.bit_len.is_multiple_of(8) || current.refs.len() > 1 {
             return Err(TonCellError::BadSnake);
         }
         let len = current.bit_len / 8;
@@ -451,7 +450,6 @@ pub fn hash_chunks(hashes: &[[u8; 32]]) -> Result<Option<Cell>, TonCellError> {
 
 /// Inputs of the canonical minter initial data for a deployment pinned to one generation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg(test)]
 pub struct TonMinterInitV1 {
     /// Live Taira `NetworkId` bytes.
     pub taira_network_id: [u8; 32],
@@ -469,7 +467,6 @@ pub struct TonMinterInitV1 {
 
 /// The three cells under the minter data root, exposed for golden comparisons.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg(test)]
 pub struct TonMinterDataV1 {
     /// `minter_data` root cell.
     pub root: Cell,
@@ -491,7 +488,6 @@ pub struct TonMinterDataV1 {
 /// # Errors
 ///
 /// Returns [`TonCellError::BadRoster`] or [`TonCellError::CoinsTooLarge`].
-#[cfg(test)]
 pub fn minter_initial_data(init: &TonMinterInitV1) -> Result<TonMinterDataV1, TonCellError> {
     let roster_digest = init
         .roster
@@ -568,7 +564,6 @@ pub fn state_init(
 /// # Errors
 ///
 /// See [`minter_initial_data`].
-#[cfg(test)]
 pub fn minter_account_id(
     init: &TonMinterInitV1,
     minter_code: SccpTonCodeRefV1,
@@ -617,7 +612,7 @@ mod tests {
     use super::*;
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        crate::v1::hashes::to_hex(bytes)
     }
 
     fn from_hex(text: &str) -> [u8; 32] {
@@ -707,7 +702,9 @@ mod tests {
     #[test]
     fn snake_bytes_shapes() {
         for len in [1_usize, 126, 127, 128, 254, 255, 1024] {
-            let bytes: Vec<u8> = (0..len).map(|index| (index % 251) as u8).collect();
+            let bytes: Vec<u8> = (0..len)
+                .map(|index| u8::try_from(index % 251).unwrap())
+                .collect();
             let cell = snake_bytes(&bytes).unwrap();
             assert_eq!(parse_snake_bytes(&cell, 4096).unwrap(), bytes, "len {len}");
             let expected_depth = u16::try_from(len.div_ceil(127) - 1).unwrap();

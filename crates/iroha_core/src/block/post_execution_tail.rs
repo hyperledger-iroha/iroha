@@ -10,6 +10,7 @@ impl ValidBlock {
         advertised_fragments: Option<u64>,
         advertised_policy: Option<&AxtPolicySnapshot>,
         advertised_transitions: Option<&BTreeSet<DataSpaceId>>,
+        sccp_height: crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1<'_>,
     ) -> Result<crate::state::ExecutionOutputSealMetadata, BlockValidationError> {
         Self::finalize_common_execution_metadata(
             block,
@@ -61,12 +62,104 @@ impl ValidBlock {
                     "QueuePlan pending application obligation could not be resolved: {error}"
                 ))
             })?;
+        // SCCP commitments, history, rosters, subjects and pruning are World writes of this
+        // block after all of its transactions (`specs/sccp.md` §4.5), with the authenticated
+        // consensus inputs of its height.
+        let sccp_inputs = Self::sccp_height_inputs(block, state, sccp_height);
+        crate::smartcontracts::isi::sccp::hook::finalize_block(
+            state,
+            &block.header(),
+            sccp_inputs.as_ref(),
+        )?;
         let committed_fragment_count =
             Self::validated_committed_fragment_count(state, advertised_fragments)?;
         Ok(crate::state::ExecutionOutputSealMetadata {
             committed_fragment_count,
             lane_finality_statements,
         })
+    }
+
+    /// Derive the consensus inputs of the height `state` executes for the SCCP post-execution
+    /// hook (`specs/sccp.md` §4.3.2), or `None` when SCCP does not exist or the inputs cannot
+    /// be derived (SCCP roster derivation then fails closed; block execution is unaffected).
+    ///
+    /// The Sumeragi core reads its lag-2 schedule, which the output-seal finalizer advanced
+    /// for this block just before; a v2 block uses its frozen authenticated height context;
+    /// an unauthenticated execution freezes the height-one context of a v2 signed genesis
+    /// and has no inputs for any other block.
+    fn sccp_height_inputs(
+        block: &SignedBlock,
+        state: &StateBlock<'_>,
+        source: crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1<'_>,
+    ) -> Option<crate::smartcontracts::isi::sccp::height::SccpHeightInputsV1> {
+        use crate::smartcontracts::isi::sccp::height::{SccpHeightInputsV1, SccpHeightSourceV1};
+        if !crate::smartcontracts::isi::sccp::params::exists(&state.world) {
+            return None;
+        }
+        match source {
+            SccpHeightSourceV1::V2Context(context) => {
+                Some(SccpHeightInputsV1::from_height_context(context))
+            }
+            SccpHeightSourceV1::SumeragiSchedule {
+                genesis_height,
+                mode,
+            } => SccpHeightInputsV1::from_sumeragi_schedule(
+                &state.world,
+                block.header().height().get(),
+                genesis_height,
+                mode,
+            )
+            .map_err(|error| {
+                iroha_logger::warn!(
+                    %error,
+                    "SCCP: the scheduled height inputs are unavailable; roster derivation fails closed"
+                );
+            })
+            .ok(),
+            SccpHeightSourceV1::Unauthenticated => Self::sccp_genesis_height_context(block, state)
+                .map(|context| SccpHeightInputsV1::from_height_context(&context)),
+        }
+    }
+
+    /// Freeze the height-one context of a genesis block for the SCCP post-execution hook
+    /// (`specs/sccp.md` §4.3.2).
+    ///
+    /// This is the context `build_genesis_height_context` derives from the signed genesis and
+    /// its staged state, recomputed after every genesis transaction has executed, when the
+    /// consensus inputs it reads are final. It is frozen only when genesis initialized SCCP, so
+    /// a network without SCCP does no extra work. A genesis whose context cannot be frozen
+    /// yields `None`; SCCP roster derivation then fails closed, and the node's own genesis
+    /// freeze reports the underlying error.
+    fn sccp_genesis_height_context(
+        block: &SignedBlock,
+        state: &StateBlock<'_>,
+    ) -> Option<consensus_v2::HeightContext> {
+        if !block.header().is_genesis()
+            || !crate::smartcontracts::isi::sccp::params::exists(&state.world)
+        {
+            return None;
+        }
+        let genesis = iroha_genesis::GenesisBlock(block.clone());
+        let frozen = iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
+            .map_err(|error| error.to_string())
+            .and_then(|metadata| {
+                crate::sumeragi::freeze_staged_genesis_v2(
+                    &genesis,
+                    state,
+                    consensus_v2::ConsensusMode::from(metadata.mode),
+                )
+                .map_err(|error| error.to_string())
+            });
+        match frozen {
+            Ok(bootstrap) => Some(bootstrap.context().clone()),
+            Err(error) => {
+                iroha_logger::warn!(
+                    %error,
+                    "SCCP: the genesis height context could not be frozen; roster derivation fails closed"
+                );
+                None
+            }
+        }
     }
 
     /// Qualify the source-owned native producer, including pristine controls,
@@ -192,13 +285,7 @@ impl ValidBlock {
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
         let _guard = crate::exec_witness::exec_witness_guard();
-        Self::execute_and_record_canonical_outputs(
-            block,
-            state,
-            None,
-            SccpRootValidation::Enforce,
-            genesis.as_ref(),
-        )?;
+        Self::execute_and_record_canonical_outputs(block, state, None, genesis.as_ref())?;
         state
             .finalize_lane_consensus_contexts(block, None)
             .and_then(|()| state.capture_exec_witness())
@@ -220,13 +307,7 @@ impl ValidBlock {
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
         let _guard = crate::exec_witness::exec_witness_guard();
-        Self::execute_and_record_canonical_outputs(
-            block,
-            state,
-            None,
-            SccpRootValidation::Enforce,
-            genesis.as_ref(),
-        )?;
+        Self::execute_and_record_canonical_outputs(block, state, None, genesis.as_ref())?;
         if genesis.is_some() {
             context.nexus_amx_context_hash =
                 crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);
