@@ -602,7 +602,9 @@ fn actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_image
         .unwrap();
     let initial = NativeStorage::initial_allocation_demand().unwrap().bytes();
     let identity = concread::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
-    assert_eq!(initial, maps + 2 * identity);
+    let notification =
+        concread::release::ReleaseNotification::allocation_layout::<AllocationCharge>().size();
+    assert_eq!(initial, maps + 2 * identity + 2 * notification);
     let insufficient = AllocationBudget::new(initial - 1);
     let error = without_allocations(|| NativeStorage::try_new_admitted(insufficient.clone()))
         .err()

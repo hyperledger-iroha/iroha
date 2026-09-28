@@ -1736,6 +1736,7 @@ TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
     'app_routed_read_http_admission_tests::solo_bodyless_burst_queues_under_one_unchanged_memory_working_set',
     'app_routed_read_http_admission_tests::bodyless_read_queue_keeps_finite_count_and_deadline',
     'tests_runtime_handlers::global_asset_definition_and_own_balance_ignore_unrelated_restricted_routes',
+    'tests_runtime_handlers::global_asset_balance_route_requires_exact_holder_scope_and_known_policy',
     'routing::tests::finality_attestation_handler_tests::finality_attestation_handler_binds_current_node_success_and_actual_tip_race',
     'routing::tests::finality_attestation_handler_tests::finality_attestation_latest_signs_current_status_and_rejects_stopped_driver',
     'routing::tests::finality_attestation_handler_tests::finality_attestation_handler_distinguishes_absent_driver_and_foreign_signer',

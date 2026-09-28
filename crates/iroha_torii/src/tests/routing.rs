@@ -790,8 +790,18 @@ mod tests {
             challenge: [u8; 32],
             reason: Reason,
         ) -> FinalityAttestationFailure {
+            assert_selector_failure(app, &height.to_string(), height, challenge, reason).await
+        }
+
+        async fn assert_selector_failure(
+            app: &SharedAppState,
+            selector: &str,
+            height: u64,
+            challenge: [u8; 32],
+            reason: Reason,
+        ) -> FinalityAttestationFailure {
             let response = router(app)
-                .oneshot(request(height, challenge))
+                .oneshot(selector_request(selector, challenge))
                 .await
                 .unwrap();
             assert_eq!(response.status().as_u16(), reason.http_status_code());
@@ -934,6 +944,9 @@ mod tests {
         #[tokio::test]
         async fn finality_attestation_latest_signs_current_status_and_rejects_stopped_driver() {
             let mut fixture = ReadinessNode::start();
+            let node = fixture.app.sumeragi.as_ref().unwrap();
+            assert!(node.ready());
+            assert!(!node.restart_required());
             let challenge = [0x39; 32];
             let response = router(&fixture.app)
                 .oneshot(selector_request("latest", challenge))
@@ -958,7 +971,19 @@ mod tests {
                 "node signature covers actual status"
             );
             fixture.stop();
+            let node = fixture.app.sumeragi.as_ref().unwrap();
+            assert!(node.status_dto().is_some(), "shutdown retains diagnostics");
+            assert!(!node.ready());
+            assert!(node.restart_required());
             assert_failure(&fixture.app, 1, [0x3A; 32], Reason::RestartRequired).await;
+            assert_selector_failure(
+                &fixture.app,
+                "latest",
+                1,
+                [0x3B; 32],
+                Reason::RestartRequired,
+            )
+            .await;
         }
 
         #[tokio::test]
@@ -996,8 +1021,6 @@ mod tests {
                 let hash = block.hash();
                 drop(view);
                 let kura = Kura::blank_kura_for_testing();
-                kura.store_block(block)
-                    .expect("persist canonical deliberately damaged certificate fixture");
                 let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
                     World::default(),
                     Arc::clone(&kura),
@@ -1005,6 +1028,10 @@ mod tests {
                     fixture.app.state.chain_id_ref().clone(),
                     *fixture.app.state.network_id_ref(),
                 ));
+                // Provision authenticated primary storage while it is empty,
+                // then inject only the deliberate certificate defect.
+                kura.store_block(block)
+                    .expect("persist canonical deliberately damaged certificate fixture");
                 let mut hashes = state.block_hashes.block();
                 hashes.push_for_tests(hash);
                 hashes.commit_for_tests();
