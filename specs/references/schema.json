@@ -767,6 +767,12 @@
       "type": "u8"
     }
   },
+  "Array<u8, 20>": {
+    "Array": {
+      "len": 20,
+      "type": "u8"
+    }
+  },
   "Array<u8, 32>": {
     "Array": {
       "len": 32,
@@ -3254,6 +3260,42 @@
     ]
   },
   "ChainId": "String",
+  "CheckpointDecision": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "core_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "result",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "committee_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "next_committee_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "executed_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "executed_len",
+        "type": "u64"
+      }
+    ]
+  },
   "ChunkerProfileHandle": {
     "Struct": [
       {
@@ -4619,6 +4661,11 @@
         "discriminant": 22,
         "tag": "GameSession",
         "type": "GameSessionEventV1"
+      },
+      {
+        "discriminant": 23,
+        "tag": "Sccp",
+        "type": "SccpEvent"
       }
     ]
   },
@@ -4747,6 +4794,11 @@
         "discriminant": 24,
         "tag": "GameSession",
         "type": "Option<Hash>"
+      },
+      {
+        "discriminant": 25,
+        "tag": "Sccp",
+        "type": "SccpEventFilter"
       }
     ]
   },
@@ -17997,6 +18049,9 @@
   "Option<Array<u8, 16>>": {
     "Option": "Array<u8, 16>"
   },
+  "Option<Array<u8, 20>>": {
+    "Option": "Array<u8, 20>"
+  },
   "Option<Array<u8, 32>>": {
     "Option": "Array<u8, 32>"
   },
@@ -18407,6 +18462,12 @@
   },
   "Option<RwaId>": {
     "Option": "RwaId"
+  },
+  "Option<SccpNetworkV1>": {
+    "Option": "SccpNetworkV1"
+  },
+  "Option<SccpRouteActivationV1>": {
+    "Option": "SccpRouteActivationV1"
   },
   "Option<SignedGameCheckpointV1>": {
     "Option": "SignedGameCheckpointV1"
@@ -25387,6 +25448,1017 @@
       }
     ]
   },
+  "SccpAttestationFaultV1": {
+    "Struct": [
+      {
+        "name": "peer",
+        "type": "PeerId"
+      },
+      {
+        "name": "address",
+        "type": "Array<u8, 20>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "statement_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "reported_at_height",
+        "type": "u64"
+      }
+    ]
+  },
+  "SccpAttestationSignedV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "generation",
+        "type": "u64"
+      },
+      {
+        "name": "signer_index",
+        "type": "u8"
+      },
+      {
+        "name": "address",
+        "type": "Array<u8, 20>"
+      }
+    ]
+  },
+  "SccpBlockAttestedV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "generation",
+        "type": "u64"
+      },
+      {
+        "name": "signer_bitmap",
+        "type": "u32"
+      }
+    ]
+  },
+  "SccpBlockCommittedV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "root",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "count",
+        "type": "u32"
+      },
+      {
+        "name": "history_size",
+        "type": "u64"
+      }
+    ]
+  },
+  "SccpBounceReasonV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "undecodable_recipient"
+      },
+      {
+        "discriminant": 1,
+        "tag": "escrow_recipient"
+      },
+      {
+        "discriminant": 2,
+        "tag": "inadmissible_controller"
+      },
+      {
+        "discriminant": 3,
+        "tag": "credit_refused"
+      }
+    ]
+  },
+  "SccpBridgeKeySetV1": {
+    "Struct": [
+      {
+        "name": "peer",
+        "type": "PeerId"
+      },
+      {
+        "name": "address",
+        "type": "Option<Array<u8, 20>>"
+      },
+      {
+        "name": "account",
+        "type": "Option<AccountId>"
+      },
+      {
+        "name": "activation_epoch",
+        "type": "u64"
+      }
+    ]
+  },
+  "SccpControlRecordedV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "control_nonce",
+        "type": "u64"
+      },
+      {
+        "name": "paused",
+        "type": "bool"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "commitment_index",
+        "type": "u32"
+      }
+    ]
+  },
+  "SccpEvent": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "message_recorded",
+        "type": "SccpMessageRecordedV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "block_committed",
+        "type": "SccpBlockCommittedV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "subject_created",
+        "type": "SccpSubjectCreatedV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "attestation_signed",
+        "type": "SccpAttestationSignedV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "block_attested",
+        "type": "SccpBlockAttestedV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "roster_generation_created",
+        "type": "SccpRosterGenerationCreatedV1"
+      },
+      {
+        "discriminant": 6,
+        "tag": "roster_derivation_failed",
+        "type": "SccpRosterDerivationFailedV1"
+      },
+      {
+        "discriminant": 7,
+        "tag": "handoff_stalled",
+        "type": "SccpHandoffStalledV1"
+      },
+      {
+        "discriminant": 8,
+        "tag": "bridge_key_set",
+        "type": "SccpBridgeKeySetV1"
+      },
+      {
+        "discriminant": 9,
+        "tag": "attestation_fault",
+        "type": "SccpAttestationFaultV1"
+      },
+      {
+        "discriminant": 10,
+        "tag": "inbound_proven",
+        "type": "SccpInboundProvenV1"
+      },
+      {
+        "discriminant": 11,
+        "tag": "recipient_registered",
+        "type": "SccpRecipientRegisteredV1"
+      },
+      {
+        "discriminant": 12,
+        "tag": "inbound_released",
+        "type": "SccpInboundReleasedV1"
+      },
+      {
+        "discriminant": 13,
+        "tag": "inbound_bounced",
+        "type": "SccpInboundBouncedV1"
+      },
+      {
+        "discriminant": 14,
+        "tag": "inbound_liability_shortfall",
+        "type": "SccpInboundLiabilityShortfallV1"
+      },
+      {
+        "discriminant": 15,
+        "tag": "outbound_voided",
+        "type": "SccpOutboundVoidedV1"
+      },
+      {
+        "discriminant": 16,
+        "tag": "outbound_refunded",
+        "type": "SccpOutboundRefundedV1"
+      },
+      {
+        "discriminant": 17,
+        "tag": "outbound_stranded",
+        "type": "SccpOutboundStrandedV1"
+      },
+      {
+        "discriminant": 18,
+        "tag": "stranded_released",
+        "type": "SccpStrandedReleasedV1"
+      },
+      {
+        "discriminant": 19,
+        "tag": "light_client_advanced",
+        "type": "SccpLightClientAdvancedV1"
+      },
+      {
+        "discriminant": 20,
+        "tag": "light_client_frozen",
+        "type": "SccpLightClientFrozenV1"
+      },
+      {
+        "discriminant": 21,
+        "tag": "light_client_initialized",
+        "type": "SccpLightClientInitializedV1"
+      },
+      {
+        "discriminant": 22,
+        "tag": "trusted_checkpoint_installed",
+        "type": "SccpTrustedCheckpointInstalledV1"
+      },
+      {
+        "discriminant": 23,
+        "tag": "revision_activation_changed",
+        "type": "SccpRevisionActivationChangedV1"
+      },
+      {
+        "discriminant": 24,
+        "tag": "control_recorded",
+        "type": "SccpControlRecordedV1"
+      },
+      {
+        "discriminant": 25,
+        "tag": "governance_enacted",
+        "type": "SccpGovernanceEnactedV1"
+      }
+    ]
+  },
+  "SccpEventFilter": {
+    "Struct": [
+      {
+        "name": "network_matcher",
+        "type": "Option<SccpNetworkV1>"
+      },
+      {
+        "name": "event_set",
+        "type": "SccpEventSet"
+      }
+    ]
+  },
+  "SccpEventSet": {
+    "Bitmap": {
+      "masks": [
+        {
+          "mask": 1,
+          "name": "MessageRecorded"
+        },
+        {
+          "mask": 2,
+          "name": "BlockCommitted"
+        },
+        {
+          "mask": 4,
+          "name": "SubjectCreated"
+        },
+        {
+          "mask": 8,
+          "name": "AttestationSigned"
+        },
+        {
+          "mask": 16,
+          "name": "BlockAttested"
+        },
+        {
+          "mask": 32,
+          "name": "RosterGenerationCreated"
+        },
+        {
+          "mask": 64,
+          "name": "RosterDerivationFailed"
+        },
+        {
+          "mask": 128,
+          "name": "HandoffStalled"
+        },
+        {
+          "mask": 256,
+          "name": "BridgeKeySet"
+        },
+        {
+          "mask": 512,
+          "name": "AttestationFault"
+        },
+        {
+          "mask": 1024,
+          "name": "InboundProven"
+        },
+        {
+          "mask": 2048,
+          "name": "RecipientRegistered"
+        },
+        {
+          "mask": 4096,
+          "name": "InboundReleased"
+        },
+        {
+          "mask": 8192,
+          "name": "InboundBounced"
+        },
+        {
+          "mask": 16384,
+          "name": "InboundLiabilityShortfall"
+        },
+        {
+          "mask": 32768,
+          "name": "OutboundVoided"
+        },
+        {
+          "mask": 65536,
+          "name": "OutboundRefunded"
+        },
+        {
+          "mask": 131072,
+          "name": "OutboundStranded"
+        },
+        {
+          "mask": 262144,
+          "name": "StrandedReleased"
+        },
+        {
+          "mask": 524288,
+          "name": "LightClientAdvanced"
+        },
+        {
+          "mask": 1048576,
+          "name": "LightClientFrozen"
+        },
+        {
+          "mask": 2097152,
+          "name": "LightClientInitialized"
+        },
+        {
+          "mask": 4194304,
+          "name": "TrustedCheckpointInstalled"
+        },
+        {
+          "mask": 8388608,
+          "name": "RevisionActivationChanged"
+        },
+        {
+          "mask": 16777216,
+          "name": "ControlRecorded"
+        },
+        {
+          "mask": 33554432,
+          "name": "GovernanceEnacted"
+        }
+      ],
+      "repr": "u32"
+    }
+  },
+  "SccpGovernanceEnactedV1": {
+    "Struct": [
+      {
+        "name": "proposal_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "subjects",
+        "type": "Vec<SccpGovernanceSubjectV1>"
+      }
+    ]
+  },
+  "SccpGovernanceSubjectV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "route",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "route_control",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "light_client",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "parameters"
+      },
+      {
+        "discriminant": 4,
+        "tag": "bridge_key_fault",
+        "type": "PeerId"
+      }
+    ]
+  },
+  "SccpHandoffStalledV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "generation",
+        "type": "u64"
+      }
+    ]
+  },
+  "SccpInboundBouncedV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "bounce_message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "bounce_revision",
+        "type": "u32"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "reason",
+        "type": "SccpBounceReasonV1"
+      }
+    ]
+  },
+  "SccpInboundLiabilityShortfallV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "liability",
+        "type": "u128"
+      }
+    ]
+  },
+  "SccpInboundProvenV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "source_locator",
+        "type": "SccpSourceLocatorV1"
+      },
+      {
+        "name": "fee_due",
+        "type": "u128"
+      }
+    ]
+  },
+  "SccpInboundReleasedV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "recipient",
+        "type": "AccountId"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "fee",
+        "type": "u128"
+      }
+    ]
+  },
+  "SccpLcEquivocationFreezeV1": {
+    "Struct": [
+      {
+        "name": "evidence_hash",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SccpLcFreezeReasonV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "equivocation",
+        "type": "SccpLcEquivocationFreezeV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "parliament",
+        "type": "SccpLcParliamentFreezeV1"
+      }
+    ]
+  },
+  "SccpLcParliamentFreezeV1": {
+    "Struct": [
+      {
+        "name": "proposal_id",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SccpLcPointV1": {
+    "Struct": [
+      {
+        "name": "source_height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_time_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "SccpLightClientAdvancedV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "latest_set_id",
+        "type": "u64"
+      },
+      {
+        "name": "latest_finalized",
+        "type": "SccpLcPointV1"
+      },
+      {
+        "name": "state_hash",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SccpLightClientFrozenV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "reason",
+        "type": "SccpLcFreezeReasonV1"
+      }
+    ]
+  },
+  "SccpLightClientInitializedV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "latest_set_id",
+        "type": "u64"
+      },
+      {
+        "name": "latest_finalized",
+        "type": "SccpLcPointV1"
+      },
+      {
+        "name": "state_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "proposal_id",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SccpMessageRecordedV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "nonce",
+        "type": "u64"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "commitment_index",
+        "type": "u32"
+      },
+      {
+        "name": "deadline_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "SccpNetworkV1": {
+    "Enum": [
+      {
+        "discriminant": 64,
+        "tag": "sora_taira"
+      },
+      {
+        "discriminant": 65,
+        "tag": "ethereum_mainnet"
+      },
+      {
+        "discriminant": 66,
+        "tag": "bsc_mainnet"
+      },
+      {
+        "discriminant": 67,
+        "tag": "tron_mainnet"
+      },
+      {
+        "discriminant": 68,
+        "tag": "ton_mainnet"
+      }
+    ]
+  },
+  "SccpOutboundRefundedV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "nonce",
+        "type": "u64"
+      },
+      {
+        "name": "recipient",
+        "type": "AccountId"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      }
+    ]
+  },
+  "SccpOutboundStrandedV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "nonce",
+        "type": "u64"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      }
+    ]
+  },
+  "SccpOutboundVoidedV1": {
+    "Struct": [
+      {
+        "name": "message_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "nonce",
+        "type": "u64"
+      },
+      {
+        "name": "kind",
+        "type": "SccpVoidKindV1"
+      },
+      {
+        "name": "refund_pending",
+        "type": "bool"
+      }
+    ]
+  },
+  "SccpRecipientRegisteredV1": {
+    "Struct": [
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "message_id",
+        "type": "Option<Array<u8, 32>>"
+      }
+    ]
+  },
+  "SccpRevisionActivationChangedV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "revision",
+        "type": "u32"
+      },
+      {
+        "name": "from",
+        "type": "Option<SccpRouteActivationV1>"
+      },
+      {
+        "name": "to",
+        "type": "Option<SccpRouteActivationV1>"
+      }
+    ]
+  },
+  "SccpRosterDerivationFailedV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "generation",
+        "type": "u64"
+      },
+      {
+        "name": "reason",
+        "type": "SccpRosterDerivationFailureV1"
+      },
+      {
+        "name": "roster_size",
+        "type": "u32"
+      }
+    ]
+  },
+  "SccpRosterDerivationFailureV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "missing_next_epoch_snapshot"
+      },
+      {
+        "discriminant": 1,
+        "tag": "roster_size_out_of_range"
+      }
+    ]
+  },
+  "SccpRosterGenerationCreatedV1": {
+    "Struct": [
+      {
+        "name": "generation",
+        "type": "u64"
+      },
+      {
+        "name": "digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "activation_height",
+        "type": "u64"
+      },
+      {
+        "name": "valid_until_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "SccpRouteActivationV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "staged"
+      },
+      {
+        "discriminant": 1,
+        "tag": "bidirectional"
+      },
+      {
+        "discriminant": 2,
+        "tag": "paused"
+      },
+      {
+        "discriminant": 3,
+        "tag": "inbound_only"
+      },
+      {
+        "discriminant": 4,
+        "tag": "retired"
+      }
+    ]
+  },
+  "SccpSourceLocatorV1": {
+    "Struct": [
+      {
+        "name": "source_height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "index_in_block",
+        "type": "u32"
+      }
+    ]
+  },
+  "SccpStrandedReleasedV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "recipient",
+        "type": "AccountId"
+      },
+      {
+        "name": "amount",
+        "type": "u128"
+      },
+      {
+        "name": "memo",
+        "type": "String"
+      },
+      {
+        "name": "proposal_id",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SccpSubjectCreatedV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "generation",
+        "type": "u64"
+      },
+      {
+        "name": "message_count",
+        "type": "u32"
+      },
+      {
+        "name": "rotation",
+        "type": "bool"
+      }
+    ]
+  },
+  "SccpTrustedCheckpointInstalledV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "SccpNetworkV1"
+      },
+      {
+        "name": "source_height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "proposal_id",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SccpVoidKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "expired"
+      },
+      {
+        "discriminant": 1,
+        "tag": "frozen"
+      }
+    ]
+  },
   "Schedule": {
     "Struct": [
       {
@@ -29452,6 +30524,34 @@
       }
     ]
   },
+  "SumeragiFinalityCheckpoint": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "chain_id",
+        "type": "String"
+      },
+      {
+        "name": "genesis_wire",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "genesis_committee",
+        "type": "Vec<FinalityValidator>"
+      },
+      {
+        "name": "decisions",
+        "type": "Vec<CheckpointDecision>"
+      },
+      {
+        "name": "tip",
+        "type": "SumeragiFinalityProof"
+      }
+    ]
+  },
   "SumeragiFinalityProof": {
     "Struct": [
       {
@@ -31634,6 +32734,9 @@
   "Vec<BlockHeader>": {
     "Vec": "BlockHeader"
   },
+  "Vec<CheckpointDecision>": {
+    "Vec": "CheckpointDecision"
+  },
   "Vec<ClassRentRate>": {
     "Vec": "ClassRentRate"
   },
@@ -32173,6 +33276,9 @@
   },
   "Vec<RwaParentRef>": {
     "Vec": "RwaParentRef"
+  },
+  "Vec<SccpGovernanceSubjectV1>": {
+    "Vec": "SccpGovernanceSubjectV1"
   },
   "Vec<SignedBlock>": {
     "Vec": "SignedBlock"

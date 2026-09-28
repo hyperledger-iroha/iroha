@@ -1,90 +1,40 @@
-import { test as baseTest } from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createConfidentialProofBuilders,
-} from "../src/confidentialProofBuilders.js";
+import { createConfidentialProverClass } from "../src/confidentialProofBuilders.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
-
-const NETWORK_ID = NetworkId.parse(
-  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
-);
-const NETWORK_ID_BYTES = Buffer.from(NETWORK_ID.toBytes());
+const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0x13));
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const rho = "51".repeat(32), diversifier = "52".repeat(32), ownerTag = "53".repeat(32);
+const rootHex = "54".repeat(32), treeCommitment = "55".repeat(32);
+const options = { networkId: NETWORK_ID, assetDefinitionId: ASSET_DEFINITION_ID, spendKey: Buffer.alloc(32, 0x42) };
+const baseRequest = {
+  treeCommitments: [treeCommitment], rootHex,
+  inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier, leafIndex: 0 }],
+  outputs: [{ amount: "7", rhoHex: rho, ownerTagHex: ownerTag }],
+};
+const validResult = {
+  nullifiers: [Buffer.alloc(32, 0x61)], outputCommitments: [Buffer.alloc(32, 0x62)],
+  root: Buffer.from(rootHex, "hex"), proof: Buffer.from([0x64]),
+};
+function wallet(binding) {
+  const Prover = createConfidentialProverClass(createNativeRuntime({
+    proveConfidentialTransfer: () => validResult,
+    proveConfidentialRedemption: () => { throw new Error("unexpected dispatch"); },
+    ...binding,
+  }));
+  return { Prover, prover: new Prover(options) };
+}
 
-baseTest("confidential proof builders require exact NetworkId and reject malformed fields before native dispatch", () => {
-  const calls = [];
-  const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: {
-      circuit_id: "confidential-transfer-v2",
-      backend: "halo2/ipa",
-      inline_key: {
-        backend: "halo2/ipa",
-        bytes_b64: Buffer.from([1, 2, 3]).toString("base64"),
-      },
-    },
-  };
-  const spendKey = Buffer.alloc(32, 0x42);
-  const rho = Buffer.alloc(32, 0x51).toString("hex");
-  const diversifier = Buffer.alloc(32, 0x52).toString("hex");
-  const ownerTag = Buffer.alloc(32, 0x53).toString("hex");
-  const rootHint = Buffer.alloc(32, 0x54).toString("hex");
-  const treeCommitment = Buffer.alloc(32, 0x55).toString("hex");
-  const baseRequest = {
-    networkId: NETWORK_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    spendKey,
-    treeCommitments: [treeCommitment],
-    inputs: [{ amount: "7", rhoHex: rho, diversifierHex: diversifier, leafIndex: 0 }],
-    outputs: [{ amount: "7", rhoHex: rho, ownerTagHex: ownerTag }],
-    rootHintHex: rootHint,
-    verifyingKey,
-  };
-  withNativeBinding(
-    {
-      buildConfidentialTransferProofV2: (...args) => {
-        calls.push(args);
-        return {
-          nullifiers: [],
-          outputCommitments: [],
-          root: Buffer.alloc(32, 0x61),
-          proof: Buffer.from([0x62]),
-        };
-      },
-      buildConfidentialUnshieldProofV2: () => {
-        throw new Error("unshield v2 publicAmount should fail before native call");
-      },
-      buildConfidentialUnshieldProofV3: () => {
-        throw new Error("unshield v3 publicAmount should fail before native call");
-      },
-    },
-    ({
-      buildConfidentialTransferProofV2,
-      buildConfidentialUnshieldProofV2,
-      buildConfidentialUnshieldProofV3,
-    }) => {
-      buildConfidentialTransferProofV2(baseRequest);
-      assert.equal(calls.length, 1);
-      assert.deepEqual(calls[0][0], NETWORK_ID_BYTES);
-      assert.equal(calls[0][1], ASSET_DEFINITION_ID);
-      assert.deepEqual(calls[0][3], [treeCommitment]);
-      assert.equal(calls[0][4][0].rhoHex, rho);
-      assert.equal(calls[0][4][0].diversifierHex, diversifier);
-      assert.equal(calls[0][5][0].ownerTagHex, ownerTag);
-
-      calls.length = 0;
-      for (const [label, patch, message] of [
-        [
-          "networkId",
-          { networkId: "test-chain" },
-          /confidentialTransferProofV2\.networkId must be a NetworkId/u,
-        ],
-        [
-          "assetDefinitionId",
-          { assetDefinitionId: `${ASSET_DEFINITION_ID} ` },
-          /confidentialTransferProofV2\.assetDefinitionId must not contain surrounding whitespace/u,
-        ],
+test("canonical wallet requires exact NetworkId and rejects malformed fields before native dispatch", async () => {
+  let calls = 0;
+  const { Prover, prover } = wallet({ proveConfidentialTransfer: () => { calls += 1; return validResult; } });
+  try {
+    for (const [patch, message] of [
+      [{ networkId: "test-chain" }, /networkId must be a NetworkId/u],
+      [{ assetDefinitionId: `${ASSET_DEFINITION_ID} ` }, /assetDefinitionId must not contain surrounding whitespace/u],
+    ]) assert.throws(() => new Prover({ ...options, ...patch }), message);
+    for (const [label, patch, message] of [
         [
           "input amount",
           {
@@ -248,9 +198,9 @@ baseTest("confidential proof builders require exact NetworkId and reject malform
           /treeCommitments\[0\] must be exactly 64 lowercase hex characters/u,
         ],
         [
-          "rootHintHex",
-          { rootHintHex: `${rootHint} ` },
-          /rootHintHex must be exactly 64 lowercase hex characters/u,
+          "rootHex",
+          { rootHex: `${rootHex} ` },
+          /rootHex must be exactly 64 lowercase hex characters/u,
         ],
         [
           "prefixed rhoHex",
@@ -309,192 +259,52 @@ baseTest("confidential proof builders require exact NetworkId and reject malform
           { treeCommitments: {} },
           /treeCommitments must be an array/u,
         ],
-        [
-          "top-level verifying key alias",
-          {
-            verifyingKey: {
-              id: { backend: "halo2/ipa" },
-              record: verifyingKey.record,
-              inlineKey: {
-                bytesBase64: Buffer.from([1, 2, 3]).toString("base64"),
-              },
-            },
-          },
-          /verifyingKey\.inlineKey is retired/u,
-        ],
-        [
-          "record circuit camel alias",
-          {
-            verifyingKey: {
-              id: { backend: "halo2/ipa" },
-              record: {
-                ...verifyingKey.record,
-                circuit_id: undefined,
-                circuitId: "confidential-transfer-v2",
-              },
-            },
-          },
-          /verifyingKey\.record\.circuitId is retired/u,
-        ],
-        [
-          "inline bytes camel alias",
-          {
-            verifyingKey: {
-              id: { backend: "halo2/ipa" },
-              record: {
-                ...verifyingKey.record,
-                inline_key: {
-                  backend: "halo2/ipa",
-                  bytesBase64: Buffer.from([1, 2, 3]).toString("base64"),
-                },
-              },
-            },
-          },
-          /verifyingKey\.record\.inline_key\.bytesBase64 is retired/u,
-        ],
-        [
-          "mismatched verifying key backend",
-          {
-            verifyingKey: {
-              id: { backend: "halo2/ipa" },
-              record: { ...verifyingKey.record, backend: "stark/fri" },
-            },
-          },
-          /verifyingKey backend fields must match exactly/u,
-        ],
-        [
-          "noncanonical verifying key base64",
-          {
-            verifyingKey: {
-              id: { backend: "halo2/ipa" },
-              record: {
-                ...verifyingKey.record,
-                inline_key: {
-                  backend: "halo2/ipa",
-                  bytes_b64: " AQID",
-                },
-              },
-            },
-          },
-          /bytes_b64 must be canonical non-empty base64/u,
-        ],
-      ]) {
-        assert.throws(
-          () => buildConfidentialTransferProofV2({ ...baseRequest, ...patch }),
-          message,
-          label,
-        );
-      }
-
-      assert.throws(
-        () =>
-          buildConfidentialUnshieldProofV2({
-            networkId: NETWORK_ID,
-            assetDefinitionId: ASSET_DEFINITION_ID,
-            spendKey,
-            treeCommitments: [treeCommitment],
-            inputs: [
-              {
-                amount: "7",
-                rhoHex: rho,
-                diversifierHex: diversifier,
-                leafIndex: 0,
-              },
-            ],
-            publicAmount: " 7",
-            rootHintHex: rootHint,
-            verifyingKey,
-          }),
-        /publicAmount must not contain surrounding whitespace/u,
-      );
-      assert.throws(
-        () =>
-          buildConfidentialUnshieldProofV3({
-            networkId: NETWORK_ID,
-            assetDefinitionId: ASSET_DEFINITION_ID,
-            spendKey,
-            treeCommitments: [treeCommitment],
-            inputs: [
-              {
-                amount: "7",
-                rhoHex: rho,
-                diversifierHex: diversifier,
-                leafIndex: 0,
-              },
-            ],
-            outputs: [{ amount: "7", rhoHex: rho }],
-            publicAmount: "7\n",
-            rootHintHex: rootHint,
-            verifyingKey,
-          }),
-        /publicAmount must not contain surrounding whitespace/u,
-      );
-    },
-  );
-
-  assert.deepEqual(calls, []);
+    ]) await assert.rejects(() => prover.proveTransfer({ ...baseRequest, ...patch }), message, label);
+    const { outputs: _outputs, ...spend } = baseRequest;
+    for (const publicAmount of [" 7", "7\n"]) {
+      await assert.rejects(() => prover.proveRedemption({ ...spend, publicAmount }), /publicAmount must not contain surrounding whitespace/u);
+    }
+    assert.equal(calls, 0);
+  } finally { prover.dispose(); }
 });
 
-baseTest("confidential proof builders reject noncanonical native result shapes", () => {
-  const backend = "halo2/ipa";
-  const verifyingKey = {
-    id: { backend },
-    record: {
-      circuit_id: "confidential-transfer-v2",
-      backend,
-      inline_key: { backend, bytes_b64: "AQID" },
-    },
-  };
-  const rhoHex = Buffer.alloc(32, 0x51).toString("hex");
-  const request = {
-    networkId: NETWORK_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    spendKey: Buffer.alloc(32, 0x42),
-    treeCommitments: [Buffer.alloc(32, 0x55)],
-    inputs: [
-      {
-        amount: "7",
-        rhoHex,
-        diversifierHex: Buffer.alloc(32, 0x52).toString("hex"),
-        leafIndex: 0,
-      },
-    ],
-    outputs: [
-      {
-        amount: "7",
-        rhoHex,
-        ownerTagHex: Buffer.alloc(32, 0x53).toString("hex"),
-      },
-    ],
-    rootHintHex: Buffer.alloc(32, 0x54).toString("hex"),
-    verifyingKey,
-  };
-  const validResult = {
-    nullifiers: [Buffer.alloc(32, 0x61)],
-    outputCommitments: [Buffer.alloc(32, 0x62)],
-    root: Buffer.alloc(32, 0x63),
-    proof: Buffer.from([0x64]),
-  };
-  let result = validResult;
+test("canonical wallet rejects caller circuit keys and removed fields without inspecting them", async () => {
+  const { Prover, prover } = wallet();
+  try {
+    for (const field of ["verifyingKey", "circuitId", "circuit_id", "backend", "inlineKey", "rootHintHex"]) {
+      const patch = {};
+      Object.defineProperty(patch, field, { enumerable: true, get() { throw new Error("must not inspect removed metadata"); } });
+      // Define getters on the final argument, so object spread cannot invoke them first.
+      const configuration = { ...options };
+      Object.defineProperty(configuration, field, Object.getOwnPropertyDescriptor(patch, field));
+      assert.throws(() => new Prover(configuration), new RegExp(`wallet options\\.${field} is not a canonical field`, "u"));
+      const request = { ...baseRequest };
+      Object.defineProperty(request, field, Object.getOwnPropertyDescriptor(patch, field));
+      await assert.rejects(() => prover.proveTransfer(request), new RegExp(`request\\.${field} is not a canonical field`, "u"));
+    }
+    await assert.rejects(() => prover.proveRedemption({ ...baseRequest, publicAmount: 7 }), /request.outputs is not a canonical field/u);
+  } finally { prover.dispose(); }
+});
 
-  withNativeBinding(
-    { buildConfidentialTransferProofV2: () => result },
-    ({ buildConfidentialTransferProofV2 }) => {
-      for (const [label, replacement, message] of [
+test("canonical wallet rejects every noncanonical native result shape", async () => {
+  let result = validResult;
+  const { prover } = wallet({ proveConfidentialTransfer: () => result });
+  try {
+    for (const [label, replacement, message] of [
         [
           "missing nullifiers",
           { ...validResult, nullifiers: undefined },
-          /result\.nullifiers must be an array/u,
+          /confidential proof\.nullifiers must be an array/u,
         ],
         [
           "wrong nullifiers type",
           { ...validResult, nullifiers: {} },
-          /result\.nullifiers must be an array/u,
+          /confidential proof\.nullifiers must be an array/u,
         ],
         [
           "wrong nullifier width",
           { ...validResult, nullifiers: [Buffer.alloc(31)] },
-          /result\.nullifiers\[0\] must be 32 bytes/u,
+          /confidential proof\.nullifiers\[0\] must be 32 bytes/u,
         ],
         [
           "retired output commitments alias",
@@ -503,110 +313,67 @@ baseTest("confidential proof builders reject noncanonical native result shapes",
             outputCommitments: undefined,
             output_commitments: [],
           },
-          /result\.output_commitments is retired; use canonical outputCommitments/u,
+          /confidential proof\.output_commitments is retired; use canonical outputCommitments/u,
         ],
         [
           "missing outputCommitments",
           { ...validResult, outputCommitments: undefined },
-          /result\.outputCommitments must be an array/u,
+          /confidential proof\.outputCommitments must be an array/u,
         ],
         [
           "wrong outputCommitments type",
           { ...validResult, outputCommitments: {} },
-          /result\.outputCommitments must be an array/u,
+          /confidential proof\.outputCommitments must be an array/u,
         ],
         [
           "wrong root width",
           { ...validResult, root: Buffer.alloc(31) },
-          /result\.root must be 32 bytes/u,
+          /confidential proof\.root must be 32 bytes/u,
         ],
         [
           "missing root",
           { ...validResult, root: undefined },
-          /result\.root must be a Buffer or ArrayBuffer view/u,
+          /confidential proof\.root must be a Buffer or ArrayBuffer view/u,
         ],
         [
           "empty proof",
           { ...validResult, proof: Buffer.alloc(0) },
-          /result\.proof must be non-empty/u,
+          /confidential proof\.proof must be non-empty/u,
         ],
         [
           "missing proof",
           { ...validResult, proof: undefined },
-          /result\.proof must be a Buffer or ArrayBuffer view/u,
+          /confidential proof\.proof must be a Buffer or ArrayBuffer view/u,
         ],
         [
           "unknown result field",
           { ...validResult, legacy: true },
-          /result\.legacy is not a canonical result field/u,
+          /confidential proof\.legacy is not a canonical result field/u,
         ],
-      ]) {
-        result = replacement;
-        assert.throws(
-          () => buildConfidentialTransferProofV2(request),
-          message,
-          label,
-        );
-      }
-    },
-  );
+    ]) {
+      result = replacement;
+      await assert.rejects(() => prover.proveTransfer(baseRequest), (error) => {
+        assert.equal(error.code, "PROVING_FAILED", label);
+        assert.match(error.cause.message, message, label);
+        return true;
+      });
+    }
+  } finally { prover.dispose(); }
 });
 
-baseTest("confidential proof builder factories isolate immutable native runtimes", async () => {
-  const backend = "halo2/ipa";
-  const request = {
-    networkId: NETWORK_ID,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    spendKey: Buffer.alloc(32, 0x42),
-    treeCommitments: [Buffer.alloc(32, 0x55)],
-    inputs: [{
-      amount: "7",
-      rhoHex: Buffer.alloc(32, 0x51).toString("hex"),
-      diversifierHex: Buffer.alloc(32, 0x52).toString("hex"),
-      leafIndex: 0,
-    }],
-    outputs: [{
-      amount: "7",
-      rhoHex: Buffer.alloc(32, 0x53).toString("hex"),
-      ownerTagHex: Buffer.alloc(32, 0x54).toString("hex"),
-    }],
-    rootHintHex: Buffer.alloc(32, 0x56).toString("hex"),
-    verifyingKey: {
-      id: { backend },
-      record: {
-        circuit_id: "confidential-transfer-v2",
-        backend,
-        inline_key: { backend, bytes_b64: "AQID" },
-      },
-    },
-  };
-  const result = (byte) => ({
-    nullifiers: [],
-    outputCommitments: [],
-    root: Buffer.alloc(32, byte),
-    proof: Buffer.from([byte]),
-  });
+test("canonical wallet classes isolate immutable native runtimes", async () => {
   const bindingA = {
-    buildConfidentialTransferProofV2: () => result(0xa1),
+    proveConfidentialTransfer: () => ({ ...validResult, proof: Buffer.from([0xa1]) }),
+    proveConfidentialRedemption: () => { throw new Error("unexpected redemption"); },
   };
-  const apiA = createConfidentialProofBuilders(createNativeRuntime(bindingA));
-  const apiB = createConfidentialProofBuilders(createNativeRuntime({
-    buildConfidentialTransferProofV2: () => result(0xb2),
-  }));
-  bindingA.buildConfidentialTransferProofV2 = () => result(0xff);
-
-  const [proofA, proofB] = await Promise.all([
-    Promise.resolve().then(() => apiA.buildConfidentialTransferProofV2(request)),
-    Promise.resolve().then(() => apiB.buildConfidentialTransferProofV2(request)),
-  ]);
-  assert.equal(Object.isFrozen(apiA), true);
-  assert.equal(proofA.root[0], 0xa1);
-  assert.equal(proofB.root[0], 0xb2);
+  const ProverA = createConfidentialProverClass(createNativeRuntime(bindingA));
+  const a = { prover: new ProverA(options) };
+  const b = wallet({ proveConfidentialTransfer: () => ({ ...validResult, proof: Buffer.from([0xb2]) }) });
+  bindingA.proveConfidentialTransfer = () => ({ ...validResult, proof: Buffer.from([0xff]) });
+  try {
+    const [proofA, proofB] = await Promise.all([a.prover.proveTransfer(baseRequest), b.prover.proveTransfer(baseRequest)]);
+    assert.equal(Object.isFrozen(a.prover), true);
+    assert.equal(proofA.proof[0], 0xa1);
+    assert.equal(proofB.proof[0], 0xb2);
+  } finally { a.prover.dispose(); b.prover.dispose(); }
 });
-
-
-function withNativeBinding(binding, fn) {
-  return fn(
-    createConfidentialProofBuilders(createNativeRuntime(binding)),
-  );
-}

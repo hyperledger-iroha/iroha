@@ -187,3 +187,51 @@ fn coefficient_preflight_rejects_incomplete_noncanonical_and_unbounded_work() {
     assert!(fold_coefficients(5, &[], F::ONE, usize::MAX).is_err());
     assert!(fold_coefficients(4, &[F::ZERO; 7], F::ONE, usize::MAX).is_err());
 }
+
+#[test]
+fn selected_group_stripes_keep_all_fiber_coordinates_and_reject_bad_indices_early() {
+    let plan = CoefficientReplayPlan::with_shape(1024, 16, 1, 4, limits(1)).unwrap();
+    let coefficients = (0..16).map(dense).collect::<Vec<_>>();
+    let sources = [&coefficients[..]];
+    let mut replay = CoefficientReplay::new(plan, &sources).unwrap();
+    for invalid in [
+        vec![],
+        vec![0, 0],
+        vec![3, 1],
+        vec![256],
+        (0..129).collect(),
+    ] {
+        assert!(
+            replay
+                .visit_selected_stripes(&invalid, |_| panic!("invalid group visited"))
+                .is_err()
+        );
+        assert!(replay.ensure_pass_available().is_ok());
+    }
+    let indices = [0, 1, 63, 64, 127, 128, 255];
+    let mut seen = [false; 64];
+    replay
+        .visit_selected_stripes(&indices, |stripe| {
+            let s = stripe.stripe_index();
+            assert!(!seen[s]);
+            seen[s] = true;
+            for &index in &indices {
+                if index % 64 == s {
+                    let mut fiber = [F::ZERO; 4];
+                    stripe.fiber(index / 64, &mut fiber)?;
+                    for (position, &value) in fiber.iter().enumerate() {
+                        assert_eq!(
+                            value,
+                            horner(&coefficients, plan.domain().point(index + position * 256))
+                        );
+                    }
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    for (s, &visited) in seen.iter().enumerate() {
+        assert_eq!(visited, indices.iter().any(|i| i % 64 == s));
+    }
+    assert!(replay.ensure_pass_available().is_err());
+}

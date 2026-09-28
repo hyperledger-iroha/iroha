@@ -411,6 +411,25 @@ pub mod isi {
             self.ensure_numeric_asset_holding_limit(id, &candidate)?;
             Ok(candidate)
         }
+        /// Check that the exact balance `id` can receive `amount` under every recipient-side
+        /// rule of an ordinary credit (incoming transfer availability, holding limit, custody
+        /// and definition spec) without mutating state.
+        ///
+        /// SCCP settlement bounces a message whose recipient fails this check
+        /// (`specs/sccp.md` §4.12.3).
+        pub(crate) fn precheck_numeric_asset_receivable(
+            &self,
+            id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<(), Error> {
+            self.ensure_numeric_asset_transfer_availability(
+                id,
+                amount.clone(),
+                AssetTransferDirection::Incoming,
+            )?;
+            self.precheck_numeric_asset_credit_exact(id, amount)
+                .map(|_| ())
+        }
         fn apply_prechecked_numeric_asset_credit_exact(
             &mut self,
             id: &AssetId,
@@ -1738,6 +1757,8 @@ pub mod isi {
         GovernanceRestitution,
         GovernanceUnlock,
         CitizenshipRelease,
+        SccpEscrowLock,
+        SccpEscrowRelease,
     }
     impl NumericAssetTransferSourcePolicy {
         const fn is_moderation_challenge_settlement(self) -> bool {
@@ -1979,6 +2000,38 @@ pub mod isi {
         }
         Ok(())
     }
+    /// Return whether `account` is the escrow of a registered SCCP route (`specs/sccp.md` §4.15).
+    fn is_sccp_escrow_account(
+        state_transaction: &StateTransaction<'_, '_>,
+        account: &AccountId,
+    ) -> bool {
+        crate::smartcontracts::isi::sccp::escrow::is_escrow(state_transaction.world(), account)
+    }
+    /// Reject a debit of an SCCP route escrow outside the SCCP release paths (§4.15).
+    fn ensure_not_sccp_escrow_source(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+    ) -> Result<(), Error> {
+        if is_sccp_escrow_account(state_transaction, source_id.account()) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP route escrow can only be debited by an SCCP inbound release, outbound refund or Parliament-enacted stranded release"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+    /// Reject a credit of an SCCP route escrow outside `RecordSccpMessage` (§4.15).
+    fn ensure_not_sccp_escrow_destination(
+        state_transaction: &StateTransaction<'_, '_>,
+        destination_id: &AssetId,
+    ) -> Result<(), Error> {
+        if is_sccp_escrow_account(state_transaction, destination_id.account()) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP route escrow can only be credited by RecordSccpMessage".into(),
+            ));
+        }
+        Ok(())
+    }
     #[derive(Debug)]
     enum NumericMovementDebitAuthorization {
         ExactUser(AccountId),
@@ -2045,6 +2098,8 @@ pub mod isi {
         FxCorridorEscrowDeposit(Vec<u8>),
         /// Charge one exact SNS auto-renewal quote.
         SnsAutoRenewal(Vec<u8>),
+        /// Lock one exact SCCP outbound amount into its route escrow.
+        SccpEscrowLock(Vec<u8>),
     }
     /// Closed set of retained-state protocol movement purposes.
     #[derive(Debug)]
@@ -2097,6 +2152,8 @@ pub mod isi {
         PrivacyPoolDeposit(Vec<u8>),
         /// Release an exact native pool effect from its governed public reserve.
         PrivacyPoolBridge(PrivacyPublicReserveOwnerV1, Vec<u8>),
+        /// Release one exact SCCP inbound, refund or stranded amount from its route escrow.
+        SccpEscrowRelease(Vec<u8>),
     }
     /// One-shot authorization and deterministic execution context for a numeric movement.
     ///
@@ -2152,6 +2209,10 @@ pub mod isi {
             let is_game_funding = matches!(
                 &purpose,
                 EmbeddedNumericAssetMovementPurpose::GameSession(_)
+            );
+            let is_sccp_lock = matches!(
+                &purpose,
+                EmbeddedNumericAssetMovementPurpose::SccpEscrowLock(_)
             );
             let (debit, tag, binding) = match purpose {
                 EmbeddedNumericAssetMovementPurpose::AccountAdmissionFee(binding) => (
@@ -2246,6 +2307,11 @@ pub mod isi {
                     "sns-auto-renewal",
                     binding,
                 ),
+                EmbeddedNumericAssetMovementPurpose::SccpEscrowLock(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "sccp-escrow-lock",
+                    binding,
+                ),
             };
             Self {
                 debit,
@@ -2258,6 +2324,8 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::FxEscrowDeposit
                 } else if is_game_funding {
                     NumericAssetTransferSourcePolicy::GameSessionFunding
+                } else if is_sccp_lock {
+                    NumericAssetTransferSourcePolicy::SccpEscrowLock
                 } else {
                     NumericAssetTransferSourcePolicy::User
                 },
@@ -2415,6 +2483,12 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner),
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
+                RetainedNumericAssetMovementPurpose::SccpEscrowRelease(binding) => (
+                    "sccp-escrow-release",
+                    binding,
+                    NumericAssetTransferSourcePolicy::SccpEscrowRelease,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
             };
             Self {
                 debit: NumericMovementDebitAuthorization::Protocol,
@@ -2554,6 +2628,10 @@ pub mod isi {
                 }
                 NumericAssetTransferSourcePolicy::CitizenshipRelease => {
                     ("CitizenshipRelease", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::SccpEscrowLock => ("SccpEscrowLock", Vec::new()),
+                NumericAssetTransferSourcePolicy::SccpEscrowRelease => {
+                    ("SccpEscrowRelease", Vec::new())
                 }
                 NumericAssetTransferSourcePolicy::RetailMonetary(purpose) => {
                     ("RetailMonetary", norito::encode_canonical(&purpose).ok()?)
@@ -3068,6 +3146,7 @@ pub mod isi {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
+                ensure_not_sccp_escrow_source(state_transaction, &source_id)?;
             }
             NumericAssetBurnSourcePolicy::FeeSponsorCustody => {
                 if source_id.account()
@@ -3083,6 +3162,7 @@ pub mod isi {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
+                ensure_not_sccp_escrow_source(state_transaction, &source_id)?;
             }
         }
         let spec = state_transaction
@@ -4449,6 +4529,74 @@ pub mod isi {
             NumericAssetMovementAuthorization::retained(
                 &decision_authority,
                 RetainedNumericAssetMovementPurpose::SorafsReserve(binding),
+            ),
+        )
+    }
+    /// Lock `amount` of the submitting authority's `source_id` balance into the SCCP route
+    /// escrow `escrow_id` for the outbound message `message_id` (`specs/sccp.md` §4.15).
+    ///
+    /// Only `RecordSccpMessage` calls this; every other credit of an escrow is rejected.
+    pub(in crate::smartcontracts::isi) fn execute_sccp_escrow_lock(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        escrow_id: AssetId,
+        amount: Quantity,
+        message_id: [u8; 32],
+    ) -> Result<(), Error> {
+        if source_id.account() != authority || escrow_id.definition() != source_id.definition() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP escrow lock must debit the submitting authority's own balance of the escrowed asset"
+                    .into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            message_id,
+            source_id.clone(),
+            escrow_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            escrow_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::SccpEscrowLock(binding),
+            ),
+        )
+    }
+    /// Release `amount` from the SCCP route escrow `escrow_id` to the existing account of
+    /// `destination_id` for the record `record_id` (inbound release, outbound refund or
+    /// Parliament-enacted stranded release, `specs/sccp.md` §4.15).
+    pub(in crate::smartcontracts::isi) fn execute_sccp_escrow_release(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        escrow_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+        record_id: [u8; 32],
+    ) -> Result<(), Error> {
+        if escrow_id.definition() != destination_id.definition() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP escrow release must credit the escrowed asset".into(),
+            ));
+        }
+        let transcript_authority = destination_id.account().clone();
+        let binding = canonical_numeric_movement_binding(&(
+            record_id,
+            escrow_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            escrow_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &transcript_authority,
+                RetainedNumericAssetMovementPurpose::SccpEscrowRelease(binding),
             ),
         )
     }
@@ -6635,6 +6783,12 @@ pub mod isi {
         if source_policy != NumericAssetTransferSourcePolicy::SorafsReserveCustody {
             ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
         }
+        if source_policy != NumericAssetTransferSourcePolicy::SccpEscrowRelease {
+            ensure_not_sccp_escrow_source(state_transaction, &source_id)?;
+        }
+        if source_policy != NumericAssetTransferSourcePolicy::SccpEscrowLock {
+            ensure_not_sccp_escrow_destination(state_transaction, &destination_id)?;
+        }
         if source_policy != NumericAssetTransferSourcePolicy::FxEscrowRelease {
             ensure_not_fx_corridor_escrow_source(state_transaction, &source_id)?;
         }
@@ -6735,6 +6889,22 @@ pub mod isi {
                     ));
                 }
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
+            }
+            NumericAssetTransferSourcePolicy::SccpEscrowLock => {
+                if !is_sccp_escrow_account(state_transaction, destination_id.account()) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP escrow lock destination is not a registered route escrow".into(),
+                    ));
+                }
+                ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+            }
+            NumericAssetTransferSourcePolicy::SccpEscrowRelease => {
+                if !is_sccp_escrow_account(state_transaction, source_id.account()) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP escrow release source is not a registered route escrow".into(),
+                    ));
+                }
             }
         }
         Ok((source_id, destination_id))
@@ -7009,6 +7179,7 @@ pub mod isi {
                 ));
             }
             ensure_not_fx_corridor_escrow_destination(state_transaction, &resolved_asset_id)?;
+            ensure_not_sccp_escrow_destination(state_transaction, &resolved_asset_id)?;
             let _created = ensure_receiving_account(
                 authority,
                 asset_id.account(),
@@ -7113,6 +7284,7 @@ pub mod isi {
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sorafs_reserve_custody_source(state_transaction, &resolved_asset_id)?;
+            ensure_not_sccp_escrow_source(state_transaction, &resolved_asset_id)?;
             let captured_quantity = quantity.clone();
             apply_with_supply_quantity_candidate(
                 state_transaction,
@@ -7215,6 +7387,7 @@ pub mod isi {
         }
         state_transaction.world.account(asset_id.account())?;
         ensure_not_fx_corridor_escrow_destination(state_transaction, &asset_id)?;
+        ensure_not_sccp_escrow_destination(state_transaction, &asset_id)?;
         let spec = state_transaction
             .numeric_spec_for(asset_id.definition())
             .map_err(Error::from)?;
@@ -7327,6 +7500,7 @@ pub mod isi {
         ensure_not_native_escrow_source(state_transaction, &asset_id)?;
         ensure_not_fx_corridor_escrow_source(state_transaction, &asset_id)?;
         ensure_not_sorafs_reserve_custody_source(state_transaction, &asset_id)?;
+        ensure_not_sccp_escrow_source(state_transaction, &asset_id)?;
         let captured_quantity = quantity.clone();
         let captured_id = asset_id.clone();
         let policy_binding = bounded_quantity_frame(

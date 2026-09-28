@@ -541,6 +541,13 @@ from .dataspaces import (
 )
 
 _BASE_EXPORTS = [
+    "ConfidentialChange",
+    "ConfidentialInput",
+    "ConfidentialOutput",
+    "ConfidentialProof",
+    "ConfidentialProver",
+    "ConfidentialProverError",
+    "ConfidentialTree",
     "AccountAddress",
     "AccountAddressError",
     "CurveId",
@@ -1108,8 +1115,6 @@ _CRYPTO_EXPORTS: List[str] = [
     "verify_sm2",
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
-    "build_confidential_transfer_proof_v2",
-    "build_confidential_unshield_proof_v3",
     "confidential_transfer_v2_verifying_key_registration_payload_v1",
     "confidential_unshield_v3_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
@@ -1209,6 +1214,16 @@ _CRYPTO_EXPORTS: List[str] = [
     "SorafsPorIngestionStatus",
     "multi_fetch_local",
 ]
+
+from .confidential import (
+    ConfidentialChange,
+    ConfidentialInput,
+    ConfidentialOutput,
+    ConfidentialProof,
+    ConfidentialProver,
+    ConfidentialProverError,
+    ConfidentialTree,
+)
 
 from .tx import (
     ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
@@ -1310,8 +1325,6 @@ from .crypto import (
     verify_sm2,
     derive_confidential_keyset,
     derive_confidential_keyset_from_hex,
-    build_confidential_transfer_proof_v2,
-    build_confidential_unshield_proof_v3,
     confidential_transfer_v2_verifying_key_registration_payload_v1,
     confidential_unshield_v3_verifying_key_registration_payload_v1,
     privacy_bridge_abi_version,

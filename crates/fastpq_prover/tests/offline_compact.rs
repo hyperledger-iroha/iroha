@@ -807,6 +807,9 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
 #[path = "support/offline_compact_capture.rs"]
 mod capture;
 
+#[path = "support/offline_compact_single.rs"]
+mod single;
+
 #[test]
 #[ignore = "requires fresh FASTPQ_TEST_ORDINARY_ARTIFACT and FASTPQ_TEST_AXT_ARTIFACT"]
 fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() {

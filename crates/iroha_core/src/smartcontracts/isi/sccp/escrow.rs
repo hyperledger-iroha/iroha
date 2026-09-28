@@ -3,14 +3,34 @@
 //!
 //! One core-created escrow account per route, derived from the live `NetworkId` without the
 //! revision and created at genesis. Core rejects every non-SCCP debit, credit, registration or
-//! unregistration of it, and `balance(escrow(route)) = Σ_r liability(r) + stranded(route)`.
+//! unregistration of it (the guards live in `asset.rs` and `domain.rs` and call
+//! [`is_escrow`]), and `balance(escrow(route)) = Σ_r liability(r) + stranded(route)`.
+//!
+//! Only three movements touch an escrow: [`lock`] (credit by `RecordSccpMessage`), [`release`]
+//! (debit by an inbound release, an outbound refund or a Parliament-enacted
+//! `ReleaseStranded`) and [`strand`], which keeps the amount in the escrow and books it as
+//! `stranded(route)`. Liability bookkeeping belongs to the callers.
 
-use super::{Error, not_wired, store};
-use crate::state::{StateTransaction, WorldReadOnly};
-use iroha_data_model::{
-    NetworkId, account::AccountId, bridge::SccpNetworkV1,
-    sccp::escrow::sccp_xor_route_escrow_account_id_v1,
+use super::{Error, store};
+use crate::{
+    smartcontracts::{Execute, isi::asset::isi as asset_isi},
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
+use iroha_data_model::{
+    NetworkId,
+    account::{Account, AccountId},
+    asset::AssetId,
+    bridge::SccpNetworkV1,
+    isi::Register,
+    sccp::{
+        escrow::{sccp_taira_xor_asset_definition_id, sccp_xor_route_escrow_account_id_v1},
+        registry::{SCCP_ROUTE_NETWORKS_V1, SccpRouteV1},
+    },
+};
+use iroha_primitives::numeric::{Numeric, Quantity};
+
+/// Decimal scale of Taira XOR; every SCCP amount is in these Taira units (§0, §3.2).
+pub const SCCP_XOR_SCALE: u32 = 9;
 
 /// Return the escrow account of `network`'s route under `network_id`, or `None` for the Taira
 /// profile, which has no route.
@@ -19,46 +39,146 @@ pub fn escrow_account(network_id: &NetworkId, network: SccpNetworkV1) -> Option<
     sccp_xor_route_escrow_account_id_v1(network_id, network)
 }
 
+/// Convert `amount` Taira units into the canonical XOR quantity.
+///
+/// # Errors
+///
+/// Fails when the amount does not form a canonical quantity.
+pub fn xor_quantity(amount: u128) -> Result<Quantity, Error> {
+    Numeric::try_new(amount, SCCP_XOR_SCALE)
+        .map_err(|error| error.to_string())
+        .and_then(|numeric| Quantity::try_from_numeric(numeric).map_err(|error| error.to_string()))
+        .map_err(|error| {
+            Error::InvariantViolation(
+                format!("SCCP: amount {amount} is not a quantity: {error}").into(),
+            )
+        })
+}
+
 /// Create the four route escrow accounts and empty routes (genesis, §4.1).
 ///
+/// Each escrow is registered as its own authority with the effects and events of an ordinary
+/// `Register<Account>`, before its route exists, so the escrow guards cannot refuse it; once
+/// the route is stored, no ordinary registration or unregistration of it succeeds.
+///
 /// # Errors
 ///
-/// Fails closed until ws32 implements escrow creation.
-pub fn create_route_escrows(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-) -> Result<(), Error> {
-    // TODO(ws32): register the escrows as core-reserved accounts and insert empty routes.
-    Err(not_wired("route escrow creation", "ws32"))
+/// Fails when a route or escrow account already exists.
+pub fn create_route_escrows(state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+    let network_id = *state_transaction.network_id();
+    for network in SCCP_ROUTE_NETWORKS_V1 {
+        if store::routes::contains(&*state_transaction.world, &network) {
+            return Err(Error::InvariantViolation(
+                format!("SCCP: route {} already exists", network.profile_key()).into(),
+            ));
+        }
+        let escrow = escrow_account(&network_id, network).ok_or_else(|| {
+            Error::InvariantViolation(
+                format!("SCCP: {} has no route", network.profile_key()).into(),
+            )
+        })?;
+        Register::account(Account::new(escrow.clone())).execute(&escrow, state_transaction)?;
+        let route = SccpRouteV1::empty(network, escrow).ok_or_else(|| {
+            Error::InvariantViolation(
+                format!("SCCP: {} has no route", network.profile_key()).into(),
+            )
+        })?;
+        store::routes::insert(state_transaction, network, route)?;
+    }
+    Ok(())
 }
 
-/// Lock `amount` Taira units of XOR from `from` into `network`'s route escrow.
+/// Return the XOR balance id of `network`'s registered route escrow.
+fn escrow_asset(
+    world: &(impl WorldReadOnly + ?Sized),
+    network: SccpNetworkV1,
+) -> Result<AssetId, Error> {
+    let route = store::routes::get(world, &network).ok_or_else(|| {
+        Error::InvariantViolation(
+            format!("SCCP: route {} is not registered", network.profile_key()).into(),
+        )
+    })?;
+    Ok(AssetId::of(
+        sccp_taira_xor_asset_definition_id(),
+        route.escrow.clone(),
+    ))
+}
+
+/// Lock `amount` Taira units of XOR from `from` into `network`'s route escrow for the outbound
+/// message `message_id`.
+///
+/// `from` must be the transaction authority: only its own balance can be locked.
 ///
 /// # Errors
 ///
-/// Fails closed until ws32 implements escrow custody.
+/// Fails when the route is not registered or the transfer is refused (balance, policy).
 pub fn lock(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-    _network: SccpNetworkV1,
-    _from: &AccountId,
-    _amount: u128,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    network: SccpNetworkV1,
+    from: &AccountId,
+    amount: u128,
+    message_id: [u8; 32],
 ) -> Result<(), Error> {
-    // TODO(ws32): SCCP-only escrow debit/credit path (§4.15).
-    Err(not_wired("escrow lock", "ws32"))
+    let escrow = escrow_asset(&*state_transaction.world, network)?;
+    let source = AssetId::of(escrow.definition().clone(), from.clone());
+    asset_isi::execute_sccp_escrow_lock(
+        state_transaction,
+        from,
+        source,
+        escrow,
+        xor_quantity(amount)?,
+        message_id,
+    )
 }
 
-/// Release `amount` Taira units of XOR from `network`'s route escrow to `to`.
+/// Release `amount` Taira units of XOR from `network`'s route escrow to the existing account
+/// `to`, bound to the record `record_id`.
 ///
 /// # Errors
 ///
-/// Fails closed until ws32 implements escrow custody.
+/// Fails when the route is not registered, `to` does not exist or transfer control refuses
+/// the credit.
 pub fn release(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-    _network: SccpNetworkV1,
-    _to: &AccountId,
-    _amount: u128,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    network: SccpNetworkV1,
+    to: &AccountId,
+    amount: u128,
+    record_id: [u8; 32],
 ) -> Result<(), Error> {
-    // TODO(ws32): SCCP-only escrow debit/credit path (§4.15).
-    Err(not_wired("escrow release", "ws32"))
+    let escrow = escrow_asset(&*state_transaction.world, network)?;
+    let destination = AssetId::of(escrow.definition().clone(), to.clone());
+    asset_isi::execute_sccp_escrow_release(
+        state_transaction,
+        escrow,
+        destination,
+        xor_quantity(amount)?,
+        record_id,
+    )
+}
+
+/// Book `amount` Taira units that stay in `network`'s escrow as `stranded(route)` (§4.16).
+///
+/// # Errors
+///
+/// Fails when the route is not registered or `stranded` would overflow.
+pub fn strand(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    network: SccpNetworkV1,
+    amount: u128,
+) -> Result<(), Error> {
+    let mut route = store::routes::get(&*state_transaction.world, &network)
+        .cloned()
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                format!("SCCP: route {} is not registered", network.profile_key()).into(),
+            )
+        })?;
+    route.stranded = route
+        .stranded
+        .checked_add(amount)
+        .ok_or_else(|| Error::InvariantViolation("SCCP: stranded amount overflows".into()))?;
+    store::routes::insert(state_transaction, network, route)?;
+    Ok(())
 }
 
 /// Return whether `account` is the escrow of a registered route.
@@ -70,9 +190,56 @@ pub fn is_escrow(world: &(impl WorldReadOnly + ?Sized), account: &AccountId) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::smartcontracts::isi::sccp::test_support::{
-        authority, blank_state, header, sample_route,
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::isi::sccp::test_support::{authority, blank_state, header},
+        state::{State, World},
     };
+    use iroha_data_model::{
+        Registrable,
+        asset::{AssetBalancePolicy, AssetDefinition},
+        isi::{Burn, Mint, Transfer, Unregister},
+    };
+    use mv::storage::StorageReadOnly;
+
+    /// State with the Taira XOR definition and `holder` funded with `balance` Taira units.
+    fn funded_state(holder: &AccountId, balance: u128) -> State {
+        let xor = sccp_taira_xor_asset_definition_id();
+        let definition = AssetDefinition::numeric(
+            xor.clone(),
+            "XOR".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(holder);
+        let world = World::with_assets(
+            [],
+            [Account::new(holder.clone()).build(holder)],
+            [definition],
+            [iroha_data_model::asset::Asset::new(
+                AssetId::of(xor, holder.clone()),
+                xor_quantity(balance).expect("quantity"),
+            )],
+            [],
+        );
+        State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        )
+    }
+
+    fn balance(stx: &StateTransaction<'_, '_>, account: &AccountId) -> Quantity {
+        stx.world
+            .assets
+            .get(&AssetId::of(
+                sccp_taira_xor_asset_definition_id(),
+                account.clone(),
+            ))
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+    }
 
     #[test]
     fn escrows_are_per_route_and_bound_to_the_network_id() {
@@ -85,18 +252,134 @@ mod tests {
     }
 
     #[test]
-    fn only_registered_route_escrows_are_recognized() {
+    fn taira_units_are_scale_nine_quantities() {
+        assert_eq!(
+            xor_quantity(1_000_000_000).expect("one XOR"),
+            Quantity::try_from_numeric(Numeric::new(1_u32, 0)).expect("one")
+        );
+        assert_eq!(xor_quantity(1).expect("nano").scale(), 9);
+        assert!(xor_quantity(0).expect("zero").is_zero());
+    }
+
+    #[test]
+    fn genesis_creates_four_registered_escrows_once() {
         let state = blank_state();
-        let mut block = state.block(header(2));
+        let mut block = state.block(header(1));
         let mut stx = block.transaction();
-        let route = sample_route(SccpNetworkV1::BscMainnet);
-        let escrow = route.escrow.clone();
-        assert!(!is_escrow(&*stx.world, &escrow));
-        store::routes::insert(&mut stx, SccpNetworkV1::BscMainnet, route).expect("route");
-        assert!(is_escrow(&*stx.world, &escrow));
+        create_route_escrows(&mut stx).expect("escrows");
+        let network_id = *stx.network_id();
+        for network in SCCP_ROUTE_NETWORKS_V1 {
+            let escrow = escrow_account(&network_id, network).expect("route");
+            assert!(
+                stx.world.account(&escrow).is_ok(),
+                "{network:?} escrow registered"
+            );
+            assert!(is_escrow(&*stx.world, &escrow));
+            let route = store::routes::get(&*stx.world, &network).expect("route");
+            assert_eq!(route.escrow, escrow);
+            assert!(route.revisions.is_empty());
+            assert_eq!(route.stranded, 0);
+        }
         assert!(!is_escrow(&*stx.world, &authority(1)));
-        let error =
-            lock(&mut stx, SccpNetworkV1::BscMainnet, &authority(1), 1).expect_err("skeleton");
-        assert!(error.to_string().contains("TODO(ws32)"), "{error}");
+        let error = create_route_escrows(&mut stx).expect_err("second creation");
+        assert!(error.to_string().contains("already exists"), "{error}");
+    }
+
+    #[test]
+    fn escrow_accounts_cannot_be_registered_or_unregistered_ordinarily() {
+        let state = blank_state();
+        let mut block = state.block(header(1));
+        let mut stx = block.transaction();
+        create_route_escrows(&mut stx).expect("escrows");
+        let escrow = escrow_account(stx.network_id(), SccpNetworkV1::BscMainnet).expect("route");
+        let error = Unregister::account(escrow.clone())
+            .execute(&authority(1), &mut stx)
+            .expect_err("unregister escrow");
+        assert!(error.to_string().contains("SCCP route escrow"), "{error}");
+        assert!(stx.world.account(&escrow).is_ok());
+    }
+
+    #[test]
+    fn lock_and_release_move_xor_through_the_escrow_only() {
+        let holder = authority(1);
+        let state = funded_state(&holder, 5_000_000_000);
+        let mut block = state.block(header(1));
+        // This direct component fixture retains a bounded invocation; it does
+        // not authenticate a network transaction or grant publication authority.
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::new(
+            b"sccp-escrow-lock-release-component",
+        ));
+        create_route_escrows(&mut stx).expect("escrows");
+        let network = SccpNetworkV1::EthereumMainnet;
+        let escrow = escrow_account(stx.network_id(), network).expect("route");
+
+        lock(&mut stx, network, &holder, 2_000_000_000, [1; 32]).expect("lock");
+        assert_eq!(balance(&stx, &escrow), xor_quantity(2_000_000_000).unwrap());
+        assert_eq!(balance(&stx, &holder), xor_quantity(3_000_000_000).unwrap());
+
+        let error = lock(&mut stx, network, &holder, 9_000_000_000, [2; 32]).expect_err("overdraw");
+        assert!(!error.to_string().is_empty());
+
+        release(&mut stx, network, &holder, 500_000_000, [3; 32]).expect("release");
+        assert_eq!(balance(&stx, &escrow), xor_quantity(1_500_000_000).unwrap());
+        assert_eq!(balance(&stx, &holder), xor_quantity(3_500_000_000).unwrap());
+
+        let unknown = authority(9);
+        release(&mut stx, network, &unknown, 1, [4; 32]).expect_err("absent recipient");
+        release(&mut stx, SccpNetworkV1::BscMainnet, &holder, 1, [5; 32])
+            .expect_err("another route's escrow is empty");
+    }
+
+    #[test]
+    fn ordinary_instructions_cannot_touch_an_escrow() {
+        let holder = authority(1);
+        let state = funded_state(&holder, 5_000_000_000);
+        let mut block = state.block(header(1));
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::new(
+            b"sccp-escrow-ordinary-instructions-component",
+        ));
+        create_route_escrows(&mut stx).expect("escrows");
+        let network = SccpNetworkV1::TronMainnet;
+        let escrow = escrow_account(stx.network_id(), network).expect("route");
+        lock(&mut stx, network, &holder, 1_000_000_000, [1; 32]).expect("lock");
+        let xor = sccp_taira_xor_asset_definition_id();
+        let escrow_asset = AssetId::of(xor.clone(), escrow.clone());
+        let one = xor_quantity(1).expect("quantity");
+
+        let credit = Transfer::asset_quantity(
+            AssetId::of(xor.clone(), holder.clone()),
+            one.clone(),
+            escrow.clone(),
+        )
+        .execute(&holder, &mut stx)
+        .expect_err("ordinary credit of an escrow");
+        assert!(credit.to_string().contains("SCCP route escrow"), "{credit}");
+        let debit = Transfer::asset_quantity(escrow_asset.clone(), one.clone(), holder.clone())
+            .execute(&holder, &mut stx)
+            .expect_err("ordinary debit of an escrow");
+        assert!(!debit.to_string().is_empty());
+        let burn = Burn::asset_quantity(one.clone(), escrow_asset.clone())
+            .execute(&holder, &mut stx)
+            .expect_err("definition-owner burn of an escrow");
+        assert!(burn.to_string().contains("SCCP route escrow"), "{burn}");
+        let mint = Mint::asset_quantity(one, escrow_asset)
+            .execute(&holder, &mut stx)
+            .expect_err("mint into an escrow");
+        assert!(mint.to_string().contains("SCCP route escrow"), "{mint}");
+        assert_eq!(balance(&stx, &escrow), xor_quantity(1_000_000_000).unwrap());
+    }
+
+    #[test]
+    fn stranding_books_the_amount_on_the_route() {
+        let state = blank_state();
+        let mut block = state.block(header(1));
+        let mut stx = block.transaction();
+        strand(&mut stx, SccpNetworkV1::TonMainnet, 1).expect_err("no route yet");
+        create_route_escrows(&mut stx).expect("escrows");
+        strand(&mut stx, SccpNetworkV1::TonMainnet, 7).expect("strand");
+        strand(&mut stx, SccpNetworkV1::TonMainnet, 3).expect("strand");
+        let route = store::routes::get(&*stx.world, &SccpNetworkV1::TonMainnet).expect("route");
+        assert_eq!(route.stranded, 10);
+        strand(&mut stx, SccpNetworkV1::TonMainnet, u128::MAX).expect_err("overflow");
     }
 }

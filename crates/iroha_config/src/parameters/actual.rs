@@ -11941,10 +11941,12 @@ pub struct Sccp {
     pub max_ed25519_signature_checks_per_transaction: NonZeroU32,
     /// Maximum Ed25519 signature checks committed in one block.
     pub max_ed25519_signature_checks_per_block: NonZeroU32,
-    /// Maximum TON Ed25519 validator-key checks in one transaction.
-    pub max_ed25519_validator_key_checks_per_transaction: NonZeroU32,
-    /// Maximum TON Ed25519 validator-key checks committed in one block.
-    pub max_ed25519_validator_key_checks_per_block: NonZeroU32,
+    /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) in one
+    /// transaction.
+    pub max_bls_vote_attestations_per_transaction: NonZeroU32,
+    /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) committed in one
+    /// block.
+    pub max_bls_vote_attestations_per_block: NonZeroU32,
 }
 impl_default!(Sccp => {
         Self {
@@ -11972,10 +11974,10 @@ impl_default!(Sccp => {
                 defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION,
             max_ed25519_signature_checks_per_block:
                 defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK,
-            max_ed25519_validator_key_checks_per_transaction:
-                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION,
-            max_ed25519_validator_key_checks_per_block:
-                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK,
+            max_bls_vote_attestations_per_transaction:
+                defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_TRANSACTION,
+            max_bls_vote_attestations_per_block:
+                defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_BLOCK,
         }
 });
 /// CABAC runtime mode compiled into the host.

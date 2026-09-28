@@ -122,7 +122,8 @@ pub(crate) enum AggregateStarkErrorV1 {
     #[error("aggregate STARK internal invariant failed")]
     InternalInvariant,
 }
-fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
+/// Preserve shared arithmetic and allocation failures at the aggregate boundary.
+pub(crate) fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
     match error {
         TransparentStarkErrorV1::RandomnessUnavailable => {
             AggregateStarkErrorV1::RandomnessUnavailable
@@ -2167,6 +2168,11 @@ pub(crate) struct StreamingTraceMaskSetV1 {
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
+    /// Transfer an already allocated private column into its clearing owner.
+    pub(crate) fn from_vec_v1(values: Vec<F>) -> Self {
+        Self(values)
+    }
+
     fn zeroize_v1(&mut self) {
         zeroize_field_column_v1(&mut self.0);
     }
@@ -6284,7 +6290,6 @@ mod retained_polynomial_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
     use rand::{SeedableRng as _, rngs::StdRng};
     pub(super) const PARAMETERS: AggregateStarkParametersV1 = AggregateStarkParametersV1 {
         proof_magic: *b"AGG1",
@@ -7549,7 +7554,10 @@ mod tests {
                     (0..rows)
                         .map(|row| match (row + column) % 3 {
                             0 => F::ZERO,
-                            1 => F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1 - 1),
+                            1 => F(
+                                crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1
+                                    - 1,
+                            ),
                             _ => F((row * 31 + column * 17) as u64),
                         })
                         .collect::<Vec<_>>()

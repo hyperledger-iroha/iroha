@@ -45,7 +45,10 @@ use iroha_data_model::{
     },
 };
 
-use self::{ethereum::EthereumLcError, profile::SccpChainProfilesV1};
+use self::{
+    bsc::BscLcError, ethereum::EthereumLcError, profile::SccpChainProfilesV1, ton::TonLcError,
+    tron::TronLcError,
+};
 pub use self::{
     proof::{
         SccpLcAdvanceV1, SccpLcBootstrapDataV1, SccpLcEvidenceV1, SccpLcSegmentV1, SccpLcSetDataV1,
@@ -179,6 +182,12 @@ pub enum SccpLcError {
     EvidenceNotConflicting,
     /// Ethereum-specific verification failure.
     Ethereum(EthereumLcError),
+    /// BSC-specific verification failure.
+    Bsc(BscLcError),
+    /// TRON-specific verification failure.
+    Tron(TronLcError),
+    /// TON-specific verification failure.
+    Ton(TonLcError),
 }
 
 impl fmt::Display for SccpLcError {
@@ -268,6 +277,9 @@ impl fmt::Display for SccpLcError {
                 formatter.write_str("the evidence records do not conflict")
             }
             Self::Ethereum(error) => write!(formatter, "Ethereum light client: {error}"),
+            Self::Bsc(error) => write!(formatter, "BSC light client: {error}"),
+            Self::Tron(error) => write!(formatter, "TRON light client: {error}"),
+            Self::Ton(error) => write!(formatter, "TON light client: {error}"),
         }
     }
 }
@@ -297,12 +309,12 @@ pub struct SccpVerifierWorkV1 {
     pub native_header_bytes: u64,
     /// Ethereum `LightClientUpdate`s (each one fast-aggregate BLS check).
     pub ethereum_light_client_updates: u32,
-    /// secp256k1 recoveries (BSC and TRON headers).
+    /// BSC fast-finality vote attestations (each one fast-aggregate BLS check).
+    pub bls_vote_attestations: u32,
+    /// secp256k1 recoveries (TRON headers).
     pub secp256k1_recoveries: u32,
     /// Ed25519 signature checks (TON blocks).
     pub ed25519_signature_checks: u32,
-    /// Ed25519 validator-key checks (TON validator sets).
-    pub ed25519_validator_key_checks: u32,
 }
 
 impl SccpVerifierWorkV1 {
@@ -319,15 +331,15 @@ impl SccpVerifierWorkV1 {
             ethereum_light_client_updates: self
                 .ethereum_light_client_updates
                 .checked_add(other.ethereum_light_client_updates)?,
+            bls_vote_attestations: self
+                .bls_vote_attestations
+                .checked_add(other.bls_vote_attestations)?,
             secp256k1_recoveries: self
                 .secp256k1_recoveries
                 .checked_add(other.secp256k1_recoveries)?,
             ed25519_signature_checks: self
                 .ed25519_signature_checks
                 .checked_add(other.ed25519_signature_checks)?,
-            ed25519_validator_key_checks: self
-                .ed25519_validator_key_checks
-                .checked_add(other.ed25519_validator_key_checks)?,
         })
     }
 }
@@ -335,14 +347,11 @@ impl SccpVerifierWorkV1 {
 /// Fail unless this release has a light client for `network`.
 fn ensure_supported(network: SccpNetworkV1) -> Result<(), SccpLcError> {
     match network {
-        SccpNetworkV1::EthereumMainnet => Ok(()),
-        // TODO(ws38): dispatch to the BSC skipping light client.
-        SccpNetworkV1::BscMainnet
-        // TODO(ws39): dispatch to the TRON light client.
+        SccpNetworkV1::EthereumMainnet
+        | SccpNetworkV1::BscMainnet
         | SccpNetworkV1::TronMainnet
-        // TODO(ws3A): dispatch to the TON light client.
-        | SccpNetworkV1::TonMainnet
-        | SccpNetworkV1::SoraTaira => Err(SccpLcError::UnsupportedNetwork(network)),
+        | SccpNetworkV1::TonMainnet => Ok(()),
+        SccpNetworkV1::SoraTaira => Err(SccpLcError::UnsupportedNetwork(network)),
     }
 }
 
@@ -434,6 +443,15 @@ pub fn verify_bootstrap_with_profiles(
         SccpLcBootstrapDataV1::Ethereum(bootstrap) => {
             ethereum::verify_bootstrap(&profiles.ethereum, params, &bootstrap, taira_now_ms)
         }
+        SccpLcBootstrapDataV1::Bsc(bootstrap) => {
+            bsc::verify_bootstrap(&profiles.bsc, params, &bootstrap, taira_now_ms)
+        }
+        SccpLcBootstrapDataV1::Tron(bootstrap) => {
+            tron::verify_bootstrap(&profiles.tron, params, &bootstrap, taira_now_ms)
+        }
+        SccpLcBootstrapDataV1::Ton(bootstrap) => {
+            ton::verify_bootstrap(&profiles.ton, params, &bootstrap, taira_now_ms)
+        }
     }
 }
 
@@ -499,7 +517,7 @@ pub fn initialize_light_client_with_profiles<V: SccpLcStateView + ?Sized>(
         (SccpLcInitExpectationV1::Absent, None) => None,
         (SccpLcInitExpectationV1::Unusable, Some(installed)) if installed.is_frozen() => None,
         (SccpLcInitExpectationV1::Unusable, Some(installed))
-            if is_aged_with_profiles(profiles, &installed, network, taira_now_ms)? =>
+            if is_aged_with_profiles(profiles, view, &installed, network, taira_now_ms)? =>
         {
             Some(installed)
         }
@@ -513,13 +531,12 @@ pub fn initialize_light_client_with_profiles<V: SccpLcStateView + ?Sized>(
             SccpNetworkV1::EthereumMainnet => {
                 ethereum::aged_supersessions(&profiles.ethereum, view, &installed)?
             }
-            // TODO(ws38): supersede an aged BSC light client's newest validator set.
-            SccpNetworkV1::BscMainnet
-            // TODO(ws39): supersede an aged TRON light client's newest witness set.
-            | SccpNetworkV1::TronMainnet
-            // TODO(ws3A): supersede an aged TON light client's newest key-block epoch.
-            | SccpNetworkV1::TonMainnet
-            | SccpNetworkV1::SoraTaira => return Err(SccpLcError::UnsupportedNetwork(network)),
+            SccpNetworkV1::BscMainnet => bsc::aged_supersessions(view, &installed),
+            SccpNetworkV1::TronMainnet => {
+                tron::aged_supersessions(&profiles.tron, view, &installed)?
+            }
+            SccpNetworkV1::TonMainnet => ton::aged_supersessions(view, &installed),
+            SccpNetworkV1::SoraTaira => return Err(SccpLcError::UnsupportedNetwork(network)),
         };
     }
     for checkpoint in &initial.checkpoints {
@@ -606,9 +623,24 @@ pub fn apply_advance_with_profiles<V: SccpLcStateView + ?Sized>(
             &advance,
             taira_now_ms,
         ),
+        SccpLcAdvanceV1::Bsc(advance) => {
+            bsc::apply_advance(&profiles.bsc, view, &light_client, &advance, taira_now_ms)
+        }
+        SccpLcAdvanceV1::Tron(advance) => {
+            tron::apply_advance(&profiles.tron, view, &light_client, &advance, taira_now_ms)
+        }
+        SccpLcAdvanceV1::Ton(advance) => {
+            ton::apply_advance(&profiles.ton, view, &light_client, &advance, taira_now_ms)
+        }
         SccpLcAdvanceV1::Backfill {
             segment: SccpLcSegmentV1::Ethereum(segment),
         } => ethereum::apply_backfill(view, &light_client, &segment, taira_now_ms),
+        SccpLcAdvanceV1::Backfill {
+            segment: SccpLcSegmentV1::Bsc(segment),
+        } => bsc::apply_backfill(&profiles.bsc, view, &light_client, &segment, taira_now_ms),
+        SccpLcAdvanceV1::Backfill {
+            segment: SccpLcSegmentV1::Tron(segment),
+        } => tron::apply_backfill(&profiles.tron, view, &light_client, &segment, taira_now_ms),
     }
 }
 
@@ -667,6 +699,15 @@ pub fn verify_proof_with_profiles<V: SccpLcStateView + ?Sized>(
             &proof,
             taira_now_ms,
         ),
+        SccpSourceProofV1::Bsc(proof) => {
+            bsc::verify_proof(&profiles.bsc, view, &light_client, &proof, taira_now_ms)
+        }
+        SccpSourceProofV1::Tron(proof) => {
+            tron::verify_proof(&profiles.tron, view, &light_client, &proof, taira_now_ms)
+        }
+        SccpSourceProofV1::Ton(proof) => {
+            ton::verify_proof(&profiles.ton, view, &proof, taira_now_ms)
+        }
     }
 }
 
@@ -731,6 +772,35 @@ pub fn verify_equivocation_with_profiles<V: SccpLcStateView + ?Sized>(
                 taira_now_ms,
             )
         }
+        (SccpLcEvidenceV1::Bsc(first), SccpLcEvidenceV1::Bsc(second)) => bsc::verify_equivocation(
+            &profiles.bsc,
+            view,
+            &light_client,
+            (&first, a.as_bytes()),
+            (&second, b.as_bytes()),
+            taira_now_ms,
+        ),
+        (SccpLcEvidenceV1::Tron(first), SccpLcEvidenceV1::Tron(second)) => {
+            tron::verify_equivocation(
+                &profiles.tron,
+                view,
+                &light_client,
+                (&first, a.as_bytes()),
+                (&second, b.as_bytes()),
+                taira_now_ms,
+            )
+        }
+        (SccpLcEvidenceV1::Ton(first), SccpLcEvidenceV1::Ton(second)) => ton::verify_equivocation(
+            &profiles.ton,
+            view,
+            (&first, a.as_bytes()),
+            (&second, b.as_bytes()),
+            taira_now_ms,
+        ),
+        (first, second) => Err(SccpLcError::NetworkMismatch {
+            expected: first.network(),
+            found: second.network(),
+        }),
     }
 }
 
@@ -751,14 +821,16 @@ pub fn is_aged<V: SccpLcStateView + ?Sized>(
         .ok_or(SccpLcError::NotInstalled(network))?;
     is_aged_with_profiles(
         SccpChainProfilesV1::compiled(),
+        view,
         &light_client,
         network,
         taira_now_ms,
     )
 }
 
-fn is_aged_with_profiles(
+fn is_aged_with_profiles<V: SccpLcStateView + ?Sized>(
     profiles: &SccpChainProfilesV1,
+    view: &V,
     light_client: &SccpLightClientV1,
     network: SccpNetworkV1,
     taira_now_ms: u64,
@@ -769,13 +841,15 @@ fn is_aged_with_profiles(
             light_client,
             taira_now_ms,
         )),
-        // TODO(ws38): BSC set freshness.
-        // TODO(ws39): TRON set freshness.
-        // TODO(ws3A): TON key-block freshness (`utime_until + stake_held_for - margin`).
-        SccpNetworkV1::BscMainnet
-        | SccpNetworkV1::TronMainnet
-        | SccpNetworkV1::TonMainnet
-        | SccpNetworkV1::SoraTaira => Err(SccpLcError::UnsupportedNetwork(network)),
+        SccpNetworkV1::BscMainnet => Ok(bsc::is_aged(light_client, taira_now_ms)),
+        SccpNetworkV1::TronMainnet => Ok(tron::is_aged(&profiles.tron, light_client, taira_now_ms)),
+        SccpNetworkV1::TonMainnet => Ok(ton::is_aged(
+            &profiles.ton,
+            view,
+            light_client,
+            taira_now_ms,
+        )),
+        SccpNetworkV1::SoraTaira => Err(SccpLcError::UnsupportedNetwork(network)),
     }
 }
 
@@ -793,10 +867,17 @@ pub fn weak_subjectivity_deadline_ms<V: SccpLcStateView + ?Sized>(
         .light_client(network)
         .ok_or(SccpLcError::NotInstalled(network))?;
     ensure_supported(network)?;
-    Ok(ethereum::weak_subjectivity_deadline_ms(
-        &SccpChainProfilesV1::compiled().ethereum,
-        &light_client,
-    ))
+    let profiles = SccpChainProfilesV1::compiled();
+    Ok(match network {
+        SccpNetworkV1::BscMainnet => bsc::weak_subjectivity_deadline_ms(&light_client),
+        SccpNetworkV1::TronMainnet => {
+            tron::weak_subjectivity_deadline_ms(&profiles.tron, &light_client)
+        }
+        SccpNetworkV1::TonMainnet => {
+            ton::weak_subjectivity_deadline_ms(&profiles.ton, view, &light_client)
+        }
+        _ => ethereum::weak_subjectivity_deadline_ms(&profiles.ethereum, &light_client),
+    })
 }
 
 /// Check an enacted `InstallTrustedCheckpoint` (§4.14.3) and return the checkpoint to write.
@@ -854,9 +935,18 @@ pub fn advance_work(
     decoded.expect_network(network)?;
     Ok(match &decoded {
         SccpLcAdvanceV1::Ethereum(advance) => ethereum::advance_work(advance),
+        SccpLcAdvanceV1::Bsc(advance) => bsc::advance_work(advance),
+        SccpLcAdvanceV1::Tron(advance) => tron::advance_work(advance),
+        SccpLcAdvanceV1::Ton(advance) => ton::advance_work(advance),
         SccpLcAdvanceV1::Backfill {
             segment: SccpLcSegmentV1::Ethereum(segment),
         } => ethereum::segment_work(segment),
+        SccpLcAdvanceV1::Backfill {
+            segment: SccpLcSegmentV1::Bsc(segment),
+        } => bsc::segment_work(segment),
+        SccpLcAdvanceV1::Backfill {
+            segment: SccpLcSegmentV1::Tron(segment),
+        } => tron::segment_work(segment),
     }
     .with_frame_bytes(advance.len()))
 }
@@ -875,6 +965,9 @@ pub fn proof_work(
     decoded.expect_network(network)?;
     Ok(match &decoded {
         SccpSourceProofV1::Ethereum(proof) => ethereum::proof_work(proof),
+        SccpSourceProofV1::Bsc(proof) => bsc::proof_work(proof),
+        SccpSourceProofV1::Tron(proof) => tron::proof_work(proof),
+        SccpSourceProofV1::Ton(proof) => ton::proof_work(proof),
     }
     .with_frame_bytes(proof.len()))
 }
@@ -896,6 +989,9 @@ pub fn evidence_work(
         decoded.expect_network(network)?;
         let work = match &decoded {
             SccpLcEvidenceV1::Ethereum(record) => ethereum::evidence_work(record),
+            SccpLcEvidenceV1::Bsc(record) => bsc::evidence_work(record),
+            SccpLcEvidenceV1::Tron(record) => tron::evidence_work(record),
+            SccpLcEvidenceV1::Ton(record) => ton::evidence_work(record),
         }
         .with_frame_bytes(evidence.len());
         total = total.checked_add(&work).unwrap_or(total);
@@ -923,13 +1019,14 @@ mod tests {
             native_headers: 2,
             native_header_bytes: 20,
             ethereum_light_client_updates: 3,
+            bls_vote_attestations: 7,
             secp256k1_recoveries: 4,
             ed25519_signature_checks: 5,
-            ed25519_validator_key_checks: 6,
         };
         let two = one.checked_add(&one).expect("no overflow");
         assert_eq!(two.proofs, 2);
-        assert_eq!(two.ed25519_validator_key_checks, 12);
+        assert_eq!(two.bls_vote_attestations, 14);
+        assert_eq!(two.ed25519_signature_checks, 10);
         let full = SccpVerifierWorkV1 {
             proofs: u32::MAX,
             ..SccpVerifierWorkV1::default()

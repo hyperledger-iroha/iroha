@@ -302,8 +302,9 @@ fn maximum_profile_assembly_payload_and_source_admission_diagnostic() {
 }
 
 /// Synthetic public values isolate the real exact-width streaming hash work.
-/// The small row sample fits caches differently from a full commitment, so its
-/// linear extrapolation is diagnostic only and never qualifies the time limit.
+/// The small single-worker row sample fits caches differently from a full
+/// commitment. Its linear extrapolation never qualifies the time limit or
+/// measures parallel throughput.
 #[test]
 #[ignore = "optimized exact-width X509 streaming hash cost diagnostic; run --release"]
 fn maximum_profile_streaming_hash_cost_diagnostic() {
@@ -313,7 +314,7 @@ fn maximum_profile_streaming_hash_cost_diagnostic() {
         !cfg!(debug_assertions),
         "run this diagnostic with --release"
     );
-    const SAMPLE_ROWS: usize = 4096;
+    const SAMPLE_ROWS: usize = 128;
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let widths = [
         layout
@@ -328,62 +329,59 @@ fn maximum_profile_streaming_hash_cost_diagnostic() {
             .sum::<usize>(),
     ];
     let full_rows = 1_usize << layout.common_lde_log2;
-    let available = std::thread::available_parallelism().unwrap().get();
-    let mut workers = vec![1, available];
-    workers.dedup();
     let mut expected_roots = None;
-    for workers in workers {
-        for batch_width in [1, aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] {
-            let (roots, seconds) = rayon::ThreadPoolBuilder::new()
-                .num_threads(workers)
-                .build()
-                .unwrap()
-                .install(|| {
-                    let start = Instant::now();
-                    let mut roots = Vec::new();
-                    for (width, (leaf, node)) in widths.into_iter().zip([
-                        (
-                            AGGREGATE_DOMAINS_V1.base_leaf,
-                            AGGREGATE_DOMAINS_V1.base_node,
-                        ),
-                        (AGGREGATE_DOMAINS_V1.aux_leaf, AGGREGATE_DOMAINS_V1.aux_node),
-                    ]) {
-                        let mut commitment = aggregate::StreamingRowCommitmentV1::new(
-                            AGGREGATE_DOMAINS_V1.digest_context,
-                            leaf,
-                            node,
-                            usize::from(u16::MAX),
-                            SAMPLE_ROWS,
-                            width,
-                            &[],
-                        )
-                        .unwrap();
-                        for first in (0..width).step_by(batch_width) {
-                            let columns = (first..(first + batch_width).min(width))
-                                .map(|column| {
-                                    (0..SAMPLE_ROWS)
-                                        .map(|row| F((row * 31 + column * 17) as u64))
-                                        .collect::<Vec<_>>()
-                                })
-                                .collect::<Vec<_>>();
-                            commitment.absorb_columns_v1(&columns).unwrap();
-                        }
-                        roots.push(commitment.finish().unwrap().commitment.root);
+    let workers = 1;
+    for batch_width in [1, aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] {
+        let (roots, seconds) = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let start = Instant::now();
+                let mut roots = Vec::new();
+                for (width, (leaf, node)) in widths.into_iter().zip([
+                    (
+                        AGGREGATE_DOMAINS_V1.base_leaf,
+                        AGGREGATE_DOMAINS_V1.base_node,
+                    ),
+                    (AGGREGATE_DOMAINS_V1.aux_leaf, AGGREGATE_DOMAINS_V1.aux_node),
+                ]) {
+                    let mut commitment = aggregate::StreamingRowCommitmentV1::new(
+                        AGGREGATE_DOMAINS_V1.digest_context,
+                        leaf,
+                        node,
+                        usize::from(u16::MAX),
+                        SAMPLE_ROWS,
+                        width,
+                        &[],
+                    )
+                    .unwrap();
+                    for first in (0..width).step_by(batch_width) {
+                        let columns = (first..(first + batch_width).min(width))
+                            .map(|column| {
+                                (0..SAMPLE_ROWS)
+                                    .map(|row| F((row * 31 + column * 17) as u64))
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>();
+                        commitment.absorb_columns_v1(&columns).unwrap();
                     }
-                    (roots, start.elapsed().as_secs_f64())
-                });
-            if let Some(expected) = &expected_roots {
-                assert_eq!(&roots, expected);
-            } else {
-                expected_roots = Some(roots);
-            }
-            eprintln!(
-                "X509 exact-width streaming hash diagnostic: workers={workers}, batch_columns={batch_width}, sample_rows={SAMPLE_ROWS}, base_width={}, aux_width={}, seconds={seconds:.6}, linear_two_full_pass_seconds={:.3}; excludes FFT/source replay/constraints/FRI/CA, differs in cache residency, concurrent host load must be recorded",
-                widths[0],
-                widths[1],
-                seconds * 2.0 * (full_rows / SAMPLE_ROWS) as f64,
-            );
+                    roots.push(commitment.finish().unwrap().commitment.root);
+                }
+                (roots, start.elapsed().as_secs_f64())
+            });
+        if let Some(expected) = &expected_roots {
+            assert_eq!(&roots, expected);
+        } else {
+            expected_roots = Some(roots);
         }
+        eprintln!(
+            "X509 exact-width streaming hash diagnostic: workers={workers}, batch_columns={batch_width}, sample_rows={SAMPLE_ROWS}, base_width={}, aux_width={}, total_width={}, seconds={seconds:.6}, linear_two_full_pass_seconds={:.3}; single-worker diagnostic only, no parallel-throughput claim; excludes FFT/source replay/constraints/FRI/CA, differs in cache residency, concurrent host load must be recorded",
+            widths[0],
+            widths[1],
+            widths.iter().sum::<usize>(),
+            seconds * 2.0 * (full_rows / SAMPLE_ROWS) as f64,
+        );
     }
 }
 
@@ -460,5 +458,116 @@ fn maximum_profile_replay_fft_cost_diagnostic() {
         rayon::current_num_threads(),
         1_usize << native_log,
         lde_seconds * forward_transforms as f64 / batch_width as f64,
+    );
+}
+
+#[test]
+fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let buffers = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let mut cached_columns = 0_u64;
+    let mut native_cells = 0_u64;
+    let mut masked_cells = 0_u64;
+    let mut quotient_rows = 0_u64;
+    let mut residues = 0_u64;
+    let mut quotient_native_iffts = 0_u64;
+    let mut quotient_native_butterflies = 0_u64;
+    let mut quotient_forward_butterflies = 0_u64;
+    let mut quotient_fp4_inverse_butterflies = 0_u64;
+    let mut other_native_butterflies = 0_u64;
+    let mut fixed_native_butterflies = 0_u64;
+    let mut columns = 0_u64;
+    for registration in &layout.registered_segments {
+        let segment = registration.segment;
+        let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2).unwrap();
+        let n = segment.trace_size() as u64;
+        let m = plan.quotient_coset_rows as u64;
+        let width = (segment.base_width + segment.aux_width) as u64;
+        let fixed = segment.fixed_width as u64;
+        // The source-bound stripe tests separately pin this public cap.
+        let stripe_rows = m.min(1 << 19);
+        assert!(n <= stripe_rows);
+        let stripes = m / stripe_rows;
+        columns += width;
+        native_cells += width * n;
+        masked_cells += width * (n + MASK_DEGREE as u64 + 1);
+        quotient_rows += m;
+        residues += m * segment.constraint_count as u64;
+        let cache = buffers
+            .quotient_cache_plan_v1(&layout, *registration)
+            .unwrap();
+        let cached = (cache.base_columns + cache.aux_columns) as u64;
+        assert!(cache.base_columns <= segment.base_width);
+        assert!(cache.aux_columns <= segment.aux_width);
+        assert!(cache.aux_columns == 0 || cache.base_columns == segment.base_width);
+        if stripes == 1 {
+            assert_eq!(cached, 0);
+        }
+        cached_columns += cached;
+        let replays = cached + (width - cached) * stripes;
+        quotient_native_iffts += replays;
+        quotient_native_butterflies += replays * (n / 2) * u64::from(segment.trace_log2);
+        quotient_forward_butterflies += (width + fixed) * (m / 2) * u64::from(stripe_rows.ilog2());
+        quotient_fp4_inverse_butterflies += (m / 2) * u64::from(plan.quotient_coset_log2);
+        // Initial and opening commitments, DEEP values, and DEEP quotient
+        // accumulation each replay every original masked trace polynomial.
+        other_native_butterflies += 4 * width * (n / 2) * u64::from(segment.trace_log2);
+        fixed_native_butterflies += fixed * (n / 2) * u64::from(segment.trace_log2);
+    }
+    assert_eq!(SECURITY_LANES, 1);
+    assert_eq!(layout.registered_segments.len(), 49);
+    assert_eq!(columns, 5_623);
+    assert_eq!(native_cells, 2_018_157_056);
+    assert_eq!(masked_cells, 2_028_368_424);
+    assert_eq!(quotient_rows, 53_215_232);
+    assert_eq!(residues, 28_038_635_520);
+    // The public prefix cache does not enlarge the admitted arithmetic envelope.
+    assert_eq!(buffers.maximum_live_buffers, 3_694_852_800);
+    assert_eq!(buffers.remaining_source_and_runtime_envelope, 9_190_049_088);
+    assert_eq!(cached_columns, 2_893);
+    assert_eq!(quotient_native_iffts, 8_281);
+    assert_eq!(quotient_native_butterflies, 32_319_713_792);
+    assert_eq!(quotient_forward_butterflies, 134_276_390_912);
+    assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
+    assert_eq!(other_native_butterflies, 76_323_670_016);
+    assert_eq!(fixed_native_butterflies, 8_118_573_504);
+    let commitment_forward_butterflies =
+        2 * columns * (layout.common_lde_size() as u64 / 2) * u64::from(layout.common_lde_log2);
+    assert_eq!(commitment_forward_butterflies, 518_860_570_624);
+    eprintln!(
+        "MAIN complete work inventory: quotient_rows={quotient_rows}, AIR_residues={residues}, quotient_native_IFFTs={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_Fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, commitment_forward_butterflies={commitment_forward_butterflies}, masked_coefficient_cells={masked_cells}; public operation counts only, no timing or maximum-proof qualification"
+    );
+}
+
+#[test]
+fn grouped_deep_replay_fits_existing_buffers_and_eliminates_per_column_division() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let mut original_division_steps = 0_u64;
+    let mut grouped_division_steps = 0_u64;
+    for group in &layout.trace_groups {
+        let coefficients = (1_usize << group.native_trace_log2) + MASK_DEGREE + 1;
+        let width = group.base_width + group.aux_width;
+        original_division_steps += (2 * width * (coefficients - 1)) as u64;
+        grouped_division_steps += (2 * (coefficients - 1)) as u64;
+        let owners = (2 + 2 * SECURITY_LANES) * coefficients * core::mem::size_of::<E>()
+            + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+                * coefficients
+                * core::mem::size_of::<F>();
+        assert!(owners <= plan.replay_batch);
+    }
+    assert_eq!(plan.replay_batch, 310_494_720);
+    assert_eq!(original_division_steps, 4_056_725_602);
+    assert_eq!(grouped_division_steps, 1_791_828);
+    assert_eq!(
+        4 * ((1 << 19) + MASK_DEGREE + 1) * core::mem::size_of::<E>()
+            + 8 * ((1 << 19) + MASK_DEGREE + 1) * core::mem::size_of::<F>(),
+        101_011_968
+    );
+    // Individual claims still require both dot products, and both weighted
+    // coefficients still require scale-by-base-field work for every cell.
+    // This is an operation inventory, not a full-proof timing estimate.
+    eprintln!(
+        "MAIN DEEP synthetic-division recurrence steps: original={original_division_steps}, grouped={grouped_division_steps}; each individual claim remains checked, base-field weighted sums remain"
     );
 }

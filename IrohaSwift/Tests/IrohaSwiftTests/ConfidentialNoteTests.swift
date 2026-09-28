@@ -3,6 +3,17 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConfidentialNoteTests: XCTestCase {
+    func testRetainedChangeOpeningUsesNativeDefaultDiversifier() throws {
+        let change = try ConfidentialChange(amount: 3, rho: Data(repeating: 8, count: 32))
+        let input = try change.asInput(leafIndex: 65_535)
+        XCTAssertEqual(input.amount, change.amount)
+        XCTAssertEqual(input.rho, change.rho)
+        XCTAssertEqual(input.leafIndex, 65_535)
+        XCTAssertEqual(input.diversifier, try ConfidentialOwnerTag.defaultDiversifier())
+        XCTAssertNotEqual(input.diversifier, try ConfidentialOwnerTag.deriveDiversifier(Data([7])))
+        XCTAssertThrowsError(try change.asInput(leafIndex: 65_536))
+    }
+
     func testDerivesCanonicalNativeConfidentialV3Values() throws {
         XCTAssertEqual(
             ConfidentialNoteNativeDerivation.loadedContractRevisionV3(),
@@ -18,6 +29,11 @@ final class ConfidentialNoteTests: XCTestCase {
             asset: "rose#wonderland",
             networkId: TestNetworkIds.canonical,
             amount: "7"
+        )
+        XCTAssertEqual(
+            try ConfidentialNoteCommitment.derive(asset: opening.asset, amount: 7,
+                                                 rho: rho, ownerTag: ownerTag),
+            try ConfidentialNoteCommitment.deriveFromOpening(opening)
         )
 
         for digest in [

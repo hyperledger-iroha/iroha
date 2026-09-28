@@ -67,6 +67,32 @@ pub enum ConfidentialProverError {
     Proving(String),
 }
 
+impl native::ConfidentialUnshieldOutputV3 {
+    /// Consume a saved change opening as an input at its authenticated leaf index.
+    ///
+    /// Securely persist the opening before proving consumes the original, then
+    /// restore it once its ledger position is authenticated. Change belongs to
+    /// the wallet's default diversifier, even when the consumed note used a
+    /// different diversifier. This conversion checks shape, not membership.
+    pub fn into_input(
+        mut self,
+        leaf_index: usize,
+    ) -> Result<native::ConfidentialUnshieldInputV2, ConfidentialProverError> {
+        if leaf_index >= native::CONFIDENTIAL_TREE_CAPACITY_V2 {
+            return Err(ConfidentialProverError::InputIndex);
+        }
+        if self.amount == 0 {
+            return Err(ConfidentialProverError::InvalidInputAmounts);
+        }
+        Ok(native::ConfidentialUnshieldInputV2 {
+            amount: std::mem::take(&mut self.amount),
+            rho: std::mem::take(&mut self.rho),
+            diversifier: native::default_confidential_diversifier_v2(),
+            leaf_index,
+        })
+    }
+}
+
 /// Borrowed tree evidence for precisely the notes being spent.
 ///
 /// Obtain `root` from authenticated ledger state. A full tree is useful for

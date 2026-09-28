@@ -1973,6 +1973,55 @@ impl Drop for ZkX509ShaColumnFillGuardV1<'_> {
         }
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn sha_column_fill_batch_v1<'a>(
+    targets: &'a mut [&mut [F]],
+) -> Result<Vec<ZkX509ShaColumnFillGuardV1<'a>>, ZkX509ShaCallBusStarkErrorV1> {
+    let mut fills = Vec::new();
+    fills
+        .try_reserve_exact(targets.len())
+        .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
+    for target in targets {
+        fills.push(ZkX509ShaColumnFillGuardV1::new_v1(target));
+    }
+    Ok(fills)
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn finish_sha_column_fill_batch_v1(
+    mut fills: Vec<ZkX509ShaColumnFillGuardV1<'_>>,
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    // Validate every destination before transferring any successful column.
+    // A malformed late column must clear the complete partial batch.
+    if fills
+        .iter()
+        .any(|fill| !fill.valid || fill.written != fill.target.len())
+    {
+        return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+    }
+    for fill in &mut fills {
+        fill.committed = true;
+    }
+    Ok(())
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn validate_sha_column_batch_extent_v1(
+    first: usize,
+    width: usize,
+    targets: &[&mut [F]],
+) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+    if targets.is_empty()
+        || targets.len() > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+        || first
+            .checked_add(targets.len())
+            .is_none_or(|end| end > width)
+        || targets
+            .iter()
+            .any(|target| target.len() != ZK_X509_SHA_SEGMENT_ROWS_V1)
+    {
+        return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+    }
+    Ok(())
+}
 /// Challenge-independent source for one of the four canonical log-19 SHA registrations.
 ///
 /// The source can stream every base and verifier-fixed row without receiving any post-base
@@ -2042,17 +2091,35 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
         local_column: usize,
         target: &mut [F],
     ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        self.fill_base_columns_v1(segment, local_column, &mut [target])
+    }
+    /// Replay at most eight adjacent base columns in one bounded call traversal.
+    /// Every destination is validated before construction; failed batches clear
+    /// all destinations and retain no eager segment matrix.
+    pub(crate) fn fill_base_columns_v1(
+        &self,
+        segment: usize,
+        first_column: usize,
+        targets: &mut [&mut [F]],
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        validate_sha_column_batch_extent_v1(
+            first_column,
+            ZK_X509_SHA_BATCH_BASE_WIDTH_V1,
+            targets,
+        )?;
         self.validate_column_request_v1(
             segment,
-            local_column,
+            first_column,
             ZK_X509_SHA_BATCH_BASE_WIDTH_V1,
-            target,
+            targets[0],
         )?;
-        let mut fill = ZkX509ShaColumnFillGuardV1::new_v1(target);
+        let mut fills = sha_column_fill_batch_v1(targets)?;
         self.for_each_base_fixed_row_v1(|row, base, _| {
-            fill.write_v1(row, base[local_column]);
+            for (offset, fill) in fills.iter_mut().enumerate() {
+                fill.write_v1(row, base[first_column + offset]);
+            }
         })?;
-        fill.finish_v1()
+        finish_sha_column_fill_batch_v1(fills)
     }
     /// Replay one verifier-fixed column before X5B1 into an exact native segment-sized target.
     #[cfg(test)]
@@ -2246,6 +2313,15 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         local_column: usize,
         target: &mut [F],
     ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        self.replay_base_columns_v1(segment, local_column, &mut [target])
+    }
+    /// Replay original adjacent base columns through the already-bound owner.
+    pub(crate) fn replay_base_columns_v1(
+        &self,
+        segment: usize,
+        first_column: usize,
+        targets: &mut [&mut [F]],
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
         let binding = self.binding.ok_or(ZkX509ShaCallBusStarkErrorV1::Phase)?;
         validate_sha_segment_binding_families_v1(
             binding.sha_word(),
@@ -2258,7 +2334,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
             replay: self.replay,
             bound: false,
         };
-        source.fill_base_column_v1(segment, local_column, target)
+        source.fill_base_columns_v1(segment, first_column, targets)
     }
 
     fn replay_aux_rows_with_air_terminals_v1(
@@ -2376,12 +2452,25 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         local_column: usize,
         target: &mut [F],
     ) -> Result<ZkX509ShaSegmentAirTerminalsV1, ZkX509ShaCallBusStarkErrorV1> {
-        self.validate_column_request_v1(segment, local_column, target)?;
-        let mut fill = ZkX509ShaColumnFillGuardV1::new_v1(target);
+        self.fill_aux_columns_with_air_terminals_v1(segment, local_column, &mut [target])
+    }
+    /// Replay at most eight adjacent auxiliary columns with the exact bound
+    /// segment and compact-CA terminal checks from the single row stream.
+    pub(crate) fn fill_aux_columns_with_air_terminals_v1(
+        &self,
+        segment: usize,
+        first_column: usize,
+        targets: &mut [&mut [F]],
+    ) -> Result<ZkX509ShaSegmentAirTerminalsV1, ZkX509ShaCallBusStarkErrorV1> {
+        validate_sha_column_batch_extent_v1(first_column, ZK_X509_SHA_BATCH_AUX_WIDTH_V1, targets)?;
+        self.validate_column_request_v1(segment, first_column, targets[0])?;
+        let mut fills = sha_column_fill_batch_v1(targets)?;
         let terminals = self.replay_aux_rows_with_air_terminals_v1(|row, aux| {
-            fill.write_v1(row, aux[local_column]);
+            for (offset, fill) in fills.iter_mut().enumerate() {
+                fill.write_v1(row, aux[first_column + offset]);
+            }
         })?;
-        fill.finish_v1()?;
+        finish_sha_column_fill_batch_v1(fills)?;
         Ok(terminals)
     }
     /// Replay one auxiliary column when only the registration terminal is needed.
@@ -5601,5 +5690,178 @@ mod tests {
             ZkX509ShaSegmentReplayV1::new(4),
             Err(ZkX509ShaCallBusStarkErrorV1::Topology)
         );
+    }
+
+    #[test]
+    fn column_batch_guard_preserves_atomic_finish_and_clears_error_and_unwind() {
+        for mode in 0..3 {
+            let mut first = [F(3); 4];
+            let mut second = [F(7); 4];
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut targets = [&mut first[..], &mut second[..]];
+                let mut fills = sha_column_fill_batch_v1(&mut targets).unwrap();
+                for row in 0..4 {
+                    fills[0].write_v1(row, F((row + 11) as u64));
+                    fills[1].write_v1(
+                        row,
+                        if mode == 1 && row == 3 {
+                            F(u64::MAX)
+                        } else {
+                            F((row + 17) as u64)
+                        },
+                    );
+                }
+                assert!(mode != 2, "injected batch unwind");
+                finish_sha_column_fill_batch_v1(fills)
+            }));
+            if mode == 0 {
+                assert!(result.unwrap().is_ok());
+                assert_eq!(first, [F(11), F(12), F(13), F(14)]);
+                assert_eq!(second, [F(17), F(18), F(19), F(20)]);
+            } else {
+                assert!(if mode == 1 {
+                    result.unwrap().is_err()
+                } else {
+                    result.is_err()
+                });
+                assert_eq!(first, [F::ZERO; 4]);
+                assert_eq!(second, [F::ZERO; 4]);
+            }
+        }
+    }
+
+    #[test]
+    fn segment_column_batches_match_independent_row_projection_and_bound_terminals() {
+        let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 2,
+        })
+        .unwrap();
+        let witnesses = witnesses(&schedule);
+        let segment = 0;
+        let mut source =
+            ZkX509ShaBatchSegmentBaseSourceV1::new_v1(&schedule, &witnesses, segment).unwrap();
+        let first_base = 3;
+        let mut reference = vec![native_column_v1(F::ZERO); 8];
+        source
+            .for_each_base_fixed_row_v1(|row, base, _| {
+                for column in 0..8 {
+                    reference[column][row] = base[first_base + column];
+                }
+            })
+            .unwrap();
+        let mut actual = vec![native_column_v1(F::ZERO); 8];
+        source
+            .fill_base_columns_v1(
+                segment,
+                first_base,
+                &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(actual, reference);
+        let mut bound = source.bind_v1(credential_binding(0x47)).unwrap();
+        assert!(
+            source
+                .fill_base_columns_v1(
+                    segment,
+                    first_base,
+                    &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>()
+                )
+                .is_err()
+        );
+        assert_eq!(actual, reference);
+        bound
+            .replay_base_columns_v1(
+                segment,
+                first_base,
+                &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(actual, reference);
+        let first_aux = ZK_X509_SHA_INPUT_PRODUCTS_V1;
+        assert!(first_aux + 8 <= ZK_X509_SHA_BATCH_AUX_WIDTH_V1);
+        let expected_terminal = bound
+            .replay_aux_rows_with_air_terminals_v1(|row, aux| {
+                for column in 0..8 {
+                    reference[column][row] = aux[first_aux + column];
+                }
+            })
+            .unwrap();
+        let actual_terminal = bound
+            .fill_aux_columns_with_air_terminals_v1(
+                segment,
+                first_aux,
+                &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(actual_terminal, expected_terminal);
+        assert_eq!(actual, reference);
+        assert!(!bound.row_stream_emitted_for_test_v1());
+        for width in [1, 3] {
+            let terminal = bound
+                .fill_aux_columns_with_air_terminals_v1(
+                    segment,
+                    first_aux,
+                    &mut actual[..width]
+                        .iter_mut()
+                        .map(Vec::as_mut_slice)
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            assert_eq!(terminal, expected_terminal);
+            assert_eq!(actual, reference);
+        }
+        for (changed_segment, first_column) in [
+            (segment + 1, first_aux),
+            (segment, ZK_X509_SHA_BATCH_AUX_WIDTH_V1 - 7),
+            (segment, usize::MAX),
+        ] {
+            assert!(
+                bound
+                    .fill_aux_columns_with_air_terminals_v1(
+                        changed_segment,
+                        first_column,
+                        &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>()
+                    )
+                    .is_err()
+            );
+            assert_eq!(actual, reference);
+        }
+        assert!(
+            bound
+                .fill_aux_columns_with_air_terminals_v1(segment, first_aux, &mut [])
+                .is_err()
+        );
+        let mut short = vec![F(91); ZK_X509_SHA_SEGMENT_ROWS_V1 - 1];
+        assert!(
+            bound
+                .fill_aux_columns_with_air_terminals_v1(
+                    segment,
+                    first_aux,
+                    &mut [&mut actual[0], &mut short]
+                )
+                .is_err()
+        );
+        assert!(short.iter().all(|value| *value == F(91)));
+        assert_eq!(actual, reference);
+        bound.zeroize_private_v1();
+        assert!(
+            bound
+                .replay_base_columns_v1(
+                    segment,
+                    first_base,
+                    &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>()
+                )
+                .is_err()
+        );
+        assert!(
+            bound
+                .fill_aux_columns_with_air_terminals_v1(
+                    segment,
+                    first_aux,
+                    &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>()
+                )
+                .is_err()
+        );
+        assert_eq!(actual, reference);
     }
 }

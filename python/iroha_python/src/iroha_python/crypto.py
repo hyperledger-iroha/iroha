@@ -200,13 +200,10 @@ __all__ = [
     "derive_confidential_keyset_from_hex",
     "compute_confidential_root_v2",
     "derive_confidential_next_zero_path_v2",
+    "default_confidential_diversifier_v2",
     "derive_confidential_diversifier_v2",
     "derive_confidential_owner_tag_v2",
     "derive_confidential_note_v2",
-    "build_confidential_transfer_proof_v2",
-    "build_confidential_transfer_proof_v2_with_paths",
-    "build_confidential_unshield_proof_v3",
-    "build_confidential_unshield_proof_v3_with_paths",
     "confidential_transfer_v2_verifying_key_registration_payload_v1",
     "confidential_unshield_v3_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
@@ -1901,39 +1898,6 @@ def _require_exact_non_empty_string(value: Any, context: str) -> str:
     return value
 
 
-def _confidential_verifying_key_parts(
-    verifying_key: Mapping[str, Any],
-    context: str,
-) -> tuple[str, str, Any]:
-    if not isinstance(verifying_key, Mapping):
-        raise TypeError(f"{context} must be a mapping")
-    backend = (
-        verifying_key.get("backend")
-        or verifying_key.get("vk_backend")
-        or verifying_key.get("vkBackend")
-    )
-    circuit_id = (
-        verifying_key.get("circuit_id")
-        or verifying_key.get("circuitId")
-        or verifying_key.get("vk_circuit_id")
-        or verifying_key.get("vkCircuitId")
-    )
-    vk_bytes = (
-        verifying_key.get("bytes") or verifying_key.get("vk_bytes") or verifying_key.get("vkBytes")
-    )
-    backend = _require_exact_non_empty_string(backend, f"{context}.backend")
-    circuit_id = _require_exact_non_empty_string(circuit_id, f"{context}.circuit_id")
-    if vk_bytes is None:
-        raise ValueError(f"{context}.bytes is required")
-    return backend, circuit_id, vk_bytes
-
-
-def _confidential_native_result(result: Any, context: str) -> Dict[str, Any]:
-    if not isinstance(result, dict):
-        raise RuntimeError(f"{context} returned a non-object payload")
-    return result
-
-
 def _confidential_path_hex(value: Any, name: str) -> str:
     data = bytes(value)
     if len(data) != 32:
@@ -2016,10 +1980,20 @@ def derive_confidential_next_zero_path_v2(
     return _confidential_merkle_path_result(result, "confidential next-zero path")
 
 
+def default_confidential_diversifier_v2() -> bytes:
+    """Return the native canonical diversifier used by private redemption change."""
+    if not hasattr(_crypto, "default_confidential_diversifier_v2"):
+        raise RuntimeError("rebuild the native extension for the confidential change diversifier")
+    value = bytes(_crypto.default_confidential_diversifier_v2())
+    if len(value) != 32:
+        raise RuntimeError("native default diversifier must be 32 bytes")
+    return value
+
+
 def derive_confidential_diversifier_v2(
-    seed: bytes | bytearray | memoryview | str,
+    seed: bytes | str,
 ) -> bytes:
-    """Derive a canonical confidential-transfer v2 note diversifier."""
+    """Derive a note diversifier from bytes or hex, bounded to 1 MiB decoded."""
 
     if not hasattr(_crypto, "derive_confidential_diversifier_v2"):
         raise RuntimeError(
@@ -2033,10 +2007,10 @@ def derive_confidential_diversifier_v2(
 
 
 def derive_confidential_owner_tag_v2(
-    spend_key: bytes | bytearray | memoryview | str,
-    diversifier: bytes | bytearray | memoryview | str,
+    spend_key: bytes | str,
+    diversifier: bytes | str,
 ) -> bytes:
-    """Derive a canonical confidential-transfer v2 owner tag."""
+    """Derive an owner tag from bytes or hex; the decoded key is at most 1 MiB."""
 
     if not hasattr(_crypto, "derive_confidential_owner_tag_v2"):
         raise RuntimeError(
@@ -2051,11 +2025,11 @@ def derive_confidential_owner_tag_v2(
 
 def derive_confidential_note_v2(
     asset_definition_id: str,
-    amount: int | str,
-    rho: bytes | bytearray | memoryview | str,
-    owner_tag: bytes | bytearray | memoryview | str,
+    amount: int,
+    rho: bytes | str,
+    owner_tag: bytes | str,
 ) -> bytes:
-    """Derive a canonical confidential-transfer v2 note commitment."""
+    """Derive a note commitment from two exact 32-byte words (bytes or hex)."""
 
     if not hasattr(_crypto, "derive_confidential_note_v2"):
         raise RuntimeError(
@@ -2071,154 +2045,6 @@ def derive_confidential_note_v2(
     if len(note_commitment) != 32:
         raise RuntimeError("confidential note v2 returned non-32-byte output")
     return note_commitment
-
-
-def build_confidential_transfer_proof_v2(
-    *,
-    network_id: NetworkId,
-    asset_definition_id: str,
-    spend_key: bytes | bytearray | memoryview | str,
-    tree_commitments: Iterable[bytes | bytearray | memoryview | str],
-    inputs: Iterable[Mapping[str, Any]],
-    outputs: Iterable[Mapping[str, Any]],
-    root_hint: bytes | bytearray | memoryview | str,
-    verifying_key: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Build a confidential transfer v2 proof envelope with the native Halo2 prover."""
-
-    if not hasattr(_crypto, "build_confidential_transfer_proof_v2"):
-        raise RuntimeError(
-            "iroha_native._crypto is missing confidential transfer v2 prover support; rebuild the extension"
-        )
-    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
-        verifying_key,
-        "verifying_key",
-    )
-    result = _crypto.build_confidential_transfer_proof_v2(
-        _require_network_id(network_id),
-        str(asset_definition_id),
-        spend_key,
-        list(tree_commitments),
-        list(inputs),
-        list(outputs),
-        root_hint,
-        vk_backend,
-        vk_circuit_id,
-        vk_bytes,
-    )
-    return _confidential_native_result(result, "confidential transfer v2 prover")
-
-
-def build_confidential_transfer_proof_v2_with_paths(
-    *,
-    network_id: NetworkId,
-    asset_definition_id: str,
-    spend_key: bytes | bytearray | memoryview | str,
-    input_paths: Iterable[Mapping[str, Any]],
-    inputs: Iterable[Mapping[str, Any]],
-    outputs: Iterable[Mapping[str, Any]],
-    root_hint: bytes | bytearray | memoryview | str,
-    verifying_key: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Build a confidential transfer v2 proof envelope from ledger Merkle paths."""
-
-    if not hasattr(_crypto, "build_confidential_transfer_proof_v2_with_paths"):
-        raise RuntimeError(
-            "iroha_native._crypto is missing confidential transfer v2 path prover support; rebuild the extension"
-        )
-    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
-        verifying_key,
-        "verifying_key",
-    )
-    result = _crypto.build_confidential_transfer_proof_v2_with_paths(
-        _require_network_id(network_id),
-        str(asset_definition_id),
-        spend_key,
-        list(input_paths),
-        list(inputs),
-        list(outputs),
-        root_hint,
-        vk_backend,
-        vk_circuit_id,
-        vk_bytes,
-    )
-    return _confidential_native_result(result, "confidential transfer v2 path prover")
-
-
-def build_confidential_unshield_proof_v3(
-    *,
-    network_id: NetworkId,
-    asset_definition_id: str,
-    spend_key: bytes | bytearray | memoryview | str,
-    tree_commitments: Iterable[bytes | bytearray | memoryview | str],
-    inputs: Iterable[Mapping[str, Any]],
-    outputs: Iterable[Mapping[str, Any]],
-    public_amount: int | str,
-    root_hint: bytes | bytearray | memoryview | str,
-    verifying_key: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Build a confidential unshield v3 proof envelope with optional private change."""
-
-    if not hasattr(_crypto, "build_confidential_unshield_proof_v3"):
-        raise RuntimeError(
-            "iroha_native._crypto is missing confidential unshield v3 prover support; rebuild the extension"
-        )
-    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
-        verifying_key,
-        "verifying_key",
-    )
-    result = _crypto.build_confidential_unshield_proof_v3(
-        _require_network_id(network_id),
-        str(asset_definition_id),
-        spend_key,
-        list(tree_commitments),
-        list(inputs),
-        list(outputs),
-        _normalize_u128_literal(public_amount, "public_amount"),
-        root_hint,
-        vk_backend,
-        vk_circuit_id,
-        vk_bytes,
-    )
-    return _confidential_native_result(result, "confidential unshield v3 prover")
-
-
-def build_confidential_unshield_proof_v3_with_paths(
-    *,
-    network_id: NetworkId,
-    asset_definition_id: str,
-    spend_key: bytes | bytearray | memoryview | str,
-    input_paths: Iterable[Mapping[str, Any]],
-    inputs: Iterable[Mapping[str, Any]],
-    outputs: Iterable[Mapping[str, Any]],
-    public_amount: int | str,
-    root_hint: bytes | bytearray | memoryview | str,
-    verifying_key: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Build a confidential unshield v3 proof envelope from ledger Merkle paths."""
-
-    if not hasattr(_crypto, "build_confidential_unshield_proof_v3_with_paths"):
-        raise RuntimeError(
-            "iroha_native._crypto is missing confidential unshield v3 path prover support; rebuild the extension"
-        )
-    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
-        verifying_key,
-        "verifying_key",
-    )
-    result = _crypto.build_confidential_unshield_proof_v3_with_paths(
-        _require_network_id(network_id),
-        str(asset_definition_id),
-        spend_key,
-        list(input_paths),
-        list(inputs),
-        list(outputs),
-        _normalize_u128_literal(public_amount, "public_amount"),
-        root_hint,
-        vk_backend,
-        vk_circuit_id,
-        vk_bytes,
-    )
-    return _confidential_native_result(result, "confidential unshield v3 path prover")
 
 
 def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str, Any]:

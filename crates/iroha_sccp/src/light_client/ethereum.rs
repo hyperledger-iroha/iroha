@@ -71,8 +71,8 @@ use super::{
     },
     proof::{SccpLcSetDataV1, SccpNormalizedEventV1, SccpSourceEmitterV1, SccpVerifiedProofV1},
     state::{
-        SccpLcDeltaV1, SccpLcInitialStateV1, SccpLcPurgeV1, SccpLcStateView, SccpLcSupersessionV1,
-        is_set_fresh, same_checkpoint_block, state_hash,
+        CheckpointRecorder, SccpLcDeltaV1, SccpLcInitialStateV1, SccpLcPurgeV1, SccpLcStateView,
+        SccpLcSupersessionV1, is_set_fresh, same_checkpoint_block, state_hash,
     },
 };
 use crate::{
@@ -605,7 +605,10 @@ struct VerifiedUpdateV1 {
 fn stored_committee(set: &SccpLcConsensusSetV1) -> Result<SyncCommittee, SccpLcError> {
     let malformed = EthereumLcError::MalformedStoredSet { set_id: set.set_id };
     let SccpLcSetDataV1::Ethereum(data) =
-        SccpLcSetDataV1::from_frame(&set.set_bytes).map_err(|_| malformed)?;
+        SccpLcSetDataV1::from_frame(&set.set_bytes).map_err(|_| malformed)?
+    else {
+        return Err(malformed.into());
+    };
     if data.period != set.set_id {
         return Err(malformed.into());
     }
@@ -719,62 +722,6 @@ const fn point(data: &SccpLcCheckpointDataV1) -> SccpLcPointV1 {
         source_height: data.source_height,
         block_hash: data.block_hash,
         source_time_ms: data.source_time_ms,
-    }
-}
-
-/// Collects new checkpoints, idempotent against stored ones and conflict-checked by content
-/// ([`same_checkpoint_block`]).
-struct CheckpointRecorder<'a, V: SccpLcStateView + ?Sized> {
-    view: &'a V,
-    origin: SccpLcCheckpointOriginV1,
-    now: u64,
-    pending: BTreeMap<u64, SccpLcCheckpointV1>,
-}
-
-impl<'a, V: SccpLcStateView + ?Sized> CheckpointRecorder<'a, V> {
-    const fn new(view: &'a V, origin: SccpLcCheckpointOriginV1, now: u64) -> Self {
-        Self {
-            view,
-            origin,
-            now,
-            pending: BTreeMap::new(),
-        }
-    }
-
-    fn record(&mut self, data: SccpLcCheckpointDataV1) -> Result<(), SccpLcError> {
-        let height = data.source_height;
-        let existing = self
-            .pending
-            .get(&height)
-            .map(|checkpoint| checkpoint.data)
-            .or_else(|| {
-                self.view
-                    .checkpoint(NETWORK, height)
-                    .map(|checkpoint| checkpoint.data)
-            });
-        match existing {
-            Some(existing) if !same_checkpoint_block(&existing, &data) => Err(
-                SccpLcError::ConflictsWithStoredData(SccpLcConflictV1::Checkpoint {
-                    source_height: height,
-                }),
-            ),
-            Some(_) => Ok(()),
-            None => {
-                self.pending.insert(
-                    height,
-                    SccpLcCheckpointV1 {
-                        data,
-                        recorded_at_taira_ms: self.now,
-                        origin: self.origin,
-                    },
-                );
-                Ok(())
-            }
-        }
-    }
-
-    fn into_vec(self) -> Vec<SccpLcCheckpointV1> {
-        self.pending.into_values().collect()
     }
 }
 
@@ -961,8 +908,12 @@ pub(super) fn apply_advance<V: SccpLcStateView + ?Sized>(
     }
     let ctx = Ctx::new(profile, params, taira_now_ms)?;
     let mut learner = CommitteeLearner::new(view, profile);
-    let mut recorder =
-        CheckpointRecorder::new(view, SccpLcCheckpointOriginV1::Advance, taira_now_ms);
+    let mut recorder = CheckpointRecorder::new(
+        view,
+        NETWORK,
+        SccpLcCheckpointOriginV1::Advance,
+        taira_now_ms,
+    );
     let mut latest_set_id = light_client.head.latest_set_id;
     let mut latest_finalized = light_client.head.latest_finalized;
     for update in &advance.updates {
@@ -1038,8 +989,12 @@ pub(super) fn apply_backfill<V: SccpLcStateView + ?Sized>(
         }
         .into());
     }
-    let mut recorder =
-        CheckpointRecorder::new(view, SccpLcCheckpointOriginV1::Backfill, taira_now_ms);
+    let mut recorder = CheckpointRecorder::new(
+        view,
+        NETWORK,
+        SccpLcCheckpointOriginV1::Backfill,
+        taira_now_ms,
+    );
     recorder.record(header_checkpoint(&first)?)?;
     Ok(SccpLcDeltaV1 {
         checkpoints: recorder.into_vec(),
@@ -1144,13 +1099,14 @@ fn verify_ancestry(
     }
 }
 
-fn open_receipt(
-    event: &EthereumExecutionHeaderFieldsV1,
+/// Open the successful receipt `transaction_index` under `receipts_root` (shared with BSC).
+pub(super) fn open_receipt(
+    receipts_root: [u8; 32],
     transaction_index: u32,
     proof: &EthereumNativeMptProofV1,
 ) -> Result<EthereumReceiptV1, SccpLcError> {
     let key = rlp_encode_u64(u64::from(transaction_index));
-    let value = verify_mpt_inclusion(event.receipts_root, &key, proof, EthereumMptRoleV1::Receipt)
+    let value = verify_mpt_inclusion(receipts_root, &key, proof, EthereumMptRoleV1::Receipt)
         .map_err(execution)?;
     let receipt = decode_receipt(&value).map_err(execution)?;
     if !receipt.success {
@@ -1175,7 +1131,8 @@ fn log_at(
         })
 }
 
-fn select_event(
+/// Select the SCCP event of `receipt` named by `selector` (shared with BSC).
+pub(super) fn select_event(
     receipt: &EthereumReceiptV1,
     selector: EthereumEventSelectorV1,
     locator: SccpSourceLocatorV1,
@@ -1257,7 +1214,8 @@ pub(super) fn verify_proof<V: SccpLcStateView + ?Sized>(
 ) -> Result<SccpVerifiedProofV1, SccpLcError> {
     let params = &light_client.params;
     let ctx = Ctx::new(profile, params, taira_now_ms)?;
-    let mut recorder = CheckpointRecorder::new(view, SccpLcCheckpointOriginV1::Proof, taira_now_ms);
+    let mut recorder =
+        CheckpointRecorder::new(view, NETWORK, SccpLcCheckpointOriginV1::Proof, taira_now_ms);
     let anchor = match &proof.anchor {
         EthereumProofAnchorV1::FinalityUpdate(update) => {
             let verified =
@@ -1277,7 +1235,11 @@ pub(super) fn verify_proof<V: SccpLcStateView + ?Sized>(
     let event_block = decode_execution_header(&proof.event_header).map_err(execution)?;
     verify_ancestry(&ctx, params, &event_block, &anchor, &proof.ancestry)?;
     recorder.record(header_checkpoint(&event_block)?)?;
-    let receipt = open_receipt(&event_block, proof.transaction_index, &proof.receipt_proof)?;
+    let receipt = open_receipt(
+        event_block.receipts_root,
+        proof.transaction_index,
+        &proof.receipt_proof,
+    )?;
     let locator = SccpSourceLocatorV1 {
         source_height: event_block.number,
         block_hash: event_block.hash,
@@ -2263,17 +2225,8 @@ mod tests {
             state_root: [1; 32],
             receipts_root,
         }));
-        let fields = EthereumExecutionHeaderFieldsV1 {
-            hash: header.block_hash,
-            parent_hash: [0; 32],
-            state_root: header.state_root,
-            transactions_root: [0x56; 32],
-            receipts_root: header.receipts_root,
-            number: 5,
-            timestamp: 5,
-        };
         assert_eq!(
-            open_receipt(&fields, 0, &proof),
+            open_receipt(header.receipts_root, 0, &proof),
             Err(EthereumLcError::FailedReceipt.into())
         );
     }

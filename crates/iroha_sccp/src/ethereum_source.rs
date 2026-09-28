@@ -845,7 +845,7 @@ fn finality_branch_from_wire(
 // RLP
 // ---------------------------------------------------------------------------------------------
 #[derive(Clone, Copy)]
-enum RlpItem<'a> {
+pub(crate) enum RlpItem<'a> {
     Bytes { payload: &'a [u8] },
     List { payload: &'a [u8], raw: &'a [u8] },
 }
@@ -920,12 +920,12 @@ fn parse_rlp_item_at<'a>(bytes: &'a [u8], cursor: &mut usize) -> Option<RlpItem<
         }
     }
 }
-fn parse_single_rlp(bytes: &[u8]) -> Option<RlpItem<'_>> {
+pub(crate) fn parse_single_rlp(bytes: &[u8]) -> Option<RlpItem<'_>> {
     let mut cursor = 0usize;
     let item = parse_rlp_item_at(bytes, &mut cursor)?;
     (cursor == bytes.len()).then_some(item)
 }
-fn parse_rlp_list(bytes: &[u8], max_items: usize) -> Option<Vec<RlpItem<'_>>> {
+pub(crate) fn parse_rlp_list(bytes: &[u8], max_items: usize) -> Option<Vec<RlpItem<'_>>> {
     let RlpItem::List { payload, .. } = parse_single_rlp(bytes)? else {
         return None;
     };
@@ -942,19 +942,19 @@ fn parse_rlp_list_payload(payload: &[u8], max_items: usize) -> Option<Vec<RlpIte
     }
     (cursor == payload.len()).then_some(items)
 }
-const fn rlp_bytes(item: RlpItem<'_>) -> Option<&[u8]> {
+pub(crate) const fn rlp_bytes(item: RlpItem<'_>) -> Option<&[u8]> {
     match item {
         RlpItem::Bytes { payload, .. } => Some(payload),
         RlpItem::List { .. } => None,
     }
 }
-fn rlp_list_items(item: RlpItem<'_>, max_items: usize) -> Option<Vec<RlpItem<'_>>> {
+pub(crate) fn rlp_list_items(item: RlpItem<'_>, max_items: usize) -> Option<Vec<RlpItem<'_>>> {
     match item {
         RlpItem::List { payload, .. } => parse_rlp_list_payload(payload, max_items),
         RlpItem::Bytes { .. } => None,
     }
 }
-fn rlp_h256(item: RlpItem<'_>) -> Option<H256> {
+pub(crate) fn rlp_h256(item: RlpItem<'_>) -> Option<H256> {
     H256::try_from(rlp_bytes(item)?).ok()
 }
 fn canonical_uint_bytes(item: RlpItem<'_>, max_bytes: usize) -> Option<&[u8]> {
@@ -964,7 +964,7 @@ fn canonical_uint_bytes(item: RlpItem<'_>, max_bytes: usize) -> Option<&[u8]> {
     }
     Some(bytes)
 }
-fn canonical_u64(item: RlpItem<'_>) -> Option<u64> {
+pub(crate) fn canonical_u64(item: RlpItem<'_>) -> Option<u64> {
     let bytes = canonical_uint_bytes(item, 8)?;
     Some(
         bytes

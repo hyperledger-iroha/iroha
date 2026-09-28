@@ -26,6 +26,10 @@ mod peers_gossiper_topology_sync;
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
 pub mod runtime_provider_registry;
+/// In-node SCCP attestor with zero-touch bridge-key management.
+#[cfg(unix)]
+#[path = "sccp_attestor.rs"]
+mod sccp_attestor;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[path = "soracloud_runtime.rs"]
 mod soracloud_runtime;
@@ -4642,6 +4646,20 @@ impl Iroha {
             supervisor.monitor(child);
             Some(runtime)
         };
+        // The SCCP attestor signs only durably final state and never aborts the node.
+        #[cfg(unix)]
+        if !emergency_fast
+            && let Some(child) = sccp_attestor::start(
+                Arc::clone(&state),
+                Arc::clone(&queue),
+                config.common.key_pair.clone(),
+                config.sccp.attestor.clone(),
+                config.sccp.light_client_keeper.clone(),
+                supervisor.shutdown_signal(),
+            )
+        {
+            supervisor.monitor(child);
+        }
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);

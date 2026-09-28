@@ -14,4 +14,8 @@ license = {text = "Apache-2.0"}
 python-source = "src"
 manifest-path = "../iroha_python/iroha_python_rs/Cargo.toml"
 module-name = "iroha_native._crypto"
+# LLVM's debug-info stripping can produce a misaligned Mach-O LINKEDIT string
+# pool rejected by the macOS loader. Keep the extension loadable in dev and
+# release wheels; dependency debug-info settings remain controlled by Cargo.
+rustc-args = ["-C", "strip=none"]
 exclude = ["src/**/*.so", "src/**/*.dylib", "src/**/*.pyd", "src/**/__pycache__/**", "src/**/*.pyc", "src/**/*.pyo"]

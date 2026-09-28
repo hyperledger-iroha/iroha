@@ -194,8 +194,9 @@ targets.append(
 let bridgeDependency: Target.Dependency = .target(name: "NoritoBridge", condition: .when(platforms: [.iOS, .macOS]))
 irohaSwiftDependencies.append(bridgeDependency)
 testDependencies.append(bridgeDependency)
-// Ensure static bridge object files are retained so runtime dlsym lookups resolve.
-irohaSwiftLinkerSettings.append(.unsafeFlags(["-Xlinker", "-all_load"], .when(platforms: [.iOS, .macOS])))
+// Retain every native bridge export used by dlsym, without force-loading Swift's
+// unrelated compatibility archives twice in executable consumers.
+irohaSwiftLinkerSettings.append(.unsafeFlags(["-Xlinker", "-force-lNoritoBridge"], .when(platforms: [.iOS, .macOS])))
 
 var swiftSettings: [SwiftSetting] = [
     .define("IROHA_SWIFT"),
@@ -253,6 +254,7 @@ let package = Package(
         .macOS(.v12)
     ],
     products: [
+        .executable(name: "confidential-redemption-example", targets: ["ConfidentialRedemptionExample"]),
         .library(
             name: "IrohaSwift",
             targets: ["IrohaSwift"]),
@@ -265,6 +267,11 @@ let package = Package(
     ],
     dependencies: packageDependencies,
     targets: targets + [
+        .executableTarget(
+            name: "ConfidentialRedemptionExample",
+            dependencies: ["IrohaSwift"],
+            path: "Examples/ConfidentialRedemption"
+        ),
         .target(
             name: "IrohaSwift",
             dependencies: irohaSwiftDependencies,

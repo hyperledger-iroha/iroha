@@ -128,8 +128,25 @@ DUMPBIN_EXPORT_RE = re.compile(
     re.IGNORECASE,
 )
 
+CONFIDENTIAL_PROVER_C_EXPORTS = tuple(
+    "connect_norito_confidential_prover_" + suffix + "_v1"
+    for suffix in (
+        "revision", "create", "close", "job_create", "job_input", "job_output",
+        "job_commitments", "job_paths", "job_prove", "job_close",
+    )
+)
+CONFIDENTIAL_PROVER_JNI_EXPORTS = tuple(
+    "Java_org_hyperledger_iroha_sdk_privacy_ConfidentialProverNative_" + method
+    for method in (
+        "revision", "create", "close", "jobCreate", "jobInput", "jobOutput",
+        "jobCommitments", "jobPaths", "jobProve", "jobClose",
+    )
+)
+
 REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
+        *CONFIDENTIAL_PROVER_C_EXPORTS,
+        *CONFIDENTIAL_PROVER_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
         *APPROVED_KAGEMUSHA_C_EXPORTS,

@@ -40,6 +40,37 @@ fn context_rejects_zero_key_and_redacts_private_state() {
 }
 
 #[test]
+fn saved_change_conversion_checks_shape_and_uses_the_default_owner() {
+    let change = || native::ConfidentialUnshieldOutputV3 {
+        amount: 3,
+        rho: [94; 32],
+    };
+    let input = change().into_input(65_535).unwrap();
+    assert_eq!(input.amount, 3);
+    assert_eq!(input.rho, [94; 32]);
+    assert_eq!(input.leaf_index, 65_535);
+    assert_eq!(
+        input.diversifier,
+        native::default_confidential_diversifier_v2()
+    );
+    for index in [65_536, usize::MAX] {
+        assert_eq!(
+            change().into_input(index).unwrap_err(),
+            ConfidentialProverError::InputIndex
+        );
+    }
+    assert_eq!(
+        native::ConfidentialUnshieldOutputV3 {
+            amount: 0,
+            rho: [94; 32],
+        }
+        .into_input(0)
+        .unwrap_err(),
+        ConfidentialProverError::InvalidInputAmounts
+    );
+}
+
+#[test]
 fn tree_rejects_missing_duplicate_and_over_capacity_notes_before_proving() {
     let leaves = [[1; 32], [2; 32]];
     let tree = ConfidentialTree::Commitments {
@@ -285,4 +316,74 @@ fn canonical_wallet_proves_transfer_full_redemption_and_private_change() {
         };
         crate::zk::verify_for_relation(result.relation, &result.proof, &key, policy).unwrap();
     }
+}
+
+#[test]
+fn retained_change_from_a_nondefault_input_can_be_fully_redeemed() {
+    let (network, asset) = context();
+    let prover = ConfidentialProver::new(network, &asset, Zeroizing::new([91; 32])).unwrap();
+    let mut original = input(7, 0);
+    original.diversifier = native::derive_confidential_diversifier_v2(b"nondefault-wallet-input");
+    assert_ne!(
+        original.diversifier,
+        native::default_confidential_diversifier_v2()
+    );
+    let owner =
+        native::derive_confidential_owner_tag_v2_with_diversifier(&[91; 32], original.diversifier)
+            .unwrap();
+    let commitment = native::derive_confidential_note_v2(
+        &asset.to_string(),
+        original.amount,
+        original.rho,
+        owner,
+    )
+    .unwrap();
+    let leaves = [commitment];
+    let root = native::compute_confidential_root_v2(&leaves).unwrap();
+    let change = native::ConfidentialUnshieldOutputV3 {
+        amount: 3,
+        rho: [94; 32],
+    };
+    // Model restoring an opening persisted securely before proof construction.
+    let saved_change = change.clone();
+    let first = prover
+        .prove_unshield(
+            ConfidentialTree::Commitments {
+                root,
+                leaves: &leaves,
+            },
+            vec![original],
+            4,
+            Some(change),
+        )
+        .unwrap();
+    assert_eq!(first.relation, ProofRelation::ConfidentialChangeUnshield);
+    assert_eq!(first.output_commitments.len(), 1);
+
+    let next = saved_change.into_input(0).unwrap();
+    let next_owner =
+        native::derive_confidential_owner_tag_v2_with_diversifier(&[91; 32], next.diversifier)
+            .unwrap();
+    assert_ne!(next_owner, owner);
+    let next_commitment =
+        native::derive_confidential_note_v2(&asset.to_string(), next.amount, next.rho, next_owner)
+            .unwrap();
+    assert_eq!(first.output_commitments, [next_commitment]);
+    let next_leaves = [next_commitment];
+    let next_root = native::compute_confidential_root_v2(&next_leaves).unwrap();
+    let second = prover
+        .prove_unshield(
+            ConfidentialTree::Commitments {
+                root: next_root,
+                leaves: &next_leaves,
+            },
+            vec![next],
+            3,
+            None,
+        )
+        .unwrap();
+    assert_eq!(second.relation, ProofRelation::ConfidentialFullUnshield);
+    assert_eq!(second.root, next_root);
+    assert!(second.output_commitments.is_empty());
+    assert_ne!(first.nullifiers, second.nullifiers);
 }

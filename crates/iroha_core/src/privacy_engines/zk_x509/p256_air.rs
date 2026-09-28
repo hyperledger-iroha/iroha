@@ -163,12 +163,33 @@ impl ZkX509P256ArithmeticFixedRowV1 {
 }
 /// Complete exact arithmetic trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509P256ArithmeticTraceV1 {
     /// Verifier-regenerated fixed topology.
     pub(crate) fixed: Vec<ZkX509P256ArithmeticFixedRowV1>,
     /// Committed base rows.
     pub(crate) base: Vec<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for ZkX509P256ArithmeticTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509P256ArithmeticTraceV1 { <private trace redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509P256ArithmeticTraceV1 {
+    fn drop(&mut self) {
+        super::private_table::zeroize_field_rows_v1(&mut self.base);
+    }
+}
+/// Clear private operation words held by temporary operation batches.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn zeroize_p256_operations_v1(operations: &mut [ZkX509P256ArithmeticOperationV1]) {
+    for operation in operations {
+        super::private_table::zeroize_words_v1(&mut operation.a);
+        super::private_table::zeroize_words_v1(&mut operation.b);
+        super::private_table::zeroize_words_v1(&mut operation.c);
+    }
 }
 /// Project the selected `c`-limb bit decomposition from one opened arithmetic base row.
 ///
@@ -450,7 +471,10 @@ pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
         .checked_mul(P256_ARITHMETIC_ROWS_PER_OPERATION_V1)
         .ok_or(ZkX509P256AirErrorV1::Allocation)?;
     let mut fixed_rows = Vec::new();
-    let mut base = Vec::new();
+    let mut base = super::private_table::PrivateTableV1::new(
+        Vec::new(),
+        super::private_table::zeroize_field_rows_v1,
+    );
     fixed_rows
         .try_reserve_exact(rows)
         .map_err(|_| ZkX509P256AirErrorV1::Allocation)?;
@@ -473,7 +497,7 @@ pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
     }
     let trace = ZkX509P256ArithmeticTraceV1 {
         fixed: fixed_rows,
-        base,
+        base: base.into_vec(),
     };
     trace.validate()?;
     Ok(trace)
@@ -1208,6 +1232,56 @@ fn write_bits_v1(target: &mut [F], value: u16) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_arithmetic_erasure_covers_success_partial_error_and_unwind() {
+        use super::super::private_table::{PrivateTableV1, inspection::observe_v1};
+        let mut operations = boundary_operations();
+        let valid = operations[0];
+        let trace = build_zk_x509_p256_arithmetic_trace_v1(&[valid]).unwrap();
+        assert_eq!(
+            format!("{trace:?}"),
+            "ZkX509P256ArithmeticTraceV1 { <private trace redacted> }"
+        );
+        let cells = trace.base.len() * P256_ARITHMETIC_BASE_WIDTH_V1;
+        let (_, observed) = observe_v1(|| drop(trace));
+        assert_eq!(observed.iter().map(|item| item.cells).sum::<usize>(), cells);
+        assert!(observed.iter().any(|item| item.nonzero_before > 0));
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        let mut invalid = valid;
+        invalid.a = [255; 32];
+        let (result, observed) =
+            observe_v1(|| build_zk_x509_p256_arithmetic_trace_v1(&[valid, invalid]));
+        assert!(result.is_err());
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells == cells && item.nonzero_before > 0)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        let (result, observed) = observe_v1(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _operations = PrivateTableV1::new(
+                    core::mem::take(&mut operations),
+                    zeroize_p256_operations_v1,
+                );
+                let _trace = build_zk_x509_p256_arithmetic_trace_v1(&[valid]).unwrap();
+                panic!("exercise private P256 trace unwind");
+            }))
+        });
+        assert!(result.is_err());
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells == 32 && item.nonzero_before > 0)
+        );
+        assert!(
+            observed
+                .iter()
+                .any(|item| item.cells == cells && item.nonzero_before > 0)
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+
     use super::*;
     use p256::{Scalar, elliptic_curve::PrimeField as _};
     fn zero() -> [u8; 32] {

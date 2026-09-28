@@ -78,7 +78,7 @@ use iroha_data_model::privacy::PrivacyConsensusLimitsV1;
 use rand::TryCryptoRng;
 use thiserror::Error;
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
-const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
+const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-norito-zk-x509-witness-v1-flags0+strict-reference-relation";
 const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // Independently encoded and SHA-256 checked from the exact ordered 29-field
@@ -284,6 +284,21 @@ pub(crate) fn verify_zk_x509_credential_proof_v1(
         envelope.ca_subproof,
     )
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn validate_witness_round_trip_v1(
+    witness: &ZkX509WitnessV1,
+    encoded_witness: &[u8],
+) -> Result<(), ZkX509EngineErrorV1> {
+    let canonical = super::private_table::PrivateTableV1::new(
+        witness.encode_v1()?,
+        super::private_table::zeroize_words_v1,
+    );
+    if canonical.as_slice() != encoded_witness {
+        return Err(ZkX509EngineErrorV1::WitnessRoundTripMismatch);
+    }
+    Ok(())
+}
+
 /// Decode and validate the exact prover input against trusted ledger state.
 ///
 /// This function performs no proof construction. Its output is the only
@@ -306,9 +321,7 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
     let witness = ZkX509WitnessV1::decode_exact_v1(encoded_witness)?;
     // Decode is already exact.  Re-encoding here is a deliberate differential
     // invariant for the eventual external prover boundary.
-    if witness.encode_v1()? != encoded_witness {
-        return Err(ZkX509EngineErrorV1::WitnessRoundTripMismatch);
-    }
+    validate_witness_round_trip_v1(&witness, encoded_witness)?;
     let trust_anchor = authoritative_state.trust_anchor();
     let crl = authoritative_state.crl_record();
     let governance = ZkX509GovernanceV1 {
@@ -634,6 +647,21 @@ mod tests {
         let recomputed =
             recompute_zk_x509_compiled_profile_digest_v1().expect("canonical manifest digest");
         assert_eq!(recomputed, independent);
+        if ZK_X509_COMPILED_PROFILE_DIGEST_V1 != Some(independent) {
+            // These are public profile descriptors, never witness material.
+            // Retain the exact independent inputs when a deliberate first-
+            // release protocol change requires a new native pin.
+            eprintln!(
+                "zk-x509-independent-compiled-profile-sha256={}",
+                hex::encode(independent)
+            );
+            for (index, field) in fields.iter().enumerate() {
+                eprintln!(
+                    "zk-x509-compiled-profile-field-{index}={}",
+                    hex::encode(field)
+                );
+            }
+        }
         assert_eq!(ZK_X509_COMPILED_PROFILE_DIGEST_V1, Some(independent));
         assert_eq!(
             construct_zk_x509_compiled_profile_v1()
@@ -810,3 +838,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "engine_prover_diagnostic.rs"]
+mod prover_diagnostic;

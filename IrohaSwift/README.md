@@ -1383,8 +1383,9 @@ owner tag from the supplied spend key; diversified notes must use the explicit
 expected-owner-tag overload. Decrypted note plaintext rejects noncanonical
 length varints before reconstructing the opening. Confidential note byte-vector
 contents keep their raw bytes after the vector length. Proof witnesses remain
-owned by each native engine; Swift has no generic confidential witness archive
-or native proof-construction route. Direct verifier-record hashes use packed fixed
+owned by each native engine. `ConfidentialProver` constructs local transfer,
+full-redemption and private-change proofs through the shared Rust wallet owner;
+there is no generic confidential witness archive. Direct verifier-record hashes use packed fixed
 arrays, hashes inside `Option` or `Vec` use ConstVec element framing, and all
 Iroha `Hash` values retain their marker bit. The verifier-record `status` field
 uses the canonical four-byte `u32` enum discriminant. Swift
@@ -1393,6 +1394,38 @@ duplicate JSON keys, noncanonical integer
 fields, non-lowercase fixed32 hex, depth/count drift, root drift,
 direction-bit drift, or non-verifying paths before wallet code receives proof
 material.
+
+### Local confidential proofs
+
+Create one `ConfidentialProver(networkId:assetDefinitionId:spendKey:)`, then call
+`await proveTransfer(tree:inputs:outputs:)` or
+`await proveUnshield(tree:inputs:publicAmount:change:)`. The native owner selects
+the circuit and proving keys, checks conservation and membership, and verifies
+the resulting proof locally. Supply one or two actual notes and either complete
+commitments or one path per note in `ConfidentialTree`; an absent second input
+requires no dummy note. Authenticate the network, canonical asset and expected
+root before proving.
+
+Securely retain each change opening before proving. Once its new leaf index and
+root are authenticated, `change.asInput(leafIndex:)` supplies the native default
+change diversifier, independently of the consumed notes' diversifiers.
+
+Use integer literals for ordinary `ConfidentialAmount` values or its exact
+decimal initializer for amounts up to `u128::MAX`. `ConfidentialProverError`
+distinguishes invalid inputs, unavailable bridge, closed owner and native error
+codes. Proving runs on a background queue. Call `close()` when finished: accepted
+jobs finish with their own native ownership, even if their Swift task is cancelled.
+Native key and witness owners clear their storage; Swift-managed `Data` copies
+do not carry an erasure guarantee. A local artifact submits no transaction and
+does not establish ledger or protocol activation authority.
+
+With the current authenticated NoritoBridge artifact configured, run the
+standalone public-API example with `swift run confidential-redemption-example`.
+It uses secure random disposable keys and notes and makes no network request.
+Its source is [ConfidentialRedemption.swift](Examples/ConfidentialRedemption/ConfidentialRedemption.swift).
+The direct native consumer check is
+`swift test --filter ConfidentialProverNativeTests`; unavailable native support
+fails this check instead of skipping it.
 
 ### Confidential key derivation
 

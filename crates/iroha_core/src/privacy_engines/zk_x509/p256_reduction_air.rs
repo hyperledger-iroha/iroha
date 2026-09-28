@@ -95,7 +95,7 @@ pub(crate) struct P256ReductionFixedRowV1 {
 }
 /// Complete exact reduction trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct P256ReductionTraceV1 {
     /// Verifier-regenerated row topology.
     pub(crate) fixed: [P256ReductionFixedRowV1; P256_REDUCTION_ROWS_V1],
@@ -103,10 +103,23 @@ pub(crate) struct P256ReductionTraceV1 {
     pub(crate) base: [[F; P256_REDUCTION_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for P256ReductionTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("P256ReductionTraceV1 { <private trace redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256ReductionTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ReductionTraceV1 {
     /// Overwrite every committed reduction row.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.base.fill([F::ZERO; P256_REDUCTION_BASE_WIDTH_V1]);
+        super::private_table::zeroize_field_rows_v1(&mut self.base);
     }
     /// Validate topology and every algebraic row identity.
     pub(crate) fn validate(&self) -> Result<(), P256ReductionAirErrorV1> {
@@ -174,7 +187,7 @@ pub(crate) enum P256ReductionAirErrorV1 {
 }
 /// Exact fixed trace proving `s <= floor(n/2)`.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct P256LowSTraceV1 {
     /// Verifier-regenerated limb rows.
     pub(crate) fixed: [P256ReductionFixedRowV1; P256_REDUCTION_ROWS_V1],
@@ -182,10 +195,23 @@ pub(crate) struct P256LowSTraceV1 {
     pub(crate) base: [[F; P256_LOW_S_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for P256LowSTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("P256LowSTraceV1 { <private trace redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256LowSTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256LowSTraceV1 {
     /// Overwrite every committed low-s comparison row.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.base.fill([F::ZERO; P256_LOW_S_BASE_WIDTH_V1]);
+        super::private_table::zeroize_field_rows_v1(&mut self.base);
     }
     /// Validate the strict comparison against `floor(n/2)+1`.
     pub(crate) fn validate(&self) -> Result<(), P256ReductionAirErrorV1> {
@@ -803,6 +829,38 @@ fn write_bits_v1(target: &mut [F], value: u16) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_comparison_erasure_clears_live_rows_on_drop() {
+        use super::super::private_table::inspection::observe_v1;
+        let reduction = build_p256_reduction_trace_v1([127; 32]).unwrap();
+        let mut scalar = [0; 32];
+        scalar[31] = 7;
+        let low_s = build_p256_low_s_trace_v1(scalar).unwrap();
+        assert_eq!(
+            format!("{reduction:?}"),
+            "P256ReductionTraceV1 { <private trace redacted> }"
+        );
+        assert_eq!(
+            format!("{low_s:?}"),
+            "P256LowSTraceV1 { <private trace redacted> }"
+        );
+        let expected = reduction.base.len() * P256_REDUCTION_BASE_WIDTH_V1
+            + low_s.base.len() * P256_LOW_S_BASE_WIDTH_V1;
+        let (_, observed) = observe_v1(|| {
+            drop(reduction);
+            drop(low_s);
+        });
+        assert_eq!(
+            observed.iter().map(|item| item.cells).sum::<usize>(),
+            expected
+        );
+        assert!(
+            observed
+                .iter()
+                .all(|item| item.nonzero_before > 0 && item.nonzero_after == 0)
+        );
+    }
+
     use super::*;
     fn add_small_be(mut value: [u8; 32], amount: u64) -> [u8; 32] {
         let mut carry = amount;

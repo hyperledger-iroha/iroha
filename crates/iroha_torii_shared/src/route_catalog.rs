@@ -2908,6 +2908,11 @@ pub mod runtime_governance {
         "governance.parliament.attempt.read",
         "/v1/gov/parliament/attempts/{governance_attempt_id}",
     );
+    /// Read the driver plan of one Parliament attempt.
+    pub const GOV_PARLIAMENT_ATTEMPT_PLAN: RouteDescriptor = app_signed_get(
+        "governance.parliament.attempt.plan",
+        "/v1/gov/parliament/attempts/{governance_attempt_id}/plan",
+    );
     /// Inspect one node-local replay-validated timed-OVN context (never wallet input).
     pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ: RouteDescriptor = app_signed_get(
         "governance.parliament.timed_ovn_casting_context.read",
@@ -3081,6 +3086,7 @@ pub mod runtime_governance {
         GOV_CITIZEN_DRAFT,
         GOV_PARLIAMENT_ATTEMPT_DRAFT,
         GOV_PARLIAMENT_ATTEMPT_READ,
+        GOV_PARLIAMENT_ATTEMPT_PLAN,
         GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ,
         GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF,
         GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ,
@@ -4495,6 +4501,81 @@ pub mod content_directory {
     /// Canonical raw-content and directory route set.
     pub const ROUTES: &[RouteDescriptor] = &[CONTENT, SORADNS_LATEST, SORADNS_EVENTS];
 }
+/// SCCP v1 public read API (`specs/sccp.md` §6): every peer serves identical bytes derived from
+/// committed state, and readers verify every proof themselves.
+pub mod sccp {
+    use super::{
+        AdmissionPolicy, ApiSurface, HttpMethod, Listener, RouteDescriptor, RouteEffect,
+        RouteProjections,
+    };
+    const fn public_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
+        RouteDescriptor::new(
+            stable_route_id,
+            HttpMethod::Get,
+            path,
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
+        )
+        .with_projections(RouteProjections::OPENAPI)
+        .with_cors_options(true)
+    }
+    /// Read the Taira identity, parameters and attestation health.
+    pub const CAPABILITIES: RouteDescriptor =
+        public_get("sccp.capabilities.read", "/v1/sccp/capabilities");
+    /// Read every route with its escrow, stranded balance and revisions.
+    pub const REGISTRY: RouteDescriptor = public_get("sccp.registry.read", "/v1/sccp/registry");
+    /// Read one outbound message record.
+    pub const MESSAGE: RouteDescriptor =
+        public_get("sccp.message.read", "/v1/sccp/messages/{message_id}");
+    /// Assemble the attestation proof bundle of one outbound message.
+    pub const MESSAGE_PROOF: RouteDescriptor =
+        public_get("sccp.message.proof", "/v1/sccp/messages/{message_id}/proof");
+    /// Assemble the attestation proof bundle of one destination control.
+    pub const CONTROL_PROOF: RouteDescriptor = public_get(
+        "sccp.control.proof",
+        "/v1/sccp/controls/{network}/{revision}/{control_nonce}/proof",
+    );
+    /// Read the current roster generation.
+    pub const ROSTER_CURRENT: RouteDescriptor =
+        public_get("sccp.roster.current", "/v1/sccp/rosters/current");
+    /// Assemble the catch-up rotation chain from a generation.
+    pub const ROSTER_ROTATIONS: RouteDescriptor =
+        public_get("sccp.roster.rotations", "/v1/sccp/rosters/rotations");
+    /// Read one roster generation.
+    pub const ROSTER: RouteDescriptor =
+        public_get("sccp.roster.read", "/v1/sccp/rosters/{generation}");
+    /// Read every installed inbound light client.
+    pub const LIGHT_CLIENTS: RouteDescriptor =
+        public_get("sccp.light_client.list", "/v1/sccp/light-clients");
+    /// Read the stored consensus sets of one inbound light client.
+    pub const LIGHT_CLIENT_SETS: RouteDescriptor = public_get(
+        "sccp.light_client.sets",
+        "/v1/sccp/light-clients/{network}/sets",
+    );
+    /// Read the per-subject SCCP governance revisions.
+    pub const GOVERNANCE: RouteDescriptor =
+        public_get("sccp.governance.read", "/v1/sccp/governance");
+    /// Read every open SCCP governance proposal with its newest Parliament attempt.
+    pub const GOVERNANCE_PROPOSALS: RouteDescriptor =
+        public_get("sccp.governance.proposals", "/v1/sccp/governance/proposals");
+    /// Complete SCCP read route set.
+    pub const ROUTES: &[RouteDescriptor] = &[
+        CAPABILITIES,
+        GOVERNANCE,
+        GOVERNANCE_PROPOSALS,
+        LIGHT_CLIENTS,
+        LIGHT_CLIENT_SETS,
+        REGISTRY,
+        MESSAGE,
+        MESSAGE_PROOF,
+        CONTROL_PROOF,
+        ROSTER_CURRENT,
+        ROSTER_ROTATIONS,
+        ROSTER,
+    ];
+}
 /// Canonical descriptors enforced by Torii's mounted-route registry. Router assembly fails when any
 /// enabled descriptor is missing or when a registration does not match this catalog exactly.
 const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
@@ -4521,6 +4602,7 @@ const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     soracloud_gateway::ROUTES,
     content_directory::ROUTES,
     kagemusha::ROUTES,
+    sccp::ROUTES,
 ];
 const fn cataloged_route_count(families: &[&[RouteDescriptor]]) -> usize {
     let mut count = 0;

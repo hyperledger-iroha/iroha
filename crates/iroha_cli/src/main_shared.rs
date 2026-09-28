@@ -25,6 +25,7 @@ mod nexus;
 mod offline;
 mod operator_key;
 mod runtime;
+mod sccp;
 mod soracloud;
 mod space_directory;
 mod staking;
@@ -501,6 +502,9 @@ enum Command {
     /// Soracloud app platform helpers
     #[command(subcommand)]
     Soracloud(crate::soracloud::Command),
+    /// SORA Cross-Chain Protocol reads, transfers and proofs
+    #[command(subcommand)]
+    Sccp(crate::sccp::Command),
 }
 /// Build the common CLI submission receipt fields with a reusable transaction locator.
 ///
@@ -718,6 +722,7 @@ impl Run for Command {
             Taira(variant) => Run::run(variant, context),
             Offline(variant) => Run::run(variant, context),
             Soracloud(variant) => Run::run(variant, context),
+            Sccp(variant) => Run::run(variant, context),
         }
     }
 }
@@ -731,7 +736,8 @@ impl Command {
             | Self::Ledger(_)
             | Self::Trigger(_)
             | Self::Ops(_)
-            | Self::Taira(_) => false,
+            | Self::Taira(_)
+            | Self::Sccp(_) => false,
             Self::Contract(command) => command.allows_fallback_config(),
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Soracloud(command) => command.allows_fallback_config(),

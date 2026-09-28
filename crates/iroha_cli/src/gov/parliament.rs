@@ -1,6 +1,6 @@
 //! Attempt-based SORA Parliament draft, read, ballot and release commands.
 
-mod ballot;
+pub(crate) mod ballot;
 mod member;
 #[cfg(test)]
 mod test_context;
@@ -56,7 +56,7 @@ fn parse_ballot_attempt_id(input: &str) -> Result<BallotAttemptId, String> {
     Ok(id)
 }
 
-fn parse_release_peer_url(input: &str) -> Result<Url, String> {
+pub(crate) fn parse_release_peer_url(input: &str) -> Result<Url, String> {
     let url = Url::parse(input).map_err(|_| "must be an absolute Torii URL".to_owned())?;
     if url.username().is_empty()
         && url.password().is_none()
@@ -345,128 +345,144 @@ pub struct FinalizeOpenedBallotArgs {
 
 impl Run for FinalizeOpenedBallotArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        if self.peer_urls.len() > PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1 {
-            bail!(
-                "Parliament TLE release coordinator accepts at most {PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1} peers"
-            );
-        }
-        let mut unique_peers = BTreeMap::new();
-        for peer in self.peer_urls {
-            unique_peers.insert(peer.as_str().to_owned(), peer);
-        }
-        if unique_peers.is_empty() {
-            bail!("Parliament TLE release coordinator requires at least one signer peer");
-        }
-
         let primary: Client = context.client_from_config()?;
-        let release_context = primary
-            .get_parliament_tle_release_context(self.ballot_attempt_id)
-            .wrap_err("failed to fetch the canonical Parliament TLE release context")?;
-        let validated = release_projection(&release_context)?
-            .validate()
-            .wrap_err("failed to replay the Parliament TLE public transcript and identity")?;
-        let threshold = usize::from(release_context.tle_key_session.threshold);
-        if unique_peers.len() < threshold {
-            bail!(
-                "Parliament TLE release requires {threshold} distinct signer peers, but only {} were supplied",
-                unique_peers.len()
-            );
-        }
-        if unique_peers.len() > usize::from(release_context.tle_key_session.committee_size) {
-            bail!("Parliament TLE release peer count exceeds the committed committee size");
-        }
-
-        let mut verified_partials = BTreeMap::new();
-        let mut failed_peers = Vec::new();
-        for (peer_label, peer_url) in unique_peers {
-            let peer_client = release_peer_client(&primary, peer_url)?;
-            let result = (|| -> Result<TlePartialReleaseShareV1> {
-                let peer_context = peer_client
-                    .get_parliament_tle_release_context(self.ballot_attempt_id)
-                    .wrap_err("peer release context unavailable")?;
-                if !release_statement_matches(&release_context, &peer_context) {
-                    bail!("peer release context differs from the canonical release statement");
-                }
-                let partial = release_partial(
-                    peer_client
-                        .post_parliament_tle_partial_release(&release_context)
-                        .wrap_err("peer partial release unavailable")?,
-                );
-                validated
-                    .session()
-                    .verify_partial_release(
-                        validated.identity(),
-                        validated.finalized_height(),
-                        &partial,
-                    )
-                    .wrap_err("peer partial release proof is invalid")?;
-                Ok(partial)
-            })();
-            match result {
-                Ok(partial) => insert_verified_partial(&mut verified_partials, partial)?,
-                Err(_) => failed_peers.push(peer_label),
-            }
-        }
-
-        if verified_partials.len() < threshold {
-            bail!(
-                "Parliament TLE release obtained {} distinct valid shares, below threshold {threshold}; failed peers: {}",
-                verified_partials.len(),
-                failed_peers.join(", ")
-            );
-        }
-        let canonical_threshold = verified_partials
-            .into_values()
-            .take(threshold)
-            .collect::<Vec<_>>();
-        let final_release = validated
-            .session()
-            .combine_partial_releases(
-                validated.identity(),
-                validated.finalized_height(),
-                &canonical_threshold,
-            )
-            .wrap_err("failed to combine the canonical Parliament TLE threshold")?;
-
-        // Peer collection can span several finalized heights. Reauthorize on the
-        // configured primary immediately before submission so a transitioned or
-        // expired ballot cannot be finalized from the initial snapshot.
-        let refreshed_release_context = primary
-            .get_parliament_tle_release_context(self.ballot_attempt_id)
-            .wrap_err("failed to refresh the canonical Parliament TLE release context")?;
-        if !release_statement_matches(&release_context, &refreshed_release_context) {
-            bail!("Parliament TLE release statement changed while collecting partials");
-        }
-        if refreshed_release_context.current_height < release_context.current_height {
-            bail!("refreshed Parliament TLE release context regressed in finalized height");
-        }
-        let refreshed_validated = release_projection(&refreshed_release_context)?
-            .validate()
-            .wrap_err("refreshed Parliament TLE release context is no longer authorized")?;
-        refreshed_validated
-            .session()
-            .verify_final_release(
-                refreshed_validated.identity(),
-                refreshed_validated.finalized_height(),
-                &final_release,
-            )
-            .wrap_err("combined Parliament TLE release failed refreshed final verification")?;
-
-        let instruction = SubmitParliamentLifecycleTransitionV1 {
-            governance_attempt_id: refreshed_release_context.governance_attempt_id,
-            transition: ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(
-                ParliamentFinalizeOpenedBallotV1 {
-                    ballot_attempt_id: refreshed_release_context.ballot_attempt_id,
-                    final_release: ParliamentTleFinalReleaseSignatureV1 {
-                        key_session_id: final_release.key_session_id,
-                        identity_digest: final_release.identity_digest,
-                        signature: final_release.signature,
-                    },
-                },
-            ),
-        };
+        let instruction =
+            finalize_opened_ballot_instruction(&primary, self.ballot_attempt_id, self.peer_urls)?;
         context.finish(vec![InstructionBox::from(instruction)])
     }
+}
+
+/// Collect, verify and combine the signer peers' TLE partial releases of the ballot in
+/// `Opening` and return its `FinalizeOpenedBallot` transition, reauthorized on `primary`.
+///
+/// # Errors
+///
+/// Fails when fewer than the threshold of peers return a valid share, or the release statement
+/// changes or expires during collection.
+pub(crate) fn finalize_opened_ballot_instruction(
+    primary: &Client,
+    ballot_attempt_id: BallotAttemptId,
+    peer_urls: Vec<Url>,
+) -> Result<SubmitParliamentLifecycleTransitionV1> {
+    if peer_urls.len() > PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1 {
+        bail!(
+            "Parliament TLE release coordinator accepts at most {PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1} peers"
+        );
+    }
+    let mut unique_peers = BTreeMap::new();
+    for peer in peer_urls {
+        unique_peers.insert(peer.as_str().to_owned(), peer);
+    }
+    if unique_peers.is_empty() {
+        bail!("Parliament TLE release coordinator requires at least one signer peer");
+    }
+
+    let release_context = primary
+        .get_parliament_tle_release_context(ballot_attempt_id)
+        .wrap_err("failed to fetch the canonical Parliament TLE release context")?;
+    let validated = release_projection(&release_context)?
+        .validate()
+        .wrap_err("failed to replay the Parliament TLE public transcript and identity")?;
+    let threshold = usize::from(release_context.tle_key_session.threshold);
+    if unique_peers.len() < threshold {
+        bail!(
+            "Parliament TLE release requires {threshold} distinct signer peers, but only {} were supplied",
+            unique_peers.len()
+        );
+    }
+    if unique_peers.len() > usize::from(release_context.tle_key_session.committee_size) {
+        bail!("Parliament TLE release peer count exceeds the committed committee size");
+    }
+
+    let mut verified_partials = BTreeMap::new();
+    let mut failed_peers = Vec::new();
+    for (peer_label, peer_url) in unique_peers {
+        let peer_client = release_peer_client(primary, peer_url)?;
+        let result = (|| -> Result<TlePartialReleaseShareV1> {
+            let peer_context = peer_client
+                .get_parliament_tle_release_context(ballot_attempt_id)
+                .wrap_err("peer release context unavailable")?;
+            if !release_statement_matches(&release_context, &peer_context) {
+                bail!("peer release context differs from the canonical release statement");
+            }
+            let partial = release_partial(
+                peer_client
+                    .post_parliament_tle_partial_release(&release_context)
+                    .wrap_err("peer partial release unavailable")?,
+            );
+            validated
+                .session()
+                .verify_partial_release(
+                    validated.identity(),
+                    validated.finalized_height(),
+                    &partial,
+                )
+                .wrap_err("peer partial release proof is invalid")?;
+            Ok(partial)
+        })();
+        match result {
+            Ok(partial) => insert_verified_partial(&mut verified_partials, partial)?,
+            Err(_) => failed_peers.push(peer_label),
+        }
+    }
+
+    if verified_partials.len() < threshold {
+        bail!(
+            "Parliament TLE release obtained {} distinct valid shares, below threshold {threshold}; failed peers: {}",
+            verified_partials.len(),
+            failed_peers.join(", ")
+        );
+    }
+    let canonical_threshold = verified_partials
+        .into_values()
+        .take(threshold)
+        .collect::<Vec<_>>();
+    let final_release = validated
+        .session()
+        .combine_partial_releases(
+            validated.identity(),
+            validated.finalized_height(),
+            &canonical_threshold,
+        )
+        .wrap_err("failed to combine the canonical Parliament TLE threshold")?;
+
+    // Peer collection can span several finalized heights. Reauthorize on the
+    // configured primary immediately before submission so a transitioned or
+    // expired ballot cannot be finalized from the initial snapshot.
+    let refreshed_release_context = primary
+        .get_parliament_tle_release_context(ballot_attempt_id)
+        .wrap_err("failed to refresh the canonical Parliament TLE release context")?;
+    if !release_statement_matches(&release_context, &refreshed_release_context) {
+        bail!("Parliament TLE release statement changed while collecting partials");
+    }
+    if refreshed_release_context.current_height < release_context.current_height {
+        bail!("refreshed Parliament TLE release context regressed in finalized height");
+    }
+    let refreshed_validated = release_projection(&refreshed_release_context)?
+        .validate()
+        .wrap_err("refreshed Parliament TLE release context is no longer authorized")?;
+    refreshed_validated
+        .session()
+        .verify_final_release(
+            refreshed_validated.identity(),
+            refreshed_validated.finalized_height(),
+            &final_release,
+        )
+        .wrap_err("combined Parliament TLE release failed refreshed final verification")?;
+
+    Ok(SubmitParliamentLifecycleTransitionV1 {
+        governance_attempt_id: refreshed_release_context.governance_attempt_id,
+        transition: ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(
+            ParliamentFinalizeOpenedBallotV1 {
+                ballot_attempt_id: refreshed_release_context.ballot_attempt_id,
+                final_release: ParliamentTleFinalReleaseSignatureV1 {
+                    key_session_id: final_release.key_session_id,
+                    identity_digest: final_release.identity_digest,
+                    signature: final_release.signature,
+                },
+            },
+        ),
+    })
 }
 
 /// Attempt-based Parliament commands.

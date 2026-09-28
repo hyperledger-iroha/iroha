@@ -373,3 +373,21 @@ def test_retired_abi23_manifest_and_schema_are_rejected() -> None:
             assert expected in str(error)
         else:
             raise AssertionError(f"retired {field} was accepted")
+
+
+def test_wallet_prover_inventory_covers_native_owners_and_consumable_jobs() -> None:
+    """A rebuilt mobile artifact must expose the complete owner/job contract."""
+    assert len(MODULE.CONFIDENTIAL_PROVER_C_EXPORTS) == 10
+    assert len(MODULE.CONFIDENTIAL_PROVER_JNI_EXPORTS) == 10
+    header = (REPO_ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h").read_text()
+    owner = (REPO_ROOT / "crates/connect_norito_bridge/src/confidential_prover_ffi.rs").read_text()
+    jni = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/confidential_prover.rs").read_text()
+    required = set(MODULE.REQUIRED_SYMBOLS["c-jni"])
+    for symbol in MODULE.CONFIDENTIAL_PROVER_C_EXPORTS:
+        assert symbol in required
+        assert re.search(r"\b" + symbol + r"\s*\(", header)
+        assert re.search(r"\bfn\s+" + symbol + r"\s*\(", owner)
+    for symbol in MODULE.CONFIDENTIAL_PROVER_JNI_EXPORTS:
+        assert symbol in required
+        assert re.search(r"\bfn\s+" + symbol + r"\s*\(", jni)
+    assert "iroha_android_privacy_ConfidentialProverNative" not in jni

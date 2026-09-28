@@ -72,7 +72,6 @@ import {
 } from "./instructionBuilders.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { createRegisterAssetDefinitionInstructionBuilder } from "./assetDefinitionRegistration.js";
-import { createConfidentialProofBuilders } from "./confidentialProofBuilders.js";
 
 const submissionAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
@@ -100,7 +99,6 @@ const TRANSACTION_CONTEXTS = new WeakSet();
 function createTransactionContext(nativeRuntime) {
   const context = Object.freeze({
     nativeRuntime,
-    confidentialProofs: createConfidentialProofBuilders(nativeRuntime),
     crypto: _createCryptoApi(nativeRuntime),
     norito: _createNoritoInstructionApi(nativeRuntime),
   });
@@ -3800,12 +3798,6 @@ export function buildEndKaigiTransaction(input) {
   });
 }
 
-export {
-  buildConfidentialTransferProofV2,
-  buildConfidentialUnshieldProofV2,
-  buildConfidentialUnshieldProofV3,
-} from "./confidentialProofBuilders.js";
-
 /**
  * Build a transaction containing a `Kaigi::RecordKaigiUsage` instruction.
  */
@@ -4551,7 +4543,6 @@ export function _createTransactionApi(nativeRuntime) {
     buildJoinKaigiTransaction: bind(buildJoinKaigiTransaction),
     buildLeaveKaigiTransaction: bind(buildLeaveKaigiTransaction),
     buildEndKaigiTransaction: bind(buildEndKaigiTransaction),
-    ...context.confidentialProofs,
     buildRecordKaigiUsageTransaction: bind(buildRecordKaigiUsageTransaction),
     buildSetKaigiRelayManifestTransaction: bind(
       buildSetKaigiRelayManifestTransaction,

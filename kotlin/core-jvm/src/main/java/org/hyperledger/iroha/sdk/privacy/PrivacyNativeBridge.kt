@@ -91,13 +91,14 @@ class PrivacyNativeBridge private constructor() {
         internal fun deriveConfidentialOwnerTagV3(
             spendKey: ByteArray,
             diversifier: ByteArray,
-        ): ByteArray =
-            confidentialDigest("owner tag") {
-                nativeDeriveConfidentialOwnerTagV3(
-                    confidentialInput32(spendKey, "spendKey"),
-                    confidentialInput32(diversifier, "diversifier"),
-                )
-            }
+        ): ByteArray {
+            require(spendKey.size == 32 && diversifier.size == 32) { "owner words must contain 32 bytes" }
+            val keyBytes = spendKey.copyOf()
+            val diversifierBytes = diversifier.copyOf()
+            return try {
+                confidentialDigest("owner tag") { nativeDeriveConfidentialOwnerTagV3(keyBytes, diversifierBytes) }
+            } finally { keyBytes.fill(0); diversifierBytes.fill(0) }
+        }
 
         /** Derive a canonical Rust-owned V3 asset tag. */
         internal fun deriveConfidentialAssetTagV3(asset: String): ByteArray =
@@ -117,15 +118,19 @@ class PrivacyNativeBridge private constructor() {
             amount: String,
             rho: ByteArray,
             ownerTag: ByteArray,
-        ): ByteArray =
-            confidentialDigest("note commitment") {
-                nativeDeriveConfidentialNoteCommitmentV3(
-                    confidentialText(asset, "asset"),
-                    confidentialPositiveU128(amount),
-                    confidentialInput32(rho, "rho"),
-                    confidentialInput32(ownerTag, "ownerTag"),
-                )
-            }
+        ): ByteArray {
+            // Validate before copying; native/JVM temporary openings clear on every exit.
+            require(rho.size == 32 && ownerTag.size == 32) { "note words must contain 32 bytes" }
+            val assetBytes = confidentialText(asset, "asset")
+            val amountBytes = confidentialPositiveU128(amount)
+            val rhoBytes = rho.copyOf()
+            val ownerBytes = ownerTag.copyOf()
+            return try {
+                confidentialDigest("note commitment") {
+                    nativeDeriveConfidentialNoteCommitmentV3(assetBytes, amountBytes, rhoBytes, ownerBytes)
+                }
+            } finally { amountBytes.fill(0); rhoBytes.fill(0); ownerBytes.fill(0) }
+        }
 
         /** Derive a canonical Rust-owned V3 exact-network nullifier. */
         internal fun deriveConfidentialNullifierV3(
@@ -133,15 +138,17 @@ class PrivacyNativeBridge private constructor() {
             asset: String,
             spendKey: ByteArray,
             rho: ByteArray,
-        ): ByteArray =
-            confidentialDigest("nullifier") {
-                nativeDeriveConfidentialNullifierV3(
-                    networkId.bytes(),
-                    confidentialText(asset, "asset"),
-                    confidentialInput32(spendKey, "spendKey"),
-                    confidentialInput32(rho, "rho"),
-                )
-            }
+        ): ByteArray {
+            require(spendKey.size == 32 && rho.size == 32) { "nullifier words must contain 32 bytes" }
+            val assetBytes = confidentialText(asset, "asset")
+            val keyBytes = spendKey.copyOf()
+            val rhoBytes = rho.copyOf()
+            return try {
+                confidentialDigest("nullifier") {
+                    nativeDeriveConfidentialNullifierV3(networkId.bytes(), assetBytes, keyBytes, rhoBytes)
+                }
+            } finally { keyBytes.fill(0); rhoBytes.fill(0) }
+        }
 
         /** Derive one canonical fixed-tree V3 authentication path in native Rust. */
         internal fun deriveConfidentialMerklePathV3(

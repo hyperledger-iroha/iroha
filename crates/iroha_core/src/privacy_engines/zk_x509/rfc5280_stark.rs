@@ -12,6 +12,20 @@
 //! module and remain three.  Aggregate registration and consensus activation
 //! remain false until every terminal below is wired to its numeric consumer.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::private_table::{
+    PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1, zeroize_words_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "rfc5280_private.rs"]
+mod private;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use private::{
+    private_bytes_v1, reserve_private_semantic_v1, zeroize_equal_bytes_v1, zeroize_fixed_bytes_v1,
+    zeroize_node_multiplicities_v1, zeroize_numeric_relations_v1, zeroize_source_cells_v1,
+    zeroize_source_multiplicities_v1,
+};
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::der_air::rfc5280_io_witnesses_v1;
 #[cfg(test)]
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
@@ -1731,12 +1745,12 @@ pub(crate) fn zk_x509_rfc5280_output_terminals_v1(
             .consumers
             .iter()
             .copied()
-            .zip(witness.consumer_values)
+            .zip(&witness.consumer_values)
         {
             if values.len() != witness.producer_value.len() {
                 return Err(ZkX509Rfc5280StarkErrorV1::Output);
             }
-            for (offset, value) in values.into_iter().enumerate() {
+            for (offset, value) in values.iter().copied().enumerate() {
                 for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
                     terminals.consumer[role_index][lane] = terminals.consumer[role_index][lane]
                         .mul(output_factor_v1(
@@ -1852,7 +1866,7 @@ pub(crate) enum ZkX509Rfc5280SerialComparisonKindV1 {
 }
 /// One fixed-width serial comparison, including length and padded octets.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280SerialComparisonV1 {
     pub(crate) kind: ZkX509Rfc5280SerialComparisonKindV1,
     pub(crate) left_instance: u16,
@@ -1862,7 +1876,7 @@ pub(crate) struct ZkX509Rfc5280SerialComparisonV1 {
 }
 /// One canonical DER-backed producer frame for a comparator endpoint.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280SerialSourceV1 {
     pub(crate) logical_id: u16,
     pub(crate) node: ZkX509Rfc5280NodeProvenanceV1,
@@ -1873,7 +1887,7 @@ pub(crate) struct ZkX509Rfc5280SerialSourceV1 {
 /// Complete prover-side semantic operands. Each vector is committed as a
 /// fixed-family range; none is reduced to a host Boolean digest.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280SemanticWitnessV1 {
     pub(crate) fixed_bytes: Vec<ZkX509Rfc5280FixedByteV1>,
     pub(crate) equal_bytes: Vec<ZkX509Rfc5280EqualByteV1>,
@@ -1888,21 +1902,26 @@ pub(crate) struct ZkX509Rfc5280SemanticWitnessV1 {
 fn document_bytes_v1(
     trace: &ZkX509Rfc5280TraceV1,
     document: usize,
-) -> Result<Vec<u8>, ZkX509Rfc5280StarkErrorV1> {
-    source_documents_v1(trace)
+) -> Result<PrivateTableV1<u8>, ZkX509Rfc5280StarkErrorV1> {
+    let rows = &source_documents_v1(trace)
         .nth(document)
         .ok_or(ZkX509Rfc5280StarkErrorV1::Source)?
-        .bytes
-        .iter()
-        .map(|row| u8::try_from(row.value.value.0).map_err(|_| ZkX509Rfc5280StarkErrorV1::Source))
-        .collect()
+        .bytes;
+    let mut bytes = PrivateTableV1::new(Vec::new(), zeroize_words_v1);
+    bytes
+        .try_reserve_exact(rows.len())
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    for row in rows {
+        bytes.push(u8::try_from(row.value.value.0).map_err(|_| ZkX509Rfc5280StarkErrorV1::Source)?);
+    }
+    Ok(bytes)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn source_slice_v1(
     trace: &ZkX509Rfc5280TraceV1,
     row: ZkX509Rfc5280NodeProvenanceV1,
     contents_only: bool,
-) -> Result<Vec<ZkX509Rfc5280SourceCellV1>, ZkX509Rfc5280StarkErrorV1> {
+) -> Result<PrivateTableV1<ZkX509Rfc5280SourceCellV1>, ZkX509Rfc5280StarkErrorV1> {
     let bytes = document_bytes_v1(trace, usize::from(row.document))?;
     let start = if contents_only {
         row.content_start
@@ -1913,15 +1932,18 @@ fn source_slice_v1(
     if start > end || usize::from(end) > bytes.len() {
         return Err(ZkX509Rfc5280StarkErrorV1::Source);
     }
-    (start..end)
-        .map(|address| {
-            Ok(ZkX509Rfc5280SourceCellV1 {
-                document: row.document,
-                address,
-                value: bytes[usize::from(address)],
-            })
-        })
-        .collect()
+    let mut cells = PrivateTableV1::new(Vec::new(), zeroize_source_cells_v1);
+    cells
+        .try_reserve_exact(usize::from(end - start))
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    for address in start..end {
+        cells.push(ZkX509Rfc5280SourceCellV1 {
+            document: row.document,
+            address,
+            value: bytes[usize::from(address)],
+        });
+    }
+    Ok(cells)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_fixed_slice_v1(
@@ -1936,9 +1958,7 @@ fn push_fixed_slice_v1(
     if source.len() != expected.len() {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
-    output
-        .try_reserve(source.len())
-        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    reserve_private_semantic_v1(output, source.len(), zeroize_fixed_bytes_v1)?;
     let length = u16::try_from(expected.len()).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
     for (offset, (source, expected)) in source
         .iter()
@@ -1970,9 +1990,7 @@ fn push_equal_slices_v1(
     if left.len() != right.len() {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
-    output
-        .try_reserve(left.len())
-        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    reserve_private_semantic_v1(output, left.len(), zeroize_equal_bytes_v1)?;
     for (offset, (left, right)) in left.iter().copied().zip(right.iter().copied()).enumerate() {
         output.push(ZkX509Rfc5280EqualByteV1 {
             left,
@@ -2070,10 +2088,13 @@ fn canonical_serial_comparisons_v1(
         return Err(ZkX509Rfc5280StarkErrorV1::Resource);
     }
     let leaf = serial_frame_v1(leaf)?;
-    let revoked = revoked_serials
-        .iter()
-        .map(|serial| serial_frame_v1(serial))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut revoked = PrivateTableV1::new(Vec::new(), zeroize_words_v1);
+    revoked
+        .try_reserve_exact(revoked_serials.len())
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    for serial in revoked_serials {
+        revoked.push(serial_frame_v1(serial)?);
+    }
     let mut comparisons = Vec::new();
     comparisons
         .try_reserve_exact(serial_comparison_count_v1(revoked.len()))
@@ -2155,10 +2176,7 @@ fn canonical_serial_source_v1(
     let node = find_role_instance_node_v1(trace, document, role, role_instance)?;
     let frame = serial_frame_v1(serial)?;
     let encoded_contents = source_slice_v1(trace, node, true)?;
-    let encoded = encoded_contents
-        .iter()
-        .map(|cell| cell.value)
-        .collect::<Vec<_>>();
+    let encoded = private_bytes_v1(encoded_contents.iter().map(|cell| cell.value))?;
     let sign_padding = encoded.len() == serial.len() + 1
         && encoded.first() == Some(&0)
         && encoded.get(1..) == Some(serial);
@@ -2169,7 +2187,7 @@ fn canonical_serial_source_v1(
         logical_id,
         node,
         frame,
-        encoded_contents,
+        encoded_contents: encoded_contents.into_vec(),
     })
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2216,17 +2234,34 @@ pub(crate) struct ZkX509Rfc5280SerialNodeMultiplicityV1 {
 /// Compile the pre-challenge byte/node table multiplicities consumed by the
 /// serial-source lookup arguments.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn zk_x509_rfc5280_serial_lookup_multiplicities_v1(
+pub(super) fn zk_x509_rfc5280_serial_lookup_multiplicities_v1(
     sources: &[ZkX509Rfc5280SerialSourceV1],
 ) -> Result<
     (
-        Vec<ZkX509Rfc5280SourceMultiplicityV1>,
-        Vec<ZkX509Rfc5280SerialNodeMultiplicityV1>,
+        PrivateTableV1<ZkX509Rfc5280SourceMultiplicityV1>,
+        PrivateTableV1<ZkX509Rfc5280SerialNodeMultiplicityV1>,
     ),
     ZkX509Rfc5280StarkErrorV1,
 > {
-    let mut bytes = Vec::new();
-    let mut nodes = Vec::new();
+    let byte_count = sources
+        .iter()
+        .try_fold(0usize, |count, source| {
+            count.checked_add(source.encoded_contents.len())
+        })
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let mut bytes = PrivateTableV1::new(Vec::new(), zeroize_source_cells_v1);
+    bytes
+        .try_reserve_exact(byte_count)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let mut nodes = PrivateTableV1::new(Vec::new(), |nodes: &mut [(u8, u16)]| {
+        for (document, node) in nodes {
+            zeroize_words_v1(core::slice::from_mut(document));
+            zeroize_words_v1(core::slice::from_mut(node));
+        }
+    });
+    nodes
+        .try_reserve_exact(sources.len())
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
     for source in sources {
         build_zk_x509_rfc5280_serial_source_rows_v1(source)?;
         bytes.extend(source.encoded_contents.iter().copied());
@@ -2234,8 +2269,11 @@ pub(crate) fn zk_x509_rfc5280_serial_lookup_multiplicities_v1(
     }
     bytes.sort_unstable();
     nodes.sort_unstable();
-    let mut byte_multiplicities: Vec<ZkX509Rfc5280SourceMultiplicityV1> = Vec::new();
-    for source in bytes {
+    let mut byte_multiplicities = PrivateTableV1::new(Vec::new(), zeroize_source_multiplicities_v1);
+    byte_multiplicities
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    for source in bytes.iter().copied() {
         if let Some(last) = byte_multiplicities.last_mut()
             && last.source == source
         {
@@ -2250,8 +2288,11 @@ pub(crate) fn zk_x509_rfc5280_serial_lookup_multiplicities_v1(
             });
         }
     }
-    let mut node_multiplicities: Vec<ZkX509Rfc5280SerialNodeMultiplicityV1> = Vec::new();
-    for (document, node) in nodes {
+    let mut node_multiplicities = PrivateTableV1::new(Vec::new(), zeroize_node_multiplicities_v1);
+    node_multiplicities
+        .try_reserve_exact(nodes.len())
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    for (document, node) in nodes.iter().copied() {
         if let Some(last) = node_multiplicities.last_mut()
             && last.document == document
             && last.node == node
@@ -2287,6 +2328,7 @@ fn push_relation_v1(
         .checked_sub(right)
         .filter(|slack| !strict || *slack != 0)
         .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
+    reserve_private_semantic_v1(output, 1, zeroize_numeric_relations_v1)?;
     output.push(ZkX509Rfc5280NumericRelationV1 {
         relation,
         instance: u16::try_from(instance).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
@@ -2313,9 +2355,9 @@ fn parse_decimal_v1(bytes: &[u8]) -> Result<u16, ZkX509Rfc5280StarkErrorV1> {
 fn parse_time_cells_v1(
     cells: &[ZkX509Rfc5280SourceCellV1],
     tag: u32,
-) -> Result<(u64, Vec<ZkX509Rfc5280SourceCellV1>), ZkX509Rfc5280StarkErrorV1> {
+) -> Result<(u64, PrivateTableV1<ZkX509Rfc5280SourceCellV1>), ZkX509Rfc5280StarkErrorV1> {
     use time::{Date, Month, PrimitiveDateTime, Time};
-    let bytes = cells.iter().map(|cell| cell.value).collect::<Vec<_>>();
+    let bytes = private_bytes_v1(cells.iter().map(|cell| cell.value))?;
     let (year, offset, z_offset) = if tag == 23 {
         if bytes.len() != 13 || bytes[12] != b'Z' {
             return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
@@ -2362,9 +2404,14 @@ fn parse_time_cells_v1(
     )
     .assume_utc()
     .unix_timestamp();
+    let mut decimal = PrivateTableV1::new(Vec::new(), zeroize_source_cells_v1);
+    decimal
+        .try_reserve_exact(z_offset)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    decimal.extend_from_slice(&cells[..z_offset]);
     Ok((
         u64::try_from(timestamp).map_err(|_| ZkX509Rfc5280StarkErrorV1::Semantic)?,
-        cells[..z_offset].to_vec(),
+        decimal,
     ))
 }
 fn encode_unsigned_integer_v1(value: u64) -> Vec<u8> {
@@ -2586,7 +2633,8 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
         role_nodes_v1(trace, ZkX509Rfc5280GrammarRoleV1::CrlSignatureValue),
     ) {
         let first = source_slice_v1(trace, row, true)?
-            .into_iter()
+            .iter()
+            .copied()
             .next()
             .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
         push_fixed_slice_v1(
@@ -2667,7 +2715,7 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
     }
     for row in role_nodes_v1(trace, ZkX509Rfc5280GrammarRoleV1::NameAttributeOid) {
         let source = source_slice_v1(trace, row, true)?;
-        let actual = source.iter().map(|cell| cell.value).collect::<Vec<_>>();
+        let actual = private_bytes_v1(source.iter().map(|cell| cell.value))?;
         let expected = NAME_OIDS_V1
             .iter()
             .copied()
@@ -2913,8 +2961,14 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
     {
         let (calendar, decimal) =
             parse_time_cells_v1(&source_slice_v1(trace, row, true)?, row.tag_number)?;
+        reserve_private_semantic_v1(&mut witness.calendar_values, 1, zeroize_words_v1)?;
+        reserve_private_semantic_v1(
+            &mut witness.decimal_cells,
+            decimal.len(),
+            zeroize_source_cells_v1,
+        )?;
         witness.calendar_values.push(calendar);
-        witness.decimal_cells.extend(decimal);
+        witness.decimal_cells.extend_from_slice(&decimal);
         if row.role == ZkX509Rfc5280GrammarRoleV1::CrlEntryTime {
             push_relation_v1(
                 &mut witness.numeric_relations,
@@ -2926,19 +2980,22 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
             )?;
         }
     }
-    let expected_calendars = trace
-        .certificates
-        .iter()
-        .map(|certificate| certificate.not_before)
-        .chain(
-            trace
-                .certificates
-                .iter()
-                .map(|certificate| certificate.not_after),
-        )
-        .chain([trace.crl.this_update, trace.crl.next_update])
-        .collect::<Vec<_>>();
-    if witness.calendar_values[..expected_calendars.len()] != expected_calendars {
+    let expected_calendars = PrivateTableV1::new(
+        trace
+            .certificates
+            .iter()
+            .map(|certificate| certificate.not_before)
+            .chain(
+                trace
+                    .certificates
+                    .iter()
+                    .map(|certificate| certificate.not_after),
+            )
+            .chain([trace.crl.this_update, trace.crl.next_update])
+            .collect::<Vec<_>>(),
+        zeroize_words_v1,
+    );
+    if witness.calendar_values[..expected_calendars.len()] != *expected_calendars.as_slice() {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
     if witness
@@ -2969,10 +3026,10 @@ pub(crate) struct ZkX509Rfc5280SourceMultiplicityV1 {
     pub(crate) required_multiplicity: u16,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn zk_x509_rfc5280_semantic_source_multiplicities_v1(
+pub(super) fn zk_x509_rfc5280_semantic_source_multiplicities_v1(
     witness: &ZkX509Rfc5280SemanticWitnessV1,
-) -> Result<Vec<ZkX509Rfc5280SourceMultiplicityV1>, ZkX509Rfc5280StarkErrorV1> {
-    let mut cells = Vec::new();
+) -> Result<PrivateTableV1<ZkX509Rfc5280SourceMultiplicityV1>, ZkX509Rfc5280StarkErrorV1> {
+    let mut cells = PrivateTableV1::new(Vec::new(), zeroize_source_cells_v1);
     cells
         .try_reserve(
             witness
@@ -2991,8 +3048,11 @@ pub(crate) fn zk_x509_rfc5280_semantic_source_multiplicities_v1(
     );
     cells.extend(witness.decimal_cells.iter().copied());
     cells.sort_unstable();
-    let mut unique: Vec<ZkX509Rfc5280SourceMultiplicityV1> = Vec::new();
-    for source in cells {
+    let mut unique = PrivateTableV1::new(Vec::new(), zeroize_source_multiplicities_v1);
+    unique
+        .try_reserve_exact(cells.len())
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    for source in cells.iter().copied() {
         if let Some(last) = unique.last_mut()
             && last.source == source
         {
@@ -3955,9 +4015,9 @@ fn write_u16_bits_v1(row: &mut ZkX509Rfc5280StarkBaseRowV1, start: usize, value:
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn build_zk_x509_rfc5280_serial_comparison_rows_v1(
+pub(super) fn build_zk_x509_rfc5280_serial_comparison_rows_v1(
     comparison: &ZkX509Rfc5280SerialComparisonV1,
-) -> Result<Vec<ZkX509Rfc5280StarkBaseRowV1>, ZkX509Rfc5280StarkErrorV1> {
+) -> Result<PrivateTableV1<ZkX509Rfc5280StarkBaseRowV1>, ZkX509Rfc5280StarkErrorV1> {
     validate_serial_comparison_v1(comparison)?;
     let strict = comparison.kind == ZkX509Rfc5280SerialComparisonKindV1::AdjacentStrictOrder;
     let mut prefix_equal = true;
@@ -3966,7 +4026,7 @@ pub(crate) fn build_zk_x509_rfc5280_serial_comparison_rows_v1(
     let right_length = comparison.right[0];
     let mut left_count = 0_u8;
     let mut right_count = 0_u8;
-    let mut rows = Vec::new();
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     rows.try_reserve_exact(SERIAL_COMPARISON_WIDTH_V1)
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
     for offset in 0..SERIAL_COMPARISON_WIDTH_V1 {
@@ -4046,16 +4106,12 @@ pub(crate) fn build_zk_x509_rfc5280_serial_comparison_rows_v1(
     Ok(rows)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn build_zk_x509_rfc5280_serial_source_rows_v1(
+pub(super) fn build_zk_x509_rfc5280_serial_source_rows_v1(
     source: &ZkX509Rfc5280SerialSourceV1,
-) -> Result<Vec<ZkX509Rfc5280StarkBaseRowV1>, ZkX509Rfc5280StarkErrorV1> {
+) -> Result<PrivateTableV1<ZkX509Rfc5280StarkBaseRowV1>, ZkX509Rfc5280StarkErrorV1> {
     validate_serial_frame_v1(&source.frame)?;
     let length = source.frame[0];
-    let encoded = source
-        .encoded_contents
-        .iter()
-        .map(|cell| cell.value)
-        .collect::<Vec<_>>();
+    let encoded = private_bytes_v1(source.encoded_contents.iter().map(|cell| cell.value))?;
     let magnitude = &source.frame[1..1 + usize::from(length)];
     let sign_padding = encoded.len() == magnitude.len() + 1
         && encoded.first() == Some(&0)
@@ -4083,7 +4139,7 @@ pub(crate) fn build_zk_x509_rfc5280_serial_source_rows_v1(
         .checked_sub(source.node.content_start)
         .ok_or(ZkX509Rfc5280StarkErrorV1::Source)?;
     let mut count = 0_u8;
-    let mut rows = Vec::new();
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     rows.try_reserve_exact(SERIAL_COMPARISON_WIDTH_V1)
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
     for offset in 0..SERIAL_COMPARISON_WIDTH_V1 {
@@ -6001,6 +6057,12 @@ impl core::fmt::Debug for ZkX509Rfc5280StarkBaseMaterialV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509Rfc5280StarkBaseMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509Rfc5280StarkBaseMaterialV1 {
     /// Allocated sparse row payload; providers only borrow these rows.
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
@@ -6014,35 +6076,57 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
     }
     /// Recursively overwrite every private shape cell and committed field row.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.private_shape.chain_depth = 0;
-        self.private_shape.certificate_slot_2_active = F::ZERO;
-        self.private_shape.top_document_count = 0;
-        self.private_shape.top_document_lengths.fill(0);
-        self.private_shape.top_node_counts.fill(0);
-        self.private_shape.embedded_document_count = 0;
-        self.private_shape.embedded_document_lengths.fill(0);
-        self.private_shape.embedded_node_counts.fill(0);
-        self.private_shape.crl_entries = 0;
-        self.private_shape.disclosed_attributes = 0;
-        self.private_shape.embedded_copy_rows = 0;
-        self.private_shape.grammar_rows = 0;
-        self.private_shape.fixed_byte_rows = 0;
-        self.private_shape.equality_rows = 0;
-        self.private_shape.decimal_rows = 0;
-        self.private_shape.calendar_rows = 0;
-        self.private_shape.relation_rows = 0;
-        self.private_shape.bit_flag_rows = 0;
-        self.private_shape.serial_source_rows = 0;
-        self.private_shape.serial_rows = 0;
-        self.private_shape.range_rows = 0;
-        self.private_shape.semantic_source_rows = 0;
-        self.private_shape.semantic_consumer_rows = 0;
-        self.private_shape.output_producer_rows = 0;
-        self.private_shape.output_consumer_rows = 0;
-        self.private_shape.io_channels = 0;
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.chain_depth));
+        zeroize_fields_v1(core::slice::from_mut(
+            &mut self.private_shape.certificate_slot_2_active,
+        ));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.top_document_count,
+        ));
+        zeroize_words_v1(&mut self.private_shape.top_document_lengths);
+        zeroize_words_v1(&mut self.private_shape.top_node_counts);
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.embedded_document_count,
+        ));
+        zeroize_words_v1(&mut self.private_shape.embedded_document_lengths);
+        zeroize_words_v1(&mut self.private_shape.embedded_node_counts);
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.crl_entries));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.disclosed_attributes,
+        ));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.embedded_copy_rows,
+        ));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.grammar_rows));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.fixed_byte_rows,
+        ));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.equality_rows));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.decimal_rows));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.calendar_rows));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.relation_rows));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.bit_flag_rows));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.serial_source_rows,
+        ));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.serial_rows));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.range_rows));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.semantic_source_rows,
+        ));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.semantic_consumer_rows,
+        ));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.output_producer_rows,
+        ));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.output_consumer_rows,
+        ));
+        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.io_channels));
         for family in &mut self.family_rows {
             for row in &mut *family {
-                row.fill(F::ZERO);
+                zeroize_fields_v1(row);
             }
             family.clear();
         }
@@ -6097,6 +6181,31 @@ fn byte_row_v1(document: u64, address: u64, value: u8) -> ZkX509Rfc5280StarkBase
     row[BASE_ADDRESS] = F(address);
     row
 }
+/// Grow by copying into a clearing owner, then erase the displaced allocation.
+/// Ordinary Vec reallocation could free an initialized private row allocation.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn reserve_private_family_rows_v1(
+    rows: &mut Vec<ZkX509Rfc5280StarkBaseRowV1>,
+    length: usize,
+) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+    if length > ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
+        return Err(ZkX509Rfc5280StarkErrorV1::Resource);
+    }
+    if length <= rows.capacity() {
+        return Ok(());
+    }
+    let capacity = length
+        .checked_next_power_of_two()
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let mut replacement = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
+    replacement
+        .try_reserve_exact(capacity)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    replacement.extend_from_slice(rows);
+    zeroize_field_rows_v1(rows);
+    *rows = replacement.into_vec();
+    Ok(())
+}
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn ensure_family_slot_v1(
     rows: &mut Vec<ZkX509Rfc5280StarkBaseRowV1>,
@@ -6106,8 +6215,7 @@ fn ensure_family_slot_v1(
         .checked_add(1)
         .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
     if rows.len() < length {
-        rows.try_reserve(length - rows.len())
-            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+        reserve_private_family_rows_v1(rows, length)?;
         rows.resize(length, [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]);
     }
     Ok(())
@@ -6117,13 +6225,18 @@ fn push_family_row_v1(
     rows: &mut Vec<ZkX509Rfc5280StarkBaseRowV1>,
     row: ZkX509Rfc5280StarkBaseRowV1,
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    rows.try_reserve(1)
-        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let length = rows
+        .len()
+        .checked_add(1)
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    reserve_private_family_rows_v1(rows, length)?;
     rows.push(row);
     Ok(())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn canonical_time_nodes_v1(trace: &ZkX509Rfc5280TraceV1) -> Vec<ZkX509Rfc5280NodeProvenanceV1> {
+fn canonical_time_nodes_v1(
+    trace: &ZkX509Rfc5280TraceV1,
+) -> impl Iterator<Item = ZkX509Rfc5280NodeProvenanceV1> + '_ {
     role_nodes_v1(trace, ZkX509Rfc5280GrammarRoleV1::CertificateNotBefore)
         .chain(role_nodes_v1(
             trace,
@@ -6141,7 +6254,6 @@ fn canonical_time_nodes_v1(trace: &ZkX509Rfc5280TraceV1) -> Vec<ZkX509Rfc5280Nod
             trace,
             ZkX509Rfc5280GrammarRoleV1::CrlEntryTime,
         ))
-        .collect()
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6160,7 +6272,7 @@ fn calendar_operands_v1(
     tag: u32,
 ) -> Result<CalendarOperandsV1, ZkX509Rfc5280StarkErrorV1> {
     let (timestamp, decimal) = parse_time_cells_v1(cells, tag)?;
-    let bytes = decimal.iter().map(|cell| cell.value).collect::<Vec<_>>();
+    let bytes = private_bytes_v1(decimal.iter().map(|cell| cell.value))?;
     let (year, offset) = match tag {
         23 => {
             let short = u64::from(parse_decimal_v1(&bytes[..2])?);
@@ -6318,18 +6430,36 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
     let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(
         build_zk_x509_rfc5280_stark_shape_v1(trace)?,
     )?;
-    let mut family_rows: [Vec<ZkX509Rfc5280StarkBaseRowV1>; FAMILY_COUNT_V1] =
-        core::array::from_fn(|_| Vec::new());
+    let mut family_rows: [PrivateTableV1<ZkX509Rfc5280StarkBaseRowV1>; FAMILY_COUNT_V1] =
+        core::array::from_fn(|_| PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1));
     let (serial_byte_multiplicities, serial_node_multiplicities) =
         zk_x509_rfc5280_serial_lookup_multiplicities_v1(&semantic.serial_sources)?;
-    let mut byte_lookup_cells = Vec::new();
-    for entry in &serial_byte_multiplicities {
+    let semantic_multiplicities = zk_x509_rfc5280_semantic_source_multiplicities_v1(&semantic)?;
+    let byte_lookup_count = serial_byte_multiplicities
+        .iter()
+        .chain(semantic_multiplicities.iter())
+        .try_fold(0usize, |count, entry| {
+            count.checked_add(usize::from(entry.required_multiplicity))
+        })
+        .and_then(|count| {
+            trace
+                .embedded_byte_rows
+                .len()
+                .checked_mul(2)
+                .and_then(|embedded| count.checked_add(embedded))
+        })
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let mut byte_lookup_cells = PrivateTableV1::new(Vec::new(), zeroize_source_cells_v1);
+    byte_lookup_cells
+        .try_reserve_exact(byte_lookup_count)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    for entry in serial_byte_multiplicities.iter() {
         byte_lookup_cells.extend(core::iter::repeat_n(
             entry.source,
             usize::from(entry.required_multiplicity),
         ));
     }
-    for entry in zk_x509_rfc5280_semantic_source_multiplicities_v1(&semantic)? {
+    for entry in semantic_multiplicities.iter() {
         byte_lookup_cells.extend(core::iter::repeat_n(
             entry.source,
             usize::from(entry.required_multiplicity),
@@ -6707,7 +6837,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
     }
     let decimal_family = ZkX509Rfc5280StarkFamilyV1::Decimal as usize;
     let calendar_family = ZkX509Rfc5280StarkFamilyV1::Calendar as usize;
-    for (time_instance, node) in canonical_time_nodes_v1(trace).into_iter().enumerate() {
+    for (time_instance, node) in canonical_time_nodes_v1(trace).enumerate() {
         let cells = source_slice_v1(trace, node, true)?;
         let operands = calendar_operands_v1(&cells, node.tag_number)?;
         let decimal = parse_time_cells_v1(&cells, node.tag_number)?.1;
@@ -6721,12 +6851,8 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
             let group_cells = decimal
                 .get(cursor..end)
                 .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
-            let expected_value = u64::from(parse_decimal_v1(
-                &group_cells
-                    .iter()
-                    .map(|cell| cell.value)
-                    .collect::<Vec<_>>(),
-            )?);
+            let group_bytes = private_bytes_v1(group_cells.iter().map(|cell| cell.value))?;
+            let expected_value = u64::from(parse_decimal_v1(&group_bytes)?);
             let mut state = 0_u64;
             for (offset, source) in group_cells.iter().copied().enumerate() {
                 let digit = source
@@ -6838,13 +6964,19 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
     }
     let serial_source_family = ZkX509Rfc5280StarkFamilyV1::SerialSource as usize;
     for source in &semantic.serial_sources {
-        for row in build_zk_x509_rfc5280_serial_source_rows_v1(source)? {
+        for row in build_zk_x509_rfc5280_serial_source_rows_v1(source)?
+            .iter()
+            .copied()
+        {
             push_family_row_v1(&mut family_rows[serial_source_family], row)?;
         }
     }
     let serial_family = ZkX509Rfc5280StarkFamilyV1::SerialCompare as usize;
     for comparison in &semantic.serial_comparisons {
-        for row in build_zk_x509_rfc5280_serial_comparison_rows_v1(comparison)? {
+        for row in build_zk_x509_rfc5280_serial_comparison_rows_v1(comparison)?
+            .iter()
+            .copied()
+        {
             for _ in 0..SERIAL_COMPARISON_PHASES_V1 {
                 push_family_row_v1(&mut family_rows[serial_family], row)?;
             }
@@ -6943,9 +7075,9 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
             .consumers
             .iter()
             .copied()
-            .zip(witness.consumer_values)
+            .zip(&witness.consumer_values)
         {
-            for (offset, value) in values.into_iter().enumerate() {
+            for (offset, value) in values.iter().copied().enumerate() {
                 let row = output_base_row_v1(
                     role,
                     witness.declaration.channel,
@@ -6976,7 +7108,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
     Ok(ZkX509Rfc5280StarkBaseMaterialV1 {
         private_shape,
         schedule,
-        family_rows,
+        family_rows: family_rows.map(PrivateTableV1::into_vec),
     })
 }
 fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
@@ -9512,7 +9644,7 @@ mod tests {
         )
         .expect("canonical five-signature P-256 AIR terminals")
     }
-    fn canonical_trace_v1() -> ZkX509Rfc5280TraceV1 {
+    pub(super) fn canonical_trace_v1() -> ZkX509Rfc5280TraceV1 {
         let fixture = fixture();
         build_zk_x509_rfc5280_trace_v1(
             &fixture.witness.certificate_chain_der,
@@ -9536,6 +9668,88 @@ mod tests {
             },
         )
         .expect("canonical RFC trace")
+    }
+    #[test]
+    fn owned_rfc_numeric_sources_clear_success_error_unwind_and_displaced_rows() {
+        use super::super::private_table::inspection;
+        let trace = canonical_trace_v1();
+        let original = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+        let expected_fields = original
+            .family_rows
+            .iter()
+            .map(|rows| rows.len() * ZK_X509_RFC5280_STARK_BASE_WIDTH_V1)
+            .sum::<usize>();
+        assert!(expected_fields > 0);
+        for mode in 0..3 {
+            let material = original.clone();
+            let (result, observed) = inspection::observe_v1(|| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut material = material;
+                    if mode == 0 {
+                        material.zeroize_private_v1();
+                        assert!(material.private_is_zeroized_v1());
+                        assert_eq!(material.schedule, original.schedule);
+                        Ok(())
+                    } else if mode == 1 {
+                        Err(())
+                    } else {
+                        panic!("injected RFC numeric source unwind")
+                    }
+                }))
+            });
+            assert_eq!(result.is_err(), mode == 2);
+            assert!(observed.iter().map(|item| item.cells).sum::<usize>() >= expected_fields);
+            assert!(observed.iter().any(|item| item.nonzero_before > 0));
+            assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        }
+        let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
+        rows.try_reserve_exact(1).unwrap();
+        rows.push([F(29); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]);
+        let first = rows.as_ptr();
+        let ((), observed) = inspection::observe_v1(|| {
+            push_family_row_v1(&mut rows, [F(31); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]).unwrap();
+            assert_ne!(rows.as_ptr(), first);
+            assert_eq!(rows[0], [F(29); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]);
+            assert_eq!(rows[1], [F(31); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]);
+        });
+        assert_eq!(
+            observed
+                .iter()
+                .map(|item| item.nonzero_before)
+                .sum::<usize>(),
+            ZK_X509_RFC5280_STARK_BASE_WIDTH_V1
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        let retained = rows.clone();
+        assert!(ensure_family_slot_v1(&mut rows, usize::MAX).is_err());
+        assert_eq!(&**rows, &retained);
+        // Ordinary error and unwinding after partial family writes still drop
+        // the same guarded allocation used by the production compiler.
+        for unwind in [false, true] {
+            let (result, observed) = inspection::observe_v1(|| {
+                std::panic::catch_unwind(|| {
+                    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
+                    push_family_row_v1(&mut rows, [F(37); ZK_X509_RFC5280_STARK_BASE_WIDTH_V1])
+                        .unwrap();
+                    if unwind {
+                        panic!("injected RFC partial-family unwind");
+                    }
+                    ensure_family_slot_v1(&mut rows, usize::MAX)
+                })
+            });
+            assert_eq!(result.is_err(), unwind);
+            if !unwind {
+                assert!(result.unwrap().is_err());
+            }
+            assert_eq!(
+                observed
+                    .iter()
+                    .map(|item| item.nonzero_before)
+                    .sum::<usize>(),
+                ZK_X509_RFC5280_STARK_BASE_WIDTH_V1
+            );
+            assert!(observed.iter().all(|item| item.nonzero_after == 0));
+        }
     }
     fn neutral_aux_v1() -> ZkX509Rfc5280StarkAuxRowV1 {
         let mut aux = [F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
@@ -9605,7 +9819,10 @@ mod tests {
         }
         (current_aux, next_aux)
     }
-    fn serial_source_fixture_v1(logical_id: u16, magnitude: &[u8]) -> ZkX509Rfc5280SerialSourceV1 {
+    pub(super) fn serial_source_fixture_v1(
+        logical_id: u16,
+        magnitude: &[u8],
+    ) -> ZkX509Rfc5280SerialSourceV1 {
         let sign_padding = magnitude[0] & 0x80 != 0;
         let mut encoded = Vec::new();
         if sign_padding {
@@ -11575,8 +11792,8 @@ mod tests {
         let table =
             zk_x509_rfc5280_semantic_source_multiplicities_v1(&witness).expect("source table");
         assert_eq!(
-            table,
-            vec![
+            table.as_slice(),
+            &[
                 ZkX509Rfc5280SourceMultiplicityV1 {
                     source: cell_a,
                     required_multiplicity: 3,
@@ -11588,7 +11805,8 @@ mod tests {
             ]
         );
         let mut duplicated = table;
-        duplicated.push(duplicated[0]);
+        let first = duplicated[0];
+        duplicated.push(first);
         duplicated.sort_unstable_by_key(|entry| entry.source);
         assert!(
             duplicated
@@ -11658,8 +11876,8 @@ mod tests {
             vec![(100, 0, 1), (101, 0xff, 1)]
         );
         assert_eq!(
-            node_multiplicities,
-            vec![ZkX509Rfc5280SerialNodeMultiplicityV1 {
+            node_multiplicities.as_slice(),
+            &[ZkX509Rfc5280SerialNodeMultiplicityV1 {
                 document: 0,
                 node: 7,
                 required_multiplicity: 21,

@@ -488,3 +488,47 @@ fn actual_masked_rows_use_canonical_binding_and_match_materialized_frontiers() {
     );
     assert!(plan.build(&mut replay, &binding).is_err());
 }
+
+#[test]
+fn extra_push_after_complete_coverage_poisoned_even_if_error_is_ignored() {
+    let binding =
+        super::super::deep_binding::Context::new(b"complete stream rejected extra write").unwrap();
+    for scalar_extra in [false, true] {
+        let mut stream = StripedMerklePlan::new(1, 1, &[], limits())
+            .unwrap()
+            .start()
+            .unwrap();
+        stream.push(0, leaves(1)[0], hash).unwrap();
+        if scalar_extra {
+            assert!(stream.push(0, leaves(1)[0], hash).is_err());
+        } else {
+            assert!(
+                stream
+                    .push_batch(&[0], &mut [leaves(1)[0].words()], batch_hash, hash)
+                    .is_err()
+            );
+        }
+        assert!(stream.finish(hash).is_err());
+    }
+    // Cached complete coverage has the same poisoning rule; the first root
+    // callback must never run after the rejected extra insertion.
+    let cache = super::super::deep_node_cache::NodeCachePlan::new(
+        super::super::deep_binding::Oracle::Fri(4),
+    )
+    .unwrap()
+    .start(&binding)
+    .unwrap();
+    let mut stream = StripedMerklePlan::new(128, 1, &[], limits())
+        .unwrap()
+        .start_cached(cache)
+        .unwrap();
+    for (i, leaf) in leaves(128).into_iter().enumerate() {
+        stream.push(i, leaf, hash).unwrap();
+    }
+    assert!(stream.push(128, leaves(1)[0], hash).is_err());
+    assert!(
+        stream
+            .finish(|_, _, _, _| panic!("poisoned cached stream cannot hash"))
+            .is_err()
+    );
+}

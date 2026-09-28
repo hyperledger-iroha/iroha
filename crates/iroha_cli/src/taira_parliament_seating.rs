@@ -33,8 +33,9 @@ use iroha::{
         asset::{AssetDefinitionId, AssetId},
         isi::{
             Grant, GrantBox, InstructionBox, Mint, Register, governance::RegisterCitizen,
-            register::RegisterBox,
+            register::RegisterBox, sccp::InitializeSccpV1,
         },
+        sccp::params::SccpParametersV1,
     },
     executor_data_model::permission::{
         governance::CanManageParliament, sccp::CanProposeSccpRouteGovernance,
@@ -996,6 +997,36 @@ pub(crate) fn citizen_genesis_instructions(
     Ok(instructions)
 }
 
+/// The genesis instruction that creates SCCP with the Taira defaults under `reset_nonce`
+/// (`specs/sccp.md` §4.1, §4.18): its parameters, reset nonce, four route escrows and an empty
+/// registry. Genesis carries no bridge keys; validators register their own after start.
+///
+/// # Errors
+/// Returns an error for a zero reset nonce.
+pub(crate) fn sccp_genesis_instruction(reset_nonce: [u8; 32]) -> Result<InstructionBox> {
+    if reset_nonce == [0; 32] {
+        return Err(eyre!("the SCCP reset nonce must be nonzero"));
+    }
+    Ok(InitializeSccpV1 {
+        parameters: SccpParametersV1::taira_default(),
+        reset_nonce,
+    }
+    .into())
+}
+
+/// Draw a fresh SCCP reset nonce from the OS CSPRNG, so every reset has a new identity (§4.18).
+///
+/// # Errors
+/// Returns an error when the OS CSPRNG fails.
+pub(crate) fn fresh_sccp_reset_nonce() -> Result<[u8; 32]> {
+    use rand::rand_core::TryRngCore as _;
+    let mut nonce = [0_u8; 32];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| eyre!("OS CSPRNG failed: {error}"))?;
+    Ok(nonce)
+}
+
 /// Append one instruction-only transaction to a raw genesis manifest JSON document.
 ///
 /// # Errors
@@ -1336,6 +1367,15 @@ impl SeatParliament {
         )?;
         let mut document: Value = json::from_slice(&genesis_bytes)?;
         append_genesis_transaction(&mut document, &instructions)?;
+        if !manifest
+            .instructions()
+            .any(|instruction| instruction.as_any().is::<InitializeSccpV1>())
+        {
+            append_genesis_transaction(
+                &mut document,
+                &[sccp_genesis_instruction(fresh_sccp_reset_nonce()?)?],
+            )?;
+        }
         let mut genesis_json = json::to_json_pretty(&document)?;
         genesis_json.push('\n');
         let reparsed: iroha_genesis::RawGenesisTransaction = json::from_str(&genesis_json)

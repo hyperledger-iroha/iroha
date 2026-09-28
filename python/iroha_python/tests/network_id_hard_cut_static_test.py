@@ -278,25 +278,30 @@ def test_nexus_uses_exact_network_id_for_connect_and_transactions() -> None:
 
 
 def test_confidential_proof_builders_require_exact_network_id() -> None:
-    crypto = _tree("crypto.py")
-    function_names = (
+    retired = (
         "build_confidential_transfer_proof_v2",
         "build_confidential_transfer_proof_v2_with_paths",
         "build_confidential_unshield_proof_v3",
         "build_confidential_unshield_proof_v3_with_paths",
     )
-    for name in function_names:
-        function = _function(crypto.body, name)
-        assert "network_id" in _arguments(function)
-        assert _argument_annotation(function, "network_id") == "NetworkId"
-        assert RETIRED_DOMAIN_NAMES.isdisjoint(_arguments(function))
-
-    rust = (RUST_BRIDGE / "lib.rs").read_text(encoding="utf-8")
-    for name in function_names:
-        start = rust.index(f"fn {name}_py(")
-        signature = rust[start : rust.index(") -> PyResult", start)]
-        assert "network_id: &PyNetworkId" in signature
-        assert all(retired not in signature for retired in RETIRED_DOMAIN_NAMES)
+    crypto = (PYTHON_SOURCE / "crypto.py").read_text(encoding="utf-8")
+    exports = (PYTHON_SOURCE / "__init__.py").read_text(encoding="utf-8")
+    bridge = (RUST_BRIDGE / "lib.rs").read_text(encoding="utf-8")
+    for name in retired:
+        assert name not in crypto
+        assert name not in exports
+        assert name not in bridge
+    wallet = _class(_tree("confidential.py"), "ConfidentialProver")
+    constructor = _function(wallet.body, "__init__")
+    assert "network_id" in _arguments(constructor)
+    assert _argument_annotation(constructor, "network_id") == "NetworkId"
+    assert RETIRED_DOMAIN_NAMES.isdisjoint(_arguments(constructor))
+    assert "_require_network_id(network_id)" in ast.unparse(constructor)
+    rust = (RUST_BRIDGE / "confidential_wallet.rs").read_text(encoding="utf-8")
+    start = rust.index("fn new(")
+    signature = rust[start : rust.index(") -> PyResult", start)]
+    assert "network_id: &PyNetworkId" in signature
+    assert all(retired not in signature for retired in RETIRED_DOMAIN_NAMES)
 
 
 def test_zk_x509_public_apis_require_nominal_network_id() -> None:

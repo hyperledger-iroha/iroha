@@ -16,6 +16,7 @@ use iroha_data_model::{
     },
 };
 mod account_address;
+mod confidential_prover;
 mod committed_transaction_inclusion;
 mod gpu;
 mod kagemusha_signed_app_preparation;

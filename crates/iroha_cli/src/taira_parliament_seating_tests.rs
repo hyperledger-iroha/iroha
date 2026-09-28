@@ -1059,3 +1059,19 @@ fn seat_parliament_and_doctor_flags_parse() {
     };
     assert!(doctor.parliament);
 }
+
+#[test]
+fn sccp_genesis_instruction_uses_taira_defaults_and_a_fresh_nonce() {
+    use iroha::data_model::{isi::sccp::InitializeSccpV1, sccp::params::SccpParametersV1};
+    assert!(sccp_genesis_instruction([0; 32]).is_err());
+    let first = fresh_sccp_reset_nonce().expect("nonce");
+    let second = fresh_sccp_reset_nonce().expect("nonce");
+    assert_ne!(first, second);
+    let instruction = sccp_genesis_instruction(first).expect("instruction");
+    let initialize = instruction
+        .as_any()
+        .downcast_ref::<InitializeSccpV1>()
+        .expect("InitializeSccpV1");
+    assert_eq!(initialize.reset_nonce, first);
+    assert_eq!(initialize.parameters, SccpParametersV1::taira_default());
+}

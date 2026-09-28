@@ -1,7 +1,7 @@
 //! Governance helpers (app API convenience). Build/submit governance transactions.
 mod audit;
 mod deploy;
-mod parliament;
+pub(crate) mod parliament;
 mod shared;
 mod vote;
 use crate::{Run, RunContext};

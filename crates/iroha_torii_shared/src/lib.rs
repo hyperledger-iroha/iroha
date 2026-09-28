@@ -415,6 +415,9 @@ pub mod uri {
     /// URI template used to read one exact Parliament attempt.
     pub const GOV_PARLIAMENT_ATTEMPT_READ: &str =
         crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ.path();
+    /// URI template used to read the driver plan of one Parliament attempt.
+    pub const GOV_PARLIAMENT_ATTEMPT_PLAN: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_PLAN.path();
     /// URI template used to inspect one node-local timed-OVN casting context.
     pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ: &str =
         crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ

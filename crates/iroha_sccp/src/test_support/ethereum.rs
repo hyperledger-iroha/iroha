@@ -1164,7 +1164,9 @@ mod tests {
         assert!(chain.slot_unix_ms(slot + 1) > now_ms);
         let bootstrap = chain.bootstrap_at_unix_ms(now_ms);
         let decoded = SccpLcBootstrapDataV1::from_frame(&bootstrap.bytes).expect("frame");
-        let SccpLcBootstrapDataV1::Ethereum(wire) = decoded;
+        let SccpLcBootstrapDataV1::Ethereum(wire) = decoded else {
+            panic!("an Ethereum bootstrap");
+        };
         assert_eq!(wire.header.beacon.slot, slot);
     }
 

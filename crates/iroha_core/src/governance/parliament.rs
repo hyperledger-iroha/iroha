@@ -2600,6 +2600,13 @@ include!("parliament/reducer_ballot.rs");
 include!("parliament/reducer_validation.rs");
 include!("parliament/fixture_helpers.rs");
 
+#[path = "parliament/planner.rs"]
+mod planner;
+pub use planner::{
+    PARLIAMENT_DRIVER_EXECUTION_LAG_BLOCKS, ParliamentDriverPlanV1, ParliamentExactTransitionV1,
+    ParliamentPlanWorldV1, WorldPlanInputsV1, plan_parliament_attempt_v1,
+};
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2671,4 +2678,5 @@ pub(crate) mod tests {
     include!("parliament/tests/sortition.rs");
     include!("parliament/tests/ballot.rs");
     include!("parliament/tests/certificate.rs");
+    include!("parliament/tests/planner.rs");
 }

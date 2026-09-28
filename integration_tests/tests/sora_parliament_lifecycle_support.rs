@@ -168,7 +168,8 @@ pub(super) const FAIL_CLOSED_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; V
     ParliamentBeaconSignerMode::Absent,
     ParliamentBeaconSignerMode::Invalid,
 ];
-pub(super) const CONTRACT_ADDRESS: &str = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+pub(super) const CONTRACT_ADDRESS: &str =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 pub(super) const NO_RESULT_RETRY_CONTRACT_ADDRESS: &str =
     "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
 
@@ -228,7 +229,10 @@ pub(super) async fn submit_parliament_instructions(
 // A height carrier is deliberately left pending after Torii admission. Its
 // caller must observe the exact finalized carrier height, rather than awaiting
 // this Log's eventual QueuePlan merge and overshooting the protocol checkpoint.
-pub(super) async fn admit_parliament_height_carrier(client: &Client, instructions: [Log; 1]) -> Result<()> {
+pub(super) async fn admit_parliament_height_carrier(
+    client: &Client,
+    instructions: [Log; 1],
+) -> Result<()> {
     let transaction = prepare_parliament_transaction(client, instructions).await?;
     let admitted_hash = tokio::time::timeout(
         OPERATION_TIMEOUT,
@@ -597,7 +601,11 @@ pub(super) async fn assert_governed_contract_binding(
     Ok(())
 }
 
-pub(super) async fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> Result<()> {
+pub(super) async fn assert_asset_not_found(
+    client: &Client,
+    asset_id: &AssetId,
+    label: &str,
+) -> Result<()> {
     let query = FindAssetById::new(asset_id.clone());
     assert_eq!(
         query.asset_id(),
@@ -664,61 +672,16 @@ pub(super) async fn ordered_validator_roster(
     network: &iroha_test_network::Network,
     client: &Client,
 ) -> Result<Vec<PeerId>> {
-    let signed_genesis_roster =
-        iroha_core::sumeragi::startup::genesis_committee_peers(&network.genesis().0)
-            .wrap_err("read exact signed genesis voting roster")?;
-    if signed_genesis_roster.len() != VALIDATOR_COUNT {
-        return Err(eyre!("expected exactly four signed validators"));
-    }
-    let finalized_height = NonZeroU64::new(current_height(client).await?).ok_or_else(|| {
-        eyre!("the frozen validator roster is unavailable at genesis height zero")
-    })?;
-    let (proof, _) = read_on_dedicated_thread({
-        let client = client.client().clone();
-        let height = (finalized_height).clone();
-        let network_id = (network.network_id()).clone();
-        move || client.get_bridge_finality_anchor(height, network_id)
-    })
-    .await
-    .wrap_err("authenticate the current revision-4 frozen validator roster")?;
-    let context = proof.finality_artifact.height_context;
-    if context.height != finalized_height.get()
-        || context.network_id != network.network_id()
-        || context.roster.len() != VALIDATOR_COUNT
-        || context.quorum.min_signers != 3
-        || context.quorum.total_power != 4
-        || context.roster.iter().any(|entry| entry.power != 1)
-    {
-        return Err(eyre!(
-            "the current revision-4 finality context is not an exact four-validator 3-of-4 authority"
-        ));
-    }
-    if context.da_layout != recommended_data_availability_layout() {
-        return Err(eyre!(
-            "the current revision-4 finality context does not retain the mandatory RS16 DA layout"
-        ));
-    }
-    let roster = context
-        .roster
+    let height = current_height(client).await?;
+    let (proof, verified) = finality::certified_block(network, client, height).await?;
+    assert_eq!(verified.height(), height);
+    let roster = proof
+        .committee
         .into_iter()
-        .map(|entry| entry.validator)
+        .map(|validator| PeerId::new(validator.public_key))
         .collect::<Vec<_>>();
-    let mut proof_members = roster.clone();
-    proof_members.sort_unstable();
-    let mut signed_members = signed_genesis_roster;
-    signed_members.sort_unstable();
-    if proof_members != signed_members {
-        return Err(eyre!(
-            "the current frozen validator roster differs from signed genesis"
-        ));
-    }
     eprintln!(
-        "SORA_PARLIAMENT_LIFECYCLE frozen_roster authority_height={} context_height={} epoch={} epoch_end_height={} next_epoch_snapshot={} roster_hash={}",
-        finalized_height,
-        context.height,
-        context.epoch,
-        context.epoch_end_height,
-        context.next_epoch_snapshot.is_some(),
+        "SORA_PARLIAMENT_LIFECYCLE frozen_roster authority_height={height} roster_hash={}",
         hex::encode(global_threshold_beacon_roster_hash_v1(&roster)),
     );
     Ok(roster)
@@ -927,7 +890,9 @@ pub(super) fn release_projection(
     })
 }
 
-pub(super) fn release_partial(partial: ParliamentTlePartialReleaseShareV1) -> TlePartialReleaseShareV1 {
+pub(super) fn release_partial(
+    partial: ParliamentTlePartialReleaseShareV1,
+) -> TlePartialReleaseShareV1 {
     TlePartialReleaseShareV1 {
         key_session_id: partial.key_session_id,
         identity_digest: partial.identity_digest,
@@ -980,7 +945,10 @@ pub(super) async fn stage_contract_artifact(
     ))
 }
 
-pub(super) fn public_finding_root(attempt_id: GovernanceAttemptId, body: ParliamentBody) -> [u8; 32] {
+pub(super) fn public_finding_root(
+    attempt_id: GovernanceAttemptId,
+    body: ParliamentBody,
+) -> [u8; 32] {
     let body = body.encode();
     Hash::new_from_chunks(&[
         b"iroha.integration.parliament.public-finding.v1\0",
@@ -1023,7 +991,11 @@ pub(super) async fn exact_block(client: &Client, height: u64) -> Result<SignedBl
     Ok(block)
 }
 
-pub(super) async fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str) -> Result<()> {
+pub(super) async fn assert_no_global_beacon_pulse_at(
+    client: &Client,
+    height: u64,
+    label: &str,
+) -> Result<()> {
     let block = exact_block(client, height)
         .await
         .wrap_err_with(|| format!("{label}: exact finalized block is unavailable"))?;
@@ -1039,6 +1011,8 @@ pub(super) async fn assert_no_global_beacon_pulse_at(client: &Client, height: u6
     Ok(())
 }
 
+#[path = "sora_parliament_finality.rs"]
+pub(super) mod finality;
 
 #[path = "sora_parliament_enactment.rs"]
 pub(super) mod enactment;
@@ -1080,14 +1054,13 @@ pub(crate) async fn enact_publication_proposal(
         let attempt = read_attempt(&client, enacted.attempt_id).await?;
         assert_eq!(attempt.attempt().status, GovernanceAttemptStatusV1::Enacted);
         assert_eq!(attempt.terminal_height(), Some(enacted.height));
-        let (_, verified_hash) = read_on_dedicated_thread({
-            let client = client.client().clone();
-            let height = NonZeroU64::new(enacted.height).unwrap();
-            let network_id = network.network_id();
-            move || client.get_bridge_finality_anchor(height, network_id)
-        })
-        .await?;
-        assert_eq!(verified_hash, block.hash());
+        let (_, verified) = finality::certified_block(network, &client, enacted.height).await?;
+        assert_eq!(verified.block().hash(), block.hash());
+        assert_eq!(
+            verified.canonical_executed_wire()?,
+            block.clone().with_commit_certificate(None).encode_wire()?,
+            "per-peer enacted execution differs from its authenticated native decision",
+        );
     }
     Ok((enacted.attempt_id, enacted.height))
 }

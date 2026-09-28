@@ -165,6 +165,11 @@ pub(super) struct Context {
 }
 
 impl Context {
+    /// Match the original immutable attempt owner, not merely equal statement bytes.
+    pub(super) fn same_attempt(&self, other: &Self) -> bool {
+        self.framing.same_attempt(&other.framing)
+    }
+
     /// Bind the outer prepared relation identity and its exact complete statement.
     ///
     /// Only the closed relation bridge supplies the arithmetic owner. Reject any

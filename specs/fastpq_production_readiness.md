@@ -24,16 +24,44 @@ unmasked. Checked payload, work and hash budgets cover the complete construction
 with cumulative decode accounting and authenticated row-root results.
 The default segment limits remain 2 GiB of charged payload, 2^42 structural
 work units and 524,288 child bytes. They have not been raised to accommodate
-the construction. The September 28 normal-library check and latest 134 focused
-native tests pass; 11 external API tests, one public usage doctest, and three
-separately selected required-Metal leaf/parent/preflight checks pass. Bounded
+the construction. The September 28 captured final-lifetime build passes 177
+focused native tests, 12 external API tests, 13 existing Metal transform/Poseidon
+controls and three separately required-Metal leaf/parent/continuation checks.
+The earlier public usage doctest also passes. Bounded
 1024-job hashing and parallel job preparation preserve serial commitment/frontier
 parity. The earlier complete 8M-point FFT/inverse oracle also passes and takes
 69.00s wall time, reporting
 553,549,824 bytes maximum RSS on the unoptimized binary under concurrent build
-load. These scoped results do not measure complete proof generation. Exact
-commands, source scope and receipt hashes are in the
+load. A separately selected complete required-Metal fixed-SMT child subsequently
+passes independent verification and context/cap/tamper controls: 482,978 proof
+bytes, 4,346.20s wall time and 1,118,158,848 bytes maximum RSS on a contended M1
+Ultra host. This does not qualify the ordinary/AXT wrappers, source authority,
+whole-transcript privacy or deployment latency. A separate one-child AXT public
+producer subsequently passes its complete generator and reused verifier controls:
+484,750 artifact bytes, 481,729 child bytes, 2,049.67s wall time and 1,109,753,856
+bytes maximum RSS under concurrent load. The one-child ordinary public producer
+also passes at 485,600 artifact bytes, 483,777 child bytes, 5,250.63s wall time and
+1,110,228,992 bytes maximum RSS. Replaying both saved artifacts and their negative
+controls passes on both the captured API binary and the later staged-FFT API
+binary in 5.94s and 5.92s respectively, without reproving. Multiple-child,
+authenticated admission, whole-transcript privacy/soundness and deployment-latency
+qualification remain open.
+A subsequent exact-root Metal dispatcher passes 32 native controls,
+12 external API tests and the complete eight-column native-`2^19`/common-`2^22`
+masked transform oracle. The common transform takes 130.368 ms in batches of
+two against a 690.993 ms CPU reference under concurrent load; this excludes
+complete proof construction and does not change the captured facade binaries.
+Exact commands, captured binary/source scopes and concurrent source drift are in the
 [September 28 validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
+
+The current source also retains all internal Merkle nodes from the first
+commitment passes and regenerates selected leaf stripes for openings. It binds
+caches to the original attempt/context, reconstructs each committed root before
+disclosure, and clears partial caches and authentication frontiers on failure.
+The same 2 GiB limit includes 834,439,424 bytes of nodes/coverage plus owner and
+opening workspace charges. Native tests and a complete seeded proof-byte parity
+run for this later change remain pending; the completed facade results above
+measure the pre-cache implementation.
 
 ### Earlier integration evidence
 
@@ -271,9 +299,9 @@ authenticated source admission remain required.
 | --- | --- | --- |
 | G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Core still rejects unanchored spending; signed anchored-spend model amount preflight passes 2/2 focused tests but is not admitted; source/nonce and evidence gaps remain |
 | G2: Constrain the complete transfer statement | Reviewed AIR ledger or equivalent bounded public-input checks, with negative tests for every relation below | Complete 923-slot one-delta hash/SMT ledgers, bounded public checks and typed PublicIO/claim adapter pass; external authority/root authentication remains separate |
-| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | The canonical masked DEEP format, producer and ordinary/AXT verifier are integrated; exact-source complete proof/size evidence and full authenticated execution qualification remain pending |
+| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | The canonical masked DEEP format, producer and ordinary/AXT verifier are integrated; the September 28 captured binary passes complete fixed-SMT child generation/verification at 482,978 bytes. Public artifact, multiple-child and authenticated execution qualification remain pending |
 | G4: Qualify cryptography | Protocol-specific qROM argument, final multi-target digest analysis, independently reproduced constants and vectors, independent review bound to final artifacts | Unavailable |
-| G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | CPU remains the producer default; the M4 Max shader passes 5,454 digest comparisons over 954 dispatches, and the applied Rust lifecycle/tree path passes all six required actual-Metal checks. Full-proof performance, fleet and CUDA qualification remain incomplete; the native quotient fixture failure remains recorded in the September 26 checkpoint |
+| G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | CPU remains the producer default. The required-Metal fixed-SMT child takes 4,346.20s and 1,118,158,848 bytes maximum RSS on a contended M1 Ultra; three focused device parity/readiness checks pass. Ordinary/AXT artifact, fleet, CUDA and release-latency qualification remain incomplete |
 | G6: Qualify integration and release | Same-source four-validator tests, restart/recovery and adversarial admission, signed immutable source and artifacts, rollout/rollback evidence | Incomplete |
 
 Goals G2 and G3 require joint qualification. The selected

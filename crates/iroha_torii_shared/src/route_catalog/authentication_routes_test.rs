@@ -632,6 +632,7 @@ named_route_policy_test!(
                 runtime_governance::GOV_CITIZEN_DRAFT,
                 runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT,
                 runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ,
+                runtime_governance::GOV_PARLIAMENT_ATTEMPT_PLAN,
                 runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ,
                 runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF,
                 runtime_governance::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ,

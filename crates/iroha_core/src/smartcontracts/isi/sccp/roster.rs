@@ -633,6 +633,7 @@ mod tests {
         let state = blank_state();
         let mut block = state.block(header(1));
         let mut stx = block.transaction();
+        store::parameters::set(&mut stx, Some(params()));
         for seed in 1..=4 {
             key(&mut stx, seed, seed * 16, 0);
         }

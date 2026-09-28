@@ -1363,4 +1363,3 @@ mod failure_paths;
 
 #[path = "sora_parliament_no_result_paths.rs"]
 mod no_result_paths;
-

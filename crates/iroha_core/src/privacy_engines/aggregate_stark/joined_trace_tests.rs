@@ -146,9 +146,12 @@ fn joined_mixed_native_commitment_matches_independent_horner_rows_and_frontier()
         let indices = [0, 1, 7, 63, 1024, 2047];
         let opened = plan.commit_v1(domains, &borrowed, &indices).unwrap();
         let replayed = plan
-            .commit_replayed_v1(domains, &indices, |group, column| {
-                Ok(polynomials[group].column_coefficients_v1(column)?.to_vec())
-            })
+            .commit_replayed_v1(
+                domains,
+                &indices,
+                |group, column| Ok(polynomials[group].column_coefficients_v1(column)?.to_vec()),
+                evaluate_replayed_cpu_v1,
+            )
             .unwrap();
         assert_eq!(replayed.commitment.root, opened.commitment.root);
         assert_eq!(replayed.commitment.frontier, opened.commitment.frontier);
@@ -273,32 +276,47 @@ fn joined_replayed_columns_reject_indices_before_source_and_abort_failed_batches
     let polynomials = polynomial_groups(&plan);
     let mut calls = 0;
     assert!(
-        plan.commit_replayed_v1(domains, &[2048], |_, _| {
-            calls += 1;
-            unreachable!()
-        })
+        plan.commit_replayed_v1(
+            domains,
+            &[2048],
+            |_, _| {
+                calls += 1;
+                unreachable!()
+            },
+            evaluate_replayed_cpu_v1
+        )
         .is_err()
     );
     assert_eq!(calls, 0);
     assert!(
-        plan.commit_replayed_v1(domains, &[0], |group, column| {
-            calls += 1;
-            if group == 0 && column == 8 {
-                return Err(AggregateStarkErrorV1::AllocationFailure);
-            }
-            Ok(polynomials[group].column_coefficients_v1(column)?.to_vec())
-        })
+        plan.commit_replayed_v1(
+            domains,
+            &[0],
+            |group, column| {
+                calls += 1;
+                if group == 0 && column == 8 {
+                    return Err(AggregateStarkErrorV1::AllocationFailure);
+                }
+                Ok(polynomials[group].column_coefficients_v1(column)?.to_vec())
+            },
+            evaluate_replayed_cpu_v1
+        )
         .is_err()
     );
     assert_eq!(calls, 9);
     assert!(
-        plan.commit_replayed_v1(domains, &[0], |group, column| {
-            let mut values = polynomials[group].column_coefficients_v1(column)?.to_vec();
-            if group == 1 && column == 2 {
-                values[0] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
-            }
-            Ok(values)
-        })
+        plan.commit_replayed_v1(
+            domains,
+            &[0],
+            |group, column| {
+                let mut values = polynomials[group].column_coefficients_v1(column)?.to_vec();
+                if group == 1 && column == 2 {
+                    values[0] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+                }
+                Ok(values)
+            },
+            evaluate_replayed_cpu_v1
+        )
         .is_err()
     );
 }
@@ -580,4 +598,47 @@ fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
         .is_err()
     );
     assert_eq!(calls, 2);
+}
+
+fn evaluate_replayed_cpu_v1(
+    columns: &[ZeroizingFieldColumnV1],
+    native: u8,
+    common: u8,
+) -> Result<Vec<ZeroizingFieldColumnV1>, AggregateStarkErrorV1> {
+    columns
+        .iter()
+        .map(|column| {
+            masked_trace_coefficients_on_coset_v1(column, native, common)
+                .map(ZeroizingFieldColumnV1)
+                .map_err(map_transparent_error_v1)
+        })
+        .collect()
+}
+
+#[test]
+fn joined_replay_rejects_wrong_evaluator_shapes_before_commitment_publication() {
+    let (parameters, domains, layout) = fixture();
+    let plan =
+        JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
+            .unwrap();
+    let polynomials = polynomial_groups(&plan);
+    for wrong_width in [true, false] {
+        assert!(
+            plan.commit_replayed_v1(
+                domains,
+                &[0],
+                |group, column| { Ok(polynomials[group].column_coefficients_v1(column)?.to_vec()) },
+                |columns, native, common| {
+                    let mut evaluated = evaluate_replayed_cpu_v1(columns, native, common)?;
+                    if wrong_width {
+                        evaluated.pop();
+                    } else {
+                        evaluated[0].0.pop();
+                    }
+                    Ok(evaluated)
+                }
+            )
+            .is_err()
+        );
+    }
 }

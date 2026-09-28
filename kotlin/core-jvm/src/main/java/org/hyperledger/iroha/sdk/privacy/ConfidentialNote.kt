@@ -111,6 +111,11 @@ object ConfidentialOwnerTag {
 
 /** Commitment derivation owned by the canonical native Rust V3 implementation. */
 object ConfidentialNoteCommitment {
+    /** Derive a note commitment without constructing or retaining a spend-key opening. */
+    @JvmStatic
+    fun derive(asset: String, amount: String, rho: ByteArray, ownerTag: ByteArray): ByteArray =
+        PrivacyNativeBridge.deriveConfidentialNoteCommitmentV3(asset, amount, rho, ownerTag)
+
     @JvmStatic
     fun deriveFromOpening(opening: ConfidentialNoteOpening): ByteArray =
         PrivacyNativeBridge.deriveConfidentialNoteCommitmentV3(

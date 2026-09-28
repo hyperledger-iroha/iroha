@@ -43,8 +43,9 @@ use iroha_torii_shared::parliament_api::{
     PARLIAMENT_API_VERSION_V1, PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
-    ParliamentAttemptDraftResponseV1, ParliamentAttemptReadResponseV1,
-    ParliamentBodyStateProjectionV1, ParliamentDecisionModeProjectionV1,
+    ParliamentAttemptDraftResponseV1, ParliamentAttemptPlanResponseV1,
+    ParliamentAttemptReadResponseV1, ParliamentBodyStateProjectionV1,
+    ParliamentDecisionModeProjectionV1, ParliamentExactTransitionProjectionV1,
     ParliamentInstructionDraftV1, ParliamentTimedOvnCastingContextResponseV1,
     ParliamentTimedOvnCastingPhaseProjectionV1, ParliamentTimedOvnCastingProofRequestV1,
     ParliamentTimedOvnCastingProofResponseV1, ParliamentTimedOvnProgressProjectionV1,
@@ -778,6 +779,7 @@ pub async fn handle_gov_capabilities(
             "/v1/gov/citizens/draft".to_owned(),
             "/v1/gov/parliament/attempts/draft".to_owned(),
             "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
+            "/v1/gov/parliament/attempts/{governance_attempt_id}/plan".to_owned(),
             "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context".to_owned(),
             "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof".to_owned(),
             "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context".to_owned(),
@@ -869,6 +871,57 @@ pub async fn handle_gov_parliament_transition_draft(
             wire_id: draft.wire_id,
             payload_hex: draft.payload_hex,
         }],
+    }))
+}
+
+/// GET `/v1/gov/parliament/attempts/{governance_attempt_id}/plan` — driver plan of one attempt.
+///
+/// Core trial-applies every permissionless progress transition to the reducer over one committed
+/// query view (`specs/sccp.md` §4.14.5 item 4). The plan is advice for a driver; consensus
+/// rechecks every submitted transition.
+///
+/// # Errors
+/// Returns a conversion error for a noncanonical identifier or a missing attempt.
+pub async fn handle_gov_parliament_attempt_plan(
+    state: Arc<iroha_core::state::State>,
+    governance_attempt_id: String,
+) -> Result<JsonBody<ParliamentAttemptPlanResponseV1>, crate::Error> {
+    let governance_attempt_id = governance_attempt_id
+        .parse::<iroha_data_model::governance::types::GovernanceAttemptId>()
+        .map_err(|_| {
+            crate::routing::conversion_error(
+                "governance_attempt_id must be exactly 64 lowercase hexadecimal characters"
+                    .to_owned(),
+            )
+        })?;
+    let governance = state.governance_snapshot();
+    let view = state.query_view();
+    let (current_height, execution_height, plan) =
+        iroha_core::governance::parliament::plan_parliament_attempt_v1(
+            &view,
+            state.network_id_ref(),
+            &governance,
+            governance_attempt_id,
+        )
+        .ok_or_else(|| {
+            crate::routing::conversion_error("Parliament governance attempt was not found".into())
+        })?;
+    Ok(JsonBody(ParliamentAttemptPlanResponseV1 {
+        version: PARLIAMENT_API_VERSION_V1,
+        governance_attempt_id,
+        current_height,
+        execution_height,
+        due: plan.due,
+        exact: plan
+            .exact
+            .into_iter()
+            .map(|exact| ParliamentExactTransitionProjectionV1 {
+                height: exact.height,
+                transition: exact.transition,
+            })
+            .collect(),
+        relay_ballots: plan.relay_ballots,
+        finalize_ballots: plan.finalize_ballots,
     }))
 }
 

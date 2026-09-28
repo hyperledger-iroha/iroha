@@ -2259,15 +2259,17 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
     );
     let replay_source = include_str!("main_trace_replay.rs");
     let replay_start = replay_source
-        .find("fn replay_v1(")
-        .expect("original-mask replay");
+        .find("fn replay_batch_v1(")
+        .expect("live original-mask batch replay");
     let replay_end = replay_source[replay_start..]
         .find("/// Six exact groups")
         .map(|offset| replay_start + offset)
         .expect("mask replay end");
     let replay = &replay_source[replay_start..replay_end];
-    assert!(replay.contains("masked_trace_coefficients_with_mask_v1"));
+    assert!(replay.contains("goldilocks_ifft_v1"));
     assert!(replay.contains("mask.coefficients()"));
+    assert!(replay.contains("coefficients[degree].sub(random)"));
+    assert!(replay.contains("coefficients[native_rows + degree].add(random)"));
     assert!(!replay.contains("sample_trace_mask_v1"));
     assert!(
         !replay.contains("rng"),

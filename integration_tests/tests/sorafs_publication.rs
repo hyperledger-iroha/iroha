@@ -273,27 +273,28 @@ async fn refresh_network_adverts(
     authority: &PublicationAuthorityFixture,
 ) -> Result<()> {
     timeout(wire::DEADLINE, async {
-    for provider in 0..3 {
-        let advert = authority.advert(provider, network.network_id(), now()?)?;
-        for peer in network.peers().iter().take(3) {
-            let response = http
-                .post(format!(
-                    "{}/v1/sorafs/provider/advert",
-                    peer.torii_url().trim_end_matches('/')
-                ))
-                .header("Content-Type", "application/x-norito")
-                .body(norito::encode_canonical(&advert)?)
-                .send()
-                .await?;
-            ensure!(
-                response.status().is_success(),
-                "actual signed provider advert rejected: {}",
-                response.status()
-            );
+        for provider in 0..3 {
+            let advert = authority.advert(provider, network.network_id(), now()?)?;
+            for peer in network.peers().iter().take(3) {
+                let response = http
+                    .post(format!(
+                        "{}/v1/sorafs/provider/advert",
+                        peer.torii_url().trim_end_matches('/')
+                    ))
+                    .header("Content-Type", "application/x-norito")
+                    .body(norito::encode_canonical(&advert)?)
+                    .send()
+                    .await?;
+                ensure!(
+                    response.status().is_success(),
+                    "actual signed provider advert rejected: {}",
+                    response.status()
+                );
+            }
         }
-    }
-    Ok::<_, eyre::Report>(())
-    }).await?
+        Ok::<_, eyre::Report>(())
+    })
+    .await?
 }
 
 /// Build an actual network and return only after all three production workers finalize completion.
@@ -682,6 +683,23 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
     );
     let mut corrupted = fs::read(path)?;
     ensure!(corrupted.len() as u64 == chunk_length);
+    let expected_digest = blake3::hash(&corrupted);
+    // Keep unrelated healthy manifests available, but rule out every local copy of the
+    // missing content. Completion must exercise the authenticated remote repair source.
+    for manifest in fs::read_dir(published.providers[0].storage_dir.join("manifests"))? {
+        for candidate in fs::read_dir(manifest?.path().join("chunks"))? {
+            let candidate = candidate?.path();
+            if candidate == *path || fs::metadata(&candidate)?.len() != chunk_length {
+                continue;
+            }
+            let bytes = fs::read(&candidate)?;
+            ensure!(bytes.len() as u64 == chunk_length);
+            ensure!(
+                blake3::hash(&bytes) != expected_digest,
+                "remote repair qualification must not have a valid local source for the corrupted chunk"
+            );
+        }
+    }
     corrupted[0] ^= 0x80;
     let mut file = fs::OpenOptions::new()
         .write(true)
