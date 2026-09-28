@@ -461,14 +461,109 @@ impl SignedBlock {
     /// cloning execution outputs that the returned proposal must omit.
     ///
     /// The commit certificate is removed as well: a proposal never carries finality.
+    ///
+    /// Entrypoints appended from merged lane blocks (`specs/sumeragi_lanes.md` §4.3) are execution
+    /// inputs, not proposal content: they are removed and the header roots recomputed.
     #[must_use]
     pub fn canonical_resultless_proposal(&self) -> Self {
+        let mut payload = self.payload.clone();
+        if payload
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.lane_merge.as_ref())
+            .is_some_and(|section| section.merged_count > 0)
+        {
+            let count = self.merged_entrypoint_count();
+            let keep = payload.external_entrypoints.len().saturating_sub(count);
+            payload.external_entrypoints.truncate(keep);
+            if let Some(context) = payload.execution_context.as_mut() {
+                context.external.truncate(keep);
+                if let Some(section) = context.lane_merge.as_mut() {
+                    section.merged_count = 0;
+                }
+            }
+            Self::refresh_entrypoint_roots(&mut payload);
+        }
         Self {
             signatures: self.signatures.clone(),
-            payload: self.payload.clone(),
+            payload,
             result: None,
             commit_certificate: None,
         }
+    }
+
+    /// The lane merge section this block carries, if any.
+    #[must_use]
+    pub fn lane_merge(&self) -> Option<&crate::sumeragi_lanes::SumeragiLaneMergeSection> {
+        self.payload
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.lane_merge.as_ref())
+    }
+
+    /// Number of trailing entrypoints that come from merged lane blocks.
+    #[must_use]
+    pub fn merged_entrypoint_count(&self) -> usize {
+        self.lane_merge()
+            .map_or(0, |section| {
+                usize::try_from(section.merged_count).unwrap_or(usize::MAX)
+            })
+            .min(self.payload.external_entrypoints.len())
+    }
+
+    /// The execution block of a proposal that merges lane blocks: `merged` appended to the
+    /// entrypoints (with their `contexts`), the merged count recorded and the header roots
+    /// recomputed. The proposal is recovered with [`Self::canonical_resultless_proposal`].
+    ///
+    /// # Errors
+    /// The block is not a resultless proposal with a lane merge section and no merged
+    /// entrypoints yet, or `contexts` does not align with `merged`.
+    pub fn with_merged_entrypoints(
+        &self,
+        merged: Vec<TransactionEntrypoint>,
+        contexts: Vec<ExternalExecutionContext>,
+    ) -> Result<Self, &'static str> {
+        if !self.is_resultless_proposal() {
+            return Err("only a resultless proposal takes merged entrypoints");
+        }
+        if merged.len() != contexts.len() {
+            return Err("merged entrypoints and contexts differ in length");
+        }
+        let count = u32::try_from(merged.len()).map_err(|_| "too many merged entrypoints")?;
+        let mut payload = self.payload.clone();
+        let Some(context) = payload.execution_context.as_mut() else {
+            return Err("the block carries no lane merge section");
+        };
+        let Some(section) = context.lane_merge.as_mut() else {
+            return Err("the block carries no lane merge section");
+        };
+        if section.merged_count != 0 {
+            return Err("the block already carries merged entrypoints");
+        }
+        section.merged_count = count;
+        if context.external.len() != payload.external_entrypoints.len() {
+            return Err("existing contexts do not align with the entrypoints");
+        }
+        context.external.extend(contexts);
+        payload.external_entrypoints.extend(merged);
+        Self::refresh_entrypoint_roots(&mut payload);
+        Ok(Self {
+            signatures: self.signatures.clone(),
+            payload,
+            result: None,
+            commit_certificate: None,
+        })
+    }
+
+    fn refresh_entrypoint_roots(payload: &mut BlockPayload) {
+        let mut merkle = iroha_crypto::MerkleTree::<TransactionEntrypoint>::default();
+        for entrypoint in &payload.external_entrypoints {
+            merkle.add(entrypoint.hash());
+        }
+        payload.header.merkle_root = merkle.root();
+        payload
+            .header
+            .set_execution_context_hash(payload.execution_context.as_ref().map(HashOf::new));
     }
     /// Compare the exact canonical resultless proposals while borrowing both source graphs.
     ///
@@ -1784,6 +1879,83 @@ mod tests {
             result: None,
             commit_certificate: None,
         }
+    }
+    #[test]
+    fn merged_lane_entrypoints_are_an_execution_suffix_of_the_proposal() {
+        use crate::sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection};
+        let transaction = |text: &str| {
+            let key_pair = checked_random_keypair();
+            let authority = crate::account::AccountId::new(key_pair.public_key().clone());
+            let signed = TransactionBuilder::new(
+                test_network_id(),
+                authority,
+                crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([crate::prelude::Log::new(crate::Level::INFO, text.into())])
+            .sign(key_pair.private_key());
+            TransactionEntrypoint::External(signed)
+        };
+        let context = |entrypoint: &TransactionEntrypoint, lane: u32| {
+            ExternalExecutionContext::new(entrypoint.hash(), LaneId::new(lane), DataSpaceId::new(0))
+        };
+        let own = transaction("lane 0");
+        let mut bundle = BlockExecutionContextBundle::new(vec![context(&own, 0)]);
+        bundle.lane_merge = Some(SumeragiLaneMergeSection {
+            merges: vec![SumeragiLaneMerge {
+                lane: LaneId::new(16),
+                incarnation: [1; 32],
+                from: 1,
+                to: 2,
+                tip_hash: [2; 32],
+                tip_result: [3; 32],
+            }],
+            merged_count: 0,
+        });
+        let mut payload = BlockPayload {
+            header: BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, 0, 0),
+            external_entrypoints: vec![own],
+            execution_context: Some(bundle),
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+            npos_consensus_effects: None,
+            global_beacon_pulse: None,
+        };
+        SignedBlock::refresh_entrypoint_roots(&mut payload);
+        let proposal = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload,
+            result: None,
+            commit_certificate: None,
+        };
+        let merged = vec![transaction("lane 16 a"), transaction("lane 16 b")];
+        let contexts = merged
+            .iter()
+            .map(|entrypoint| context(entrypoint, 16))
+            .collect();
+        let executed = proposal
+            .with_merged_entrypoints(merged, contexts)
+            .expect("expand");
+        assert_eq!(executed.merged_entrypoint_count(), 2);
+        assert_eq!(executed.payload.external_entrypoints.len(), 3);
+        assert_ne!(
+            executed.header().merkle_root(),
+            proposal.header().merkle_root(),
+            "the executed header binds every executed entrypoint"
+        );
+        assert_eq!(executed.canonical_resultless_proposal(), proposal);
+        assert!(
+            executed
+                .with_merged_entrypoints(Vec::new(), Vec::new())
+                .is_err(),
+            "merged entrypoints are appended once"
+        );
+        assert!(
+            proposal
+                .with_merged_entrypoints(vec![transaction("x")], Vec::new())
+                .is_err(),
+            "contexts must align"
+        );
     }
     #[test]
     fn block_payload_ordering_includes_execution_context() {

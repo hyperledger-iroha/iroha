@@ -170,6 +170,35 @@ impl SumeragiLaneMerge {
     }
 }
 
+/// The lane merge of a global block (`specs/sumeragi_lanes.md` §4): the merged lane ranges and,
+/// in the executed block, how many trailing entrypoints came from them.
+///
+/// A proposal carries `merged_count = 0`; execution appends the admitted transactions of the
+/// merged lane blocks to the block's entrypoints and records their number, so the executed block
+/// runs through the ordinary execution pipeline and the proposal is recovered by removing that
+/// suffix.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sumeragi_lanes::SumeragiLaneMergeSection")]
+pub struct SumeragiLaneMergeSection {
+    /// Merged lane ranges, lanes ascending.
+    pub merges: Vec<SumeragiLaneMerge>,
+    /// Number of trailing block entrypoints that come from the merged lane blocks.
+    pub merged_count: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
