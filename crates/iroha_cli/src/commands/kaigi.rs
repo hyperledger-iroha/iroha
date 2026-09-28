@@ -280,7 +280,7 @@ impl From<PrivacyModeArg> for KaigiPrivacyMode {
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomPolicyArg {
     Public,
-    #[clap(alias = "auth", alias = "authenticated")]
+    #[clap(alias = "auth")]
     Authenticated,
 }
 impl From<RoomPolicyArg> for KaigiRoomPolicy {

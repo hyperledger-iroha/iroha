@@ -21415,11 +21415,6 @@ impl norito::NoritoSchema for BoundedCanonicalIterableFanoutResponse {
 }
 impl norito::core::SerializePayload for BoundedCanonicalIterableFanoutResponse {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        if norito::core::use_packed_struct() || norito::core::use_packed_seq() {
-            return Err(norito::core::Error::UnsupportedFeature(
-                "packed canonical fanout response",
-            ));
-        }
         // QueryResponse::Iterable is the second data-model variant.
         norito::core::SerializePayload::serialize(&1_u32, writer)?;
         norito::core::write_len_prefixed(writer, &self.output_ref())
@@ -21428,9 +21423,6 @@ impl norito::core::SerializePayload for BoundedCanonicalIterableFanoutResponse {
         self.encoded_len_exact()
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        if norito::core::use_packed_struct() || norito::core::use_packed_seq() {
-            return None;
-        }
         let output_len = self.output_ref().encoded_len_exact()?;
         4_usize.checked_add(canonical_fanout_len_prefixed(output_len)?)
     }

@@ -356,9 +356,18 @@ fn routed_read_exact_json_destination_transfers_to_bytes_without_copying() {
 }
 #[test]
 fn routed_read_source_keeps_multiroute_fanout_enabled() {
-    let source = include_str!("../../lib.rs");
+    // The routed-read helpers are `include!`d into lib.rs, so the wiring spans
+    // lib.rs and the included collect/execute sources.
+    let source = [
+        include_str!("../../lib.rs"),
+        include_str!("../../torii_app_routed_read_route_collect.rs"),
+        include_str!("../../torii_app_routed_read_execute.rs"),
+    ]
+    .concat();
     for required in [
         "include!(\"torii_app_routed_read_source.rs\")",
+        "include!(\"torii_app_routed_read_route_collect.rs\")",
+        "include!(\"torii_app_routed_read_execute.rs\")",
         "collect_torii_routed_list_json_payloads",
         "execute_torii_read_fanout_for_resolved_routes_admitted",
         "resolve_torii_proof_record_for_supported_routes(app, routes, proof_id).await",

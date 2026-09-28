@@ -240,7 +240,7 @@ impl<'a> GoldilocksDigest384DomainPrefixV1<'a> {
 
 // Opaque crate-private proof of a canonical cached domain through tag 10.
 // Only the typed prefix owner constructs it; there is no public raw-state input.
-pub(crate) struct CachedDomainSuffix {
+pub struct CachedDomainSuffix {
     lane_states: [[u64; STATE_WIDTH]; GOLDILOCKS_DIGEST384_LANES_V1],
     pending: [u64; RATE],
     pending_len: usize,
@@ -956,6 +956,7 @@ mod tests {
 
     #[test]
     fn wide_mds_dot_matches_independent_modulus_at_carry_boundaries() {
+        use core::cmp::Ordering::{Equal, Greater, Less};
         let edge = [
             0,
             1,
@@ -991,7 +992,6 @@ mod tests {
         // Pin every carry count and both individual carry flags. Nonzero
         // correction equality must return canonical zero rather than p; less
         // and greater cases exercise both modular-subtraction branches.
-        use core::cmp::Ordering::{Equal, Greater, Less};
         let p = FIELD_MODULUS;
         let half = 1_u64 << 63;
         for (row, state, carries, relation) in [

@@ -32012,7 +32012,6 @@ mod multisig_native_norito_dto_tests {
         flags: u8,
     ) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-        let _sequential = norito::core::SequentialOverrideGuard::enter();
         let mut payload = Vec::new();
         norito::core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
         payload

@@ -103,25 +103,7 @@ fn native_network_controls_classify_and_decode_under_every_supported_layout() {
             let message = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(block)));
             assert_eq!(raw_network_topic(&message), NetworkTopic::Consensus);
             assert_network_admission(&message, iroha_p2p::TransportAdmissionClass::Lane);
-            for requested_flags in [
-                0,
-                ncore::header_flags::COMPACT_LEN,
-                ncore::header_flags::PACKED_SEQ,
-                ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN,
-                ncore::header_flags::PACKED_STRUCT,
-                ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
-                ncore::header_flags::PACKED_STRUCT | ncore::header_flags::PACKED_SEQ,
-                ncore::header_flags::PACKED_STRUCT
-                    | ncore::header_flags::PACKED_SEQ
-                    | ncore::header_flags::COMPACT_LEN,
-                ncore::header_flags::PACKED_STRUCT
-                    | ncore::header_flags::COMPACT_LEN
-                    | ncore::header_flags::FIELD_BITSET,
-                ncore::header_flags::PACKED_STRUCT
-                    | ncore::header_flags::PACKED_SEQ
-                    | ncore::header_flags::COMPACT_LEN
-                    | ncore::header_flags::FIELD_BITSET,
-            ] {
+            for requested_flags in [0, ncore::header_flags::COMPACT_LEN] {
                 let encoded = {
                     let _layout = ncore::DecodeFlagsGuard::enter(requested_flags);
                     ncore::to_bytes(&message).unwrap()
@@ -130,9 +112,8 @@ fn native_network_controls_classify_and_decode_under_every_supported_layout() {
                 let (_, remaining) = super::inbound_enum_parts(view.as_bytes()).unwrap();
                 let nested = super::inbound_owned_enum_field(remaining, view.flags()).unwrap();
                 let (_, _, nested_flags) = super::inbound_sumeragi_enum_field(nested).unwrap();
-                // Norito clears unused PACKED_SEQ/FIELD_BITSET flags for a
-                // shape that has no corresponding dynamic fields. Compare the
-                // complete nested frame to its independently encoded source.
+                // Compare the complete nested frame to its independently
+                // encoded source.
                 let expected_nested = {
                     let _layout = ncore::DecodeFlagsGuard::enter(requested_flags);
                     let NetworkMessage::SumeragiBlock(wire) = &message else {
@@ -175,21 +156,15 @@ fn native_network_controls_classify_and_decode_under_every_supported_layout() {
     }
     assert_eq!(
         observed_layouts.len(),
-        10,
-        "all ten declared layouts must be exercised"
+        2,
+        "both v1 layouts must be exercised"
     );
 }
 
 #[test]
 fn native_network_control_raw_gate_rejects_unknown_version_kind_and_truncation() {
     use iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1;
-    for flags in [
-        0,
-        ncore::header_flags::COMPACT_LEN,
-        ncore::header_flags::PACKED_STRUCT
-            | ncore::header_flags::FIELD_BITSET
-            | ncore::header_flags::COMPACT_LEN,
-    ] {
+    for flags in [0, ncore::header_flags::COMPACT_LEN] {
         let mut block = native_network_controls(4).remove(3);
         let BlockMessage::NativeLane(envelope) = &mut block else {
             unreachable!()

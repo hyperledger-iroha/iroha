@@ -1,5 +1,6 @@
 //! Deterministic SoraFS PoR and cross-SDK fixture regeneration checks.
 #![allow(unexpected_cfgs)]
+#[cfg(feature = "dev-tools")]
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     PotrReceiptV1, ProofStreamTier, RepairTaskRecordV1, RepairTaskStateV1,
@@ -8,7 +9,10 @@ use sorafs_manifest::{
     },
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, decode_por_proof_v1},
 };
-use std::{fs, path::Path};
+use std::fs;
+#[cfg(feature = "dev-tools")]
+use std::path::Path;
+#[cfg(feature = "dev-tools")]
 use tempfile::tempdir;
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -17,7 +21,7 @@ const FIXTURES_ROOT: &str = concat!(
 fn read_fixture(path: &str) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 fn seed_generator_inputs(root: &Path) {
     for directory in [
         "por",
@@ -46,6 +50,7 @@ fn seed_generator_inputs(root: &Path) {
         );
     }
 }
+#[cfg(feature = "dev-tools")]
 fn run_generator(root: &Path, arguments: &[&str]) -> std::process::Output {
     cargo_bin_cmd!("generate_por_fixtures")
         .current_dir(root)
@@ -53,7 +58,7 @@ fn run_generator(root: &Path, arguments: &[&str]) -> std::process::Output {
         .output()
         .expect("run deterministic SoraFS fixture generator")
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 fn assert_generator_success(output: &std::process::Output, mode: &str) {
     assert!(
         output.status.success(),
@@ -62,13 +67,13 @@ fn assert_generator_success(output: &std::process::Output, mode: &str) {
         String::from_utf8_lossy(&output.stderr),
     );
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 fn regenerate_fixtures(root: &Path) {
     seed_generator_inputs(root);
     let write = run_generator(root, &["--write"]);
     assert_generator_success(&write, "--write");
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 fn copy_fixture_tree(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).unwrap_or_else(|error| {
         panic!(
@@ -99,6 +104,7 @@ fn copy_fixture_tree(source: &Path, destination: &Path) {
         }
     }
 }
+#[cfg(feature = "dev-tools")]
 #[test]
 fn por_fixture_generator_requires_exactly_one_explicit_mode() {
     let root = tempdir().expect("create CLI contract directory");
@@ -120,7 +126,7 @@ fn por_fixture_generator_requires_exactly_one_explicit_mode() {
         );
     }
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 #[test]
 fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() {
     let root = tempdir().expect("create adversarial fixture directory");
@@ -212,7 +218,7 @@ fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() 
         fs::remove_file(&hardlink).expect("remove hardlink alias");
     }
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 #[test]
 fn por_fixture_generator_rejects_symlinked_managed_targets() {
     use std::os::unix::fs::symlink;
@@ -362,7 +368,7 @@ fn moderation_governance_node_fixture_is_typed_and_signed() {
         other => panic!("expected ModerationBallotEvent payload, got {other:?}"),
     }
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 #[test]
 fn governance_sdk_fixture_regeneration_is_byte_identical() {
     const INVENTORIED_FILES: [&str; 26] = [
@@ -414,7 +420,7 @@ fn governance_sdk_fixture_regeneration_is_byte_identical() {
         );
     }
 }
-#[cfg(unix)]
+#[cfg(all(unix, feature = "dev-tools"))]
 #[test]
 fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
     const INVENTORIED_FILES: [&str; 27] = [

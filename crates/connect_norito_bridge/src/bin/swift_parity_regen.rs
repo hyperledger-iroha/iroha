@@ -133,18 +133,6 @@ impl PublishFailure {
         }
     }
 }
-struct ChainDiscriminantReset(u16);
-impl ChainDiscriminantReset {
-    fn new(discriminant: u16) -> Self {
-        let previous = address::set_chain_discriminant(discriminant);
-        Self(previous)
-    }
-}
-impl Drop for ChainDiscriminantReset {
-    fn drop(&mut self) {
-        address::set_chain_discriminant(self.0);
-    }
-}
 fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, String> {
     let parsed = AssetDefinitionId::parse_address_literal(raw)
         .map_err(|err| format!("invalid asset definition '{raw}': {err}"))?;
@@ -489,7 +477,7 @@ fn validate_distinct_fixture_identities(fixtures: &[FixtureOutput]) -> Result<()
     Ok(())
 }
 fn render_fixtures(fixtures_path: &Path) -> Result<RenderedFixtures, String> {
-    let _chain_guard = ChainDiscriminantReset::new(DEFAULT_CHAIN_DISCRIMINANT);
+    let _chain_guard = address::ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let source_bytes = fs::read(&fixtures_path)
         .map_err(|err| format!("failed to read {}: {err}", fixtures_path.display()))?;
     let mut entries: Vec<PayloadFileEntry> = norito::json::from_slice(&source_bytes)
@@ -770,6 +758,17 @@ fn read_regular_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
     }
     Ok(Some(bytes))
 }
+fn fixture_entry_name(
+    file_name: std::ffi::OsString,
+    directory_path: &Path,
+) -> Result<String, String> {
+    file_name.into_string().map_err(|_| {
+        format!(
+            "Swift fixture tree contains a non-UTF-8 entry under {}",
+            directory_path.display()
+        )
+    })
+}
 fn reject_orphan_swift_blobs(root: &Path) -> Result<(), String> {
     let fixtures_dir = root.join(DEFAULT_OUT_DIR);
     let metadata = match fs::symlink_metadata(&fixtures_dir) {
@@ -822,12 +821,7 @@ fn reject_orphan_swift_blobs(root: &Path) -> Result<(), String> {
             let entry =
                 entry.map_err(|err| format!("read {} entry: {err}", directory_path.display()))?;
             let entry_path = entry.path();
-            let file_name = entry.file_name().into_string().map_err(|_| {
-                format!(
-                    "Swift fixture tree contains a non-UTF-8 entry under {}",
-                    directory_path.display()
-                )
-            })?;
+            let file_name = fixture_entry_name(entry.file_name(), &directory_path)?;
             let relative = relative_directory.join(&file_name);
             let entry_metadata = fs::symlink_metadata(&entry_path)
                 .map_err(|err| format!("inspect {}: {err}", entry_path.display()))?;
@@ -1622,9 +1616,11 @@ mod tests {
     }
     #[test]
     fn rendering_is_deterministic_and_owns_only_manifest_and_three_blobs() {
+        let _caller_chain = address::ChainDiscriminantGuard::enter(733);
         let fixtures_path = repository_root().join(DEFAULT_FIXTURES_PATH);
         let first = render_fixtures(&fixtures_path).expect("first render");
         let second = render_fixtures(&fixtures_path).expect("second render");
+        assert_eq!(address::chain_discriminant(), 733);
         assert_eq!(first.files, second.files);
         assert_eq!(first.files.len(), 4);
         for relative in owned_relative_paths() {
@@ -1890,9 +1886,22 @@ mod tests {
         let stage_root = canonical_temp_root(&stage);
         let fixtures = stage_root.join(DEFAULT_OUT_DIR);
         fs::create_dir_all(&fixtures).expect("create fixtures");
-        let invalid = fixtures.join(OsString::from_vec(b"swift_\xff.norito".to_vec()));
-        fs::write(invalid, b"invalid name").expect("write non-UTF-8 entry");
+        let invalid = OsString::from_vec(b"swift_\xff.norito".to_vec());
+        let error = fixture_entry_name(invalid, &fixtures)
+            .expect_err("the production name boundary must reject non-UTF-8 bytes");
+        assert!(error.contains("non-UTF-8 entry"));
+        let representable = OsString::from("swift_ß.norito");
+        assert_eq!(
+            fixture_entry_name(representable.clone(), &fixtures).expect("valid UTF-8 name"),
+            "swift_ß.norito"
+        );
+        let unexpected = fixtures.join(representable);
+        fs::write(&unexpected, b"unexpected fixture").expect("write representable entry");
         assert!(reject_orphan_swift_blobs(&stage_root).is_err());
+        assert_eq!(
+            fs::read(unexpected).expect("unexpected entry is preserved"),
+            b"unexpected fixture"
+        );
     }
     #[test]
     fn failed_publication_rolls_back_existing_and_new_outputs() {

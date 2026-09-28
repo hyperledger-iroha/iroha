@@ -9775,6 +9775,7 @@ mod tests {
     include!("executor_effect_budget_tests.rs");
     include!("executor_sorafs_repair_tests.rs");
     include!("executor_stream_token_custody_permission_tests.rs");
+    include!("executor_cross_scope_permission_tests.rs");
     include!("executor_stream_token_direct_source_tests.rs");
     include!("executor_sorafs_market_tests.rs");
     include!("executor_sorafs_provider_governance_tests.rs");

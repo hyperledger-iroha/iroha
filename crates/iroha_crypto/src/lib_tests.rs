@@ -586,7 +586,10 @@ mod tests {
                 let (pk, sk) =
                     checked_seed_keypair(&[0x40 + i; 32], Algorithm::BlsNormal).into_parts();
                 let pop = bls_normal_pop_prove(&sk).expect("pop");
-                (BlsNormalPopVerifiedKey::new(&pk, &pop).expect("pop verifies"), sk)
+                (
+                    BlsNormalPopVerifiedKey::new(&pk, &pop).expect("pop verifies"),
+                    sk,
+                )
             })
             .collect()
     }
@@ -606,7 +609,11 @@ mod tests {
         let keys = pop_verified_keys(5);
         let (k, s): (Vec<&BlsNormalPopVerifiedKey>, Vec<&PrivateKey>) =
             keys.iter().map(|(k, s)| (k, s)).unzip();
-        let (m0, m1, m2) = (&b"timeout hq=none"[..], &b"timeout hq=3"[..], &b"timeout hq=4"[..]);
+        let (m0, m1, m2) = (
+            &b"timeout hq=none"[..],
+            &b"timeout hq=3"[..],
+            &b"timeout hq=4"[..],
+        );
         let agg = multi_message_aggregate(&[(&s[0..2], m0), (&s[2..4], m1), (&s[4..5], m2)]);
         bls_normal_verify_preaggregated_multi_message(
             &[(&k[0..2], m0), (&k[2..4], m1), (&k[4..5], m2)],
@@ -620,8 +627,7 @@ mod tests {
         )
         .expect("groups in another order");
         let same = multi_message_aggregate(&[(&s[..], m0)]);
-        bls_normal_verify_preaggregated_multi_message(&[(&k[..], m0)], &same)
-            .expect("one group");
+        bls_normal_verify_preaggregated_multi_message(&[(&k[..], m0)], &same).expect("one group");
         let pks: Vec<&PublicKey> = k.iter().map(|key| key.public_key()).collect();
         let pops: Vec<Vec<u8>> = s
             .iter()
@@ -703,7 +709,7 @@ mod tests {
     #[test]
     fn bls_normal_pop_verified_key_requires_a_valid_pop() {
         let (pk, sk) = checked_seed_keypair(&[0x51; 32], Algorithm::BlsNormal).into_parts();
-        let (other_pk, other_sk) =
+        let (other_public_key, other_secret_key) =
             checked_seed_keypair(&[0x52; 32], Algorithm::BlsNormal).into_parts();
         let pop = bls_normal_pop_prove(&sk).expect("pop");
         let key = BlsNormalPopVerifiedKey::new(&pk, &pop).expect("valid pop");
@@ -712,9 +718,9 @@ mod tests {
         assert_eq!(key.payload().len(), 48);
         assert_eq!(key.clone(), key);
         assert!(format!("{key:?}").starts_with("BlsNormalPopVerifiedKey"));
-        let other_pop = bls_normal_pop_prove(&other_sk).expect("pop");
+        let other_pop = bls_normal_pop_prove(&other_secret_key).expect("pop");
         assert!(BlsNormalPopVerifiedKey::new(&pk, &other_pop).is_err());
-        assert!(BlsNormalPopVerifiedKey::new(&other_pk, &pop).is_err());
+        assert!(BlsNormalPopVerifiedKey::new(&other_public_key, &pop).is_err());
         assert!(BlsNormalPopVerifiedKey::new(&pk, &[]).is_err());
         let (ed, _) = checked_seed_keypair(&[0x53; 32], Algorithm::Ed25519).into_parts();
         assert!(BlsNormalPopVerifiedKey::new(&ed, &pop).is_err());

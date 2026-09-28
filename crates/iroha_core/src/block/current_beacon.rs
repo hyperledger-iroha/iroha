@@ -102,7 +102,7 @@ mod current_beacon_tests {
             FinalizedGlobalThresholdBeaconKeySessionRecordV1,
             signed_pulses_fixture_for_roster_and_anchors,
         },
-        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateReadOnly, World, WorldReadOnly},
+        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, World, WorldReadOnly},
         sumeragi::{
             block_store::Staging,
             certified_chain::CertifiedChain,
@@ -118,7 +118,6 @@ mod current_beacon_tests {
         parameter::system::ConsensusMode,
     };
     use iroha_sumeragi::crypto::NoAttestation;
-    use mv::storage::StorageReadOnly as _;
     use std::{collections::BTreeSet, sync::Arc};
 
     fn predecessor() -> CertifiedTestChain {

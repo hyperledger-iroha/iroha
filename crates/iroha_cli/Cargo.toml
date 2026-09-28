@@ -99,7 +99,7 @@ humantime = { workspace = true }
 norito = { workspace = true, default-features = false }
 supports-color = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
-futures = { workspace = true }
+futures = { workspace = true, features = ["async-await", "std"] }
 base64 = { workspace = true }
 hex = { workspace = true }
 iroha_i18n = { workspace = true }

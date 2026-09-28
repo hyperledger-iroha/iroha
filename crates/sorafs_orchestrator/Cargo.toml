@@ -61,7 +61,7 @@ sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 url = { workspace = true }
 iroha_version = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
-sorafs_manifest = { path = "../sorafs_manifest", optional = true }
+sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"], optional = true }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["application"] }
 iroha_config = { path = "../iroha_config", optional = true }
 iroha_torii_shared = { workspace = true, optional = true }
@@ -77,7 +77,7 @@ hex = "0.4.3"
 assert_cmd = "2.1.1"
 httpmock = "0.8.2"
 rust_decimal = { workspace = true }
-sorafs_manifest = { path = "../sorafs_manifest" }
+sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"] }
 soranet_pq = { path = "../soranet_pq" }
 
 [[bin]]
