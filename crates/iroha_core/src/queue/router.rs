@@ -7921,7 +7921,7 @@ fn rule_matches(
     }
     true
 }
-fn rule_matches_with_world<W: WorldReadOnly>(
+pub(crate) fn rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,

@@ -183,6 +183,7 @@ pub use router::{
     evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
     resolve_query_routing_decision, resolve_routing_decision,
 };
+pub(crate) use router::rule_matches_with_world;
 #[cfg(test)]
 use std::sync::Barrier;
 use std::{
