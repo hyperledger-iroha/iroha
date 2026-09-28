@@ -75,6 +75,12 @@ must apply that one context while decoding every authority, destination, source
 owner, approval, and session account into a domainless `AccountId`. Nexus facade
 configs have no implicit/default account-chain fallback.
 
+The maintained generator `cargo xtask nexus-connect-fixture --print` emits only
+the native generated JSON. Capture stdout into an ignored staging file, inspect
+and publish those bytes, then run `cargo xtask nexus-connect-fixture --check
+--output-root "$PWD"`. Explicit `--write` still requires an external non-Git
+staging root; `--print` never opens an output path.
+
 Use this fixture for cross-SDK tests before adding live smoke tests. Live tests
 should stay behind opt-in environment variables such as `NEXUS_CONNECT_LIVE=1`,
 `TORII_URL`, and wallet credentials.

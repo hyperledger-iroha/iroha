@@ -7085,6 +7085,15 @@ fn finalize_bridge_finality_attestation_response(result: Result<AxResponse, Erro
 fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
+#[cfg(feature = "push")]
+fn push_registration_rate_limiter(
+    config: &iroha_config::parameters::actual::Push,
+) -> limits::RateLimiter {
+    limits::RateLimiter::new_per_minute(
+        config.rate_per_minute.map(std::num::NonZeroU32::get),
+        config.burst.map(std::num::NonZeroU32::get),
+    )
+}
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_error_response(
     status: StatusCode,
@@ -45799,12 +45808,7 @@ impl Torii {
             } else {
                 None
             };
-            let per_sec = config.push.rate_per_minute.map(|value| {
-                let per_min = value.get().max(1);
-                per_min.saturating_add(59) / 60
-            });
-            let burst = config.push.burst.map(std::num::NonZeroU32::get);
-            (bridge, limits::RateLimiter::new(per_sec, burst))
+            (bridge, push_registration_rate_limiter(&config.push))
         };
         let query_rate = config
             .query_rate_per_authority_per_sec

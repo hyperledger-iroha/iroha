@@ -1713,6 +1713,12 @@ TORII_UNIT_STAGES += (("large solo content and bounded gateway rate budgets", (
     'sorafs::gateway::rate_limit::tests::rate_limiter_default_admits_large_solo_burst_with_one_fixed_bucket',
     'sorafs::gateway::rate_limit::tests::rate_limiter_reclaims_idle_buckets_but_retains_active_bans',
 )),)
+TORII_UNIT_STAGES += (("large push and Connect budgets with finite operator overrides", (
+    'tests_runtime_handlers::push_registration_defaults_admit_ten_thousand_operations_with_one_bucket',
+    'tests_runtime_handlers::push_registration_explicit_small_budget_remains_bounded',
+    'connect::tests::default_handshake_budget_admits_ten_thousand_operations_with_one_bucket',
+    'connect::tests::default_handshake_rate_preserves_session_caps_and_explicit_small_budgets',
+)),)
 TORII_UNIT_STAGES += (("permanent current queue admission errors", (
     'tests_queue_metadata::unsupported_current_queue_admission_has_permanent_canonical_error',
 )),)

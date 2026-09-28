@@ -2669,12 +2669,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         #[cfg(feature = "push")]
         push: push_bridge,
         #[cfg(feature = "push")]
-        push_rate_limiter: limits::RateLimiter::new(
-            push_cfg
-                .rate_per_minute
-                .map(|v| v.get().saturating_add(59) / 60),
-            push_cfg.burst.map(std::num::NonZeroU32::get),
-        ),
+        push_rate_limiter: super::push_registration_rate_limiter(&push_cfg),
     })
 }
 #[cfg(feature = "telemetry")]

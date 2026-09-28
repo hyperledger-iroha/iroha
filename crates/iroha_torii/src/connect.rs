@@ -2871,7 +2871,8 @@ impl Default for Policy {
             relay_strategy: RelayStrategy::Broadcast,
             ws_max_sessions: 10_000,
             ws_per_ip_max_sessions: 10,
-            ws_rate_per_ip_per_min: 120,
+            ws_rate_per_ip_per_min:
+                iroha_config::parameters::defaults::connect::WS_RATE_PER_IP_PER_MIN,
             session_ttl: Duration::from_mins(5),
             session_buffer_max_bytes: 262_144,
             heartbeat_interval: Duration::from_secs(30),

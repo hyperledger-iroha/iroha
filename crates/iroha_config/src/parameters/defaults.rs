@@ -2705,9 +2705,9 @@ pub mod torii {
     /// Enable push-notification rate limiting.
     pub const PUSH_RATE_LIMIT_ENABLED: bool = true;
     /// Steady-state rate (requests per minute) for push notifications.
-    pub const PUSH_RATE_PER_MINUTE: NonZeroU32 = nonzero!(60_u32);
+    pub const PUSH_RATE_PER_MINUTE: NonZeroU32 = nonzero!(600_000_u32);
     /// Burst tokens for push notifications.
-    pub const PUSH_BURST: NonZeroU32 = nonzero!(30_u32);
+    pub const PUSH_BURST: NonZeroU32 = nonzero!(100_000_u32);
     /// HTTP connect timeout (milliseconds) for push delivery.
     pub const PUSH_CONNECT_TIMEOUT_MS: u64 = 5_000;
     /// HTTP request timeout (milliseconds) for push delivery.
@@ -3749,7 +3749,7 @@ pub mod connect {
     /// Max concurrent WS sessions per remote IP.
     pub const WS_PER_IP_MAX_SESSIONS: usize = 10;
     /// Per-IP WS handshake rate (requests per minute).
-    pub const WS_RATE_PER_IP_PER_MIN: u32 = 120;
+    pub const WS_RATE_PER_IP_PER_MIN: u32 = 600_000;
     /// Session inactivity TTL (milliseconds).
     pub const SESSION_TTL: Duration = Duration::from_millis(300_000); // 5 minutes
     /// Maximum WS frame size accepted for Connect frames (bytes).

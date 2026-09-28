@@ -34,6 +34,7 @@ use std::{
     time::Duration,
 };
 mod authorization;
+pub mod call;
 pub use authorization::DeploymentAuthorization;
 mod journal;
 mod native;

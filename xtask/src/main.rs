@@ -11624,7 +11624,18 @@ mod acceleration_state_tests {
             panic!("expected Nexus Connect fixture command");
         };
         assert_eq!(options.mode, nexus::NexusConnectFixtureMode::Check);
-        assert_eq!(options.output_root, root);
+        assert_eq!(options.output_root, Some(root));
+        let printed = parse_command(
+            ["xtask", "nexus-connect-fixture", "--print"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .expect("parse native stdout command");
+        let CommandKind::NexusConnectFixture { options } = printed else {
+            panic!("expected Nexus Connect fixture command");
+        };
+        assert_eq!(options.mode, nexus::NexusConnectFixtureMode::Print);
+        assert_eq!(options.output_root, None);
     }
     #[test]
     fn parse_fastpq_cuda_suite_operation_updates_default_artifact_names() {

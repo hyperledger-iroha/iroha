@@ -2973,3 +2973,5 @@ fn accept_transaction_signature_failure_sets_code_and_header() {
     assert!(envelope.message().contains("failed to accept transaction"));
 }
 include!("part_9b_error_headers.rs");
+
+include!("push_rate_limits.rs");

@@ -11,6 +11,7 @@ description = "Durable native contract deployment orchestration using the Iroha 
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 iroha = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["json"] }
 iroha_executor_data_model = { workspace = true }

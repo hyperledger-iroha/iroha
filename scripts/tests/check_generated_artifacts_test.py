@@ -241,9 +241,10 @@ def test_nexus_connect_transfer_fixture_has_closed_unique_staging_owner() -> Non
     }
 
     generator = owner["generator"]
-    assert "nexus-connect-fixture --write" in generator
-    assert "--output-root" in generator
-    assert "IROHA_NEXUS_CONNECT_FIXTURE_STAGE" in generator
+    assert generator.endswith("nexus-connect-fixture --print")
+    assert "--write" not in generator
+    assert "--output-root" not in generator
+    assert "IROHA_NEXUS_CONNECT_FIXTURE_STAGE" not in generator
     assert "$PWD" not in generator
     assert output not in generator
 

@@ -292,10 +292,10 @@ fn print_usage() {
         "    Regenerate Nexus lane commitment fixtures (defaults to fixtures/nexus/lane_commitments); pass --verify to ensure existing files match the generated payloads."
     );
     eprintln!(
-        "  cargo xtask nexus-connect-fixture (--write|--check) --output-root <absolute-directory>"
+        "  cargo xtask nexus-connect-fixture --print | (--write|--check) --output-root <absolute-directory>"
     );
     eprintln!(
-        "    Build the Rust-owned Nexus Connect transfer SDK fixture; write mode refuses Git checkouts and requires an external staging root."
+        "    Emit the exact native JSON with --print; file write mode still refuses Git checkouts and requires an external staging root."
     );
     eprintln!("  cargo xtask nexus-lane-maintenance --config <path>");
     eprintln!(

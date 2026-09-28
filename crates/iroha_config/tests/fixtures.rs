@@ -198,10 +198,18 @@ fn minimal_config_inherits_large_application_rate_budgets() {
         torii.soracloud_mutation_burst_per_account_origin,
         torii.proof_api.burst,
         torii.mcp.burst,
+        torii.push.burst,
     ] {
         assert_eq!(burst.map(std::num::NonZeroU32::get), Some(100_000));
     }
-    for rate in [torii.proof_api.rate_per_minute, torii.mcp.rate_per_minute] {
+    assert_eq!(torii.connect.ws_rate_per_ip_per_min, 600_000);
+    assert_eq!(torii.connect.ws_per_ip_max_sessions, 10);
+    assert_eq!(torii.connect.ws_max_sessions, 10_000);
+    for rate in [
+        torii.proof_api.rate_per_minute,
+        torii.mcp.rate_per_minute,
+        torii.push.rate_per_minute,
+    ] {
         assert_eq!(rate.map(std::num::NonZeroU32::get), Some(600_000));
     }
     assert_eq!(

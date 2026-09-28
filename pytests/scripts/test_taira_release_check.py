@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1701 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1866 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1705 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1870 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -113,6 +113,68 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_push_and_connect_rate_regressions_are_exact_source_bound_and_required(self):
+        source = SCRIPT.resolve().parents[1] / "crates/iroha_torii"
+        cases = {
+            "src/tests/lib_runtime_handlers/push_rate_limits.rs": (
+                "tests_runtime_handlers::", (
+                    "push_registration_defaults_admit_ten_thousand_operations_with_one_bucket",
+                    "push_registration_explicit_small_budget_remains_bounded",
+                )),
+            "src/connect/tests.rs": (
+                "connect::tests::", (
+                    "default_handshake_budget_admits_ten_thousand_operations_with_one_bucket",
+                    "default_handshake_rate_preserves_session_caps_and_explicit_small_budgets",
+                )),
+        }
+        required = []
+        for relative, (prefix, names) in cases.items():
+            text = (source / relative).read_text()
+            declared = re.findall(r"#\[tokio::test\]\s*async fn\s+(\w+)\s*\(", text)
+            for name in names:
+                self.assertEqual(declared.count(name), 1, (relative, name))
+                required.append(prefix + name)
+            if relative.endswith("push_rate_limits.rs"):
+                self.assertCountEqual(declared, names)
+                self.assertEqual(text.count('#[cfg(feature = "push")]'), len(names))
+        self.assertIn('include!("push_rate_limits.rs");',
+                      (source / "src/tests/lib_runtime_handlers/part_9.rs").read_text())
+        self.assertIn('include!("lib_runtime_handlers/part_9.rs");',
+                      (source / "src/tests/lib_runtime_handlers.rs").read_text())
+        self.assertIn('pub(crate) mod tests_runtime_handlers {',
+                      (source / "src/tests/lib_runtime_handlers.rs").read_text())
+        self.assertIn('include!("tests/lib_runtime_handlers.rs");',
+                      (source / "src/lib.rs").read_text())
+        self.assertIn('#[cfg(feature = "connect")]\nmod connect;',
+                      (source / "src/lib.rs").read_text())
+        self.assertIn('#[cfg(test)]\nmod tests;', (source / "src/connect.rs").read_text())
+        features = tomllib.loads((source / "Cargo.toml").read_text())["features"]
+        self.assertIn("node-api", features["default"])
+        self.assertTrue({"connect", "push", "app_api"}.issubset(features["node-api"]))
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("push_connect_rate_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            self.assertEqual(selected_gate.HARNESS_TARGETS["torii-unit"][3],
+                             ["-p", "iroha_torii", "--lib"])
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["torii-unit"]
+                selected = [name for _, names in stages for name in names]
+                for regression in required:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(selected.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(
+                            scope, ("torii-unit=" + regression,))
+                        self.assertEqual(tuple(focused), ("torii-unit",))
+                        self.assertEqual([name for _, names in focused["torii-unit"]
+                                          for name in names], [regression])
+                        listing = "\n".join(name + ": test" for name in selected
+                                            if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError,
+                                                    "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
     def test_signed_monetary_authority_controls_are_source_bound_and_required(self):
         source = SCRIPT.resolve().parents[1] / "crates/iroha_core/src/smartcontracts/isi"
         self.assertIn('include!("staking_monetary_fixture_tests.rs");',

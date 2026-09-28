@@ -4841,6 +4841,7 @@ dependencies = [
 name = "iroha_contract_deploy"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "base64 0.22.1",
  "eyre",
  "hex",
  "iroha",

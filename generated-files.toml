@@ -444,7 +444,7 @@ kind = "file"
 outputs = [
   "fixtures/sdk/nexus_connect_transfer_v1.json",
 ]
-generator = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- nexus-connect-fixture --write --output-root \"${IROHA_NEXUS_CONNECT_FIXTURE_STAGE:?set an absolute external staging tree}\""
+generator = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- nexus-connect-fixture --print"
 generator_sources = [
   "xtask/src/main.rs",
   "xtask/src/nexus.rs",

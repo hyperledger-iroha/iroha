@@ -2928,3 +2928,70 @@ fn decode_sid_rejects_hex() {
     let hex = hex::encode(sid);
     assert!(decode_sid(&hex).is_err(), "hex should be rejected");
 }
+
+#[tokio::test]
+async fn default_handshake_budget_admits_ten_thousand_operations_with_one_bucket() {
+    let mut config = enabled_test_config();
+    config.ws_rate_per_ip_per_min =
+        iroha_config::parameters::defaults::connect::WS_RATE_PER_IP_PER_MIN;
+    config.ws_per_ip_max_sessions =
+        iroha_config::parameters::defaults::connect::WS_PER_IP_MAX_SESSIONS;
+    let bus = Bus::from_config(&config, test_network_id());
+    assert_eq!(bus.policy.ws_rate_per_ip_per_min, 600_000);
+    assert_eq!(Policy::default().ws_rate_per_ip_per_min, 600_000);
+    let ip: IpAddr = "198.51.100.10".parse().expect("client IP");
+    bus.pre_session_create(ip)
+        .await
+        .expect("first creation admission");
+    let capacity = bus.handshake_buckets.lock().await.capacity();
+    for request in 0..10_000 {
+        bus.pre_session_create(ip).await.unwrap_or_else(|error| {
+            panic!("solo session creation throttled at {request}: {error:?}")
+        });
+        let mut permit = bus.pre_ws_handshake(ip).await.unwrap_or_else(|error| {
+            panic!("solo WebSocket handshake throttled at {request}: {error:?}")
+        });
+        permit.release().await;
+    }
+    let buckets = bus.handshake_buckets.lock().await;
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets.capacity(), capacity);
+    drop(buckets);
+    assert!(bus.inner.read().await.is_empty());
+    assert!(bus.per_ip_counts.lock().await.is_empty());
+    assert_eq!(bus.shared.sessions_total.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn default_handshake_rate_preserves_session_caps_and_explicit_small_budgets() {
+    let mut config = enabled_test_config();
+    config.ws_rate_per_ip_per_min =
+        iroha_config::parameters::defaults::connect::WS_RATE_PER_IP_PER_MIN;
+    config.ws_per_ip_max_sessions =
+        iroha_config::parameters::defaults::connect::WS_PER_IP_MAX_SESSIONS;
+    let bus = Bus::from_config(&config, test_network_id());
+    let ip: IpAddr = "198.51.100.10".parse().expect("client IP");
+    let mut permits = Vec::new();
+    for _ in 0..config.ws_per_ip_max_sessions {
+        permits.push(bus.pre_ws_handshake(ip).await.expect("within session cap"));
+    }
+    let error = bus.pre_ws_handshake(ip).await.err().expect("session cap");
+    assert_eq!(error.0, axum::http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(error.1, "connect: per-ip session cap");
+    for permit in &mut permits {
+        permit.release().await;
+    }
+    assert!(bus.per_ip_counts.lock().await.is_empty());
+
+    config.ws_rate_per_ip_per_min = 2;
+    let bounded = Bus::from_config(&config, test_network_id());
+    bounded.pre_session_create(ip).await.expect("first token");
+    bounded.pre_session_create(ip).await.expect("second token");
+    let error = bounded
+        .pre_session_create(ip)
+        .await
+        .expect_err("finite rate");
+    assert_eq!(error.0, axum::http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(error.1, "connect: per-ip handshake rate");
+    assert_eq!(bounded.handshake_buckets.lock().await.len(), 1);
+}
