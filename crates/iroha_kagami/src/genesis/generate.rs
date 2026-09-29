@@ -1,9 +1,11 @@
+#[cfg(test)]
+use crate::genesis::profile::{TAIRA_XOR_ASSET_DEFINITION_ID, TAIRA_XOR_SCALE};
 use crate::{
     Outcome, RunArgs,
     genesis::profile::{
         GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
-        TAIRA_XOR_ASSET_DEFINITION_ID, TAIRA_XOR_SCALE, known_chain_discriminant_for_chain_id,
-        parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
+        ensure_public_xor_contract, known_chain_discriminant_for_chain_id, parse_vrf_seed_hex,
+        profile_defaults, profile_requires_npos, public_xor_numeric_spec,
         reject_retired_public_chain_id, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
     },
     tui,
@@ -456,7 +458,7 @@ fn append_public_xor_binding(
             .downcast_ref::<Register<AssetDefinition>>()
         {
             if register.object.id == *asset_definition_id {
-                ensure_public_xor_numeric_spec(&register.object, asset_definition_id)?;
+                ensure_public_xor_contract(&register.object, asset_definition_id)?;
                 has_asset_definition = true;
             }
             continue;
@@ -471,7 +473,7 @@ fn append_public_xor_binding(
                 }
                 iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
                     if register.object.id == *asset_definition_id {
-                        ensure_public_xor_numeric_spec(&register.object, asset_definition_id)?;
+                        ensure_public_xor_contract(&register.object, asset_definition_id)?;
                         has_asset_definition = true;
                     }
                 }
@@ -508,7 +510,8 @@ fn append_public_xor_binding(
     }
     builder = builder.next_transaction();
     if !has_domain {
-        builder = builder.append_instruction(Register::domain(Domain::new(public_xor_domain)));
+        builder =
+            builder.append_instruction(Register::domain(Domain::new(public_xor_domain.clone())));
     }
     if !has_asset_definition {
         let definition = AssetDefinition::new(
@@ -516,7 +519,7 @@ fn append_public_xor_binding(
             "xor".to_owned(),
             public_xor_numeric_spec(asset_definition_id),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(public_xor_domain),
         )
         .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
@@ -531,27 +534,6 @@ fn append_public_xor_binding(
         );
     }
     Ok(builder.build_raw()?.with_consensus_meta())
-}
-fn public_xor_numeric_spec(asset_definition_id: &AssetDefinitionId) -> NumericSpec {
-    if asset_definition_id.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID {
-        NumericSpec::fractional(TAIRA_XOR_SCALE)
-    } else {
-        NumericSpec::default()
-    }
-}
-fn ensure_public_xor_numeric_spec(
-    definition: &NewAssetDefinition,
-    asset_definition_id: &AssetDefinitionId,
-) -> color_eyre::Result<()> {
-    let expected = public_xor_numeric_spec(asset_definition_id);
-    if definition.spec != expected {
-        return Err(color_eyre::eyre::eyre!(
-            "public XOR asset `{asset_definition_id}` uses numeric spec {:?}, expected {:?}",
-            definition.spec,
-            expected
-        ));
-    }
-    Ok(())
 }
 fn format_profile_summary(
     profile: GenesisProfile,
@@ -797,7 +779,28 @@ mod consensus_manifest_tests {
         repository_root: &std::path::Path,
         relative_path: &str,
     ) -> RawGenesisTransaction {
+        use crate::genesis::profile::{PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID};
+
         let path = repository_root.join(relative_path);
+        let source: norito::json::Value = norito::json::from_str(
+            &std::fs::read_to_string(&path).expect("read source-template test manifest"),
+        )
+        .expect("parse source-template test manifest");
+        let xor_asset_definition_id =
+            (source["consensus_mode"].as_str() == Some("Npos")).then(|| {
+                match source["chain"].as_str().expect("source-template chain") {
+                    PUBLIC_TAIRA_CHAIN_ID => {
+                        AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+                            .expect("canonical Taira XOR identity")
+                    }
+                    PUBLIC_NEXUS_CHAIN_ID => AssetDefinitionId::derive_from_components(
+                        DomainId::parse_fully_qualified("mainnet-fixture.universal")
+                            .expect("fixture domain"),
+                        "xor".parse().expect("fixture asset"),
+                    ),
+                    _ => SumeragiNposParameters::default().xor_asset_definition_id,
+                }
+            });
         let parameters = GenesisBuilder::new_without_executor(
             ChainId::from("source-template-test"),
             PathBuf::from("."),
@@ -808,26 +811,36 @@ mod consensus_manifest_tests {
         .kagemusha_mint_finality_genesis_parameters()
         .clone();
         iroha_genesis::GenesisSourceTemplate::from_path(&path)
-            .and_then(|template| {
-                template.materialize(
-                    parameters,
-                    Some(
-                        if relative_path.contains("nexus/")
-                            || relative_path.contains("iroha3-nexus/")
-                        {
-                            AssetDefinitionId::derive_from_components(
-                                DomainId::parse_fully_qualified("mainnet-fixture.universal")
-                                    .expect("fixture domain"),
-                                "xor".parse().expect("fixture asset"),
-                            )
-                        } else {
-                            SumeragiNposParameters::default().xor_asset_definition_id
-                        },
-                    ),
-                )
-            })
+            .and_then(|template| template.materialize(parameters, xor_asset_definition_id))
             .unwrap_or_else(|error| panic!("complete {} for test: {error}", path.display()))
     }
+
+    #[test]
+    fn source_template_materialization_uses_chain_identity_not_path() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let temporary = tempfile::tempdir().expect("temporary renamed source template");
+        std::fs::create_dir(temporary.path().join("nexus")).expect("misleading source directory");
+        std::fs::copy(
+            repository_root.join("configs/soranexus/taira/genesis.template.json"),
+            temporary.path().join("nexus/renamed.template.json"),
+        )
+        .expect("copy Taira source into a different path");
+        let manifest =
+            load_genesis_source_template_for_test(temporary.path(), "nexus/renamed.template.json");
+        let parameters = manifest
+            .effective_parameters()
+            .expect("materialized parameters");
+        let npos = parameters
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("materialized NPoS snapshot");
+        assert_eq!(
+            npos.xor_asset_definition_id.to_string(),
+            TAIRA_XOR_ASSET_DEFINITION_ID
+        );
+    }
+
     fn account_permission_grants(manifest: &RawGenesisTransaction) -> Vec<(AccountId, Permission)> {
         manifest
             .transactions()
@@ -980,6 +993,155 @@ mod consensus_manifest_tests {
             manifest.wire_protocol_version(),
             u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION)
         );
+    }
+    #[test]
+    fn public_xor_binding_registers_an_owned_global_definition() {
+        let manifest = generate_default(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("public-xor-ownership"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            Some([7; 32]),
+        )
+        .expect("generate public genesis");
+        let xor_id = AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+            .expect("public XOR identity");
+        let manifest = append_public_xor_binding(manifest, &xor_id).expect("register public XOR");
+        let manifest = append_public_xor_binding(manifest, &xor_id)
+            .expect("existing explicitly owned XOR remains valid");
+        let owner = DomainId::parse_fully_qualified(PUBLIC_XOR_DOMAIN).expect("public XOR domain");
+        let mut domain_registered = false;
+        let mut definitions = 0;
+        for instruction in manifest.instructions() {
+            match instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+            {
+                Some(iroha_data_model::isi::register::RegisterBox::Domain(register)) => {
+                    domain_registered |= register.object.id == owner;
+                }
+                Some(iroha_data_model::isi::register::RegisterBox::AssetDefinition(register))
+                    if register.object.id == xor_id =>
+                {
+                    assert!(domain_registered, "XOR owner must be registered first");
+                    assert_eq!(register.object.owning_domain.as_ref(), Some(&owner));
+                    assert_eq!(
+                        register.object.balance_scope_policy,
+                        iroha_data_model::asset::AssetBalancePolicy::Global
+                    );
+                    assert_eq!(
+                        register.object.spec,
+                        NumericSpec::fractional(TAIRA_XOR_SCALE)
+                    );
+                    definitions += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(definitions, 1);
+    }
+
+    #[test]
+    fn public_xor_contract_rejects_missing_or_incorrect_ownership_and_scope() {
+        use iroha_data_model::asset::AssetBalancePolicy;
+
+        let xor_id = AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+            .expect("public XOR identity");
+        let owner = DomainId::parse_fully_qualified(PUBLIC_XOR_DOMAIN).expect("public XOR domain");
+        for (owning_domain, balance_policy) in [
+            (None, AssetBalancePolicy::Global),
+            (
+                Some(DomainId::parse_fully_qualified("other.universal").expect("other domain")),
+                AssetBalancePolicy::Global,
+            ),
+            (Some(owner.clone()), AssetBalancePolicy::DataspaceRestricted),
+        ] {
+            let definition = AssetDefinition::new(
+                xor_id.clone(),
+                "xor",
+                NumericSpec::fractional(TAIRA_XOR_SCALE),
+                balance_policy,
+                owning_domain,
+            );
+            let error = ensure_public_xor_contract(&definition, &xor_id)
+                .expect_err("public XOR requires its explicit universal owner and global balances");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires Global balances and owning domain")
+            );
+        }
+        let wrong_scale = AssetDefinition::new(
+            xor_id.clone(),
+            "xor",
+            NumericSpec::default(),
+            AssetBalancePolicy::Global,
+            Some(owner),
+        );
+        assert!(
+            ensure_public_xor_contract(&wrong_scale, &xor_id)
+                .expect_err("public XOR must retain its pinned numeric scale")
+                .to_string()
+                .contains("uses numeric spec")
+        );
+    }
+
+    #[test]
+    fn synthetic_asset_definitions_are_owned_by_their_domain() {
+        let manifest = generate_synthetic(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("synthetic-ownership"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            2,
+            0,
+            2,
+            None,
+            None,
+        )
+        .expect("generate synthetic genesis");
+        let mut registered_domains = Vec::new();
+        let mut synthetic_definitions = 0;
+        for instruction in manifest.instructions() {
+            match instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+            {
+                Some(iroha_data_model::isi::register::RegisterBox::Domain(register)) => {
+                    registered_domains.push(register.object.id.clone());
+                }
+                Some(iroha_data_model::isi::register::RegisterBox::AssetDefinition(register))
+                    if register.object.name.starts_with("asset_") =>
+                {
+                    let owner = register
+                        .object
+                        .owning_domain
+                        .as_ref()
+                        .expect("synthetic asset definition must be domain-owned");
+                    let expected_id = AssetDefinitionId::derive_from_components(
+                        owner.clone(),
+                        register.object.name.parse().expect("synthetic asset name"),
+                    );
+                    assert_eq!(register.object.id, expected_id);
+                    assert!(
+                        registered_domains.contains(owner),
+                        "owning domain {owner} must be registered before its asset definition"
+                    );
+                    synthetic_definitions += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(synthetic_definitions, 4);
     }
     #[test]
     fn profile_cadence_and_seed_are_signed() {
@@ -1214,6 +1376,84 @@ mod consensus_manifest_tests {
         assert_first_release_hijiri_bootstrap(&manifest, "generated default genesis");
     }
     #[test]
+    fn checked_in_source_template_assets_have_registered_owning_domains() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for (relative_path, rose_domain, expected_assets) in [
+            ("defaults/genesis.template.json", "wonderland.universal", 2),
+            (
+                "defaults/kagami/iroha3-dev/genesis.template.json",
+                "wonderland.universal",
+                3,
+            ),
+            (
+                "defaults/kagami/iroha3-nexus/genesis.template.json",
+                "wonderland.universal",
+                2,
+            ),
+            (
+                "defaults/nexus/genesis.template.json",
+                "wonderland.universal",
+                2,
+            ),
+            (
+                "configs/soranexus/nexus/genesis.template.json",
+                "wonderland.universal",
+                2,
+            ),
+            (
+                "configs/soranexus/taira/genesis.template.json",
+                "taira.universal",
+                5,
+            ),
+            (
+                "crates/iroha_kagami/tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json",
+                "taira.universal",
+                5,
+            ),
+        ] {
+            let manifest = load_genesis_source_template_for_test(&repository_root, relative_path);
+            let mut registered_domains = std::collections::BTreeSet::new();
+            let mut assets = 0;
+            for instruction in manifest.instructions() {
+                match instruction.as_any().downcast_ref::<RegisterBox>() {
+                    Some(RegisterBox::Domain(register)) => {
+                        registered_domains.insert(register.object.id.clone());
+                    }
+                    Some(RegisterBox::AssetDefinition(register)) => {
+                        let definition = &register.object;
+                        let expected_domain = match definition.name.as_str() {
+                            "rose" => rose_domain,
+                            "cabbage" => "garden_of_live_flowers.universal",
+                            "xor" | "ds" => "universal.universal",
+                            name => panic!("unexpected asset {name} in {relative_path}"),
+                        };
+                        let expected_domain = DomainId::parse_fully_qualified(expected_domain)
+                            .expect("canonical template owning domain");
+                        assert_eq!(
+                            definition.owning_domain.as_ref(),
+                            Some(&expected_domain),
+                            "{relative_path}: {} must be visible in its owning dataspace",
+                            definition.name,
+                        );
+                        assert!(
+                            registered_domains.contains(&expected_domain),
+                            "{relative_path}: owning domain must be registered before {}",
+                            definition.name,
+                        );
+                        assert_eq!(
+                            definition.balance_scope_policy,
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            "{relative_path}: public assets must retain global balances",
+                        );
+                        assets += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(assets, expected_assets, "{relative_path}: asset inventory");
+        }
+    }
+    #[test]
     fn checked_in_first_release_source_templates_seed_neutral_hijiri() {
         let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         for relative_path in [
@@ -1362,7 +1602,7 @@ fn generate_synthetic(
                 asset_name_literal,
                 NumericSpec::default(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(domain_id.clone()),
             )));
         }
         for _ in 0..accounts_per_domain {

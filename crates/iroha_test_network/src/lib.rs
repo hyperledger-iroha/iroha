@@ -8305,7 +8305,7 @@ impl NetworkBuilder {
                 "XOR".to_owned(),
                 NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(universal_domain.clone()),
             )
             .with_metadata(Metadata::default());
             let fee_seed_amount = 1_000_000_u32;
@@ -15242,6 +15242,31 @@ mod tests {
         );
         let xor = default_fee_asset_definition();
         assert!(registers_asset_definition(&instructions, &xor));
+        let universal_domain =
+            DomainId::try_new("universal", "universal").expect("universal domain");
+        let mut domain_registered = false;
+        for instruction in &instructions {
+            match instruction.as_any().downcast_ref::<RegisterBox>() {
+                Some(RegisterBox::Domain(register)) if register.object.id == universal_domain => {
+                    domain_registered = true;
+                }
+                Some(RegisterBox::AssetDefinition(register)) if register.object.id == xor => {
+                    assert!(
+                        domain_registered,
+                        "fee asset owner must be registered first"
+                    );
+                    assert_eq!(
+                        register.object.owning_domain.as_ref(),
+                        Some(&universal_domain)
+                    );
+                    assert_eq!(
+                        register.object.balance_scope_policy,
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                    );
+                }
+                _ => {}
+            }
+        }
         assert_eq!(mints_to(&instructions, &xor, &ALICE_ID), 1);
         for peer in network.peers() {
             assert_eq!(
@@ -15621,12 +15646,21 @@ mod tests {
             .expect("validator peer")
             .account_id();
         let mut definition_count = 0;
+        let universal_domain =
+            DomainId::try_new("universal", "universal").expect("universal domain");
+        let mut domain_registered = false;
         let mut saw_staking_plan = false;
         let mut saw_alice_mint = false;
         let mut saw_validator_mint = false;
         for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
+                    if let Some(RegisterBox::Domain(register)) =
+                        instruction.as_any().downcast_ref::<RegisterBox>()
+                        && register.object.id == universal_domain
+                    {
+                        domain_registered = true;
+                    }
                     if let Some(register) = instruction
                         .as_any()
                         .downcast_ref::<iroha_data_model::isi::RegisterBox>()
@@ -15636,6 +15670,18 @@ mod tests {
                     {
                         definition_count += 1;
                         assert_eq!(&register.object.spec, &NumericSpec::fractional(9));
+                        assert!(
+                            domain_registered,
+                            "fee asset owner must be registered first"
+                        );
+                        assert_eq!(
+                            register.object.owning_domain.as_ref(),
+                            Some(&universal_domain)
+                        );
+                        assert_eq!(
+                            register.object.balance_scope_policy,
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                        );
                     }
                     if let Some(registration) = instruction
                         .as_any()

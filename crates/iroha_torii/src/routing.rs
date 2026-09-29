@@ -209,6 +209,7 @@ pub(crate) struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
     can_read_all: bool,
     exact_account: Option<AccountId>,
+    balance_dataspace: Option<DataSpaceId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -218,16 +219,25 @@ impl DataspaceReadVisibility {
             visible_dataspaces,
             can_read_all,
             exact_account: None,
+            balance_dataspace: None,
         }
     }
 
     /// Restrict an authorized account-assets route to one exact account.
     /// The account grant opens its balance routes, not the caller's siblings.
-    pub(crate) fn exact_account(dataspace: DataSpaceId, account: AccountId) -> Self {
+    /// An independently authorized global reader retains access to unscoped definitions,
+    /// while the producer still emits only balances belonging to this route.
+    pub(crate) fn exact_account(
+        visible_dataspaces: BTreeSet<DataSpaceId>,
+        dataspace: DataSpaceId,
+        account: AccountId,
+        can_read_all: bool,
+    ) -> Self {
         Self {
-            visible_dataspaces: BTreeSet::from([dataspace]),
-            can_read_all: false,
+            visible_dataspaces,
+            can_read_all,
             exact_account: Some(account),
+            balance_dataspace: Some(dataspace),
         }
     }
 
@@ -241,6 +251,7 @@ impl DataspaceReadVisibility {
             visible_dataspaces: BTreeSet::new(),
             can_read_all: true,
             exact_account: None,
+            balance_dataspace: None,
         }
     }
 
@@ -337,14 +348,25 @@ impl DataspaceReadVisibility {
 
     /// Return whether an asset bucket and its holder belong only to visible routes.
     pub(crate) fn allows_asset(&self, world: &impl WorldReadOnly, asset_id: &AssetId) -> bool {
-        if self.can_read_all {
+        if !self.allows_account(world, asset_id.account()) {
+            return false;
+        }
+        if self.can_read_all && self.exact_account.is_none() {
             return true;
         }
         if world.assets().get(asset_id).is_none()
             || !self.allows_asset_definition(world, asset_id.definition())
-            || !self.allows_account(world, asset_id.account())
         {
             return false;
+        }
+        // Definition ownership controls visibility, not balance authority. A full
+        // ledger grant must not let one routed producer return another route's buckets.
+        if let Some(balance_dataspace) = self.balance_dataspace {
+            let dataspace = match asset_id.scope() {
+                iroha_data_model::asset::AssetBalanceScope::Global => DataSpaceId::UNIVERSAL,
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => *dataspace,
+            };
+            return balance_dataspace == dataspace;
         }
         match asset_id.scope() {
             iroha_data_model::asset::AssetBalanceScope::Global => true,

@@ -37,7 +37,7 @@
               "metadata": {},
               "mintable": "Infinitely",
               "name": "rose",
-              "owning_domain": null,
+              "owning_domain": "wonderland.universal",
               "spec": {
                 "scale": null
               }
@@ -75,7 +75,7 @@
               "metadata": {},
               "mintable": "Infinitely",
               "name": "cabbage",
-              "owning_domain": null,
+              "owning_domain": "garden_of_live_flowers.universal",
               "spec": {
                 "scale": null
               }

@@ -1218,7 +1218,7 @@ mod app_api_integration_tests {
         assert!(items[0]["asset_alias"].is_null());
     }
     #[tokio::test]
-    async fn account_assets_routes_return_dataspace_scoped_asset_holder_without_account_record() {
+    async fn account_assets_routes_return_dataspace_scoped_asset_for_registered_holder() {
         let _guard = app_query_limits_guard();
         let authority_id =
             checked_app_api_account_id(0x82, "derive dataspace-scoped asset authority key");
@@ -1233,13 +1233,27 @@ mod app_api_integration_tests {
             AssetId::with_scope(kina_def.clone(), holder_id.clone(), dataspace_scope),
             Quantity::from(81_u32),
         )];
-        let state = state_with_assets(
-            domain_id,
-            authority_id,
-            Vec::new(),
-            vec![(kina_def.clone(), "kina".to_owned())],
+        let world = World::with_assets(
+            [Domain::new(domain_id.clone()).build(&authority_id)],
+            [
+                Account::new(authority_id.clone()).build(&authority_id),
+                Account::new(holder_id.clone()).build(&authority_id),
+            ],
+            [AssetDefinition::numeric(
+                kina_def.clone(),
+                "kina",
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&authority_id)],
             assets,
+            [],
         );
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
         use axum::routing::get;
         let app = Router::new()
             .route(
@@ -1279,13 +1293,20 @@ mod app_api_integration_tests {
         let get_req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v1/accounts/{holder_literal}/assets?scope=dataspace:10"
+                "/v1/accounts/{holder_literal}/assets?scope={}",
+                urlencoding::encode("dataspace:10"),
             ))
             .body(axum::body::Body::empty())
             .unwrap();
         let get_resp = app.clone().oneshot(get_req).await.unwrap();
-        assert_eq!(get_resp.status(), http::StatusCode::OK);
+        let get_status = get_resp.status();
         let get_bytes = get_resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            get_status,
+            http::StatusCode::OK,
+            "account assets GET response: {}",
+            String::from_utf8_lossy(&get_bytes),
+        );
         let get_json: norito::json::Value = norito::json::from_slice(&get_bytes).unwrap();
         assert_eq!(get_json["total"].as_u64(), Some(1));
         let get_items = get_json["items"].as_array().unwrap();
@@ -1308,8 +1329,14 @@ mod app_api_integration_tests {
             .body(axum::body::Body::from(query_body))
             .unwrap();
         let query_resp = app.oneshot(query_req).await.unwrap();
-        assert_eq!(query_resp.status(), http::StatusCode::OK);
+        let query_status = query_resp.status();
         let query_bytes = query_resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            query_status,
+            http::StatusCode::OK,
+            "account assets query response: {}",
+            String::from_utf8_lossy(&query_bytes),
+        );
         let query_json: norito::json::Value = norito::json::from_slice(&query_bytes).unwrap();
         assert_eq!(query_json["total"].as_u64(), Some(1));
         assert_eq!(

@@ -3,6 +3,7 @@ use crate::{
     localnet::{
         AssetSpec, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST, LOCALNET_SAMPLE_ASSET_NAME,
         LocalnetOptions, SoraProfile, canonical_asset_definition_literal, generate_localnet,
+        localnet_user_asset_domain,
     },
     tui,
 };
@@ -169,6 +170,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                     id,
                     name,
                     alias: None,
+                    owning_domain: localnet_user_asset_domain(),
                     owned_by: ALICE_ID.clone(),
                     mint_to: ALICE_ID.clone(),
                     quantity: qty,

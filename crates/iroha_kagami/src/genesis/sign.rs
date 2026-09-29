@@ -1329,6 +1329,10 @@ pub(super) fn prepare_genesis_for_signing(
             .with_consensus_mode(consensus_mode)
             .with_consensus_meta()
     };
+    if public_xor_profile_for_manifest(&prepared).is_some() {
+        let public_xor_asset_id = configured_npos_bootstrap_stake_asset_id(&prepared, config)?;
+        super::profile::ensure_public_xor_manifest_contract(&prepared, &public_xor_asset_id)?;
+    }
     prepared
         .validate_kagemusha_mint_finality_topology()
         .wrap_err(
@@ -2539,7 +2543,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let consensus_mode = manifest.consensus_mode();
         let mut builder = manifest.into_builder().next_transaction();
         if !domain_registered {
-            builder = builder.append_instruction(Register::domain(Domain::new(domain)));
+            builder = builder.append_instruction(Register::domain(Domain::new(domain.clone())));
         }
         if registrations.asset_defs.insert(asset.clone()) {
             builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
@@ -2547,7 +2551,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "XOR".to_owned(),
                 NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(domain),
             )));
         }
         for peer in topology {
@@ -4488,6 +4492,88 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
+    fn public_signing_rechecks_xor_contract_after_bootstrap() {
+        let (peers, peer_pops) = valid_test_topology(4);
+        let path =
+            with_test_authority_for_topology(public_taira_alias_backed_npos_genesis_file(), &peers);
+        let manifest = RawGenesisTransaction::from_path(path).expect("public Taira fixture");
+        let prepared = prepare_genesis_for_signing(
+            manifest,
+            None,
+            SumeragiConsensusMode::Npos,
+            Some(&peers),
+            &peer_pops,
+        )
+        .expect("public XOR passes bootstrap preparation");
+        assert!(manifest_has_npos_bootstrap(&prepared));
+        prepare_genesis_for_signing(
+            prepared.clone(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            &[],
+        )
+        .expect("already bootstrapped public XOR passes direct preparation");
+        let _profile = staged_genesis_chain_discriminant(&prepared);
+        for (field, value, expected_error) in [
+            ("owning_domain", norito::json::Value::Null, "owning domain"),
+            (
+                "owning_domain",
+                norito::json::Value::from("other.universal"),
+                "owning domain",
+            ),
+            (
+                "balance_scope_policy",
+                norito::json::Value::from("DataspaceRestricted"),
+                "requires Global balances",
+            ),
+            ("spec", norito::json!({"scale": null}), "uses numeric spec"),
+        ] {
+            let mut json = norito::json::to_value(&prepared).expect("prepared JSON");
+            let mut changed = 0;
+            for transaction in json
+                .get_mut("transactions")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()
+            {
+                for instruction in transaction
+                    .get_mut("instructions")
+                    .unwrap()
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    if let Some(definition) = instruction
+                        .get_mut("Register")
+                        .and_then(|register| register.get_mut("AssetDefinition"))
+                        && definition.get("id").and_then(norito::json::Value::as_str)
+                            == Some(crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID)
+                    {
+                        definition
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(field.to_owned(), value.clone());
+                        changed += 1;
+                    }
+                }
+            }
+            assert_eq!(changed, 1);
+            let invalid = RawGenesisTransaction::from_json_slice(
+                &norito::json::to_vec(&json).expect("mutated prepared JSON"),
+            )
+            .expect("invalid public contract is structurally valid");
+            assert!(manifest_has_npos_bootstrap(&invalid));
+            let error =
+                prepare_genesis_for_signing(invalid, None, SumeragiConsensusMode::Npos, None, &[])
+                    .expect_err("direct signing must recheck the public XOR contract");
+            assert!(
+                error.to_string().contains(expected_error),
+                "{field}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn public_nexus_auto_bootstrap_requires_xor_alias_binding() {
         let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
@@ -4543,7 +4629,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect_err("public stake config must match XOR alias binding");
         assert!(
             err.to_string()
-                .contains("must match the canonical XOR binding"),
+                .contains("NPoS stake asset must equal the committed canonical XOR definition")
+                && err
+                    .to_string()
+                    .contains(crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID),
             "unexpected error: {err}"
         );
     }
@@ -5006,17 +5095,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let alias: AssetDefinitionAlias = crate::genesis::PUBLIC_XOR_ALIAS
             .parse()
             .expect("valid alias");
+        let owning_domain =
+            DomainId::parse_fully_qualified(super::super::profile::PUBLIC_XOR_DOMAIN)
+                .expect("public XOR owning domain");
         let manifest = GenesisBuilder::new_without_executor(
             crate::genesis::profile_defaults(crate::genesis::GenesisProfile::Iroha3Taira).chain_id,
             PathBuf::from("."),
         )
+        .append_instruction(Register::domain(Domain::new(owning_domain.clone())))
         .append_instruction(Register::asset_definition(
             AssetDefinition::new(
                 asset_definition_id.clone(),
                 "xor".to_owned(),
                 NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(owning_domain),
             )
             .with_metadata(Metadata::default()),
         ))
@@ -5076,17 +5169,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let alias: AssetDefinitionAlias = crate::genesis::PUBLIC_XOR_ALIAS
             .parse()
             .expect("valid alias");
+        let owning_domain =
+            DomainId::parse_fully_qualified(super::super::profile::PUBLIC_XOR_DOMAIN)
+                .expect("public XOR owning domain");
         let manifest = GenesisBuilder::new_without_executor(
             crate::genesis::profile_defaults(crate::genesis::GenesisProfile::Iroha3Taira).chain_id,
             PathBuf::from("."),
         )
+        .append_instruction(Register::domain(Domain::new(owning_domain.clone())))
         .append_instruction(Register::asset_definition(
             AssetDefinition::new(
                 canonical_xor.clone(),
                 "xor".to_owned(),
                 NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(owning_domain.clone()),
             )
             .with_metadata(Metadata::default()),
         ))
@@ -5096,7 +5193,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "xor-shadow".to_owned(),
                 NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(owning_domain.clone()),
             )
             .with_metadata(Metadata::default()),
         ))

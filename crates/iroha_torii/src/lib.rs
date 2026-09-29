@@ -16683,9 +16683,23 @@ fn torii_account_assets_route_visibility(
             if !routes.contains(&route) {
                 return Err(torii_signed_query_permission_denied_response(&caller, 1));
             }
+            let can_read_all = torii_account_has_permission(
+                app.state.view().world(),
+                &caller,
+                &CanReadAllLedgerData.into(),
+            );
+            // Definition visibility and balance authority are independent: a public
+            // definition may belong to another dataspace than its global balance.
+            let visible_dataspaces = routes
+                .into_iter()
+                .chain(torii_visible_account_read_routes(app, Some(&caller)))
+                .map(|route| route.dataspace_id)
+                .collect();
             Ok(routing::DataspaceReadVisibility::exact_account(
+                visible_dataspaces,
                 route.dataspace_id,
                 path_account,
+                can_read_all,
             ))
         }
         ToriiFanoutRouteScopeV1::VisibleAccount {

@@ -153,6 +153,11 @@ pub struct AssetSpec {
     pub name: String,
     /// Optional leased alias binding to attach after registration.
     pub alias: Option<String>,
+    /// Immutable owning domain, registered in genesis before the definition.
+    ///
+    /// Torii shows domainless definitions only to global readers, so publicly
+    /// readable assets need an owner even when their balance policy is global.
+    pub owning_domain: DomainId,
     /// Account that should own the asset definition after genesis completes.
     pub owned_by: AccountId,
     /// Account that should receive the minted supply.
@@ -586,7 +591,7 @@ const LOCALNET_PRIVATE_SNS_LEASE_PAYMENT: &str = "0.5";
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
 const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
 const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
-const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
+const LOCALNET_USER_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
 const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
@@ -842,7 +847,11 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
     )])
 }
 fn localnet_sample_asset_literal() -> String {
-    canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
+    canonical_asset_definition_literal(LOCALNET_USER_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
+}
+pub(crate) fn localnet_user_asset_domain() -> DomainId {
+    DomainId::parse_fully_qualified(LOCALNET_USER_ASSET_DOMAIN)
+        .expect("static localnet user asset domain must remain canonical")
 }
 #[cfg(test)]
 fn localnet_kagemusha_asset_literal() -> String {
@@ -852,11 +861,15 @@ fn localnet_kagemusha_asset_spec_for_client(
     client_account_id: &AccountId,
     taira: bool,
 ) -> AssetSpec {
-    let (id, name, alias, quantity) = if taira {
+    // The public Digital Shekel contract owns a universal domain independently
+    // of its alias in the restricted `is` namespace.
+    let (id, name, alias, owning_domain, quantity) = if taira {
         (
             TAIRA_DIGITAL_SHEKEL_ASSET_ID,
             "ds",
             TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS,
+            DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)
+                .expect("static universal domain must remain canonical"),
             TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY,
         )
     } else {
@@ -864,6 +877,7 @@ fn localnet_kagemusha_asset_spec_for_client(
             LOCALNET_KAGEMUSHA_ASSET_ID,
             LOCALNET_KAGEMUSHA_ASSET_NAME,
             LOCALNET_KAGEMUSHA_ASSET_ALIAS,
+            localnet_user_asset_domain(),
             LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
         )
     };
@@ -871,6 +885,7 @@ fn localnet_kagemusha_asset_spec_for_client(
         id: id.to_owned(),
         name: name.to_owned(),
         alias: Some(alias.to_owned()),
+        owning_domain,
         owned_by: client_account_id.clone(),
         mint_to: client_account_id.clone(),
         quantity,
@@ -888,6 +903,7 @@ fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec>
         id: id.to_owned(),
         name: format!("Localnet asset {id}"),
         alias: None,
+        owning_domain: localnet_user_asset_domain(),
         owned_by: client_account_id.clone(),
         mint_to: client_account_id,
         quantity: LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY,
@@ -1101,6 +1117,7 @@ impl<T: Write> RunArgs<T> for Args {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
                 alias: None,
+                owning_domain: localnet_user_asset_domain(),
                 owned_by: localnet_client_account_id(),
                 mint_to: localnet_client_account_id(),
                 quantity: 100,
@@ -3647,12 +3664,16 @@ fn extend_genesis(
         } else {
             (NumericSpec::default(), Metadata::default())
         };
+        if registrations.domains.insert(asset.owning_domain.clone()) {
+            builder = builder
+                .append_instruction(Register::domain(Domain::new(asset.owning_domain.clone())));
+        }
         let definition = AssetDefinition::new(
             asset_def.clone(),
             asset.name.clone(),
             spec,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(asset.owning_domain.clone()),
         )
         .with_metadata(metadata);
         builder = builder.append_instruction(Register::asset_definition(definition));
@@ -3928,7 +3949,8 @@ fn append_localnet_alias_fee_bootstrap(
     // those accounts, and sharing their boundary keeps staged genesis within the protocol cap.
     let mut builder = genesis.into_builder();
     if registrations.domains.insert(universal_domain.clone()) {
-        builder = builder.append_instruction(Register::domain(Domain::new(universal_domain)));
+        builder =
+            builder.append_instruction(Register::domain(Domain::new(universal_domain.clone())));
     }
     if registrations.asset_defs.insert(fee_asset_id.clone()) {
         let definition = AssetDefinition::new(
@@ -3936,7 +3958,7 @@ fn append_localnet_alias_fee_bootstrap(
             "XOR".to_owned(),
             NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(universal_domain),
         )
         .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
@@ -4277,7 +4299,7 @@ fn append_localnet_npos_bootstrap(
             "XOR".to_owned(),
             NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(universal_domain.clone()),
         )
         .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
@@ -4289,7 +4311,7 @@ fn append_localnet_npos_bootstrap(
             "XOR".to_owned(),
             NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(universal_domain),
         )
         .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));

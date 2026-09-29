@@ -110,7 +110,7 @@
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
-              "owning_domain": null,
+              "owning_domain": "taira.universal",
               "spec": {
                 "scale": null
               },
@@ -148,7 +148,7 @@
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
-              "owning_domain": null,
+              "owning_domain": "garden_of_live_flowers.universal",
               "spec": {
                 "scale": null
               },
@@ -175,7 +175,7 @@
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
-              "owning_domain": null,
+              "owning_domain": "universal.universal",
               "spec": {
                 "scale": 9
               },
@@ -206,7 +206,7 @@
                 "symbol": "₪"
               },
               "mintable": "Infinitely",
-              "owning_domain": null,
+              "owning_domain": "universal.universal",
               "spec": {
                 "scale": 2
               },
@@ -251,7 +251,7 @@
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
-              "owning_domain": null,
+              "owning_domain": "universal.universal",
               "spec": {
                 "scale": 9
               },
@@ -370,6 +370,7 @@
               "finality_margin_blocks": 8,
               "evidence_horizon_blocks": 7200,
               "activation_lag_blocks": 1,
+              "xor_asset_definition_id": null,
               "epoch_length_blocks": 3600,
               "slashing_delay_blocks": 3600
             }
@@ -445,12 +446,6 @@
               "destination": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "1000000000.00"
             }
-          }
-        },
-        {
-          "RegisterCitizen": {
-            "owner": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": "10000"
           }
         },
         {

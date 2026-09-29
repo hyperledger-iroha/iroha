@@ -2856,7 +2856,7 @@ impl GenesisDomainBuilder {
         self.current_tx_mut().instructions.push(register.into());
         self
     }
-    /// Add [`AssetDefinition`] to this domain.
+    /// Add a globally balanced [`AssetDefinition`] owned by this domain.
     pub fn asset(mut self, asset_name: Name, asset_spec: NumericSpec) -> Self {
         let asset_display_name = asset_name.to_string();
         let asset_definition_id =
@@ -2866,7 +2866,7 @@ impl GenesisDomainBuilder {
             asset_display_name,
             asset_spec,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(self.domain_id.clone()),
         );
         self.current_tx_mut()
             .instructions

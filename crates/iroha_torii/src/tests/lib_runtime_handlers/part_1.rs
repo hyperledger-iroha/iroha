@@ -939,6 +939,50 @@ pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppSt
     let state_view = app_state.state.view();
     app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
 }
+#[cfg(feature = "app_api")]
+fn configure_account_asset_routes_for_test(app: &mut SharedAppState) {
+    let peers = (0..4_u8)
+        .map(|index| {
+            let validator_key = checked_torii_test_ed25519_keypair(
+                0xd0 + index * 2,
+                "account-assets validator fixture",
+            );
+            let peer_key =
+                checked_torii_test_bls_keypair(0xd1 + index * 2, "account-assets peer fixture");
+            (AccountId::new(validator_key.public_key().clone()), peer_key)
+        })
+        .collect::<Vec<_>>();
+    let app_mut = Arc::get_mut(app).expect("unique app state");
+    app_mut.local_peer_id = Some(PeerId::from(peers[0].1.public_key().clone()));
+    let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+    for (index, (validator, peer_key)) in peers.iter().enumerate() {
+        ensure_runtime_peer_binding_for_test(
+            state,
+            validator,
+            peer_key,
+            &format!("account-assets-{index}"),
+        );
+    }
+    {
+        let mut topology = state.commit_topology.block();
+        topology.clear();
+        for (_, peer_key) in &peers {
+            topology.push(PeerId::from(peer_key.public_key().clone()));
+        }
+        topology.commit();
+    }
+    // Runtime key bindings activate at height one; routing reads the committed journal.
+    let block = make_empty_signed_block(1, None, 0);
+    let header = block.header();
+    let block_hash = store_block(app, block);
+    record_committed_block_hash_for_test(app, header, block_hash);
+    for route in torii_all_dataspace_routes(app.as_ref()) {
+        assert!(
+            should_execute_route_locally(app.as_ref(), route),
+            "account-assets fixture must own route {route:?}",
+        );
+    }
+}
 pub(crate) fn configure_private_ingress_routes_for_test(
     app: &mut SharedAppState,
 ) -> (LaneId, DataSpaceId) {
