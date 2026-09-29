@@ -4594,7 +4594,8 @@ mod tests {
                     norito::json!({"intent": label, "value": null}),
                 );
                 let error = parse_payload(&Value::Object(retired))
-                    .expect_err("retired admission field must fail closed");
+                    .err()
+                    .expect("retired admission field must fail closed");
                 assert!(error.to_string().contains(field), "{error}");
             }
         }

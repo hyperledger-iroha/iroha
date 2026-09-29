@@ -28,10 +28,6 @@ fn bridge_public_transaction_signing_binds_current_ordinary_admission() {
         decode_signed_transaction(&signed_bytes).expect("decode versioned signed transaction");
     assert_eq!(hash_bytes, *signed.hash().as_ref());
     assert_eq!(signed.authority(), &authority);
-    assert_eq!(
-        signed.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
     signed
         .verify_signature()
         .expect("checked bridge transaction signature should verify");
@@ -55,35 +51,9 @@ fn bridge_public_transaction_signing_binds_current_ordinary_admission() {
     .expect("fee-aware public bridge transaction should sign");
     let fee_signed = decode_signed_transaction(&fee_signed_bytes)
         .expect("decode fee-aware versioned signed transaction");
-    assert_eq!(
-        fee_signed.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
-
     fee_signed
         .verify_signature()
         .expect("fee-aware ordinary signature");
-
-    // An explicit unsupported intent stays signed as requested; it is never downgraded.
-    let explicit = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([iroha_data_model::isi::Log::new(
-        iroha_data_model::Level::INFO,
-        "explicit admission".to_owned(),
-    )])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-    .try_sign(keypair.private_key())
-    .expect("explicit intent signs");
-    assert_eq!(
-        explicit.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
-    );
-    explicit
-        .verify_signature()
-        .expect("explicit intent signature");
 
     let direct = TransactionBuilder::new(
         network_id,
@@ -93,8 +63,7 @@ fn bridge_public_transaction_signing_binds_current_ordinary_admission() {
     .with_executable(Executable::from(Vec::<InstructionBox>::new()))
     .try_sign(keypair.private_key())
     .expect("direct bridge fixture transaction should sign");
-    assert_eq!(
-        direct.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
+    direct
+        .verify_signature()
+        .expect("direct bridge fixture signature");
 }

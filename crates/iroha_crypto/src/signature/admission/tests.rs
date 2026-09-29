@@ -219,67 +219,121 @@ fn mldsa_without_compiled_verifier_preserves_fixed_bad_signature() {
     assert_eq!(rejected.into_error(), Error::BadSignature);
 }
 
+/// Environment selector that routes a fresh test process into its child case.
+const COLD_CHILD_SENTINEL: &str = "IROHA_CRYPTO_FIXED_ADMISSION_CHILD";
+
+/// Receipt printed by a child only after its observed relation allocated nothing.
+fn cold_receipt(algorithm: Algorithm, mode: &str) -> String {
+    format!(
+        "FIXED_ADMISSION_COLD_RECEIPT algorithm={} case={mode} rust_allocation_requests=0",
+        algorithm as u8
+    )
+}
+
+/// Child side: run the one environment-selected case in this fresh process.
+fn run_cold_admission_child() {
+    // Only public bytes cross this test-only subprocess boundary. Building
+    // the raw retained inputs does not call a key parser or signature backend.
+    let algorithm = Algorithm::try_from(
+        std::env::var("IROHA_CRYPTO_FIXED_ALGORITHM")
+            .unwrap()
+            .parse::<u8>()
+            .unwrap(),
+    )
+    .unwrap();
+    let bytes = hex::decode(std::env::var("IROHA_CRYPTO_FIXED_PUBLIC_KEY").unwrap()).unwrap();
+    let signature = hex::decode(std::env::var("IROHA_CRYPTO_FIXED_SIGNATURE").unwrap()).unwrap();
+    let mode = std::env::var("IROHA_CRYPTO_FIXED_CASE").unwrap();
+    let key = compact(algorithm, &bytes);
+    let proof = Signature::from_bytes(&signature);
+    let message = [0x61_u8; 32];
+    match mode.as_str() {
+        "valid" => {
+            without_allocations(|| verify_signature_borrowed(&proof, &key, &message)).unwrap();
+        }
+        "key" | "short-key" => {
+            let damaged = if mode == "key" {
+                vec![0; bytes.len()]
+            } else {
+                bytes[..bytes.len() - 1].to_vec()
+            };
+            let malformed = compact(algorithm, &damaged);
+            let rejected = without_allocations(|| {
+                verify_signature_borrowed(&proof, &malformed, &message).unwrap_err()
+            });
+            if algorithm == Algorithm::MlDsa {
+                assert_eq!(rejected.into_error(), Error::BadSignature);
+            } else {
+                assert!(matches!(rejected.into_error(), Error::Parse(_)));
+            }
+        }
+        "signature" => {
+            let malformed = Signature::from_bytes(&vec![0; signature.len()]);
+            let rejected = without_allocations(|| {
+                verify_signature_borrowed(&malformed, &key, &message).unwrap_err()
+            });
+            assert_eq!(rejected.into_error(), Error::BadSignature);
+        }
+        _ => panic!("unexpected cold-process control"),
+    }
+    println!("{}", cold_receipt(algorithm, &mode));
+}
+
+/// Parent side: run one case in a fresh test process and require its exact receipt.
+fn assert_cold_admission_child(
+    selector: &str,
+    algorithm: Algorithm,
+    bytes: &[u8],
+    proof: &Signature,
+    mode: &str,
+) {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", selector, "--nocapture", "--test-threads=1"])
+        .env(COLD_CHILD_SENTINEL, selector)
+        .env(
+            "IROHA_CRYPTO_FIXED_ALGORITHM",
+            (algorithm as u8).to_string(),
+        )
+        .env("IROHA_CRYPTO_FIXED_PUBLIC_KEY", hex::encode(bytes))
+        .env("IROHA_CRYPTO_FIXED_SIGNATURE", hex::encode(proof.payload()))
+        .env("IROHA_CRYPTO_FIXED_CASE", mode)
+        .output()
+        .unwrap();
+    let output = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success(),
+        "{algorithm:?}/{mode}: {output}\n{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+    assert_eq!(
+        output
+            .lines()
+            .filter(|line| line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;"))
+            .count(),
+        1,
+        "child must run exactly the one selected test: {output}"
+    );
+    let receipt = cold_receipt(algorithm, mode);
+    assert_eq!(
+        output.matches(&receipt).count(),
+        1,
+        "actual cold relation receipt required: {output}"
+    );
+    println!("{receipt}");
+}
+
 #[test]
 fn every_enabled_algorithm_has_cold_process_valid_key_and_signature_controls() {
-    const SENTINEL: &str = "IROHA_CRYPTO_FIXED_ADMISSION_CHILD";
     let module = module_path!().split_once("::").unwrap().1;
     let selector = format!(
         "{module}::every_enabled_algorithm_has_cold_process_valid_key_and_signature_controls"
     );
-    if std::env::var(SENTINEL).ok().as_deref() == Some(selector.as_str()) {
-        // Only public bytes cross this test-only subprocess boundary. Building
-        // the raw retained inputs does not call a key parser or signature backend.
-        let algorithm = Algorithm::try_from(
-            std::env::var("IROHA_CRYPTO_FIXED_ALGORITHM")
-                .unwrap()
-                .parse::<u8>()
-                .unwrap(),
-        )
-        .unwrap();
-        let bytes = hex::decode(std::env::var("IROHA_CRYPTO_FIXED_PUBLIC_KEY").unwrap()).unwrap();
-        let signature =
-            hex::decode(std::env::var("IROHA_CRYPTO_FIXED_SIGNATURE").unwrap()).unwrap();
-        let mode = std::env::var("IROHA_CRYPTO_FIXED_CASE").unwrap();
-        let key = compact(algorithm, &bytes);
-        let proof = Signature::from_bytes(&signature);
-        let message = [0x61_u8; 32];
-        match mode.as_str() {
-            "valid" => {
-                without_allocations(|| verify_signature_borrowed(&proof, &key, &message)).unwrap();
-            }
-            "key" | "short-key" => {
-                let damaged = if mode == "key" {
-                    vec![0; bytes.len()]
-                } else {
-                    bytes[..bytes.len() - 1].to_vec()
-                };
-                let malformed = compact(algorithm, &damaged);
-                let rejected = without_allocations(|| {
-                    verify_signature_borrowed(&proof, &malformed, &message).unwrap_err()
-                });
-                if algorithm == Algorithm::MlDsa {
-                    assert_eq!(rejected.into_error(), Error::BadSignature);
-                } else {
-                    assert!(matches!(rejected.into_error(), Error::Parse(_)));
-                }
-            }
-            "signature" => {
-                let malformed = Signature::from_bytes(&vec![0; signature.len()]);
-                let rejected = without_allocations(|| {
-                    verify_signature_borrowed(&malformed, &key, &message).unwrap_err()
-                });
-                assert_eq!(rejected.into_error(), Error::BadSignature);
-            }
-            _ => panic!("unexpected cold-process control"),
-        }
-        println!(
-            "FIXED_ADMISSION_COLD_RECEIPT algorithm={} case={mode} rust_allocation_requests=0",
-            algorithm as u8
-        );
+    if std::env::var(COLD_CHILD_SENTINEL).ok().as_deref() == Some(selector.as_str()) {
+        run_cold_admission_child();
         return;
     }
     assert!(
-        std::env::var_os(SENTINEL).is_none(),
+        std::env::var_os(COLD_CHILD_SENTINEL).is_none(),
         "unknown child selector must not alter routing"
     );
     for algorithm in algorithms() {
@@ -287,44 +341,7 @@ fn every_enabled_algorithm_has_cold_process_valid_key_and_signature_controls() {
         let proof = Signature::try_new(pair.private_key(), &[0x61; 32]).unwrap();
         let (_, bytes) = pair.public_key().to_bytes();
         for mode in ["valid", "key", "short-key", "signature"] {
-            let child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", &selector, "--nocapture", "--test-threads=1"])
-                .env(SENTINEL, &selector)
-                .env(
-                    "IROHA_CRYPTO_FIXED_ALGORITHM",
-                    (algorithm as u8).to_string(),
-                )
-                .env("IROHA_CRYPTO_FIXED_PUBLIC_KEY", hex::encode(bytes))
-                .env("IROHA_CRYPTO_FIXED_SIGNATURE", hex::encode(proof.payload()))
-                .env("IROHA_CRYPTO_FIXED_CASE", mode)
-                .output()
-                .unwrap();
-            let output = String::from_utf8_lossy(&child.stdout);
-            assert!(
-                child.status.success(),
-                "{algorithm:?}/{mode}: {output}\n{}",
-                String::from_utf8_lossy(&child.stderr)
-            );
-            assert_eq!(
-                output
-                    .lines()
-                    .filter(
-                        |line| line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")
-                    )
-                    .count(),
-                1,
-                "child must run exactly the one selected test: {output}"
-            );
-            let receipt = format!(
-                "FIXED_ADMISSION_COLD_RECEIPT algorithm={} case={mode} rust_allocation_requests=0",
-                algorithm as u8
-            );
-            assert_eq!(
-                output.matches(&receipt).count(),
-                1,
-                "actual cold relation receipt required: {output}"
-            );
-            println!("{receipt}");
+            assert_cold_admission_child(&selector, algorithm, bytes, &proof, mode);
         }
     }
 }

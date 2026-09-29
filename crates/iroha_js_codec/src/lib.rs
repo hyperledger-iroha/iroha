@@ -1115,8 +1115,8 @@ pub fn validation_fee_policy_from_json_value(
 /// # Errors
 ///
 /// Returns a [`CodecErrorKind::InvalidArgument`] error when the policy violates its
-/// invariants, or when the lifecycle proposal id is missing, zero or present without a
-/// payout binding.
+/// invariants, when a payout-enabled policy lacks a non-zero lifecycle proposal id, or
+/// when a policy without a payout binding selects a lifecycle proposal.
 pub fn validate_validation_fee_policy_proposal(
     policy: &ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<&[u8; 32]>,

@@ -59,8 +59,7 @@ impl CaptureFixture {
             "rose".parse().unwrap(),
         );
         let batch_hash = Hash::new(b"compact AXT public entry");
-        let (claims, mut remote) =
-            mixed_scale_claims(occurrences, &asset, batch_hash, accounts.as_ref());
+        let (claims, mut remote) = mixed_scale_claims(occurrences, &asset, batch_hash, accounts);
         let (statement, expected) = materialized_statement(claims, occurrences);
         // Match claims to chronological source transfers before canonical remote sorting.
         let mut source_occurrences = source_occurrences(&remote, &statement, batch_hash);
@@ -109,11 +108,13 @@ impl CaptureFixture {
 ///
 /// The sender starts one unit below the maximum full-domain quantity and the
 /// receiver at one unit of scale 28; every occurrence moves exactly one unit.
+/// Caller-selected accounts form independent sender/receiver pairs, each from
+/// those initial balances; otherwise every occurrence chains Alice to Bob.
 fn mixed_scale_claims(
     occurrences: usize,
     asset: &AssetDefinitionId,
     batch_hash: Hash,
-    accounts: Option<&[iroha_data_model::account::AccountId; 4]>,
+    accounts: Option<[iroha_data_model::account::AccountId; 4]>,
 ) -> (
     Vec<FastpqPublicTransferTranscriptV1>,
     Vec<AxtRemoteSpendClaimV1>,
@@ -130,25 +131,25 @@ fn mixed_scale_claims(
         Quantity::from_canonical_numeric(Numeric::try_new(1_u32, 28).unwrap()).unwrap();
     let initial_sender = sender.clone();
     let initial_receiver = receiver.clone();
+    let independent = accounts.is_some();
+    let participants = accounts.map_or_else(
+        || vec![((*ALICE_ID).clone(), (*BOB_ID).clone()); occurrences],
+        |[first_from, first_to, second_from, second_to]| {
+            vec![(first_from, first_to), (second_from, second_to)]
+        },
+    );
     let mut claims = Vec::new();
     let mut remote = Vec::new();
-    for counter in 1..=occurrences {
-        let (from, to) = match accounts {
-            Some(accounts) => {
-                sender = initial_sender.clone();
-                receiver = initial_receiver.clone();
-                (
-                    &accounts[2 * (counter - 1)],
-                    &accounts[2 * (counter - 1) + 1],
-                )
-            }
-            None => (&*ALICE_ID, &*BOB_ID),
-        };
+    for (counter, (from_account, to_account)) in (1..=occurrences).zip(participants) {
+        if independent {
+            sender = initial_sender.clone();
+            receiver = initial_receiver.clone();
+        }
         let next_sender = sender.try_sub(&Quantity::one()).unwrap();
         let next_receiver = receiver.try_add(&Quantity::one()).unwrap();
         let delta = FastpqPublicTransferDeltaV1 {
-            from_account: from.clone(),
-            to_account: to.clone(),
+            from_account,
+            to_account,
             asset_definition: asset.clone(),
             amount: Quantity::one(),
             from_balance_before: sender,

@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus};
+    use iroha_model_base::metadata::Metadata;
 
     #[test]
     fn mcp_inflight_dispatch_limit_default_is_nonzero() {

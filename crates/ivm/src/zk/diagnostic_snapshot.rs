@@ -163,13 +163,12 @@ impl DiagnosticTraceSource<'_> {
     /// # Errors
     /// Refuses overflowing allocation geometry or a malformed delta index.
     pub fn allocation_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
-        if let DiagnosticRegisterSource::Deltas(rows) = &self.registers {
-            if rows
+        if let DiagnosticRegisterSource::Deltas(rows) = &self.registers
+            && rows
                 .iter()
                 .any(|row| row.changes.iter().any(|(index, _, _)| *index >= 256))
-            {
-                return Err(VMError::DecodeError);
-            }
+        {
+            return Err(VMError::DecodeError);
         }
         let mut plan = ExecutionMemoryPlan::array::<RegisterState>(self.state_count())
             .map_err(|_| unavailable())?;

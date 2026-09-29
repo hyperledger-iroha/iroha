@@ -46,7 +46,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 #[global_allocator]
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
-pub(crate) fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
+pub fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
     struct EndObservation;
     impl Drop for EndObservation {
         fn drop(&mut self) {

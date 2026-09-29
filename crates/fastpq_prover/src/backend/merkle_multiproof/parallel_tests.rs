@@ -139,6 +139,29 @@ fn assert_tampering_matches_serial(
     }
 }
 
+/// Deliberately cheap and noncryptographic parent digest for sparse frontiers.
+///
+/// Exact callback inputs are also compared by its caller, so a coincidental
+/// final-root collision cannot hide a sibling-offset, child-order, coordinate
+/// or repeated-parent defect.
+fn cheap_parent(level: usize, index: usize, left: Digest, right: Digest) -> Digest {
+    let left = left.words();
+    let right = right.words();
+    Digest::new(core::array::from_fn(|lane| {
+        u64::try_from(
+            (u128::from(left[lane]) * 0x1_0000_0001
+                + u128::from(right[(lane + 1) % 6]) * 0x1000_0013
+                + level as u128 * 65_537
+                + index as u128 * 257
+                + lane as u128 * 17
+                + 1)
+                % u128::from(crate::backend::GOLDILOCKS_MODULUS),
+        )
+        .unwrap()
+    }))
+    .unwrap()
+}
+
 #[test]
 fn parallel_sparse_depth19_frontiers_match_serial_at_query_thresholds() {
     let pools: Vec<_> = [3, 7]
@@ -156,26 +179,6 @@ fn parallel_sparse_depth19_frontiers_match_serial_at_query_thresholds() {
             1 + tag * 10_000_000 + position as u64 * 97 + lane as u64 * 13
         }))
         .unwrap()
-    };
-    // Deliberately cheap and noncryptographic: exact callback inputs are also
-    // compared below, so a coincidental final-root collision cannot hide a
-    // sibling-offset, child-order, coordinate or repeated-parent defect.
-    let hash = |level: usize, index: usize, left: Digest, right: Digest| -> Result<Digest> {
-        let left = left.words();
-        let right = right.words();
-        Ok(Digest::new(core::array::from_fn(|lane| {
-            u64::try_from(
-                (u128::from(left[lane]) * 0x1_0000_0001
-                    + u128::from(right[(lane + 1) % 6]) * 0x1000_0013
-                    + level as u128 * 65_537
-                    + index as u128 * 257
-                    + lane as u128 * 17
-                    + 1)
-                    % u128::from(crate::backend::GOLDILOCKS_MODULUS),
-            )
-            .unwrap()
-        }))
-        .unwrap())
     };
     for query_count in [31_usize, 32, 33, 375] {
         for clustered in [false, true] {
@@ -207,12 +210,16 @@ fn parallel_sparse_depth19_frontiers_match_serial_at_query_thresholds() {
             let mut expected_calls = Vec::new();
             let root = plan
                 .reconstruct(&leaves, &siblings, |level, index, left, right| {
-                    let parent = hash(level, index, left, right)?;
+                    let parent = cheap_parent(level, index, left, right);
                     expected_calls.push((level, index, left, right, parent));
                     Ok(parent)
                 })
                 .unwrap();
-            let expected_work = plan.verify_with(root, &leaves, &siblings, hash).unwrap();
+            let expected_work = plan
+                .verify_with(root, &leaves, &siblings, |level, index, left, right| {
+                    Ok(cheap_parent(level, index, left, right))
+                })
+                .unwrap();
             assert_eq!(expected_calls.len(), expected_work.parent_hashes);
             assert_eq!(expected_work.max_frontier_width, query_count);
             assert_ne!(root, Digest::default());
@@ -225,7 +232,7 @@ fn parallel_sparse_depth19_frontiers_match_serial_at_query_thresholds() {
                             &leaves,
                             &siblings,
                             |level, index, left, right| {
-                                let parent = hash(level, index, left, right)?;
+                                let parent = cheap_parent(level, index, left, right);
                                 actual_calls
                                     .lock()
                                     .unwrap()

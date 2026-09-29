@@ -44,7 +44,7 @@ impl Fixture {
         transaction.set_creation_time(Duration::from_millis(1_002));
         let instruction: InstructionBox = if rejected {
             Unregister::domain(
-                iroha_data_model::domain::DomainId::try_new("absent_inclusion", "universal")
+                iroha_model_base::domain::DomainId::try_new("absent_inclusion", "universal")
                     .unwrap(),
             )
             .into()

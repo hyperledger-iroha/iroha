@@ -39466,7 +39466,7 @@ mod fastpq_tx_set_hash_tests {
             .sign(keypair.private_key())
             .unpack(|_| {});
         let (mut state_block, guard) =
-            crate::block::ValidBlock::start_component_execution(new_block.as_ref(), state)
+            crate::block::ValidBlock::start_component_execution(&new_block.clone().into(), state)
                 .expect("original recorder before execution");
         let _ = new_block
             .validate_and_record_transactions(&mut state_block, guard)

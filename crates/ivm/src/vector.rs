@@ -29,8 +29,6 @@ pub use metal_receipts::{MetalKernel, metal_completed_dispatches};
 mod metal_qualification;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
-use objc2::Message;
-#[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2_foundation::NSUInteger;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2_metal::*;

@@ -6,7 +6,7 @@
 
 use crate::{
     crypto::Crypto,
-    message::{Block, BlockHeader, Qc, TimeoutCert, VoteKind},
+    message::{AttestationSignature, Block, BlockHeader, Qc, TimeoutCert, VoteKind},
     types::{Committee, EpochConfig, EpochId, Hash32, PublicKey},
 };
 
@@ -64,11 +64,11 @@ fn put_len32(out: &mut Vec<u8>, len: usize) {
 }
 
 /// `blobs(l) = be32(len(l)) ‖ [be32(len(x)) ‖ x] for x in l` (§3.1).
-fn put_blobs<'a>(out: &mut Vec<u8>, list: impl ExactSizeIterator<Item = &'a [u8]>) {
+fn put_blobs(out: &mut Vec<u8>, list: impl ExactSizeIterator<Item = impl AsRef<[u8]>>) {
     put_len32(out, list.len());
     for blob in list {
-        put_len32(out, blob.len());
-        out.extend_from_slice(blob);
+        put_len32(out, blob.as_ref().len());
+        out.extend_from_slice(blob.as_ref());
     }
 }
 
@@ -334,7 +334,7 @@ pub fn qc_digest_preimage(qc: &Qc) -> Vec<u8> {
     }
     put_blobs(
         &mut out,
-        qc.attestations.iter().map(|signature| signature.as_slice()),
+        qc.attestations.iter().map(AttestationSignature::as_slice),
     );
     out
 }

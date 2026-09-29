@@ -12,8 +12,10 @@ use iroha_data_model::{
         consensus_v2::{SumeragiV2GenesisContextParameters, ValidationError, ValidatorPower},
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     sumeragi::{
@@ -57,6 +59,28 @@ fn mint_finality_authority(
     }
 }
 
+fn mint_finality_genesis_authorization(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+) -> KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: authority.network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority.authority_id().expect("valid fixture authority"),
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    authorization
+        .validate_against_authority(authority)
+        .expect("valid fixture genesis authorization");
+    authorization
+}
 fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
     assert!(u8::try_from(len).is_ok(), "len must fit in u8");
     (0..len)

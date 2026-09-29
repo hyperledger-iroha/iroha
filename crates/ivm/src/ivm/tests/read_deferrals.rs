@@ -47,7 +47,7 @@ fn public_and_input_only_tlv_decoders_preserve_header_and_envelope_refusals() {
                 VMError::NoritoInvalid
             );
             budget.set_limit_bytes(occupied + 8 * std::mem::size_of::<crate::AccessRange>());
-            assert_eq!(vm.validate_tlv(Memory::INPUT_START).unwrap().payload, &[]);
+            assert!(vm.validate_tlv(Memory::INPUT_START).unwrap().payload.is_empty());
         }
     }
 }

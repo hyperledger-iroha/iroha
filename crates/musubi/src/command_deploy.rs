@@ -711,18 +711,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn prepared_output_shows_exact_signer_alias_transactions_and_fee_bounds() {
+    /// Deterministic signer, network, derived contract address and Nexus fee bound, built under
+    /// the caller's active address profile.
+    fn authority_paid_identities() -> (
+        iroha_data_model::account::AccountId,
+        iroha_data_model::NetworkId,
+        iroha_data_model::smart_contract::ContractAddress,
+        FeePaymentIntent,
+    ) {
         use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
         use iroha_data_model::{
             NetworkId,
             account::AccountId,
-            nexus::{FeeDebitSource, FeeSponsorProgramId},
             smart_contract::ContractAddress,
             transaction::{FeeChargeKind, FeeChargeLimit},
         };
         use iroha_model_base::topology::DataSpaceId;
-        let _profile = ChainDiscriminantGuard::enter(369);
         let key = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519).expect("test key");
         let authority = AccountId::new(key.public_key().clone());
         let id =
@@ -737,6 +741,14 @@ mod tests {
             }],
             None,
         );
+        (authority, id, address, fee)
+    }
+
+    #[test]
+    fn prepared_output_shows_exact_signer_alias_transactions_and_fee_bounds() {
+        use iroha_data_model::nexus::{FeeDebitSource, FeeSponsorProgramId};
+        let _profile = ChainDiscriminantGuard::enter(369);
+        let (authority, id, address, fee) = authority_paid_identities();
         let mut preflight = authority_paid_preflight(id, &authority, &address, &fee);
         let signer = authority.to_string();
         let _foreign_profile = ChainDiscriminantGuard::enter(753);
@@ -820,6 +832,37 @@ mod tests {
         });
         assert!(readback.contains("Verifying stored artifact and alias readback"));
         assert!(readback.contains("coffee::universal"));
+    }
+
+    #[test]
+    fn plan_journal_is_named_by_the_final_atomic_commit_hash() {
+        use iroha::crypto::Hash;
+        let _profile = ChainDiscriminantGuard::enter(369);
+        let (authority, id, address, fee) = authority_paid_identities();
+        let mut preflight = authority_paid_preflight(id, &authority, &address, &fee);
+        let commit = Hash::new(b"atomic commit");
+        preflight.transaction_hashes = vec![Hash::new(b"self grant").to_string(), commit.to_string()];
+        assert_eq!(
+            plan_journal_id(&preflight).expect("journal id"),
+            hex::encode(commit.as_ref())
+        );
+        for (hashes, reason) in [
+            (Vec::new(), "contains no atomic commit"),
+            (
+                vec!["not-a-transaction-hash".to_owned()],
+                "contains an invalid transaction hash",
+            ),
+            // Valid hex whose least significant bit is clear is not a transaction hash.
+            (vec!["00".repeat(32)], "contains an invalid transaction hash"),
+        ] {
+            preflight.transaction_hashes = hashes;
+            let diagnostic = plan_journal_id(&preflight).expect_err("unusable plan hashes");
+            assert_eq!(diagnostic.code(), ErrorCode::Internal);
+            let rendered = CommandOutput::failure("deploy", diagnostic)
+                .render(OutputFormat::Human)
+                .expect("render deploy failure");
+            assert!(rendered.stderr().contains(reason), "{}", rendered.stderr());
+        }
     }
 
     #[test]

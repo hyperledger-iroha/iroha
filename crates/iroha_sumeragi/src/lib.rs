@@ -77,11 +77,13 @@
 //! for each ID it builds the mutated crate and requires its named deterministic test(s) to fail
 //! (then its randomized scenario, as a second line), and requires the unmutated build to pass.
 //!
-//! TODO: run the mutation gate and the §12.6 size gate (`tests/spec.rs`) in CI; add the §13.5
-//! multi-process soak once the node runs the driver (the conformance runs of the production
-//! driver kernel in this simulator live in `iroha_core::sumeragi::driver`), and the O-AMX oracle
-//! with the AMX application; narrow the public API to what a §12 driver needs
-//! (`Core`, `api`, the wire types, the safety record, the §11 exports) once the driver exists.
+//! CI runs the §12.6 size gate (`tests/spec.rs`) with every pull request's crate tests and the
+//! mutation gate nightly (`.github/workflows/nightly_sumeragi.yml`, `--strict`).
+//!
+//! TODO: add the §13.5 multi-process soak (the conformance runs of the production driver kernel
+//! in this simulator live in `iroha_core::sumeragi::driver`) and the O-AMX oracle with the AMX
+//! application; narrow the public API to what the §12 driver in `iroha_core` needs (`Core`,
+//! `api`, the wire types, the safety record, the §11 exports).
 
 // The workspace denies `clippy::redundant_feature_names`, and clippy attributes a violation in
 // the workspace member `vendor/concread` (feature `simd_support`) to every crate it checks. This

@@ -242,7 +242,7 @@ fn assert_axt_context_changes_rejected(
     assert!(verify_quantity_ordinary_artifact(bytes, expected, limits).is_err());
 }
 
-pub(super) fn verify_count(
+pub fn verify_count(
     bytes: &[u8],
     is_axt: bool,
     fixture: &capture::CaptureFixture,
@@ -270,7 +270,7 @@ pub(super) fn verify_count(
     assert_eq!(accepted.work().row_leaves, 64 * count);
     assert_eq!(accepted.work().oracle_leaves, 64 * count);
     assert!(accepted.work().proof_bytes <= count * 512 * 1024);
-    let maximum_child_bytes = maximum_child_bytes.unwrap_or(accepted.work().proof_bytes);
+    let maximum_child_bytes = maximum_child_bytes.unwrap_or_else(|| accepted.work().proof_bytes);
     assert!(maximum_child_bytes <= limits.bundle.segment.max_proof_bytes);
     assert_eq!(accepted.identity().profile_id, quantity_profile_id());
     assert_eq!(

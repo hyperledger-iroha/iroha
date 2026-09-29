@@ -28,7 +28,7 @@ impl PublicKeyEnvelopeError {
     }
 }
 
-pub(super) fn algorithm(bytes: &[u8]) -> Result<Algorithm, PublicKeyEnvelopeError> {
+pub fn algorithm(bytes: &[u8]) -> Result<Algorithm, PublicKeyEnvelopeError> {
     let tag = *bytes
         .first()
         .ok_or(PublicKeyEnvelopeError(EnvelopeFailure::MissingAlgorithm))?;
@@ -36,7 +36,7 @@ pub(super) fn algorithm(bytes: &[u8]) -> Result<Algorithm, PublicKeyEnvelopeErro
         .map_err(|()| PublicKeyEnvelopeError(EnvelopeFailure::InvalidAlgorithm(tag)))
 }
 
-pub(super) fn payload(bytes: &[u8]) -> Result<&[u8], PublicKeyEnvelopeError> {
+pub fn payload(bytes: &[u8]) -> Result<&[u8], PublicKeyEnvelopeError> {
     bytes
         .get(1..)
         .ok_or(PublicKeyEnvelopeError(EnvelopeFailure::MissingPayload))

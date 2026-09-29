@@ -44,7 +44,7 @@ impl Fixture {
         transaction.set_creation_time(Duration::from_millis(1_002));
         let instruction: InstructionBox = if rejected {
             Unregister::domain(
-                iroha_data_model::domain::DomainId::try_new("absent_inclusion", "universal")
+                iroha_model_base::domain::DomainId::try_new("absent_inclusion", "universal")
                     .unwrap(),
             )
             .into()
@@ -200,9 +200,27 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
         result["context_id"],
         json::to_value(&tip.context_id()).unwrap()
     );
+    let execution = tip.execution();
+    let reported = &result["execution_commitment"];
     assert_eq!(
-        result["execution_commitment"],
-        json::to_value(tip.execution()).unwrap()
+        reported["parent_state_root"],
+        json::to_value(&execution.parent_state_root).unwrap()
+    );
+    assert_eq!(
+        reported["post_state_root"],
+        json::to_value(&execution.post_state_root).unwrap()
+    );
+    assert_eq!(
+        reported["ordinary_writes_root"],
+        json::to_value(&execution.ordinary_writes_root).unwrap()
+    );
+    assert_eq!(
+        reported["executed_block_wire_len"],
+        json::to_value(&execution.executed_block_wire_len).unwrap()
+    );
+    assert_eq!(
+        reported["executed_block_wire_hash"],
+        json::to_value(&execution.executed_block_wire_hash).unwrap()
     );
     assert_eq!(result["result_ok"].as_bool(), Some(true));
     assert_eq!(result["proof_kind"].as_str(), Some("selective-v1"));

@@ -668,7 +668,7 @@ pub fn kagami_default_manifest_json(
     );
     manifest.insert(
         "wire_protocol_version".to_string(),
-        norito::json::value::to_value(&u32::from(PROTOCOL_VERSION))
+        norito::json::value::to_value(&u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION))
             .expect("serialize wire protocol version"),
     );
     manifest.insert(
@@ -787,7 +787,7 @@ mod tests {
         );
         assert_eq!(
             value.get("wire_protocol_version").and_then(Value::as_u64),
-            Some(u64::from(PROTOCOL_VERSION))
+            Some(u64::from(iroha_data_model::sumeragi::PROTOCOL_VERSION))
         );
         assert_eq!(
             value

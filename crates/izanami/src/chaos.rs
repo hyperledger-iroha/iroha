@@ -7463,7 +7463,7 @@ mod tests {
     use super::*;
     use crate::config::{
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-        DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS, DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+        DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
         FaultArgs, FaultToggles, IzanamiArgs, NexusProfile, WorkloadProfile,
     };
     use color_eyre::eyre::{WrapErr, eyre};

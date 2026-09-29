@@ -7568,7 +7568,7 @@ state_test! { sync normal_validation_requires_can_set_parameters_for_lane_lifecy
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
         let_row! { parent: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new()) .chain(0, None) .sign(signer.private_key()) .unpack(|_| {}) .into() };
         let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
-        let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(unverified.as_ref(), &state).expect("original recorder before execution");
+        let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&unverified.clone().into(), &state).expect("original recorder before execution");
         let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
         let signed: SignedBlock = committed.into();
         if authorized {
@@ -7605,7 +7605,7 @@ state_test! { sync signed_lane_lifecycle_transaction_rejects_duplicate_transitio
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([instruction(), instruction()]) .sign(signer.private_key()) };
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
-    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(unverified.as_ref(), state).expect("original recorder before execution");
+    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&unverified.clone().into(), state).expect("original recorder before execution");
     let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
     let signed: SignedBlock = committed.into();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("duplicate signed lifecycle transition must be rejected") ) };
@@ -7635,7 +7635,7 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_catalog_after_prior_commi
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( stale_payload.into_custom_parameter(), ))]) .sign(signer.private_key()) };
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(first.block().as_ref())) .sign(signer.private_key()) .unpack(|_| {}) };
-    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(unverified.as_ref(), state).expect("original recorder before execution");
+    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&unverified.clone().into(), state).expect("original recorder before execution");
     let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
     let signed: SignedBlock = committed.into();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("stale signed lifecycle transition must be rejected") ) };

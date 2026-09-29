@@ -230,7 +230,9 @@ fn complete_required_metal_masked_deep_producer_roundtrip_and_statement_rejectio
 }
 
 fn complete_siblings() -> [[u32; 8]; 32] {
-    core::array::from_fn(|level| digest((level + 17) as u8))
+    core::array::from_fn(|level| {
+        digest(u8::try_from(level + 17).expect("32 sibling levels offset by 17 fit in u8"))
+    })
 }
 
 // Independent public fixture facts are derived before reading any artifact.
@@ -271,6 +273,7 @@ fn complete_statement() -> PublicStatement {
 }
 
 fn complete_masked_producer(execution: DigestExecutionV1) {
+    use crate::backend::compact_protocol::FixedAir as _;
     use crate::gadgets::compact_smt_air::PhysicalSmtWitness;
     // Required-device failure must precede the diagnostic's private witness too.
     crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
@@ -308,7 +311,6 @@ fn complete_masked_producer(execution: DigestExecutionV1) {
         iroha_crypto::Hash::new(&proof),
     );
     // Retain only public outputs before later resource/golden/verifier assertions.
-    use crate::backend::compact_protocol::FixedAir as _;
     let receipt = diagnostic_artifact::retain(
         &proof,
         air.statement_bytes(),

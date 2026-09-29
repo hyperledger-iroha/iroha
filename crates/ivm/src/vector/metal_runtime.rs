@@ -118,6 +118,8 @@ fn discover() {
 
 #[cfg(all(test, feature = "metal-hardware-tests"))]
 fn qualify(record: &DeviceLease<MetalState>, device: &ProtocolObject<dyn MTLDevice>) {
+    use objc2::Message;
+
     if record.value().is_some() || !record.health().usable() || !record_allowed(record) {
         return;
     }

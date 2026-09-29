@@ -1819,7 +1819,7 @@ mod tests {
         version: u8,
         registers: u16,
         lanes: u16,
-        instructions: Vec<HiddenRamFheInstruction>,
+        instructions: &[HiddenRamFheInstruction],
     ) -> HiddenRamFheProgram {
         program::from_public_test_parts(version, registers, lanes, instructions)
     }
@@ -2043,7 +2043,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 1),
                 HiddenRamFheInstruction::LoadInput(1, 2),
                 HiddenRamFheInstruction::Add(2, 0, 1),
@@ -2143,7 +2143,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 2),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2187,7 +2187,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadConst(0, RAM_LFE_BFV_PLAINTEXT_MODULUS),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2226,7 +2226,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 2),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2316,7 +2316,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions,
+            &instructions,
         );
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("chained multiplications must exceed the profile depth budget");
@@ -2358,7 +2358,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2373,7 +2373,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadState(0, BFV_PROGRAM_STATE_WIDTH_U16),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2388,7 +2388,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadConst(BFV_PROGRAM_REGISTER_COUNT_U16, 1),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2409,7 +2409,7 @@ mod tests {
                 1,
                 BFV_PROGRAM_REGISTER_COUNT_U16,
                 BFV_PROGRAM_STATE_WIDTH_U16,
-                vec![instruction, HiddenRamFheInstruction::Output(0)],
+                &[instruction, HiddenRamFheInstruction::Output(0)],
             );
             let err = validate_hidden_ram_fhe_program(&program)
                 .expect_err("noncanonical plaintext immediate must be rejected before execution");
@@ -2429,7 +2429,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions,
+            &instructions,
         );
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("programs cannot emit more output slots than the profile admits");
@@ -2441,7 +2441,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![HiddenRamFheInstruction::LoadConst(0, 1); BFV_PROGRAM_MAX_INSTRUCTIONS + 1],
+            &[HiddenRamFheInstruction::LoadConst(0, 1); BFV_PROGRAM_MAX_INSTRUCTIONS + 1],
         );
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("oversized instruction tapes must be rejected before execution");
@@ -2455,7 +2455,7 @@ mod tests {
                     2,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    vec![
+                    &[
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
                     ],
@@ -2467,7 +2467,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16 - 1,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    vec![
+                    &[
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
                     ],
@@ -2479,7 +2479,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16 - 1,
-                    vec![
+                    &[
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
                     ],
@@ -2491,7 +2491,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    Vec::new(),
+                    &[],
                 ),
                 "instruction tape",
             ),
@@ -2500,7 +2500,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    vec![HiddenRamFheInstruction::LoadConst(0, 1)],
+                    &[HiddenRamFheInstruction::LoadConst(0, 1)],
                 ),
                 "at least one output",
             ),
@@ -2831,7 +2831,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 1),
                 HiddenRamFheInstruction::LoadConst(1, 42),
                 HiddenRamFheInstruction::LoadConst(2, 7),
