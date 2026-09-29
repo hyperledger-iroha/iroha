@@ -941,7 +941,7 @@ fn catch_native_verifier_panic<T>(
     parity: KagemushaPastaParityV1,
     verify: impl FnOnce() -> T,
 ) -> Result<T, KagemushaRecursionErrorV1> {
-    crate::panic_hook::catch_unwind_suppressed(verify)
+    iroha_panic_hook::catch_unwind_suppressed(verify)
         .map_err(|_| KagemushaRecursionErrorV1::NativeVerifierPanic(parity))
 }
 

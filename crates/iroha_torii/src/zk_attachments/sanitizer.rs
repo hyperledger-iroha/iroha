@@ -523,7 +523,7 @@ pub(super) fn spawn_sanitizer_stdout_reader(
         // Keep physical admission for as long as this reader can remain blocked
         // so detached pipe readers cannot accumulate outside the semaphore.
         let admission = admission;
-        let result = match iroha_core::panic_hook::catch_unwind_suppressed(|| {
+        let result = match iroha_panic_hook::catch_unwind_suppressed(|| {
             read_sanitizer_stdout_limited(&mut stdout, max_output_bytes)
         }) {
             Ok(result) => result,

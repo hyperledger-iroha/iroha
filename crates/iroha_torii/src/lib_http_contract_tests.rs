@@ -1375,7 +1375,7 @@ mod response_negotiation_middleware_tests {
                 "/panic",
                 get(|| async {
                     assert!(
-                        iroha_core::panic_hook::is_suppressed(),
+                        iroha_panic_hook::is_suppressed(),
                         "caught request panics must not trigger process shutdown"
                     );
                     panic!("adversarial test panic");
@@ -1429,7 +1429,7 @@ mod response_negotiation_middleware_tests {
             assert_eq!(envelope.code(), "internal_server_error");
             assert!(!envelope.message().contains("adversarial test panic"));
             assert!(
-                !iroha_core::panic_hook::is_suppressed(),
+                !iroha_panic_hook::is_suppressed(),
                 "request-local suppression must not leak after recovery"
             );
         }

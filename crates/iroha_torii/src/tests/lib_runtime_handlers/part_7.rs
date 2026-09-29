@@ -21,7 +21,7 @@ fn install_unavailable_local_read_runtime(
 async fn hosted_connection_driver_panic_is_contained_to_the_proxy_request() {
     let task = super::spawn_soracloud_hosted_connection_driver(async {
         assert!(
-            iroha_core::panic_hook::is_suppressed(),
+            iroha_panic_hook::is_suppressed(),
             "the physical hosted connection driver must suppress the process shutdown hook"
         );
         panic!("injected hosted connection driver panic");
@@ -30,7 +30,7 @@ async fn hosted_connection_driver_panic_is_contained_to_the_proxy_request() {
     });
     assert!(matches!(task.await, Ok(Err(_))));
     assert!(
-        !iroha_core::panic_hook::is_suppressed(),
+        !iroha_panic_hook::is_suppressed(),
         "hosted driver suppression must not leak into the request task"
     );
 }
