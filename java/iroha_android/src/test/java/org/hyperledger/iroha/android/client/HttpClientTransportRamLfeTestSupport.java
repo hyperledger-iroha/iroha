@@ -24,7 +24,7 @@ final class HttpClientTransportRamLfeTestSupport {
         + "\","
         + "\"executed_at_ms\":42,"
         + "\"expires_at_ms\":142,"
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"backend\":\"bfv-programmed-v1\","
         + "\"verification_mode\":\"signed\","
         + "\"receipt\":{"
         + "\"payload\":{"
@@ -32,7 +32,7 @@ final class HttpClientTransportRamLfeTestSupport {
         + "\"program_digest\":\"hash:"
         + "11".repeat(32).toUpperCase()
         + "#ABCD\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"backend\":\"bfv-programmed-v1\","
         + "\"verification_mode\":{\"mode\":\"Signed\",\"value\":null},"
         + "\"output_hash\":\"hash:"
         + "22".repeat(32).toUpperCase()
@@ -57,7 +57,7 @@ final class HttpClientTransportRamLfeTestSupport {
     return "{"
         + "\"valid\":true,"
         + "\"program_id\":\"identifier_lookup_retail\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"backend\":\"bfv-programmed-v1\","
         + "\"verification_mode\":\"signed\","
         + "\"output_hash\":\""
         + "44".repeat(32)

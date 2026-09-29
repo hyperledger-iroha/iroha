@@ -41,7 +41,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "AA".repeat(32),
                 "BB".repeat(32),
@@ -110,7 +110,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             new IdentifierResolutionExecutionPayload(
                 "email_retail",
                 "11".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "AA".repeat(32),
                 "BB".repeat(32),
@@ -279,7 +279,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "AA".repeat(32),
                 "BB".repeat(32),

@@ -1803,24 +1803,14 @@ fn sample_identifier_policy(
     signer: &KeyPair,
     policy_id: &IdentifierPolicyId,
 ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-    sample_identifier_policy_with_backend(
-        owner,
-        signer,
-        policy_id,
-        RamLfeBackend::BfvAffineSha3_256V1,
-    )
+    sample_identifier_policy_with_backend(owner, signer, policy_id, RamLfeBackend::BfvAffineV1)
 }
 fn sample_programmed_identifier_policy(
     owner: &AccountId,
     signer: &KeyPair,
     policy_id: &IdentifierPolicyId,
 ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-    sample_identifier_policy_with_backend(
-        owner,
-        signer,
-        policy_id,
-        RamLfeBackend::BfvProgrammedSha3_256V1,
-    )
+    sample_identifier_policy_with_backend(owner, signer, policy_id, RamLfeBackend::BfvProgrammedV1)
 }
 fn sample_identifier_policy_with_backend(
     owner: &AccountId,
@@ -1837,7 +1827,7 @@ fn sample_identifier_policy_with_backend(
     )
     .expect("identifier BFV parameters");
     let program_policy = match backend {
-        RamLfeBackend::BfvAffineSha3_256V1 => RamLfeProgramPolicy::new(
+        RamLfeBackend::BfvAffineV1 => RamLfeProgramPolicy::new(
             program_id.clone(),
             owner.clone(),
             backend,
@@ -1849,7 +1839,7 @@ fn sample_identifier_policy_with_backend(
             .expect("policy commitment"),
             signer.public_key().clone(),
         ),
-        RamLfeBackend::BfvProgrammedSha3_256V1 => {
+        RamLfeBackend::BfvProgrammedV1 => {
             let hidden_program = default_bfv_programmed_hidden_program();
             let evaluation_keys = BfvEvaluationKeyBundle {
                 relinearization_key,
@@ -2032,7 +2022,7 @@ fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
 fn shared_sdk_identifier_bfv_public_parameters(
     policy_id: &IdentifierPolicyId,
 ) -> BfvIdentifierPublicParameters {
-    let parameters = sample_identifier_bfv_parameters(RamLfeBackend::BfvProgrammedSha3_256V1);
+    let parameters = sample_identifier_bfv_parameters(RamLfeBackend::BfvProgrammedV1);
     let program_id = sample_program_id(policy_id);
     let (derived, _, _) = derive_identifier_key_material_from_seed(
         &parameters,
@@ -2079,7 +2069,7 @@ fn sample_identifier_policy_with_public_parameters(
     let program_policy = RamLfeProgramPolicy::new(
         program_id.clone(),
         owner.clone(),
-        RamLfeBackend::BfvProgrammedSha3_256V1,
+        RamLfeBackend::BfvProgrammedV1,
         RamLfeVerificationMode::Signed,
         bfv_programmed_policy_commitment_with_program(
             b"resolver-secret",

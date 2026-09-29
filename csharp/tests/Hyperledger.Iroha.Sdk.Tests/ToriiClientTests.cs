@@ -8558,7 +8558,7 @@ public sealed partial class ToriiClientTests
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed0120abcd",
-                      "backend": "bfv-affine-sha3-256-v1",
+                      "backend": "bfv-affine-v1",
                       "input_encryption": "bfv-v1",
                       "input_encryption_public_parameters": "DEADBEEF",
                       "input_encryption_public_parameters_decoded": {
@@ -8579,7 +8579,7 @@ public sealed partial class ToriiClientTests
         Assert.Single(policies.Items);
         Assert.Equal("phone#retail", policies.Items[0].PolicyId);
         Assert.True(policies.Items[0].Active);
-        Assert.Equal("bfv-affine-sha3-256-v1", policies.Items[0].Backend);
+        Assert.Equal("bfv-affine-v1", policies.Items[0].Backend);
         Assert.Equal(2048, policies.Items[0].InputEncryptionPublicParametersDecoded!["degree"]!.GetValue<int>());
         Assert.Equal("retail phone resolver", policies.Items[0].Note);
         Assert.Equal("/v1/identifier-policies", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -8615,7 +8615,7 @@ public sealed partial class ToriiClientTests
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": {{JsonSerializer.Serialize(resolverPublicKey)}},
-                      "backend": "bfv-affine-sha3-256-v1"
+                      "backend": "bfv-affine-v1"
                     }
                   ]
                 }
@@ -11240,7 +11240,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("opaque-1", resolved.OpaqueId);
         Assert.Equal("receipt-1", resolved.ReceiptHash);
         Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", resolved.AccountId);
-        Assert.Equal("bfv-programmed-sha3-256-v1", resolved.Backend);
+        Assert.Equal("bfv-programmed-v1", resolved.Backend);
         Assert.NotNull(resolved.SignaturePayload);
         Assert.Equal("phone#retail", resolved.SignaturePayload!["payload"]!["policy_id"]!.GetValue<string>());
     }
@@ -11275,7 +11275,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", resolved.AccountId);
         Assert.Equal(1710000000000L, resolved.ResolvedAtMilliseconds);
         Assert.Equal(1710003600000L, resolved.ExpiresAtMilliseconds);
-        Assert.Equal("bfv-programmed-sha3-256-v1", resolved.Backend);
+        Assert.Equal("bfv-programmed-v1", resolved.Backend);
         Assert.Equal("ABCD", resolved.Signature);
         Assert.Equal(string.Empty, resolved.SignaturePayloadHex);
         Assert.Equal(
@@ -11309,7 +11309,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     [Theory]
     [InlineData(" phone#retail", null, """{"kind":"signed","signature":"ABCD"}""", "payload.policy_id", "whitespace")]
-    [InlineData("phone#retail", " bfv-programmed-sha3-256-v1", """{"kind":"signed","signature":"ABCD"}""", "payload.execution.backend", "whitespace")]
+    [InlineData("phone#retail", " bfv-programmed-v1", """{"kind":"signed","signature":"ABCD"}""", "payload.execution.backend", "whitespace")]
     [InlineData("phone#retail", null, """{"kind":"signed","signature":" ABCD"}""", "attestation.signature", "whitespace")]
     [InlineData("phone#retail", null, """{"kind":"signed","signature":"ABCD","proof_b64":"AQID"}""", "signed attestations", "proof fields")]
     [InlineData("phone#retail", null, """{"kind":"proof","proof_b64":"AQID"}""", "attestation.proof_backend", "required")]
@@ -11327,7 +11327,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(IdentifierResolveEnvelopeJson(
-                IdentifierResolvePayloadJson(policyId, backend ?? "bfv-programmed-sha3-256-v1"),
+                IdentifierResolvePayloadJson(policyId, backend ?? "bfv-programmed-v1"),
                 attestationJson)),
         });
 
@@ -23025,7 +23025,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Active = true,
             Normalization = "phone_e164",
             ResolverPublicKey = "ed0120abcd",
-            Backend = "bfv-affine-sha3-256-v1",
+            Backend = "bfv-affine-v1",
             InputEncryption = "bfv-v1",
             InputEncryptionPublicParameters = "DEADBEEF",
             InputEncryptionPublicParametersDecoded = new JsonObject { ["degree"] = 2048 },
@@ -23049,7 +23049,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["active"] = true,
             ["normalization"] = "phone_e164",
             ["resolver_public_key"] = "ed0120abcd",
-            ["backend"] = "bfv-affine-sha3-256-v1",
+            ["backend"] = "bfv-affine-v1",
             ["input_encryption"] = "bfv-v1",
             ["input_encryption_public_parameters"] = "DEADBEEF",
             ["input_encryption_public_parameters_decoded"] = new JsonObject { ["degree"] = 2048 },
@@ -23068,7 +23068,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               "active": true,
               "normalization": "phone_e164",
               "resolver_public_key": "ed0120abcd",
-              "backend": "bfv-affine-sha3-256-v1"
+              "backend": "bfv-affine-v1"
             }
             """;
     }
@@ -23124,7 +23124,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "active": true,
                   "normalization": "phone_e164",
                   "resolver_public_key": "ed0120abcd",
-                  "backend": "bfv-affine-sha3-256-v1"
+                  "backend": "bfv-affine-v1"
                 }
               ]
             }
@@ -31044,7 +31044,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               "account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "resolved_at_ms": 1710000000000,
               "expires_at_ms": 1710003600000,
-              "backend": "bfv-programmed-sha3-256-v1",
+              "backend": "bfv-programmed-v1",
               "signature": {{JsonSerializer.Serialize(signature)}},
               "signature_payload_hex": {{JsonSerializer.Serialize(signaturePayloadHex)}},
               "signature_payload": {{signaturePayloadJson}}
@@ -31095,7 +31095,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     private static string IdentifierResolvePayloadJson(
         string policyId = "phone#retail",
-        string backend = "bfv-programmed-sha3-256-v1",
+        string backend = "bfv-programmed-v1",
         string executedAtJson = "1710000000000",
         string expiresAtJson = "1710003600000")
     {

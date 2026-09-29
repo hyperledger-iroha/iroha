@@ -39,7 +39,7 @@ const RECEIPT = {
   payload: {
     program_id: PROGRAM_ID,
     program_digest: "bb".repeat(32),
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     input_ciphertext_hash: INPUT_CIPHERTEXT_HASH,
     output_ciphertext_hash: OUTPUT_CIPHERTEXT_HASH,
@@ -80,7 +80,7 @@ function ramLfeExecuteResponse(overrides = {}) {
     associated_data_hash: ASSOCIATED_DATA_HASH,
     executed_at_ms: 42,
     expires_at_ms: 142,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     receipt: RECEIPT,
     output_opening: ramLfeOutputOpening(),
@@ -92,7 +92,7 @@ function ramLfeReceiptVerifyResponse(overrides = {}) {
   return {
     valid: true,
     program_id: PROGRAM_ID,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     output_hash: OUTPUT_HASH,
     associated_data_hash: ASSOCIATED_DATA_HASH,
@@ -108,7 +108,7 @@ function ramLfeProgramPolicy(overrides = {}) {
     active: true,
     resolver_public_key: "ed25519:resolver-key",
     output_opening_public_key: "ed25519:output-opening-key",
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters: "ABCD",
@@ -371,7 +371,7 @@ test("verifyRamLfeReceipt posts raw receipt payloads", async () => {
 test("verifyRamLfeReceipt rejects non-exact response fields", async () => {
   const cases = [
     ["program_id", ramLfeReceiptVerifyResponse({ program_id: `${PROGRAM_ID} ` })],
-    ["backend", ramLfeReceiptVerifyResponse({ backend: " bfv-programmed-sha3-256-v1" })],
+    ["backend", ramLfeReceiptVerifyResponse({ backend: " bfv-programmed-v1" })],
     ["verification_mode", ramLfeReceiptVerifyResponse({ verification_mode: "Signed" })],
     ["output_hash", ramLfeReceiptVerifyResponse({ output_hash: ` ${OUTPUT_HASH}` })],
     [

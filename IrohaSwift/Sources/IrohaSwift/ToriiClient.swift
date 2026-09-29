@@ -2087,9 +2087,9 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         switch raw {
         case "hkdf-sha3-512-prf-v1":
             return 0
-        case "bfv-affine-sha3-256-v1":
+        case "bfv-affine-v1":
             return 1
-        case "bfv-programmed-sha3-256-v1":
+        case "bfv-programmed-v1":
             return 2
         default:
             throw ToriiClientError.invalidPayload(

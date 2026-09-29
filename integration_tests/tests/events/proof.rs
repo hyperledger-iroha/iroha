@@ -12,7 +12,7 @@ use iroha_data_model::events::data::prelude::ProofEventFilter;
 use iroha_data_model::{isi::verifying_keys, proof::ProofAttachment};
 use iroha_test_network::*;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
-use proof_fixtures::{rejected_replay_binding_attachment, replay_binding_attachment};
+use proof_fixtures::{confidential_attachment, rejected_confidential_attachment};
 use std::time::Duration;
 use tokio::{task::spawn_blocking, time::timeout};
 const CLIENT_STATUS_TIMEOUT: Duration = Duration::from_secs(600);
@@ -20,10 +20,10 @@ const PROOF_EVENT_TIMEOUT: Duration = Duration::from_secs(600);
 fn halo2_attachment_and_registration(
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    replay_binding_attachment("event-verified", vk_name)
+    confidential_attachment("event-verified", vk_name)
 }
 fn rejected_halo2_attachment() -> ProofAttachment {
-    rejected_replay_binding_attachment("event-rejected", "event_vk")
+    rejected_confidential_attachment("event-rejected", "event_vk")
 }
 fn client_with_timeout(network: &Network) -> Client {
     integration_tests::sync::rebind_blocking_client(&network.client(), |client| {

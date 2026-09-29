@@ -3642,7 +3642,12 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "identifier policy list response",
+      { signal },
+    );
     if (!payload) {
       rejectError("identifier policy list endpoint returned no payload");
     }
@@ -3665,7 +3670,12 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "ram-lfe program policy list response",
+      { signal },
+    );
     if (!payload) {
       rejectError("ram-lfe program policy list endpoint returned no payload");
     }
@@ -24791,7 +24801,7 @@ function normalizeRamLfeProgramProfile(payload, context) {
   }
   const dimension = (field, maximum) => {
     const name = `${context}.${field}`;
-    const value = requireBfvUint(record[field], name, { allowZero: false });
+    const value = BigInt(normalizeGovernanceUint64Integer(record[field], name, { allowZero: false }));
     if (value > maximum) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -32979,9 +32989,9 @@ function identifierBackendTag(raw) {
   switch (tag) {
     case "hkdf-sha3-512-prf-v1":
       return 0;
-    case "bfv-affine-sha3-256-v1":
+    case "bfv-affine-v1":
       return 1;
-    case "bfv-programmed-sha3-256-v1":
+    case "bfv-programmed-v1":
       return 2;
     default:
       rejectError(`unsupported RAM-LFE backend: ${raw}`);

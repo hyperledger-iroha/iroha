@@ -165,14 +165,14 @@ impl IdentifierResolutionService {
         program_policy: &RamLfeProgramPolicy,
         ciphertext: &BfvIdentifierCiphertext,
     ) -> Result<RamLfeExecutionDraft, IdentifierResolutionError> {
-        if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedSha3_256V1 {
+        if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedV1 {
             return Err(IdentifierResolutionError::UnsupportedBackend(
                 program_policy.commitment.backend,
             ));
         }
         self.execute_request_payload(
             program_policy,
-            norito::to_bytes(ciphertext)
+            norito::encode_canonical(ciphertext)
                 .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?,
         )
     }
@@ -274,7 +274,7 @@ impl IdentifierResolutionService {
             || policy.program_id.to_string() != "phone_retail"
             || policy.program_id != program_policy.program_id
             || policy.owner != program_policy.owner
-            || program_policy.backend != RamLfeBackend::BfvProgrammedSha3_256V1
+            || program_policy.backend != RamLfeBackend::BfvProgrammedV1
             || program_policy.commitment.backend != program_policy.backend
             || program_policy.verification_mode != RamLfeVerificationMode::Signed
         {
@@ -557,12 +557,12 @@ pub(crate) fn decode_bfv_public_parameters(
         return Err(IdentifierResolutionError::MissingFheParameters);
     }
     match program_policy.commitment.backend {
-        RamLfeBackend::BfvProgrammedSha3_256V1 => Ok(decode_bfv_programmed_public_parameters(
+        RamLfeBackend::BfvProgrammedV1 => Ok(decode_bfv_programmed_public_parameters(
             &program_policy.commitment.public_parameters,
         )
         .map_err(|err| IdentifierResolutionError::InvalidFheParameters(err.to_string()))?
         .encryption),
-        RamLfeBackend::BfvAffineSha3_256V1 => {
+        RamLfeBackend::BfvAffineV1 => {
             let public_parameters: BfvIdentifierPublicParameters =
                 norito::decode_from_bytes(&program_policy.commitment.public_parameters)
                     .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?;
@@ -579,7 +579,7 @@ pub(crate) fn decode_bfv_public_parameters(
 pub(crate) fn decode_programmed_public_parameters(
     program_policy: &RamLfeProgramPolicy,
 ) -> Result<Option<BfvProgrammedPublicParameters>, IdentifierResolutionError> {
-    if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedSha3_256V1 {
+    if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedV1 {
         return Ok(None);
     }
     if program_policy.commitment.public_parameters.is_empty() {
@@ -656,7 +656,7 @@ mod tests {
         signer: &KeyPair,
         secret: &[u8],
     ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-        let backend = RamLfeBackend::BfvProgrammedSha3_256V1;
+        let backend = RamLfeBackend::BfvProgrammedV1;
         let params = sample_identifier_bfv_parameters();
         let program_id = sample_program_id(&policy_id);
         let hidden_program = default_bfv_programmed_hidden_program();
@@ -895,8 +895,8 @@ mod tests {
     fn ram_lfe_backend(raw: &str) -> RamLfeBackend {
         match raw {
             "hkdf-sha3-512-prf-v1" => RamLfeBackend::HkdfSha3_512PrfV1,
-            "bfv-affine-sha3-256-v1" => RamLfeBackend::BfvAffineSha3_256V1,
-            "bfv-programmed-sha3-256-v1" => RamLfeBackend::BfvProgrammedSha3_256V1,
+            "bfv-affine-v1" => RamLfeBackend::BfvAffineV1,
+            "bfv-programmed-v1" => RamLfeBackend::BfvProgrammedV1,
             other => panic!("unsupported RAM-LFE backend `{other}`"),
         }
     }
@@ -1101,10 +1101,15 @@ mod tests {
         let (_, program_policy) = sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
         let default_program = default_bfv_programmed_hidden_program();
         let mut builder = HiddenRamFheProgram::builder().expect("bounded tape allocation");
-        for instruction in default_program.instructions().take(default_program.instruction_count() - 1) {
+        for instruction in default_program
+            .instructions()
+            .take(default_program.instruction_count() - 1)
+        {
             builder.push(instruction).expect("bounded modified tape");
         }
-        let mismatched_program = builder.finish().expect("modified tape remains a valid program");
+        let mismatched_program = builder
+            .finish()
+            .expect("modified tape remains a valid program");
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,
@@ -1437,13 +1442,13 @@ mod tests {
             b"+15551234567",
             b"non-programmed-backend-ciphertext",
         );
-        program_policy.commitment.backend = RamLfeBackend::BfvAffineSha3_256V1;
+        program_policy.commitment.backend = RamLfeBackend::BfvAffineV1;
         let err = service
             .execute_encrypted(&program_policy, &ciphertext)
             .expect_err("Torii execution must reject non-programmed commitment backends");
         assert!(matches!(
             err,
-            IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::BfvAffineSha3_256V1)
+            IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::BfvAffineV1)
         ));
     }
     #[test]
@@ -1618,7 +1623,7 @@ mod tests {
             .expect("second derive");
         assert_eq!(first.opaque_id, second.opaque_id);
         assert_eq!(first.receipt_hash, second.receipt_hash);
-        assert_eq!(first.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
+        assert_eq!(first.backend, RamLfeBackend::BfvProgrammedV1);
     }
     #[test]
     fn programmed_backend_resolves_encrypted_input() {
@@ -1649,6 +1654,25 @@ mod tests {
         let encrypted = service
             .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
             .expect("encrypted derive");
-        assert_eq!(encrypted.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
+        assert_eq!(encrypted.backend, RamLfeBackend::BfvProgrammedV1);
+        let canonical_input = norito::encode_canonical(&ciphertext).expect("canonical input");
+        assert_eq!(execution.input_ciphertext_hash, Hash::new(&canonical_input));
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            let actual = service
+                .execute_encrypted(&program_policy, &ciphertext)
+                .expect("ambient flags cannot change the execution transcript");
+            assert_eq!(actual.output, execution.output);
+            assert_eq!(
+                actual.input_ciphertext_hash,
+                execution.input_ciphertext_hash
+            );
+            assert_eq!(
+                actual.output_ciphertext_hash,
+                execution.output_ciphertext_hash
+            );
+            assert_eq!(actual.opaque_hash, execution.opaque_hash);
+            assert_eq!(actual.receipt_hash, execution.receipt_hash);
+        }
     }
 }

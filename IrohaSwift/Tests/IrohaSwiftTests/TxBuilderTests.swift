@@ -369,7 +369,7 @@ final class TxBuilderTests: XCTestCase {
             execution: ToriiIdentifierResolutionExecutionPayload(
                 programId: Self.fixtureClaimProgramId,
                 programDigest: Self.fixtureClaimProgramDigestHex,
-                backend: "bfv-programmed-sha3-256-v1",
+                backend: "bfv-programmed-v1",
                 verificationMode: "signed",
                 inputCiphertextHash: String(repeating: "ab", count: 32),
                 outputCiphertextHash: String(repeating: "bb", count: 32),

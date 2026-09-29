@@ -14,6 +14,9 @@ then executes the branchless tape. The closed
 slots, four registers, 32 state lanes, 256 instructions, 64 outputs and
 multiplicative depth 16. Its ring degree is 64, plaintext modulus is 257 and
 ciphertext modulus is `257 * 2^48`.
+The public backend tags are `bfv-affine-v1` and `bfv-programmed-v1`; they identify
+the evaluator's semantics. Retired `sha3-256` tags are rejected. Exact hash and
+initializer choices are specified by the compiled protocol and profile descriptor.
 
 The [Torii runtime](../crates/iroha_torii/src/identifier_resolution.rs) evaluates
 this interpreter and issues **signed** receipts. These attestations trust the
@@ -30,9 +33,9 @@ An otherwise valid replay-binding proof cannot establish program execution.
 Policy validation also applies during
 [state restoration](../crates/iroha_core/src/state/deserialize_core.rs).
 
-No existing compiled relation supplies the missing semantics. IVM replay binding
-requires deterministic replay of public code; the hidden program and secret
-cannot be disclosed to substitute that path. The BFV full-bootstrap verifier
+No existing compiled relation supplies the missing semantics. Retired IVM
+binding-only relations did not establish execution and provide no substitute for
+the hidden-program relation. The BFV full-bootstrap verifier
 requires full execution material, while its public-padding-only verifier rejects.
 The existing Halo2 IPA engine, canonical key/envelope owners and bounded verifier
 can be reused; a new semantic circuit still needs independent review. Proving the
@@ -54,6 +57,15 @@ transition, output ordering, and exact BFV modular arithmetic and relinearizatio
 All coefficient, index, quotient, remainder and depth bounds belong in the
 relation. Host-side interpreter checks alone cannot establish these facts.
 
+The canonical hidden program is a validated immutable shared owner. Its sole
+`HiddenRamFheProgramV1` frame contains fixed profile metadata followed by 1..256
+48-byte instruction slots: six little-endian u64 words per instruction, with
+all unused words zero. The typed builder writes into one bounded clearing tape;
+the explicit byte/config readers enforce the same format and reject retired
+enum-sequence frames. The relation must constrain every tag, operand, reserved
+word and bound in this exact encoding. Generic archive decoding is deliberately
+unavailable for this secret owner.
+
 The current first-release initializer uses a fixed BLAKE3 derive-key XOF schedule.
 A borrowed canonical Norito frame binds the initializer descriptor, policy hash,
 secret and associated data. Exactly 1,024 bytes become 32 consecutive big-endian
@@ -68,6 +80,15 @@ Secret commitment and private tape hashing now use separate BLAKE3 contexts and
 clearing owned hash/XOF state. The outer policy and tape digests remain properly
 typed Iroha Blake2b hashes of public commitments. Policy, program and dependent
 output vectors change explicitly; parameter and evaluation-key algorithms do not.
+The outer policy commits the canonical `PolicyCommitmentInputV1` frame, in field
+order: backend, normalized public-parameter bytes and secret commitment. The PRF
+uses the canonical `HkdfRequestInputV1` frame: policy hash, public parameters,
+associated data and normalized input. These explicit first-release identities
+replace ambient-layout tuples. Borrowed production fields and owned reference
+fixtures must produce identical frames; no reference-schema alias is introduced.
+Torii hashes the canonical ciphertext frame independently of ambient decoder
+flags. See the [canonical-transcript repair](../docs/history/2026-09-29/ram-lfe-canonical-transcripts.md)
+for the exact changes and pending validation.
 The execution trace comes from the sole interpreter and owns clearing snapshots
 of its registers and memory. It is private prover input, not execution evidence.
 The future circuit must constrain these exact hash/Norito/fold semantics and all

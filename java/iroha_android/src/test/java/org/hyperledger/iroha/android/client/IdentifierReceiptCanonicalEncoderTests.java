@@ -191,7 +191,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         "timestamp u64 opening expires_at_ms must fail");
 
     for (final String backend :
-        new String[] {" bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1"}) {
+        new String[] {" bfv-affine-v1", "bfv-affine-v1 ", "BFV-AFFINE-SHA3-256-V1"}) {
       assertThrows(
           () -> IdentifierReceiptCanonicalEncoder.encodePayload(samplePayload(backend, "signed")),
           "non-exact execution backend must fail");
@@ -200,7 +200,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
     for (final String mode : new String[] {" signed", "signed ", "Signed"}) {
       assertThrows(
           () -> IdentifierReceiptCanonicalEncoder.encodePayload(
-              samplePayload("bfv-affine-sha3-256-v1", mode)),
+              samplePayload("bfv-affine-v1", mode)),
           "non-exact execution verification mode must fail");
     }
 
@@ -301,7 +301,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         signatureHex,
         executionExpiresAtMs,
         openingExpiresAtMs,
-        "bfv-affine-sha3-256-v1",
+        "bfv-affine-v1",
         "signed");
   }
 
@@ -310,7 +310,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         "A1B2C3D4",
         142L,
         242L,
-        "bfv-affine-sha3-256-v1",
+        "bfv-affine-v1",
         "signed",
         policyId,
         "identifier_lookup_retail",
@@ -323,7 +323,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         "A1B2C3D4",
         142L,
         242L,
-        "bfv-affine-sha3-256-v1",
+        "bfv-affine-v1",
         "signed",
         "phone#retail",
         programId,
@@ -337,7 +337,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         "A1B2C3D4",
         142L,
         242L,
-        "bfv-affine-sha3-256-v1",
+        "bfv-affine-v1",
         "signed",
         "phone#retail",
         "identifier_lookup_retail",
@@ -350,7 +350,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         "A1B2C3D4",
         142L,
         242L,
-        "bfv-affine-sha3-256-v1",
+        "bfv-affine-v1",
         "signed",
         "phone#retail",
         "identifier_lookup_retail",
@@ -368,7 +368,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         "A1B2C3D4",
         142L,
         242L,
-        "bfv-affine-sha3-256-v1",
+        "bfv-affine-v1",
         "signed",
         "phone#retail",
         "identifier_lookup_retail",
@@ -391,7 +391,7 @@ public final class IdentifierReceiptCanonicalEncoderTests {
         new IdentifierResolutionExecutionPayload(
             "identifier_lookup_retail",
             "11".repeat(32),
-            "bfv-affine-sha3-256-v1",
+            "bfv-affine-v1",
             "signed",
             "AA".repeat(32),
             "BB".repeat(32),

@@ -155,8 +155,9 @@ Torii's in-process execution runtime is configured under
 reuse that same RAM-LFE runtime instead of a separate `identifier_resolver`
 config surface. Each runtime entry must include `secret_hex`,
 `hidden_program_hex`, `signer_private_key`, and the optional `receipt_ttl_ms`.
-`hidden_program_hex` is the Norito-encoded `HiddenRamFheProgram` whose digest
-must match the on-chain programmed BFV public parameters. Torii runtime config
+`hidden_program_hex` is exact `0x`-prefixed lowercase hex for the canonical
+`HiddenRamFheProgramV1` Norito frame, decoded directly into the validated clearing
+program owner. Its digest must match the on-chain programmed BFV public parameters. Torii runtime config
 must not include BFV secret keys; it signs execution receipts and evaluates
 with public/evaluation-key material only. Programmed BFV public parameters are
 relinearization-only for the first release; Soracloud rotation/bootstrap

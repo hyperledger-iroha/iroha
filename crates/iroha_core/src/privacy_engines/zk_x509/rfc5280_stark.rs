@@ -19,6 +19,9 @@ use super::private_table::{
 #[path = "rfc5280_private.rs"]
 mod private;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "rfc5280_source_rows.rs"]
+mod source_rows;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use private::{
     private_bytes_v1, reserve_private_semantic_v1, zeroize_equal_bytes_v1, zeroize_fixed_bytes_v1,
     zeroize_node_multiplicities_v1, zeroize_numeric_relations_v1, zeroize_source_cells_v1,
@@ -6029,15 +6032,17 @@ fn grammar_ordinal_factor_v1<A: PolynomialAirFieldV1>(
 }
 /// Challenge-independent canonical RFC 5280 trace material.
 ///
-/// Rows are stored by fixed family and ordinal. Sparse fixed-capacity gaps are represented by
-/// absent vector entries and replay as the unique inactive zero row (apart from the carried
-/// private-depth selector). This keeps the prover bounded without allocating a `2^18 × 66` matrix.
+/// Rows retain the prefix selected by their public family and ordinal. Omitted
+/// nonzero fields reject during construction; replay restores the exact full
+/// 285-column row. Sparse fixed-capacity gaps replay as the unique inactive zero
+/// row before carried selectors and deterministic helpers are populated. The
+/// owner never allocates the full `2^19 × 285` matrix.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StarkBaseMaterialV1 {
     pub(crate) private_shape: ZkX509Rfc5280StarkPrivateShapeV1,
     pub(crate) schedule: ZkX509Rfc5280StarkFixedScheduleV1,
-    family_rows: [Vec<ZkX509Rfc5280StarkBaseRowV1>; FAMILY_COUNT_V1],
+    family_rows: [source_rows::FamilyRowsV1; FAMILY_COUNT_V1],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509Rfc5280StarkBaseMaterialV1 {
@@ -6057,7 +6062,11 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
         use super::allocation_payload::{sum_v1, vector_v1};
         sum_v1([
-            sum_v1(self.family_rows.iter().map(vector_v1)),
+            sum_v1(
+                self.family_rows
+                    .iter()
+                    .map(source_rows::FamilyRowsV1::allocated_heap_bytes_v1),
+            ),
             vector_v1(&self.schedule.profile_byte_table),
             vector_v1(&self.schedule.output_topology),
         ])
@@ -6113,9 +6122,6 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
         ));
         zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.io_channels));
         for family in &mut self.family_rows {
-            for row in &mut *family {
-                zeroize_fields_v1(row);
-            }
             family.clear();
         }
     }
@@ -6151,7 +6157,10 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
             && shape.output_producer_rows == 0
             && shape.output_consumer_rows == 0
             && shape.io_channels == 0
-            && self.family_rows.iter().all(Vec::is_empty)
+            && self
+                .family_rows
+                .iter()
+                .all(source_rows::FamilyRowsV1::is_empty)
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -6586,7 +6595,14 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         row[BASE_A] = F(u64::from(multiplicity));
         push_family_row_v1(&mut family_rows[grammar_family], row)?;
     }
-    let mut ordinal_entries = Vec::new();
+    let mut ordinal_entries = PrivateTableV1::new(Vec::new(), |rows| {
+        for (document, parent, child, count) in rows {
+            zeroize_words_v1(core::slice::from_mut(document));
+            zeroize_words_v1(core::slice::from_mut(parent));
+            zeroize_words_v1(core::slice::from_mut(child));
+            zeroize_words_v1(core::slice::from_mut(count));
+        }
+    });
     ordinal_entries
         .try_reserve(private_shape.source_nodes()?)
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
@@ -6888,10 +6904,26 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
             return Err(ZkX509Rfc5280StarkErrorV1::Shape);
         }
     }
+    // These construction-only owners must release before old and compact
+    // family allocations overlap. The schedule remains in the final material
+    // and is charged alongside that overlap; the input trace is borrowed.
+    drop((
+        semantic,
+        serial_byte_multiplicities,
+        serial_node_multiplicities,
+        semantic_multiplicities,
+        byte_lookup_cells,
+        ordinal_entries,
+    ));
+    let schedule_payload = super::allocation_payload::sum_v1([
+        super::allocation_payload::vector_v1(&schedule.profile_byte_table),
+        super::allocation_payload::vector_v1(&schedule.output_topology),
+    ]);
+    let family_rows = source_rows::compact_families_v1(family_rows, schedule_payload)?;
     Ok(ZkX509Rfc5280StarkBaseMaterialV1 {
         private_shape,
         schedule,
-        family_rows: family_rows.map(PrivateTableV1::into_vec),
+        family_rows,
     })
 }
 fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
@@ -7054,7 +7086,6 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
         let (family, ordinal) = self.schedule.family_and_ordinal(row)?;
         let mut value = self.family_rows[family as usize]
             .get(ordinal)
-            .copied()
             .unwrap_or([F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1]);
         value[BASE_CERT2_ACTIVE] = self.private_shape.certificate_slot_2_active;
         value[BASE_ENTRY_COUNT] = F(u64::from(self.private_shape.crl_entries));
@@ -9374,7 +9405,7 @@ mod tests {
         let expected_fields = original
             .family_rows
             .iter()
-            .map(|rows| rows.len() * ZK_X509_RFC5280_STARK_BASE_WIDTH_V1)
+            .map(source_rows::FamilyRowsV1::initialized_cells_v1)
             .sum::<usize>();
         assert!(expected_fields > 0);
         for mode in 0..3 {

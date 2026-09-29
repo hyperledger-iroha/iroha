@@ -405,7 +405,7 @@ mod tests {
         RamLfeExecutionReceiptPayload {
             program_id: "email_retail".parse().expect("valid program id"),
             program_digest: Hash::new(b"program"),
-            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            backend: RamLfeBackend::BfvProgrammedV1,
             verification_mode: RamLfeVerificationMode::Signed,
             input_ciphertext_hash: Hash::new(b"input-ciphertext"),
             output_ciphertext_hash: Hash::new(b"output-ciphertext"),
@@ -629,7 +629,7 @@ mod tests {
             payload.program_digest = Hash::new(b"tampered-program");
         });
         assert_rejected!("backend", |payload| {
-            payload.backend = RamLfeBackend::BfvAffineSha3_256V1;
+            payload.backend = RamLfeBackend::BfvAffineV1;
         });
         assert_rejected!("verification_mode", |payload| {
             payload.verification_mode = RamLfeVerificationMode::Proof;

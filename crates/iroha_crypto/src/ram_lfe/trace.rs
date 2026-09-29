@@ -1,5 +1,6 @@
 //! Clearing owners and bounded snapshots for the sole programmed interpreter.
 
+use super::program::instruction_fields;
 use super::{
     BFV_PROGRAM_MAX_INSTRUCTIONS, BFV_PROGRAM_REGISTER_COUNT, BFV_PROGRAM_STATE_WIDTH,
     BfvCiphertext, HiddenRamFheInstruction, RamLfeError, invalid_program_error,
@@ -9,7 +10,6 @@ use std::{
     ops::{Deref, DerefMut},
 };
 use zeroize::{Zeroize, Zeroizing};
-use super::program::instruction_fields;
 
 const COEFFICIENTS_PER_CIPHERTEXT: usize = 128;
 const SNAPSHOT_WIDTH: usize =
@@ -274,7 +274,6 @@ fn zeroed(count: usize) -> Result<Zeroizing<Vec<u64>>, RamLfeError> {
 fn allocation_error(error: std::collections::TryReserveError) -> RamLfeError {
     invalid_program_error(&format!("private interpreter allocation failed: {error}"))
 }
-
 
 #[cfg(test)]
 thread_local! {

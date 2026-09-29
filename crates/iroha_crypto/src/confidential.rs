@@ -38,7 +38,11 @@ pub enum ConfidentialKeyError {
 }
 /// Result type for confidential key derivations.
 pub type Result<T, E = ConfidentialKeyError> = core::result::Result<T, E>;
-/// Derived keys for confidential asset operations.
+/// Derived keys for confidential asset operations, cleared when the owner drops.
+///
+/// Clones are independent clearing owners. Borrowed key copies and serialized
+/// exports remain the caller's responsibility. Primitive-internal state and
+/// compiler-created copies are outside this owner's erasure guarantee.
 #[allow(missing_copy_implementations)]
 #[derive(Clone)]
 pub struct ConfidentialKeyset {
@@ -60,10 +64,26 @@ impl Zeroize for ConfidentialKeyset {
         self.incoming_view.zeroize();
         self.outgoing_view.zeroize();
         self.full_view.zeroize();
+        #[cfg(test)]
+        owner_tests::observe_erasure(self);
     }
 }
 impl ZeroizeOnDrop for ConfidentialKeyset {}
+impl Drop for ConfidentialKeyset {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
 impl ConfidentialKeyset {
+    fn empty() -> Self {
+        Self {
+            spend: [0; 32],
+            nullifier: [0; 32],
+            incoming_view: [0; 32],
+            outgoing_view: [0; 32],
+            full_view: [0; 32],
+        }
+    }
     /// Spend key used to authorise note creation.
     #[must_use]
     pub const fn spend_key(&self) -> &[u8; 32] {
@@ -94,36 +114,34 @@ fn expand_key(
     hkdf: &Hkdf<Sha3_512>,
     label: &'static str,
     info: &[u8],
-) -> Result<Zeroizing<[u8; 32]>> {
-    let mut out = Zeroizing::new([0u8; 32]);
-    hkdf.expand(info, out.as_mut())
-        .map_err(|_| ConfidentialKeyError::HkdfExpand { label })?;
-    Ok(out)
+    out: &mut [u8; 32],
+) -> Result<()> {
+    hkdf.expand(info, out)
+        .map_err(|_| ConfidentialKeyError::HkdfExpand { label })
+}
+fn derive_owned_keyset(mut keyset: ConfidentialKeyset) -> Result<ConfidentialKeyset> {
+    if keyset.spend.iter().all(|&byte| byte == 0) {
+        return Err(ConfidentialKeyError::InertSpendKey);
+    }
+    // Every output slot belongs to a clearing owner before any fallible work.
+    // TODO: use clearing HKDF state when the primitive exposes that contract.
+    let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &keyset.spend);
+    expand_key(&hkdf, "nk", INFO_NK, &mut keyset.nullifier)?;
+    expand_key(&hkdf, "ivk", INFO_IVK, &mut keyset.incoming_view)?;
+    expand_key(&hkdf, "ovk", INFO_OVK, &mut keyset.outgoing_view)?;
+    expand_key(&hkdf, "fvk", INFO_FVK, &mut keyset.full_view)?;
+    Ok(keyset)
 }
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 ///
 /// # Errors
 /// Returns [`ConfidentialKeyError::InertSpendKey`] if the spend key is all zero, or
 /// [`ConfidentialKeyError::HkdfExpand`] if domain-separated key expansion fails.
-pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
-    if spend_key.iter().all(|&byte| byte == 0) {
-        spend_key.zeroize();
-        return Err(ConfidentialKeyError::InertSpendKey);
-    }
-    let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &spend_key);
-    let nk = expand_key(&hkdf, "nk", INFO_NK)?;
-    let ivk = expand_key(&hkdf, "ivk", INFO_IVK)?;
-    let ovk = expand_key(&hkdf, "ovk", INFO_OVK)?;
-    let fvk = expand_key(&hkdf, "fvk", INFO_FVK)?;
-    let keyset = ConfidentialKeyset {
-        spend: spend_key,
-        nullifier: *nk,
-        incoming_view: *ivk,
-        outgoing_view: *ovk,
-        full_view: *fvk,
-    };
-    spend_key.zeroize();
-    Ok(keyset)
+pub fn derive_keyset(spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
+    let spend_key = Zeroizing::new(spend_key);
+    let mut keyset = ConfidentialKeyset::empty();
+    keyset.spend.copy_from_slice(spend_key.as_ref());
+    derive_owned_keyset(keyset)
 }
 /// Derive the confidential key hierarchy from an arbitrary slice.
 ///
@@ -135,9 +153,9 @@ pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> 
     if spend_key.len() != 32 {
         return Err(ConfidentialKeyError::InvalidSpendKeyLength(spend_key.len()));
     }
-    let mut seed = Zeroizing::new([0u8; 32]);
-    seed.copy_from_slice(spend_key);
-    derive_keyset(*seed)
+    let mut keyset = ConfidentialKeyset::empty();
+    keyset.spend.copy_from_slice(spend_key);
+    derive_owned_keyset(keyset)
 }
 /// Generate a fresh random spend key and derive the associated hierarchy.
 ///
@@ -146,14 +164,14 @@ pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> 
 /// [`ConfidentialKeyError::InertSpendKey`] if the RNG returns all-zero material, or
 /// [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
 pub fn generate_keyset<R: TryCryptoRng>(rng: &mut R) -> Result<ConfidentialKeyset> {
-    let mut seed = Zeroizing::new([0u8; 32]);
-    rng.try_fill_bytes(seed.as_mut())
+    let mut keyset = ConfidentialKeyset::empty();
+    rng.try_fill_bytes(&mut keyset.spend)
         .map_err(|_| ConfidentialKeyError::RandomBytes)?;
-    if seed.iter().all(|&byte| byte == 0) {
-        return Err(ConfidentialKeyError::InertSpendKey);
-    }
-    derive_keyset(*seed)
+    derive_owned_keyset(keyset)
 }
+#[cfg(test)]
+#[path = "confidential/owner_tests.rs"]
+mod owner_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,7 +12,7 @@ use iroha_data_model::{
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
-use proof_fixtures::replay_binding_attachment;
+use proof_fixtures::confidential_attachment;
 use reqwest::Client as HttpClient;
 use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 #[path = "proofs/full_tree_wallet.rs"]
@@ -124,7 +124,7 @@ fn is_duplicate_tx_error(err: &Report) -> bool {
 fn active_halo2_vk_registration(
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    replay_binding_attachment("proof-record", vk_name)
+    confidential_attachment("proof-record", vk_name)
 }
 async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], ProofStatus)> {
     let response = HttpClient::new()
@@ -212,15 +212,24 @@ async fn submit_proof_and_query_record() -> Result<()> {
     // even if another peer is timing out under load.
     let tx = {
         let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [isi],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 iroha_model_base::metadata::Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed selected payer or gas limit"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)?
+    };
     let mut accepted = false;
     let mut submit_last_err: Option<Report> = None;
     for submit_client in &peer_clients {

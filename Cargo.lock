@@ -5894,8 +5894,11 @@ name = "iroha_zkp_poseidon"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "halo2curves",
+ "halo2curves-axiom",
  "once_cell",
  "poseidon-primitives",
+ "sha2",
+ "zeroize",
 ]
 
 [[package]]

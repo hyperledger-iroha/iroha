@@ -48,7 +48,9 @@ fn fixture(program: &HiddenRamFheProgram) -> (PolicyCommitment, ClientRequest) {
 
 fn program(instructions: Vec<HiddenRamFheInstruction>) -> HiddenRamFheProgram {
     let mut builder = HiddenRamFheProgram::builder().unwrap();
-    for instruction in instructions { builder.push(instruction).unwrap(); }
+    for instruction in instructions {
+        builder.push(instruction).unwrap();
+    }
     builder.finish().unwrap()
 }
 
@@ -70,11 +72,16 @@ fn all_eleven_instructions_match_untraced_execution_and_record_state() {
         Output(0),
     ]);
     let (commitment, request) = fixture(&program);
-    let ordinary =
-        evaluate_commitment_with_hidden_program(&SECRET, &commitment, &request, Some(&program))
-            .unwrap();
+    let ordinary = evaluate_diagnostic_commitment_with_hidden_program(
+        &SECRET,
+        &commitment,
+        &request,
+        Some(&program),
+    )
+    .unwrap();
     let (traced, trace) =
-        evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).unwrap();
+        evaluate_diagnostic_programmed_with_trace(&SECRET, &commitment, &request, &program)
+            .unwrap();
     assert_eq!(ordinary, traced);
     assert_eq!(trace.step_count(), program.instruction_count());
     assert_eq!(trace.output_count(), 1);
@@ -117,7 +124,8 @@ fn maximum_program_has_exact_bounded_snapshot_and_output_capacity() {
     let program = default_bfv_programmed_hidden_program();
     let (commitment, request) = fixture(&program);
     let (response, trace) =
-        evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).unwrap();
+        evaluate_diagnostic_programmed_with_trace(&SECRET, &commitment, &request, &program)
+            .unwrap();
     assert_eq!(trace.step_count(), 256);
     assert_eq!(trace.output_count(), 64);
     assert_eq!(
@@ -127,8 +135,13 @@ fn maximum_program_has_exact_bounded_snapshot_and_output_capacity() {
     assert_eq!(trace.instructions.len(), 256 * INSTRUCTION_WIDTH);
     assert_eq!(
         response,
-        evaluate_commitment_with_hidden_program(&SECRET, &commitment, &request, Some(&program),)
-            .unwrap()
+        evaluate_diagnostic_commitment_with_hidden_program(
+            &SECRET,
+            &commitment,
+            &request,
+            Some(&program),
+        )
+        .unwrap()
     );
 }
 
@@ -143,13 +156,16 @@ fn unused_malformed_input_and_oversized_associated_data_reject_before_execution(
         norito::decode_from_bytes(&request.normalized_input).unwrap();
     input.slots.last_mut().unwrap().c0.pop();
     request.normalized_input = norito::to_bytes(&input).unwrap();
-    assert!(evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).is_err());
+    assert!(
+        evaluate_diagnostic_programmed_with_trace(&SECRET, &commitment, &request, &program)
+            .is_err()
+    );
     request
         .associated_data
         .resize(RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES + 1, 0);
     request.normalized_input = vec![0xff];
-    let error =
-        evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).unwrap_err();
+    let error = evaluate_diagnostic_programmed_with_trace(&SECRET, &commitment, &request, &program)
+        .unwrap_err();
     assert!(error.to_string().contains("associated data"));
 }
 

@@ -7,7 +7,7 @@ func ramLfeExecuteResponseJSON(
     outputCiphertext: String = "C0FFEE",
     outputHash: String = String(repeating: "44", count: 32),
     associatedDataHash: String = String(repeating: "55", count: 32),
-    backend: String = "bfv-programmed-sha3-256-v1",
+    backend: String = "bfv-programmed-v1",
     verificationMode: String = "signed"
 ) -> Data {
     """
@@ -26,7 +26,7 @@ func ramLfeExecuteResponseJSON(
         "payload":{
           "program_id":"identifier_lookup_retail",
           "program_digest":"\(String(repeating: "11", count: 32))",
-          "backend":"bfv-programmed-sha3-256-v1",
+          "backend":"bfv-programmed-v1",
           "verification_mode":"signed",
           "output_hash":"\(String(repeating: "22", count: 32))",
           "associated_data_hash":"\(String(repeating: "33", count: 32))",
@@ -57,7 +57,7 @@ func ramLfeExecuteResponseJSON(
 
 func ramLfeReceiptVerifyResponseJSON(
     programId: String = "identifier_lookup_retail",
-    backend: String = "bfv-programmed-sha3-256-v1",
+    backend: String = "bfv-programmed-v1",
     verificationMode: String = "signed",
     outputHash: String = String(repeating: "44", count: 32),
     associatedDataHash: String = String(repeating: "55", count: 32)

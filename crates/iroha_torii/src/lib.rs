@@ -10816,15 +10816,16 @@ fn derive_identifier_request_draft(
         ));
     }
     match program_policy.commitment.backend {
-        iroha_crypto::RamLfeBackend::BfvAffineSha3_256V1
-        | iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1 => resolver
-            .derive_encrypted(
-                policy,
-                program_policy,
-                &ciphertext,
-                request.output_opening.clone(),
-            )
-            .map_err(|err| identifier_internal_error(err.to_string())),
+        iroha_crypto::RamLfeBackend::BfvAffineV1 | iroha_crypto::RamLfeBackend::BfvProgrammedV1 => {
+            resolver
+                .derive_encrypted(
+                    policy,
+                    program_policy,
+                    &ciphertext,
+                    request.output_opening.clone(),
+                )
+                .map_err(|err| identifier_internal_error(err.to_string()))
+        }
         _ => Err(identifier_conversion_error(
             "identifier encrypted input requires a BFV-backed RAM-LFE program",
         )),

@@ -661,7 +661,7 @@ async fn ram_lfe_program_policies_list_registered_program() {
         dto.items[0].program_id,
         program_policy.program_id.to_string()
     );
-    assert_eq!(dto.items[0].backend, "bfv-programmed-sha3-256-v1");
+    assert_eq!(dto.items[0].backend, "bfv-programmed-v1");
     assert_eq!(dto.items[0].verification_mode, "signed");
     assert!(dto.items[0].active);
     assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
@@ -758,7 +758,7 @@ async fn ram_lfe_execute_returns_receipt() {
     let dto: routing::RamLfeExecuteResponseDto =
         norito::json::from_slice(&body).expect("json decode");
     assert_eq!(dto.program_id, program_policy.program_id.to_string());
-    assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+    assert_eq!(dto.backend, "bfv-programmed-v1");
     assert_eq!(dto.verification_mode, "signed");
     assert_eq!(dto.receipt.payload.program_id, dto.program_id);
     assert_eq!(dto.receipt.payload.output_hash, dto.output_hash);
@@ -832,7 +832,7 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
         norito::json::from_slice(&body).expect("json decode");
     assert!(dto.valid);
     assert_eq!(dto.program_id, program_policy.program_id.to_string());
-    assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+    assert_eq!(dto.backend, "bfv-programmed-v1");
     assert_eq!(dto.verification_mode, "signed");
     assert_eq!(dto.output_hash_matches, Some(true));
     assert!(dto.error.is_none());
@@ -973,7 +973,7 @@ async fn identifier_policies_lists_registered_policy() {
     assert_eq!(dto.items.len(), 1);
     assert_eq!(dto.items[0].policy_id, policy_id.to_string());
     assert!(dto.items[0].active);
-    assert_eq!(dto.items[0].backend, "bfv-affine-sha3-256-v1");
+    assert_eq!(dto.items[0].backend, "bfv-affine-v1");
     assert_eq!(dto.items[0].normalization, "exact");
     assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
     assert!(
@@ -1040,7 +1040,7 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
     let dto: routing::IdentifierPolicyListDto =
         norito::json::from_slice(&body).expect("json decode");
     assert_eq!(dto.total, 1);
-    assert_eq!(dto.items[0].backend, "bfv-programmed-sha3-256-v1");
+    assert_eq!(dto.items[0].backend, "bfv-programmed-v1");
     let signer_public_key = signer.public_key().to_string();
     assert_eq!(
         dto.items[0].phone_retail_attestor_public_key.as_deref(),
@@ -1194,7 +1194,7 @@ async fn identifier_resolve_returns_bound_account() {
     assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
     assert_eq!(dto.payload.uaid, uaid.to_string());
     assert_eq!(dto.payload.account_id, authority.to_string());
-    assert_eq!(dto.payload.execution.backend, "bfv-programmed-sha3-256-v1");
+    assert_eq!(dto.payload.execution.backend, "bfv-programmed-v1");
     assert!(
         !dto.attestation
             .signature
@@ -1317,7 +1317,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
     assert_eq!(dto.payload.uaid, uaid.to_string());
     assert_eq!(dto.payload.account_id, authority.to_string());
-    assert_eq!(dto.payload.execution.backend, "bfv-programmed-sha3-256-v1");
+    assert_eq!(dto.payload.execution.backend, "bfv-programmed-v1");
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]

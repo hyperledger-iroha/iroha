@@ -191,8 +191,8 @@ def _identifier_backend_tag(raw: Any) -> int:
     value = _identifier_exact_tag(raw, "payload.execution.backend")
     tags = {
         "hkdf-sha3-512-prf-v1": 0,
-        "bfv-affine-sha3-256-v1": 1,
-        "bfv-programmed-sha3-256-v1": 2,
+        "bfv-affine-v1": 1,
+        "bfv-programmed-v1": 2,
     }
     try:
         return tags[value]

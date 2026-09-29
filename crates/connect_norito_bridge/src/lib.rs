@@ -2962,8 +2962,8 @@ fn parse_identifier_receipt_backend(value: &JsonValue) -> BridgeResult<RamLfeBac
     let backend = parse_identifier_exact_str(value)?;
     match backend.as_str() {
         "hkdf-sha3-512-prf-v1" => Ok(RamLfeBackend::HkdfSha3_512PrfV1),
-        "bfv-affine-sha3-256-v1" => Ok(RamLfeBackend::BfvAffineSha3_256V1),
-        "bfv-programmed-sha3-256-v1" => Ok(RamLfeBackend::BfvProgrammedSha3_256V1),
+        "bfv-affine-v1" => Ok(RamLfeBackend::BfvAffineV1),
+        "bfv-programmed-v1" => Ok(RamLfeBackend::BfvProgrammedV1),
         _ => Err(BridgeError::IdentifierReceipt),
     }
 }
@@ -14335,7 +14335,7 @@ mod tests {
                     .parse()
                     .expect("valid program id"),
                 program_digest: Hash::new(b"program"),
-                backend: iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1,
+                backend: iroha_crypto::RamLfeBackend::BfvProgrammedV1,
                 verification_mode: iroha_crypto::RamLfeVerificationMode::Signed,
                 input_ciphertext_hash: Hash::new(b"input-ciphertext"),
                 output_ciphertext_hash: Hash::new(b"output-ciphertext"),
@@ -14388,7 +14388,7 @@ mod tests {
                                 "program_digest",
                                 JsonValue::from(hex_hash(payload.execution.program_digest)),
                             ),
-                            ("backend", JsonValue::from("bfv-programmed-sha3-256-v1")),
+                            ("backend", JsonValue::from("bfv-programmed-v1")),
                             ("verification_mode", JsonValue::from("signed")),
                             (
                                 "input_ciphertext_hash",
@@ -14733,7 +14733,7 @@ mod tests {
             ),
             (
                 vec!["payload", "execution", "backend"],
-                " bfv-programmed-sha3-256-v1".to_owned(),
+                " bfv-programmed-v1".to_owned(),
             ),
             (
                 vec!["payload", "execution", "verification_mode"],

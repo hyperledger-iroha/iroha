@@ -155,6 +155,29 @@ fn retired_push_provider_json_credentials_are_rejected() {
 }
 
 #[test]
+fn ram_lfe_fixture_decodes_directly_to_the_validated_private_owner() {
+    let actual = decode_ram_lfe_overlay(ram_lfe_overlay())
+        .parse()
+        .expect("validated RAM-LFE fixture should parse");
+    let configured = &actual
+        .torii
+        .ram_lfe
+        .as_ref()
+        .expect("configured RAM-LFE")
+        .programs[0];
+    assert_eq!(
+        configured.hidden_program,
+        iroha_crypto::default_bfv_programmed_hidden_program()
+    );
+    let private_frame = configured.hidden_program.to_bytes().unwrap();
+    assert_eq!(
+        private_frame.len(),
+        iroha_crypto::RAM_LFE_HIDDEN_PROGRAM_MAX_BYTES
+    );
+    assert!(!format!("{configured:?}").contains(&hex::encode(&*private_frame)));
+}
+
+#[test]
 fn ram_lfe_optional_table_rejects_redundant_enable_switch() {
     let table = "[torii.ram_lfe]\nenabled = true\n"
         .parse()
@@ -184,9 +207,11 @@ signer_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B38954416
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .expect_err("hidden program material must never be fabricated from a default");
+    let report = format!("{error:?}");
+    assert!(report.contains("torii.ram_lfe"), "{report}");
     assert!(
-        format!("{error:?}").contains("hidden_program_hex"),
-        "{error:?}"
+        report.contains("missing field `hidden_program_hex`"),
+        "{report}"
     );
 }
 
@@ -215,8 +240,16 @@ fn ram_lfe_rejects_empty_duplicate_and_malformed_program_lists() {
             "hidden_program_hex".to_owned(),
             Value::String("0xnot-hex".to_owned()),
         );
-    let error = decode_ram_lfe_overlay(malformed)
-        .parse()
-        .expect_err("malformed hidden-program material must be a parse error");
-    assert!(format!("{error:?}").contains("hidden_program_hex"));
+    let error = base_reader()
+        .with_toml_source(TomlSource::inline(malformed))
+        .read_and_complete::<UserConfig>()
+        .expect_err("malformed hidden-program material must fail typed configuration decoding");
+    let report = format!("{error:?}");
+    assert!(report.contains("torii.ram_lfe"), "{report}");
+    assert!(report.contains("hidden program"), "{report}");
+    assert!(report.contains("lowercase hex"), "{report}");
+    assert!(
+        !report.contains("0xnot-hex"),
+        "private input leaked: {report}"
+    );
 }

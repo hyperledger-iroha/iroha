@@ -422,7 +422,7 @@ pub mod isi {
                 )
             })?;
         if program.owner != policy.owner
-            || program.backend != RamLfeBackend::BfvProgrammedSha3_256V1
+            || program.backend != RamLfeBackend::BfvProgrammedV1
             || program.commitment.backend != program.backend
             || program.verification_mode != RamLfeVerificationMode::Signed
         {
@@ -432,6 +432,10 @@ pub mod isi {
                     .into(),
             ));
         }
+        program
+            .backend
+            .require_production_support()
+            .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
         Ok(())
     }
     fn evict_expired_identifier_binding(
@@ -485,6 +489,15 @@ pub mod isi {
         now_ms: u64,
         guardrails: crate::zk::ZkVerifyGuardrails,
     ) -> Result<(), Error> {
+        program_policy
+            .backend
+            .require_production_support()
+            .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
+        program_policy
+            .commitment
+            .backend
+            .require_production_support()
+            .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
         let execution = &receipt.payload.execution;
         if execution.program_id != policy.program_id
             || execution.program_id != program_policy.program_id
@@ -527,7 +540,7 @@ pub mod isi {
             ));
         }
         let public_parameters = match program_policy.backend {
-            RamLfeBackend::BfvProgrammedSha3_256V1 => decode_bfv_programmed_public_parameters(
+            RamLfeBackend::BfvProgrammedV1 => decode_bfv_programmed_public_parameters(
                 &program_policy.commitment.public_parameters,
             )
             .map_err(|err| {
@@ -859,7 +872,7 @@ pub mod isi {
                 program_id: RamLfeProgramId::from_str("identifier_proof_program")
                     .expect("program id"),
                 program_digest: Hash::new(b"program"),
-                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                backend: RamLfeBackend::BfvProgrammedV1,
                 verification_mode: RamLfeVerificationMode::Proof,
                 input_ciphertext_hash: Hash::new(b"input-ciphertext"),
                 output_ciphertext_hash: Hash::new(b"output-ciphertext"),
@@ -1375,7 +1388,7 @@ mod tests {
         RamLfeProgramPolicy::new(
             program_id.clone(),
             owner.clone(),
-            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeBackend::BfvProgrammedV1,
             RamLfeVerificationMode::Signed,
             commitment,
             resolver.public_key().clone(),

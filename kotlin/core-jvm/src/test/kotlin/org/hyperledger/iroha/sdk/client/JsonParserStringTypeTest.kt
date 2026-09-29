@@ -140,7 +140,7 @@ class JsonParserStringTypeTest {
                 "normalization":"phone_e164",
                 "resolver_public_key":"$VALID_PUBLIC_KEY",
                 "output_opening_public_key":"$VALID_PUBLIC_KEY",
-                "backend":"bfv-affine-sha3-256-v1",
+                "backend":"bfv-affine-v1",
                 "note":"retail policy"
               }]
             }
@@ -156,7 +156,7 @@ class JsonParserStringTypeTest {
                 "active":true,
                 "resolver_public_key":"$VALID_PUBLIC_KEY",
                 "output_opening_public_key":"$VALID_PUBLIC_KEY",
-                "backend":"bfv-programmed-sha3-256-v1",
+                "backend":"bfv-programmed-v1",
                 "verification_mode":"signed",
                 "note":"retail policy"
               }]
@@ -168,7 +168,7 @@ class JsonParserStringTypeTest {
             {
               "valid":false,
               "program_id":"lookup",
-              "backend":"bfv-programmed-sha3-256-v1",
+              "backend":"bfv-programmed-v1",
               "verification_mode":"signed",
               "output_hash":"${"11".repeat(32)}",
               "associated_data_hash":"${"22".repeat(32)}",

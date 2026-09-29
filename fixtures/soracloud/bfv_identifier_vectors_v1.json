@@ -7,7 +7,7 @@
     "active": true,
     "normalization": "exact",
     "resolver_public_key": "ed25519:ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
-    "backend": "bfv-affine-sha3-256-v1",
+    "backend": "bfv-affine-v1",
     "input_encryption": "bfv-v1",
     "input_encryption_public_parameters_decoded": {
       "parameters": {
