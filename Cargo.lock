@@ -4926,6 +4926,7 @@ dependencies = [
  "iroha_macro",
  "iroha_model_base",
  "iroha_p2p",
+ "iroha_panic_hook",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_schema",
@@ -5428,6 +5429,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_panic_hook"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "iroha_primitives"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5764,6 +5772,7 @@ dependencies = [
  "iroha_logger",
  "iroha_model_base",
  "iroha_p2p",
+ "iroha_panic_hook",
  "iroha_primitives",
  "iroha_schema",
  "iroha_schema_gen",
@@ -5934,6 +5943,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_musubi_service",
  "iroha_p2p",
+ "iroha_panic_hook",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_sccp_rpc",

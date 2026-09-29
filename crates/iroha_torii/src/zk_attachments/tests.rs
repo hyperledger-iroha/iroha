@@ -400,7 +400,7 @@ fn attachment_sanitizer_stdout_reader_contains_panic_and_releases_admission() {
     impl std::io::Read for PanickingReader {
         fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
             assert!(
-                iroha_core::panic_hook::is_suppressed(),
+                iroha_panic_hook::is_suppressed(),
                 "the physical stdout-reader thread must suppress the shutdown hook"
             );
             panic!("injected sanitizer stdout-reader panic");
@@ -409,7 +409,7 @@ fn attachment_sanitizer_stdout_reader_contains_panic_and_releases_admission() {
     impl Drop for PanickingReader {
         fn drop(&mut self) {
             if let Some(dropped) = self.dropped.take() {
-                let _ = dropped.send(iroha_core::panic_hook::is_suppressed());
+                let _ = dropped.send(iroha_panic_hook::is_suppressed());
             }
         }
     }

@@ -210,7 +210,7 @@ async fn shared_pool_admission_bounds_distinct_leaf_instances_and_releases_on_ca
 #[tokio::test]
 async fn gateway_context_worker_panic_is_unavailable() {
     let result: Result<(), _> = build_gateway_context_recoverably(|| {
-        assert!(iroha_core::panic_hook::is_suppressed());
+        assert!(iroha_panic_hook::is_suppressed());
         panic!("injected gateway context worker failure");
     })
     .await;

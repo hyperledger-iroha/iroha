@@ -103,7 +103,6 @@ use iroha_core::{
     },
     kiso::{KisoHandle, SoranetHandshakeApplyRequest},
     kura::Kura,
-    panic_hook,
     peers_gossiper::PeersGossiper,
     query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, LaneRouter, Queue},
@@ -9502,7 +9501,7 @@ async fn run_node(
     let default_hook = std::panic::take_hook();
     let signal_clone = shutdown_on_panic.clone();
     std::panic::set_hook(Box::new(move |info| {
-        let suppressed_by_panic_hook = panic_hook::is_suppressed();
+        let suppressed_by_panic_hook = iroha_panic_hook::is_suppressed();
         let suppressed_by_norito_decode = norito::decode_panic_suppressed();
         if suppressed_by_panic_hook || suppressed_by_norito_decode {
             let panic_file = info.location().map(std::panic::Location::file);

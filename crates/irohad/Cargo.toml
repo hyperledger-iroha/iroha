@@ -151,6 +151,7 @@ iroha_storage_client = { workspace = true }
 iroha_core = { workspace = true, default-features = false }
 iroha_logger = { workspace = true }
 iroha_futures = { workspace = true }
+iroha_panic_hook = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true, optional = true }

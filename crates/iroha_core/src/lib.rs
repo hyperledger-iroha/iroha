@@ -111,8 +111,6 @@ pub mod musubi_search;
 pub mod nexus;
 /// Oracle host helpers (admission/aggregation plumbing).
 pub mod oracle;
-/// Panic hook suppression helpers shared across crates.
-pub mod panic_hook;
 /// Peer discovery and gossip.
 pub mod peers_gossiper;
 /// Pipeline helpers (access-set derivation, scheduler glue)

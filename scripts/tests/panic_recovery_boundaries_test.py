@@ -173,6 +173,7 @@ def test_stable_inventory_read_rejects_hardlinks_and_shared_writes(
         "crates/iroha_core/src/zk.rs",
         "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs",
         "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs",
+        "crates/iroha_panic_hook/src/lib.rs",
     ),
 )
 @pytest.mark.parametrize(
@@ -204,7 +205,7 @@ def test_core_raw_catch_inventory_allows_only_one_reviewed_test_call() -> None:
         "fn test_only() { std::panic::catch_unwind(|| work()); }\n"
     ) == [1]
     assert module._direct_raw_catch_unwind_lines(
-        "fn reviewed() { crate::panic_hook::catch_unwind_suppressed(work); }\n"
+        "fn reviewed() { iroha_panic_hook::catch_unwind_suppressed(work); }\n"
     ) == []
 
 

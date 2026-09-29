@@ -684,7 +684,7 @@ mod tests {
                 MusubiPublicationPrivateHttpResponseV1,
                 MusubiPublicationPrivateIngressErrorV1,
             > {
-                assert!(iroha_core::panic_hook::is_suppressed());
+                assert!(iroha_panic_hook::is_suppressed());
                 panic!("injected private dispatch failure");
             }
         }

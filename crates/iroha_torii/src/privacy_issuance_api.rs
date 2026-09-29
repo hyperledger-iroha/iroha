@@ -18,7 +18,6 @@ use axum::{
 use base64::{Engine as _, encoded_len, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_core::{
-    panic_hook::catch_unwind_suppressed,
     privacy_engines::bootle_lantern::{
         codec::{
             BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1, BLIND_ISSUANCE_REQUEST_BYTES_V1,
@@ -44,6 +43,7 @@ use iroha_data_model::privacy::{
     PrivacyCompiledProfileResultV1, PrivacyIssuerIdV1, PrivacyPolicyIdV1, PrivacyProtocolIdV1,
     PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
 };
+use iroha_panic_hook::catch_unwind_suppressed;
 use sha2::{Digest as _, Sha256};
 #[cfg(test)]
 use std::panic::{AssertUnwindSafe, catch_unwind};

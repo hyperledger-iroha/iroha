@@ -751,7 +751,7 @@ fn queue_filesystem_panic_is_recovered() {
         let reached_in_worker = Arc::clone(&reached);
         let error = super::run_queue_filesystem_operation(move || -> io::Result<()> {
             assert!(
-                iroha_core::panic_hook::is_suppressed(),
+                iroha_panic_hook::is_suppressed(),
                 "the recoverable boundary must be installed on the physical blocking worker"
             );
             reached_in_worker.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -762,7 +762,7 @@ fn queue_filesystem_panic_is_recovered() {
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert!(reached.load(std::sync::atomic::Ordering::SeqCst));
         assert!(
-            !iroha_core::panic_hook::is_suppressed(),
+            !iroha_panic_hook::is_suppressed(),
             "suppression must stay scoped to the physical blocking worker"
         );
     });

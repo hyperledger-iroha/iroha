@@ -21,6 +21,7 @@ packages = [
   "iroha_i18n",
   "iroha_macro",
   "iroha_model_base",
+  "iroha_panic_hook",
   "iroha_primitives",
   "iroha_primitives_derive",
   "iroha_schema",
@@ -126,9 +127,11 @@ packages = [
 [lanes.hardware]
 description = "Platform-specific acceleration and hardware discovery."
 packages = [
+  "cust_raw",
   "find_cuda_helper",
   "gpuzstd_cuda",
   "gpuzstd_metal",
+  "iroha_accel",
   "jsonstage1_cuda",
   "jsonstage1_metal",
   "sm3-neon",

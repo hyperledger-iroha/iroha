@@ -57,6 +57,7 @@ on:
       - "crates/iroha_cli/**"
       - "crates/iroha_config/**"
       - "crates/iroha_core/**"
+      - "crates/iroha_panic_hook/**"
       - "crates/iroha_data_model/**"
       - "crates/iroha_kagami/**"
       - "crates/iroha_torii/**"

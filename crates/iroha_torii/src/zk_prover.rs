@@ -2961,7 +2961,7 @@ mod tests {
         let mut tasks = JoinSet::new();
         tasks.spawn(crate::panic_recovery::catch_async_recoverable(async {
             assert!(
-                iroha_core::panic_hook::is_suppressed(),
+                iroha_panic_hook::is_suppressed(),
                 "the entire JoinSet wrapper must run inside the recoverable scope"
             );
             panic!("injected prover wrapper panic outside blocking verification");
@@ -2984,7 +2984,7 @@ mod tests {
                 .contains("inside its recovery boundary")
         );
         assert!(
-            !iroha_core::panic_hook::is_suppressed(),
+            !iroha_panic_hook::is_suppressed(),
             "task-local suppression must not leak after the joined wrapper exits"
         );
     }

@@ -2581,7 +2581,7 @@ mod checked_loader_tests {
                 ..base_params()
             };
             validate_kagemusha_base_circuit_params_v1(&params).expect("supported allocator shape");
-            crate::panic_hook::catch_unwind_suppressed(|| {
+            iroha_panic_hook::catch_unwind_suppressed(|| {
                 BaseConfig::<Fp>::configure(&mut ConstraintSystem::default(), params.clone());
                 BaseConfig::<Fq>::configure(&mut ConstraintSystem::default(), params.clone());
             })
@@ -2890,7 +2890,7 @@ mod checked_loader_tests {
                         .map(Vec::as_slice)
                         .chain([0, 1, 5, 9, 10, 41, bytes.len() - 1].map(|cut| &bytes[..cut]))
                     {
-                        let result = crate::panic_hook::catch_unwind_suppressed(|| {
+                        let result = iroha_panic_hook::catch_unwind_suppressed(|| {
                             read_recursive_vk_checked::<$curve, SmallVkCircuit<$scalar>>(
                                 malformed,
                                 (),
@@ -3536,7 +3536,7 @@ pub(super) fn verify_eq_succinct_protocol_with_transcript_binding(
     let instance_columns = vec![instances.to_vec()];
     let mut cursor = Cursor::new(proof);
     let mut transcript = Transcript::new::<PASTA_IPA_POSEIDON_SECURE_MDS_V1>(&mut cursor);
-    let parsed = crate::panic_hook::catch_unwind_suppressed(|| {
+    let parsed = iroha_panic_hook::catch_unwind_suppressed(|| {
         PlonkSuccinctVerifier::<Scheme>::read_proof(
             &svk,
             &protocol,
@@ -3546,7 +3546,7 @@ pub(super) fn verify_eq_succinct_protocol_with_transcript_binding(
     })
     .map_err(|_| "Kagemusha Eq proof parser panicked".to_owned())?
     .map_err(|error| format!("invalid Kagemusha Eq proof: {error:?}"))?;
-    let accumulators = crate::panic_hook::catch_unwind_suppressed(|| {
+    let accumulators = iroha_panic_hook::catch_unwind_suppressed(|| {
         PlonkSuccinctVerifier::<Scheme>::verify(&svk, &protocol, &instance_columns, &parsed)
     })
     .map_err(|_| "Kagemusha Eq verifier panicked".to_owned())?
@@ -3602,7 +3602,7 @@ pub(super) fn verify_ep_succinct_protocol_with_transcript_binding(
     let instance_columns = vec![instances.to_vec()];
     let mut cursor = Cursor::new(proof);
     let mut transcript = Transcript::new::<PASTA_IPA_POSEIDON_SECURE_MDS_V1>(&mut cursor);
-    let parsed = crate::panic_hook::catch_unwind_suppressed(|| {
+    let parsed = iroha_panic_hook::catch_unwind_suppressed(|| {
         PlonkSuccinctVerifier::<Scheme>::read_proof(
             &svk,
             &protocol,
@@ -3612,7 +3612,7 @@ pub(super) fn verify_ep_succinct_protocol_with_transcript_binding(
     })
     .map_err(|_| "Kagemusha Ep proof parser panicked".to_owned())?
     .map_err(|error| format!("invalid Kagemusha Ep proof: {error:?}"))?;
-    let accumulators = crate::panic_hook::catch_unwind_suppressed(|| {
+    let accumulators = iroha_panic_hook::catch_unwind_suppressed(|| {
         PlonkSuccinctVerifier::<Scheme>::verify(&svk, &protocol, &instance_columns, &parsed)
     })
     .map_err(|_| "Kagemusha Ep verifier panicked".to_owned())?
@@ -3854,7 +3854,7 @@ where
         PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
         PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
     >::new::<PASTA_IPA_POSEIDON_SECURE_MDS_V1>(&mut cursor);
-    let parsed = crate::panic_hook::catch_unwind_suppressed(|| {
+    let parsed = iroha_panic_hook::catch_unwind_suppressed(|| {
         if let Some(transcript_initial_state) = protocol.transcript_initial_state.as_ref() {
             transcript.common_scalar(transcript_initial_state)?;
         }
@@ -3917,7 +3917,7 @@ where
     let mut verification_instances = Vec::with_capacity(N + 1);
     verification_instances.push(instances[0].clone());
     verification_instances.extend((0..N).map(|_| Vec::new()));
-    let accumulators = crate::panic_hook::catch_unwind_suppressed(|| {
+    let accumulators = iroha_panic_hook::catch_unwind_suppressed(|| {
         PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::verify(
             svk,
             protocol,

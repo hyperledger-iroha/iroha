@@ -170,6 +170,7 @@ iroha_crypto = { workspace = true, default-features = false, features = ["consen
 iroha_version = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
+iroha_panic_hook = { workspace = true }
 iroha_telemetry = { workspace = true }
 time = { workspace = true }
 iroha_primitives = { workspace = true }
