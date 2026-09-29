@@ -192,30 +192,19 @@ pub enum TransportProtocolKind {
     Unknown,
 }
 impl TransportProtocolKind {
-    #[allow(clippy::match_same_arms)]
-    fn from_hint(hint: &TransportHint) -> Self {
+    /// Classify a hint by its advertised `protocol_id`; the `protocol` label is display-only.
+    const fn from_hint(hint: &TransportHint) -> Self {
         match hint.protocol_id {
-            1 => return Self::ToriiHttpRange,
-            2 => return Self::QuicStream,
-            3 => return Self::SoraNetRelay,
-            255 => return Self::VendorReserved,
-            _ => {}
-        }
-        let label = hint.protocol.trim().to_ascii_lowercase();
-        match label.as_str() {
-            "torii" | "torii_http_range" | "torii-http-range" | "toriihttp" | "torii-range" => {
-                Self::ToriiHttpRange
-            }
-            "quic" | "quic_stream" | "quic-stream" | "quicstream" | "quic-streaming"
-            | "quicstreaming" => Self::QuicStream,
-            "soranet" | "soranet_relay" | "soranet-relay" | "soranetrelay" => Self::SoraNetRelay,
-            "vendor" | "vendor_reserved" | "vendor-reserved" => Self::VendorReserved,
+            1 => Self::ToriiHttpRange,
+            2 => Self::QuicStream,
+            3 => Self::SoraNetRelay,
+            255 => Self::VendorReserved,
             _ => Self::Unknown,
         }
     }
 }
 impl TransportHint {
-    /// Returns the normalised transport protocol advertised by this hint.
+    /// Returns the transport protocol advertised by this hint's `protocol_id`.
     #[must_use]
     pub fn protocol_kind(&self) -> TransportProtocolKind {
         TransportProtocolKind::from_hint(self)
@@ -1481,37 +1470,24 @@ mod tests {
         assert_eq!(hint.protocol_kind(), TransportProtocolKind::SoraNetRelay);
     }
     #[test]
-    fn transport_hint_protocol_kind_matches_label_variants() {
-        let quic_hint = TransportHint {
-            protocol: "Quic-Stream".to_owned(),
-            protocol_id: 0,
-            priority: 0,
-        };
-        assert_eq!(quic_hint.protocol_kind(), TransportProtocolKind::QuicStream);
-        let torii_hint = TransportHint {
-            protocol: "torii_http_range".to_owned(),
-            protocol_id: 0,
-            priority: 0,
-        };
-        assert_eq!(
-            torii_hint.protocol_kind(),
-            TransportProtocolKind::ToriiHttpRange
-        );
-        let vendor_hint = TransportHint {
-            protocol: "vendor_reserved".to_owned(),
-            protocol_id: 0,
-            priority: 0,
-        };
-        assert_eq!(
-            vendor_hint.protocol_kind(),
-            TransportProtocolKind::VendorReserved
-        );
-        let unknown_hint = TransportHint {
-            protocol: "custom".to_owned(),
-            protocol_id: 42,
-            priority: 0,
-        };
-        assert_eq!(unknown_hint.protocol_kind(), TransportProtocolKind::Unknown);
+    fn transport_hint_protocol_kind_ignores_display_label() {
+        for (label, protocol_id, expected) in [
+            ("quic", 0, TransportProtocolKind::Unknown),
+            ("torii_http_range", 0, TransportProtocolKind::Unknown),
+            ("vendor_reserved", 0, TransportProtocolKind::Unknown),
+            ("custom", 42, TransportProtocolKind::Unknown),
+            ("soranet", 1, TransportProtocolKind::ToriiHttpRange),
+            ("torii", 2, TransportProtocolKind::QuicStream),
+            ("quic", 3, TransportProtocolKind::SoraNetRelay),
+            ("fixture", 255, TransportProtocolKind::VendorReserved),
+        ] {
+            let hint = TransportHint {
+                protocol: label.to_owned(),
+                protocol_id,
+                priority: 0,
+            };
+            assert_eq!(hint.protocol_kind(), expected, "{label}/{protocol_id}");
+        }
     }
     impl fmt::Display for TestError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

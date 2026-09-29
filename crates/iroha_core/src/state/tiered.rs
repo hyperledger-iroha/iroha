@@ -7,15 +7,13 @@
 //! scans, and heavy snapshot work can be offloaded after commit to reduce block latency.
 #[cfg(test)]
 use super::World;
+use super::block_field::StorageField;
 use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_model_base::state_path::StatePath;
-use mv::{
-    Key, Value,
-    storage::{Block as StorageBlock, StorageReadOnly},
-};
+use mv::{Key, Value, storage::StorageReadOnly};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
@@ -128,7 +126,8 @@ impl TieredSnapshotPayload {
             complete,
         }
     }
-    /// Retain one store's exact overlay values, including incremental deletions.
+    /// Retain one store's exact original values, including incremental deletions,
+    /// through its execution or frozen publication read authority.
     ///
     /// Keep heterogeneous iterators and cloned values in a per-store frame. An
     /// expanded loop for every World field reserves their combined stack space
@@ -136,7 +135,7 @@ impl TieredSnapshotPayload {
     #[inline(never)]
     pub(super) fn collect_storage<K, V, M>(
         &mut self,
-        storage: &StorageBlock<'_, K, V, M>,
+        storage: &StorageField<'_, K, V, M>,
         key_handle: impl Fn(K) -> TieredKeyHandle,
     ) where
         K: Key,
@@ -148,8 +147,8 @@ impl TieredSnapshotPayload {
                 self.push_value(key_handle(key.clone()), Some(value.clone()));
             }
         } else {
-            for key in storage.revert_map().keys() {
-                self.push_value(key_handle(key.clone()), storage.get(key).cloned());
+            for entry in storage.touched_entries() {
+                self.push_value(key_handle(entry.key.clone()), entry.after.cloned());
             }
         }
     }
@@ -1686,6 +1685,16 @@ impl TieredStateBackend {
             world.axt_replay_ledger
         );
         collect_map!(
+            TieredSegment::AxtSpendNonceLedger,
+            AxtSpendNonce,
+            world.axt_spend_nonce_ledger
+        );
+        collect_map!(
+            TieredSegment::AxtSourceTransferReplayLedger,
+            AxtSourceTransferReplay,
+            world.axt_source_transfer_replay_ledger
+        );
+        collect_map!(
             TieredSegment::AxtHandleBudgetLedger,
             AxtHandleBudget,
             world.axt_handle_budget_ledger
@@ -2531,8 +2540,9 @@ mod measured_bytes_impls {
         ipfs::IpfsPath,
         nexus::{
             AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtPolicyEntry,
-            AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
-            PrivateSettlementAbortReceiptV1, PrivateSettlementReceiptV1, UniversalAccountId,
+            AxtReplayRecord, AxtSourceTransferReplayRecordV1, LanePrivacyMerkleWitness,
+            LanePrivacyProof, LanePrivacyWitness, PrivateSettlementAbortReceiptV1,
+            PrivateSettlementReceiptV1, UniversalAccountId,
         },
         nft::NftData,
         permission::Permission,
@@ -2846,6 +2856,11 @@ mod measured_bytes_impls {
     impl MeasuredBytes for AxtReplayRecord {
         fn measured_bytes(&self) -> usize {
             size_of::<AxtReplayRecord>().saturating_add(self.budget_key.allocated_heap_bytes())
+        }
+    }
+    impl MeasuredBytes for AxtSourceTransferReplayRecordV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<AxtSourceTransferReplayRecordV1>()
         }
     }
     impl<T> MeasuredBytes for HashOf<T> {
@@ -3590,6 +3605,15 @@ mod measured_bytes_impls {
                 ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
                     total = total.saturating_add(norito::codec::Encode::encode(payload).len());
                 }
+                ProposalKind::KagemushaVerifierPolicyInstall(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
+                ProposalKind::KagemushaVerifierReleaseInstall(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
+                ProposalKind::KagemushaVerifierReleaseActivate(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
             }
             total
         }
@@ -3775,15 +3799,31 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let preparation = &self.preparation;
             let mut bytes = size_of::<Self>()
-                .saturating_add(preparation.roster.capacity().saturating_mul(size_of::<
-                    iroha_data_model::block::consensus_v2::ValidatorPower,
-                >()))
-                .saturating_add(preparation.validator_set_pops.measured_bytes_extra())
+                .saturating_add(
+                    preparation.committee.capacity().saturating_mul(size_of::<
+                        iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1,
+                    >()),
+                )
+                .saturating_add(
+                    preparation
+                        .eligibility
+                        .xor_asset_definition_id
+                        .measured_bytes_extra(),
+                )
+                .saturating_add(preparation.eligibility.min_self_bond.measured_bytes_extra())
+                .saturating_add(
+                    preparation
+                        .eligibility
+                        .min_nomination_bond
+                        .measured_bytes_extra(),
+                )
                 .saturating_add(self.readiness.capacity().saturating_mul(size_of::<
                     iroha_data_model::nexus::ValidatorCommitteeSeatReadinessV1,
                 >()));
-            for seat in &preparation.roster {
-                bytes = bytes.saturating_add(seat.validator.measured_bytes_extra());
+            for seat in &preparation.committee {
+                bytes = bytes
+                    .saturating_add(seat.validator.measured_bytes_extra())
+                    .saturating_add(seat.proof_of_possession.measured_bytes_extra());
             }
             if let Some(credentials) = &self.credentials {
                 bytes = bytes.saturating_add(
@@ -3903,6 +3943,8 @@ enum TieredSegment {
     AxtHandleCounters,
     AxtAssetIncarnations,
     AxtReplayLedger,
+    AxtSpendNonceLedger,
+    AxtSourceTransferReplayLedger,
     AxtHandleBudgetLedger,
     Nfts,
     Rwas,
@@ -3984,6 +4026,8 @@ macro_rules! tiered_segment_table {
             AxtHandleCounters, AxtHandleCounter, "axt_handle_counters", axt_handle_counters;
             AxtAssetIncarnations, AxtAssetIncarnation, "axt_asset_incarnations", axt_asset_incarnations;
             AxtReplayLedger, AxtReplay, "axt_replay_ledger", axt_replay_ledger;
+            AxtSpendNonceLedger, AxtSpendNonce, "axt_spend_nonce_ledger", axt_spend_nonce_ledger;
+            AxtSourceTransferReplayLedger, AxtSourceTransferReplay, "axt_source_transfer_replay_ledger", axt_source_transfer_replay_ledger;
             AxtHandleBudgetLedger, AxtHandleBudget, "axt_handle_budget_ledger", axt_handle_budget_ledger;
             Nfts, Nft, "nfts", nfts;
             Rwas, Rwa, "rwas", rwas;
@@ -4234,6 +4278,8 @@ pub(crate) enum TieredKeyHandle {
     AxtHandleCounter(iroha_model_base::topology::DataSpaceId),
     AxtAssetIncarnation(iroha_data_model::asset::AssetDefinitionId),
     AxtReplay(iroha_data_model::nexus::AxtHandleReplayKey),
+    AxtSpendNonce(iroha_data_model::nexus::AxtAnchoredSpendReplayKeyV1),
+    AxtSourceTransferReplay(iroha_data_model::nexus::AxtSourceTransferReplayKeyV1),
     AxtHandleBudget(iroha_data_model::nexus::AxtHandleBudgetKey),
     Nft(iroha_data_model::nft::NftId),
     Rwa(iroha_data_model::rwa::RwaId),
@@ -4333,6 +4379,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::AxtHandleCounter(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AxtAssetIncarnation(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AxtReplay(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtSpendNonce(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtSourceTransferReplay(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AxtHandleBudget(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Rwa(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4485,6 +4533,21 @@ impl fmt::Display for TieredKeyHandle {
                 f,
                 "axt_replay:{}:{}:{}:{}",
                 id.asset_dsid, id.handle_era, id.sub_nonce, id.target_lane
+            ),
+            TieredKeyHandle::AxtSpendNonce(id) => write!(
+                f,
+                "axt_spend_nonce:{}:{}",
+                id.issuer_context.asset_dsid,
+                hex::encode(id.nonce.as_bytes())
+            ),
+            TieredKeyHandle::AxtSourceTransferReplay(id) => write!(
+                f,
+                "axt_source_transfer_replay:{}:{}:{}:{}:{}",
+                id.dataspace_id,
+                id.lane_id,
+                id.source_tx_index,
+                id.transcript_index,
+                id.delta_index
             ),
             TieredKeyHandle::AxtHandleBudget(id) => write!(
                 f,

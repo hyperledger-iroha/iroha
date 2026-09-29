@@ -31,6 +31,8 @@ use std::{convert::TryFrom, fmt, str::FromStr};
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::manifest::UniversalAccountId")]
 pub struct UniversalAccountId(Hash);
 impl UniversalAccountId {
     /// Construct a UAID from a pre-hashed value (blake2b-32, LSB set to 1).
@@ -1242,6 +1244,31 @@ pub enum DenyReason {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_registry_schema_identity_roundtrips() {
+        let value = UniversalAccountId::from_hash(Hash::new(b"universal-state-key"));
+        assert_eq!(
+            <UniversalAccountId as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::nexus::manifest::UniversalAccountId"
+        );
+        let encoded = norito::encode_canonical(&value).expect("canonical owner frame");
+        assert_eq!(
+            encoded[6..22],
+            norito::schema::identity::frame_hash::<UniversalAccountId>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<UniversalAccountId>(&encoded)
+                .expect("canonical owner roundtrip"),
+            value
+        );
+        let mut wrong_owner = encoded;
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<UniversalAccountId>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     use super::*;
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;

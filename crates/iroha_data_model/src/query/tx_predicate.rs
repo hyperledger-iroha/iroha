@@ -1908,6 +1908,8 @@ mod wire {
             map.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
         }
     }
+    /// Owned node-stream oracle for the borrowed streaming serializer tests.
+    #[cfg(test)]
     pub(super) fn flatten(root: &CommittedTxPredicate) -> Result<Vec<Node>, Error> {
         validate_committed_tx_predicate(root)
             .map_err(|error| Error::Message(format!("invalid CommittedTxPredicate: {error}")))?;
@@ -2002,9 +2004,6 @@ mod wire {
         Ok(())
     }
     fn streamed_encoded_len_validated(root: &CommittedTxPredicate) -> Option<usize> {
-        if norito::core::use_packed_seq() || norito::core::use_packed_struct() {
-            return None;
-        }
         let mut total = 8_usize;
         visit_borrowed_nodes(root, &mut |_, fields| {
             let node_len = borrowed_node_encoded_len(fields).ok_or(Error::LengthMismatch)?;
@@ -2067,6 +2066,7 @@ mod wire {
             .map_err(|error| Error::Message(format!("invalid CommittedTxPredicate: {error}")))?;
         Ok(tree)
     }
+    #[cfg(test)]
     fn flatten_inner(node: &CommittedTxPredicate, out: &mut Vec<Node>) -> Result<(), Error> {
         use CommittedTxPredicate as P;
         match node {
@@ -2255,11 +2255,7 @@ pub(super) fn generic_membership_identity_records() -> Vec<norito::json::Value> 
 
 impl norito::core::SerializePayload for CommittedTxPredicate {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        if !norito::core::use_packed_seq() && !norito::core::use_packed_struct() {
-            return wire::serialize_streaming(self, writer);
-        }
-        let nodes = wire::flatten(self)?;
-        norito::core::SerializePayload::serialize(&nodes, writer)
+        wire::serialize_streaming(self, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         wire::streamed_encoded_len(self)

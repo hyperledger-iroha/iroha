@@ -670,6 +670,8 @@ pub(crate) use publication_lease::{
 /// global state checkpoints into storage.
 #[derive(Debug)]
 pub struct Kura {
+    /// Configured finite maximum for an original native context archive record.
+    native_context_archive_max_bytes: NonZeroUsize,
     /// One finite pool shared by every State hash generation using this store.
     block_hash_history_budget: mv::allocation::AllocationBudget,
     /// One finite pool shared by every State transaction-membership generation using this store.
@@ -3219,6 +3221,7 @@ impl Kura {
             blocks_in_memory,
             lane_history_retention,
             fastpq_artifact_policy: config.fastpq_artifacts,
+            native_context_archive_max_bytes: config.native_context_archive_max_bytes,
             pending_control_sidecar_limits,
             native_amx_evidence_prune_intent_max_bytes,
             merge_log: ResidentMutex::new(merge_log, &resource_inventory),
@@ -3631,6 +3634,8 @@ impl Kura {
             lane_history_retention: LANE_HISTORY_RETENTION,
             fastpq_artifact_policy:
                 iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             pending_control_sidecar_limits: PendingControlSidecarLimits::default(),
             native_amx_evidence_prune_intent_max_bytes,
             merge_log: ResidentMutex::new(merge_log, &resource_inventory),
@@ -3820,6 +3825,33 @@ impl Kura {
     #[cfg(test)]
     pub(crate) fn pipeline_sidecar_queue_len_for_testing(&self) -> usize {
         self.pipeline_sidecar_queue.lock().len()
+    }
+    /// Retain this Kura's original opened directory for native context publication.
+    pub(crate) fn native_context_archive_root(&self) -> std::io::Result<std::fs::File> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            if !self.instance_identity().matches(self)
+                || !self.bound_storage_directory_unchanged(&self.store_root_directory)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "opened Kura root changed before native context archive binding",
+                ));
+            }
+            self.store_root_directory.file.try_clone()
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "original Kura directory custody is required for native context publication",
+            ))
+        }
+    }
+    /// Original configured limit for each canonical native context projection.
+    #[must_use]
+    pub const fn native_context_archive_max_bytes(&self) -> NonZeroUsize {
+        self.native_context_archive_max_bytes
     }
     /// Root directory used by this Kura instance.
     #[must_use]
@@ -42900,6 +42932,7 @@ include!("kura/sidecar_physical_resource_accounting.rs");
 include!("kura/indexed_sidecar_io.rs");
 include!("kura/receipt_namespace_durability.rs");
 include!("kura/consensus_storage_reads.rs");
+include!("kura/native_execution_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
 pub(crate) use lane_admission_source::{

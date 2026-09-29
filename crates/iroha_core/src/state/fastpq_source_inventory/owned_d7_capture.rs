@@ -123,16 +123,13 @@ impl StateBlock<'_> {
     /// authenticated-policy and deterministic execution/proposal-accounting gates are resolved.
     ///
     /// # Errors
-    /// Rejects replay fabrication, absent/failed/stale ownership, changed public archives,
+    /// Rejects absent/failed/stale ownership, changed public archives,
     /// exceeded caller limits, invalid full-domain statements or noncanonical final digests.
     pub(crate) fn prepare_owned_fastpq_d7_capture(
         &self,
         transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
         limits: FastpqSourceStatementBuildLimits,
     ) -> Result<PreparedOwnedFastpqD7Capture, String> {
-        if self.authenticated_replay_commit {
-            return Err("authenticated replay cannot prepare new ordinary FASTPQ D7 facts".into());
-        }
         let inventory = self.verified_fastpq_source_inventory_for_capture()?;
         let mut budget = self.fastpq_source_statement_budget(limits)?;
         let attempt = budget.prepare(self, transcripts)?;

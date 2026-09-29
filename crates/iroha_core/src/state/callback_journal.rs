@@ -5,6 +5,7 @@
 //! callback error into a capacity rejection. TODO: integrate the separately
 //! owned rejection/penalty corridor and internal root-failure diagnostics.
 
+use crate::execution_attempt::ExecutionAttemptError;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     block::execution_output::InvocationCompletionV1,
@@ -68,7 +69,7 @@ impl CallbackJournal {
         &mut self,
         call: Option<Hash>,
         id: &TriggerId,
-    ) -> Result<CallbackTicket, String> {
+    ) -> Result<CallbackTicket, ExecutionAttemptError<String>> {
         let result = (|| {
             if self.consumed || self.refused {
                 return Err("callback journal is no longer available".into());
@@ -92,9 +93,7 @@ impl CallbackJournal {
                 self.slots.clear();
             }
             if !self.overflow && !self.failed {
-                self.slots
-                    .try_reserve(1)
-                    .map_err(|_| "host cannot reserve callback ownership storage")?;
+                self.reserve_slots(1)?;
                 self.slots.push(CallbackSlot {
                     id: id.clone(),
                     step: None,
@@ -106,6 +105,14 @@ impl CallbackJournal {
             self.refused = true;
         }
         result
+    }
+
+    /// Reserve physical capture storage without producing a consensus rejection.
+    fn reserve_slots(&mut self, additional: usize) -> Result<(), ExecutionAttemptError<String>> {
+        self.slots.try_reserve(additional).map_err(|_| {
+            self.refused = true;
+            ExecutionAttemptError::Deferred(ivm::ExecutionDeferral::AllocationUnavailable.into())
+        })
     }
 
     pub(super) fn finish(
@@ -199,7 +206,10 @@ impl CallbackJournal {
         Ok(())
     }
 
-    pub(super) fn take(&mut self, call: Hash) -> Result<DrainedCallbacks, String> {
+    pub(super) fn take(
+        &mut self,
+        call: Hash,
+    ) -> Result<DrainedCallbacks, ExecutionAttemptError<String>> {
         if self.consumed
             || self.refused
             || self.failed
@@ -221,7 +231,9 @@ impl CallbackJournal {
             .and_then(|()| completions.try_reserve_exact(self.slots.len()))
             .map_err(|_| {
                 self.refused = true;
-                "host cannot transfer callback output storage"
+                ExecutionAttemptError::Deferred(
+                    ivm::ExecutionDeferral::AllocationUnavailable.into(),
+                )
             })?;
         for (index, slot) in self.slots.iter_mut().enumerate() {
             let step = slot.step.take().ok_or("callback trace is unfinished")?;
@@ -257,6 +269,75 @@ impl CallbackJournal {
 }
 
 impl super::StateTransaction<'_, '_> {
+    /// Transfer the exact callback journal to direct transaction/lane replay.
+    ///
+    /// Ordinary output producers retain their own complete row reservation. This
+    /// corridor returns the actual callback sequence used by certified lane result
+    /// hashes; it does not authorize an ordinary execution-output row. Completions
+    /// and nested by-call steps come only from the transaction's original journal.
+    pub(crate) fn complete_direct_callbacks(
+        &mut self,
+        call: Hash,
+    ) -> Result<
+        iroha_data_model::transaction::DataTriggerSequence,
+        ExecutionAttemptError<TransactionRejectionReason>,
+    > {
+        use iroha_data_model::{
+            ValidationFail,
+            events::{EventBox, trigger_completed::TriggerCompletedEvent},
+            transaction::error::TransactionLimitError,
+        };
+        if let Some(owner) = self.execution_deferral() {
+            return Err(ExecutionAttemptError::Deferred(owner));
+        }
+        if self
+            .world
+            .external_event_buf
+            .iter()
+            .any(|event| matches!(event, EventBox::TriggerCompleted(_)))
+        {
+            return Err(ExecutionAttemptError::Rejected(
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(
+                    "direct completion bypassed its callback journal".into(),
+                )),
+            ));
+        }
+        let drained = self.callback_journal.take(call).map_err(|error| {
+            error.map_rejection(|message| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(message))
+            })
+        })?;
+        let DrainedCallbacks::Complete { steps, completions } = drained else {
+            return Err(ExecutionAttemptError::Rejected(
+                TransactionRejectionReason::LimitCheck(TransactionLimitError {
+                    reason:
+                        iroha_data_model::block::execution_output::EXECUTION_OUTPUT_LIMIT_REASON
+                            .into(),
+                }),
+            ));
+        };
+        self.world
+            .external_event_buf
+            .try_reserve(completions.len())
+            .map_err(|_| {
+                ExecutionAttemptError::Deferred(
+                    ivm::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            })?;
+        for completion in completions {
+            self.world.external_event_buf.push(
+                TriggerCompletedEvent::new(
+                    completion.trigger_id,
+                    iroha_crypto::HashOf::from_untyped_unchecked(call),
+                    completion.callback_index,
+                    completion.outcome,
+                )
+                .into(),
+            );
+        }
+        Ok(steps)
+    }
+
     /// Consume an isolated component fixture's actual callbacks before applying
     /// its successful overlay. Failed, incomplete and overflowing journals keep
     /// the same production rejection semantics and are never applied.
@@ -268,7 +349,11 @@ impl super::StateTransaction<'_, '_> {
         let call = self
             .tx_call_hash
             .ok_or("callback fixture has no root owner")?;
-        match self.callback_journal.take(call)? {
+        match self
+            .callback_journal
+            .take(call)
+            .map_err(|error| format!("{error:?}"))?
+        {
             DrainedCallbacks::Complete { completions, .. } => {
                 if !self.execution_effects_allow_apply() {
                     return Err("callback fixture has unclosed execution effects".into());
@@ -303,6 +388,27 @@ mod tests {
 
     fn call() -> Hash {
         Hash::new(b"actual source call")
+    }
+
+    #[test]
+    fn actual_callback_reservation_refusal_is_local_and_prevents_publication() {
+        let mut journal = CallbackJournal::new(Ok(4096));
+        // Exercise the real fallible reservation without depending on host OOM.
+        // Host address-space capacity is physical, not a transaction limit.
+        assert_eq!(
+            journal.reserve_slots(usize::MAX),
+            Err(ExecutionAttemptError::Deferred(
+                ivm::ExecutionDeferral::AllocationUnavailable.into()
+            ))
+        );
+        assert!(journal.refused);
+        assert!(!journal.allows_apply());
+        assert!(
+            journal
+                .begin(Some(call()), &"root".parse().unwrap())
+                .is_err()
+        );
+        assert!(journal.take(call()).is_err());
     }
 
     #[test]

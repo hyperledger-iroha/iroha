@@ -721,8 +721,11 @@ pub fn f18(seed: u64) -> Scenario {
     let mut sc = sized("F18", seed, n);
     let mut rng = side("F18", seed);
     sc.params.max_block_bytes = 256 * 1024;
-    sc.local.sync_max_bytes = 512 * 1024;
-    sc.net.frame_limit = u64::from(sc.params.max_block_bytes) + 64 * 1024;
+    // One mandatory canonical certificate-bearing frame must fit. Flood inputs
+    // above this exact bound still exercise the same rejection and progress checks.
+    sc.local.sync_max_bytes = sc.params.max_block_bytes + crate::pacemaker::FRAME_OVERHEAD;
+    sc.net.frame_limit =
+        u64::from(sc.params.max_block_bytes) + u64::from(crate::pacemaker::FRAME_OVERHEAD);
     let count = 1 + rng.index(f_of(n).max(1));
     sc.byz = distinct(&mut rng, n, count)
         .into_iter()
@@ -1223,8 +1226,8 @@ pub fn f30(seed: u64) -> Scenario {
     let mut rng = side("F30", seed);
     let max = if cfg!(debug_assertions) { 64 } else { 256 } * 1024;
     sc.params.max_block_bytes = max;
-    sc.local.sync_max_bytes = max + 64 * 1024;
-    sc.net.frame_limit = u64::from(max) + 64 * 1024;
+    sc.local.sync_max_bytes = max + crate::pacemaker::FRAME_OVERHEAD;
+    sc.net.frame_limit = u64::from(max) + u64::from(crate::pacemaker::FRAME_OVERHEAD);
     sc.net.bandwidth = 20_000;
     sc.workload = Some(Workload {
         every_min: 10,

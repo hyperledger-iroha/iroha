@@ -8,7 +8,7 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetId,
-    block::{BlockHeader, consensus_v2::ValidatorPower},
+    block::BlockHeader,
     consensus::{
         GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconDkgConstantProofV1,
         GlobalThresholdBeaconDkgDealerCommitmentV1, GlobalThresholdBeaconDkgEncryptedShareV1,
@@ -208,16 +208,31 @@ fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         authority_generation: 1,
         preparing_authorization_id: [0x61; 32],
         election_seed: [0x62; 32],
-        roster: peers
+        eligibility: iroha_data_model::nexus::ValidatorElectionPolicyV1 {
+            epoch_length_blocks: 100,
+            ..iroha_data_model::nexus::ValidatorElectionPolicyV1::from_npos_parameters(
+                &iroha_data_model::parameter::system::SumeragiNposParameters::default(),
+            )
+            .unwrap()
+        },
+        committee: peers
             .iter()
-            .cloned()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
+            .map(|peer| {
+                let key = (1_u8..=4)
+                    .map(|seed| key(seed, Algorithm::BlsNormal))
+                    .find(|key| key.public_key() == peer.public_key())
+                    .unwrap();
+                iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1 {
+                    validator: peer.clone(),
+                    proof_of_possession: iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .unwrap(),
+                }
             })
             .collect(),
-        validator_set_pops: vec![vec![0x63; 96]; 4],
     };
+    preparation
+        .validate()
+        .expect("real frozen committee and policy");
     let transition = ValidatorCommitteeTransitionV1 {
         preparation,
         credentials: Some(ValidatorCommitteeCredentialsV1 {
@@ -267,6 +282,22 @@ fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         ("monetary_plan", plan.encode()),
         ("rebind_peer", rebind.encode()),
     ]
+}
+
+#[test]
+fn retired_synthetic_xor_has_the_same_rejected_sdk_identity() {
+    let retired = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::parse_fully_qualified("nexus.universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
+    assert_eq!(
+        hex::encode(retired.aid_bytes()),
+        "5ecd1e80ac7d4d18b22772091a73fc13"
+    );
+    assert_ne!(
+        retired,
+        SumeragiNposParameters::default().xor_asset_definition_id
+    );
 }
 
 #[test]

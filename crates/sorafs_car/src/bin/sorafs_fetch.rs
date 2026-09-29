@@ -913,11 +913,10 @@ fn run() -> Result<(), String> {
         }
         (length, hasher.finalize().into())
     };
-    if let Some((_, digest)) = streamed_stats {
-        if digest != payload_digest_bytes {
+    if let Some((_, digest)) = streamed_stats
+        && digest != payload_digest_bytes {
             return Err("streamed payload digest mismatch".into());
         }
-    }
     let mut car_spool = car_out.as_deref().map(private_output_spool).transpose()?;
     let mut car_stats = if let Some(spool) = car_spool.as_mut() {
         let mut writer = BufWriter::new(spool);
@@ -926,10 +925,10 @@ fn run() -> Result<(), String> {
                 .lock()
                 .map_err(|error| error.to_string())?
                 .reader()?;
-            let stats = CarStreamingWriter::new(&plan)
+            
+            CarStreamingWriter::new(&plan)
                 .write_from_reader(&mut reader, &mut writer)
-                .map_err(|error| error.to_string())?;
-            stats
+                .map_err(|error| error.to_string())?
         } else {
             let mut reader = sorafs_car::payload_verifier::ChunkPayloadReader::new(&outcome.chunks);
             CarStreamingWriter::new(&plan)
@@ -971,8 +970,8 @@ fn run() -> Result<(), String> {
     {
         return Err(format!(
             "assembled payload digest {} does not match expected {}",
-            hex::encode(&payload_digest_bytes),
-            hex::encode(&expected_digest)
+            hex::encode(payload_digest_bytes),
+            hex::encode(expected_digest)
         ));
     }
     if let (Some(writer), Some(path)) = (streaming_writer, output_path.as_ref()) {
@@ -1598,9 +1597,9 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
         .ok_or_else(|| "provider advert advertised max_concurrent_streams=0".to_string())?;
     let mut concurrency = qos_concurrency;
     let mut supports_chunk_range = false;
-    let provider_hex = hex::encode(&advert.body.provider_id);
+    let provider_hex = hex::encode(advert.body.provider_id);
     let mut provider_metadata = ProviderMetadata::new();
-    provider_metadata.provider_id = Some(hex::encode(&advert.body.provider_id));
+    provider_metadata.provider_id = Some(hex::encode(advert.body.provider_id));
     provider_metadata.profile_id = Some(advert.body.profile_id.clone());
     let mut aliases = advert.body.profile_aliases.clone().unwrap_or_default();
     if !aliases.iter().any(|alias| alias == &advert.body.profile_id) {

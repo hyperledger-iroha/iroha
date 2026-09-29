@@ -65,7 +65,7 @@ fn canonical_execution_does_not_populate_retired_dag_metrics() {
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
     let state = iroha_core::state::State::with_telemetry(world, kura, query, telemetry);
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let genesis = state

@@ -100,7 +100,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         network_id,
     );
     let nexus = state_seq.nexus_snapshot();
-    state_seq.install_lane_manifests(&Arc::new(
+    state_seq.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let cfg_seq = iroha_config::parameters::actual::Pipeline {
@@ -128,6 +128,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         ivm_cache_max_decoded_ops:
             iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
         ivm_cache_max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        ivm_execution_max_bytes:
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ivm_prover_threads: iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
         overlay_max_instructions:
             iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
@@ -192,7 +194,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         network_id,
     );
     let nexus = state_par.nexus_snapshot();
-    state_par.install_lane_manifests(&Arc::new(
+    state_par.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let cfg_par = iroha_config::parameters::actual::Pipeline {
@@ -220,6 +222,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         ivm_cache_max_decoded_ops:
             iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
         ivm_cache_max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        ivm_execution_max_bytes:
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ivm_prover_threads: iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
         overlay_max_instructions:
             iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
@@ -363,7 +367,7 @@ fn run_block_and_events(
         *network_id,
     );
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let mut cfg = state.view().pipeline().clone();

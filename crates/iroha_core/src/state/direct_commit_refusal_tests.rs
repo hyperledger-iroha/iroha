@@ -1,6 +1,6 @@
 //! Direct commit refusal must retire original State writers before membership wakes.
 //!
-//! Register beneath carrier_preparation::tests to reuse the actual four-validator
+//! Register beneath acquisition_fixture_tests to reuse the actual four-validator
 //! fixture. This exercises public StateBlock::commit, not a test commit surrogate.
 
 use super::fixture;
@@ -172,7 +172,7 @@ fn original_state_write_fence_never_notifies_under_sibling_writers() {
 }
 
 fn check_commit_retirement(case: CommitCase, source: NotificationSource) {
-    let (state, proposal, _topology, _context) = fixture();
+    let (state, proposal) = fixture();
     let state: Arc<State> = Arc::from(state);
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let before_height = state.transactions.latest_height();
@@ -199,11 +199,9 @@ fn check_commit_retirement(case: CommitCase, source: NotificationSource) {
     // exact error assertion below also excludes any intervening guard failure.
     block.verify_execution_output_publication().unwrap();
     block.validate_canonical_runtime_projection().unwrap();
-    block.verify_lane_consensus_contexts_publication().unwrap();
+    block.verify_sumeragi_lane_state_publication().unwrap();
     block.validate_merge_carrier_entrypoint_binding().unwrap();
     assert!(block.fastpq_source_inventory.is_none());
-    assert!(block.native_lane_stage.is_none());
-    assert!(block.staged_merge_entry.is_none());
 
     let carrier_hash = proposal.header().hash();
     if !matches!(case, CommitCase::MissingMembership) {
@@ -380,3 +378,5 @@ fn check_commit_retirement(case: CommitCase, source: NotificationSource) {
     }
     drop((membership, parameters, initial_fence_release));
 }
+
+include!("direct_commit_execution_refund_tests.rs");

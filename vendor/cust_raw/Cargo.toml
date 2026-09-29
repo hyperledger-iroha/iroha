@@ -1,0 +1,13 @@
+[package]
+name = "cust_raw"
+version = "0.11.3"
+edition = "2024"
+description = "Runtime-loaded CUDA Driver API bindings (workspace patched)"
+license = "Apache-2.0"
+repository = "https://github.com/Rust-GPU/Rust-CUDA"
+
+[dependencies]
+libloading = "0.8.9"
+
+[dev-dependencies]
+cust = "0.3.2"

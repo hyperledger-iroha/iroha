@@ -15,7 +15,7 @@ use iroha_primitives::time::TimeSource;
 
 use crate::{
     block::{BlockBuilder, ValidBlock},
-    queue::{Queue, execution_context_for_routing_plan},
+    queue::Queue,
     state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
     tx::AcceptedTransaction,
 };
@@ -66,28 +66,9 @@ pub struct Assembly<'a> {
 pub fn assemble(
     state: &State,
     assembly: Assembly<'_>,
-    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+    transactions: &[AcceptedTransaction<'static>],
 ) -> Result<SignedBlock, PayloadError> {
-    assemble_with_pulse(state, assembly, transactions, None)
-}
-
-/// Assemble actual transaction work together with an already finalized current pulse.
-///
-/// # Errors
-/// See [`assemble`].
-pub fn assemble_with_pulse(
-    state: &State,
-    assembly: Assembly<'_>,
-    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
-    pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
-) -> Result<SignedBlock, PayloadError> {
-    assemble_with_merges(
-        state,
-        assembly,
-        transactions,
-        &MergeProposal::default(),
-        pulse,
-    )
+    assemble_with_merges(state, assembly, transactions, &MergeProposal::default())
 }
 
 /// The lane merges a leader proposes (`specs/sumeragi_lanes.md` §4.2).
@@ -102,17 +83,16 @@ pub struct MergeProposal {
 }
 
 /// Assemble the block's own transactions and its lane merges (`specs/sumeragi_lanes.md` §4.2)
-/// with an already finalized current pulse. Merged lane blocks are work: a block may carry
-/// merges alone.
+/// without beacon control, which is supplied separately in the native header. Merged lane
+/// blocks are work: a block may carry merges alone.
 ///
 /// # Errors
 /// There are neither transactions nor merges, or the canonical block time overflows.
 pub fn assemble_with_merges(
     state: &State,
     assembly: Assembly<'_>,
-    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+    transactions: &[AcceptedTransaction<'static>],
     merges: &MergeProposal,
-    pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
     if transactions.is_empty() && merges.merges.is_empty() {
         return Err(PayloadError::EmptyBlock);
@@ -122,7 +102,7 @@ pub fn assemble_with_merges(
         .checked_add(assembly.cadence)
         .ok_or(PayloadError::TimeOverflow)?;
     let build = |time: Duration| -> Result<SignedBlock, PayloadError> {
-        build_at(state, assembly, transactions, merges, time, pulse)
+        build_at(state, assembly, transactions, merges, time)
     };
     let first = build(minimum)?;
     let canonical = ValidBlock::sumeragi_block_time(&first, parent_time, assembly.cadence)
@@ -137,25 +117,32 @@ pub fn assemble_with_merges(
 fn build_at(
     state: &State,
     assembly: Assembly<'_>,
-    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+    transactions: &[AcceptedTransaction<'static>],
     merges: &MergeProposal,
     time: Duration,
-    pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
     let height = assembly.parent.header().height().get().saturating_add(1);
     let (_, time_source) = TimeSource::new_mock(time);
-    let accepted = transactions
-        .iter()
-        .map(|(tx, _)| tx.clone())
-        .collect::<Vec<_>>();
+    let accepted = transactions.iter().cloned().collect::<Vec<_>>();
     let nexus = state.nexus_snapshot();
     let view = state.view();
     let confidential = compute_confidential_feature_digest(view.world(), view.zk(), height);
-    drop(view);
+    let routing = super::lanes::routing::RoutingSnapshot::of(&view);
+    let inputs = routing.inputs(view.world());
     let contexts = transactions
         .iter()
-        .map(|(tx, plan)| execution_context_for_routing_plan(tx.hash_as_entrypoint(), plan))
-        .collect::<Vec<_>>();
+        .map(|tx| {
+            let route = inputs.execution_route(tx, height).ok_or_else(|| {
+                PayloadError::NotCanonical("committed execution route is unavailable".into())
+            })?;
+            Ok(iroha_data_model::block::ExternalExecutionContext::new(
+                tx.hash_as_entrypoint(),
+                route.lane_id,
+                route.dataspace_id,
+            ))
+        })
+        .collect::<Result<Vec<_>, PayloadError>>()?;
+    drop(view);
     let mut execution_context = BlockExecutionContextBundle::new(contexts);
     if !merges.merges.is_empty() {
         execution_context.lane_merge = Some(SumeragiLaneMergeSection {
@@ -171,18 +158,14 @@ fn build_at(
         )))
         .with_confidential_features((!confidential.is_empty()).then_some(confidential))
         .with_execution_context((!execution_context.is_empty()).then_some(execution_context))
-        .with_global_beacon_pulse(pulse)
         .with_network_input_time_floor(time)
         .ok_or(PayloadError::TimeOverflow)?;
     Ok(builder.into_unsigned_proposal())
 }
 
-/// Whether a block carries work: its own transactions or lane merges.
+/// Whether the canonical proposal carries transactions or certified lane merge work.
 fn has_work(block: &SignedBlock) -> bool {
-    block.network_entrypoint_count() > 0
-        || block
-            .lane_merge()
-            .is_some_and(|section| !section.merges.is_empty())
+    block.has_consensus_work()
 }
 
 /// The payload bytes of `block`: its canonical resultless proposal wire.
@@ -240,7 +223,7 @@ pub fn select(
     queue: &std::sync::Arc<Queue>,
     max_bytes: usize,
     reserved: usize,
-) -> Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> {
+) -> Vec<AcceptedTransaction<'static>> {
     let view = state.view();
     let block_parameters = view.world().parameters().block();
     // The next block executes under the FASTPQ source policy frozen at its start (the
@@ -299,15 +282,12 @@ pub fn select(
         {
             continue;
         }
-        let Ok(plan) = queue.route_plan_with_state(&transaction, state) else {
-            continue;
-        };
         let next = bytes.saturating_add(transaction.encoded_len());
         if next > max_bytes {
             continue;
         }
         bytes = next;
-        selected.push((transaction, plan));
+        selected.push(transaction);
     }
     selected
 }
@@ -410,4 +390,111 @@ mod tests {
         assert_eq!(decoded.network_entrypoint_count(), 1);
         assert_eq!(decoded.encode_wire().unwrap(), bytes);
     }
+    #[test]
+    fn signed_native_lane_policy_drives_direct_global_context_without_queue_override() {
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            account::{Account, AccountId},
+            isi::Register,
+            parameter::Parameter,
+            sumeragi_lanes::{
+                SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+            },
+        };
+        use iroha_model_base::{
+            peer::PeerId,
+            topology::{DataSpaceId, LaneId},
+        };
+        let user = KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519);
+        let account = AccountId::new(user.public_key().clone());
+        let mut committee = (0x61..=0x64)
+            .map(|seed| {
+                let key = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+                SumeragiLaneMember {
+                    peer: PeerId::new(key.public_key().clone()),
+                    pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+                }
+            })
+            .collect::<Vec<_>>();
+        committee.sort();
+        let policy = SumeragiLanePolicy {
+            anchor_freshness: 4,
+            max_merge_blocks: 8,
+            stall_window: 1000,
+            lane_params: Default::default(),
+            fixed: vec![SumeragiFixedLane {
+                lane: LaneId::new(2),
+                dataspace: DataSpaceId::UNIVERSAL,
+                committee,
+            }],
+            routes: vec![SumeragiLaneRoute {
+                lane: LaneId::new(2),
+                account: Some(account.to_string()),
+                instruction: None,
+            }],
+            autoscale: None,
+        };
+        let mut config = TestChainConfig::new(crate::state::World::new(), 1000);
+        config
+            .genesis_instructions
+            .push(Register::account(Account::new(account.clone())).into());
+        config
+            .genesis_parameters
+            .push(Parameter::Custom(policy.into_custom_parameter()));
+        let mut chain = CertifiedTestChain::start(config).unwrap();
+        chain.commit_at(2000, Vec::new());
+        chain.commit_at(3000, Vec::new());
+        let view = chain.state().view();
+        assert!(
+            view.world()
+                .sumeragi_lanes()
+                .lane(LaneId::new(2))
+                .unwrap()
+                .admits_anchor(3)
+        );
+        let parent = view.latest_block().unwrap();
+        let mut builder = TransactionBuilder::new(
+            chain.network_id(),
+            account,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "direct rescue")]);
+        builder.set_creation_time(Duration::from_millis(3000));
+        let (_, clock) = TimeSource::new_mock(Duration::from_millis(3001));
+        let accepted = AcceptedTransaction::accept_with_time_source(
+            builder.sign(user.private_key()),
+            &chain.network_id(),
+            Duration::from_secs(1),
+            view.world().parameters().transaction(),
+            &iroha_config::parameters::actual::Crypto::default(),
+            &clock,
+        )
+        .unwrap();
+        drop(view);
+        let proposal = assemble(
+            chain.state(),
+            Assembly {
+                parent: &parent,
+                view: 0,
+                cadence: Duration::from_millis(1),
+            },
+            &[accepted],
+        )
+        .unwrap();
+        let contexts = &proposal.execution_context().unwrap().external;
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].lane_id, LaneId::new(2));
+        assert_eq!(contexts[0].dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(contexts[0].routing_plan_legs.len(), 1);
+        assert!(
+            proposal.lane_merge().is_none(),
+            "a direct rescue carries no fabricated lane certificate"
+        );
+        assert_eq!(decode(&encode(&proposal).unwrap()).unwrap(), proposal);
+    }
 }
+
+#[cfg(test)]
+#[path = "payload/work_tests.rs"]
+mod work_tests;

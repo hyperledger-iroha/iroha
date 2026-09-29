@@ -218,9 +218,6 @@ fn smart_contract_code_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractCode {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let manifest = super::decode_aos_canonical_field::<ContractManifest>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -236,9 +233,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractCode {
 impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateContractInstance {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let contract_address = super::decode_aos_canonical_field::<
             crate::smart_contract::ContractAddress,
@@ -272,9 +266,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateContractInstance {
 impl<'a> norito::core::DecodeFromSlice<'a> for ActivateContractInstance {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let contract_address = super::decode_aos_canonical_field::<
             crate::smart_contract::ContractAddress,
@@ -304,9 +295,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateContractInstance {
 impl<'a> norito::core::DecodeFromSlice<'a> for CommitContractDeployment {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let expected_deploy_nonce = super::decode_aos_canonical_field::<u64>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -351,9 +339,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitContractDeployment {
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractBytes {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -373,9 +358,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractBytes {
 impl<'a> norito::core::DecodeFromSlice<'a> for UploadSmartContractCodeChunk {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -416,9 +398,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UploadSmartContractCodeChunk {
 impl<'a> norito::core::DecodeFromSlice<'a> for FinalizeSmartContractCodeUpload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -449,9 +428,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for FinalizeSmartContractCodeUpload {
 impl<'a> norito::core::DecodeFromSlice<'a> for CancelSmartContractCodeUpload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -467,9 +443,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelSmartContractCodeUpload {
 impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,

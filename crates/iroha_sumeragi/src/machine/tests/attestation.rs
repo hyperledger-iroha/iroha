@@ -38,6 +38,7 @@ fn attested_ok(h: &H, qc: &Qc) -> bool {
         &h.v.crypto,
         &FakeVerifier,
         &I,
+        &crate::testing::TEST_EPOCH.id,
         &h.committee_at(qc.height),
         qc,
     )
@@ -106,7 +107,7 @@ fn det_a1_flagged_block_commits_with_attestations() {
     let qc = &formed[0];
     assert!(qc.attest);
     assert_eq!(qc.attestations.len(), qc.signers.count_ones());
-    assert!(qc.signers.count_ones() >= h.q());
+    assert_eq!(qc.signers.count_ones(), h.q());
     assert!(
         attested_ok(&h, qc),
         "exactly its signers' attestations, in order"
@@ -137,7 +138,9 @@ fn det_a2_unattested_commit_votes_not_counted() {
     // W: forged attestation; Y: attestation stripped by a relay.
     let mut tampered = h.vote(VoteKind::Commit, forger, 0, &b);
     if let Some(a) = tampered.attestation.as_mut() {
-        a[0] ^= 0xff;
+        let mut bytes = a.signature.as_slice().to_vec();
+        bytes[0] ^= 0xff;
+        a.signature = crate::message::AttestationSignature::try_from_slice(&bytes).unwrap();
     }
     h.deliver(forger, WireMessage::Vote(tampered));
     let mut stripped = h.vote(VoteKind::Commit, stripped_signer, 0, &b);
@@ -227,13 +230,16 @@ fn det_a4_commitqc_attestations_checked_core() {
     let genuine = h.qc_q(VoteKind::Commit, 0, &b);
     let other_height = {
         let value = (h.bh(&b), result_of(&b));
-        let statement = preimage::att_preimage(&I, 2, &value.0, &value.1);
+        let statement =
+            preimage::att_preimage(&I, &crate::testing::TEST_EPOCH.id, 2, &value.0, &value.1);
         (h.signer_keys_of(&genuine).iter())
-            .map(|k| fake_attestation(k, 2, &statement))
+            .map(|k| fake_attestation(k, 2, &statement).signature)
             .collect::<Vec<_>>()
     };
     let mut forged = genuine.attestations.clone();
-    forged[0][3] ^= 1;
+    let mut bytes = forged[0].as_slice().to_vec();
+    bytes[3] ^= 1;
+    forged[0] = crate::message::AttestationSignature::try_from_slice(&bytes).unwrap();
     let mut bad: Vec<Qc> = [
         Vec::new(),
         genuine.attestations[1..].to_vec(),
@@ -271,7 +277,16 @@ fn det_a4_commitqc_attestations_checked_core() {
     }
     // As the parent_qc of a proposal for height 2.
     let next_leader = {
-        let topo = Topology::compute(&h.v.crypto, &I, &h.committee(), 2, 0, W, &[]);
+        let topo = Topology::compute(
+            &h.v.crypto,
+            &I,
+            &crate::testing::TEST_EPOCH,
+            &h.committee(),
+            2,
+            0,
+            W,
+            &[],
+        );
         topo.leader(0)
     };
     let child = Block {
@@ -293,7 +308,7 @@ fn det_a4_commitqc_attestations_checked_core() {
     };
     let bh = h.bh(&child);
     let ad = preimage::att_digest(&h.v.crypto, None, bad.first());
-    let msg = preimage::prop_preimage(&I, 2, 0, &bh, &ad);
+    let msg = preimage::prop_preimage(&I, &crate::testing::TEST_EPOCH.id, 2, 0, &bh, &ad);
     let p = Proposal {
         instance: I,
         height: 2,
@@ -408,7 +423,7 @@ fn det_a9_pending_attestor_commits_after_execution() {
         } else {
             result_of(&b)
         };
-        executed.record(&I, 1, &h.bh(&b), &result);
+        executed.record(&I, &b.header.epoch, 1, &h.bh(&b), &result);
         let out = h.exec(h.bh(&b), ExecOutcome::Valid(result));
         let commit = votes_of(&out, VoteKind::Commit);
         if divergent {

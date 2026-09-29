@@ -27,6 +27,7 @@ pub fn numeric_error_type() -> ContractErrorTypeDescriptor {
             ("InexactConversion", 7),
             ("NegativeQuantity", 8),
             ("QuantityUnderflow", 9),
+            ("NegativeSquareRoot", 13),
         ],
     )
 }
@@ -58,5 +59,9 @@ mod tests {
             "IndexOutOfBounds"
         );
         assert!(numeric.variant(10).is_none());
+        assert_eq!(
+            numeric.variant(13).expect("square root fault").name,
+            "NegativeSquareRoot"
+        );
     }
 }

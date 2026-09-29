@@ -753,7 +753,8 @@ fn configuration_request(
     network_id: &NetworkId,
     operator_signer: Option<&KeyPair>,
 ) -> eyre::Result<reqwest::Request> {
-    let config_uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
+    let config_uri: crate::Uri = iroha_torii_shared::route_catalog::core::CONFIGURATION_GET
+        .path()
         .parse()
         .expect("static configuration URI");
     let mut request = client
@@ -841,7 +842,8 @@ fn signed_peers_request(
 ) -> eyre::Result<reqwest::Request> {
     let key_pair = operator_signer
         .ok_or_else(|| eyre!("/v1/peers requires an immutable operator signing context"))?;
-    let peers_uri: crate::Uri = iroha_torii_shared::uri::PEERS
+    let peers_uri: crate::Uri = iroha_torii_shared::route_catalog::core::PEERS
+        .path()
         .parse()
         .expect("static peers URI");
     let headers = operator_signatures::signed_request_headers(

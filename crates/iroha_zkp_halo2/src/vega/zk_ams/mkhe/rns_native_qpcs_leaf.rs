@@ -309,11 +309,10 @@ impl<'a> RnsNativeLeafCacheV1<'a> {
         if index >= length {
             return Err(RnsNativeLeafErrorV1::InvalidIndex);
         }
-        if let Some((previous, commitment)) = self.entry {
-            if previous == values {
+        if let Some((previous, commitment)) = self.entry
+            && previous == values {
                 return commitment.at_index(index);
             }
-        }
         let commitment = RnsNativeLeafPayloadV1::from_canonical_values(
             self.parameter_digest,
             self.oracle,

@@ -67,7 +67,7 @@ fn kotodama_nested_struct_map_roundtrip() {
     vm.load_program(&code).expect("load nested map program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute nested map program");
-    assert_eq!(common::decode_i64_register(&vm, 10), 33);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 33);
 }
 #[test]
 fn kotodama_foreach_map_lowering_uses_compact_loop() {

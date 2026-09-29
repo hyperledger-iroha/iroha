@@ -5,10 +5,7 @@
 //! authority. Purpose-owned wrappers must check current custody and both UTC endpoints before
 //! producing their distinct successes. Historical finality alone is not a current-authority read.
 
-use crate::{
-    state::{State, StateReadOnly, StateView, TransactionsReadOnly},
-    sumeragi::certified_chain::CertifiedChain,
-};
+use crate::state::{State, StateReadOnly, StateView, TransactionsReadOnly};
 use iroha_crypto::{Algorithm, HashOf, Signature};
 use iroha_data_model::{
     account::AccountId,
@@ -439,6 +436,12 @@ impl<'state> AuthenticatedCheckExecutionCutV1<'state> {
     }
 }
 
+mod certified_walk;
+pub(crate) use certified_walk::{SignerCertifiedBlockV1, SignerCertifiedWalkV1};
+
+mod execution;
+pub(crate) use execution::{BorrowedCheckExecutionCutV1, PreparedCheckExecutionV1};
+
 /// Consume exact application against actual State/Kura and independently pinned floor continuity.
 pub(crate) fn authenticate_applied_check_v1<'state>(
     state: &'state Arc<State>,
@@ -447,88 +450,22 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
     round: &NativeCheckRoundV1,
 ) -> Result<AuthenticatedCheckExecutionCutV1<'state>, Error> {
     round.ensure_live()?;
-    if !round.bound
-        || bound.purpose != purpose
-        || bound.started != round.started
-        || bound.max_elapsed != round.max_elapsed
-        || Some(bound.challenge) != round.challenge
-    {
-        return Err(Error::Invalid);
-    }
     let view = state.view();
-    if view.network_id().as_bytes() != &bound.network_id
-        || view.chain_id().to_string() != bound.chain_id
-    {
-        return Err(Error::Finality);
-    }
-    let entry_hash = bound.signed.hash_as_entrypoint();
-    let height_index = view
-        .transactions
-        .get(&entry_hash)
-        .ok_or(Error::NotApplied)?;
-    let check_height = u64::try_from(height_index.get()).map_err(|_| Error::NotApplied)?;
-    let applied_height = u64::try_from(view.block_hashes().len()).map_err(|_| Error::NotApplied)?;
-    if check_height <= bound.floor.height || check_height > applied_height {
-        return Err(Error::NotApplied);
-    }
-    check_history_span_v1(bound.floor.height, applied_height)?;
-    let chain = CertifiedChain::new(&view).map_err(|_| Error::Finality)?;
-    let mut check_block_hash = None;
-    let mut applied_floor = bound.floor;
-    // Each block is the view's, certified by its local `CommitQC`, and extends the previous one.
-    for block in chain.walk(bound.floor.height, applied_height) {
+    let mut proof = PreparedCheckExecutionV1::new(&view, purpose, bound, round)?;
+    let chain = SignerCertifiedWalkV1::new(&view)?;
+    for block in chain.walk(proof.floor_height(), proof.applied_height()) {
         round.ensure_live()?;
-        let block = block.map_err(|_| Error::Finality)?;
-        let height = block.height();
-        let hash = *block.block_hash().as_ref();
-        if height == bound.floor.height
-            && (hash != bound.floor.block_hash || block.id() != bound.floor.context_id)
-        {
-            return Err(Error::Finality);
-        }
-        if height == check_height {
-            // Verify execution against this same certified lineage body: the anchor binds the
-            // executed wire the certified result commits.
-            let anchor = block
-                .entry_anchor(&entry_hash)
-                .map_err(|_| Error::Execution)?;
-            let body = block.block();
-            let proofs = body
-                .network_execution_proof(&entry_hash)
-                .ok_or(Error::Execution)?;
-            if !proofs.verify(&anchor) {
-                return Err(Error::Execution);
-            }
-            let entry_index =
-                usize::try_from(anchor.entry_index()).map_err(|_| Error::Execution)?;
-            let actual = body
-                .network_entrypoint_at(entry_index)
-                .ok_or(Error::Execution)?;
-            let (_, output) = body
-                .network_output_at(anchor.entry_index())
-                .ok_or(Error::Execution)?;
-            if bounded_entry(actual).map_err(|_| Error::Execution)? != bound.entry_bytes
-                || !output.result.is_ok()
-            {
-                return Err(Error::Execution);
-            }
-            check_block_hash = Some(hash);
-        }
-        applied_floor = NativeCheckFloorV1 {
-            height,
-            block_hash: hash,
-            context_id: block.id(),
-        };
+        proof.consume(&block.map_err(|_| Error::Finality)?)?;
     }
-    round.ensure_live()?;
-    let check_block_hash = check_block_hash.ok_or(Error::Execution)?;
+    let data = proof.finish()?.into_data();
+    drop(chain);
     Ok(AuthenticatedCheckExecutionCutV1 {
         view,
-        check_height,
-        applied_floor,
-        entry_hash,
-        canonical_external: bound.entry_bytes,
-        check_block_hash,
+        check_height: data.check_height,
+        applied_floor: data.applied_floor,
+        entry_hash: data.entry_hash,
+        canonical_external: data.canonical_external,
+        check_block_hash: data.check_block_hash,
     })
 }
 

@@ -2884,11 +2884,6 @@ impl norito::NoritoSchema for ReputationJournalEventIdSource<'_> {
 
 impl norito::core::SerializePayload for ReputationJournalEventIdSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        if norito::core::use_packed_struct() {
-            return Err(norito::core::Error::UnsupportedFeature(
-                "borrowed reputation event-id packed struct",
-            ));
-        }
         let zero = ReputationJournalEventIdV1::ZERO;
         let leading_fields: [&dyn norito::core::SerializePayload; 6] = [
             &self.0.version,
@@ -2914,9 +2909,6 @@ impl norito::core::SerializePayload for ReputationJournalEventIdSource<'_> {
         Ok(())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        if norito::core::use_packed_struct() {
-            return None;
-        }
         let zero = ReputationJournalEventIdV1::ZERO;
         let leading_fields: [&dyn norito::core::SerializePayload; 6] = [
             &self.0.version,

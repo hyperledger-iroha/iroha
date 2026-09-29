@@ -20,6 +20,15 @@ pub(crate) enum StateRestoreError {
     /// Local resources refused restore; this does not invalidate the snapshot.
     #[error(transparent)]
     Admission(#[from] StateAdmissionError),
+    /// Original finite resources refused canonical native schedule ownership.
+    #[error("snapshot native schedule admission deferred: {0}")]
+    NativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
+    /// The local VM image could not be constructed before restoring State.
+    #[error("snapshot State VM initialization deferred: {0}")]
+    VmInitialization(#[source] ivm::VMError),
+    /// Original execution resources refused this local restore attempt.
+    #[error("snapshot State execution deferred: {0}")]
+    ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
 }
 impl From<mv::storage::AdmittedStorageError> for StateRestoreError {
     fn from(error: mv::storage::AdmittedStorageError) -> Self {
@@ -40,6 +49,12 @@ impl From<storage_transactions::MembershipRestoreError> for StateRestoreError {
 }
 fn durable_state_restore_error(error: MergeLedgerCommitError) -> StateRestoreError {
     match error {
+        MergeLedgerCommitError::ExecutionDeferred(reason) => {
+            StateRestoreError::ExecutionDeferred(reason)
+        }
+        MergeLedgerCommitError::VmInitialization(reason) => {
+            StateRestoreError::VmInitialization(reason)
+        }
         MergeLedgerCommitError::StateStorageAdmission(error) => {
             StateRestoreError::Admission(StateAdmissionError::Storage(error))
         }
@@ -166,7 +181,7 @@ impl<'a> SnapshotJsonField<'a> {
                 message: error.to_string(),
             }
             .into(),
-            admission @ StateRestoreError::Admission(_) => admission,
+            local => local,
         })
     }
     fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
@@ -341,12 +356,61 @@ impl IvmSeed<'_, TriggerSet> {
 }
 pub struct KuraSeed {
     pub operation_index_budget: mv::allocation::AllocationBudget,
+    /// Original caller-owned execution pool retained by the restored State.
+    pub execution_budget: mv::allocation::AllocationBudget,
     pub kura: Arc<Kura>,
     /// Immutable configured manifest sources used before the first restored State view.
     pub lane_manifests: LaneManifestRegistryHandle,
     pub query_handle: LiveQueryStoreHandle,
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
+}
+impl From<crate::execution_attempt::ExecutionAttemptError<json::Error>> for StateRestoreError {
+    fn from(error: crate::execution_attempt::ExecutionAttemptError<json::Error>) -> Self {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                Self::Serialization(error)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                Self::ExecutionDeferred(reason)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn snapshot_format_error_for_test(error: StateRestoreError) -> json::Error {
+    match error {
+        StateRestoreError::Serialization(error) => error,
+        local => panic!("snapshot format fixture hit a local resource failure: {local}"),
+    }
+}
+#[cfg(test)]
+mod state_snapshot_decode_error_tests {
+    use super::*;
+
+    #[test]
+    fn state_owner_refusals_remain_local_and_invalid_content_remains_format() {
+        let deferred = crate::execution_attempt::ExecutionDeferred::from(
+            ivm::error::ExecutionDeferral::AllocationUnavailable,
+        );
+        assert!(matches!(
+            durable_state_restore_error(MergeLedgerCommitError::ExecutionDeferred(deferred)),
+            StateRestoreError::ExecutionDeferred(_)
+        ));
+        assert!(matches!(
+            durable_state_restore_error(MergeLedgerCommitError::BlockHashAdmission(
+                BlockHashAdmissionError::Capacity(
+                    mv::allocation::AllocationRefusal::DemandOverflow
+                )
+            )),
+            StateRestoreError::Admission(StateAdmissionError::History(_))
+        ));
+        assert!(matches!(
+            durable_state_restore_error(MergeLedgerCommitError::EmptyEntry),
+            StateRestoreError::Serialization(_)
+        ));
+    }
 }
 impl KuraSeed {
     #[cfg(test)]
@@ -415,9 +479,11 @@ impl KuraSeed {
             .collect();
         let state = build_state(
             BuildStateInputs {
+                execution_budget: self.execution_budget.clone(),
                 lane_manifests: self.lane_manifests,
-                world: World(Box::new(WorldData::try_new_with_operation_index_budget(
+                world: World(Box::new(WorldData::try_new_with_budgets(
                     self.operation_index_budget.clone(),
+                    &self.execution_budget,
                 )?)),
                 block_hashes,
                 transactions: TransactionsStorage::try_new(self.kura.transaction_history_budget())
@@ -426,8 +492,7 @@ impl KuraSeed {
                     })?,
                 commit_topology: Cell::new(Vec::new()),
                 prev_commit_topology: Cell::new(Vec::new()),
-                lane_consensus_contexts: Cell::new(LaneConsensusContextsV1::default()),
-                ivm: IVM::new(0),
+                ivm: IVM::try_new(0).map_err(StateRestoreError::VmInitialization)?,
                 canonical_runtime: Cell::new(
                     SnapshotNexusRuntime::from_nexus_with_autoscale_history(
                         &nexus,
@@ -473,19 +538,6 @@ impl KuraSeed {
     ) -> Result<Box<State>, StateRestoreError> {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, false, Some(configured_nexus))
-    }
-    /// Decode the original live State into a private replay probe. Process-local
-    /// Nexus fields, including governance modules, are not snapshot fields;
-    /// the probe needs the original configuration before rebinding active lane
-    /// manifests. Authenticated runtime owner and catalog fields still replace
-    /// their configured baseline during decoding.
-    pub(crate) fn into_state_for_replay_prevalidation(
-        self,
-        input: &str,
-        nexus: iroha_config::parameters::actual::Nexus,
-    ) -> Result<Box<State>, StateRestoreError> {
-        let map = SnapshotJsonMap::parse(input, "state")?;
-        self.into_state_from_snapshot_map(map, false, Some(nexus))
     }
     #[cfg(test)]
     fn into_state_from_json_with_recovery_mode(
@@ -589,7 +641,6 @@ impl KuraSeed {
             "sccp",
             "commit_topology",
             "prev_commit_topology",
-            "lane_consensus_contexts",
         ];
         const WITH_BOOTSTRAP: &[&str] = &[
             "chain_id",
@@ -625,7 +676,6 @@ impl KuraSeed {
             "sccp",
             "commit_topology",
             "prev_commit_topology",
-            "lane_consensus_contexts",
         ];
         let expected_order = if map.contains_key("sumeragi_v2_bootstrap") {
             WITH_BOOTSTRAP
@@ -640,14 +690,14 @@ impl KuraSeed {
         if !world_map.contains_key("contract_subject_bindings") {
             return Err((json::Error::missing_field("world.contract_subject_bindings")).into());
         }
-        let ivm_runtime = IVM::new(0);
+        let ivm_runtime = IVM::try_new(0).map_err(StateRestoreError::VmInitialization)?;
         let ivm_seed = IvmSeed {
             operation_index_budget: &self.operation_index_budget,
             operation_index_refusal,
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
-        let mut world = parse_world(world_map, &ivm_seed)?;
+        let mut world = parse_world(&self.execution_budget, world_map, &ivm_seed)?;
         world.public_lane_validators =
             take_required::<snapshot_storage::SnapshotStorage>(&mut map, "public_lane_validators")?
                 .decode(
@@ -714,7 +764,7 @@ impl KuraSeed {
             }
         })?;
         {
-            let previous_world = world.try_block_and_revert()?;
+            let previous_world = world.try_block_and_revert(&self.execution_budget)?;
             validate_public_lane_reward_reserves(&previous_world).map_err(|message| {
                 json::Error::InvalidField {
                     field: "public_lane_reward_reserves.revert".to_owned(),
@@ -730,7 +780,7 @@ impl KuraSeed {
             }
         })?;
         {
-            let previous_world = world.try_block_and_revert()?;
+            let previous_world = world.try_block_and_revert(&self.execution_budget)?;
             validate_public_lane_stake_reserves(&previous_world).map_err(|message| {
                 json::Error::InvalidField {
                     field: "public_lane_stake_reserves.revert".to_owned(),
@@ -783,10 +833,27 @@ impl KuraSeed {
                 field: "state.block_hashes".to_owned(),
                 message: "committed height does not fit u64".to_owned(),
             })?;
+        validate_sumeragi_lane_state(
+            network_id,
+            committed_height,
+            world.sumeragi_lanes.view().get(),
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "world.sumeragi_lanes.blocks".to_owned(),
+            message,
+        })?;
+        if committed_height == 0 && world.sumeragi_lanes.predecessor_view().get().is_some() {
+            return Err((json::Error::InvalidField {
+                field: "world.sumeragi_lanes.revert".to_owned(),
+                message: "height-zero lane state cannot retain predecessor undo".to_owned(),
+            })
+            .into());
+        }
         validate_replication_order_completion_anchors(&world, &block_hashes)?;
         validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes)?;
         validator_committee::validate_committed_progress(
             &world.view(),
+            &chain_id,
             network_id,
             &block_hashes,
             &self.kura,
@@ -796,9 +863,22 @@ impl KuraSeed {
             message,
         })?;
         if !block_hashes.is_empty() {
-            let previous_world = world.try_block_and_revert()?;
+            let previous_world = world.try_block_and_revert(&self.execution_budget)?;
+            // Revert the original World rather than reconstructing H-1 from the current
+            // lane policy. A no-op Cell legitimately has no undo; its original value is
+            // still the predecessor and must pass the predecessor height constraints.
+            validate_sumeragi_lane_state(
+                network_id,
+                committed_height - 1,
+                previous_world.sumeragi_lanes(),
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "world.sumeragi_lanes.revert".to_owned(),
+                message,
+            })?;
             validator_committee::validate_committed_progress(
                 &previous_world,
+                &chain_id,
                 network_id,
                 &block_hashes[..block_hashes.len() - 1],
                 &self.kura,
@@ -893,7 +973,6 @@ impl KuraSeed {
             })
             .into());
         }
-        let mut predecessor_context_policy = None;
         if let Some(previous) = runtime_predecessor.get() {
             let predecessor_len = block_hashes.hash_count().checked_sub(1).ok_or_else(|| {
                 json::Error::InvalidField {
@@ -901,12 +980,12 @@ impl KuraSeed {
                     message: "height-zero runtime cannot retain predecessor undo".to_owned(),
                 }
             })?;
-            let (mut prior_nexus, prior_incarnations, _, _, _) = nexus_from_snapshot_runtime(
+            let (mut prior_nexus, _, _, _, _) = nexus_from_snapshot_runtime(
                 previous.clone(),
                 &block_hashes[..predecessor_len],
                 replay_nexus.as_ref(),
             )?;
-            let prior_world = world.try_block_and_revert()?;
+            let prior_world = world.try_block_and_revert(&self.execution_budget)?;
             let prior_catalog = runtime_catalog_from_world(&prior_world).map_err(|error| {
                 json::Error::InvalidField {
                     field: "nexus_runtime.revert.owner_policy".to_owned(),
@@ -931,7 +1010,6 @@ impl KuraSeed {
                 })
                 .into());
             }
-            predecessor_context_policy = Some((prior_nexus, prior_incarnations));
         }
         drop(runtime_predecessor);
         let nexus_runtime_restored_from_snapshot = true;
@@ -941,15 +1019,6 @@ impl KuraSeed {
             .decode_transactions(self.kura.transaction_history_budget())?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
-        let lane_consensus_contexts: Cell<LaneConsensusContextsV1> =
-            take_required(&mut map, "lane_consensus_contexts")?;
-        if committed_height == 0 && lane_consensus_contexts.predecessor_view().get().is_some() {
-            return Err((json::Error::InvalidField {
-                field: "lane_consensus_contexts.revert".to_owned(),
-                message: "height-zero contexts cannot retain predecessor undo".to_owned(),
-            })
-            .into());
-        }
         if let Some(qualification) = world.privacy_exact12_qualification.view().get() {
             crate::privacy_state::validate_privacy_exact12_qualification_registration_v1(
                 qualification,
@@ -985,40 +1054,9 @@ impl KuraSeed {
                 field: "state.world.numeric_ledgers".to_owned(),
                 message,
             })?;
-        lane_consensus_state::validate_committed_lane_consensus_contexts(
-            lane_consensus_contexts.view().get(),
-            &world.view(),
-            &restored_nexus,
-            &lane_incarnations,
-            network_id,
-            committed_height,
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "lane_consensus_contexts".to_owned(),
-            message,
-        })?;
-        if let Some((prior_nexus, prior_incarnations)) = predecessor_context_policy {
-            let current_contexts = lane_consensus_contexts.view();
-            let predecessor = lane_consensus_contexts.predecessor_view();
-            // A no-op Cell publication legitimately has no undo. Its current
-            // record must then be valid at H-1 as well; never invent old contexts.
-            let prior_contexts = predecessor.get().as_ref().unwrap_or(current_contexts.get());
-            let prior_world = world.try_block_and_revert()?;
-            lane_consensus_state::validate_committed_lane_consensus_contexts(
-                prior_contexts,
-                &prior_world,
-                &prior_nexus,
-                &prior_incarnations,
-                network_id,
-                committed_height - 1,
-            )
-            .map_err(|message| json::Error::InvalidField {
-                field: "lane_consensus_contexts.revert".to_owned(),
-                message,
-            })?;
-        }
         let state = build_state(
             BuildStateInputs {
+                execution_budget: self.execution_budget,
                 lane_manifests: self.lane_manifests,
                 world,
                 block_hashes: BlockHashes::try_new(
@@ -1031,7 +1069,6 @@ impl KuraSeed {
                 transactions,
                 commit_topology,
                 prev_commit_topology,
-                lane_consensus_contexts,
                 ivm: ivm_runtime,
                 canonical_runtime,
                 nexus: restored_nexus,
@@ -1636,6 +1673,27 @@ fn take_musubi_domain_ownership_generations(
     }
     Ok(generations)
 }
+fn take_musubi_pin_outbox_high_waters(
+    map: &mut SnapshotJsonMap<'_>,
+) -> Result<Storage<AccountId, MusubiPinOutboxHighWaterV1>, json::Error> {
+    let records: Storage<AccountId, MusubiPinOutboxHighWaterV1> =
+        take_required(map, "musubi_pin_outbox_high_waters")?;
+    for (authority, record) in records.view().iter() {
+        record
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "musubi_pin_outbox_high_waters".to_owned(),
+                message: error.to_string(),
+            })?;
+        if authority != &record.pin_authority {
+            return Err(json::Error::InvalidField {
+                field: "musubi_pin_outbox_high_waters".to_owned(),
+                message: "pin-outbox high-water key differs from its signer".to_owned(),
+            });
+        }
+    }
+    Ok(records)
+}
 fn take_musubi_registry_policy(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Cell<MusubiRegistryPolicyV1>, json::Error> {
@@ -1670,8 +1728,46 @@ fn take_musubi_resolver_index_checkpoints(
 }
 fn take_musubi_replication_shortfall_releases(
     map: &mut SnapshotJsonMap<'_>,
-) -> Result<Cell<u64>, json::Error> {
-    take_required(map, "musubi_replication_shortfall_releases")
+    execution_budget: &mv::allocation::AllocationBudget,
+) -> Result<Cell<u64, mv::allocation::AllocationCharge>, StateRestoreError> {
+    // Reserve every concrete outer allocation before decoding either scalar.
+    // Refusal leaves the original encoded field available for exact retry.
+    let initial = mv::cell::CellInitialization::<u64>::try_reserve(execution_budget)
+        .map_err(super::scalar_cell_custody::admission_error)?;
+    let field = map
+        .remove("musubi_replication_shortfall_releases")
+        .ok_or_else(|| json::Error::missing_field("musubi_replication_shortfall_releases"))?;
+    let decoded = match field {
+        SnapshotJsonField::Borrowed { raw } => super::scalar_cell_custody::decode_snapshot(raw),
+        #[cfg(test)]
+        SnapshotJsonField::Owned(json::Value::Object(mut fields)) => {
+            // Owned fixture maps have no source ordering. Render just their
+            // two exact values through the same production decoder.
+            let revert = fields
+                .remove("revert")
+                .ok_or_else(|| json::Error::missing_field("revert"))?;
+            let blocks = fields
+                .remove("blocks")
+                .ok_or_else(|| json::Error::missing_field("blocks"))?;
+            if !fields.is_empty() {
+                return Err(json::Error::Message("unexpected scalar snapshot field".into()).into());
+            }
+            super::scalar_cell_custody::decode_snapshot(&format!(
+                "{{\"revert\":{},\"blocks\":{}}}",
+                json::to_json(&revert)?,
+                json::to_json(&blocks)?,
+            ))
+        }
+        #[cfg(test)]
+        SnapshotJsonField::Owned(_) => Err(json::Error::Message(
+            "scalar snapshot must be an object".into(),
+        )),
+    };
+    let (blocks, revert) = decoded.map_err(|error| json::Error::InvalidField {
+        field: "musubi_replication_shortfall_releases".into(),
+        message: error.to_string(),
+    })?;
+    Ok(initial.initialize(blocks, revert))
 }
 fn validate_provider_ingest_completion_authorities(
     provider_owners: &Storage<ProviderId, AccountId>,

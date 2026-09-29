@@ -70,18 +70,6 @@ where
 pub(crate) fn verifying_key_to_processed_bytes(vk: &VerifyingKey) -> Vec<u8> {
     vk.to_bytes(SerdeFormat::Processed)
 }
-/// Return the standard processed proving-key serialization.
-pub(crate) fn proving_key_to_processed_bytes(pk: &ProvingKey) -> Vec<u8> {
-    pk.to_bytes(SerdeFormat::Processed)
-}
-/// Return the processed verifying-key serialization embedded in a proving key.
-pub(crate) fn proving_key_vk_to_processed_bytes(pk: &ProvingKey) -> Vec<u8> {
-    verifying_key_to_processed_bytes(pk.get_vk())
-}
-/// Return the proving-key domain exponent.
-pub(crate) fn proving_key_domain_k(pk: &ProvingKey) -> u32 {
-    pk.get_vk().get_domain().k()
-}
 /// Canonical constraint-system failure used by cache adapters.
 pub(crate) fn constraint_system_failure() -> Error {
     PlonkError::ConstraintSystemFailure
@@ -100,22 +88,6 @@ where
     #[cfg(not(feature = "circuit-params"))]
     {
         VerifyingKey::read::<_, C>(reader, SerdeFormat::Processed)
-    }
-}
-/// Read a processed Pasta proving key, respecting the optional circuit-params API.
-pub(crate) fn read_proving_key<C, R>(reader: &mut R) -> io::Result<ProvingKey>
-where
-    R: io::Read,
-    C: Circuit<Scalar>,
-    C::Params: Default,
-{
-    #[cfg(feature = "circuit-params")]
-    {
-        ProvingKey::read::<_, C>(reader, SerdeFormat::Processed, C::Params::default())
-    }
-    #[cfg(not(feature = "circuit-params"))]
-    {
-        ProvingKey::read::<_, C>(reader, SerdeFormat::Processed)
     }
 }
 /// Assign advice through the canonical vendored Halo2 API shape.

@@ -35,12 +35,10 @@ fn saturate_input(vm: &mut IVM) {
     let filler = make_tlv(PointerType::Blob, b"");
     while vm.alloc_input_tlv(&filler).is_ok() {}
 }
-fn bytes_state_program(number: u32, name: &str) -> Vec<u8> {
-    common::assemble_bytes_state_contract_syscalls(
-        &[u8::try_from(number).expect("state syscall fits compact encoding")],
-        &[name],
-    )
+fn bytes_state_program(name: &str) -> Vec<u8> {
+    common::assemble_bytes_state_schema_contract(&[name])
 }
+
 #[test]
 fn wsv_host_state_set_get_del_roundtrip() {
     let wsv = MockWorldStateView::new();
@@ -49,8 +47,7 @@ fn wsv_host_state_set_get_del_roundtrip() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller.clone());
-    vm.set_host(host);
+    let mut host = WsvHost::new_with_subject(wsv, caller.clone());
     let path_tlv = state_path_tlv("bar");
     let expected = vec![9u8, 8, 7];
     let val1 = common::encode_bytes_state_value(&expected);
@@ -58,16 +55,18 @@ fn wsv_host_state_set_get_del_roundtrip() {
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val1 = vm.alloc_input_tlv(&val1_tlv).expect("alloc val");
     // SET
-    let set_prog = bytes_state_program(syscalls::SYSCALL_STATE_SET, "bar");
+    let set_prog = bytes_state_program("bar");
     vm.set_register(10, p_path);
     vm.set_register(11, p_val1);
     vm.load_program(&set_prog).expect("load set");
-    vm.run().expect("state set");
+    host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm)
+        .expect("state set");
     // GET
-    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "bar");
+    let get_prog = bytes_state_program("bar");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
-    vm.run().expect("state get");
+    host.syscall(syscalls::SYSCALL_STATE_GET, &mut vm)
+        .expect("state get");
     let p_out = vm.register(10);
     assert!(p_out >= Memory::INPUT_START);
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
@@ -75,14 +74,16 @@ fn wsv_host_state_set_get_del_roundtrip() {
     assert_eq!(tlv.payload, &val1[..]);
     assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
     // DEL
-    let del_prog = bytes_state_program(syscalls::SYSCALL_STATE_DEL, "bar");
+    let del_prog = bytes_state_program("bar");
     vm.set_register(10, p_path);
     vm.load_program(&del_prog).expect("load del");
-    vm.run().expect("state del");
+    host.syscall(syscalls::SYSCALL_STATE_DEL, &mut vm)
+        .expect("state del");
     // GET -> 0
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get again");
-    vm.run().expect("state get again");
+    host.syscall(syscalls::SYSCALL_STATE_GET, &mut vm)
+        .expect("state get again");
     assert_eq!(vm.register(10), 0);
 }
 #[test]
@@ -132,14 +133,14 @@ fn wsv_host_state_get_returns_canonical_record_in_input_when_space_is_available(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller);
-    vm.set_host(host);
+    let mut host = WsvHost::new_with_subject(wsv, caller);
     let path_tlv = state_path_tlv("inline_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "inline_value");
+    let get_prog = bytes_state_program("inline_value");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
-    vm.run().expect("state get");
+    host.syscall(syscalls::SYSCALL_STATE_GET, &mut vm)
+        .expect("state get");
     let p_out = vm.register(10);
     assert!(
         (Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&p_out),
@@ -161,24 +162,25 @@ fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller);
-    vm.set_host(host);
+    let mut host = WsvHost::new_with_subject(wsv, caller);
     let path_tlv = state_path_tlv("spill");
     let expected = vec![0xCD; 64];
     let stored = common::encode_bytes_state_value(&expected);
     let val_tlv = make_tlv(PointerType::NoritoBytes, &stored);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val = vm.alloc_input_tlv(&val_tlv).expect("alloc value");
-    let set_prog = bytes_state_program(syscalls::SYSCALL_STATE_SET, "spill");
+    let set_prog = bytes_state_program("spill");
     vm.set_register(10, p_path);
     vm.set_register(11, p_val);
     vm.load_program(&set_prog).expect("load set");
-    vm.run().expect("state set");
+    host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm)
+        .expect("state set");
     saturate_input(&mut vm);
-    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "spill");
+    let get_prog = bytes_state_program("spill");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
-    vm.run().expect("state get");
+    host.syscall(syscalls::SYSCALL_STATE_GET, &mut vm)
+        .expect("state get");
     let p_out = vm.register(10);
     assert!(
         (Memory::HEAP_START..Memory::INPUT_START).contains(&p_out),
@@ -201,15 +203,15 @@ fn wsv_host_state_get_spills_canonical_record_when_input_bump_is_full() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller);
-    vm.set_host(host);
+    let mut host = WsvHost::new_with_subject(wsv, caller);
     let path_tlv = state_path_tlv("spilled_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     saturate_input(&mut vm);
-    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "spilled_value");
+    let get_prog = bytes_state_program("spilled_value");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
-    vm.run().expect("state get");
+    host.syscall(syscalls::SYSCALL_STATE_GET, &mut vm)
+        .expect("state get");
     let p_out = vm.register(10);
     assert!(
         (Memory::HEAP_START..Memory::INPUT_START).contains(&p_out),

@@ -30,7 +30,7 @@ use sorafs_manifest::signer::{
 };
 
 use super::{
-    OperationHeadV1, OperationRecordV1, authenticate_stream_token_history_to_floor_v1,
+    OperationHeadV1, OperationRecordV1,
     eligibility::{authorized, check_live_custody, checked_phase},
     read_head, read_slot,
 };
@@ -38,8 +38,8 @@ use crate::{
     query::{
         signer_check::{
             BoundNativeCheckV1, NativeCheckErrorV1, NativeCheckFloorV1, NativeCheckRoundV1,
-            NativeCustodyCheckPurposeV1, NativeCustodyCheckRefV1, authenticate_applied_check_v1,
-            bind_signed_check_v1, validate_native_signatory_v1,
+            NativeCustodyCheckPurposeV1, NativeCustodyCheckRefV1, bind_signed_check_v1,
+            validate_native_signatory_v1,
         },
         stream_token_custody::{read_active, read_stream_token_custody_control_at_v1},
     },
@@ -488,6 +488,8 @@ impl PendingStreamTokenCheckV1 {
     /// Both UTC endpoints are sampled only after the bounded historical proof; neither sampling
     /// nor a later phase resets the original monotonic lifetime. Complete phases prove the actual
     /// signed Reserve and Complete entries and successful outputs from this node's Kura history.
+    /// All operation, floor, Check and applied-tip targets share one monotonically ordered
+    /// certified walk over the same immutable view; equal heights retain every target check.
     ///
     /// # Errors
     /// Consumes the pending attempt on any unavailable application/finality/history, current
@@ -497,35 +499,10 @@ impl PendingStreamTokenCheckV1 {
         sample_time: impl FnOnce() -> Result<StreamTokenEligibilityTimeIntervalV1, Error>,
     ) -> Result<VerifiedStreamTokenCheckV1, Error> {
         let prepared = self.prepared;
-        let cut = authenticate_applied_check_v1(
-            &prepared.state,
-            NativeCustodyCheckPurposeV1::StreamToken,
-            self.bound,
-            &prepared.round,
-        )?;
+        prepared.round.ensure_live()?;
+        let view = prepared.state.view();
+        let cut = lineage::authenticate(&view, &prepared, self.bound)?;
         let view = cut.view();
-        if !matches!(prepared.expected.phase, Phase::Current(_)) {
-            let history = authenticate_stream_token_history_to_floor_v1(
-                view,
-                prepared.instruction.request.provider_id,
-                prepared.expected.reviewed.request.operation_id,
-                prepared.expected.floor,
-            )
-            .map_err(|_| Error::Execution)?;
-            let claimed = match &prepared.expected.phase {
-                Phase::BeforeProvider(row)
-                | Phase::AfterProvider(row)
-                | Phase::BeforeCommit(row)
-                | Phase::AfterCommit(row)
-                | Phase::BeforeRelease(row) => row,
-                Phase::Current(_) => return Err(Error::Invalid),
-            };
-            if &history.current().operation != claimed
-                || history.reserved().operation.operation.reviewed != prepared.expected.reviewed
-            {
-                return Err(Error::Execution);
-            }
-        }
         prepared.round.ensure_live()?;
         let time = sample_time().map_err(|_| Error::Clock)?;
         if time.earliest_unix_ms == 0
@@ -612,6 +589,8 @@ impl VerifiedStreamTokenCheckV1 {
         self.time
     }
 }
+
+mod lineage;
 
 #[cfg(test)]
 mod tests;

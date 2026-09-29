@@ -2001,7 +2001,7 @@ fn interface_type(transcript: &mut Vec<u8>, ty: &Type) {
         Type::Bytes => transcript.push(5),
         Type::DataSpaceId => transcript.push(6),
         Type::AxtDescriptor => transcript.push(7),
-        Type::AssetHandle => transcript.push(8),
+        Type::AxtAnchoredSpendV1 => transcript.push(30),
         Type::ProofBlob => transcript.push(9),
         Type::SoracloudRequest => transcript.push(10),
         Type::SoracloudResponse => transcript.push(11),
@@ -2797,7 +2797,7 @@ fn qualify_type(ty: &mut Type, local_structs: &HashSet<String>, prefix: &str) {
         | Type::Bytes
         | Type::DataSpaceId
         | Type::AxtDescriptor
-        | Type::AssetHandle
+        | Type::AxtAnchoredSpendV1
         | Type::ProofBlob
         | Type::SoracloudRequest
         | Type::SoracloudResponse

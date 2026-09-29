@@ -14,6 +14,12 @@ pub enum TryReadError {
     Serialization(#[source] norito::json::Error),
     /// Local State history allocation refused restore; this is not evidence of snapshot corruption: {0}
     StateAdmission(#[source] crate::state::StateAdmissionError),
+    /// The local State VM image could not be constructed during snapshot restore
+    StateVmInitialization(#[source] ivm::VMError),
+    /// Local State execution resources were unavailable during snapshot restore
+    StateExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
+    /// Local original-pool admission of the restored native schedule failed: {0}
+    StateNativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
     /// Signed snapshot payload is not the single canonical first-release JSON encoding
     NonCanonicalSnapshotPayload,
     /// Snapshot exceeds a configured typed decode or transient resource boundary: {0}
@@ -141,6 +147,15 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
             crate::state::deserialize::StateRestoreError::Admission(error) => {
                 Self::StateAdmission(error)
             }
+            crate::state::deserialize::StateRestoreError::VmInitialization(error) => {
+                Self::StateVmInitialization(error)
+            }
+            crate::state::deserialize::StateRestoreError::ExecutionDeferred(error) => {
+                Self::StateExecutionDeferred(error)
+            }
+            crate::state::deserialize::StateRestoreError::NativeSchedule(error) => {
+                Self::StateNativeSchedule(error)
+            }
         }
     }
 }
@@ -207,4 +222,43 @@ pub(super) enum TryWriteError {
         /// Missing publication step that a later snapshot interval must retry.
         reason: String,
     },
+}
+
+#[cfg(test)]
+mod native_schedule_tests {
+    use super::*;
+
+    #[test]
+    fn restore_schedule_refusal_keeps_original_typed_local_error() {
+        use crate::{state::deserialize::StateRestoreError, sumeragi::schedule::ScheduleError};
+        let budget = mv::allocation::AllocationBudget::new(64);
+        let occupied = budget.try_reserve_bytes(64).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        let converted = TryReadError::from(StateRestoreError::NativeSchedule(
+            ScheduleError::Admission(refusal),
+        ));
+        assert!(matches!(
+            converted,
+            TryReadError::StateNativeSchedule(ScheduleError::Admission(
+                mv::allocation::AllocationRefusal::Capacity { .. }
+            ))
+        ));
+        assert_eq!(
+            budget.reserved_bytes(),
+            64,
+            "conversion cannot replace or refund the source owner"
+        );
+        drop(occupied);
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::NativeSchedule(
+                ScheduleError::Allocator {
+                    requested_bytes: 128
+                }
+            )),
+            TryReadError::StateNativeSchedule(ScheduleError::Allocator {
+                requested_bytes: 128
+            })
+        ));
+    }
 }

@@ -39,7 +39,7 @@ use iroha_torii_shared::status::{
     GovernanceProposalCounters, GovernanceProtectedNamespaceCounters, GovernanceStatus,
     Halo2Status, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
 };
-use iroha_torii_shared::{NORITO_V1_WEBSOCKET_SUBPROTOCOL, uri as torii_uri};
+use iroha_torii_shared::{NORITO_V1_WEBSOCKET_SUBPROTOCOL, route_catalog as torii_routes};
 use norito::json::{self, Value};
 use parking_lot::Mutex;
 use std::{fs, net::SocketAddr, num::NonZeroU64, path::Path, sync::Arc, time::Duration};
@@ -467,12 +467,24 @@ impl MockTorii {
             .route("/status", get(handle_status))
             .route("/v1/sumeragi/status", get(handle_sumeragi_status))
             .route("/v1/sumeragi/diagnostics", get(handle_sumeragi_diagnostics))
-            .route(torii_uri::CONFIGURATION, get(handle_configuration))
+            .route(
+                torii_routes::core::CONFIGURATION_GET.path(),
+                get(handle_configuration),
+            )
             .route("/metrics", get(handle_metrics))
-            .route(torii_uri::TRANSACTION, post(handle_transaction))
-            .route(torii_uri::QUERY, post(handle_query))
-            .route(torii_uri::BLOCKS_STREAM, get(handle_block_stream))
-            .route(torii_uri::SUBSCRIPTION, get(handle_event_stream))
+            .route(
+                torii_routes::pipeline::TRANSACTION.path(),
+                post(handle_transaction),
+            )
+            .route(torii_routes::pipeline::QUERY.path(), post(handle_query))
+            .route(
+                torii_routes::streaming::BLOCKS_WS.path(),
+                get(handle_block_stream),
+            )
+            .route(
+                torii_routes::streaming::SUBSCRIPTION_WS.path(),
+                get(handle_event_stream),
+            )
             .with_state(state.clone());
         let server =
             axum::serve(listener, router.into_make_service()).with_graceful_shutdown(async move {

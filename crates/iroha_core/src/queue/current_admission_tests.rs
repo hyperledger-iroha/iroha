@@ -276,7 +276,7 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
     // Current proposal building peeks; neither an idle route nor rebuilding a
     // proposal may divide this input's gas budget or take away its durable owner.
     for _ in 0..2 {
-        let selected = crate::sumeragi::payload::select(&state, &queue, max_bytes);
+        let selected = crate::sumeragi::payload::select(&state, &queue, max_bytes, 0);
         assert_eq!(
             selected.len(),
             1,
@@ -386,7 +386,7 @@ fn current_ordinary_fifo_survives_committed_height_and_replay_on_consensus_stack
         assert_eq!(queue.fifo_snapshot_for_test(), hashes);
         assert_eq!((queue.active_len(), queue.queued_len()), (2, 2));
         for _ in 0..2 {
-            let selected = crate::sumeragi::payload::select(&state, queue, 1024 * 1024);
+            let selected = crate::sumeragi::payload::select(&state, queue, 1024 * 1024, 0);
             assert_eq!(selected.len(), 2);
             assert_eq!(
                 selected

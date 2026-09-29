@@ -294,7 +294,7 @@ impl Core {
     fn broadcast_status(&mut self) {
         self.last_status = Some(self.now);
         let mut to = self.members_except_me();
-        if let Some(next) = self.configs.get(&self.height.saturating_add(1)) {
+        if let Some(next) = self.config(&self.height.saturating_add(1)) {
             for key in next.committee.members() {
                 if !to.contains(key) && !self.is_local_key(key) {
                     to.push(key.clone());
@@ -308,11 +308,7 @@ impl Core {
     /// The probe deadline (§6.11): every `rebroadcast_interval` while some key is unanchored and
     /// `C_{tip.height+2}` is known.
     fn probe_deadline(&self) -> Option<Millis> {
-        if !self.any_unanchored()
-            || !self
-                .configs
-                .contains_key(&self.tip.height.saturating_add(2))
-        {
+        if !self.any_unanchored() || self.config(&self.tip.height.saturating_add(2)).is_none() {
             return None;
         }
         Some(
@@ -325,7 +321,7 @@ impl Core {
     /// `C_{tip.height+2}` other than this node.
     fn probe_tick(&mut self) {
         self.last_probe = self.now;
-        let Some(next) = self.configs.get(&self.tip.height.saturating_add(2)) else {
+        let Some(next) = self.config(&self.tip.height.saturating_add(2)) else {
             return;
         };
         let to: Vec<PublicKey> = next

@@ -25,8 +25,8 @@ def test_checked_in_compile_time_assets_and_preimages_are_exact() -> None:
     assert counts == MODULE.AuditCounts(
         manifests=11,
         assets=82,
-        bytes=269_821,
-        source_preimages=90,
+        bytes=286_090,
+        source_preimages=89,
     )
 
 

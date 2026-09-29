@@ -1,58 +1,28 @@
-//! Exact ordinary or constructor-owned native inputs for the common producer.
-//!
-//! Native execution consumes a preflight capability; it never fabricates a
-//! signed block to reuse the economic executor.
+//! Borrowed original signed global inputs for the sole economic output producer.
 
 use super::*;
-use crate::state::lane_decision_execution::NativeLaneAfterStartV1;
 use iroha_data_model::block::{BlockHeader, execution_output::ExecutionInputs};
 
-pub(super) enum ExecutionSource<'source> {
-    Ordinary(&'source SignedBlock),
-    Native {
-        header: BlockHeader,
-        groups: &'source [crate::state::VerifiedLaneDecisionGroupV1],
-    },
-}
+pub(super) struct ExecutionSource<'source>(pub(super) &'source SignedBlock);
 
 impl<'source> ExecutionSource<'source> {
-    pub(super) fn native(preflight: NativeLaneAfterStartV1<'source>) -> Self {
-        let (header, groups) = preflight.into_source();
-        Self::Native { header, groups }
-    }
-
     pub(super) fn header(&self) -> BlockHeader {
-        match self {
-            Self::Ordinary(block) => block.header(),
-            Self::Native { header, .. } => header.clone(),
-        }
+        self.0.header()
     }
 
     pub(super) fn hash(&self) -> HashOf<BlockHeader> {
         self.header().hash()
     }
 
-    pub(super) fn is_native(&self) -> bool {
-        matches!(self, Self::Native { .. })
-    }
-
     pub(super) fn network_entrypoint_count(&self) -> usize {
-        match self {
-            Self::Ordinary(block) => block.network_entrypoint_count(),
-            Self::Native { groups, .. } => groups.len(),
-        }
+        self.0.network_entrypoint_count()
     }
 
     pub(super) fn network_entrypoint_at(
         &self,
         index: usize,
     ) -> Option<&'source TransactionEntrypoint> {
-        match self {
-            Self::Ordinary(block) => block.network_entrypoint_at(index),
-            Self::Native { groups, .. } => groups
-                .get(index)
-                .map(|group| &group.body().payload().input.entrypoint),
-        }
+        self.0.network_entrypoint_at(index)
     }
 
     pub(super) fn network_entrypoints(

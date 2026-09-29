@@ -2,6 +2,7 @@
 
 use super::*;
 use color_eyre::eyre::ensure;
+use iroha_core::sumeragi::native_journal::{NativeJournalCursor, authenticate_signed_genesis};
 use iroha_core::{
     beacon::{
         AdaptiveGlobalThresholdBeaconDkgCryptoV1, GlobalThresholdBeaconDkgSnapshotV1,
@@ -14,9 +15,8 @@ use iroha_core::{
 };
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::HeightContextId,
     consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1},
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
+    sumeragi::finality::{NativeFinalityJournal, NativeFinalityLimits},
 };
 use norito::derive::JsonSerialize;
 use std::{
@@ -35,20 +35,19 @@ const KEY_FD: i32 = 198;
 const PUBLIC_FD: i32 = 201;
 const FINALITY_FD: i32 = 202;
 const MAX_PUBLIC_FRAME_BYTES: usize = 32 * 1024 * 1024;
-const MAX_FINALITY_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const GLOBAL_BEACON_CREDENTIAL_FILE: &str = "iroha-global-beacon-partial-signer-v1.norito";
 
 /// Independently anchored arguments to the native per-seat rotation command.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DisposableRotationProofInput {
     /// Signed-genesis network identity.
     pub network_id: NetworkId,
-    /// Trusted context identifier pinned before the committee status query.
-    pub trusted_context_id: CryptoHash,
-    /// Positive first height of the contiguous proof chain.
-    pub anchor_height: u64,
+    /// Independently configured chain instance, never inferred from returned proof bytes.
+    pub chain_id: ChainId,
+    /// Explicit finite source and cumulative decoded-allocation limits.
+    pub finality_limits: NativeFinalityLimits,
     /// Exact scheduling epoch of the frozen target.
     pub target_epoch: u64,
     /// Exact frozen transition, independently selected by the operator.
@@ -60,10 +59,8 @@ pub struct DisposableRotationProofInput {
 pub struct DisposablePendingCustodyInput {
     /// Signed-genesis network identity.
     pub network_id: NetworkId,
-    /// Trusted context identifier pinned before the committee status query.
-    pub trusted_context_id: CryptoHash,
-    /// First height of the contiguous authenticated proof chain.
-    pub anchor_height: u64,
+    /// Explicit finite source and cumulative decoded-allocation limits.
+    pub finality_limits: NativeFinalityLimits,
     /// Exact target scheduling epoch.
     pub target_epoch: u64,
     /// Exact immutable frozen attempt.
@@ -190,11 +187,9 @@ fn attempt_child_name(session: &GlobalThresholdBeaconDkgSessionV1, signer_index:
 
 fn provider_handle(peer: &PeerId) -> String {
     use fmt::Write as _;
-    let identity: [u8; 32] = CryptoHash::new_from_chunks(&[
-        b"sumeragi-v2:disposable-beacon-provider:v1",
-        &peer.encode(),
-    ])
-    .into();
+    let identity: [u8; 32] =
+        CryptoHash::new_from_chunks(&[b"iroha:disposable-beacon-provider:v1", &peer.encode()])
+            .into();
     let mut handle = String::from("software://iroha/global-beacon/disposable-validator-");
     for byte in identity {
         write!(handle, "{byte:02x}").expect("writing into a String cannot fail");
@@ -203,13 +198,96 @@ fn provider_handle(peer: &PeerId) -> String {
 }
 
 fn verify_input(
-    _seats: &[&NetworkPeer],
-    _authorizing_seats: &[&NetworkPeer],
-    _evidence: &ValidatorCommitteeSelectionEvidenceV1,
-    _input: DisposableRotationProofInput,
-) -> Result<(GlobalThresholdBeaconDkgSessionV1, SumeragiFinalityVerifier)> {
-    Err(eyre!(
-        "rotation requires current authenticated committee state evidence, which is unavailable"
+    seats: &[&NetworkPeer],
+    authorizing_seats: &[&NetworkPeer],
+    evidence: &ValidatorCommitteeSelectionEvidenceV1,
+    input: &DisposableRotationProofInput,
+) -> Result<(GlobalThresholdBeaconDkgSessionV1, NativeJournalCursor)> {
+    let mut verifier = NativeJournalCursor::new(
+        input.chain_id.clone(),
+        input.network_id,
+        input.finality_limits,
+    )
+    .map_err(|error| eyre!(error))?;
+    let selected = verify_validator_committee_selection_evidence_v1(
+        evidence,
+        &input.chain_id,
+        input.network_id,
+        input.target_epoch,
+        input.transition_id.into(),
+        input.finality_limits,
+        verifier.attestations(),
+    )
+    .map_err(|error| eyre!("rotation selection evidence is invalid: {error}"))?;
+    let preparation = selected.preparation();
+    let incumbent = selected
+        .incumbent_authority()
+        .validators
+        .iter()
+        .map(|keys| keys.validator.clone())
+        .collect::<Vec<_>>();
+    ensure!(
+        authorizing_seats.len() == incumbent.len()
+            && authorizing_seats
+                .iter()
+                .zip(&incumbent)
+                .all(|(seat, peer)| seat.id() == *peer),
+        "rotation signers must match the complete exact incumbent roster in order"
+    );
+    let roster = preparation
+        .committee
+        .iter()
+        .map(|seat| seat.validator.clone())
+        .collect::<Vec<_>>();
+    ensure!(
+        roster.len() == seats.len()
+            && seats
+                .iter()
+                .zip(&roster)
+                .all(|(seat, peer)| seat.id() == *peer)
+            && roster.len() >= 4
+            && (roster.len() - 1) % 3 == 0,
+        "rotation processes must match every exact frozen 3f+1 seat in order"
+    );
+    let observed = selected.observed_height();
+    let commitments_end_height = observed
+        .checked_add(1)
+        .ok_or_else(|| eyre!("height overflow"))?;
+    let deliveries_end_height = observed
+        .checked_add(2)
+        .ok_or_else(|| eyre!("height overflow"))?;
+    let acceptances_end_height = observed
+        .checked_add(3)
+        .ok_or_else(|| eyre!("height overflow"))?;
+    let cutoff = preparation
+        .first_height
+        .checked_sub(1)
+        .ok_or_else(|| eyre!("invalid cutoff"))?;
+    ensure!(
+        acceptances_end_height < cutoff,
+        "rotation DKG misses the preparation cutoff"
+    );
+    verifier
+        .advance(&evidence.finality_journal)
+        .map_err(|error| eyre!(error))?;
+    Ok((
+        GlobalThresholdBeaconDkgSessionV1 {
+            version: 1,
+            network_id: input.network_id,
+            session_id: preparation
+                .beacon_session_id()
+                .map_err(|error| eyre!(error))?,
+            attempt_id: preparation.transition_id().map_err(|error| eyre!(error))?,
+            authority_generation: preparation.authority_generation,
+            roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
+            committee_size: u16::try_from(roster.len())?,
+            threshold: u16::try_from((roster.len() - 1) / 3 + 1)?,
+            start_height: observed,
+            commitments_end_height,
+            deliveries_end_height,
+            acceptances_end_height,
+        },
+        verifier,
     ))
 }
 
@@ -235,10 +313,82 @@ fn broadcast_public<T: norito::NoritoSerialize>(
     Ok(())
 }
 
-fn broadcast_finality(seats: &mut [SeatProcess], proof: &SumeragiFinalityProof) -> Result<()> {
-    let bytes = norito::encode_canonical(proof)?;
+fn finality_limit_args(limits: NativeFinalityLimits) -> Vec<String> {
+    vec![
+        "--finality-block-bytes".into(),
+        limits.block_bytes.to_string(),
+        "--finality-journal-bytes".into(),
+        limits.journal_bytes.to_string(),
+        "--finality-block-count".into(),
+        limits.block_count.to_string(),
+        "--finality-allocated-bytes".into(),
+        limits.allocated_bytes.to_string(),
+    ]
+}
+
+/// The cursor authenticates real source heights before a public phase advances.
+fn advance_native_phase(
+    cursor: &mut NativeJournalCursor,
+    journal: &NativeFinalityJournal,
+    height: u64,
+) -> Result<()> {
+    ensure!(
+        u64::try_from(journal.blocks.len())? == height,
+        "native phase source count differs from requested height"
+    );
+    ensure!(
+        cursor
+            .tip()
+            .map(|tip| tip.height())
+            .unwrap_or(1)
+            .checked_add(1)
+            == Some(height),
+        "native phase is not consecutive"
+    );
+    ensure!(
+        cursor
+            .advance(journal)
+            .map_err(|error| eyre!(error))?
+            .height()
+            == height,
+        "native phase source differs from requested height"
+    );
+    Ok(())
+}
+
+fn encode_phase_journal(
+    journal: &NativeFinalityJournal,
+    limits: NativeFinalityLimits,
+) -> Result<Vec<u8>> {
+    journal
+        .validate_source(limits)
+        .map_err(|error| eyre!(error))?;
+    let count = {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::core::encoded_payload_len(journal)?
+            .checked_add(norito::core::Header::SIZE)
+            .ok_or_else(|| eyre!("native phase archive size overflow"))?
+    };
+    ensure!(
+        count <= limits.journal_bytes,
+        "native phase archive exceeds configured transport before encoding"
+    );
+    let bytes = norito::encode_canonical(journal)?;
+    ensure!(
+        bytes.len() == count,
+        "native phase archive length changed during encoding"
+    );
+    Ok(bytes)
+}
+
+fn broadcast_finality(
+    seats: &mut [SeatProcess],
+    journal: &NativeFinalityJournal,
+    limits: NativeFinalityLimits,
+) -> Result<()> {
+    let bytes = encode_phase_journal(journal, limits)?;
     for seat in seats {
-        write_frame(&mut seat.finality_writer, &bytes, MAX_FINALITY_FRAME_BYTES)?;
+        write_frame(&mut seat.finality_writer, &bytes, limits.journal_bytes)?;
     }
     Ok(())
 }
@@ -439,7 +589,7 @@ fn spawn_seat(
     signer_index: u16,
     session: &GlobalThresholdBeaconDkgSessionV1,
     evidence_path: &Path,
-    input: DisposableRotationProofInput,
+    input: &DisposableRotationProofInput,
     provider_revision: u64,
 ) -> Result<SeatProcess> {
     let owner_root =
@@ -482,10 +632,9 @@ fn spawn_seat(
         .arg(evidence_path)
         .arg("--network-id")
         .arg(input.network_id.to_string())
-        .arg("--trusted-context-id")
-        .arg(input.trusted_context_id.to_string())
-        .arg("--anchor-height")
-        .arg(input.anchor_height.to_string())
+        .arg("--chain-id")
+        .arg(input.chain_id.to_string())
+        .args(finality_limit_args(input.finality_limits))
         .arg("--target-epoch")
         .arg(input.target_epoch.to_string())
         .arg("--transition-id")
@@ -540,12 +689,12 @@ fn spawn_seat(
 
 fn verify_genesis_input(
     network: &Network,
-    first_finality: &SumeragiFinalityProof,
+    limits: NativeFinalityLimits,
 ) -> Result<(
     NativeGenesisProvisioningBundle,
     GlobalThresholdBeaconDkgSessionV1,
     Vec<PeerId>,
-    SumeragiFinalityVerifier,
+    NativeJournalCursor,
 )> {
     ensure!(
         network.validators().len() == 4,
@@ -554,14 +703,17 @@ fn verify_genesis_input(
     let bundle = network.native_genesis_provisioning_bundle()?;
     let network_id = network.network_id();
     ensure!(
-        network_id.into_genesis_hash() == bundle.block_hash
-            && first_finality.block_header.hash() == bundle.block_hash
-            && first_finality.block_header.height().get() == 1
-            && first_finality.height() == 1,
-        "genesis DKG anchor is not the exact retained signed genesis"
+        network_id.into_genesis_hash() == bundle.block_hash,
+        "genesis DKG source is not the exact retained signed genesis"
     );
-    let genesis = network.genesis();
-    let roster = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis.0)?;
+    let (body, epoch) = authenticate_signed_genesis(&bundle.signed_wire, network_id, limits)
+        .map_err(|error| eyre!(error))?;
+    ensure!(body.hash() == bundle.block_hash, "genesis body changed");
+    let roster = epoch
+        .committee
+        .iter()
+        .map(|seat| seat.validator.clone())
+        .collect::<Vec<_>>();
     let available = network
         .validators()
         .iter()
@@ -572,19 +724,10 @@ fn verify_genesis_input(
             && available.len() == roster.len(),
         "disposable genesis DKG lacks an exact real process for each signed voter"
     );
-    let validators = iroha_core::sumeragi::schedule::genesis_validators(&genesis)?
-        .into_iter()
-        .map(|(peer, proof_of_possession)| FinalityValidator {
-            public_key: peer.public_key().clone(),
-            proof_of_possession,
-        })
-        .collect();
-    let mut verifier =
-        SumeragiFinalityVerifier::new(&genesis.0, &network.chain_id().to_string(), validators)?;
-    verifier.verify(first_finality)?;
+    let verifier = NativeJournalCursor::new(network.chain_id(), network_id, limits)
+        .map_err(|error| eyre!(error))?;
     let session = genesis_dkg_session(network_id, &roster);
-    let _ =
-        GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)?;
+    GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)?;
     Ok((bundle, session, roster, verifier))
 }
 
@@ -621,8 +764,10 @@ fn spawn_genesis_seat(
     seat: &NetworkPeer,
     signer_index: u16,
     session: &GlobalThresholdBeaconDkgSessionV1,
-    public_paths: &[PathBuf; 5],
+    public_paths: &[PathBuf; 4],
     chain_discriminant: u16,
+    chain_id: &ChainId,
+    limits: NativeFinalityLimits,
 ) -> Result<SeatProcess> {
     let owner_root =
         super::disposable_runtime_provider_broker::new_disposable_owner_private_root()?;
@@ -677,8 +822,9 @@ fn spawn_genesis_seat(
         .arg(&public_paths[2])
         .arg("--genesis-public-key")
         .arg(&public_paths[3])
-        .arg("--genesis-finality")
-        .arg(&public_paths[4])
+        .arg("--chain-id")
+        .arg(chain_id.to_string())
+        .args(finality_limit_args(limits))
         .arg("--signer-index")
         .arg(signer_index.to_string())
         .arg("--key-fd")
@@ -813,8 +959,10 @@ fn spawn_genesis_config_seat(
     seat: &DisposableGenesisConfigSeat,
     signer_index: u16,
     session: &GlobalThresholdBeaconDkgSessionV1,
-    public_paths: &[PathBuf; 5],
+    public_paths: &[PathBuf; 4],
     chain_discriminant: u16,
+    chain_id: &ChainId,
+    limits: NativeFinalityLimits,
 ) -> Result<SeatProcess> {
     let owner_root =
         super::disposable_runtime_provider_broker::new_disposable_owner_private_root()?;
@@ -868,8 +1016,9 @@ fn spawn_genesis_config_seat(
         .arg(&public_paths[2])
         .arg("--genesis-public-key")
         .arg(&public_paths[3])
-        .arg("--genesis-finality")
-        .arg(&public_paths[4])
+        .arg("--chain-id")
+        .arg(chain_id.to_string())
+        .args(finality_limit_args(limits))
         .arg("--signer-index")
         .arg(signer_index.to_string())
         .arg("--config-fd")
@@ -915,25 +1064,31 @@ fn spawn_genesis_config_seat(
     })
 }
 
-fn genesis_public_args(paths: &[PathBuf; 5], network: NetworkId, discriminant: u16) -> Vec<String> {
-    // The fixed public input order is shared with the native genesis parser.
-    [
-        "--network-id".to_owned(),
+fn genesis_public_args(
+    paths: &[PathBuf; 4],
+    network: NetworkId,
+    discriminant: u16,
+    chain_id: &ChainId,
+    limits: NativeFinalityLimits,
+) -> Vec<String> {
+    let mut args = vec![
+        "--network-id".into(),
         network.to_string(),
-        "--chain-discriminant".to_owned(),
+        "--chain-discriminant".into(),
         discriminant.to_string(),
-        "--request".to_owned(),
+        "--chain-id".into(),
+        chain_id.to_string(),
+        "--request".into(),
         paths[0].display().to_string(),
-        "--genesis-manifest".to_owned(),
+        "--genesis-manifest".into(),
         paths[1].display().to_string(),
-        "--genesis-signed".to_owned(),
+        "--genesis-signed".into(),
         paths[2].display().to_string(),
-        "--genesis-public-key".to_owned(),
+        "--genesis-public-key".into(),
         paths[3].display().to_string(),
-        "--genesis-finality".to_owned(),
-        paths[4].display().to_string(),
-    ]
-    .into()
+    ];
+    args.extend(finality_limit_args(limits));
+    args
 }
 
 async fn run_genesis_public_command(binary: &Path, arguments: &[String]) -> Result<()> {
@@ -961,6 +1116,8 @@ async fn run_genesis_public_command(binary: &Path, arguments: &[String]) -> Resu
     reason = "the disposable supervisor passes one already opened owner-private BLS descriptor to the native signer"
 )]
 async fn sign_genesis_draft(
+    chain_id: &ChainId,
+    limits: NativeFinalityLimits,
     binary: &Path,
     network: NetworkId,
     discriminant: u16,
@@ -977,6 +1134,9 @@ async fn sign_genesis_draft(
     command
         .arg("beacon-bootstrap")
         .arg("sign-genesis-install")
+        .arg("--chain-id")
+        .arg(chain_id.to_string())
+        .args(finality_limit_args(limits))
         .arg("--network-id")
         .arg(network.to_string())
         .arg("--chain-discriminant")
@@ -1096,23 +1256,25 @@ pub async fn prepare_disposable_pending_custody(
     );
     iroha_config::parameters::validate_production_runtime_handle(&input.handle)
         .map_err(|error| eyre!("invalid production beacon provider handle: {error:?}"))?;
-    let trusted = HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
-        input.trusted_context_id,
-    ));
+    let chain_id = ChainId::from(input.chain_id.as_str());
+    let cursor =
+        NativeJournalCursor::new(chain_id.clone(), input.network_id, input.finality_limits)
+            .map_err(|error| eyre!(error))?;
     let verified = verify_validator_committee_provisioning_evidence_v1(
         evidence,
+        &chain_id,
         input.network_id,
-        trusted,
-        input.anchor_height,
         input.target_epoch,
         input.transition_id.into(),
+        input.finality_limits,
+        cursor.attestations(),
     )
     .map_err(|error| eyre!("pending custody evidence is invalid: {error}"))?;
     ensure!(
         verified
             .transition()
             .preparation
-            .roster
+            .committee
             .iter()
             .any(|seat| seat.validator == input.local_validator),
         "pending custody owner is not one exact target seat"
@@ -1142,10 +1304,7 @@ pub async fn prepare_disposable_pending_custody(
         .arg(&evidence_path)
         .arg("--network-id")
         .arg(input.network_id.to_string())
-        .arg("--trusted-context-id")
-        .arg(input.trusted_context_id.to_string())
-        .arg("--anchor-height")
-        .arg(input.anchor_height.to_string())
+        .args(finality_limit_args(input.finality_limits))
         .arg("--target-epoch")
         .arg(input.target_epoch.to_string())
         .arg("--transition-id")
@@ -1199,8 +1358,8 @@ pub async fn prepare_disposable_pending_custody(
 
 /// Run four real signed-genesis dealers/recipients and assemble their install certificate.
 ///
-/// The caller supplies the independently fetched h1 anchor and a live finality
-/// source. This function requests h2, h3, and h4 only after each preceding
+/// The retained signed genesis supplies body authority; the caller supplies a live native finality
+/// source with explicit bounded admission. This function requests h2, h3, and h4 only after each preceding
 /// public phase is ready. Every seat owns its private DKG share and signing
 /// descriptor; only signed public artifacts cross the coordinator.
 ///
@@ -1210,15 +1369,15 @@ pub async fn prepare_disposable_pending_custody(
 /// private edge acceptance, failed native process, or invalid quorum assembly.
 pub async fn run_disposable_genesis_dkg<F, Fut>(
     network: &Network,
-    first_finality: &SumeragiFinalityProof,
+    limits: NativeFinalityLimits,
     certificate_height: u64,
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<SumeragiFinalityProof>>,
+    Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
-    let (bundle, session, roster, verifier) = verify_genesis_input(network, first_finality)?;
+    let (bundle, session, roster, verifier) = verify_genesis_input(network, limits)?;
     let binary = Program::IrohadTaira.resolve_async().await?;
     let ordered_seats = roster
         .iter()
@@ -1235,11 +1394,10 @@ where
         session,
         roster,
         verifier,
-        first_finality,
         certificate_height,
         next_finality,
         &binary,
-        |binary, _validator, index, session, paths, discriminant| {
+        |binary, _validator, index, session, paths, discriminant, chain_id, limits| {
             spawn_genesis_seat(
                 binary,
                 ordered_seats[usize::from(index - 1)],
@@ -1247,6 +1405,8 @@ where
                 session,
                 paths,
                 discriminant,
+                chain_id,
+                limits,
             )
         },
     )
@@ -1268,15 +1428,16 @@ where
 pub async fn run_disposable_genesis_dkg_from_configs<F, Fut>(
     bundle: NativeGenesisProvisioningBundle,
     network_id: NetworkId,
+    chain_id: &ChainId,
     seats: &[DisposableGenesisConfigSeat],
     native_binary: &Path,
-    first_finality: &SumeragiFinalityProof,
+    limits: NativeFinalityLimits,
     certificate_height: u64,
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<SumeragiFinalityProof>>,
+    Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     ensure!(
         seats.len() == 4,
@@ -1284,10 +1445,7 @@ where
     );
     ensure!(
         sha256(&bundle.manifest_json) == bundle.manifest_sha256
-            && network_id.into_genesis_hash() == bundle.block_hash
-            && first_finality.block_header.hash() == bundle.block_hash
-            && first_finality.block_header.height().get() == 1
-            && first_finality.height() == 1,
+            && network_id.into_genesis_hash() == bundle.block_hash,
         "external genesis DKG anchor differs from retained signed genesis"
     );
     let manifest: RawGenesisTransaction = norito::json::from_slice(&bundle.manifest_json)?;
@@ -1297,26 +1455,27 @@ where
         &bundle.public_key,
         bundle.block_hash,
     )?;
-    let genesis = GenesisBlock(validated.block().clone());
-    let roster = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis.0)?;
+    ensure!(
+        manifest.chain_id() == chain_id,
+        "external genesis chain differs from independent configuration"
+    );
+    let (body, epoch) = authenticate_signed_genesis(&bundle.signed_wire, network_id, limits)
+        .map_err(|error| eyre!(error))?;
+    ensure!(
+        body.hash() == validated.block().hash(),
+        "external signed body differs"
+    );
+    let roster = epoch
+        .committee
+        .iter()
+        .map(|seat| seat.validator.clone())
+        .collect::<Vec<_>>();
     ensure!(
         roster.len() == 4 && seats.iter().map(|seat| &seat.validator).eq(roster.iter()),
         "native config seats differ from exact signed-genesis voter order"
     );
-    let validators = validated
-        .validator_pops()
-        .iter()
-        .map(|(public_key, proof_of_possession)| FinalityValidator {
-            public_key: public_key.clone(),
-            proof_of_possession: proof_of_possession.clone(),
-        })
-        .collect();
-    let mut verifier = SumeragiFinalityVerifier::new(
-        validated.block(),
-        &manifest.chain_id().to_string(),
-        validators,
-    )?;
-    verifier.verify(first_finality)?;
+    let verifier = NativeJournalCursor::new(chain_id.clone(), network_id, limits)
+        .map_err(|error| eyre!(error))?;
     let session = genesis_dkg_session(network_id, &roster);
     let _ =
         GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)?;
@@ -1325,11 +1484,10 @@ where
         session,
         roster,
         verifier,
-        first_finality,
         certificate_height,
         next_finality,
         native_binary,
-        |binary, _validator, index, session, paths, discriminant| {
+        |binary, _validator, index, session, paths, discriminant, chain_id, limits| {
             spawn_genesis_config_seat(
                 binary,
                 &seats[usize::from(index - 1)],
@@ -1337,6 +1495,8 @@ where
                 session,
                 paths,
                 discriminant,
+                chain_id,
+                limits,
             )
         },
     )
@@ -1347,8 +1507,7 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
     bundle: NativeGenesisProvisioningBundle,
     session: GlobalThresholdBeaconDkgSessionV1,
     roster: Vec<PeerId>,
-    mut verifier: SumeragiFinalityVerifier,
-    first_finality: &SumeragiFinalityProof,
+    mut verifier: NativeJournalCursor,
     certificate_height: u64,
     mut next_finality: F,
     binary: &Path,
@@ -1356,21 +1515,25 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
 ) -> Result<DisposableGenesisDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<SumeragiFinalityProof>>,
+    Fut: Future<Output = Result<NativeFinalityJournal>>,
     S: FnMut(
         &Path,
         &PeerId,
         u16,
         &GlobalThresholdBeaconDkgSessionV1,
-        &[PathBuf; 5],
+        &[PathBuf; 4],
         u16,
+        &ChainId,
+        NativeFinalityLimits,
     ) -> Result<SeatProcess>,
 {
     ensure!(
         certificate_height > 4,
         "genesis install cannot precede DKG finality"
     );
-    let mut proofs = vec![first_finality.clone()];
+    let mut proofs = Vec::with_capacity(3);
+    let chain_id = verifier.chain_id().clone();
+    let limits = verifier.limits();
     let controller =
         super::disposable_runtime_provider_broker::new_disposable_owner_private_root()?;
     let controller_path = controller.path();
@@ -1379,7 +1542,6 @@ where
         controller_path.join("genesis-manifest.json"),
         controller_path.join("genesis.signed.nrt"),
         controller_path.join("genesis.public-key"),
-        controller_path.join("genesis-finality.norito"),
     ];
     let request = GenesisRequest {
         schema: "iroha.global-beacon.bootstrap.request.v1".to_owned(),
@@ -1397,7 +1559,6 @@ where
     );
     fs::write(&paths[2], &bundle.signed_wire)?;
     fs::write(&paths[3], format!("{}\n", bundle.public_key))?;
-    fs::write(&paths[4], norito::encode_canonical(first_finality)?)?;
     let mut processes = roster
         .iter()
         .enumerate()
@@ -1409,6 +1570,8 @@ where
                 &session,
                 &paths,
                 bundle.chain_discriminant,
+                &chain_id,
+                limits,
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1419,24 +1582,16 @@ where
     let mut public = merge_publications(session, &publications, &crypto)?;
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(2).await?;
-    ensure!(
-        proof.height() == 2 && proof.block_header.height().get() == 2,
-        "genesis commitments were not followed by exact h2 finality"
-    );
-    verifier.verify(&proof)?;
-    broadcast_finality(&mut processes, &proof)?;
+    advance_native_phase(&mut verifier, &proof, 2)?;
+    broadcast_finality(&mut processes, &proof, verifier.limits())?;
     proofs.push(proof);
 
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(3).await?;
-    ensure!(
-        proof.height() == 3 && proof.block_header.height().get() == 3,
-        "genesis deliveries were not followed by exact h3 finality"
-    );
-    verifier.verify(&proof)?;
-    broadcast_finality(&mut processes, &proof)?;
+    advance_native_phase(&mut verifier, &proof, 3)?;
+    broadcast_finality(&mut processes, &proof, verifier.limits())?;
     proofs.push(proof);
 
     let acceptances = wait_for_snapshots(&mut processes, "acceptances.norito", deadline).await?;
@@ -1446,12 +1601,8 @@ where
         .clone();
     broadcast_public(&mut processes, &assembled)?;
     let proof = next_finality(4).await?;
-    ensure!(
-        proof.height() == 4 && proof.block_header.height().get() == 4,
-        "genesis acceptances were not followed by exact h4 finality"
-    );
-    verifier.verify(&proof)?;
-    broadcast_finality(&mut processes, &proof)?;
+    advance_native_phase(&mut verifier, &proof, 4)?;
+    broadcast_finality(&mut processes, &proof, verifier.limits())?;
     proofs.push(proof);
 
     let mut outputs = Vec::with_capacity(processes.len());
@@ -1494,10 +1645,13 @@ where
     }
     let public_session_path = controller_path.join("public-session.norito");
     fs::write(&public_session_path, norito::encode_canonical(&assembled)?)?;
-    let phase_paths = (1..=3)
+    let phase_paths = (0..3)
         .map(|index| {
-            let path = controller_path.join(format!("phase-{}.norito", index + 1));
-            fs::write(&path, norito::encode_canonical(&proofs[index])?)?;
+            let path = controller_path.join(format!("phase-{}.norito", index + 2));
+            fs::write(
+                &path,
+                encode_phase_journal(&proofs[index], verifier.limits())?,
+            )?;
             Ok(path)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1510,6 +1664,8 @@ where
         &paths,
         session.network_id,
         bundle.chain_discriminant,
+        &chain_id,
+        limits,
     ));
     for phase in &phase_paths {
         assemble_args.push("--phase-proof".to_owned());
@@ -1536,6 +1692,8 @@ where
         let signature =
             controller_path.join(format!("install-signature-{}.json", seat.signer_index));
         sign_genesis_draft(
+            &chain_id,
+            limits,
             &binary,
             session.network_id,
             bundle.chain_discriminant,
@@ -1550,6 +1708,8 @@ where
     let mut install_args = vec![
         "beacon-bootstrap".to_owned(),
         "assemble-genesis-install".to_owned(),
+        "--chain-id".to_owned(),
+        chain_id.to_string(),
         "--network-id".to_owned(),
         session.network_id.to_string(),
         "--chain-discriminant".to_owned(),
@@ -1557,6 +1717,7 @@ where
         "--bundle".to_owned(),
         public_bundle_path.display().to_string(),
     ];
+    install_args.extend(finality_limit_args(limits));
     for signature in &signatures {
         install_args.push("--signature".to_owned());
         install_args.push(signature.display().to_string());
@@ -1598,10 +1759,10 @@ pub async fn run_disposable_rotation_dkg<F, Fut>(
 ) -> Result<DisposableRotationDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<SumeragiFinalityProof>>,
+    Fut: Future<Output = Result<NativeFinalityJournal>>,
 {
     ensure!(provider_revision != 0, "provider revision must be positive");
-    let (session, mut verifier) = verify_input(seats, authorizing_seats, evidence, input)?;
+    let (session, mut verifier) = verify_input(seats, authorizing_seats, evidence, &input)?;
     ensure!(
         certificate_height > session.acceptances_end_height
             && certificate_height
@@ -1631,7 +1792,7 @@ where
                 u16::try_from(index + 1)?,
                 &session,
                 &evidence_path,
-                input,
+                &input,
                 provider_revision,
             )
         })
@@ -1644,26 +1805,16 @@ where
     let mut public = merge_publications(session, &publications, &crypto)?;
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(session.commitments_end_height).await?;
-    ensure!(
-        proof.height() == session.commitments_end_height
-            && proof.block_header.height().get() == session.commitments_end_height,
-        "rotation commitments were not followed by exact phase finality"
-    );
-    verifier.verify(&proof)?;
-    broadcast_finality(&mut processes, &proof)?;
+    advance_native_phase(&mut verifier, &proof, session.commitments_end_height)?;
+    broadcast_finality(&mut processes, &proof, verifier.limits())?;
     phase_proofs.push(proof);
 
     let deliveries = wait_for_snapshots(&mut processes, "deliveries.norito", deadline).await?;
     merge_deliveries(&mut public, &deliveries, &crypto)?;
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(session.deliveries_end_height).await?;
-    ensure!(
-        proof.height() == session.deliveries_end_height
-            && proof.block_header.height().get() == session.deliveries_end_height,
-        "rotation deliveries were not followed by exact phase finality"
-    );
-    verifier.verify(&proof)?;
-    broadcast_finality(&mut processes, &proof)?;
+    advance_native_phase(&mut verifier, &proof, session.deliveries_end_height)?;
+    broadcast_finality(&mut processes, &proof, verifier.limits())?;
     phase_proofs.push(proof);
 
     let acceptances = wait_for_snapshots(&mut processes, "acceptances.norito", deadline).await?;
@@ -1673,13 +1824,8 @@ where
         .clone();
     broadcast_public(&mut processes, &assembled)?;
     let proof = next_finality(session.acceptances_end_height).await?;
-    ensure!(
-        proof.height() == session.acceptances_end_height
-            && proof.block_header.height().get() == session.acceptances_end_height,
-        "rotation acceptances were not followed by exact phase finality"
-    );
-    verifier.verify(&proof)?;
-    broadcast_finality(&mut processes, &proof)?;
+    advance_native_phase(&mut verifier, &proof, session.acceptances_end_height)?;
+    broadcast_finality(&mut processes, &proof, verifier.limits())?;
     phase_proofs.push(proof);
 
     let mut outputs = Vec::with_capacity(processes.len());
@@ -1720,8 +1866,8 @@ where
         .map(|proof| {
             let path = controller
                 .path()
-                .join(format!("phase-{}.norito", proof.height()));
-            fs::write(&path, norito::encode_canonical(proof)?)?;
+                .join(format!("phase-{}.norito", proof.blocks.len()));
+            fs::write(&path, encode_phase_journal(proof, verifier.limits())?)?;
             Ok(path)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1731,15 +1877,14 @@ where
         evidence_path.display().to_string(),
         "--network-id".to_owned(),
         input.network_id.to_string(),
-        "--trusted-context-id".to_owned(),
-        input.trusted_context_id.to_string(),
-        "--anchor-height".to_owned(),
-        input.anchor_height.to_string(),
+        "--chain-id".to_owned(),
+        input.chain_id.to_string(),
         "--target-epoch".to_owned(),
         input.target_epoch.to_string(),
         "--transition-id".to_owned(),
         input.transition_id.to_string(),
     ];
+    proof_args.extend(finality_limit_args(input.finality_limits));
     let mut assemble_args = vec![
         "beacon-bootstrap".to_owned(),
         "assemble-rotation-dkg".to_owned(),
@@ -1812,6 +1957,38 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_phase_bounds_are_forwarded_without_context_hash_fallback() {
+        let limits = NativeFinalityLimits {
+            block_bytes: 1024,
+            journal_bytes: 4096,
+            block_count: 8,
+            allocated_bytes: 8192,
+        };
+        assert_eq!(
+            finality_limit_args(limits),
+            vec![
+                "--finality-block-bytes",
+                "1024",
+                "--finality-journal-bytes",
+                "4096",
+                "--finality-block-count",
+                "8",
+                "--finality-allocated-bytes",
+                "8192"
+            ]
+        );
+        let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            CryptoHash::new(b"native phase refusal"),
+        ));
+        let mut cursor =
+            NativeJournalCursor::new(ChainId::from("phase-refusal"), network, limits).unwrap();
+        let journal = NativeFinalityJournal { blocks: Vec::new() };
+        assert!(advance_native_phase(&mut cursor, &journal, 2).is_err());
+        assert!(cursor.tip().is_none());
+        assert!(encode_phase_journal(&journal, limits).is_err());
+    }
+
     use super::*;
 
     #[test]

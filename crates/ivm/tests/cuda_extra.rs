@@ -6,10 +6,6 @@ fn test_cuda_poseidon2() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
-        return;
-    }
     let a = 1u64;
     let b = 2u64;
     let cpu = ivm::poseidon2_simd(a, b);
@@ -24,10 +20,6 @@ fn test_cuda_poseidon2() {
 fn test_cuda_keccak() {
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
         return;
     }
     let mut st_cpu = [0u64; 25];
@@ -46,10 +38,6 @@ fn test_cuda_aesenc() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
-        return;
-    }
     let state = [0u8; 16];
     let rk = [1u8; 16];
     let cpu = ivm::aesenc_impl(state, rk);
@@ -66,10 +54,6 @@ fn test_cuda_bn254_add() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
-        return;
-    }
     let a = ivm::bn254_vec::FieldElem::from_u64(3);
     let b = ivm::bn254_vec::FieldElem::from_u64(4);
     let cpu = ivm::bn254_vec::add_scalar(a, b);
@@ -84,10 +68,6 @@ fn test_cuda_bn254_add() {
 fn test_cuda_aesdec() {
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
         return;
     }
     let state = [0u8; 16];
@@ -107,10 +87,6 @@ fn test_cuda_bn254_sub() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
-        return;
-    }
     let a = ivm::bn254_vec::FieldElem::from_u64(5);
     let b = ivm::bn254_vec::FieldElem::from_u64(2);
     let cpu = ivm::bn254_vec::sub_scalar(a, b);
@@ -125,10 +101,6 @@ fn test_cuda_bn254_sub() {
 fn test_cuda_bn254_mul() {
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
         return;
     }
     let a = ivm::bn254_vec::FieldElem::from_u64(3);
@@ -147,10 +119,6 @@ fn test_cuda_poseidon6() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
-        return;
-    }
     let inputs = [1u64, 2, 3, 4, 5, 6];
     let cpu = ivm::poseidon6_simd(inputs);
     if let Some(gpu) = ivm::poseidon6_cuda(inputs) {
@@ -164,10 +132,6 @@ fn test_cuda_poseidon6() {
 fn test_cuda_ed25519_verify() {
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
         return;
     }
     use ed25519_dalek::{Signer, SigningKey};
@@ -200,22 +164,68 @@ fn compute_hram(sig: &[u8; 64], pk: &[u8; 32], msg: &[u8]) -> [u8; 32] {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_public_helpers_reject_adversarial_shape_mismatches() {
-    assert!(ivm::vector_add_f32(&[1.0, 2.0, 3.0], &[4.0, 5.0]).is_none());
-    assert!(ivm::vadd32_cuda(&[1u32, 2, 3], &[4u32, 5]).is_none());
-    assert!(ivm::vadd64_cuda(&[1u64, 2, 3], &[4u64, 5]).is_none());
-    assert!(ivm::vand_cuda(&[1u32, 2, 3], &[4u32, 5]).is_none());
-    assert!(ivm::vxor_cuda(&[1u32, 2, 3], &[4u32, 5]).is_none());
-    assert!(ivm::vor_cuda(&[1u32, 2, 3], &[4u32, 5]).is_none());
+    assert!(!ivm::vadd32_cuda_into(
+        &[1u32, 2, 3],
+        &[4u32, 5],
+        &mut [0; 3]
+    ));
+    assert!(!ivm::vadd64_cuda_into(
+        &[1u64, 2, 3],
+        &[4u64, 5],
+        &mut [0; 3]
+    ));
+    assert!(!ivm::vand_cuda_into(&[1u32, 2, 3], &[4u32, 5], &mut [0; 3]));
+    assert!(!ivm::vxor_cuda_into(&[1u32, 2, 3], &[4u32, 5], &mut [0; 3]));
+    assert!(!ivm::vor_cuda_into(&[1u32, 2, 3], &[4u32, 5], &mut [0; 3]));
     let lhs = [[1u64, 2, 3, 4], [5, 6, 7, 8]];
     let rhs = [[9u64, 10, 11, 12]];
-    assert!(ivm::bn254_add_batch_cuda(&lhs, &rhs).is_none());
-    assert!(ivm::bn254_sub_batch_cuda(&lhs, &rhs).is_none());
-    assert!(ivm::bn254_mul_batch_cuda(&lhs, &rhs).is_none());
+    let bn_sentinel = [[u64::MAX; 4]; 2];
+    let mut bn_output = bn_sentinel;
+    assert!(!ivm::bn254_add_batch_cuda_into(&lhs, &rhs, &mut bn_output));
+    assert_eq!(bn_output, bn_sentinel);
+    assert!(!ivm::bn254_sub_batch_cuda_into(&lhs, &rhs, &mut bn_output));
+    assert_eq!(bn_output, bn_sentinel);
+    assert!(!ivm::bn254_mul_batch_cuda_into(&lhs, &rhs, &mut bn_output));
+    assert_eq!(bn_output, bn_sentinel);
     let signatures = [[0x11u8; 64], [0x22; 64]];
     let public_keys = [[0x33u8; 32], [0x44; 32]];
     let hrams = [[0x55u8; 32], [0x66; 32]];
-    assert!(ivm::ed25519_verify_batch_cuda(&signatures, &public_keys[..1], &hrams).is_none());
-    assert!(ivm::ed25519_verify_batch_cuda(&signatures, &public_keys, &hrams[..1]).is_none());
+    assert!(
+        {
+            let signatures = &signatures;
+            let public_keys = &public_keys[..1];
+            let hrams = &hrams;
+            let mut output = vec![true; signatures.len()];
+            if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                Some(output)
+            } else {
+                assert!(
+                    output.iter().all(|value| *value),
+                    "refusal must preserve destination"
+                );
+                None
+            }
+        }
+        .is_none()
+    );
+    assert!(
+        {
+            let signatures = &signatures;
+            let public_keys = &public_keys;
+            let hrams = &hrams[..1];
+            let mut output = vec![true; signatures.len()];
+            if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                Some(output)
+            } else {
+                assert!(
+                    output.iter().all(|value| *value),
+                    "refusal must preserve destination"
+                );
+                None
+            }
+        }
+        .is_none()
+    );
 }
 #[cfg(feature = "cuda")]
 #[test]
@@ -243,18 +253,16 @@ fn cuda_adversarial_rejections_preserve_caller_buffers() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_empty_vector_boundaries_short_circuit_without_device_work() {
-    assert_eq!(ivm::vector_add_f32(&[], &[]), Some(Vec::<f32>::new()));
-    assert_eq!(ivm::vadd32_cuda(&[], &[]), Some(Vec::<u32>::new()));
-    assert_eq!(ivm::vadd64_cuda(&[], &[]), Some(Vec::<u64>::new()));
-    assert_eq!(ivm::vand_cuda(&[], &[]), Some(Vec::<u32>::new()));
-    assert_eq!(ivm::vxor_cuda(&[], &[]), Some(Vec::<u32>::new()));
-    assert_eq!(ivm::vor_cuda(&[], &[]), Some(Vec::<u32>::new()));
-    assert!(ivm::vector_add_f32(&[], &[1.0]).is_none());
-    assert!(ivm::vadd32_cuda(&[], &[1]).is_none());
-    assert!(ivm::vadd64_cuda(&[], &[1]).is_none());
-    assert!(ivm::vand_cuda(&[], &[1]).is_none());
-    assert!(ivm::vxor_cuda(&[], &[1]).is_none());
-    assert!(ivm::vor_cuda(&[], &[1]).is_none());
+    assert!(ivm::vadd32_cuda_into(&[], &[], &mut []));
+    assert!(ivm::vadd64_cuda_into(&[], &[], &mut []));
+    assert!(ivm::vand_cuda_into(&[], &[], &mut []));
+    assert!(ivm::vxor_cuda_into(&[], &[], &mut []));
+    assert!(ivm::vor_cuda_into(&[], &[], &mut []));
+    assert!(!ivm::vadd32_cuda_into(&[], &[1], &mut [0; 0]));
+    assert!(!ivm::vadd64_cuda_into(&[], &[1], &mut [0; 0]));
+    assert!(!ivm::vand_cuda_into(&[], &[1], &mut [0; 0]));
+    assert!(!ivm::vxor_cuda_into(&[], &[1], &mut [0; 0]));
+    assert!(!ivm::vor_cuda_into(&[], &[1], &mut [0; 0]));
 }
 #[cfg(feature = "cuda")]
 #[test]
@@ -265,15 +273,29 @@ fn cuda_empty_and_singleton_boundaries_short_circuit_without_device_work() {
         ivm::bitonic_sort_pairs(&mut empty_hi, &mut empty_lo),
         Some(())
     );
-    assert_eq!(ivm::sha256_leaves_cuda(&[]), Some(Vec::new()));
+    assert!(ivm::sha256_leaves_cuda_into(&[], &mut []));
     assert_eq!(
-        ivm::ed25519_verify_batch_cuda(&[], &[], &[]),
+        {
+            let signatures = &[];
+            let public_keys = &[];
+            let hrams = &[];
+            let mut output = vec![true; signatures.len()];
+            if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                Some(output)
+            } else {
+                assert!(
+                    output.iter().all(|value| *value),
+                    "refusal must preserve destination"
+                );
+                None
+            }
+        },
         Some(Vec::new())
     );
-    assert_eq!(ivm::poseidon2_cuda_many(&[]), Some(Vec::new()));
-    assert_eq!(ivm::poseidon6_cuda_many(&[]), Some(Vec::new()));
-    assert_eq!(ivm::aesenc_batch_cuda(&[], [0u8; 16]), Some(Vec::new()));
-    assert_eq!(ivm::aesdec_batch_cuda(&[], [0u8; 16]), Some(Vec::new()));
+    assert!(ivm::poseidon2_cuda_many_into(&[], &mut []));
+    assert!(ivm::poseidon6_cuda_many_into(&[], &mut []));
+    assert!(ivm::aesenc_batch_cuda_into(&[], [0u8; 16], &mut []));
+    assert!(ivm::aesdec_batch_cuda_into(&[], [0u8; 16], &mut []));
     let digest = [0xa5u8; 32];
     assert_eq!(ivm::sha256_pairs_reduce_cuda(&[]), None);
     assert_eq!(ivm::sha256_pairs_reduce_cuda(&[digest]), Some(digest));
@@ -293,7 +315,11 @@ fn cuda_ed25519_does_not_accept_adversarial_public_key_bytes() {
     );
 }
 #[test]
-fn cuda_public_ed25519_helpers_reject_malformed_signature_r_before_device_dispatch() {
+fn cuda_public_ed25519_helpers_reject_malformed_signature_r_on_publication() {
+    if !ivm::cuda_available() {
+        eprintln!("CUDA unavailable; invalid-R native parity remains unqualified");
+        return;
+    }
     use ed25519_dalek::{Signer, SigningKey};
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -318,12 +344,27 @@ fn cuda_public_ed25519_helpers_reject_malformed_signature_r_before_device_dispat
         assert_eq!(
             ivm::ed25519_verify_cuda(message, &malformed_signature, &public_key),
             Some(false),
-            "{label} signature R must reject before single CUDA dispatch"
+            "{label} signature R must reject on single CUDA publication"
         );
         assert_eq!(
-            ivm::ed25519_verify_batch_cuda(&[malformed_signature], &[public_key], &[hram]),
+            {
+                let signatures = &[malformed_signature];
+                let public_keys = &[public_key];
+                let hrams = &[hram];
+                let mut output = vec![true; signatures.len()];
+                if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output)
+                {
+                    Some(output)
+                } else {
+                    assert!(
+                        output.iter().all(|value| *value),
+                        "refusal must preserve destination"
+                    );
+                    None
+                }
+            },
             Some(vec![false]),
-            "{label} signature R must reject before batch CUDA dispatch"
+            "{label} signature R must reject on batch CUDA publication"
         );
     }
 }
@@ -332,10 +373,6 @@ fn cuda_public_ed25519_helpers_reject_malformed_signature_r_before_device_dispat
 fn test_cuda_ed25519_verify_batch() {
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
         return;
     }
     use ed25519_dalek::{Signer, SigningKey};
@@ -356,7 +393,21 @@ fn test_cuda_ed25519_verify_batch() {
         compute_hram(&sigs[0], &pks[0], msg1),
         compute_hram(&sigs[1], &pks[1], msg2),
     ];
-    if let Some(gpu_results) = ivm::ed25519_verify_batch_cuda(&sigs, &pks, &hrams) {
+    if let Some(gpu_results) = {
+        let signatures = &sigs;
+        let public_keys = &pks;
+        let hrams = &hrams;
+        let mut output = vec![true; signatures.len()];
+        if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+            Some(output)
+        } else {
+            assert!(
+                output.iter().all(|value| *value),
+                "refusal must preserve destination"
+            );
+            None
+        }
+    } {
         assert_eq!(gpu_results, vec![true, false]);
     } else {
         eprintln!("CUDA ed25519 batch verify path unavailable; skipping");
@@ -367,10 +418,6 @@ fn test_cuda_ed25519_verify_batch() {
 fn test_cuda_ed25519_verify_batch_rejects_adversarial_hram() {
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
         return;
     }
     use ed25519_dalek::{Signer, SigningKey};
@@ -389,7 +436,21 @@ fn test_cuda_ed25519_verify_batch_rejects_adversarial_hram() {
         compute_hram(&sigs[1], &pks[1], msg2),
     ];
     hrams[1][0] ^= 0x80;
-    if let Some(gpu_results) = ivm::ed25519_verify_batch_cuda(&sigs, &pks, &hrams) {
+    if let Some(gpu_results) = {
+        let signatures = &sigs;
+        let public_keys = &pks;
+        let hrams = &hrams;
+        let mut output = vec![true; signatures.len()];
+        if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+            Some(output)
+        } else {
+            assert!(
+                output.iter().all(|value| *value),
+                "refusal must preserve destination"
+            );
+            None
+        }
+    } {
         assert_eq!(
             gpu_results,
             vec![true, false],

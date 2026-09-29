@@ -14,9 +14,10 @@ Policy-to-Confirmation capacity handoff. The model and implementation must also
 share one proposal-wide fresh-randomness redraw ceiling across successor
 attempts, sortition/Confirmation generations, and timed-OVN ballot retries;
 committed transport replay must remain state-idempotent.
-The first-release `Executable::IvmProved` ZK-governance and proof-carrying
-execution corridor is an additive dependency of Parliament hardening and must
-remain typed, admitted, replayed, fee-checked, visited, and API-visible.
+The first-release `Executable::IvmProved` transaction shape remains typed and
+fee-checked, but private execution admission stays closed until the complete
+native STARK relation exists. The retired binding-only Torii producer must not
+re-enter the proof-carrying governance corridor.
 It also keeps the PR model run bound to archived copies of its exact inputs and
 to stable, source-identified result metadata.
 
@@ -508,7 +509,7 @@ def require_block_start_construction(state: str) -> None:
     prefix = (
         "letcanonical_runtime::AcquiredRuntimeBlockFields{world,transactions,"
         "commit_topology,prev_commit_topology,lane_consensus_contexts,canonical_runtime,"
-        "projection,sccp_registry,block_hashes,da_rewind_releases,}=original.take()"
+        "projection,block_hashes,da_rewind_releases,}=original.take()"
         '.expect("originalacquiredStateblock").into_fields();'
         "letblock=StateBlock::from_fields(StateBlockFields{"
     )
@@ -546,7 +547,7 @@ def require_block_start_construction(state: str) -> None:
             raise RuntimeError(f"{path}: start construction has duplicate or invalid original fields")
         bindings[name] = value if separator else name
     expected = {name: name for name in (
-        "world", "sccp_registry", "da_rewind_releases",
+        "world", "da_rewind_releases",
     )}
     expected.update({
         "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
@@ -558,6 +559,12 @@ def require_block_start_construction(state: str) -> None:
         "local_storage_refusal": "None",
         "state_ref": "self", "_curr_block": "curr_block",
         "nexus": "projection.nexus", "start_of_block_effects_applied": "false",
+        "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
+        "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",
+        "transactions": "storage_transactions::TransactionsBlockField::new(transactions)",
+        "commit_topology": "block_field::BlockField::new(commit_topology)",
+        "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
+        "lane_consensus_contexts": "block_field::BlockField::new(lane_consensus_contexts)",
         "pending_parliament_telemetry_events":
             'pending_parliament_telemetry_events.take().expect("preparedStateinput")',
     })
@@ -566,8 +573,19 @@ def require_block_start_construction(state: str) -> None:
     if not code.endswith("#[inline(never)]fnfinish_state_block_construction<R>(finish:implFnOnce()->R)->R{finish()}"):
         raise RuntimeError(f"{path}: start construction must retain its bounded borrowed finish")
     for owner in (
-        "impl<'state>StateBlock<'state>{fnfrom_fields(fields:StateBlockFields<'state>)->Self{Self{fields:Some(fields),}}",
-        "implDropforStateBlock<'_>{fndrop(&mutself){mv::BlockRetirement::release_writers(self);}}",
+        "impl<'state>StateBlock<'state>{fnfrom_fields(fields:StateBlockFields<'state>)->Self{Self{fields:Some(fields),publication:None,}}",
+        (
+            "implDropforStateBlock<'_>{fndrop(&mutself){"
+            "letSome(fields)=self.fields.as_ref()else{return;};"
+            "letexecution=fields.pipeline_ivm_prepared_cache.execution_budget().clone();"
+            "letmembership=fields.state_ref.transactions.budget.clone();"
+            "lethashes=fields.state_ref.block_hashes.budget.clone();"
+            "execution.with_deferred_refund_notifications(|_|{"
+            "membership.with_deferred_refund_notifications(|_|{"
+            "hashes.with_deferred_refund_notifications(|_|{"
+            "mv::BlockRetirement::release_writers(self);"
+            "drop(self.fields.take());drop(self.publication.take());})})});}}"
+        ),
     ):
         if state_code.count(owner) != 1:
             raise RuntimeError(f"{state_path}: start construction must install the original armed State owner")
@@ -588,7 +606,7 @@ def require_block_start_enactment_phases(state: str) -> None:
         "        let current_slot =",
         state_path,
     )
-    # This small statement region contains only the original height and the two
+    # This small statement region contains only the original height and the three
     # unconditional calls. Ignore line comments, but reject hidden conditions,
     # substituted owners/heights, duplicate calls, or swapped execution order.
     phases = re.sub(r"//[^\n]*", "", phases)
@@ -598,16 +616,32 @@ def require_block_start_enactment_phases(state: str) -> None:
         ".map_err(StateBlockStartError::Storage)?;"
         "Self::apply_block_start_parliament_enactments(&mut sb, now_h)"
         ".map_err(StateBlockStartError::Storage)?;"
+        "let sccp_header = sb._curr_block;"
+        "crate::smartcontracts::isi::sccp::hook::apply_block_start(&mut sb, &sccp_header)"
+        ".map_err(StateBlockStartError::Storage)?;"
     )
     if re.sub(r"\s+", "", phases) != re.sub(r"\s+", "", expected):
         raise RuntimeError(f"{state_path}: start phases must use the original block and height in order")
     compact = re.sub(r"\s+", "", constructor)
+    # The source quota owner may complete an intrinsic rejection before shared
+    # start effects. Bind that exact owner and remove only this checked branch
+    # before checking the one ordinary after-start continuation.
+    intrinsic_rejection = (
+        "ifmatches!(sb.fastpq_source_quota,Some(Err(_))){"
+        "letresult=after_start(&mutsb,continuation).map_err(StateBlockStartError::Stage)?;"
+        "returnOk((sb,result));}"
+    )
+    if compact.count(intrinsic_rejection) != 1:
+        raise RuntimeError(f"{state_path}: start phases lost the original intrinsic source refusal")
+    compact = compact.replace(intrinsic_rejection, "", 1)
     ordered = (
         "letacquired=self.acquire_canonical_runtime_block(false)?;",
         "letmutsb=self.construct_acquired_block(acquired,curr_block,Box::new);",
         "letcontinuation=before_start(&mutsb).map_err(StateBlockStartError::Stage)?;",
         "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h).map_err(StateBlockStartError::Storage)?;",
         "Self::apply_block_start_parliament_enactments(&mutsb,now_h).map_err(StateBlockStartError::Storage)?;",
+        "letsccp_header=sb._curr_block;",
+        "crate::smartcontracts::isi::sccp::hook::apply_block_start(&mutsb,&sccp_header).map_err(StateBlockStartError::Storage)?;",
         "sb.start_of_block_effects_applied=true;",
         "sb.capture_execution_output_capacity();",
         "letresult=after_start(&mutsb,continuation).map_err(StateBlockStartError::Stage)?;",
@@ -714,37 +748,82 @@ def require_parliament_event_capture(state: str) -> None:
 
 
 def require_parliament_commit_publication(state: str) -> None:
-    """Publish Parliament metrics only after prepared State commits, with replay guards."""
-    path = "crates/iroha_core/src/state.rs"
-    commit = section(state, "    fn commit_inner(",
-                     "    fn mint_canonical_carrier_commit_metadata_authorization(", path)
+    """Publish Parliament metrics only from the retained State owner, with replay guards."""
+    state_path = "crates/iroha_core/src/state.rs"
+    require_all(state_path, state, (
+        "mod publication;", "publication: Option<publication::StatePublication<'state>>",
+    ))
+    path = "crates/iroha_core/src/state/publication.rs"
+    publication = read(path)
+    source_compact = re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", publication))
+    require_all(path, source_compact, (
+        "pub(crate)fntry_publish(&mutself)->StatePublicationOutcome{self.try_publish_inner(None,None)}",
+        "self.try_publish_inner(authorization,veto).into_result()",
+        "letmutoriginal=self.publication.take().unwrap_or_else(||StatePublication::new(self.state_ref,authorization));",
+        "iforiginal.published{self.publication=Some(original);returnStatePublicationOutcome::Published;}",
+        "letresult=self.attempt_original_publication(&mutoriginal,veto);",
+        "iforiginal.fields_frozen&&!original.irreversible{self.recover_original_publication_fields();self.retire_original_publication_notices();}",
+        "self.publication=Some(original);ifterminal{mv::BlockRetirement::release_writers(self);}result",
+    ))
+    constructor = section(source_compact, "impl<'state>StatePublication<'state>{", "impl<'state>StateBlock<'state>{", path)
+    if not (0 <= constructor.find("effect_cleanup:effect_publication::StateEffectLocks::new(state)")
+            < constructor.find("commit_fence:state.state_commit_lock.defer_notifications()")):
+        raise RuntimeError(f"{path}: original effect and commit-fence owners must precede publication")
+    commit = section(publication, "    fn attempt_original_publication(",
+                     "\n#[cfg(test)]", path)
     # All fallible World/geometry work precedes the original State writer and
     # visibility interval. The prepared World effects are consumed under that
     # same writer, after the original World journal publishes.
     compact = re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", commit))
-    prepare = section(compact,
-                      "world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay(",
-                      "tiered_snapshot=Some(", path)
-    if not prepare.endswith("TransactionsBlockError::WorldCommitPreparation})?);"):
+    prepare = section(compact, "*world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay_mutations(",
+                      "if!*fields_frozen{", path)
+    if not prepare.endswith("ExecutionAttemptError::Deferred(reason)=>{TransactionsBlockError::ExecutionDeferred(reason)}}})?,);}"):
         raise RuntimeError(f"{path}: World preparation must propagate refusal before publication")
+    validation = section(compact, "world_commit::PreparedWorldCommit::validate_prepared_overlay(",
+                         "letverifier:&dynstd::any::Any=", path)
+    if not validation.endswith("ExecutionAttemptError::Deferred(reason)=>{TransactionsBlockError::ExecutionDeferred(reason)}})?;"):
+        raise RuntimeError(f"{path}: retained World validation must propagate refusal before publication")
+    kagemusha = section(compact, "letverifier:&dynstd::any::Any=", "iftiered_snapshot.is_none()", path)
+    authority_checks = (
+        "runtime_matches_governed_registry(",
+        "returnErr(TransactionsBlockError::KagemushaVerifierAuthority);",
+        "letpredecessor=state_ref.world.kagemusha_verifier_registry.view();",
+        "authorization.validate_for_state_commit(",
+        "returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);",
+        "(true,None)|(false,Some(_))=>{",
+        "drop(predecessor);",
+    )
+    authority_positions = [kagemusha.find(token) for token in authority_checks]
+    if (
+        any(position < 0 for position in authority_positions)
+        or authority_positions != sorted(authority_positions)
+        or kagemusha.count("returnErr(TransactionsBlockError::KagemushaGovernanceUnavailable);") != 2
+    ):
+        raise RuntimeError(f"{path}: KAGEMUSHA authority must reject unowned transitions before publication")
     geometry = section(compact, "ifletErr(err)=geometry_result{", "autoscale_start.elapsed()", path)
     if not geometry.endswith("returnErr(TransactionsBlockError::from(err));}"):
         raise RuntimeError(f"{path}: geometry refusal must return before State publication")
     ordered = (
         "letcommitted_parliament_attempt_counts=world.parliament_attempt_counts.is_dirty()",
         "let_state_commit_lock=commit_fence.lock();",
-        "world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay(",
+        "*world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay_mutations(",
+        "letverifier:&dynstd::any::Any=kagemusha_v1_runtime_verifier.as_ref();",
+        "*tiered_snapshot=Some(",
         "ifletErr(err)=geometry_result{",
         "letstate_write_lock_wait_start=Instant::now();let_state_write_lock=write_fence.lock();",
-        "block_hashes.try_prepare_publication().map_err(|_|{",
-        "world.prepare_publication();",
+        "block_hashes.try_prepare_publication().map_err(|error|matcherror{",
+        "world.try_prepare_frozen_publication().map_err(original_preparation_error)?;",
         "let_view_generation=publication_notice.begin();",
         "transactions.publish_prepared();",
+        "canonical_runtime.publish_prepared();",
         "world.publish_prepared();",
         "block_hashes.publish_prepared();",
         "world_effects.take().expect(\"originalpreparedWorldeffects\").publish(",
         "drop(autoscale_lifecycle_guard);",
+        '#[cfg(feature="telemetry")]if!*replay_prevalidation{if!*authenticated_replay_commit{for&(transition,no_result_kind)inpending_parliament_telemetry_events.iter(){',
+        "tiered_snapshot.take().expect(\"originalpreparedtieredsnapshot\").publish(",
         "drop(_state_commit_lock);",
+        "*published=true;",
     )
     positions = [compact.find(token) for token in ordered]
     # The same State writer is also acquired once during the earlier preflight.
@@ -761,12 +840,13 @@ def require_parliament_commit_publication(state: str) -> None:
                           "ifletSome(post)=lifecycle_post_publication.as_mut(){", path)
     writer_order = (
         "let_state_write_lock=write_fence.lock();",
-        "block_hashes.try_prepare_publication().map_err(|_|{TransactionsBlockError::SnapshotObservationChanged})?;",
-        "world.prepare_publication();",
-        "canonical_runtime.prepare_publication();",
+        "block_hashes.try_prepare_publication().map_err(|error|matcherror{mv::PublicationPreparationError::Busy(wait)=>{TransactionsBlockError::BlockHashesBusy(wait)}_=>TransactionsBlockError::SnapshotObservationChanged,})?;",
+        "world.try_prepare_frozen_publication().map_err(original_preparation_error)?;",
+        "canonical_runtime.try_prepare_frozen_publication().map_err(original_preparation_error)?;",
         "effect_locks.prepare_blocking();",
         "let_view_generation=publication_notice.begin();",
-        "transactions.publish_prepared();", "world.publish_prepared();",
+        "transactions.publish_prepared();", "canonical_runtime.publish_prepared();",
+        "world.publish_prepared();",
         "block_hashes.publish_prepared();",
         "world_effects.take().expect(\"originalpreparedWorldeffects\").publish(",
     )
@@ -790,7 +870,7 @@ def require_parliament_commit_publication(state: str) -> None:
     # could survive while replay guards or the publisher move to another scope.
     telemetry = section(compact, 'ifletSome(post)=da_post_publication.take(){post.publish(state_ref);}',
                         "if!verified_lane_relay_records.is_empty(){", path)
-    start = telemetry.find('#[cfg(feature="telemetry")]if!*replay_prevalidation{')
+    start = telemetry.find('#[cfg(feature="telemetry")]if!*replay_prevalidation{if!*authenticated_replay_commit{for&(transition,no_result_kind)inpending_parliament_telemetry_events.iter(){')
     expected = """
         #[cfg(feature="telemetry")]
         if !*replay_prevalidation {
@@ -811,9 +891,9 @@ def require_parliament_commit_publication(state: str) -> None:
         if !*replay_prevalidation {
             state_ref.enforce_nexus_storage_budget(block_height);
             if *authenticated_replay_commit {
-                state_ref.set_query_index_status(block_height, state_ref.latest_block_hash_fast());
+                state_ref.set_query_index_status(block_height, Some(block_header_hash));
             } else {
-                state_ref.persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
+                state_ref.persist_query_index_status(block_height, Some(block_header_hash));
             }
         }
         drop(_state_commit_lock);
@@ -907,6 +987,36 @@ def require_parliament_beacon_requirement(beacon: str) -> None:
             "effects.finalized_global_beacon_pulse = pulse;",
         ),
     )
+
+def require_beacon_parliament_pulse_fixtures(core: str, fixtures: str) -> None:
+    """Follow the actual compiled test module to both canonical fixture admissions."""
+    core_path = "crates/iroha_core/src/beacon.rs"
+    tests_path = "crates/iroha_core/src/beacon/tests.rs"
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", "", core, flags=re.S)
+    declarations = list(re.finditer(
+        r"(?P<attrs>(?:[ \t]*#\[[^\n]+\]\s*)*)pub\(crate\)\s+mod\s+tests\s*;",
+        code,
+    ))
+    if (len(declarations) != 1
+            or re.sub(r"\s+", "", declarations[0].group("attrs")) != "#[cfg(test)]"):
+        raise RuntimeError(f"{core_path}: Parliament pulse fixtures must use the original test module")
+    fixtures = re.sub(r"/\*.*?\*/|//[^\n]*", "", fixtures, flags=re.S)
+    for declaration in (
+        "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
+        "fn assert_same_block_key_rotation_persists_requested_pulse(",
+    ):
+        if fixtures.count(declaration) != 1:
+            raise RuntimeError(f"{tests_path}: Parliament pulse fixture declaration changed: {declaration}")
+        body = section(fixtures, declaration, "\n}\n", tests_path)
+        require_all(tests_path, body, (
+            ".put_parliament_attempt(attempt)",
+            'expect("persist the Parliament request and its beacon-slot index")',
+        ))
+    if fixtures.count(".put_parliament_attempt(attempt)") < 2:
+        raise RuntimeError(
+            f"{tests_path}: Parliament pulse fixtures must seed both derived-index consumers through canonical admission"
+        )
+
 
 def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
     """Bind the public DKG layout and fail-closed all-edge finalization to source."""
@@ -1041,6 +1151,18 @@ def require_signed_staking_fee_boundary(
     ))
 
 
+def require_proved_trigger_rejection(source: str) -> None:
+    """Registration may not turn a proof-carrying trigger into plain IVM code."""
+    path = "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs"
+    require_all(
+        path,
+        source,
+        ("Executable::IvmProved(_) => return Err(Error::ProofBackedTriggerUnavailable)",),
+    )
+    if "proved.bytecode" in source:
+        raise RuntimeError(f"{path}: proved trigger was downgraded to plain bytecode")
+
+
 def main() -> int:
     ivm_executable_path = "crates/iroha_data_model/src/transaction/executable.rs"
     ivm_executable = read(ivm_executable_path)
@@ -1093,12 +1215,22 @@ def main() -> int:
             "crates/iroha_core/src/queue.rs",
             ("Executable::IvmProved(proved)",),
         ),
-        (
-            "crates/iroha_torii/src/lib.rs",
-            ("derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context",),
-        ),
     ):
         require_all(ivm_path, read(ivm_path), bindings)
+    torii_path = "crates/iroha_torii/src/lib.rs"
+    torii_source = read(torii_path)
+    for retired in (
+        "derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context",
+        "handler_zk_ivm_derive",
+        "handler_zk_ivm_prove",
+    ):
+        if retired in torii_source:
+            raise RuntimeError(f"{torii_path}: retired IVM proof producer remains: {retired}")
+    overlay_path = "crates/iroha_core/src/pipeline/overlay.rs"
+    if "derive_ivm_proved_payload_from_ivm_execution" in read(overlay_path):
+        raise RuntimeError(f"{overlay_path}: retired IVM proof producer remains")
+    trigger_path = "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs"
+    require_proved_trigger_rejection(read(trigger_path))
 
     # Every maintained SCCP SDK must accept the same proof-carrying execution
     # policy that Rust and OpenAPI publish. In particular, `vk_ref` is a
@@ -2681,7 +2813,7 @@ def main() -> int:
     attempt_removal = section(
         state,
         "    pub fn remove_parliament_attempt_for_testing(",
-        "    /// Test helper: get mutable access to citizenship storage for direct seeding.",
+        "    /// Test helper: index a manually seeded confidential-policy transition.",
         state_path,
     )
     require_all(
@@ -4388,11 +4520,15 @@ def main() -> int:
     boundary = section(committee, "pub(crate) fn finalize_validator_committee_boundary(",
                        "fn owns_validator(", committee_path)
     require_all(committee_path, boundary, (
-        "context.validate()", "context.next_epoch_snapshot", "verify_progress(&self.world, &transition)?",
+        "let context = frozen.current();", "let boundary = frozen.boundary();",
+        "boundary.validate_against(context)?", "let snapshot = &boundary.next;",
+        "boundary.height != self._curr_block.height().get()", "context.network_id != self.network_id",
+        "self.block_hashes().hash_at(anchor_index) != Some(&boundary.selection_anchor)",
+        "self.block_hashes().hash_count() != anchor_index + 1",
+        "verify_progress(&self.world, &transition)?",
         "transition.outcome = Some(*outcome)", "transition.validate()?",
-        "credentials.authority != snapshot.kagemusha_mint_finality_authority",
-        "transition.preparation.roster != snapshot.roster",
-        "transition.preparation.validator_set_pops != snapshot.validator_set_pops",
+        "credentials.authority != snapshot.authority",
+        "transition.preparation.committee != snapshot.committee",
         "active_global_beacon_key_session() != Some(previous.session_id)",
         "old.retire(outcome.first_height)", "next.activate(outcome.first_height)",
         "beacon_rotation = Some((old, next))", "if let Some((old, next)) = beacon_rotation",
@@ -4405,7 +4541,7 @@ def main() -> int:
     certificate_preimage = section(
         certificate_state,
         "pub fn threshold_key_lifecycle_certificate_preimage_v1(",
-        "fn threshold_key_lifecycle_successor_roster_v1(",
+        "pub(crate) fn threshold_key_lifecycle_roster_v1(",
         certificate_state_path,
     )
     require_all(
@@ -4432,20 +4568,9 @@ def main() -> int:
         read("crates/iroha_core/src/validation_fee/committee_effects.rs"),
         read("crates/iroha_core/src/validation_fee/staking_effects.rs"),
     )
-    require_all(
-        beacon_state_path,
-        beacon_state,
-        (
-            "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
-            "fn assert_same_block_key_rotation_persists_requested_pulse(",
-            ".put_parliament_attempt(attempt)",
-            'expect("persist the Parliament request and its beacon-slot index")',
-        ),
+    require_beacon_parliament_pulse_fixtures(
+        beacon_state, read("crates/iroha_core/src/beacon/tests.rs")
     )
-    if beacon_state.count(".put_parliament_attempt(attempt)") < 2:
-        raise RuntimeError(
-            f"{beacon_state_path}: Parliament pulse fixtures must seed both derived-index consumers through canonical admission"
-        )
 
     block_path = "crates/iroha_core/src/block.rs"
     block = read(block_path)

@@ -687,7 +687,9 @@ fn tool_semantics(tool: &ToolSpec) -> ToolSemantics {
     let mutation = mutation_nature_for_operation(operation, false);
     let retry = match operation {
         OperationKind::Observe | OperationKind::Construct => RetrySemantics::Safe,
-        OperationKind::Mutate if path_template == iroha_torii_shared::uri::TRANSACTION => {
+        OperationKind::Mutate
+            if path_template == iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path() =>
+        {
             RetrySemantics::ExactIdentityDeduplicated
         }
         OperationKind::Mutate => RetrySemantics::Unsafe,
@@ -696,7 +698,7 @@ fn tool_semantics(tool: &ToolSpec) -> ToolSemantics {
     let sensitivity = sensitivity_for(authority, world, route.map(|route| route.surface()));
     let requires_external_signature = operation == OperationKind::Construct
         || authority.requires_external_signature()
-        || path_template == iroha_torii_shared::uri::TRANSACTION;
+        || path_template == iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path();
     ToolSemantics::try_new(
         operation,
         authority,
@@ -4466,13 +4468,10 @@ fn should_skip_operation(
     operation: &Map,
     expose_operator_routes: bool,
 ) -> bool {
-    if matches!(
-        path,
-        iroha_torii_shared::uri::SUBSCRIPTION
-            | iroha_torii_shared::uri::BLOCKS_STREAM
-            | "/v1/connect/ws"
-            | "/v1/mcp"
-    ) {
+    if path == iroha_torii_shared::route_catalog::streaming::SUBSCRIPTION_WS.path()
+        || path == iroha_torii_shared::route_catalog::streaming::BLOCKS_WS.path()
+        || matches!(path, "/v1/connect/ws" | "/v1/mcp")
+    {
         return true;
     }
     if path.ends_with("/sse") {
@@ -5535,7 +5534,7 @@ async fn dispatch_iroha_gov_parliament_attempt_draft(
         app,
         inbound_headers,
         Method::POST,
-        iroha_torii_shared::uri::GOV_PARLIAMENT_ATTEMPT_DRAFT,
+        iroha_torii_shared::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT.path(),
         arguments.get("headers"),
         body,
         Some("application/json".to_owned()),
@@ -5751,7 +5750,8 @@ async fn dispatch_iroha_gov_parliament_transition_draft(
         app,
         inbound_headers,
         Method::POST,
-        iroha_torii_shared::uri::GOV_PARLIAMENT_TRANSITION_DRAFT,
+        iroha_torii_shared::route_catalog::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT
+            .path(),
         arguments.get("headers"),
         body,
         Some("application/json".to_owned()),
@@ -6502,7 +6502,7 @@ async fn dispatch_iroha_transactions_submit_body(
         app,
         inbound_headers,
         Method::POST,
-        iroha_torii_shared::uri::TRANSACTION,
+        iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
         arguments.get("headers"),
         body,
         Some(crate::utils::NORITO_MIME_TYPE),
@@ -6524,7 +6524,7 @@ async fn dispatch_iroha_queries_submit(
         app,
         inbound_headers,
         Method::POST,
-        iroha_torii_shared::uri::QUERY,
+        iroha_torii_shared::route_catalog::pipeline::QUERY.path(),
         arguments.get("headers"),
         body,
         Some(crate::utils::NORITO_MIME_TYPE),
@@ -10072,7 +10072,9 @@ fn iroha_queries_submit_tool() -> ToolSpec {
             .to_owned(),
         manual_tool_effect_from_name("iroha.queries.submit"),
         Method::POST,
-        iroha_torii_shared::uri::QUERY.to_owned(),
+        iroha_torii_shared::route_catalog::pipeline::QUERY
+            .path()
+            .to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10151,7 +10153,9 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
             .to_owned(),
         manual_tool_effect_from_name("iroha.transactions.submit"),
         Method::POST,
-        iroha_torii_shared::uri::TRANSACTION.to_owned(),
+        iroha_torii_shared::route_catalog::pipeline::TRANSACTION
+            .path()
+            .to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10176,7 +10180,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
         "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll exact global pipeline status until state-resolved Applied; state-resolved Rejected and Expired fail. Status polling decodes only exact HTTP 200 payloads, treats only HTTP 404 as pending, and rejects every other HTTP status. The Applied result has exactly `status`, `hash`, `terminal_kind`, `attempts`, `elapsed_ms`, optional `submit`, and `final`.".to_owned(),
         manual_tool_effect_from_name("iroha.transactions.submit_and_wait"),
         Method::POST,
-        iroha_torii_shared::uri::TRANSACTION.to_owned(),
+        iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path().to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,

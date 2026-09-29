@@ -27,6 +27,8 @@ final class BridgeAvailabilityTests: XCTestCase {
         let privateKey = Data(repeating: 1, count: 32)
         let keypair = try Keypair(privateKeyBytes: privateKey)
         let authority = AccountId.make(publicKey: keypair.publicKey)
+        let signingKey = try SigningKey.ed25519(privateKey: privateKey)
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
         let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: canonicalAssetDefinitionId,
@@ -35,7 +37,6 @@ final class BridgeAvailabilityTests: XCTestCase {
                                       description: nil,
                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: nil)
-        let signingKey = try SigningKey.ed25519(privateKey: privateKey)
 
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
 

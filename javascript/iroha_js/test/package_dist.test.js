@@ -630,6 +630,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/native.browser.js",
       "dist/nativeRuntime.js",
       "dist/networkId.js",
+      "dist/networkPrefix.js",
       "dist/nexusApp.js",
       "dist/norito.js",
       "dist/noritoClassedRaceSchemas.js",
@@ -1055,7 +1056,7 @@ test("package declarations expose the Exact12 manifest without retired privacy t
   assert.doesNotMatch(rootDeclarations, /halo2\/pasta\/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1/u);
   assert.match(
     rootDeclarations,
-    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-authorization-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-replay-binding-v1"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri\/poseidon-x7-goldilocks-6x64-v1";/u,
+    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-authorization-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri\/poseidon-x7-goldilocks-6x64-v1";/u,
   );
 });
 

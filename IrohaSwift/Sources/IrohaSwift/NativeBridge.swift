@@ -99,6 +99,11 @@ enum NoritoBridgeLoader {
         "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
         "connect_norito_parliament_timed_ovn_ballot_from_proof_v1"
     ]
+    static let accelerationRequiredSymbols = [
+        "connect_norito_acceleration_config_set_v1",
+        "connect_norito_acceleration_config_get_v1",
+        "connect_norito_acceleration_state_get_v1"
+    ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
@@ -159,7 +164,7 @@ enum NoritoBridgeLoader {
         "connect_norito_kagemusha_device_command_response_v1_verify",
         "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
         "connect_norito_kagemusha_device_mint_stage_result_v1_validate"
-    ] + parliamentTimedOvnWalletRequiredSymbols
+    ] + parliamentTimedOvnWalletRequiredSymbols + accelerationRequiredSymbols
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
 
@@ -272,11 +277,12 @@ enum NoritoBridgeLoader {
         UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: -2))
     }
 
+    static func hasRequiredExports(resolving resolve: (String) -> Bool) -> Bool {
+        requiredSymbols.allSatisfy(resolve)
+    }
+
     private static func hasRequiredSymbols(in handle: UnsafeMutableRawPointer?) -> Bool {
-        guard let handle else { return false }
-        for symbol in requiredSymbols where dlsym(handle, symbol) == nil {
-            return false
-        }
+        guard let handle, hasRequiredExports(resolving: { dlsym(handle, $0) != nil }) else { return false }
         return isSupportedBridgeAbiVersion(bridgeAbiVersion(in: handle))
     }
 
@@ -579,39 +585,7 @@ private extension ConnectFrame {
     }
 }
 
-struct ConnectNoritoAccelerationConfig {
-    var enable_simd: UInt8
-    var enable_metal: UInt8
-    var enable_cuda: UInt8
-    var max_gpus: UInt64
-    var max_gpus_present: UInt8
-    var merkle_min_leaves_gpu: UInt64
-    var merkle_min_leaves_gpu_present: UInt8
-    var merkle_min_leaves_metal: UInt64
-    var merkle_min_leaves_metal_present: UInt8
-    var merkle_min_leaves_cuda: UInt64
-    var merkle_min_leaves_cuda_present: UInt8
-    var prefer_cpu_sha2_max_leaves_aarch64: UInt64
-    var prefer_cpu_sha2_max_leaves_aarch64_present: UInt8
-    var prefer_cpu_sha2_max_leaves_x86: UInt64
-    var prefer_cpu_sha2_max_leaves_x86_present: UInt8
-}
 
-struct ConnectNoritoAccelerationBackendStatus {
-    var supported: UInt8
-    var configured: UInt8
-    var available: UInt8
-    var parity_ok: UInt8
-    var last_error_ptr: UnsafeMutablePointer<UInt8>?
-    var last_error_len: UInt
-}
-
-struct ConnectNoritoAccelerationState {
-    var config: ConnectNoritoAccelerationConfig
-    var simd: ConnectNoritoAccelerationBackendStatus
-    var metal: ConnectNoritoAccelerationBackendStatus
-    var cuda: ConnectNoritoAccelerationBackendStatus
-}
 #endif
 
 struct NativeSignedTransaction {
@@ -1214,9 +1188,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias ChainDiscriminantScopeEnterFn = @convention(c) (UInt16) -> UInt64
     private typealias ChainDiscriminantScopeExitFn = @convention(c) (UInt64) -> Int32
-    private typealias SetAccelerationConfigFn = @convention(c) (UnsafeRawPointer?) -> Void
-    private typealias GetAccelerationConfigFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
-    private typealias GetAccelerationStateFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
+    private typealias SetAccelerationConfigFn = @convention(c) (UnsafeRawPointer?, UInt) -> Int32
+    private typealias GetAccelerationConfigFn = @convention(c) (UnsafeMutableRawPointer?, UInt) -> Int32
+    private typealias GetAccelerationStateFn = @convention(c) (UnsafeMutableRawPointer?, UInt) -> Int32
 
     private typealias EncodeCiphertextFrameFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt8, UInt64,
@@ -2169,6 +2143,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.loadedBridgeAbiVersion = abiVersion
 
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        guard let accelerationSet = staticHandle.flatMap({ dlsym($0, "connect_norito_acceleration_config_set_v1") }),
+              let accelerationGet = staticHandle.flatMap({ dlsym($0, "connect_norito_acceleration_config_get_v1") }),
+              let accelerationState = staticHandle.flatMap({ dlsym($0, "connect_norito_acceleration_state_get_v1") }) else {
+            self.loadedBridgeAbiVersion = nil
+            NSLog("[NoritoNativeBridge] missing canonical acceleration exports")
+            return
+        }
+        self.setAccelerationConfigFn = unsafeBitCast(accelerationSet, to: SetAccelerationConfigFn.self)
+        self.getAccelerationConfigFn = unsafeBitCast(accelerationGet, to: GetAccelerationConfigFn.self)
+        self.getAccelerationStateFn = unsafeBitCast(accelerationState, to: GetAccelerationStateFn.self)
         self.bridgeHandle = Self.bridgeHandleForStaticFallback(
             currentHandle: self.bridgeHandle,
             processHandle: staticHandle
@@ -2632,17 +2616,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.verifyDetachedFn = nil
             }
-            if let accelSymbol = dlsym(handle, "connect_norito_set_acceleration_config") {
+            if let accelSymbol = dlsym(handle, "connect_norito_acceleration_config_set_v1") {
                 self.setAccelerationConfigFn = unsafeBitCast(accelSymbol, to: SetAccelerationConfigFn.self)
             } else {
                 self.setAccelerationConfigFn = nil
             }
-            if let accelGetSymbol = dlsym(handle, "connect_norito_get_acceleration_config") {
+            if let accelGetSymbol = dlsym(handle, "connect_norito_acceleration_config_get_v1") {
                 self.getAccelerationConfigFn = unsafeBitCast(accelGetSymbol, to: GetAccelerationConfigFn.self)
             } else {
                 self.getAccelerationConfigFn = nil
             }
-            if let accelStateSymbol = dlsym(handle, "connect_norito_get_acceleration_state") {
+            if let accelStateSymbol = dlsym(handle, "connect_norito_acceleration_state_get_v1") {
                 self.getAccelerationStateFn = unsafeBitCast(accelStateSymbol, to: GetAccelerationStateFn.self)
             } else {
                 self.getAccelerationStateFn = nil
@@ -3190,28 +3174,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         probePrivacyNativeAvailability()
 
-        if let setAccelerationConfigFn {
-            var defaults = ConnectNoritoAccelerationConfig(
-                enable_simd: 1,
-                enable_metal: 1,
-                enable_cuda: 0,
-                max_gpus: 0,
-                max_gpus_present: 0,
-                merkle_min_leaves_gpu: 0,
-                merkle_min_leaves_gpu_present: 0,
-                merkle_min_leaves_metal: 0,
-                merkle_min_leaves_metal_present: 0,
-                merkle_min_leaves_cuda: 0,
-                merkle_min_leaves_cuda_present: 0,
-                prefer_cpu_sha2_max_leaves_aarch64: 0,
-                prefer_cpu_sha2_max_leaves_aarch64_present: 0,
-                prefer_cpu_sha2_max_leaves_x86: 0,
-                prefer_cpu_sha2_max_leaves_x86_present: 0
-            )
-            withUnsafePointer(to: &defaults) { ptr in
-                setAccelerationConfigFn(UnsafeRawPointer(ptr))
-            }
-        }
+        // The process-owned native configuration supplies enabled defaults.
+        // Loading this facade must preserve an existing file-configured policy.
         NSLog("[NoritoNativeBridge] init done — status=%@, handle=%@, free=%@",
               "\(self.bridgeStatus)",
               self.bridgeHandle == nil ? "nil" : "ok",
@@ -5852,50 +5816,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    func applyAccelerationSettings(_ settings: AccelerationSettings) {
+    @discardableResult
+    func applyAccelerationSettings(_ settings: AccelerationSettings) -> Bool {
         #if canImport(Darwin)
-        guard isAvailable else {
-            return
+        guard isAvailable, let setAccelerationConfigFn else { return false }
+        var config = settings.nativeConfig
+        let status = withUnsafePointer(to: &config) { pointer in
+            setAccelerationConfigFn(UnsafeRawPointer(pointer), UInt(MemoryLayout<ConnectNoritoAccelerationConfig>.size))
         }
-        guard let setAccelerationConfigFn else {
-            return
-        }
-
-        func encodeOptional(_ value: Int?) -> (UInt64, UInt8) {
-            if let value, value >= 0 {
-                return (UInt64(value), 1)
-            }
-            return (0, 0)
-        }
-
-        let (maxGPUsValue, maxGPUsPresent) = encodeOptional(settings.maxGPUs)
-        let (gpuLeavesValue, gpuLeavesPresent) = encodeOptional(settings.merkleMinLeavesGPU)
-        let (metalLeavesValue, metalLeavesPresent) = encodeOptional(settings.merkleMinLeavesMetal)
-        let (cudaLeavesValue, cudaLeavesPresent) = encodeOptional(settings.merkleMinLeavesCUDA)
-        let (preferAarch64Value, preferAarch64Present) = encodeOptional(settings.preferCpuSha2MaxLeavesAarch64)
-        let (preferX86Value, preferX86Present) = encodeOptional(settings.preferCpuSha2MaxLeavesX86)
-
-        var config = ConnectNoritoAccelerationConfig(
-            enable_simd: settings.enableSIMD ? 1 : 0,
-            enable_metal: settings.enableMetal ? 1 : 0,
-            enable_cuda: settings.enableCUDA ? 1 : 0,
-            max_gpus: maxGPUsValue,
-            max_gpus_present: maxGPUsPresent,
-            merkle_min_leaves_gpu: gpuLeavesValue,
-            merkle_min_leaves_gpu_present: gpuLeavesPresent,
-            merkle_min_leaves_metal: metalLeavesValue,
-            merkle_min_leaves_metal_present: metalLeavesPresent,
-            merkle_min_leaves_cuda: cudaLeavesValue,
-            merkle_min_leaves_cuda_present: cudaLeavesPresent,
-            prefer_cpu_sha2_max_leaves_aarch64: preferAarch64Value,
-            prefer_cpu_sha2_max_leaves_aarch64_present: preferAarch64Present,
-            prefer_cpu_sha2_max_leaves_x86: preferX86Value,
-            prefer_cpu_sha2_max_leaves_x86_present: preferX86Present
-        )
-
-        withUnsafePointer(to: &config) { ptr in
-            setAccelerationConfigFn(UnsafeRawPointer(ptr))
-        }
+        return status == 0
+        #else
+        return false
         #endif
     }
 
@@ -5908,26 +5839,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         }
 
-        var native = ConnectNoritoAccelerationConfig(
-            enable_simd: 0,
-            enable_metal: 0,
-            enable_cuda: 0,
-            max_gpus: 0,
-            max_gpus_present: 0,
-            merkle_min_leaves_gpu: 0,
-            merkle_min_leaves_gpu_present: 0,
-            merkle_min_leaves_metal: 0,
-            merkle_min_leaves_metal_present: 0,
-            merkle_min_leaves_cuda: 0,
-            merkle_min_leaves_cuda_present: 0,
-            prefer_cpu_sha2_max_leaves_aarch64: 0,
-            prefer_cpu_sha2_max_leaves_aarch64_present: 0,
-            prefer_cpu_sha2_max_leaves_x86: 0,
-            prefer_cpu_sha2_max_leaves_x86_present: 0
-        )
+        var native = ConnectNoritoAccelerationConfig.empty
 
         let status = withUnsafeMutablePointer(to: &native) { pointer in
-            getAccelerationConfigFn(UnsafeMutableRawPointer(pointer))
+            getAccelerationConfigFn(UnsafeMutableRawPointer(pointer), UInt(MemoryLayout<ConnectNoritoAccelerationConfig>.size))
         }
         guard status == 0 else { return nil }
         return AccelerationSettings(nativeConfig: native)
@@ -5946,30 +5861,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
 
         var native = ConnectNoritoAccelerationState(
-            config: ConnectNoritoAccelerationConfig(
-                enable_simd: 0,
-                enable_metal: 0,
-                enable_cuda: 0,
-                max_gpus: 0,
-                max_gpus_present: 0,
-                merkle_min_leaves_gpu: 0,
-                merkle_min_leaves_gpu_present: 0,
-                merkle_min_leaves_metal: 0,
-                merkle_min_leaves_metal_present: 0,
-                merkle_min_leaves_cuda: 0,
-                merkle_min_leaves_cuda_present: 0,
-                prefer_cpu_sha2_max_leaves_aarch64: 0,
-                prefer_cpu_sha2_max_leaves_aarch64_present: 0,
-                prefer_cpu_sha2_max_leaves_x86: 0,
-                prefer_cpu_sha2_max_leaves_x86_present: 0
-            ),
+            config: .empty,
             simd: ConnectNoritoAccelerationBackendStatus(supported: 0, configured: 0, available: 0, parity_ok: 0, last_error_ptr: nil, last_error_len: 0),
             metal: ConnectNoritoAccelerationBackendStatus(supported: 0, configured: 0, available: 0, parity_ok: 0, last_error_ptr: nil, last_error_len: 0),
             cuda: ConnectNoritoAccelerationBackendStatus(supported: 0, configured: 0, available: 0, parity_ok: 0, last_error_ptr: nil, last_error_len: 0)
         )
 
         let status = withUnsafeMutablePointer(to: &native) { pointer in
-            getAccelerationStateFn(UnsafeMutableRawPointer(pointer))
+            getAccelerationStateFn(UnsafeMutableRawPointer(pointer), UInt(MemoryLayout<ConnectNoritoAccelerationState>.size))
         }
         guard status == 0 else { return nil }
         let decoded = AccelerationState(nativeState: native)

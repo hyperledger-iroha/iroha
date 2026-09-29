@@ -537,13 +537,17 @@ impl LaneSettlementBufferPolicy {
 }
 /// Canonical first-release projection of one lane's consensus-relevant configuration.
 ///
-/// Human-facing aliases and descriptions, together with arbitrary instrumentation metadata, are
-/// deliberately excluded. Reserved autoscale metadata remains committed because it can affect
-/// deterministic execution; scheduler and settlement policy are dedicated typed fields.
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
+/// Aliases are committed because autoscale ownership and catalog lifecycle
+/// admission inspect them. Descriptions and arbitrary instrumentation metadata
+/// are excluded. Reserved autoscale metadata remains committed because it can
+/// affect deterministic execution; scheduler and settlement policy are typed.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::nexus::LaneConsensusProjectionV1")]
 pub struct LaneConsensusProjectionV1 {
     version: u16,
     id: LaneId,
+    alias: String,
     shard_id: ShardId,
     dataspace_id: DataSpaceId,
     visibility: LaneVisibility,
@@ -630,6 +634,7 @@ impl LaneConfig {
         LaneConsensusProjectionV1 {
             version: LaneConsensusProjectionV1::VERSION,
             id: self.id,
+            alias: self.alias.clone(),
             shard_id: self.effective_shard_id(),
             dataspace_id: self.dataspace_id,
             visibility: self.visibility,
@@ -2373,6 +2378,42 @@ mod tests {
         assert_eq!(entry.alias, "universal");
     }
     #[test]
+    fn lane_consensus_projection_binds_alias_and_reserved_metadata_only() {
+        let mut lane = LaneConfig {
+            id: LaneId::new(3),
+            alias: "elastic-lane-3".into(),
+            description: Some("operator presentation".into()),
+            ..LaneConfig::default()
+        };
+        lane.metadata
+            .insert(AUTOSCALE_META_MANAGED.into(), "true".into());
+        let projection = lane.consensus_projection();
+        assert_eq!(
+            <LaneConsensusProjectionV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::nexus::LaneConsensusProjectionV1"
+        );
+        let bytes = norito::encode_canonical(&projection).expect("canonical projection");
+        assert_eq!(
+            norito::decode_canonical::<LaneConsensusProjectionV1>(&bytes)
+                .expect("decode canonical projection"),
+            projection
+        );
+
+        let mut changed = lane.clone();
+        changed.alias = "manual-lane-3".into();
+        assert_ne!(changed.consensus_projection(), projection);
+        let mut changed = lane.clone();
+        changed
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.into(), "false".into());
+        assert_ne!(changed.consensus_projection(), projection);
+
+        lane.description = Some("changed presentation".into());
+        lane.metadata
+            .insert("operator.color".into(), "green".into());
+        assert_eq!(lane.consensus_projection(), projection);
+    }
+    #[test]
     fn lane_config_identifies_only_valid_autoscale_managed_elastic_lanes() {
         let mut lane = LaneConfig {
             id: LaneId::new(3),
@@ -2720,7 +2761,7 @@ mod tests {
             assert!(error.to_string().contains("runtime_catalog_hash"));
             for malformed in [
                 norito::json::Value::Bool(false),
-                norito::json::Value::String("".into()),
+                norito::json::Value::String(String::new()),
             ] {
                 value
                     .as_object_mut()

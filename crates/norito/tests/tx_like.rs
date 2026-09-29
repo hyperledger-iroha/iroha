@@ -1,5 +1,5 @@
 //! Regression test: complex struct with Vec and enum fields roundtrips under
-//! hybrid packed-struct layout without panicking or length mismatches.
+//! the derived struct layout without panicking or length mismatches.
 use iroha_schema::IntoSchema;
 use norito::{DeserializePayload, NoritoDeserialize, NoritoSerialize, from_bytes, to_bytes};
 #[derive(Clone, Debug, PartialEq, Default, NoritoSerialize, NoritoDeserialize, IntoSchema)]

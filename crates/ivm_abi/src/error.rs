@@ -2,6 +2,9 @@
 //!
 //! Error variants cover common failure modes including privacy tag violations.
 use crate::numeric::{NumericFaultV1, PointerAbiFaultV1};
+/// Original local allocation refusal carried by [`VMError::AllocationDeferred`].
+/// This is the allocation owner's type; re-exporting it does not copy its custody.
+pub use mv::allocation::AllocationRefusal;
 use std::{error::Error as StdError, fmt};
 /// Memory region permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,9 +109,32 @@ pub struct VmExecutionDiagnostic {
     pub budget: VmBudgetSnapshot,
     pub context: VmExecutionContext,
 }
+/// Local inability to complete an execution attempt. This is never a protocol
+/// rejection or a deterministic VM fault and deliberately has no wire codec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionDeferral {
+    /// The host allocator could not supply the requested physical storage.
+    AllocationUnavailable,
+    /// The local active execution memory admission owner has no capacity.
+    ActiveMemoryCapacity,
+}
+impl fmt::Display for ExecutionDeferral {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::AllocationUnavailable => "local allocation unavailable",
+            Self::ActiveMemoryCapacity => "local active execution memory capacity unavailable",
+        })
+    }
+}
+impl StdError for ExecutionDeferral {}
 /// VM errors.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VMError {
+    /// Abandon and retry this local attempt without retaining a transaction result.
+    ExecutionDeferred(ExecutionDeferral),
+    /// Original active allocation refusal, including its exact pool's release observation.
+    /// This local owner is never a metered guest fault or a wire rejection.
+    AllocationDeferred(AllocationRefusal),
     /// Host work failed after consuming a deterministic amount of syscall gas.
     ///
     /// The VM executor debits `gas` and then returns `source` so trap
@@ -261,6 +287,9 @@ impl VMError {
     /// Wrap an error with deterministic gas charged before surfacing it.
     #[must_use]
     pub fn metered(gas: u64, source: VMError) -> Self {
+        if source.execution_deferral().is_some() {
+            return source.into_unmetered();
+        }
         match source {
             VMError::Metered {
                 gas: existing,
@@ -273,6 +302,15 @@ impl VMError {
                 gas,
                 source: Box::new(source),
             },
+        }
+    }
+    /// Return a local retry reason, including inside manually constructed wrappers.
+    #[must_use]
+    pub fn execution_deferral(&self) -> Option<ExecutionDeferral> {
+        match self.as_unmetered() {
+            Self::ExecutionDeferred(reason) => Some(*reason),
+            Self::AllocationDeferred(_) => Some(ExecutionDeferral::ActiveMemoryCapacity),
+            _ => None,
         }
     }
     /// Construct a metered `NotImplemented` error for a known syscall.
@@ -291,6 +329,9 @@ impl VMError {
     /// Return the gas attached to this error, if it is metered.
     #[must_use]
     pub fn metered_gas(&self) -> Option<u64> {
+        if self.execution_deferral().is_some() {
+            return None;
+        }
         match self {
             VMError::Metered { gas, .. } => Some(*gas),
             _ => None,
@@ -307,6 +348,9 @@ impl VMError {
     /// Consume this error and split any attached gas from the original error.
     #[must_use]
     pub fn split_metered(self) -> (Option<u64>, VMError) {
+        if self.execution_deferral().is_some() {
+            return (None, self.into_unmetered());
+        }
         match self {
             VMError::Metered { gas, source } => (Some(gas), source.into_unmetered()),
             error => (None, error),
@@ -318,6 +362,10 @@ impl fmt::Display for VMError {
         match self {
             VMError::Metered { gas, source } => {
                 write!(f, "metered syscall error after {gas} gas: {source}")
+            }
+            VMError::ExecutionDeferred(reason) => write!(f, "execution deferred: {reason}"),
+            VMError::AllocationDeferred(refusal) => {
+                write!(f, "execution allocation deferred: {refusal}")
             }
             VMError::OutOfGas => write!(f, "out of gas"),
             VMError::OutOfMemory => write!(f, "out of memory"),
@@ -448,5 +496,57 @@ impl StdError for VMError {
             VMError::Metered { source, .. } => Some(source.as_ref()),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod execution_deferral_tests {
+    use super::{ExecutionDeferral, VMError};
+
+    #[test]
+    fn local_refusal_never_acquires_a_deterministic_gas_charge() {
+        let deferred = VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        assert_eq!(VMError::metered(123, deferred.clone()), deferred);
+        let wrapped = VMError::Metered {
+            gas: 456,
+            source: Box::new(deferred.clone()),
+        };
+        assert_eq!(
+            wrapped.execution_deferral(),
+            Some(ExecutionDeferral::AllocationUnavailable)
+        );
+        assert_eq!(wrapped.metered_gas(), None);
+        assert_eq!(wrapped.split_metered(), (None, deferred));
+    }
+
+    #[test]
+    fn deterministic_guest_memory_fault_preserves_metering() {
+        let fault = VMError::metered(123, VMError::OutOfMemory);
+        assert_eq!(fault.execution_deferral(), None);
+        assert_eq!(fault.split_metered(), (Some(123), VMError::OutOfMemory));
+    }
+
+    #[test]
+    fn original_capacity_release_survives_every_metered_boundary() {
+        let budget = mv::allocation::AllocationBudget::new(8);
+        let occupied = budget.try_reserve_bytes(8).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        let error = VMError::AllocationDeferred(refusal.clone());
+        assert_eq!(
+            error.execution_deferral(),
+            Some(ExecutionDeferral::ActiveMemoryCapacity)
+        );
+        assert_eq!(VMError::metered(123, error.clone()), error);
+        let wrapped = VMError::Metered {
+            gas: 456,
+            source: Box::new(error.clone()),
+        };
+        assert_eq!(wrapped.metered_gas(), None);
+        assert_eq!(VMError::metered(789, wrapped.clone()), error);
+        assert_eq!(
+            wrapped.split_metered(),
+            (None, VMError::AllocationDeferred(refusal))
+        );
+        drop(occupied);
     }
 }

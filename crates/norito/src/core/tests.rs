@@ -963,24 +963,28 @@ fn canonical_context_field_rejects_trailing_bytes_inside_declared_frame() {
     assert_eq!(offset, 0, "a non-canonical frame must not consume input");
 }
 #[test]
-fn context_field_prefix_and_fixed_array_helpers_advance_exactly() {
+fn context_field_and_fixed_array_helpers_advance_exactly() {
     reset_decode_state();
     let first = String::from("alpha");
     let second = String::from("beta");
     let mut payload = Vec::new();
-    serialize_to_buffer(&first, &mut payload).expect("encode first string");
-    serialize_to_buffer(&second, &mut payload).expect("encode second string");
+    for value in [&first, &second] {
+        let mut field = Vec::new();
+        serialize_to_buffer(value, &mut field).expect("encode string field");
+        write_len(&mut payload, field.len() as u64).expect("frame field");
+        payload.extend_from_slice(&field);
+    }
     payload.extend_from_slice(&[1, 2, 3, 4]);
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert_eq!(
-        decode_context_field_prefix::<String>(payload.as_ptr(), &mut offset)
-            .expect("decode first prefix"),
+        decode_context_field_canonical::<String>(payload.as_ptr(), &mut offset)
+            .expect("decode first field"),
         first
     );
     assert_eq!(
-        decode_context_field_prefix::<String>(payload.as_ptr(), &mut offset)
-            .expect("decode second prefix"),
+        decode_context_field_canonical::<String>(payload.as_ptr(), &mut offset)
+            .expect("decode second field"),
         second
     );
     assert_eq!(
@@ -2818,6 +2822,41 @@ fn vec_u8_decode_rejects_len_prefixed_elements() {
     assert!(matches!(result, Err(Error::LengthMismatch)));
     drop(guard);
     reset_decode_state();
+}
+#[test]
+fn encode_seq_payloads_counts_and_keeps_layout() {
+    let items: Vec<Vec<u8>> = vec![vec![1, 2], vec![3], vec![4, 5, 6]];
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _guard = DecodeFlagsGuard::enter(flags);
+        let mut out = Vec::new();
+        let mut encoder = Encoder::for_buffer(&mut out);
+        encode_seq_payloads::<Vec<u8>, _>(&mut encoder, items.iter())
+            .expect("encode length-prefixed seq");
+        let mut expected = (items.len() as u64).to_le_bytes().to_vec();
+        for item in &items {
+            let mut bytes = Vec::new();
+            serialize_to_buffer(item, &mut bytes).expect("encode expected item");
+            write_len_to_vec_with_flags(&mut expected, bytes.len() as u64, flags);
+            expected.extend_from_slice(&bytes);
+        }
+        assert_eq!(out, expected, "flags {flags:#04x}");
+    }
+}
+#[test]
+fn encode_slice_payloads_matches_length_prefixed_layout() {
+    let items = [0x0102_u16, 0x0304_u16, 0x0506_u16];
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _guard = DecodeFlagsGuard::enter(flags);
+        let mut out = Vec::new();
+        let mut encoder = Encoder::for_buffer(&mut out);
+        encode_slice_payloads(&mut encoder, &items).expect("encode length-prefixed slice");
+        let mut expected = 3_u64.to_le_bytes().to_vec();
+        for item in items {
+            write_len_to_vec_with_flags(&mut expected, 2, flags);
+            expected.extend_from_slice(&item.to_le_bytes());
+        }
+        assert_eq!(out, expected, "flags {flags:#04x}");
+    }
 }
 // Preserve pointer and length boundary coverage under `core::tests`.
 include!("../core_payload_boundary_tests.rs");

@@ -311,7 +311,7 @@ fn display_type(ty: &Type) -> String {
         Type::Name => "Name".to_string(),
         Type::DataSpaceId => "DataSpaceId".to_string(),
         Type::AxtDescriptor => "AxtDescriptor".to_string(),
-        Type::AssetHandle => "AssetHandle".to_string(),
+        Type::AxtAnchoredSpendV1 => "AxtAnchoredSpendV1".to_string(),
         Type::ProofBlob => "ProofBlob".to_string(),
         Type::SoracloudRequest => "SoracloudRequest".to_string(),
         Type::SoracloudResponse => "SoracloudResponse".to_string(),

@@ -93,6 +93,10 @@ pub(super) enum MembershipCapturePhase<'storage> {
     Attached(TransactionsBlock<'storage>),
     Prepared(PreparedTransactionsBlock<'storage>),
     Captured(DetachedTransactionsBlock),
+    FrozenPublishing(DetachedTransactionsPublicationSlot<'storage, ()>),
+    FrozenPublished {
+        _retirement: PublishedTransactions<()>,
+    },
     Published(PreparedTransactionsBlock<'storage>),
 }
 
@@ -110,6 +114,7 @@ pub(crate) struct TransactionsCaptureSlot<'storage> {
     // Last: the original staged payloads precede the successful capture's
     // deferred notification. All physical siblings must already be free.
     cleanup: Option<MembershipRelease>,
+    retry_cleanup: Option<DetachedTransactionsPublicationSlot<'storage, ()>>,
 }
 
 impl<'storage> TransactionsCaptureSlot<'storage> {
@@ -189,6 +194,21 @@ impl<'storage> TransactionsCaptureSlot<'storage> {
     /// displaced membership payloads remain in this slot after physical release.
     pub(crate) fn publish_prepared(&mut self) {
         assert!(!self.released, "membership capture was terminally released");
+        if let MembershipCapturePhase::FrozenPublishing(slot) = &self.phase {
+            assert!(
+                slot.is_prepared(),
+                "complete original frozen membership preparation"
+            );
+            let MembershipCapturePhase::FrozenPublishing(slot) =
+                std::mem::replace(&mut self.phase, MembershipCapturePhase::Empty)
+            else {
+                unreachable!()
+            };
+            self.phase = MembershipCapturePhase::FrozenPublished {
+                _retirement: slot.into_prepared().publish(),
+            };
+            return;
+        }
         let MembershipCapturePhase::Prepared(prepared) = &mut self.phase else {
             panic!("original prepared membership publication");
         };
@@ -242,7 +262,13 @@ impl<'storage> TransactionsCaptureSlot<'storage> {
             MembershipCapturePhase::Attached(block) => Some(block),
             MembershipCapturePhase::Prepared(prepared)
             | MembershipCapturePhase::Published(prepared) => Some(&mut prepared.block),
-            MembershipCapturePhase::Captured(_) | MembershipCapturePhase::Empty => None,
+            MembershipCapturePhase::FrozenPublishing(slot) => {
+                slot.release_writers();
+                None
+            }
+            MembershipCapturePhase::Captured(_)
+            | MembershipCapturePhase::FrozenPublished { .. }
+            | MembershipCapturePhase::Empty => None,
         };
         if let Some(block) = block {
             block.release_writers();
@@ -302,6 +328,7 @@ impl<'storage> TransactionsBlock<'storage> {
             attempted: false,
             released: false,
             cleanup: None,
+            retry_cleanup: None,
         }
     }
 
@@ -322,13 +349,75 @@ impl<'storage> TransactionsBlock<'storage> {
 #[must_use = "retain original membership through enclosing physical release"]
 pub struct TransactionsBlockField<'storage> {
     pub(super) slot: TransactionsCaptureSlot<'storage>,
+    // Exact original family only; frozen reads reopen its retained predecessor,
+    // never its current root or a replacement live view.
+    original_history: &'storage history::Map,
 }
 
 impl<'storage> TransactionsBlockField<'storage> {
     pub(crate) fn new(block: TransactionsBlock<'storage>) -> Self {
         Self {
+            original_history: block.blocks_ref,
             slot: block.capture_slot(),
         }
+    }
+
+    /// Freeze the admitted action and release its actual logical membership mutex.
+    /// Every enclosing original slot must exist before this capture is attempted.
+    pub(crate) fn finish_freeze(&mut self) -> Result<(), TransactionsBlockError> {
+        self.slot.try_capture()
+    }
+
+    pub(crate) fn install_frozen_publication(&mut self, target: &'storage TransactionsStorage) {
+        assert!(!self.slot.released && self.slot.retry_cleanup.is_none());
+        assert!(matches!(
+            self.slot.phase,
+            MembershipCapturePhase::Captured(_)
+        ));
+        let MembershipCapturePhase::Captured(original) =
+            std::mem::replace(&mut self.slot.phase, MembershipCapturePhase::Empty)
+        else {
+            unreachable!()
+        };
+        self.slot.phase =
+            MembershipCapturePhase::FrozenPublishing(original.publication_slot(target));
+    }
+
+    pub(crate) fn try_prepare_frozen_publication(
+        &mut self,
+    ) -> Result<(), mv::PublicationPreparationError<core::convert::Infallible>> {
+        assert!(!self.slot.released);
+        let MembershipCapturePhase::FrozenPublishing(slot) = &mut self.slot.phase else {
+            panic!("original frozen membership publication slot required");
+        };
+        slot.try_prepare(|_, _| Ok(()))
+    }
+
+    pub(crate) fn recover_installed_frozen_publication(&mut self) {
+        assert!(!self.slot.released && self.slot.retry_cleanup.is_none());
+        let original = match &mut self.slot.phase {
+            MembershipCapturePhase::Captured(_) => return,
+            MembershipCapturePhase::FrozenPublishing(slot) => slot.recover_original(),
+            _ => panic!("original frozen membership required"),
+        };
+        let MembershipCapturePhase::FrozenPublishing(slot) = std::mem::replace(
+            &mut self.slot.phase,
+            MembershipCapturePhase::Captured(original),
+        ) else {
+            unreachable!()
+        };
+        self.slot.retry_cleanup = Some(slot);
+    }
+
+    /// Retire the original capture and attempt notices after every sibling unlocks.
+    pub(crate) fn retire_frozen_cleanup(&mut self) {
+        assert!(!self.slot.released);
+        assert!(matches!(
+            self.slot.phase,
+            MembershipCapturePhase::Captured(_)
+        ));
+        drop(self.slot.retry_cleanup.take());
+        drop(self.slot.cleanup.take());
     }
 
     pub(crate) fn try_prepare_publication(&mut self) -> Result<(), TransactionsBlockError> {
@@ -341,8 +430,21 @@ impl<'storage> TransactionsBlockField<'storage> {
         self.slot.try_prepare_physical()
     }
 
+    /// Return temporary tree publication locks to this exact original field after
+    /// normal Busy. The admitted identity, staged set and charged cursor stay here.
+    pub(crate) fn release_physical_for_retry(&mut self) {
+        let MembershipCapturePhase::Prepared(prepared) = &mut self.slot.phase else {
+            panic!("original logically prepared membership");
+        };
+        prepared.assert_unpublished();
+        if let Some(history) = prepared.block._guard.history.as_mut() {
+            history.release_for_retry();
+        }
+    }
+
     /// Move the exact charged successor after a normal physical Busy refusal.
     /// The existing field retains all physical-release notices until aggregate cleanup.
+    #[cfg(test)]
     pub(crate) fn recover_preparation(&mut self) -> history::Pending {
         let MembershipCapturePhase::Prepared(prepared) = &mut self.slot.phase else {
             panic!("original logically prepared membership");
@@ -402,20 +504,59 @@ impl TransactionsReadOnly for TransactionsBlockField<'_> {
         Key: Borrow<Q>,
         Q: Hash + Eq + Ord + ?Sized,
     {
-        self.slot.executing().get(key)
+        assert!(!self.slot.released);
+        match &self.slot.phase {
+            MembershipCapturePhase::Captured(original) => {
+                if original.current.transactions.contains(key) {
+                    return Some(original.current.height);
+                }
+                let baseline = self
+                    .original_history
+                    .read_predecessor(
+                        original
+                            .history
+                            .baseline
+                            .as_ref()
+                            .expect("original membership cut"),
+                    )
+                    .expect("retained original membership family");
+                membership_at_cut(
+                    original.predecessor.as_deref(),
+                    &baseline,
+                    original.revert,
+                    key,
+                )
+            }
+            _ => self.slot.executing().get(key),
+        }
     }
 }
 
 impl JsonSerializeTrait for TransactionsBlockField<'_> {
     fn json_serialize(&self, out: &mut String) {
-        self.slot.executing().json_serialize(out);
-    }
-
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn json::JsonWriteSink,
-    ) -> Result<(), json::BoundedJsonError> {
-        self.slot.executing().json_serialize_to(out)
+        assert!(!self.slot.released);
+        match &self.slot.phase {
+            MembershipCapturePhase::Captured(original) => {
+                let baseline = self
+                    .original_history
+                    .read_predecessor(
+                        original
+                            .history
+                            .baseline
+                            .as_ref()
+                            .expect("original membership cut"),
+                    )
+                    .expect("retained original membership family");
+                serialization::write_transactions_cut_json(
+                    Some(&original.current),
+                    original.predecessor.as_deref(),
+                    &baseline,
+                    original.revert,
+                    out,
+                );
+            }
+            _ => self.slot.executing().json_serialize(out),
+        }
     }
 }
 

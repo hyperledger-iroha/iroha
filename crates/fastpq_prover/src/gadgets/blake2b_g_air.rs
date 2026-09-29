@@ -1,4 +1,4 @@
-//! Quadratic, fully linked BLAKE2b G-function constraint composition.
+//! Quadratic, fully linked `BLAKE2b` G-function constraint composition.
 //!
 //! The schedule is fixed by RFC 7693 sections 2.1 and 3.1:
 //! <https://www.rfc-editor.org/rfc/rfc7693#section-3.1>.
@@ -236,7 +236,7 @@ mod tests {
     // explicit shift/or rotation instead of the witness generator's operations.
     fn reference(mut words: [u64; 4], message: [u64; 2]) -> [u64; 4] {
         let mask = u128::from(u64::MAX);
-        let rotate = |word: u64, count| (word >> count) | (word << (64 - count));
+        let rotate = |word: u64, count| word.rotate_right(count);
         for (word, [d_rotation, b_rotation]) in message.into_iter().zip([[32, 24], [16, 63]]) {
             words[0] =
                 ((u128::from(words[0]) + u128::from(words[1]) + u128::from(word)) & mask) as u64;

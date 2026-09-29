@@ -246,16 +246,16 @@ impl DaShardCursorIndex {
     ) -> Result<(), DaShardCursorError> {
         self.record_records(lane_config, &bundle.commitments, block_height)
     }
-    /// Record a slice of commitments against the shard cursor index.
+    /// Record borrowed commitments against the shard cursor index.
     ///
     /// # Errors
     ///
     /// Returns [`DaShardCursorError::Regression`] if any commitment attempts to regress an existing
     /// cursor or [`DaShardCursorError::UnknownLane`] when a commitment references an unmapped lane.
-    pub fn record_records(
+    pub fn record_records<'a>(
         &mut self,
         lane_config: &LaneConfig,
-        records: &[DaCommitmentRecord],
+        records: impl IntoIterator<Item = &'a DaCommitmentRecord>,
         block_height: u64,
     ) -> Result<(), DaShardCursorError> {
         let mut candidate = self.clone();
@@ -1451,6 +1451,35 @@ mod tests {
             index.get(3, LaneId::new(3)).is_none(),
             "cursor should remain untouched"
         );
+    }
+    #[test]
+    fn borrowed_bundle_positions_exclude_hidden_rows_and_keep_rollback() {
+        let config = lane_config_with_mappings(&[(0, 7), (1, 8)]);
+        let records = [
+            sample_record(0, 1, 4),
+            sample_record(9, 9, 9),
+            sample_record(1, 2, 6),
+        ];
+        let positions = [0, 2];
+        let mut index = DaShardCursorIndex::new(&config);
+        index
+            .record_records(&config, positions.iter().map(|&i| &records[i]), 3)
+            .unwrap();
+        assert_eq!(index.get(7, LaneId::new(0)).unwrap().sequence, 4);
+        assert_eq!(index.get(8, LaneId::new(1)).unwrap().sequence, 6);
+        assert!(index.get(9, LaneId::new(9)).is_none());
+        let rejected = [
+            sample_record(0, 1, 5),
+            sample_record(9, 9, 9),
+            sample_record(1, 2, 5),
+        ];
+        assert!(
+            index
+                .record_records(&config, positions.iter().map(|&i| &rejected[i]), 4)
+                .is_err()
+        );
+        assert_eq!(index.get(7, LaneId::new(0)).unwrap().sequence, 4);
+        assert_eq!(index.get(8, LaneId::new(1)).unwrap().sequence, 6);
     }
     #[test]
     fn record_records_rolls_back_when_later_record_regresses() {

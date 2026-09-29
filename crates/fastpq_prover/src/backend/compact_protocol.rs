@@ -122,7 +122,7 @@ impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
     }
 }
 
-/// Private typed proof; its Norito schema is distinct from production ProofV1.
+/// Private typed proof; its Norito schema is distinct from production `ProofV1`.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::compact_protocol::CompactProof",
@@ -1099,7 +1099,8 @@ mod tests {
         }
         let digest = WireDigest::new([0; 6]).unwrap();
         // Fp4 payloads are the canonical 32-byte carrier, without struct framing.
-        for (rows, width, constraints) in [(65_536, 342, 923)] {
+        {
+            let (rows, width, constraints) = (65_536, 342, 923);
             let air = ShapeOnly(FixedAirSchema {
                 trace_rows: rows,
                 width,

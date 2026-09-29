@@ -5,7 +5,7 @@
 //! mirrors therefore precede every Fiat–Shamir challenge in the compact engine.
 //! The private relation remains the complete fixed public-transfer SMT AIR.
 //!
-//! The caller must authenticate the expected PublicIO, execution authority and
+//! The caller must authenticate the expected `PublicIO`, execution authority and
 //! outer AXT inputs. This wrapper grants no handle authority or source finality;
 //! its touched-balance roots are not authenticated consensus state roots. The
 //! surrounding ABI must still check expiry at use, handle signatures/replay,

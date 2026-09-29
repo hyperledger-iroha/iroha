@@ -1,28 +1,77 @@
-use std::{
-    collections::BTreeSet,
-    env,
-    error::Error,
-    ffi::OsStr,
-    fmt::Write as _,
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+#[cfg(any(feature = "cuda", test))]
+use std::path::Path;
+use std::path::PathBuf;
+use std::{collections::BTreeSet, env, error::Error, fmt::Write as _, fs};
+#[cfg(feature = "cuda")]
+use std::{ffi::OsStr, process::Command};
+#[cfg(any(feature = "cuda", test))]
+#[path = "src/cuda_build_policy.rs"]
+mod cuda_build_policy;
+#[cfg(feature = "cuda")]
+#[path = "src/cuda_provenance.rs"]
+mod cuda_provenance;
+#[cfg(any(feature = "cuda", test))]
+use cuda_build_policy::{CudaPtxMode, parse_cuda_ptx_mode, reject_generated_release_ptx};
+#[cfg(feature = "cuda")]
 const DEFAULT_CUDA_GENCODE: &str = "arch=compute_86,code=sm_86";
+#[cfg(any(feature = "cuda", test))]
+const CUDA_PTX_STEMS: [&str; 10] = [
+    "aes",
+    "bitonic_sort",
+    "bn254",
+    "poseidon",
+    "sha256",
+    "sha256_leaves",
+    "sha256_pairs_reduce",
+    "sha3",
+    "signature",
+    "vector",
+];
 const ISO20022_SCHEMA_SPEC_PATH: &str = "src/assets/iso20022_schema_v1/schema_v1.tsv";
 const ISO20022_SCHEMA_ASSET: &str = include_str!("src/assets/iso20022_schema_v1/schema_v1.tsv");
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CudaPtxMode {
-    Bundled,
-    Generate,
-    Check,
-}
+const METAL_SOURCES: [(&str, &str); 9] = [
+    (
+        "metal_vadd32",
+        include_str!("src/assets/text_v1/metal_vadd32.metal"),
+    ),
+    (
+        "metal_vadd64",
+        include_str!("src/assets/text_v1/metal_vadd64.metal"),
+    ),
+    ("metal_bitwise", include_str!("src/metal_bitwise.metal")),
+    (
+        "metal_sha256_compress",
+        include_str!("src/assets/text_v1/metal_sha256_compress.metal"),
+    ),
+    (
+        "metal_sha256_leaves",
+        include_str!("src/assets/text_v1/metal_sha256_leaves.metal"),
+    ),
+    (
+        "metal_sha256_pairs_reduce",
+        include_str!("src/assets/text_v1/metal_sha256_pairs_reduce.metal"),
+    ),
+    (
+        "metal_keccak_f1600",
+        include_str!("src/assets/text_v1/metal_keccak_f1600.metal"),
+    ),
+    (
+        "metal_aes_rounds",
+        include_str!("src/assets/text_v1/metal_aes_rounds.metal"),
+    ),
+    ("metal_ed25519", include_str!("src/metal_ed25519.metal")),
+];
+const METAL_SOURCE_DIGEST: &str =
+    "9c8f09f49746b6909d1565b6bc3175bb77e86c796bf911c07a722bd540218de5";
+const METAL_LIBRARY_DIGEST: &str =
+    "fe62a035ab7481646e64c2f272f38669c353b95f5ab79ec5876d412f88237170";
 fn main() {
     println!("cargo:rerun-if-changed=spec/syscalls.toml");
     println!("cargo:rerun-if-env-changed=IVM_CUDA_PTX_MODE");
     println!("cargo:rerun-if-env-changed=IVM_CUDA_NVCC");
     println!("cargo:rerun-if-env-changed=IVM_CUDA_GENCODE");
     println!("cargo:rerun-if-env-changed=IVM_CUDA_NVCC_EXTRA");
+    println!("cargo:rerun-if-env-changed=IVM_CUDA_TRUSTED_KEY_SHA256");
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=CXX");
     println!("cargo:rerun-if-env-changed=HOST_CXX");
@@ -33,10 +82,14 @@ fn main() {
             target.replace('-', "_")
         );
     }
-    if env::var_os("CARGO_FEATURE_CUDA").is_some()
-        && let Err(err) = build_cuda_artifacts()
-    {
+    #[cfg(feature = "cuda")]
+    if let Err(err) = build_cuda_artifacts() {
         panic!("ivm cuda build failed: {err}");
+    }
+    if env::var("TARGET").is_ok_and(|target| target.contains("apple-darwin"))
+        && env::var_os("CARGO_FEATURE_METAL").is_some()
+    {
+        verify_metal_bundle().expect("ivm Metal bundle provenance check failed");
     }
     if let Err(err) = generate_syscall_signatures() {
         panic!("ivm syscall signature generation failed: {err}");
@@ -44,6 +97,26 @@ fn main() {
     if let Err(err) = generate_iso20022_schema() {
         panic!("ivm ISO 20022 schema generation failed: {err}");
     }
+}
+
+fn verify_metal_bundle() -> Result<(), String> {
+    use sha2::Digest as _;
+
+    let mut sources = sha2::Sha256::new();
+    for (name, source) in METAL_SOURCES {
+        sources.update((name.len() as u64).to_le_bytes());
+        sources.update(name.as_bytes());
+        sources.update((source.len() as u64).to_le_bytes());
+        sources.update(source.as_bytes());
+    }
+    if format!("{:x}", sources.finalize()) != METAL_SOURCE_DIGEST {
+        return Err("Metal source bytes differ from the pinned bundle inputs".into());
+    }
+    let binary = include_bytes!("metal/v1/ivm_kernels.metallib");
+    if format!("{:x}", sha2::Sha256::digest(binary)) != METAL_LIBRARY_DIGEST {
+        return Err("Metal library bytes differ from the pinned bundle".into());
+    }
+    Ok(())
 }
 struct IsoField {
     pattern: String,
@@ -451,36 +524,34 @@ fn declared_registers(declaration: &str) -> Result<Vec<usize>, Box<dyn Error>> {
     }
     Ok(registers)
 }
+#[cfg(feature = "cuda")]
 fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let cuda_dir = manifest_dir.join("cuda");
-    if !cuda_dir.exists() {
-        return Ok(());
-    }
     println!("cargo:rerun-if-changed={}", cuda_dir.display());
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     fs::create_dir_all(&out_dir)?;
     let mode = cuda_ptx_mode()?;
-    let mut sources = Vec::new();
+    reject_generated_release_ptx(mode, &env::var("PROFILE").unwrap_or_default())?;
+    let mut observed = BTreeSet::new();
     for entry in fs::read_dir(&cuda_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension() == Some(OsStr::new("cu")) {
-            sources.push(path);
+            let stem = path
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .ok_or_else(|| format!("CUDA source has a non-UTF-8 stem: {}", path.display()))?;
+            observed.insert(stem.to_owned());
         }
     }
-    sources.sort();
-    if sources.is_empty() {
-        return Err(format!("no CUDA sources found in {}", cuda_dir.display()).into());
+    if let Some(error) = cuda_source_inventory_error(&observed) {
+        return Err(error.into());
     }
-    let mut artifacts = Vec::with_capacity(sources.len());
-    for path in sources {
+    let mut artifacts = Vec::with_capacity(CUDA_PTX_STEMS.len());
+    for stem in CUDA_PTX_STEMS {
+        let path = cuda_dir.join(format!("{stem}.cu"));
         println!("cargo:rerun-if-changed={}", path.display());
-        let stem = path
-            .file_stem()
-            .ok_or_else(|| format!("CUDA source has no file stem: {}", path.display()))?
-            .to_string_lossy()
-            .into_owned();
         let bundled = cuda_dir.join(format!("{stem}.ptx"));
         // A missing watched file keeps the script permanently stale (nvcc and
         // the whole downstream graph would rerun every build); the directory
@@ -490,8 +561,11 @@ fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
         }
         artifacts.push((path, bundled, out_dir.join(format!("{stem}.ptx")), stem));
     }
+    for name in ["provenance.v1", "provenance.v1.sig", "provenance.v1.pub"] {
+        println!("cargo:rerun-if-changed={}", cuda_dir.join(name).display());
+    }
     if mode != CudaPtxMode::Generate {
-        // TODO: Check in all 11 reproducibly generated PTX files plus their
+        // TODO: Check in all 10 reproducibly generated PTX files plus their
         // signed provenance manifest. Until then, ordinary CUDA builds must
         // fail here instead of compiling host-specific artifacts implicitly.
         let missing: Vec<_> = artifacts
@@ -507,34 +581,78 @@ fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
             .into());
         }
     }
+    let verified = if mode == CudaPtxMode::Generate {
+        None
+    } else {
+        let trusted_key_sha256 = env::var("IVM_CUDA_TRUSTED_KEY_SHA256").map_err(
+            |_| "bundled CUDA requires the reviewed IVM_CUDA_TRUSTED_KEY_SHA256 build input",
+        )?;
+        Some(cuda_provenance::verify_bundle(
+            &cuda_dir,
+            &CUDA_PTX_STEMS,
+            &trusted_key_sha256,
+        )?)
+    };
+    if let Some(verified) = &verified {
+        // This is the signed claim, not an independent image measurement. The
+        // release runner must compare it with its own pinned toolkit image.
+        println!(
+            "cargo:rustc-env=IVM_CUDA_SIGNED_IMAGE_SHA256={}",
+            verified.cuda_image_sha256
+        );
+    }
     match mode {
         CudaPtxMode::Bundled => {
-            for (_, bundled, target, _) in artifacts {
-                install_bundled_ptx(&bundled, &target)?;
+            let verified = verified.expect("bundled mode verified before installation");
+            for ((_, _, target, _), bytes) in artifacts.into_iter().zip(&verified.artifacts) {
+                install_verified_ptx(bytes, &target)?;
             }
         }
         CudaPtxMode::Generate | CudaPtxMode::Check => {
             let nvcc = NvccConfig::from_env();
+            if let Some(verified) = &verified {
+                verify_nvcc_attestation(verified, &nvcc)?;
+            }
             if let Some(host_compiler) = &nvcc.host_compiler {
                 println!(
                     "cargo:warning=ivm cuda build: using CUDA host compiler {}",
                     host_compiler.display()
                 );
             }
-            for (source, bundled, target, stem) in artifacts {
+            for (index, (source, _, target, stem)) in artifacts.into_iter().enumerate() {
                 if mode == CudaPtxMode::Generate {
                     compile_cuda_source(&cuda_dir, &source, &target, &nvcc)?;
                     continue;
                 }
                 let generated = out_dir.join(format!("{stem}.generated.ptx"));
                 compile_cuda_source(&cuda_dir, &source, &generated, &nvcc)?;
-                verify_bundled_ptx(&bundled, &generated)?;
-                install_bundled_ptx(&bundled, &target)?;
+                let expected = &verified
+                    .as_ref()
+                    .expect("check mode verified before compilation")
+                    .artifacts[index];
+                verify_bundled_ptx(expected, &generated)?;
+                install_verified_ptx(expected, &target)?;
             }
         }
     }
     Ok(())
 }
+#[cfg(any(feature = "cuda", test))]
+fn cuda_source_inventory_error(observed: &BTreeSet<String>) -> Option<String> {
+    let expected: BTreeSet<String> = CUDA_PTX_STEMS
+        .iter()
+        .map(|stem| (*stem).to_owned())
+        .collect();
+    if observed == &expected {
+        return None;
+    }
+    let missing: Vec<_> = expected.difference(observed).map(String::as_str).collect();
+    let unexpected: Vec<_> = observed.difference(&expected).map(String::as_str).collect();
+    Some(format!(
+        "CUDA source inventory must contain exactly ten production families; missing: {missing:?}; unexpected: {unexpected:?}"
+    ))
+}
+#[cfg(feature = "cuda")]
 fn cuda_ptx_mode() -> Result<CudaPtxMode, Box<dyn Error>> {
     match env::var("IVM_CUDA_PTX_MODE") {
         Ok(value) => parse_cuda_ptx_mode(&value).map_err(Into::into),
@@ -542,22 +660,14 @@ fn cuda_ptx_mode() -> Result<CudaPtxMode, Box<dyn Error>> {
         Err(err) => Err(format!("invalid IVM_CUDA_PTX_MODE: {err}").into()),
     }
 }
-fn parse_cuda_ptx_mode(value: &str) -> Result<CudaPtxMode, String> {
-    match value {
-        "bundled" => Ok(CudaPtxMode::Bundled),
-        "generate" => Ok(CudaPtxMode::Generate),
-        "check" => Ok(CudaPtxMode::Check),
-        _ => Err(format!(
-            "IVM_CUDA_PTX_MODE must be one of bundled, generate, or check; got {value:?}"
-        )),
-    }
-}
+#[cfg(feature = "cuda")]
 struct NvccConfig {
     executable: String,
     host_compiler: Option<PathBuf>,
     gencode: String,
     extra_flags: Vec<String>,
 }
+#[cfg(feature = "cuda")]
 impl NvccConfig {
     fn from_env() -> Self {
         let executable = env::var("IVM_CUDA_NVCC")
@@ -579,7 +689,43 @@ impl NvccConfig {
             extra_flags,
         }
     }
+    #[cfg(feature = "cuda")]
+    fn manifest_flags(&self) -> String {
+        let mut flags = String::from("-ptx -std=c++14");
+        if let Some(host_compiler) = &self.host_compiler {
+            write!(&mut flags, " -ccbin={}", host_compiler.display())
+                .expect("writing to String cannot fail");
+        }
+        if !self.gencode.trim().is_empty() {
+            write!(&mut flags, " -gencode {}", self.gencode)
+                .expect("writing to String cannot fail");
+        }
+        for flag in &self.extra_flags {
+            write!(&mut flags, " {flag}").expect("writing to String cannot fail");
+        }
+        flags
+    }
 }
+#[cfg(feature = "cuda")]
+fn verify_nvcc_attestation(
+    verified: &cuda_provenance::VerifiedCudaBundle,
+    nvcc: &NvccConfig,
+) -> Result<(), Box<dyn Error>> {
+    if verified.target_profile != nvcc.gencode || verified.nvcc_flags != nvcc.manifest_flags() {
+        return Err("current nvcc flags or target differ from signed CUDA provenance".into());
+    }
+    let output = Command::new(&nvcc.executable).arg("--version").output()?;
+    if !output.status.success() {
+        return Err(format!("{} --version failed: {}", nvcc.executable, output.status).into());
+    }
+    let mut bytes = output.stdout;
+    bytes.extend_from_slice(&output.stderr);
+    if verified.nvcc_version_sha256 != cuda_provenance::sha256_hex(&bytes) {
+        return Err("current nvcc version differs from signed CUDA provenance".into());
+    }
+    Ok(())
+}
+#[cfg(feature = "cuda")]
 fn compile_cuda_source(
     cuda_dir: &Path,
     source: &Path,
@@ -626,22 +772,21 @@ fn compile_cuda_source(
     let bytes = fs::read(target)?;
     validate_ptx_bytes(target, &bytes)
 }
-fn install_bundled_ptx(bundled: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
-    let bytes = fs::read(bundled)
-        .map_err(|err| format!("failed to read checked-in PTX {}: {err}", bundled.display()))?;
-    validate_ptx_bytes(bundled, &bytes)?;
+#[cfg(feature = "cuda")]
+fn install_verified_ptx(bytes: &[u8], target: &Path) -> Result<(), Box<dyn Error>> {
+    validate_ptx_bytes(target, bytes)?;
     fs::write(target, bytes)?;
     Ok(())
 }
-fn verify_bundled_ptx(bundled: &Path, generated: &Path) -> Result<(), Box<dyn Error>> {
-    let expected = fs::read(bundled)?;
+#[cfg(feature = "cuda")]
+fn verify_bundled_ptx(expected: &[u8], generated: &Path) -> Result<(), Box<dyn Error>> {
     let actual = fs::read(generated)?;
-    validate_ptx_bytes(bundled, &expected)?;
+    validate_ptx_bytes(generated, expected)?;
     validate_ptx_bytes(generated, &actual)?;
     if expected != actual {
         return Err(format!(
-            "generated PTX differs from checked-in artifact {} (expected {} bytes, generated {} bytes)",
-            bundled.display(),
+            "generated PTX differs from signed bundled artifact {} (expected {} bytes, generated {} bytes)",
+            generated.display(),
             expected.len(),
             actual.len()
         )
@@ -649,6 +794,7 @@ fn verify_bundled_ptx(bundled: &Path, generated: &Path) -> Result<(), Box<dyn Er
     }
     Ok(())
 }
+#[cfg(any(feature = "cuda", test))]
 fn validate_ptx_bytes(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     let text = std::str::from_utf8(bytes)
         .map_err(|err| format!("PTX {} is not UTF-8 text: {err}", path.display()))?;
@@ -666,6 +812,7 @@ fn validate_ptx_bytes(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
+#[cfg(feature = "cuda")]
 fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
     if target_os != "linux" || explicit_cxx_configured() {
         return None;
@@ -681,8 +828,46 @@ fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
     }
     None
 }
+#[cfg(feature = "cuda")]
 fn explicit_cxx_configured() -> bool {
     env::var_os("CXX").is_some()
         || env::var_os("HOST_CXX").is_some()
         || env::vars_os().any(|(key, _)| key.to_string_lossy().starts_with("CXX_"))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ptx_validator_rejects_comment_only_placeholders() {
+        let path = Path::new("placeholder.ptx");
+        assert!(validate_ptx_bytes(path, b"// Placeholder PTX; CUDA stays disabled.\n").is_err());
+    }
+    #[test]
+    fn cuda_source_inventory_requires_all_ten_families() {
+        let mut stems: BTreeSet<String> =
+            CUDA_PTX_STEMS.iter().map(|stem| (*stem).into()).collect();
+        assert_eq!(cuda_source_inventory_error(&stems), None);
+        stems.remove("signature");
+        assert!(
+            cuda_source_inventory_error(&stems)
+                .unwrap()
+                .contains("signature")
+        );
+        stems.insert("signature".into());
+        stems.insert("float_diagnostic".into());
+        assert!(
+            cuda_source_inventory_error(&stems)
+                .unwrap()
+                .contains("float_diagnostic")
+        );
+    }
+    #[test]
+    fn ptx_validator_accepts_required_directives_and_entry() {
+        let path = Path::new("kernel.ptx");
+        let ptx = b".version 7.8\n\
+                    .target sm_86\n\
+                    .address_size 64\n\
+                    .visible .entry kernel() { ret; }\n";
+        assert!(validate_ptx_bytes(path, ptx).is_ok());
+    }
 }

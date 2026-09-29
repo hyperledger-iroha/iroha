@@ -56,10 +56,11 @@ impl Core {
         high_pqc: Option<crate::message::Qc>,
     ) -> Option<TimeoutVote> {
         let hq = high_pqc.as_ref().map(|qc| qc.view);
-        let msg = preimage::tmo_preimage(&self.instance, self.height, w, hq);
+        let msg = preimage::tmo_preimage(&self.instance, &self.cfg.epoch.id, self.height, w, hq);
         let sig = self.sign(me, &msg)?;
         Some(TimeoutVote {
             instance: self.instance,
+            epoch: self.cfg.epoch.id,
             height: self.height,
             view: w,
             high_pqc,
@@ -84,7 +85,14 @@ impl Core {
         {
             return;
         }
-        if verify_timeout_signature(&*self.crypto, &self.instance, &self.cfg.committee, &t).is_err()
+        if verify_timeout_signature(
+            &*self.crypto,
+            &self.instance,
+            &self.cfg.epoch.id,
+            &self.cfg.committee,
+            &t,
+        )
+        .is_err()
         {
             return;
         }
@@ -226,6 +234,7 @@ impl Core {
         };
         self.retx = [None, None];
         self.build = Build::Idle;
+        self.fresh_build = None;
         self.repropose = false;
         self.resend_recorded = None;
         self.proposal_sent_at = None;

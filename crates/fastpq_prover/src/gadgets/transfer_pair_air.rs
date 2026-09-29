@@ -10,7 +10,7 @@
 //! # Required statement and commitment phases
 //!
 //! 1. The verifier obtains an independently authenticated statement containing the
-//!    execution profile, complete PublicIO, domain size, pair count, both packing
+//!    execution profile, complete `PublicIO`, domain size, pair count, both packing
 //!    widths, schema/scale convention, and the complete canonical table commitment.
 //!    Prover metadata, an authority digest, or a witness-supplied flag cannot
 //!    authenticate that statement. Both table rows must be derived from the same

@@ -9,7 +9,7 @@ internal static class ToriiContractManifestJson
 {
     private const int MaxSchemaNodes = 256;
     private const int MaxSchemaDepth = 256;
-    private const int MaxBoundaryWords = 13;
+    private const int MaxBoundaryWords = 8192;
     // Mirrors ivm_abi::state_value::MAX_STATE_VALUE_NODES.
     private const int MaxStateTypeDepth = 256;
     private const int MaxStateTypeNodes = 256;
@@ -81,7 +81,7 @@ internal static class ToriiContractManifestJson
         "NftView",
         "QueryPage",
         "AxtDescriptor",
-        "AssetHandle",
+        "AxtAnchoredSpendV1",
         "ProofBlob",
         "SoracloudRequest",
         "SoracloudResponse",
@@ -496,13 +496,13 @@ internal static class ToriiContractManifestJson
         var fields = RequiredObjectList(root, "fields", $"{context}.fields", ParseArgumentField);
         if (fields.Count is < 1 or > MaxBoundaryWords)
         {
-            throw new JsonException($"{context}.fields must contain 1..13 items.");
+            throw new JsonException($"{context}.fields must contain 1..8192 items.");
         }
         RequireUnique(fields.Select(field => field.Name), $"{context}.fields");
         var words = fields.Sum(field => field.ValueType.WordCount);
         if (words > MaxBoundaryWords)
         {
-            throw new JsonException($"{context} exceeds the V1 register window.");
+            throw new JsonException($"{context} exceeds the V1 call table.");
         }
         return new ToriiEntrypointArgumentSchemaV1 { Fields = fields, WordCount = words };
     }
@@ -617,7 +617,6 @@ internal static class ToriiContractManifestJson
         var name = RequiredExactString(root, "name", $"{context}.name");
         var fields = RequiredStringList(root, "fields", $"{context}.fields");
         if (!IsCanonicalSchemaStructIdentifier(name)
-            || fields.Count == 0
             || fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
         {
             throw new JsonException($"{context} must use canonical Kotodama identifiers.");
@@ -700,10 +699,7 @@ internal static class ToriiContractManifestJson
                 ToriiEntrypointValueTypeNodeKindV1.Result or
                 ToriiEntrypointValueTypeNodeKindV1.List;
             if (!suppressWords
-                && (isHandle || node.Kind is ToriiEntrypointValueTypeNodeKindV1.Leaf
-                    or ToriiEntrypointValueTypeNodeKindV1.Unit
-                    or ToriiEntrypointValueTypeNodeKindV1.Error
-                    or ToriiEntrypointValueTypeNodeKindV1.StateCursor))
+                && (isHandle || childCount == 0))
             {
                 wordCount = checked(wordCount + 1);
             }
@@ -916,8 +912,7 @@ internal static class ToriiContractManifestJson
         {
             case ToriiEntrypointValueTypeNodeKindV1.Struct:
                 var product = node.StructValue!;
-                if (product.Fields.Count == 0
-                    || !IsCanonicalSchemaStructIdentifier(product.Name)
+                if (!IsCanonicalSchemaStructIdentifier(product.Name)
                     || product.Fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
                 {
                     throw new JsonException($"{context} contains a noncanonical struct node.");
@@ -1621,7 +1616,6 @@ internal static class ToriiContractManifestJson
     private static JsonObject BuildStructNode(ToriiEntrypointStructTypeNodeV1 value, string context)
     {
         if (!IsCanonicalSchemaStructIdentifier(value.Name)
-            || value.Fields.Count == 0
             || value.Fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
         {
             throw new JsonException($"{context} must use canonical Kotodama identifiers.");
@@ -2379,6 +2373,8 @@ internal static class ToriiContractManifestJson
             {
                 return null;
             }
+            // Empty products retain their validated nominal name and have no fields.
+            if (Consume("}")) return string.Empty;
             var fields = new HashSet<string>(StringComparer.Ordinal);
             while (true)
             {

@@ -573,7 +573,7 @@ fn deterministic_query_schedule_retries_collisions_and_bias_tail() {
                 7
             }
             (1, 1) => 8,
-            (_, 0) => u64::try_from(ordinal + 7).expect("ordinal fits u64"),
+            (_, 0) => u64::from(ordinal + 7),
             _ => return Err(RnsNativeProofSamplingErrorV1::AttemptsExhausted),
         };
         Ok(Some(sampled))

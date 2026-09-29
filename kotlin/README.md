@@ -158,16 +158,19 @@ evaluation time are explicit command inputs. Bundle metadata supplies no trust.
 The tool emits a verified JSON record; shared fixture tests are host evidence,
 not physical StrongBox qualification.
 
-### CUDA acceleration
+### Automatic native acceleration
 
-`org.hyperledger.iroha.sdk.gpu.CudaAccelerators` is shared by Kotlin and Java
+`org.hyperledger.iroha.sdk.gpu.Accelerators` is shared by Kotlin and Java
 callers. Construct it with an explicit `Backend`, `disabled()`, or
-`loadNative(absoluteLibraryPath)`. Each of its five operations accepts an ordered
-batch, validates dimensions and canonical BN254 limbs, and owns its inputs and
-outputs. `status` describes device state; a null result means no accelerated
-computation. Native errors remain visible. See the [bridge contract and hardware
-task](../specs/sdk/android/gpu_operator_guide.md) for the required native artifact
-and numerical qualification. Ordinary host tests do not qualify CUDA hardware.
+`loadNative(absoluteLibraryPath)`. Its five batch operations validate dimensions
+and canonical BN254 limbs and own their inputs and outputs. The native bridge
+selects qualified acceleration automatically and recomputes through the CPU path
+when the device declines or fails. `status` describes CUDA availability; it does
+not determine whether an ordinary operation succeeds. A disabled or injected
+backend may return null when it declines a batch. Native resource errors remain
+visible. See the [native bridge contract](../specs/sdk/android/gpu_operator_guide.md)
+for artifact and qualification requirements. Ordinary native parity tests do not
+qualify CUDA hardware; the JNI completion-receipt gate remains open.
 
 ### JNI declaration and export checks
 
@@ -363,41 +366,30 @@ contradictory verification responses, and Merkle paths whose direction/length
 does not match the advertised bundle location. Requests are capped at 64 KiB
 and buffered responses at 8 MiB.
 
-### Authoritative Sumeragi status and operational diagnostics
+### Native Sumeragi status
 
-`HttpClientTransport.getSumeragiStatus()` reads only
-`GET /v1/sumeragi/status` into the closed protocol-v4
-`SumeragiV2Status` model. `getSumeragiDiagnostics()` separately reads
-`GET /v1/sumeragi/diagnostics` into `SumeragiDiagnosticsStatus`; diagnostics
-are durable operational evidence and must not be treated as consensus
-authority.
+`HttpClientTransport.getSumeragiStatus()` reads `GET /v1/sumeragi/status` into
+the closed protocol-8 `SumeragiStatus` model. Its current-round, footprint and
+same-applied-cut beacon observations do not confer finality authority.
 
 ```kotlin
 val status = transport.getSumeragiStatus().join()
-check(status.protocolVersion == 4)
+check(status.protocolVersion == 8)
 println("height=${status.height} view=${status.view} leader=${status.leader}")
-
-val diagnostics = transport.getSumeragiDiagnostics().join()
-diagnostics.nativeAmxParticipantApplications.forEach { row ->
-    println("lane=${row.laneId} height=${row.participantHeight} state=${row.state}")
-}
 ```
 
-Every JSON `u64` remains lossless as `BigInteger`. Status responses are capped
-at 1 MiB and diagnostics at 16 MiB; both routes require the exact JSON content
-type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
-fields and tags, and current Native AMX V2 evidence. The parsers reject
-status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
-participant rows, and inconsistent carrier identities.
+`SumeragiStatusWire` encodes the same model in a complete canonical Norito frame.
+Bare payloads and obsolete status layouts are rejected. Kotlin and Java share
+the Rust-generated JSON/Norito corpus at `fixtures/sumeragi/native_status_v1.tsv`.
+Every JSON `u64` remains lossless as `BigInteger`. Responses are capped at 1 MiB
+and require an exact JSON content type, canonical matching `Content-Length`
+when supplied, fatal UTF-8 and closed fields and tags.
 
-Diagnostics are immutable values for Kotlin and Java callers. Construction owns
-the NPoS seed, evidence vectors and nested JSON maps/arrays; changing supplied
-collections cannot change validated evidence. Constructors enforce unsigned
-counters, vector limits and the parser's nesting bound. Canonical wire values
-also own their signer, manifest and liveness vectors; decoders reject element
-counts that cannot fit the remaining frame before allocating. Direct Native AMX
-round construction enforces the same positive height and unsigned view bounds
-as parsing. Java-source fixture and mutation tests run in this module.
+The obsolete global revision-4 codec and inactive grouped AMX diagnostics
+surface are removed. Native preparation/readiness workflows require a new
+schema wired to the actual committee and published lane-state owners; they
+remain open. See `docs/source/native_protocol_retirement.md` for the assertion
+inventory and the separate cross-dataspace settlement requirements.
 
 ### KAGEMUSHA peer transports
 
@@ -870,7 +862,7 @@ transport.unregisterPushDevice(request, canonicalAuth).join()
 
 ## Verifying Key Registry
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+Binding-only IVM verifier labels are retired and rejected. Production proof-backed IVM invocation remains closed until the complete native execution relation and finalized State authority are implemented and qualified.
 
 `core-jvm` exposes Torii helpers for `/v1/zk/vk/register` and
 `/v1/zk/vk/update`. They validate production verifier backends, required
@@ -1073,14 +1065,15 @@ returning any prune classification.
 
 `MusubiInstructionsV1` supplies typed field-to-Norito constructors for immutable
 namespace registration; package-maintainer invitation, acceptance, revocation,
-role replacement, and removal; archive registration, location addition or
-renewal, and location retirement; release publication, yank, and unyank;
+role replacement, and removal; archive registration, signed pin-outbox inventory
+advance, location addition or renewal, and location retirement; release publication,
+yank, and unyank;
 permanent alias registration; exact release-digest assertion; package metadata
 replacement; and Parliament-enacted package ownership recovery,
 permanent-alias retargeting, artifact takedown, and registry-policy replacement.
 Each builder exposes `barePayload()`, `concreteFrame()`, and
 `toInstructionBox()`; transaction encoding preserves the dynamic pair inline,
-while standalone boxes use Rust's exact tuple schema. All nineteen cases and
+while standalone boxes use Rust's exact tuple schema. All twenty cases and
 their four wire layers are checked against
 [`fixtures/musubi/instructions_v1.json`](../fixtures/musubi/instructions_v1.json).
 

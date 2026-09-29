@@ -5,6 +5,8 @@
 
 mod attestation;
 mod cluster;
+mod control;
+mod epochs;
 mod fuzz;
 mod handlers;
 mod liveness;
@@ -82,6 +84,7 @@ pub(super) struct H {
     pub auto_fetch: bool,
     /// Answer `Execute` at once with `Valid(result_of(block))`.
     pub auto_exec: bool,
+    pub auto_control: bool,
     /// Keys passed as retired (restored like the others, never signing; no signer).
     pub retired: Vec<PublicKey>,
     /// `Init.nonce` of the latest start.
@@ -108,7 +111,16 @@ impl H {
     ) -> Self {
         let log = SignLog::new();
         let v = FakeValidators::new(n, 7, Some(log.clone()));
-        let topo = Topology::compute(&v.crypto, &I, &v.committee, 1, 0, W, &[]);
+        let topo = Topology::compute(
+            &v.crypto,
+            &I,
+            &crate::testing::TEST_EPOCH,
+            &v.committee,
+            1,
+            0,
+            W,
+            &[],
+        );
         let me = pick(&topo);
         let signers = vec![v.signer(me).clone()];
         let core = placeholder_core(&v, &local, &params, &signers);
@@ -131,6 +143,7 @@ impl H {
             auto_apply: true,
             auto_fetch: true,
             auto_exec: false,
+            auto_control: true,
             retired: Vec::new(),
             nonce: 0,
             last_build: None,
@@ -153,7 +166,16 @@ impl H {
     }
 
     pub fn config(&self, height: u64) -> HeightConfig {
+        let mut starts = vec![0];
+        starts.extend(self.committees.keys().copied().filter(|h| *h != 0));
+        let index = starts.iter().rposition(|start| *start <= height).unwrap();
+        let last = starts.get(index + 1).map_or(u64::MAX, |start| start - 1);
         HeightConfig {
+            epoch: Box::new(crate::testing::scheduled_epoch(
+                index as u64,
+                starts[index],
+                last,
+            )),
             committee: self
                 .committees
                 .range(..=height)
@@ -182,9 +204,16 @@ impl H {
             },
         };
         let t = tip.height;
-        let mut configs = vec![(t + 1, self.config(t + 1)), (t + 2, self.config(t + 2))];
+        let active = self.config(t + 1);
+        let mut configs = vec![
+            (t + 1, crate::types::ConfigSlot::Ready(active.clone())),
+            (
+                t + 2,
+                crate::testing::window_slot(&active, t + 2, self.config(t + 2)),
+            ),
+        ];
         if t > 0 {
-            configs.push((t, self.config(t)));
+            configs.push((t, crate::types::ConfigSlot::Ready(self.config(t))));
         }
         Init {
             instance: I,
@@ -290,6 +319,14 @@ impl H {
                             self.pending_exec.push((bh, *req, block.clone()));
                         }
                     }
+                    Action::BuildControlWitness { req, context } if self.auto_control => {
+                        queue.push_back(Event::ControlWitnessBuilt {
+                            req: *req,
+                            context: *context,
+                            witness: crate::types::ControlWitness::empty(),
+                            attest: false,
+                        });
+                    }
                     Action::BuildPayload { req, .. } => self.last_build = Some(*req),
                     Action::CommitBlock { block, commit_qc } => {
                         self.store.push((block.clone(), commit_qc.clone()));
@@ -325,7 +362,12 @@ impl H {
             height,
             block_hash: block.hash(&self.v.crypto),
             header: Box::new(block.header.clone()),
-            config_after_next: self.config(height + 2),
+            config: crate::testing::applied_config(
+                height,
+                &self.config(height),
+                self.config(height + 1),
+                self.config(height + 2),
+            ),
         }
     }
 
@@ -510,6 +552,8 @@ impl H {
     pub fn block(&self, view: u64, payload: &[u8]) -> Block {
         let topo = &self.core.topo;
         let header = BlockHeader {
+            control_witness: crate::types::ControlWitness::empty(),
+            epoch: self.config(self.height()).epoch.id,
             instance: I,
             height: self.height(),
             origin_view: view,
@@ -519,7 +563,7 @@ impl H {
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(view),
             skipped_leaders: topo.skipped_leader_keys(&self.committee(), view),
-            attest: false,
+            attest: self.height() == self.config(self.height()).epoch.last_height,
         };
         Block {
             header,
@@ -552,7 +596,14 @@ impl H {
         let parent_qc = self.core.tip.commit_qc.clone();
         let bh = self.bh(block);
         let ad = preimage::att_digest(&self.v.crypto, justify.as_ref(), parent_qc.as_ref());
-        let msg = preimage::prop_preimage(&I, self.height(), view, &bh, &ad);
+        let msg = preimage::prop_preimage(
+            &I,
+            &self.config(self.height()).epoch.id,
+            self.height(),
+            view,
+            &bh,
+            &ad,
+        );
         Proposal {
             instance: I,
             height: self.height(),
@@ -587,21 +638,38 @@ impl H {
         signers: &[ValidatorIndex],
         attest: bool,
     ) -> Qc {
-        let msg =
-            preimage::vote_preimage(kind, &I, self.height(), view, &value.0, &value.1, attest);
-        let statement = preimage::att_preimage(&I, self.height(), &value.0, &value.1);
+        let msg = preimage::vote_preimage(
+            kind,
+            &I,
+            &self.config(self.height()).epoch.id,
+            self.height(),
+            view,
+            &value.0,
+            &value.1,
+            attest,
+        );
+        let statement = preimage::att_preimage(
+            &I,
+            &self.config(self.height()).epoch.id,
+            self.height(),
+            &value.0,
+            &value.1,
+        );
         let mut sorted = signers.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
         let sigs: Vec<Signature> = sorted.iter().map(|i| self.sign_as(*i, &msg)).collect();
         let attestations = if kind == VoteKind::Commit && attest {
             (sorted.iter())
-                .map(|i| fake_attestation(&self.key_at(*i), self.height(), &statement))
+                .map(|i| fake_attestation(&self.key_at(*i), self.height(), &statement).signature)
                 .collect()
         } else {
             Vec::new()
         };
         Qc {
+            attestation_witness: (kind == VoteKind::Commit && attest)
+                .then(|| crate::message::ResultWitness::from_untrusted(statement.clone()).unwrap()),
+            epoch: self.config(self.height()).epoch.id,
             kind,
             instance: I,
             height: self.height(),
@@ -648,10 +716,25 @@ impl H {
         value: (Hash32, Hash32),
         attest: bool,
     ) -> Vote {
-        let msg =
-            preimage::vote_preimage(kind, &I, self.height(), view, &value.0, &value.1, attest);
-        let statement = preimage::att_preimage(&I, self.height(), &value.0, &value.1);
+        let msg = preimage::vote_preimage(
+            kind,
+            &I,
+            &self.config(self.height()).epoch.id,
+            self.height(),
+            view,
+            &value.0,
+            &value.1,
+            attest,
+        );
+        let statement = preimage::att_preimage(
+            &I,
+            &self.config(self.height()).epoch.id,
+            self.height(),
+            &value.0,
+            &value.1,
+        );
         Vote {
+            epoch: self.config(self.height()).epoch.id,
             kind,
             instance: I,
             height: self.height(),
@@ -674,8 +757,15 @@ impl H {
 
     pub fn timeout(&self, signer: ValidatorIndex, view: u64, qc: Option<Qc>) -> TimeoutVote {
         let hq = qc.as_ref().map(|q| q.view);
-        let msg = preimage::tmo_preimage(&I, self.height(), view, hq);
+        let msg = preimage::tmo_preimage(
+            &I,
+            &self.config(self.height()).epoch.id,
+            self.height(),
+            view,
+            hq,
+        );
         TimeoutVote {
+            epoch: self.config(self.height()).epoch.id,
             instance: I,
             height: self.height(),
             view,
@@ -699,6 +789,7 @@ impl H {
             .and_then(|t| t.high_pqc.clone());
         let sigs: Vec<Signature> = timeouts.iter().map(|t| t.sig).collect();
         TimeoutCert {
+            epoch: self.config(self.height()).epoch.id,
             instance: I,
             height: self.height(),
             view,
@@ -761,6 +852,8 @@ impl H {
     ) -> Block {
         Block {
             header: BlockHeader {
+                control_witness: crate::types::ControlWitness::empty(),
+                epoch: self.config(height).epoch.id,
                 instance: I,
                 height,
                 origin_view: 0,
@@ -770,7 +863,7 @@ impl H {
                 payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer,
                 skipped_leaders: Vec::new(),
-                attest: false,
+                attest: height == self.config(height).epoch.last_height,
             },
             payload: payload.to_vec(),
         }
@@ -801,20 +894,38 @@ impl H {
         keys: &[PublicKey],
         attest: bool,
     ) -> Qc {
-        let msg = preimage::vote_preimage(kind, &I, height, view, &value.0, &value.1, attest);
-        let statement = preimage::att_preimage(&I, height, &value.0, &value.1);
+        let msg = preimage::vote_preimage(
+            kind,
+            &I,
+            &self.config(height).epoch.id,
+            height,
+            view,
+            &value.0,
+            &value.1,
+            attest,
+        );
+        let statement = preimage::att_preimage(
+            &I,
+            &self.config(height).epoch.id,
+            height,
+            &value.0,
+            &value.1,
+        );
         let sigs: Vec<Signature> = keys.iter().map(|k| self.signer_of(k).sign(&msg)).collect();
         let indices = keys.iter().filter_map(|k| committee.index_of(k));
         let signers = Bitmap::from_indices(committee.n(), indices).unwrap();
         let attestations = if kind == VoteKind::Commit && attest {
             (signers.ones())
                 .filter_map(|i| committee.get(i))
-                .map(|k| fake_attestation(k, height, &statement))
+                .map(|k| fake_attestation(k, height, &statement).signature)
                 .collect()
         } else {
             Vec::new()
         };
         Qc {
+            attestation_witness: (kind == VoteKind::Commit && attest)
+                .then(|| crate::message::ResultWitness::from_untrusted(statement.clone()).unwrap()),
+            epoch: self.config(height).epoch.id,
             kind,
             instance: I,
             height,
@@ -865,6 +976,9 @@ impl H {
         let mut prefix = preimage::TAG_SIG.to_vec();
         prefix.push(kind);
         prefix.extend_from_slice(I.as_bytes());
+        let epoch = self.config(height).epoch.id;
+        prefix.extend_from_slice(&epoch.epoch.to_be_bytes());
+        prefix.extend_from_slice(epoch.context.as_bytes());
         prefix.extend_from_slice(&height.to_be_bytes());
         prefix.extend_from_slice(&view.to_be_bytes());
         let mut out: Vec<Vec<u8>> = self
@@ -890,7 +1004,7 @@ impl H {
 
 /// The installation event's initial record `{I, K, height: g = 0, everything else None}`.
 pub(super) fn initial_record(v: &FakeValidators, key: &PublicKey) -> Vec<u8> {
-    SafetyRecord::fresh(I, key.clone(), 0, None)
+    SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, key.clone(), 0, None)
         .encode(&v.crypto)
         .expect("encode the initial record")
 }
@@ -903,6 +1017,7 @@ fn placeholder_core(
     signers: &[FakeSigner],
 ) -> Core {
     let config = HeightConfig {
+        epoch: Box::new(crate::testing::TEST_EPOCH),
         committee: v.committee.clone(),
         params: *params,
     };
@@ -926,7 +1041,10 @@ fn placeholder_core(
             header: None,
             commit_qc: None,
         },
-        configs: vec![(1, config.clone()), (2, config)],
+        configs: vec![
+            (1, crate::types::ConfigSlot::Ready(config.clone())),
+            (2, crate::types::ConfigSlot::Ready(config)),
+        ],
         recent_headers: Vec::new(),
     };
     let boxed: Vec<Box<dyn Signer>> = signers

@@ -41,10 +41,16 @@ fn contract_artifact() -> Vec<u8> {
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 4,
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm::call::CallWordV1::Unit],
+            }],
         seiyaku_name: "HeaderBinding".to_owned(),
         compiler_fingerprint: "core-header-binding-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -73,7 +79,14 @@ fn contract_artifact() -> Vec<u8> {
     };
     let mut artifact = metadata.encode();
     artifact.extend_from_slice(&interface.encode_section());
-    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        artifact.extend_from_slice(&instruction.to_le_bytes());
+    }
     ivm::verify_contract_artifact(&artifact).expect("valid contract fixture");
     artifact
 }

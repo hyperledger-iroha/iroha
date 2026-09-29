@@ -5,6 +5,9 @@ const TEXT_IS_NOT_ONE_COMPLETE_CANONICAL_PREFIX_TYPE_TREE = "is not one complete
 const TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE = "is not a V1 entrypoint value-type node";
 
 
+/** Maximum initialized words in one V1 argument or result table. */
+export const MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 = 8192;
+
 const MAX_ENTRYPOINT_TYPE_NODES_V1 = 256;
 const MAX_ENTRYPOINT_TYPE_DEPTH_V1 = 256;
 const MIN_ENTRYPOINT_LIST_CAPACITY_V1 = 1;
@@ -130,10 +133,9 @@ function validateNode(node, context) {
       if (
         (!reservedSchemaName &&
           !isCanonicalKotodamaStructName(node.value.name)) ||
-        !Array.isArray(node.value.fields) ||
-        node.value.fields.length === 0
+        !Array.isArray(node.value.fields)
       ) {
-        fail(context, "contains a noncanonical or empty struct descriptor");
+        fail(context, "contains a noncanonical struct descriptor");
       }
       const fields = new Set();
       for (const field of node.value.fields) {
@@ -232,10 +234,10 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
     maxDepth = Math.max(maxDepth, depth);
 
     const handle = node.kind === "Option" || node.kind === "Result" || node.kind === "List";
-    if (!suppressWords && (handle || node.kind === "Leaf" || node.kind === "Unit" || node.kind === "Error" || node.kind === "StateCursor")) {
+    const children = childCount(node, `${context}.nodes[${index}]`);
+    if (!suppressWords && (handle || children === 0)) {
       wordCount += 1;
     }
-    const children = childCount(node, `${context}.nodes[${index}]`);
     if (children !== 0) {
       frames.push({
         remaining: children,

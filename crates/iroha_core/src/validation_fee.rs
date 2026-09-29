@@ -4135,6 +4135,9 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
         // These lifecycle steps only register content-addressed artifacts or create an
         // initially absent address -> code-hash binding. The executor rejects activation
         // over an address already bound to a different hash. Deactivation/removal remain
@@ -5016,17 +5019,33 @@ pub(crate) mod tests {
             .clone();
         dust.claim_plan.sources[0].payout = Quantity::zero();
         instructions.push(dust.into());
-        for instruction in instructions {
-            assert!(matches!(
-                reject_opaque_fee_asset_effects(
-                    &account(1),
-                    &[instruction],
-                    &policy.ds_asset_id,
-                    None
-                ),
-                Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
-                    | Err(ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement { .. })
-            ));
+        for (index, instruction) in instructions.into_iter().enumerate() {
+            let wire_id = iroha_data_model::isi::instruction_wire_id(&instruction).unwrap();
+            let result = reject_opaque_fee_asset_effects(
+                &account(1),
+                &[instruction],
+                &policy.ds_asset_id,
+                None,
+            );
+            let expected = if index == 5 || index == 7 {
+                // Reward recording and zero-payout claims change reserved custody
+                // without a transfer. They still require the signed envelope.
+                ValidationFeeAdmissionError::OpaqueDeferredStakingOperation {
+                    instruction_index: 0,
+                    instruction_wire_id: wire_id,
+                }
+            } else {
+                ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer {
+                    execution_account_id: account(1).to_string(),
+                    instruction_index: 0,
+                    entry_index: Some(0),
+                }
+            };
+            assert_eq!(
+                result,
+                Err(expected),
+                "opaque staking fixture {index} ({wire_id})"
+            );
         }
     }
 

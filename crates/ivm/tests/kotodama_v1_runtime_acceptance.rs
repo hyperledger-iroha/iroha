@@ -119,37 +119,41 @@ fn argument_host(
 fn call_aware_allocation_preserves_internal_call_and_tuple_results() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/001.ko");
     let vm = compile_and_run(source);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }
 #[test]
 fn mixed_value_and_divergent_tails_execute_both_paths_without_unit_fallthrough() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/002.ko");
     let vm = compile_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 25);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 25);
 }
 #[test]
 fn result_if_let_executes_both_tags_and_binds_only_the_selected_payload() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/003.ko");
     let vm = compile_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 4978);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 4978);
 }
 #[test]
 fn state_map_get_distinguishes_absent_present_zero_and_removal() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/004.ko");
     let vm = compile_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn aggregate_state_map_value_roundtrips_as_one_record() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/005.ko");
     let vm = compile_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 9);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 9);
 }
 #[test]
 fn aggregate_option_and_result_unwrap_merge_each_payload_word() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/006.ko");
     let vm = compile_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 67);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 67);
 }
 #[test]
 fn propagation_materializes_the_enclosing_sum_layout_on_failure() {
@@ -157,7 +161,13 @@ fn propagation_materializes_the_enclosing_sum_layout_on_failure() {
     let result_vm = compile_and_run(result_source);
     let result_layout = ivm::sum::SumLayoutV1::try_new(1, 2).expect("Result layout");
     assert_eq!(
-        ivm::sum::read_words(&result_vm, result_vm.register(10), result_layout),
+        ivm::sum::read_words(
+            &result_vm,
+            result_vm
+                .public_call_result_word(0)
+                .expect("completed return word"),
+            result_layout
+        ),
         Ok((false, vec![1])),
         "the returned error must occupy the wider enclosing Result allocation"
     );
@@ -165,7 +175,13 @@ fn propagation_materializes_the_enclosing_sum_layout_on_failure() {
     let option_vm = compile_and_run(option_source);
     let option_layout = ivm::sum::SumLayoutV1::option(2).expect("Option layout");
     assert_eq!(
-        ivm::sum::read_words(&option_vm, option_vm.register(10), option_layout),
+        ivm::sum::read_words(
+            &option_vm,
+            option_vm
+                .public_call_result_word(0)
+                .expect("completed return word"),
+            option_layout
+        ),
         Ok((false, vec![])),
         "the returned none must occupy the wider enclosing Option allocation"
     );
@@ -175,7 +191,10 @@ fn native_json_executes_once_and_returns_canonical_recursive_values() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/009.ko");
     let vm = compile_and_run(source);
     let output = vm
-        .validate_tlv(vm.register(10))
+        .validate_tlv(
+            vm.public_call_result_word(0)
+                .expect("completed return word"),
+        )
         .expect("native JSON result TLV");
     assert_eq!(output.type_id, PointerType::Json);
     let json: Json = norito::decode_from_bytes(output.payload).expect("decode native JSON result");
@@ -237,8 +256,15 @@ fn native_json_literal_and_dynamic_options_preserve_identical_tags() {
         }
     "#,
     );
-    let json: Json = norito::decode_from_bytes(vm.validate_tlv(vm.register(10)).unwrap().payload)
-        .expect("canonical native JSON result");
+    let json: Json = norito::decode_from_bytes(
+        vm.validate_tlv(
+            vm.public_call_result_word(0)
+                .expect("completed return word"),
+        )
+        .unwrap()
+        .payload,
+    )
+    .expect("canonical native JSON result");
     let value: njson::Value = json.try_into_any_norito().unwrap();
     let expected = norito::json!({
         "present": { "some": null },
@@ -255,13 +281,13 @@ fn native_json_literal_and_dynamic_options_preserve_identical_tags() {
 fn native_json_and_typed_getters_execute_with_default_host() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/010.ko");
     let vm = compile_and_run_with_default_host(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 7);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 7);
 }
 #[test]
 fn scalar_and_aggregate_state_roots_roundtrip_as_schema_bound_records() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/011.ko");
     let vm = compile_init_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 27);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 27);
 }
 
 #[test]
@@ -352,7 +378,9 @@ fn exact_numeric_state_survives_a_fresh_host_snapshot_roundtrip() {
         .run_with_host(&mut reader)
         .expect("read all exact numeric values after restart");
     assert_eq!(
-        read_vm.register(10),
+        read_vm
+            .public_call_result_word(0)
+            .expect("completed return word"),
         1,
         "schema-bound int, decimal, and quantity state must retain exact values"
     );
@@ -362,13 +390,13 @@ fn exact_numeric_state_survives_a_fresh_host_snapshot_roundtrip() {
 fn pointer_literal_state_is_materialized_before_record_encoding() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/012.ko");
     let vm = compile_init_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn logical_operators_short_circuit_state_side_effects() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/013.ko");
     let vm = compile_and_run(source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 2);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 2);
 }
 #[test]
 fn state_map_iteration_uses_canonical_norito_byte_order_for_sixty_four_items() {
@@ -411,7 +439,7 @@ fn state_map_iteration_uses_canonical_norito_byte_order_for_sixty_four_items() {
 "#,
     );
     let vm = compile_and_run(&source);
-    assert_eq!(common::decode_i64_register(&vm, 10), 64);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 64);
 }
 #[test]
 fn signed_comparisons_match_all_boundary_pairs_in_values_and_branches() {
@@ -438,7 +466,9 @@ fn signed_comparisons_match_all_boundary_pairs_in_values_and_branches() {
     vm.load_program(&code).expect("load comparison contract");
     vm.set_program_counter(entry_pc)
         .expect("select comparison wrapper");
-    let template = vm.runtime_template();
+    let template = vm
+        .try_runtime_template()
+        .expect("runtime template allocation fits test host");
     let code_len = vm.memory.code_len();
     let loaded_code = vm
         .memory
@@ -470,12 +500,13 @@ fn signed_comparisons_match_all_boundary_pairs_in_values_and_branches() {
             ];
             for (index, expected) in expected.into_iter().enumerate() {
                 assert_eq!(
-                    vm.register(10 + index),
+                    vm.public_call_result_word(index)
+                        .expect("completed tuple word"),
                     u64::from(expected),
                     "value comparison {index} failed for {left} and {right}"
                 );
                 assert_eq!(
-                    common::decode_i64_register(&vm, 16 + index),
+                    common::decode_i64_return_word(&vm, 6 + index),
                     i64::from(expected),
                     "branch comparison {index} failed for {left} and {right}"
                 );

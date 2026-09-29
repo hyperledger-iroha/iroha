@@ -4,29 +4,19 @@
 //! and balances for a mixed set of transactions.
 use crate::synthetic_state_snapshots as snapshots;
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
-use std::{borrow::Cow, sync::Arc}; // trait for .get()
-fn test_network_id(label: &[u8]) -> NetworkId {
-    NetworkId::from_genesis_hash(
-        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::new(label),
-        ),
-    )
-}
-fn run_with_gpu_bucket(
+use std::sync::Arc; // trait for .get()
+fn build_chain(
     gpu_key_bucket: bool,
-    network_id: &NetworkId,
-    txs: Vec<SignedTransaction>,
     alice_id: &AccountId,
     bob_id: &AccountId,
-) -> (String, iroha_core::state::State) {
+) -> CertifiedTestChain {
     // Build a fresh world with a domain, two accounts, and a numeric asset definition
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(alice_id);
@@ -44,52 +34,36 @@ fn run_with_gpu_bucket(
     let acc_a = Account::new(alice_id.clone()).build(alice_id);
     let acc_b = Account::new(bob_id.clone()).build(alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura,
-        query,
-        ChainId::from("chain"),
-        *network_id,
-    );
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    // Toggle GPU key-bucketing knob
-    let mut cfg = state.view().pipeline().clone();
-    cfg.gpu_key_bucket = gpu_key_bucket;
-    state.set_pipeline(cfg);
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish scheduler fixture genesis");
-    // Build and execute block
-    let block: SignedBlock = {
-        let accepted: Vec<_> = txs
-            .into_iter()
-            .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
-            .collect();
-        BlockBuilder::new(accepted)
-            .chain(0, Some(&genesis))
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-            .unpack(|_| {})
-            .into()
-    };
-    let mut sb = state.block(block.header());
-    let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("publish scheduler fixture effects");
-    let json = snapshots::events_json_filtered(&events);
-    (json, state)
+    let mut config = TestChainConfig::new(world, 1000);
+    config.chain_id = ChainId::from("scheduler_gpu_key_bucket_parity");
+    config.pipeline.gpu_key_bucket = gpu_key_bucket;
+    CertifiedTestChain::start(config).unwrap()
+}
+fn run(
+    mut chain: CertifiedTestChain,
+    txs: Vec<SignedTransaction>,
+) -> (String, Arc<iroha_core::state::State>) {
+    chain.commit(txs);
+    let events = chain
+        .take_events()
+        .expect("complete actual publication event delivery");
+    (
+        snapshots::events_json_filtered(&events),
+        Arc::clone(chain.state()),
+    )
 }
 #[test]
 fn scheduler_gpu_key_bucket_parity() {
-    let network_id = test_network_id(b"scheduler-gpu-key-bucket-parity");
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let first = build_chain(false, &alice_id, &bob_id);
+    let second = build_chain(true, &alice_id, &bob_id);
+    let network_id = first.network_id();
+    assert_eq!(
+        network_id,
+        second.network_id(),
+        "local execution optimization preserves signed genesis identity"
+    );
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -150,9 +124,8 @@ fn scheduler_gpu_key_bucket_parity() {
         .sign(alice_keypair.private_key()),
     ];
     // Compare with gpu_key_bucket OFF vs ON
-    let (json_off, state_off) =
-        run_with_gpu_bucket(false, &network_id, txs.clone(), &alice_id, &bob_id);
-    let (json_on, state_on) = run_with_gpu_bucket(true, &network_id, txs, &alice_id, &bob_id);
+    let (json_off, state_off) = run(first, txs.clone());
+    let (json_on, state_on) = run(second, txs);
     assert_eq!(
         json_off, json_on,
         "events must match with/without gpu_key_bucket"

@@ -160,7 +160,7 @@ fn pending_borrows_original_and_drop_preserves_empty_state() {
         let pending = validator
             .prepare(&d, digest(std::slice::from_ref(&d)))
             .unwrap();
-        assert!(std::ptr::eq(pending.delta(), &d));
+        assert!(std::ptr::eq(pending.delta(), &raw const d));
         assert_eq!(pending.count(), 1);
         assert_eq!(pending.unique_keys(), 2);
     }

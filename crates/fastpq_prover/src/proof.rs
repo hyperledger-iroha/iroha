@@ -1146,11 +1146,11 @@ struct FriFinalVerification<'a> {
 
 /// Fixed FRI geometry shared with the bounded compact verifier.
 #[cfg(test)]
-pub(crate) mod compact_fri_support {
+pub mod compact_fri_support {
     use super::*;
 
     /// Derive the existing bounded binary layer schedule from fixed geometry.
-    pub(crate) fn layer_lengths(
+    pub fn layer_lengths(
         domain_size: usize,
         arity: u32,
         max_reductions: u32,
@@ -1159,7 +1159,7 @@ pub(crate) mod compact_fri_support {
     }
 
     /// Derive the existing exact terminal degree bound for the joint quotient proof.
-    pub(crate) fn terminal_degree_bound(
+    pub fn terminal_degree_bound(
         domain_size: usize,
         blowup_factor: u32,
         arity: u32,
@@ -2132,37 +2132,37 @@ mod tests {
             tx_set_hash: [0x55; 32],
             ordering_hash: [0x66; 32],
         };
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.dsid[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "dsid" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.slot = actual.slot.wrapping_add(1);
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "slot" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.old_root[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "old_root" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.new_root[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "new_root" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.perm_root[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "perm_root" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.tx_set_hash[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
@@ -2170,7 +2170,7 @@ mod tests {
                 field: "tx_set_hash"
             })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.ordering_hash[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
@@ -2572,7 +2572,7 @@ mod tests {
         };
         let mut artifact = sample_backend_artifact();
         artifact.trace_commitment = commitment;
-        let proof = materialise_proof(public_io.clone(), artifact).expect("materialise proof");
+        let proof = materialise_proof(public_io, artifact).expect("materialise proof");
         assert_eq!(proof.commitment(), commitment);
         assert_eq!(proof.trace_commitment, commitment);
         assert_eq!(proof.public_io, public_io);

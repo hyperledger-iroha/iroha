@@ -21,7 +21,7 @@ fn compile_large_positive_constant_executes() {
         .expect("load large positive constant program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run large positive constant program");
-    assert_eq!(common::decode_i64_register(&vm, 10), 123_456_789_012);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 123_456_789_012);
 }
 #[test]
 fn compile_large_negative_constant_executes() {
@@ -42,7 +42,7 @@ fn compile_large_negative_constant_executes() {
         .expect("load large negative constant program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run large negative constant program");
-    assert_eq!(common::decode_i64_register(&vm, 10), -987_654_321_098);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), -987_654_321_098);
 }
 #[test]
 fn signed_512_bit_boundary_constants_are_canonical_and_deterministic() {
@@ -88,7 +88,7 @@ fn signed_512_bit_boundary_constants_are_canonical_and_deterministic() {
         common::select_kotodama_entrypoint(&mut vm, &artifact, entrypoint);
         vm.run().expect("run boundary entrypoint");
         assert_eq!(
-            common::decode_int_register(&vm, 10),
+            common::decode_int_return_word(&vm, 0),
             expected.parse::<BigInt>().expect("parse expected boundary")
         );
     }

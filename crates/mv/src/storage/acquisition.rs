@@ -83,7 +83,7 @@ impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> WriterPhase<'a, K, V,
 // reused. The block is installed here before any reset/replacement payload code.
 #[expect(
     clippy::large_enum_variant,
-    reason = "phases change in place; boxing a variant would allocate on the allocation-free path"
+    reason = "caller-owned inline phase storage retains partial writers through constructor unwind without a fallible allocation while sibling writers are held"
 )]
 enum AcquisitionPhase<'a, K: Key, V: Value, M: StorageMode<K, V>> {
     Empty,
@@ -196,6 +196,14 @@ impl<'a, K: Key, V: Value> crate::BlockAcquisition for BlockAcquisitionSlot<'a, 
         BlockAcquisitionSlot::release(self);
     }
 
+    fn is_initialized(&self) -> bool {
+        BlockAcquisitionSlot::is_initialized(self)
+    }
+
+    fn take_block(&mut self) -> Self::Block {
+        BlockAcquisitionSlot::take_block(self)
+    }
+
     fn into_block(self) -> Self::Block {
         BlockAcquisitionSlot::into_block(self)
     }
@@ -220,6 +228,17 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> BlockAcquisitionSlot<'a, K, V, 
     /// Transfer only a fully initialized original block without allocation.
     /// A prepaid block retains this slot's original scope and cannot outlive it.
     pub fn into_block(mut self) -> Block<'a, K, V, M> {
+        self.take_block()
+    }
+
+    /// Whether this original slot can transfer without allocation or payload work.
+    pub fn is_initialized(&self) -> bool {
+        self.complete && matches!(self.phase, AcquisitionPhase::Block(_))
+    }
+
+    /// Move the original completed Block while retaining this slot on refusal.
+    /// This performs no payload callback, allocation or physical acquisition.
+    pub fn take_block(&mut self) -> Block<'a, K, V, M> {
         assert!(
             self.complete,
             "original storage initialization did not complete"

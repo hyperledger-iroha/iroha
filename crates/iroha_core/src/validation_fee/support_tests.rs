@@ -340,7 +340,7 @@ fn minimal_bound_contract_artifact() -> (
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 4,
         abi_version: 1,
     };
     let wrapper_entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -369,6 +369,7 @@ fn minimal_bound_contract_artifact() -> (
     };
     let entrypoints = [wrapper_entrypoint, pool_entrypoint];
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: (0..entrypoints.len()).map(|index| crate::ivm_test_support::unit_callable(index as u64 * 16)).collect(),
         seiyaku_name: "ValidationFeePayout".to_owned(),
         compiler_fingerprint: "validation-fee-bound-contract-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -391,7 +392,7 @@ fn minimal_bound_contract_artifact() -> (
                 access_hints_complete: entrypoint.access_hints_complete,
                 access_hints_skipped: entrypoint.access_hints_skipped.clone(),
                 triggers: entrypoint.triggers.clone(),
-                entry_pc: u64::try_from(index).expect("fixture entrypoint index fits u64") * 4,
+                entry_pc: u64::try_from(index).expect("fixture entrypoint index fits u64") * 16,
             })
             .collect(),
         error_types: Vec::new(),
@@ -399,7 +400,7 @@ fn minimal_bound_contract_artifact() -> (
     };
     let mut instructions = Vec::new();
     for _ in &entrypoints {
-        instructions.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        instructions.extend_from_slice(&crate::ivm_test_support::unit_return());
     }
     let mut artifact = metadata.encode();
     artifact.extend_from_slice(&interface.encode_section());

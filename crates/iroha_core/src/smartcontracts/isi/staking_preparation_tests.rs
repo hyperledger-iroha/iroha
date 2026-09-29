@@ -98,9 +98,7 @@ fn prepared_reward_claim_bounds_work_and_requires_exact_existing_accrual_sources
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-        b"prepared_reward_claim_bounds_work_and_requires_exact_existing_accrual_sources",
-    ));
+    let mut stx = state_block.transaction_for_callback_testing();
     let lane = LaneId::SINGLE;
     let (_, recipient, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     let mut intent = PublicLanePrepareClaimV1 {
@@ -186,34 +184,39 @@ fn global_staking_eligibility_uses_unequal_authenticated_intervals() {
 }
 
 #[test]
-fn global_staking_eligibility_follows_the_committed_npos_epochs() {
-    let mut state = setup_state();
-    set_epoch_length(&mut state, 10);
-    let view = state.view();
-    // Epoch 1 is [11, 20]: a key ready before its last height joins after the next epoch;
-    // a key ready at the boundary misses the election that boundary freezes.
-    for (execution, ready, expected) in [
-        (1, 1, 21),
-        (15, 15, 31),
-        (15, 19, 31),
-        (15, 20, 41),
-        (20, 20, 41),
-        (15, 25, 41),
-        (15, 30, 51),
-    ] {
+fn global_staking_eligibility_follows_the_authenticated_npos_epoch() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiParameter};
+    let mut config = TestChainConfig::new(World::new(), 10_000);
+    config.consensus_mode = SumeragiConsensusMode::Npos;
+    config
+        .genesis_parameters
+        .push(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            NonZeroU64::new(10).unwrap(),
+        )));
+    config.genesis_parameters.push(Parameter::Custom(
+        SumeragiNposParameters {
+            epoch_length_blocks: NonZeroU64::new(10).unwrap(),
+            evidence_horizon_blocks: 1,
+            slashing_delay_blocks: 1,
+            ..SumeragiNposParameters::default()
+        }
+        .into_custom_parameter(),
+    ));
+    let chain = CertifiedTestChain::start(config).unwrap();
+    let view = chain.state().view();
+    // The authenticated genesis epoch is [1, 10]. A key ready at its boundary
+    // misses that boundary's frozen election, even when its registration is earlier.
+    for (ready, expected) in [(2, 21), (9, 21), (10, 31), (15, 31), (20, 41)] {
         assert_eq!(
-            validator_eligibility_height(&view, LaneId::SINGLE, execution, ready).unwrap(),
+            validator_eligibility_height(&view, LaneId::SINGLE, 2, ready).unwrap(),
             expected,
-            "execution {execution}, key ready {ready}"
-        );
-        assert_eq!(
-            validator_eligibility_height(&view, LaneId::SINGLE, execution, ready).unwrap(),
-            validator_eligibility_height(&view, LaneId::new(1), execution, ready).unwrap(),
-            "without frozen preparations the global lane uses the same epochs as other lanes"
+            "key ready {ready}"
         );
     }
-    assert!(validator_eligibility_height(&view, LaneId::SINGLE, 15, 14).is_err());
+    assert!(validator_eligibility_height(&view, LaneId::SINGLE, 2, 1).is_err());
     assert!(validator_eligibility_height(&view, LaneId::SINGLE, 0, 0).is_err());
+    assert!(validator_eligibility_height(&view, LaneId::SINGLE, 11, 11).is_err());
 }
 
 #[test]
@@ -231,7 +234,7 @@ fn global_staking_eligibility_requires_committed_npos_parameters() {
 }
 
 #[test]
-fn global_staking_eligibility_keeps_a_frozen_preparation_interval() {
+fn global_staking_eligibility_rejects_uncertified_preparation_intervals() {
     let network = crate::state::validator_committee::tests::fixture(4)
         .transition
         .preparation
@@ -257,19 +260,12 @@ fn global_staking_eligibility_keeps_a_frozen_preparation_interval() {
             network,
         )
     };
-    // The fixture froze epoch 2 = [21, 30]; while epoch 1 = [11, 20] executes, the next free
-    // election is the one after it.
+    // Complete local preparation credentials cannot replace the authenticated
+    // current epoch from committed history, even when their network matches.
     let state = state_on(network);
-    let view = state.view();
-    assert_eq!(
-        validator_eligibility_height(&view, LaneId::SINGLE, 15, 15).unwrap(),
-        31
-    );
-    assert_eq!(
-        validator_eligibility_height(&view, LaneId::SINGLE, 20, 20).unwrap(),
-        41
-    );
-    // A preparation of another network is not this chain's frozen interval.
+    assert!(validator_eligibility_height(&state.view(), LaneId::SINGLE, 15, 15).is_err());
+    assert!(validator_eligibility_height(&state.view(), LaneId::SINGLE, 20, 20).is_err());
+    // Foreign local credentials likewise grant no interval.
     let foreign = state_on(iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::from_untyped_unchecked(Hash::new(b"staking-foreign-network")),
     ));
@@ -284,10 +280,14 @@ fn global_staking_preparation_rejects_a_zero_validity_window() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-        b"global_staking_preparation_rejects_a_zero_validity_window",
-    ));
+    let mut stx = state_block.transaction_for_callback_testing();
     let (_, recipient, _, _) = configure_reward_fixture(&mut stx, LaneId::SINGLE, 100);
+    let error = validator_eligibility_height(&stx, LaneId::SINGLE, 2, 2).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::InvariantViolation(message)
+            if message.as_ref() == "height 0 is not committed in this view"
+    ));
     let request = PublicLanePreparationRequestV1 {
         lane_id: LaneId::SINGLE,
         valid_for_blocks: 0,

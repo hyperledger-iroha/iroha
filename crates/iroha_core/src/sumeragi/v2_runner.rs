@@ -55,7 +55,6 @@ use super::{
         preflight_historical_autonomous_lane_recovery,
         validate_installed_historical_autonomous_lane_recoveries,
     },
-    v2_beacon::V2GlobalBeaconLifecycle,
     v2_block_sync::{
         CommitCertificateAdmissionError, HistoricalBodyServeAdmission,
         HistoricalBodyServeCompletion, HistoricalBodyServeLimits, HistoricalBodyServeTask,
@@ -112,7 +111,7 @@ use crate::{
     },
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
-    state::State,
+    state::{State, WorldReadOnly as _},
 };
 #[cfg(test)]
 use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
@@ -125,6 +124,7 @@ use iroha_data_model::{
     events::{EventBox, pipeline::PipelineEventBox},
 };
 use iroha_model_base::peer::PeerId;
+use mv::storage::StorageReadOnly as _;
 use thiserror::Error;
 
 #[path = "v2_runner/lifecycle_height_driver.rs"]
@@ -1434,7 +1434,6 @@ fn schedule_local_proposal(
     services: &mut ProductionV2Services,
     native: &mut native_process::NativeRunnerProcess,
     queue_plan: &mut QueuePlanAdmissionOwner,
-    npos_beacon: &mut V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
     let directive = executor.local_proposal_directive()?;
@@ -1685,7 +1684,6 @@ fn schedule_local_proposal(
             parent,
             directive.tag().view(),
             &carrier_context_header,
-            npos_beacon,
             queue_plan_admissions,
         );
         let attachments = match attachments {
@@ -1758,19 +1756,9 @@ fn schedule_local_proposal(
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {
-                // The complete bounded snapshot found independently useful
-                // work. Its lease has been released without consuming work;
-                // retry selection after the exact-view pulse is reconstructed.
-                npos_beacon
-                    .activate()
-                    .and_then(|()| npos_beacon.begin_round(directive.tag().view()))
-                    .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
-                broadcast_npos_beacon_messages(
-                    npos_beacon.take_outbound(),
-                    output_guard,
-                    services,
-                )?;
-                return Ok(());
+                return Err(V2RunnerError::Candidate(
+                    "retired V2 candidate cannot produce native beacon work".into(),
+                ));
             }
             CandidateAssemblyOutcome::WorkDeferred { report, reason } => {
                 proposal_state.defer_candidate_snapshot(owner, Instant::now());
@@ -2024,23 +2012,6 @@ pub(in crate::sumeragi) fn retire_block_sync_request_after_decision(
     *request_hash = None;
     Ok(true)
 }
-fn broadcast_npos_beacon_messages(
-    messages: impl IntoIterator<Item = wire::ConsensusMessageV2>,
-    output_guard: &ConsensusOutputGuard,
-    services: &ProductionV2Services,
-) -> Result<(), V2RunnerError> {
-    for message in messages {
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or(V2RunnerError::RestartRequired)?;
-        services
-            .broadcast_to_voters_while_guarded(message, operation.permit())
-            .map_err(V2RunnerError::Service)?;
-        operation.complete();
-    }
-    Ok(())
-}
-
 include!("v2_runner/decided_lane_recovery.rs");
 include!("v2_runner/outer_ingress_cursor.rs");
 
@@ -2963,7 +2934,6 @@ fn candidate_attachments(
     parent: CandidateParent<'_>,
     view: wire::View,
     round_header: &BlockHeader,
-    npos_beacon: &V2GlobalBeaconLifecycle,
     queue_plan_admissions: Vec<Vec<u8>>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
     if round_header.height().get() != context.height
@@ -2975,7 +2945,7 @@ fn candidate_attachments(
             "certified merge carrier probe differs from the frozen round".to_owned(),
         ));
     }
-    let mut effects = if context.mode == wire::ConsensusMode::Npos {
+    let effects = if context.mode == wire::ConsensusMode::Npos {
         super::penalties::PenaltyApplier::new(
             state,
             #[cfg(feature = "telemetry")]
@@ -2988,12 +2958,26 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
-    let required_beacon_pulse_pending =
-        npos_beacon.pulse_required_for_consensus() && npos_beacon.finalized_pulse(view).is_none();
-    if !required_beacon_pulse_pending {
-        npos_beacon
-            .attach_candidate_effects(view, &mut effects)
-            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    // The native application-control owner alone may prepare and sign a pulse. A retired
+    // candidate cannot advance a requested slot without it or manufacture a native context.
+    let parliament_requested = state
+        .world_view()
+        .parliament_required_beacon_pulse_slots()
+        .get(&(
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                &context.network_id,
+            ),
+            context.height,
+        ))
+        .is_some_and(|attempts| !attempts.is_empty());
+    if parliament_requested
+        || (context.mode == wire::ConsensusMode::Npos
+            && context.height.checked_add(1) == Some(context.epoch_end_height))
+        || effects.finalized_global_beacon_pulse.is_some()
+    {
+        return Err(V2RunnerError::Candidate(
+            "native beacon work is unavailable to the retired V2 candidate path".into(),
+        ));
     }
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
     super::v2_npos::validate_candidate_context(context)
@@ -3008,7 +2992,7 @@ fn candidate_attachments(
         time_trigger_clock_progress_required: state
             .time_trigger_clock_progress_required_fast(parent_creation_time),
         npos_consensus_effects,
-        required_beacon_pulse_pending,
+        required_beacon_pulse_pending: false,
         queue_plan_admissions,
         ..CandidateAttachments::default()
     })

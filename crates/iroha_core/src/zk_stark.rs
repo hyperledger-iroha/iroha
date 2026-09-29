@@ -64,7 +64,7 @@ const BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS: u32 = 1024;
 const GENERIC_STARK_AIR_BFV_FULL_BOOTSTRAP_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the BFV full-bootstrap circuit; use the BFV full-bootstrap STARK prover";
 const GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR: &str =
     "generic STARK AIR prover cannot target the typed ZK-ACE relation; use SubmitPrivacyProofV1";
-const GENERIC_STARK_AIR_IVM_REPLAY_BINDING_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the IVM execution circuit; use the IVM execution STARK prover";
+const GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target an IVM execution relation; the complete native relation is not yet admitted";
 const GENERIC_STARK_AIR_SORACLOUD_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target a Soracloud FHE relation; a dedicated typed Soracloud verifier is required";
 const GENERIC_STARK_AIR_GOVERNANCE_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target a governance vote role; a dedicated semantic governance circuit is required";
 fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'static str> {
@@ -110,11 +110,12 @@ fn stark_air_circuit_id_targets_zk_ace(circuit_id: &str) -> bool {
         iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID,
     )
 }
-fn stark_air_circuit_id_targets_ivm_replay_binding(circuit_id: &str) -> bool {
-    stark_air_circuit_id_targets_reserved_circuit(
-        circuit_id,
-        crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
-    )
+fn stark_air_circuit_id_targets_ivm_execution(circuit_id: &str) -> bool {
+    circuit_id
+        .trim()
+        .rsplit([':', '/'])
+        .next()
+        .is_some_and(|relation| relation.starts_with("ivm-"))
 }
 fn stark_air_circuit_id_targets_governance_vote_relation(circuit_id: &str) -> bool {
     [
@@ -137,7 +138,7 @@ fn stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id: &str) -> bool
 fn stark_air_circuit_id_uses_generic_binding(circuit_id: &str) -> bool {
     !stark_air_circuit_id_targets_bfv_full_bootstrap(circuit_id)
         && !stark_air_circuit_id_targets_zk_ace(circuit_id)
-        && !stark_air_circuit_id_targets_ivm_replay_binding(circuit_id)
+        && !stark_air_circuit_id_targets_ivm_execution(circuit_id)
         && !stark_air_circuit_id_targets_governance_vote_relation(circuit_id)
         && !stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id)
 }
@@ -150,8 +151,8 @@ fn validate_generic_stark_air_circuit_id(circuit_id: &str) -> Result<(), String>
     if stark_air_circuit_id_targets_zk_ace(circuit_id) {
         return Err(GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR.to_owned());
     }
-    if stark_air_circuit_id_targets_ivm_replay_binding(circuit_id) {
-        return Err(GENERIC_STARK_AIR_IVM_REPLAY_BINDING_RESERVED_ERROR.to_owned());
+    if stark_air_circuit_id_targets_ivm_execution(circuit_id) {
+        return Err(GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR.to_owned());
     }
     if stark_air_circuit_id_targets_governance_vote_relation(circuit_id) {
         return Err(GENERIC_STARK_AIR_GOVERNANCE_RESERVED_ERROR.to_owned());
@@ -1136,6 +1137,11 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
             "{label} STARK/FRI verifier key circuit id mismatch"
         ));
     }
+    if stark_air_circuit_id_targets_ivm_execution(circuit_id) {
+        return Err(format!(
+            "{label} IVM execution relation is unavailable until complete native STARK verification"
+        ));
+    }
     if payload.fold_arity != 2 {
         return Err(format!(
             "{label} STARK/FRI verifier key must use binary FRI folding"
@@ -1152,8 +1158,7 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
             payload.n_log2, STARK_FRI_CONSENSUS_MIN_N_LOG2
         ));
     }
-    if (stark_air_circuit_id_uses_generic_binding(&payload.circuit_id)
-        || stark_air_circuit_id_targets_ivm_replay_binding(&payload.circuit_id))
+    if stark_air_circuit_id_uses_generic_binding(&payload.circuit_id)
         && payload.n_log2 > MAX_BINDING_AIR_DOMAIN_LOG2
     {
         return Err(format!(
@@ -2081,9 +2086,6 @@ struct StarkAirExplicitVerificationContext<'a> {
 #[derive(Clone, Copy)]
 enum StarkAirVerificationContext<'a> {
     Binding,
-    IvmReplayBinding {
-        public_digest: &'a GoldilocksDigest384V1,
-    },
     BfvFullBootstrapPublicPadding {
         statement_hash: &'a iroha_crypto::Hash,
         trace_material_digest: &'a iroha_crypto::Hash,
@@ -2098,7 +2100,7 @@ impl StarkAirVerificationContext<'_> {
     }
     fn trace_width(self) -> usize {
         match self {
-            Self::Binding | Self::IvmReplayBinding { .. } => stark_air_trace_width(),
+            Self::Binding => stark_air_trace_width(),
             Self::BfvFullBootstrapPublicPadding { .. } => {
                 usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)
             }
@@ -2217,8 +2219,7 @@ fn stark_air_composition_value_for_context(
     next_row: &[u64],
 ) -> Option<Fq> {
     match context {
-        StarkAirVerificationContext::Binding
-        | StarkAirVerificationContext::IvmReplayBinding { .. } => {
+        StarkAirVerificationContext::Binding => {
             stark_air_composition_value(index, domain_size, public_digest, row, next_row)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
@@ -2294,16 +2295,6 @@ fn stark_air_context_matches_statement(
     match context {
         StarkAirVerificationContext::Binding => {
             stark_air_circuit_id_uses_generic_binding(&air.circuit_id)
-                && stark_binding_air_commitments_match_statement(params, air, total_domain)
-        }
-        StarkAirVerificationContext::IvmReplayBinding { public_digest } => {
-            air.circuit_id
-                == format!(
-                    "{}:{}",
-                    crate::zk::ZK_BACKEND_STARK_FRI_V1,
-                    crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID
-                )
-                && air.public_digest == *public_digest
                 && stark_binding_air_commitments_match_statement(params, air, total_domain)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
@@ -3100,7 +3091,8 @@ pub fn prove_stark_fri_air_envelope_bytes(
         public_digest,
     )
 }
-/// Build an AIR envelope for crate-owned reserved circuits after caller-side family checks.
+/// Build a test-only AIR envelope for reserved circuits to exercise rejection.
+#[cfg(test)]
 pub(crate) fn prove_stark_fri_reserved_air_envelope_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -3743,23 +3735,6 @@ fn verify_stark_air_opening(
 /// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.
 pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifierLimits) -> bool {
     verify_stark_fri_envelope_with_context(bytes, limits, StarkAirVerificationContext::Binding)
-}
-/// Verify the canonical IVM binding AIR against the digest reconstructed from
-/// its authenticated outer envelope and public inputs.
-///
-/// The dedicated context retains exact trace/composition commitment checks and
-/// rejects auxiliary composition. Generic AIR verification cannot admit this
-/// reserved circuit. Execution correctness still requires deterministic IVM replay.
-pub(crate) fn verify_stark_fri_ivm_replay_binding_air_envelope_with_limits(
-    bytes: &[u8],
-    limits: &StarkVerifierLimits,
-    public_digest: &GoldilocksDigest384V1,
-) -> bool {
-    verify_stark_fri_envelope_with_context(
-        bytes,
-        limits,
-        StarkAirVerificationContext::IvmReplayBinding { public_digest },
-    )
 }
 /// Verify a STARK FRI AIR envelope against caller-provided trace rows and composition values.
 #[cfg(test)]

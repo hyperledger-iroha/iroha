@@ -206,9 +206,6 @@ macro_rules! impl_mint_burn_slice_decode {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = norito::core::effective_decode_flags()
                     .unwrap_or_else(norito::core::default_encode_flags);
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 let object = super::decode_aos_canonical_field::<O>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -239,9 +236,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for MintBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes
@@ -275,9 +269,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for BurnBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes

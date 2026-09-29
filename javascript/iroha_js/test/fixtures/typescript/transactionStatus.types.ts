@@ -1,5 +1,4 @@
 import type {
-  IvmProvedContractCallOptions,
   ToriiAppliedTransactionStatus,
   ToriiBrowserRequestOptions,
   ToriiBrowserTransactionStatusOptions,
@@ -34,10 +33,6 @@ const nodePoll: TransactionStatusPollOptions = {
 };
 const browserPoll: ToriiBrowserTransactionStatusPollOptions = {
   intervalMs: 10,
-};
-const provedCall: IvmProvedContractCallOptions = {
-  waitForCommit: true,
-  transactionIntervalMs: 10,
 };
 
 const removedNodeAutoScope: TransactionStatusReadOptions = {
@@ -116,10 +111,6 @@ const removedBrowserTerminalSelector: ToriiBrowserTransactionStatusPollOptions =
   // @ts-expect-error finality terminal policy is fixed.
   terminalStatuses: ["Committed"],
 };
-const removedProvedCallScope: IvmProvedContractCallOptions = {
-  // @ts-expect-error finality waits are global-only.
-  transactionStatusScope: "global",
-};
 
 void rawNodeStatus;
 void exactAppliedFinality;
@@ -127,7 +118,6 @@ void rawBrowserStatus;
 void genericBrowserHttpRequest;
 void nodePoll;
 void browserPoll;
-void provedCall;
 void removedNodeAutoScope;
 void removedNodeShortHashOption;
 void removedBrowserAutoScope;
@@ -145,5 +135,4 @@ void removedBrowserReadHttpSelector;
 void removedBrowserSuccessSelector;
 void removedBrowserFailureSelector;
 void removedBrowserTerminalSelector;
-void removedProvedCallScope;
 void (null as unknown as RemovedGenericFinalityAlias);

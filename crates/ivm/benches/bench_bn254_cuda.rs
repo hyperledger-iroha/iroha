@@ -23,12 +23,13 @@ fn bench_add(c: &mut Criterion) {
         bch.iter(|| black_box(field_vec::add(a, b)));
     });
     field_dispatch::clear_field_impl_for_tests();
-    if has_cuda_backend() {
-        // Prime the CUDA backend once to avoid measuring lazy init.
-        let _ = ivm::bn254_add_cuda(a.0, b.0);
+    if has_cuda_backend() && ivm::bn254_add_cuda(a.0, b.0).is_some() {
         group.bench_function(BenchmarkId::new("cuda", "gpu0"), |bch| {
             bch.iter(|| {
-                black_box(ivm::bn254_add_cuda(a.0, b.0).unwrap_or_else(|| field_vec::add(a, b).0))
+                black_box(
+                    ivm::bn254_add_cuda(a.0, b.0)
+                        .expect("CUDA benchmark must execute its named backend"),
+                )
             });
         });
     } else {
@@ -46,11 +47,13 @@ fn bench_mul(c: &mut Criterion) {
         bch.iter(|| black_box(field_vec::mul(a, b)));
     });
     field_dispatch::clear_field_impl_for_tests();
-    if has_cuda_backend() {
-        let _ = ivm::bn254_mul_cuda(a.0, b.0);
+    if has_cuda_backend() && ivm::bn254_mul_cuda(a.0, b.0).is_some() {
         group.bench_function(BenchmarkId::new("cuda", "gpu0"), |bch| {
             bch.iter(|| {
-                black_box(ivm::bn254_mul_cuda(a.0, b.0).unwrap_or_else(|| field_vec::mul(a, b).0))
+                black_box(
+                    ivm::bn254_mul_cuda(a.0, b.0)
+                        .expect("CUDA benchmark must execute its named backend"),
+                )
             });
         });
     } else {
@@ -66,35 +69,30 @@ fn bench_add_batch(c: &mut Criterion) {
         .map(|idx| FieldElem::from_u64((idx as u64).wrapping_mul(3) + 7).0)
         .collect();
     let mut group = c.benchmark_group("bn254_add_batch");
+    let mut output = vec![[0; 4]; lhs.len()];
     let scalar_backend: &'static dyn FieldArithmetic = &ScalarField;
     field_dispatch::set_field_impl_for_tests(scalar_backend);
     group.bench_function(BenchmarkId::new("cpu", "scalar_1024"), |bch| {
         bch.iter(|| {
-            black_box(
-                lhs.iter()
-                    .copied()
-                    .zip(rhs.iter().copied())
-                    .map(|(a, b)| field_vec::add_scalar(FieldElem(a), FieldElem(b)).0)
-                    .collect::<Vec<_>>(),
-            )
+            for ((out, a), b) in output.iter_mut().zip(&lhs).zip(&rhs) {
+                *out = field_vec::add_scalar(FieldElem(*a), FieldElem(*b)).0;
+            }
+            black_box(&output);
         });
     });
     field_dispatch::clear_field_impl_for_tests();
-    if has_cuda_backend() {
-        let _ = ivm::bn254_add_batch_cuda(&lhs, &rhs);
-        group.bench_function(BenchmarkId::new("cuda", "gpu0_1024"), |bch| {
+    if has_cuda_backend() && ivm::bn254_add_batch_cuda_into(&lhs, &rhs, &mut output) {
+        group.bench_function(BenchmarkId::new("cuda", "gpu_1024"), |bch| {
             bch.iter(|| {
-                black_box(ivm::bn254_add_batch_cuda(&lhs, &rhs).unwrap_or_else(|| {
-                    lhs.iter()
-                        .copied()
-                        .zip(rhs.iter().copied())
-                        .map(|(a, b)| field_vec::add(FieldElem(a), FieldElem(b)).0)
-                        .collect()
-                }))
+                assert!(
+                    ivm::bn254_add_batch_cuda_into(&lhs, &rhs, &mut output),
+                    "CUDA benchmark must execute its named backend"
+                );
+                black_box(&output);
             });
         });
     } else {
-        eprintln!("bn254_add_batch: CUDA backend disabled, skipping GPU benchmark");
+        eprintln!("bn254_add_batch: qualified CUDA kernel unavailable, skipping GPU benchmark");
     }
     group.finish();
 }
@@ -106,35 +104,30 @@ fn bench_mul_batch(c: &mut Criterion) {
         .map(|idx| FieldElem::from_u64((idx as u64).wrapping_mul(5) + 13).0)
         .collect();
     let mut group = c.benchmark_group("bn254_mul_batch");
+    let mut output = vec![[0; 4]; lhs.len()];
     let scalar_backend: &'static dyn FieldArithmetic = &ScalarField;
     field_dispatch::set_field_impl_for_tests(scalar_backend);
     group.bench_function(BenchmarkId::new("cpu", "scalar_1024"), |bch| {
         bch.iter(|| {
-            black_box(
-                lhs.iter()
-                    .copied()
-                    .zip(rhs.iter().copied())
-                    .map(|(a, b)| field_vec::mul_scalar(FieldElem(a), FieldElem(b)).0)
-                    .collect::<Vec<_>>(),
-            )
+            for ((out, a), b) in output.iter_mut().zip(&lhs).zip(&rhs) {
+                *out = field_vec::mul_scalar(FieldElem(*a), FieldElem(*b)).0;
+            }
+            black_box(&output);
         });
     });
     field_dispatch::clear_field_impl_for_tests();
-    if has_cuda_backend() {
-        let _ = ivm::bn254_mul_batch_cuda(&lhs, &rhs);
-        group.bench_function(BenchmarkId::new("cuda", "gpu0_1024"), |bch| {
+    if has_cuda_backend() && ivm::bn254_mul_batch_cuda_into(&lhs, &rhs, &mut output) {
+        group.bench_function(BenchmarkId::new("cuda", "gpu_1024"), |bch| {
             bch.iter(|| {
-                black_box(ivm::bn254_mul_batch_cuda(&lhs, &rhs).unwrap_or_else(|| {
-                    lhs.iter()
-                        .copied()
-                        .zip(rhs.iter().copied())
-                        .map(|(a, b)| field_vec::mul(FieldElem(a), FieldElem(b)).0)
-                        .collect()
-                }))
+                assert!(
+                    ivm::bn254_mul_batch_cuda_into(&lhs, &rhs, &mut output),
+                    "CUDA benchmark must execute its named backend"
+                );
+                black_box(&output);
             });
         });
     } else {
-        eprintln!("bn254_mul_batch: CUDA backend disabled, skipping GPU benchmark");
+        eprintln!("bn254_mul_batch: qualified CUDA kernel unavailable, skipping GPU benchmark");
     }
     group.finish();
 }

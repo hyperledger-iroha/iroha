@@ -94,7 +94,7 @@ fn report(
                 .ok_or_else(|| eyre::eyre!("verified genesis certificate missing"))?;
             let execution_hash = hex::encode(
                 iroha::data_model::sumeragi_finality::result_of_preimage(
-                    &certificate.result_preimage,
+                    certificate.result_preimage(),
                 )
                 .0,
             );

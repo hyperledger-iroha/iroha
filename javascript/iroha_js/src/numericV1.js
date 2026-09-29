@@ -51,7 +51,8 @@ const SCHEMAS = Object.freeze({
 });
 
 const NUMERIC_V1_MIN_KNOWN_POINTER_TYPE = 0x0001;
-const NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x0012;
+const NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x0013;
+const NUMERIC_V1_UNASSIGNED_POINTER_TYPE = 0x000c;
 // END GENERATED: kotodama-v1-numeric-policy
 
 /** Stable validation failure raised by the Kotodama V1 numeric codec. */
@@ -441,7 +442,8 @@ function decodeEnvelope(kind, input) {
   if (envelope.length < ENVELOPE_HEADER_BYTES) fail(TRUNCATED_ENVELOPE, (TEXT_NUMERIC_ENVELOPE + "is truncated"));
   const pointerType = (envelope[0] << 8) | envelope[1];
   const knownAllowedType = pointerType >= NUMERIC_V1_MIN_KNOWN_POINTER_TYPE
-    && pointerType <= NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE;
+    && pointerType <= NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE
+    && pointerType !== NUMERIC_V1_UNASSIGNED_POINTER_TYPE;
   if (!knownAllowedType) {
     fail("unknown_type", (TEXT_NUMERIC_ENVELOPE + "has an unknown pointer type"));
   }

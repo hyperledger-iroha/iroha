@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "SmokeTransfer",
-  "code_hash": "hash:6FAAB9FF7D639E9E840A7230B12E7778F14977229247F76B39104DFCED536B6D#A690",
-  "abi_hash": "hash:DB4259AA28486967F2D8799B4E66E1B919F4D18690DB2D94CD96EFA05EE840A3#4407",
+  "code_hash": "hash:A7EC3E1BB115D955F720DF0369411AD3D0C0BFA63D760CFA91ED9A7AA2DCDF7B#211D",
+  "abi_hash": "hash:4DE60141043F6E9990D9A36EC5049D1FA2400792A72889604A4B2B6F7C6AA0F9#130B",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -113,6 +113,10 @@
         {
           "name": "QuantityUnderflow",
           "code": 9
+        },
+        {
+          "name": "NegativeSquareRoot",
+          "code": 13
         }
       ]
     }

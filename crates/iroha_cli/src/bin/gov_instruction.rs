@@ -78,6 +78,7 @@ mod tests {
             "publish-sccp-route-manifest",
             "ensure-ivm-execution-vk",
             "propose-sccp-route-governance",
+            "record-sccp-transfer",
         ] {
             assert!(
                 Args::try_parse_from(["gov_instruction", command]).is_err(),

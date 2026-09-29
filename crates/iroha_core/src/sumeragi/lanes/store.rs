@@ -132,6 +132,9 @@ impl FileLaneBlockStore {
         if block.header.height != height
             || commit_qc.height != height
             || commit_qc.kind != VoteKind::Commit
+            || commit_qc.instance != block.header.instance
+            || commit_qc.epoch != block.header.epoch
+            || commit_qc.attest != block.header.attest
             || commit_qc.block_hash != block.hash(&*self.crypto)
             || !block.body_ok(&*self.crypto)
         {
@@ -209,6 +212,10 @@ mod tests {
         let payload = vec![u8::try_from(height).expect("small"); 16];
         let header = BlockHeader {
             instance: INSTANCE,
+            epoch: iroha_sumeragi::types::EpochId {
+                epoch: 0,
+                context: Hash32([7; 32]),
+            },
             height,
             origin_view: 0,
             parent_hash: parent,
@@ -223,6 +230,10 @@ mod tests {
         let qc = Qc {
             kind: VoteKind::Commit,
             instance: INSTANCE,
+            epoch: iroha_sumeragi::types::EpochId {
+                epoch: 0,
+                context: Hash32([7; 32]),
+            },
             height,
             view: 0,
             block_hash: block.hash(&**crypto),
@@ -243,6 +254,16 @@ mod tests {
             FileLaneBlockStore::open(dir.path(), &INSTANCE, Arc::clone(&crypto)).expect("open");
         assert_eq!(store.height(), 0);
         let (first, first_qc) = certified(&crypto, 1, Hash32([1; 32]));
+        for mutation in 0..3 {
+            let mut foreign = first_qc.clone();
+            match mutation {
+                0 => foreign.instance = Hash32([0x91; 32]),
+                1 => foreign.epoch.context = Hash32([0x92; 32]),
+                _ => foreign.attest = !first.header.attest,
+            }
+            assert!(store.append(&first, &foreign).is_err());
+            assert_eq!(store.height(), 0);
+        }
         store.append(&first, &first_qc).expect("append 1");
         store.append(&first, &first_qc).expect("an exact retry");
         let (gap, gap_qc) = certified(&crypto, 3, Hash32([1; 32]));

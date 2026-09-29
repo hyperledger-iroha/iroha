@@ -77,13 +77,13 @@ fn exact_read_plane_and_file_accounting_is_frozen() {
         SOURCE_AUTHENTICATED_READ_BYTES_V1 + COMPACT_SPOOL_WRITE_AND_SEAL_READ_BYTES_V1
     );
     assert_eq!(TOTAL_REPLAY_IO_BYTES_V1, 350_087_424);
-    assert!(AUTHENTICATED_SOURCE_REPLAY_COMPLETE_V1);
-    assert!(!SOURCE_SAME_OPENING_PROVED_V1);
-    assert!(!GLOBAL_LOOKUP_PROOF_VERIFIED_V1);
-    assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1);
-    assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1);
-    assert!(!RELEASE_READY_V1);
-    assert!(!RELEASE_COMPLETE_V1);
+    const { assert!(AUTHENTICATED_SOURCE_REPLAY_COMPLETE_V1) };
+    const { assert!(!SOURCE_SAME_OPENING_PROVED_V1) };
+    const { assert!(!GLOBAL_LOOKUP_PROOF_VERIFIED_V1) };
+    const { assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1) };
+    const { assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1) };
+    const { assert!(!RELEASE_READY_V1) };
+    const { assert!(!RELEASE_COMPLETE_V1) };
 }
 #[test]
 fn replay_receipt_kat_binds_plaintext_authenticated_and_total_io_separately() {

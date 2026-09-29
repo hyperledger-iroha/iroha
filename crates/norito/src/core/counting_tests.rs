@@ -213,8 +213,7 @@ fn element_sequence_keeps_individually_framed_bytes_in_every_layout() {
     for flags in layouts() {
         let _flags = DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
-        write_element_sequence::<u8, _>(&mut Encoder::for_buffer(&mut bytes), [0xAB_u8], u64::MAX)
-            .unwrap();
+        write_element_sequence::<u8, _>(&mut Encoder::for_buffer(&mut bytes), [0xAB_u8]).unwrap();
         let mut expected = 1_u64.to_le_bytes().to_vec();
         write_len_with_flags(&mut expected, 1, flags).unwrap();
         expected.push(0xAB);

@@ -72,7 +72,7 @@ impl VerifiedDeepProof {
 
 /// Check caller ceilings against fixed geometry before decoding or private proving.
 ///
-/// `proof_bytes` may be MAX_FRAME_BYTES for conservative producer preflight.
+/// `proof_bytes` may be `MAX_FRAME_BYTES` for conservative producer preflight.
 /// Transition count belongs to the enclosing prepared public bundle and remains
 /// checked there before constructing a segment; it cannot be read from proof bytes.
 /// AIR rows have 301 retained values, quotient chunks have two Fp4 values, and

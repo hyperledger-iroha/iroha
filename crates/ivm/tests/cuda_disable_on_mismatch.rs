@@ -104,29 +104,21 @@ fn assert_cuda_disabled_surface_behaves() {
         "poseidon2_cuda should return None when CUDA is disabled"
     );
     assert!(
-        ivm::poseidon2_cuda_many(&[(7, 9)]).is_none(),
-        "poseidon2_cuda_many should fail closed for non-empty batches when CUDA is disabled"
+        !ivm::poseidon2_cuda_many_into(&[(7, 9)], &mut [0]),
+        "poseidon2_cuda_many_into should fail closed for non-empty batches when CUDA is disabled"
     );
     assert!(
-        ivm::poseidon6_cuda_many(&[[1, 2, 3, 4, 5, 6]]).is_none(),
-        "poseidon6_cuda_many should fail closed for non-empty batches when CUDA is disabled"
+        !ivm::poseidon6_cuda_many_into(&[[1, 2, 3, 4, 5, 6]], &mut [0]),
+        "poseidon6_cuda_many_into should fail closed for non-empty batches when CUDA is disabled"
     );
     let state = [0x42u8; 16];
     let rk = [0x24u8; 16];
     let aes_enc_cpu = ivm::aesenc_impl(state, rk);
-    let aes_enc_cuda = ivm::aesenc_cuda(state, rk)
-        .expect("aesenc_cuda should return Some even when falling back to CPU");
-    assert_eq!(
-        aes_enc_cuda, aes_enc_cpu,
-        "aesenc_cuda should fall back to CPU output when CUDA is disabled"
-    );
+    assert_eq!(ivm::aesenc_cuda(state, rk), None);
+    assert_eq!(ivm::aesenc(state, rk), aes_enc_cpu);
     let aes_dec_cpu = ivm::aesdec_impl(aes_enc_cpu, rk);
-    let aes_dec_cuda = ivm::aesdec_cuda(aes_enc_cpu, rk)
-        .expect("aesdec_cuda should return Some even when falling back to CPU");
-    assert_eq!(
-        aes_dec_cuda, aes_dec_cpu,
-        "aesdec_cuda should fall back to CPU output when CUDA is disabled"
-    );
+    assert_eq!(ivm::aesdec_cuda(aes_enc_cpu, rk), None);
+    assert_eq!(ivm::aesdec(aes_enc_cpu, rk), aes_dec_cpu);
     let states = [
         [
             0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
@@ -147,16 +139,27 @@ fn assert_cuda_disabled_surface_behaves() {
         .copied()
         .map(|block| ivm::aesdec_impl(block, rk))
         .collect();
+    let mut output = [[0xa5; 16]; 2];
+    assert!(!ivm::aesenc_batch_cuda_into(&states, rk, &mut output));
+    assert!(!ivm::aesdec_batch_cuda_into(&states, rk, &mut output));
+    assert!(!ivm::aesenc_rounds_batch_cuda_into(
+        &states,
+        &[rk],
+        &mut output
+    ));
+    assert!(!ivm::aesdec_rounds_batch_cuda_into(
+        &states,
+        &[rk],
+        &mut output
+    ));
     assert_eq!(
-        ivm::aesenc_batch_cuda(&states, rk),
-        Some(expected_single_round_enc),
-        "aesenc_batch_cuda should return CPU-computed output when CUDA is disabled"
+        output, [[0xa5; 16]; 2],
+        "failed native attempts preserve caller storage"
     );
-    assert_eq!(
-        ivm::aesdec_batch_cuda(&states, rk),
-        Some(expected_single_round_dec),
-        "aesdec_batch_cuda should return CPU-computed output when CUDA is disabled"
-    );
+    assert!(ivm::aesenc_n_rounds_many_into(&states, &[rk], &mut output));
+    assert_eq!(output.as_slice(), expected_single_round_enc);
+    assert!(ivm::aesdec_n_rounds_many_into(&states, &[rk], &mut output));
+    assert_eq!(output.as_slice(), expected_single_round_dec);
     let original_hi = [5u64, 3, 5, 3, 3];
     let original_lo = [7u64, 9, 1, 2, 1];
     let mut hi = original_hi;
@@ -173,20 +176,14 @@ fn assert_cuda_disabled_surface_behaves() {
         lo, original_lo,
         "failed CUDA bitonic-sort helper must not mutate the low-word buffer"
     );
-    let lhs = [1.0f32, -2.5, 3.25, 4.5];
-    let rhs = [2.0f32, 0.5, -1.25, 3.5];
-    assert!(
-        ivm::vector_add_f32(&lhs, &rhs).is_none(),
-        "explicit CUDA vector helper should fail closed while CUDA is disabled"
-    );
-    assert!(ivm::vadd32_cuda(&[1u32, 2], &[3u32, 4]).is_none());
-    assert!(ivm::vadd64_cuda(&[1u64, 2], &[3u64, 4]).is_none());
-    assert!(ivm::vand_cuda(&[1u32, 2], &[3u32, 4]).is_none());
-    assert!(ivm::vxor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
-    assert!(ivm::vor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
+    assert!(!ivm::vadd32_cuda_into(&[1u32, 2], &[3u32, 4], &mut [0; 2]));
+    assert!(!ivm::vadd64_cuda_into(&[1u64, 2], &[3u64, 4], &mut [0; 2]));
+    assert!(!ivm::vand_cuda_into(&[1u32, 2], &[3u32, 4], &mut [0; 2]));
+    assert!(!ivm::vxor_cuda_into(&[1u32, 2], &[3u32, 4], &mut [0; 2]));
+    assert!(!ivm::vor_cuda_into(&[1u32, 2], &[3u32, 4], &mut [0; 2]));
     let leaf_blocks = [block];
     assert!(
-        ivm::sha256_leaves_cuda(&leaf_blocks).is_none(),
+        !ivm::sha256_leaves_cuda_into(&leaf_blocks, &mut [[0; 32]]),
         "explicit CUDA SHA-256 leaves helper should fail closed while CUDA is disabled"
     );
     assert!(
@@ -208,9 +205,26 @@ fn assert_cuda_disabled_surface_behaves() {
     assert!(ivm::bn254_add_cuda(bn254_lhs, bn254_rhs).is_none());
     assert!(ivm::bn254_sub_cuda(bn254_lhs, bn254_rhs).is_none());
     assert!(ivm::bn254_mul_cuda(bn254_lhs, bn254_rhs).is_none());
-    assert!(ivm::bn254_add_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
-    assert!(ivm::bn254_sub_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
-    assert!(ivm::bn254_mul_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
+    let bn_sentinel = [[u64::MAX; 4]];
+    let mut bn_output = bn_sentinel;
+    assert!(!ivm::bn254_add_batch_cuda_into(
+        &[bn254_lhs],
+        &[bn254_rhs],
+        &mut bn_output
+    ));
+    assert_eq!(bn_output, bn_sentinel);
+    assert!(!ivm::bn254_sub_batch_cuda_into(
+        &[bn254_lhs],
+        &[bn254_rhs],
+        &mut bn_output
+    ));
+    assert_eq!(bn_output, bn_sentinel);
+    assert!(!ivm::bn254_mul_batch_cuda_into(
+        &[bn254_lhs],
+        &[bn254_rhs],
+        &mut bn_output
+    ));
+    assert_eq!(bn_output, bn_sentinel);
     let msg = b"cuda disable regression";
     let sig = [0u8; 64];
     let pk = [0u8; 32];
@@ -219,7 +233,22 @@ fn assert_cuda_disabled_surface_behaves() {
         "explicit CUDA ed25519 helper should fail closed while CUDA is disabled"
     );
     assert!(
-        ivm::ed25519_verify_batch_cuda(&[sig], &[pk], &[[0u8; 32]]).is_none(),
+        {
+            let signatures = &[sig];
+            let public_keys = &[pk];
+            let hrams = &[[0u8; 32]];
+            let mut output = vec![true; signatures.len()];
+            if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+                Some(output)
+            } else {
+                assert!(
+                    output.iter().all(|value| *value),
+                    "refusal must preserve destination"
+                );
+                None
+            }
+        }
+        .is_none(),
         "explicit CUDA ed25519 batch helper should fail closed while CUDA is disabled"
     );
 }

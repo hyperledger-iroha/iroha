@@ -569,7 +569,7 @@ fn digests_are_pinned() {
     let profile = sora();
     assert_eq!(
         profile.consensus_digest(4).unwrap().to_string(),
-        "e3434ab2cebb1fd64457587110b8254c6cda78521ab52b87108cfa12458847ff"
+        "f6bfec243ab1b3989b79b2573230d0c6f3fbc83bdf49b46c1a14e6fd8274350d"
     );
     assert_eq!(
         profile.policy_digest().unwrap().to_string(),
@@ -729,6 +729,23 @@ fn digest_inputs_roundtrip_through_norito() {
 
 fn sora_table() -> toml::Table {
     parse_profile_text(ProfileId::SoraNexusV1).unwrap()
+}
+
+#[test]
+fn genesis_recipe_rejects_retired_seat_band() {
+    Profile::from_table(ProfileId::SoraNexusV1, sora_table()).expect("canonical profile");
+    for value in [0, 5, 100] {
+        let mut table = sora_table();
+        set(
+            &mut table,
+            "genesis_recipe.npos_seat_band_pct",
+            toml::Value::Integer(value),
+        );
+        assert!(matches!(
+            Profile::from_table(ProfileId::SoraNexusV1, table),
+            Err(ProfileError::Malformed { .. })
+        ));
+    }
 }
 
 #[test]

@@ -397,10 +397,24 @@ specify its complete 512-bit two's-complement semantics, valid shift counts,
 gas, and ABI surface; host-language bigint behavior is never inherited
 implicitly.
 
-The scalar IVM helpers formerly surfaced as `math::isqrt`, `math::abs`,
-`math::min`, `math::max`, `math::div_ceil`, `math::gcd`, and `math::mean` are
-also not source operations in V1. They cannot acquire an implicit 64-bit input
-domain merely because the underlying VM has scalar instructions.
+The checked helpers `math::isqrt(value)` and `math::abs(value)` accept one
+`int`. Binary helpers use named `left:` and `right:` arguments of type `int`.
+All operands and final results obey the complete signed 512-bit domain.
+
+| Helper | Result and faults |
+| --- | --- |
+| `isqrt` | Floor square root; negative input faults with `NegativeSquareRoot` (13). |
+| `abs` | Absolute value; the minimum signed integer overflows. |
+| `min`, `max` | Signed comparison over the full domain. |
+| `div_ceil` | Mathematical ceiling; zero divisor and an unrepresentable result fault. |
+| `gcd` | Nonnegative gcd of absolute operands; `gcd(0, 0) = 0`; an unrepresentable result faults. |
+| `mean` | Truncate the full intermediate sum divided by two toward zero. |
+
+Constant folding and runtime call the same observed primitive algorithms in
+`iroha_primitives::numeric_int`. Runtime uses typed numeric syscalls
+`0x010114..=0x01011A`, charging each logical limb phase before doing its work.
+No helper narrows an operand to the host machine width. Invalid constant
+expressions produce the corresponding compile-time numeric diagnostic.
 
 ## Canonical wire values
 
@@ -510,10 +524,12 @@ traversal, then decodes only that authenticated snapshot.
 Pointer type IDs are:
 
 ```text
+0x000C  unassigned (rejected as unknown)
 0x0010  QuantityValueV1
 0x0011  IntValueV1
 0x0012  DecimalValueV1
-0x0013  unassigned (rejected as unknown)
+0x0013  AxtAnchoredSpendV1 (non-numeric, rejected as wrong type)
+0x0014  unassigned (rejected as unknown)
 ```
 
 Numeric comparison and equality operate on the mathematical value after
@@ -542,7 +558,7 @@ typed numeric boundary.
 ABI V1 contains the unconditional numeric syscall blocks:
 
 ```text
-0x010100..0x010113  int
+0x010100..0x01011A  int
 0x010120..0x010130  decimal
 0x010140..0x010150  quantity
 ```
@@ -576,6 +592,7 @@ Stable numeric fault tags are:
 10 InvalidRoundingMode
 11 InvalidFailureMode
 12 ReservedRegisterNonZero
+13 NegativeSquareRoot
 ```
 
 Stable numeric pointer-validation fault tags are:
@@ -609,7 +626,7 @@ never refund. Each phase is debited immediately before its bounded work begins;
 an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
 
-The complete formula and stable OOG phase-tag map have gas-formula version 5.
+The complete formula and stable OOG phase-tag map have gas-formula version 6.
 That version is an input to gas-schedule descriptor format 4 under domain
 `iroha.ivm.gas-schedule.v4`. The descriptor also encodes every staged phase
 name and numeric tag directly, in tag order; the phase table is not represented
@@ -1082,8 +1099,9 @@ ABI V1 has not previously been released as a compatibility contract. This
 definition replaces every pre-release V1 numeric layout and syscall surface.
 Old ABI hashes and artifacts are rejected before execution. The numeric pointer
 surface assigns only `Quantity = 0x0010`, `Int = 0x0011`, and
-`Decimal = 0x0012`; `0x0013` is unassigned and rejected as unknown rather than
-retained as an ABI tombstone.
+`Decimal = 0x0012`; `0x0013` is the assigned `AxtAnchoredSpendV1` type and is
+rejected as wrong type by numeric decoders. `0x000C` and `0x0014` are
+unassigned and rejected as unknown.
 
 Merge and release require:
 

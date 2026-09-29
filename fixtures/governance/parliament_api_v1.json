@@ -24,7 +24,10 @@
     "SorafsProviderGovernance",
     "ContractLifecycleGovernance",
     "ContractEmergencyHold",
-    "GlobalDataTriggerPermissionGovernance"
+    "GlobalDataTriggerPermissionGovernance",
+    "KagemushaVerifierPolicyInstall",
+    "KagemushaVerifierReleaseInstall",
+    "KagemushaVerifierReleaseActivate"
   ],
   "contract_lifecycle_actions": [
     "Activate",

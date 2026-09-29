@@ -1234,6 +1234,120 @@ mod tests {
     }
 
     #[test]
+    fn execution_allocator_refusal_never_persists_body_rejection() {
+        use crate::{
+            block::BlockValidationError,
+            state::MergeLedgerCommitError,
+            sumeragi::{v2_apply::V2ApplyService, v2_body_store::LocalValidationRefusal},
+        };
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("retain exact body");
+        let before = durable_files_snapshot(directory.path());
+        for reason in [
+            ivm::error::ExecutionDeferral::AllocationUnavailable,
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+        ] {
+            for candidate_error in [
+                BlockValidationError::ExecutionDeferred(reason.into()),
+                BlockValidationError::from_certified_merge_stage_error(
+                    MergeLedgerCommitError::ExecutionDeferred(reason.into()),
+                ),
+            ] {
+                let error = store
+                    .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |block| {
+                        let classified = V2ApplyService::classify_candidate_validation_error(
+                            None,
+                            block,
+                            &candidate_error,
+                        );
+                        assert!(classified.rejection_identity().is_none());
+                        assert!(classified.requires_restart_recovery());
+                        Err::<wire::ExecutionCommitment, _>(classified)
+                    })
+                    .expect_err("allocator refusal cannot finish body validation");
+                assert!(matches!(
+                    error,
+                    V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(_))
+                ));
+                assert_eq!(durable_files_snapshot(directory.path()), before);
+                assert!(store.rejected.is_empty());
+                assert!(store.validated.is_empty());
+            }
+        }
+        drop(store);
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context).expect("reopen original body");
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        let outcome = reopened
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Ok::<_, String>(commitment)
+            })
+            .expect("same body can complete after local recovery");
+        assert_eq!(
+            outcome.validated_receipt().unwrap().execution_commitment(),
+            commitment
+        );
+        assert!(reopened.rejected.is_empty());
+    }
+
+    #[test]
+    fn execution_allocator_refusal_retains_release_without_a_durable_verdict() {
+        use crate::{
+            execution_attempt::ExecutionDeferred,
+            queue::Queue,
+            sumeragi::{v2_apply::V2ApplyService, v2_body_store::LocalValidationRefusal},
+        };
+        let directory = TempDir::new().unwrap();
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+        let receipt = store.store(manifest, body).unwrap();
+        let before = durable_files_snapshot(directory.path());
+        let queue = std::sync::Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &iroha_primitives::time::TimeSource::new_system(),
+        ));
+        let budget = mv::allocation::AllocationBudget::new(8);
+        let occupied = budget.try_reserve_bytes(8).unwrap();
+        let refusal = ExecutionDeferred::from(budget.try_reserve_bytes(1).unwrap_err());
+        let error = store
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                let classified =
+                    V2ApplyService::classify_execution_deferral(&refusal, queue.sumeragi_waker());
+                assert!(classified.rejection_identity().is_none());
+                assert!(!classified.requires_restart_recovery());
+                Err::<wire::ExecutionCommitment, _>(classified)
+            })
+            .expect_err("occupied capacity leaves validation undecided");
+        let V2BodyStoreError::LocalValidation(LocalValidationRefusal::PhysicalBusy(busy)) = error
+        else {
+            panic!("retain the original capacity release source");
+        };
+        assert_eq!(busy.resource, "ivm_active_memory");
+        let mut wait = super::HistoryAdmissionWait::new(busy.wait.clone(), busy.waker());
+        assert!(!wait.is_ready(busy.waker()));
+        assert_eq!(durable_files_snapshot(directory.path()), before);
+        assert!(store.rejected.is_empty());
+        assert!(store.validated.is_empty());
+        drop(occupied);
+        assert!(wait.is_ready(busy.waker()));
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        let outcome = store
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Ok::<_, String>(commitment)
+            })
+            .expect("same body completes after original pool releases");
+        assert_eq!(
+            outcome.validated_receipt().unwrap().execution_commitment(),
+            commitment,
+        );
+        assert!(store.rejected.is_empty());
+    }
+
+    #[test]
     fn local_candidate_drain_observation_never_persists_rejection() {
         use crate::{
             block::BlockValidationError,

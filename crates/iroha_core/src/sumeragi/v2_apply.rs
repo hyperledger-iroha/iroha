@@ -3561,7 +3561,7 @@ pub(crate) mod carrier_queue_retirement;
 mod native_preparation;
 
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "iroha-core-tests")),
     expect(
         dead_code,
         reason = "TODO: connect retained Apply only with complete consuming recovery"
@@ -4122,6 +4122,9 @@ impl V2ApplyService {
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
+        if let BlockValidationError::ExecutionDeferred(refusal) = error {
+            return Self::classify_execution_deferral(refusal, self.queue.sumeragi_waker());
+        }
         let local = match error {
             BlockValidationError::StateStorageAdmission(error) => {
                 Some(("state_storage", error.release_wait(), error.to_string()))
@@ -4153,6 +4156,23 @@ impl V2ApplyService {
         }
         Self::classify_candidate_validation_error(merge_reference, failed_block, error)
     }
+    /// Join an execution refusal to this runner's original capacity release source.
+    pub(super) fn classify_execution_deferral(
+        refusal: &crate::execution_attempt::ExecutionDeferred,
+        wake: std::task::Waker,
+    ) -> V2ApplyError {
+        use super::v2_body_store::LocalValidationRefusal;
+        V2ApplyError::LocalValidation(match refusal.allocation_refusal() {
+            Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {
+                LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(
+                    "ivm_active_memory",
+                    release.clone(),
+                    wake,
+                ))
+            }
+            _ => LocalValidationRefusal::RecoveryRequired(refusal.to_string()),
+        })
+    }
     /// Preserve local candidate readiness separately from deterministic invalidity.
     pub(super) fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
@@ -4164,6 +4184,7 @@ impl V2ApplyService {
             BlockValidationError::StateStorageAdmission(reason) => Some(reason.to_string()),
             BlockValidationError::BlockHashAdmission(reason) => Some(reason.to_string()),
             BlockValidationError::MembershipAdmission(reason) => Some(reason.to_string()),
+            BlockValidationError::ExecutionDeferred(reason) => Some(reason.to_string()),
             _ => None,
         };
         if let Some(reason) = local_admission {
@@ -4452,7 +4473,7 @@ impl V2ApplyService {
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let runtime = Arc::clone(&self.state.kagemusha_v1_runtime_verifier);
+        let runtime = self.state.kagemusha_v1_runtime_verifier();
         let current_authorization = &artifact
             .height_context
             .kagemusha_mint_finality_authorization;
@@ -5759,7 +5780,12 @@ impl V2ApplyService {
         } else {
             state_block.commit_with_state_commit_authorization(state_commit_authorization)
         };
-        commit_result.map_err(V2ApplyError::CommittedStatePublication)?;
+        commit_result.map_err(|error| match error {
+            crate::state::storage_transactions::TransactionsBlockError::ExecutionDeferred(
+                reason,
+            ) => Self::classify_execution_deferral(&reason, self.queue.sumeragi_waker()),
+            other => V2ApplyError::CommittedStatePublication(other),
+        })?;
         timings.record();
         #[cfg(feature = "test-network-native-amx-fault-injection")]
         for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref()) {

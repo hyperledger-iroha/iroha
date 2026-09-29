@@ -16,9 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[path = "../fixture.rs"]
-#[allow(dead_code, reason = "fixture is shared by focused test suites")]
-mod fixture;
+use crate::kura::scaling_evidence::fixture;
 
 const OUTPUT_CAP: u64 = 1024 * 1024;
 const REPLY_CAP: u64 = 1024;
@@ -44,8 +42,8 @@ impl CommandFixture {
                 .enumerate()
                 .map(|(index, height)| SuppliedHeightEvidence {
                     height: index as u64 + 1,
-                    finality: norito::encode_canonical(&height.proof).unwrap(),
-                    contexts: height.evidence.clone(),
+                    carrier: height.block.encode_wire().unwrap(),
+                    lane_evidence: height.evidence.clone(),
                     queries: height.queries(),
                 })
                 .collect(),
@@ -131,13 +129,10 @@ impl CommandFixture {
         for (binding, row) in bindings.iter().zip(&bundle.heights) {
             assert_eq!(binding.height, row.height);
             assert_eq!(
-                binding.contexts_hash,
-                iroha_crypto::Hash::new(&row.contexts)
+                binding.lane_evidence_hash,
+                iroha_crypto::Hash::new(&row.lane_evidence)
             );
-            assert_eq!(
-                binding.finality_hash,
-                iroha_crypto::Hash::new(&row.finality)
-            );
+            assert_eq!(binding.carrier_hash, iroha_crypto::Hash::new(&row.carrier));
             assert_eq!(
                 binding.query_hashes,
                 row.queries
@@ -150,17 +145,13 @@ impl CommandFixture {
         for (index, (row, original)) in bundle.heights.iter().zip(&self.signed.heights).enumerate()
         {
             assert_eq!(row.height, index as u64 + 1);
-            assert_eq!(
-                row.finality,
-                norito::encode_canonical(&original.proof).unwrap()
-            );
-            assert_eq!(row.contexts, original.evidence);
+            assert_eq!(row.carrier, original.block.encode_wire().unwrap());
+            assert_eq!(row.lane_evidence, original.evidence);
             assert_eq!(row.queries, original.queries());
             verifier
                 .push_height(
-                    &row.finality,
-                    &original.block.encode_wire().unwrap(),
-                    &row.contexts,
+                    &row.carrier,
+                    &row.lane_evidence,
                     &row.queries.iter().map(Vec::as_slice).collect::<Vec<_>>(),
                 )
                 .unwrap();

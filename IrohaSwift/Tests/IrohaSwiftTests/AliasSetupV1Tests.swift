@@ -435,6 +435,26 @@ final class AliasSetupV1Tests: XCTestCase {
 
     func testSharedRustGeneratedOnboardingReceiptBytesHashAndSignature() throws {
         let vector = try loadSharedFixture().accountOnboardingReceiptVector
+        let encodedBody = try JSONEncoder().encode(vector.receiptJSON.body)
+        var bodyJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedBody) as? [String: Any]
+        )
+        XCTAssertTrue(bodyJSON["owner_auto_renew_instruction"] is NSNull)
+        bodyJSON.removeValue(forKey: "owner_auto_renew_instruction")
+        let missingOptional = try JSONSerialization.data(withJSONObject: bodyJSON)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiAccountOnboardingPlanBody.self, from: missingOptional)
+        )
+        let encodedAcquisition = try JSONEncoder().encode(vector.receiptJSON.body.acquisition)
+        var acquisitionJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedAcquisition) as? [String: Any]
+        )
+        XCTAssertTrue(acquisitionJSON["pricing_class_hint"] is NSNull)
+        acquisitionJSON.removeValue(forKey: "pricing_class_hint")
+        let missingHint = try JSONSerialization.data(withJSONObject: acquisitionJSON)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(AliasLeaseAcquisitionV1.self, from: missingHint)
+        )
         XCTAssertEqual(vector.name, "sponsored_account_alias_create")
         XCTAssertEqual(
             vector.domain,
@@ -492,6 +512,48 @@ final class AliasSetupV1Tests: XCTestCase {
             #else
             // Source-only test environments may not package the optional bridge symbol.
             #endif
+        }
+    }
+
+    func testRequiredNullableAliasFieldsUseExplicitNulls() throws {
+        let rootAlias = try AccountAliasName(parsing: "merchant@paynet")
+        let aliasData = try JSONEncoder().encode(rootAlias)
+        var aliasJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: aliasData) as? [String: Any]
+        )
+        XCTAssertTrue(aliasJSON["domain"] is NSNull)
+        XCTAssertEqual(try JSONDecoder().decode(AccountAliasName.self, from: aliasData), rootAlias)
+        aliasJSON.removeValue(forKey: "domain")
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AccountAliasName.self,
+                from: JSONSerialization.data(withJSONObject: aliasJSON)
+            )
+        )
+
+        let original = try loadSharedFixture().accountOnboardingReceiptVector.receiptJSON.body.resource
+        let resource = AliasPlanResourceV1(
+            intent: original.intent,
+            disposition: original.disposition,
+            quote: nil,
+            instructionIndex: nil
+        )
+        let resourceData = try JSONEncoder().encode(resource)
+        let resourceJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: resourceData) as? [String: Any]
+        )
+        XCTAssertTrue(resourceJSON["quote"] is NSNull)
+        XCTAssertTrue(resourceJSON["instruction_index"] is NSNull)
+        XCTAssertEqual(try JSONDecoder().decode(AliasPlanResourceV1.self, from: resourceData), resource)
+        for missing in ["quote", "instruction_index"] {
+            var incomplete = resourceJSON
+            incomplete.removeValue(forKey: missing)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    AliasPlanResourceV1.self,
+                    from: JSONSerialization.data(withJSONObject: incomplete)
+                )
+            )
         }
     }
 

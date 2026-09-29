@@ -46,8 +46,8 @@ mod unix {
                 .iter()
                 .map(|height| SuppliedHeightEvidence {
                     height: height.block.header().height().get(),
-                    finality: norito::encode_canonical(&height.proof).unwrap(),
-                    contexts: height.evidence.clone(),
+                    carrier: height.block.encode_wire().unwrap(),
+                    lane_evidence: height.evidence.clone(),
                     queries: height.queries(),
                 })
                 .collect()
@@ -108,8 +108,8 @@ mod unix {
             .iter()
             .map(|s| HeightInputBinding {
                 height: s.height,
-                finality_hash: Hash::new(&s.finality),
-                contexts_hash: Hash::new(&s.contexts),
+                carrier_hash: Hash::new(&s.carrier),
+                lane_evidence_hash: Hash::new(&s.lane_evidence),
                 query_hashes: s.queries.iter().map(Hash::new).collect(),
             })
             .collect()
@@ -122,6 +122,84 @@ mod unix {
             Hash::new(export.canonical_bytes()),
             export.canonical_bytes(),
         )
+    }
+
+    #[test]
+    fn sdk_fixture_retains_the_entire_verified_native_artifact_and_all_request_rows() {
+        for lanes in [1, 4] {
+            let disk = Disk::new(lanes);
+            let original = disk.snapshot();
+            let export = disk.export().unwrap();
+            let replayed = replay(&disk, &export).unwrap();
+            let encoded = export.sdk_fixture_json(16 * 1024 * 1024).unwrap();
+            assert_eq!(
+                encoded,
+                replayed.sdk_fixture_json(16 * 1024 * 1024).unwrap()
+            );
+            let document: norito::json::Value = norito::json::from_slice(&encoded).unwrap();
+            assert_eq!(
+                document
+                    .get("version")
+                    .and_then(norito::json::Value::as_u64),
+                Some(1)
+            );
+            assert_eq!(
+                document
+                    .get("artifact_schema")
+                    .and_then(norito::json::Value::as_str),
+                Some("iroha_kagami::scaling_evidence::ExportEnvelopeV1")
+            );
+            let proof = hex::decode(
+                document
+                    .get("canonical_artifact_hex")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(proof, export.canonical_bytes());
+            let digest: Hash =
+                norito::json::from_value(document.get("artifact_hash").unwrap().clone()).unwrap();
+            assert_eq!(digest, Hash::new(&proof));
+            let rows: norito::json::Value =
+                norito::json::from_slice(&export.json_projection(1024 * 1024).unwrap()).unwrap();
+            assert_eq!(document.get("requests"), Some(&rows));
+            assert_eq!(
+                rows.as_array().unwrap().len(),
+                8,
+                "all warmup and measurement requests remain"
+            );
+            assert_eq!(
+                export.sdk_fixture_json(encoded.len() as u64).unwrap(),
+                encoded
+            );
+            for cap in [0, 1, encoded.len() as u64 - 1, MAX_PROOF_BYTES + 1] {
+                assert!(export.sdk_fixture_json(cap).is_err(), "reject bound {cap}");
+            }
+            assert_eq!(disk.snapshot(), original, "capture is read-only");
+        }
+    }
+
+    #[test]
+    fn native_execution_sdk_captures_match_the_complete_replayed_artifact() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sumeragi");
+        for lanes in [1, 4] {
+            let disk = Disk::new(lanes);
+            let exported = disk.export().unwrap();
+            let replayed = replay(&disk, &exported).unwrap();
+            let bytes = replayed.sdk_fixture_json(16 * 1024 * 1024).unwrap();
+            let path = root.join(format!("native_execution_evidence_{lanes}_lanes_v1.json"));
+            if std::env::var_os("IROHA_UPDATE_NATIVE_EXECUTION_FIXTURES").as_deref()
+                == Some(std::ffi::OsStr::new("1"))
+            {
+                fs::create_dir_all(&root).unwrap();
+                fs::write(&path, &bytes).unwrap();
+            }
+            assert_eq!(
+                fs::read(&path)
+                    .expect("generate native captures with the explicit fixture update test"),
+                bytes
+            );
+        }
     }
 
     #[test]
@@ -161,7 +239,7 @@ mod unix {
             let envelope: ExportEnvelopeV1 = canonical(export.canonical_bytes()).unwrap();
             assert_eq!(envelope.heights.len(), disk.signed.heights.len());
             for (retained, actual) in envelope.heights.iter().zip(&disk.signed.heights) {
-                assert_eq!(retained.contexts, actual.evidence);
+                assert_eq!(retained.lane_evidence, actual.evidence);
                 assert_eq!(retained.carrier, actual.block.encode_wire().unwrap());
             }
             assert_eq!(
@@ -190,13 +268,10 @@ mod unix {
             "entrypoint_hash",
             "carrier_height",
             "carrier_hash",
-            "admission_carrier_hash",
-            "input_descriptor_hash",
-            "instance_id",
+            "lane_source",
             "leaf_index",
             "lane_id",
             "dataspace_id",
-            "incarnation",
         ]
         .into_iter()
         .collect();
@@ -259,8 +334,8 @@ mod unix {
                     "input binding height order"
                 }
                 2 => {
-                    bindings[1].finality_hash = Hash::new(b"different");
-                    "finality/context input digest mismatch"
+                    bindings[1].carrier_hash = Hash::new(b"different");
+                    "carrier/context input digest mismatch"
                 }
                 3 => {
                     bindings[1].query_hashes[0] = Hash::new(b"different");
@@ -316,22 +391,32 @@ mod unix {
     fn late_authentication_failure_has_no_artifact_or_disk_mutation() {
         let disk = Disk::new(4);
         assert!(disk.export().is_ok());
+        let export = disk.export().unwrap();
+        let mut envelope: ExportEnvelopeV1 = canonical(export.canonical_bytes()).unwrap();
+        let mut second = disk.signed.heights[1].block.clone();
+        let certificate = second.commit_certificate().unwrap();
+        let mut qc = certificate.commit_qc().to_vec();
+        qc.pop();
+        let changed = iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+            certificate.consensus_header().to_vec(),
+            qc,
+            certificate.result_preimage().to_vec(),
+        );
+        second.set_commit_certificate(Some(changed));
         let mut supplied = disk.supplied();
-        let mut second = disk.signed.heights[1].proof.clone();
-        second.finality_artifact.commit_qc.aggregate_signature.pop();
-        supplied[1].finality = norito::encode_canonical(&second).unwrap();
-        // Independently supplied digest is deliberately updated: this control
-        // reaches real authentication rather than the earlier digest gate.
+        supplied[1].carrier = second.encode_wire().unwrap();
+        envelope.heights[1].carrier = supplied[1].carrier.clone();
+        // Coherently update every transport digest so rejection reaches native
+        // certificate verification, not an earlier hash or disk-identity gate.
         let exact = bindings(&supplied);
+        let bytes = norito::encode_canonical(&envelope).unwrap();
         let before = disk.snapshot();
-        let result = export_from_kura(
+        let result = replay_export(
             disk.signed.plan(),
             fixture::limits(),
-            &disk.root,
-            &disk.log,
-            disk.reader_limits(),
             &exact,
-            supplied,
+            Hash::new(&bytes),
+            &bytes,
         );
         assert!(result.is_err());
         assert_eq!(disk.snapshot(), before);
@@ -408,25 +493,34 @@ mod unix {
         assert!(replay(&disk, &export).is_ok());
         for mode in 0..15 {
             let mut e: ExportEnvelopeV1 = canonical(export.canonical_bytes()).unwrap();
-            let row = &mut e.rows[0];
+            let row = &mut e.rows[1];
             match mode {
                 0 => row.sequence += 1,
                 1 => row.request.logical_id = format!("{:064x}", 99),
                 2 => row.request.phase = WorkloadPhase::Measurement,
-                3 => row.request.authority = disk.signed.requests[1].1.authority().clone(),
-                4 => row.request.entrypoint_hash = disk.signed.requests[1].1.hash_as_entrypoint(),
+                3 => row.request.authority = disk.signed.requests[0].1.authority().clone(),
+                4 => row.request.entrypoint_hash = disk.signed.requests[0].1.hash_as_entrypoint(),
                 5 => row.request.carrier_height += 1,
                 6 => row.request.carrier_hash = disk.signed.heights[0].block.hash(),
                 7 => {
-                    row.request.admission_carrier_hash =
+                    row.request.lane_source.as_mut().unwrap().anchor_hash =
                         HashOf::from_untyped_unchecked(Hash::new(b"changed entry"))
                 }
-                8 => row.request.input_descriptor_hash = Hash::new(b"different descriptor"),
-                13 => row.request.instance_id = Hash::new(b"different instance"),
+                8 => {
+                    row.request.lane_source.as_mut().unwrap().block_hash =
+                        Hash::new(b"different source block").into()
+                }
+                13 => {
+                    row.request.lane_source.as_mut().unwrap().instance =
+                        Hash::new(b"different instance").into()
+                }
                 9 => row.request.leaf_index += 1,
                 10 => row.request.lane_id = LaneId::new(99),
                 11 => row.request.dataspace_id = DataSpaceId::new(99),
-                12 => row.request.incarnation = Hash::new(b"different incarnation"),
+                12 => {
+                    row.request.lane_source.as_mut().unwrap().incarnation =
+                        Hash::new(b"different incarnation").into()
+                }
                 _ => e.rows.swap(0, 1),
             }
             let bytes = norito::encode_canonical(&e).unwrap();
@@ -458,8 +552,8 @@ mod unix {
                 1 => {
                     e.heights.pop();
                 }
-                2 => e.heights[1].contexts.clear(),
-                3 => e.heights[1].queries.swap(0, 1),
+                2 => e.heights[1].lane_evidence.clear(),
+                3 => e.heights[3].queries.swap(0, 1),
                 _ => e.heights[1].carrier = disk.signed.heights[0].block.encode_wire().unwrap(),
             }
             let bytes = norito::encode_canonical(&e).unwrap();
@@ -484,9 +578,7 @@ mod unix {
         for mode in 0..4 {
             let mut plan = disk.signed.plan();
             match mode {
-                0 => {
-                    plan.first_context = disk.signed.heights[1].proof.finality_artifact.context_id()
-                }
+                0 => plan.genesis_epoch_context_id[0] ^= 1,
                 1 => plan.scheduled[0].route.lane_id = LaneId::new(1),
                 2 => {
                     plan.scheduled[0].signed_transaction =
@@ -740,9 +832,9 @@ fn export_envelope_declares_v1_identity_for_complete_nested_proofs() {
             .iter()
             .map(|height| HeightProofV1 {
                 height: height.block.header().height().get(),
-                finality: norito::encode_canonical(&height.proof).unwrap(),
                 carrier: height.block.encode_wire().unwrap(),
-                contexts: height.evidence.clone(),
+                carrier: height.block.encode_wire().unwrap(),
+                lane_evidence: height.evidence.clone(),
                 queries: height.queries(),
             })
             .collect(),
@@ -777,8 +869,8 @@ fn export_envelope_declares_v1_identity_for_complete_nested_proofs() {
         .iter()
         .map(|height| HeightInputBinding {
             height: height.block.header().height().get(),
-            finality_hash: Hash::new(norito::encode_canonical(&height.proof).unwrap()),
-            contexts_hash: Hash::new(&height.evidence),
+            carrier_hash: Hash::new(height.block.encode_wire().unwrap()),
+            lane_evidence_hash: Hash::new(&height.evidence),
             query_hashes: height.queries().iter().map(Hash::new).collect(),
         })
         .collect();
@@ -796,7 +888,7 @@ fn export_envelope_declares_v1_identity_for_complete_nested_proofs() {
 
     // A valid outer frame cannot authorize an unframed nested context proof.
     let mut bare_contexts: ExportEnvelopeV1 = norito::decode_canonical(&bytes).unwrap();
-    bare_contexts.heights[1].contexts =
+    bare_contexts.heights[1].lane_evidence =
         fixture.heights[1].evidence[norito::core::Header::SIZE..].to_vec();
     let bare_bytes = norito::encode_canonical(&bare_contexts).unwrap();
     assert_ne!(bare_bytes, bytes);

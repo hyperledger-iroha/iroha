@@ -887,9 +887,9 @@ mod tests {
             Err(norito::Error::SchemaMismatch)
         ));
         let old_prototype = RetiredPrototype {
-            row_root: expected.row_root.clone(),
-            mixed_root: expected.mixed_root.clone(),
-            quotient_root: expected.quotient_root.clone(),
+            row_root: expected.row_root,
+            mixed_root: expected.mixed_root,
+            quotient_root: expected.quotient_root,
             fri_roots: expected.fri_roots.clone(),
             rows: expected.rows.clone(),
             queries: expected.queries.clone(),
@@ -900,9 +900,9 @@ mod tests {
             terminal_values: expected.terminal_values.clone(),
         };
         let old_shake = RetiredShake {
-            row_root: expected.row_root.clone(),
-            mixed_root: expected.mixed_root.clone(),
-            quotient_root: expected.quotient_root.clone(),
+            row_root: expected.row_root,
+            mixed_root: expected.mixed_root,
+            quotient_root: expected.quotient_root,
             fri_roots: expected.fri_roots.clone(),
             rows: expected.rows.clone(),
             queries: expected.queries.clone(),

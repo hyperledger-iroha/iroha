@@ -13,6 +13,25 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class ContractManifestTest {
     @Test
+    fun durableEmptyProductsPreserveNominalNamesAndExactGrammar() {
+        fun decode(typeName: String) = ContractJsonParser.parseManifestRecord(
+            """{"manifest":{"states":[{"name":"Stored","type_name":"$typeName"}]}}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        ).manifest
+        for (typeName in listOf(
+            "Empty{}", "Other{}", "Transfer{}", "List<Empty{}, 2>", "List<List<Empty{}, 2>, 2>",
+            "Envelope{empty: Empty{}}", "StateMap<int, Empty{}>",
+            "std/math@1.0.0::Math::Empty{}",
+        )) assertEquals(typeName, decode(typeName).states!!.single().typeName)
+        for (typeName in listOf(
+            "{}", "Empty{", "Empty{ }", "Empty{,}", "Empty{: int}",
+            "Empty{field: int, }", "Empty{}trailing", "List<Empty{},2>",
+            "List<Empty{}, 0>", "Envelope{empty: Empty{}, empty: Empty{}}",
+            "StatePage{}", "Option{}", "int{}",
+        )) assertFailsWith<IllegalStateException>(typeName) { decode(typeName) }
+    }
+
+    @Test
     fun exportedStructIdentitySurvivesPublicAndDurableSchemas() {
         val directory = generateSequence(java.io.File(".").absoluteFile) { it.parentFile }
             .map { java.io.File(it, "fixtures/kotodama") }
@@ -57,6 +76,35 @@ class ContractManifestTest {
         ).toByteArray(StandardCharsets.UTF_8)).manifest.entrypoints!!.single()
         assertEquals("()", unit.returnType)
         assertEquals(1, unit.returnSchema!!.wordCount)
+    }
+
+    @Test
+    fun publicManifestUsesTheV1CallTableInsteadOfTheRetiredRegisterWindow() {
+        val parameters = (0 until 14).joinToString(",") { index ->
+            """{"name":"p$index","type_name":"int"}"""
+        }
+        val fields = (0 until 14).joinToString(",") { index ->
+            """{"name":"p$index","ty":{"nodes":[${leafNode("Int")}]}}"""
+        }
+        val returnNodes = (listOf("""{"kind":"Tuple","value":14}""") +
+            List(14) { leafNode("Int") }).joinToString(",")
+        val payload =
+            """{"manifest":{"entrypoints":[{"name":"wide","kind":{"kind":"View","value":null},"params":[$parameters],"argument_schema":{"fields":[$fields]},"return_type":"${wideTupleType(14)}","return_schema":{"nodes":[$returnNodes]}}]}}"""
+        val entrypoint = ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+            .manifest.entrypoints!!.single()
+        assertEquals(14, entrypoint.parameters.size)
+        assertEquals(14, entrypoint.argumentSchema!!.wordCount)
+        assertEquals(14, entrypoint.returnSchema!!.wordCount)
+
+        val overLimitParameters = (0..8_192).joinToString(",") { index ->
+            """{"name":"p$index","type_name":"int"}"""
+        }
+        val overLimit =
+            """{"manifest":{"entrypoints":[{"name":"wide","kind":{"kind":"View","value":null},"params":[$overLimitParameters],"return_type":"()","return_schema":{"nodes":[{"kind":"Unit","value":null}]}}]}}"""
+        val error = assertFailsWith<IllegalStateException> {
+            ContractJsonParser.parseManifestRecord(overLimit.toByteArray(StandardCharsets.UTF_8))
+        }
+        assertTrue(error.message!!.contains("V1 argument limit"))
     }
 
     @Test
@@ -265,7 +313,7 @@ class ContractManifestTest {
             "Transfer{Amount: quantity}",
             "Amount{amount: quantity}",
             "Transfer{amount: quantity, amount: int}",
-            "Transfer{}",
+            "Transfer{ }",
             "Option<StateMap<AccountId, quantity>>",
             "StateMap<Json, quantity>",
             "(int)",

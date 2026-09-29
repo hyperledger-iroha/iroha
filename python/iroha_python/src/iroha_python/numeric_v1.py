@@ -75,7 +75,8 @@ NUMERIC_V1_SCHEMAS: Mapping[str, NumericV1Schema] = MappingProxyType(
 """Canonical schema metadata keyed by source type name."""
 
 _NUMERIC_V1_MIN_KNOWN_POINTER_TYPE = 0x0001
-_NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x0012
+_NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x0013
+_NUMERIC_V1_UNASSIGNED_POINTER_TYPE = 0x000C
 # END GENERATED: kotodama-v1-numeric-policy
 
 
@@ -411,6 +412,7 @@ def _decode_envelope(kind: str, input_value: object) -> NumericValue:
     pointer_type = int.from_bytes(envelope[:2], "big")
     known_allowed = (
         _NUMERIC_V1_MIN_KNOWN_POINTER_TYPE <= pointer_type <= _NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE
+        and pointer_type != _NUMERIC_V1_UNASSIGNED_POINTER_TYPE
     )
     if not known_allowed:
         _fail("unknown_type", "numeric envelope has an unknown pointer type")

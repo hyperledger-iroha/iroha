@@ -37,16 +37,6 @@ name = "genesis_resign"
 path = "src/bin/genesis_resign.rs"
 required-features = ["dev-tools"]
 
-[[bin]]
-name = "manifest_normalize"
-path = "src/bin/manifest_normalize.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
-name = "tx_decode"
-path = "src/bin/tx_decode.rs"
-required-features = ["dev-tools"]
-
 [dependencies]
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

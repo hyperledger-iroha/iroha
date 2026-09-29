@@ -1,31 +1,9 @@
-#[cfg(feature = "cuda")]
-#[test]
-fn test_cuda_vector_add() {
-    if !ivm::cuda_available() {
-        eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
-        return;
-    }
-    let a = [1.0f32, 2.0, 3.0, 4.0];
-    let b = [4.0f32, 3.0, 2.0, 1.0];
-    if let Some(res) = ivm::vector_add_f32(&a, &b) {
-        assert_eq!(res, vec![5.0, 5.0, 5.0, 5.0]);
-    } else {
-        panic!("CUDA addition failed");
-    }
-}
+//! Optional integer CUDA parity smoke tests.
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_vector_int_ops() {
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
-        return;
-    }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
         return;
     }
     let a = [1u32, 2, 3, 4];

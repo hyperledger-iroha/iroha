@@ -17,6 +17,7 @@ Conventions and notes
 - Control flow: `JALR` adds its signed immediate to the register base with 64-bit two's-complement wrapping, then masks the low two bits of the target so control transfers are 4-byte aligned. `JAL` carries `rd` plus a signed 16-bit word offset. `JMP` and `JALS` use the whole low 24 bits as a signed word offset; `JALS` writes its return address to `r1`. Deployable artifacts carrying a `CNTR` interface additionally enforce protected returns: direct calls linking `r1` push the expected return PC onto a host-protected stack, and only canonical `JALR r0, r1, 0` returns may pop it. A mismatch, noncanonical indirect transfer, or depth above 1,024 traps before the target executes. At invocation start the VM captures the aligned initial `r1`; an empty protected stack must return to that exact captured address, which must also be a `HALT` instruction or the host's end-of-code sentinel. Raw code loaded with `IVM::load_code` retains the general opcode semantics for low-level tests and tooling, and each load installs the default non-vector, non-ZK execution profile independently of the previously loaded image.
 - Indexed literals: `LDLIT` and `LDI64` carry `rd` plus an unsigned 16-bit `LTLB` index. The authenticated table descriptor names either an exact ABI-v1 pointer TLV or an exact eight-byte signed scalar. Program loading rejects unknown kinds, noncanonical lengths, gaps, aliases, out-of-range indices, and instruction/entry kind mismatches before execution. Scalar entries never grant pointer provenance.
 - First-release availability: `LDLIT`, `LDI64`, `JAL`, `JMP`, and `JALS` are unconditional ABI-v1 instructions. They do not consult a feature bit or execution-mode flag and are present in every IVM build.
+- Proof-relation coverage: the V1 inventory in [`execution_relation_inventory.rs`](../src/instruction/execution_relation_inventory.rs) names all 90 admitted opcodes and their required PC-transition classes. A compile-time all-256-opcode check requires admission changes to update that inventory. It is a coverage guard only; it supplies no execution constraints or STARK proof and cannot authorize `IvmProved` admission.
 - Kotodama's relaxing assembler uses one-word `JAL` transfers when the signed
   16-bit word range is sufficient and one-word `JMP`/`JALS` transfers
   otherwise. Transfers beyond the signed 24-bit range route through sparse
@@ -26,7 +27,7 @@ Conventions and notes
 - See also: `instruction.rs` API docs for authoritative field extractors and masks used by encoders/decoders.
 ## Encoding Format
 
-IVM v1.1 standardises on a single 32‑bit word layout with an 8‑bit primary opcode and three 8‑bit operand slots. Helpers in `encoding::wide` and `instruction::wide` provide canonical encoders/decoders for this layout, and all code emission in the Kotodama compiler and reference tooling uses these helpers exclusively.
+IVM V1 standardises on a single 32‑bit word layout with an 8‑bit primary opcode and three 8‑bit operand slots. Helpers in `encoding::wide` and `instruction::wide` provide canonical encoders/decoders for this layout, and all code emission in the Kotodama compiler and reference tooling uses these helpers exclusively.
 
 ```
 31       24 23       16 15        8 7         0

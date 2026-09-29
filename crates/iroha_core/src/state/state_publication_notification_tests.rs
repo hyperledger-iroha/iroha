@@ -77,7 +77,7 @@ fn lane_manifest_publication_notifies_after_its_original_state_writer_unlocks() 
 
     // The actual public operation takes the original State writer and publishes
     // both projections. The test never manually releases its generation guard.
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         crate::governance::manifest::LaneManifestRegistry::empty(),
     ));
 

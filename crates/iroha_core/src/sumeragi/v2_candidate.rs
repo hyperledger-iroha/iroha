@@ -3585,7 +3585,7 @@ pub(super) mod tests {
                 torii_url: None,
             })
             .collect();
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+        state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
             BTreeMap::from([(
                 lane.id,
                 LaneManifestStatus {
@@ -5328,6 +5328,7 @@ pub(super) mod tests {
                 session_id: [1; 32],
                 roster_hash: [2; 32],
                 transcript_hash: [3; 32],
+                context: crate::beacon::pulse_context_fixture_v1(),
                 height: 3,
                 round: 0,
                 finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {

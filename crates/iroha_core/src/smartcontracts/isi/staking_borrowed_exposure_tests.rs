@@ -5,7 +5,7 @@ fn indexed_exposure_borrows_ordered_rows_and_skips_consumed_share() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     let (validator, delegator, _, _) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
     let record = PublicLaneValidatorRecord {

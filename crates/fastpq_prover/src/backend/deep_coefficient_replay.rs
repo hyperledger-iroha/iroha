@@ -321,7 +321,7 @@ impl CoefficientStripe<'_> {
 }
 
 /// Fold exact coefficient blocks, retaining full Fp4 challenges and zero padding.
-/// This is the coefficient form of FriFoldPlan::fold_coset, not a new FRI rule.
+/// This is the coefficient form of `FriFoldPlan::fold_coset`, not a new FRI rule.
 pub(super) fn fold_coefficients(
     round: usize,
     coefficients: &[F],

@@ -35,7 +35,7 @@ use super::{
 pub const MAX_MESSAGE_BYTES: usize = 128;
 /// Bits needed to represent every permitted byte count, including 128.
 pub const LENGTH_BITS: usize = 8;
-/// Fixed BLAKE2b parameter word for unkeyed sequential 32-byte output.
+/// Fixed `BLAKE2b` parameter word for unkeyed sequential 32-byte output.
 pub const DIGEST_PARAMETER_WORD: u64 = 0x0101_0020;
 /// Framing numerators before compression and output-conversion constraints.
 pub const FRAMING_CONSTRAINT_COUNT: usize = 1
@@ -405,12 +405,12 @@ mod tests {
         ] {
             let mut chaining = INITIALIZATION_VECTOR;
             chaining[0] ^= parameter;
-            witness.compression = Box::new(Blake2bCompressionWitness::from_inputs(
+            *witness.compression = Blake2bCompressionWitness::from_inputs(
                 chaining,
                 message,
                 [counter, 0],
                 final_block,
-            ));
+            );
             witness.output =
                 IrohaHashOutput::from_blake2b_256_words(core::array::from_fn(|index| {
                     decode_word(&witness.compression.output[index].bits)

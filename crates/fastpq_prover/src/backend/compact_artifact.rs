@@ -271,7 +271,7 @@ pub(in crate::backend) fn verify_ordinary_artifact(
     verify_ordinary_artifact_for::<u64>(bytes, expected, None, limits)
 }
 
-/// Verify a complete ordinary QuantityValueV1 artifact under its fixed profile.
+/// Verify a complete ordinary `QuantityValueV1` artifact under its fixed profile.
 /// The caller supplies expected inputs; advertised metadata cannot select a format.
 #[cfg(test)]
 pub(in crate::backend) fn verify_quantity_ordinary_artifact(
@@ -358,7 +358,7 @@ pub(in crate::backend) fn verify_axt_artifact(
     verify_axt_artifact_for::<u64>(bytes, expected, None, context, limits)
 }
 
-/// Verify a complete AXT QuantityValueV1 artifact with independent caller context.
+/// Verify a complete AXT `QuantityValueV1` artifact with independent caller context.
 /// All binding, mirrors and remote preimages remain mandatory under this route.
 #[cfg(test)]
 pub(in crate::backend) fn verify_quantity_axt_artifact(
@@ -461,7 +461,7 @@ fn validate_axt_advertisement(
         ),
         (
             "compact_artifact_amount_bytes",
-            advertised.committed_amount.as_ref().map(|b| b.as_slice()) == expected.committed_amount,
+            advertised.committed_amount.as_ref().map(<[u8; 16]>::as_slice) == expected.committed_amount,
         ),
         (
             "compact_artifact_expiry_bytes",
@@ -470,6 +470,11 @@ fn validate_axt_advertisement(
         (
             "compact_artifact_manifest_bytes",
             advertised.manifest_root.as_slice() == expected.manifest_root,
+        ),
+        (
+            "compact_artifact_source_occurrences",
+            advertised.source_transfer_occurrences.as_slice()
+                == expected.source_transfer_occurrences,
         ),
         (
             "compact_artifact_da_bytes",

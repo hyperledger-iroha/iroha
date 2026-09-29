@@ -42,8 +42,8 @@ pub(super) struct SuppliedEvidenceBundleV1 {
 #[norito_schema(name = "iroha_kagami::scaling_evidence::SuppliedEvidenceHeightV1")]
 pub(super) struct SuppliedEvidenceHeightV1 {
     pub(super) height: u64,
-    pub(super) finality: Vec<u8>,
-    pub(super) contexts: Vec<u8>,
+    pub(super) carrier: Vec<u8>,
+    pub(super) lane_evidence: Vec<u8>,
     pub(super) queries: Vec<Vec<u8>>,
 }
 
@@ -88,9 +88,28 @@ pub(crate) struct PreparedLaunchIdentity {
     pub(crate) bundle: PreparedTransportIdentity,
 }
 
+/// Exact original inputs and canonical native collection pair under retained custody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeCollectionIdentity {
+    /// Original signed genesis bytes selected independently by the launcher.
+    pub(crate) genesis: PreparedTransportIdentity,
+    /// Original canonical genesis epoch context.
+    pub(crate) context: PreparedTransportIdentity,
+    /// Complete native carrier and context vector.
+    pub(crate) carrier: PreparedTransportIdentity,
+    /// All actual Network input/output queries from native Decision carriers.
+    pub(crate) queries: PreparedTransportIdentity,
+    /// Exact original stopped tip authenticated from genesis through H2 and onward.
+    pub(crate) committed_height: u64,
+    /// Complete contiguous carrier count, including genesis.
+    pub(crate) carrier_count: u64,
+    /// Complete query count, without filtering failed outputs.
+    pub(crate) query_count: u64,
+}
+
 /// Structural stopped-height observation tied to the exact original signed genesis.
 ///
-/// This is not authority for later carriers, finality certificates or execution.
+/// This is not authority for later carriers, carrier certificates or execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StoppedTipIdentity {
     /// Raw identity of the independently authenticated generated genesis file.
@@ -168,8 +187,8 @@ use supported::InputPublicationLease;
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 ))]
 pub(crate) use supported::{
-    PreparedOutputPair, ProofOutput, export_bound_request, observe_stopped_tip, open_launcher,
-    prepare_bound, replay_bound_request,
+    CollectedOutputPair, PreparedOutputPair, ProofOutput, collect_bound, export_bound_request,
+    observe_stopped_tip, open_launcher, prepare_bound, replay_bound_request,
 };
 
 #[cfg(not(all(
@@ -214,6 +233,45 @@ mod unsupported {
         pub(super) fn check(&self) -> Result<()> {
             Err(eyre!("secure canonical proof filesystem is unsupported"))
         }
+    }
+    /// Unsupported platforms cannot publish native collection outputs.
+    pub(crate) struct CollectedOutputPair;
+    impl CollectedOutputPair {
+        /// Fail before filesystem use when secure retained publication is unavailable.
+        pub(crate) fn admit(
+            _: &Path,
+            _: &Path,
+            _: super::super::collector::CollectionLimits,
+        ) -> Result<Self> {
+            Err(eyre!("secure native collection filesystem is unsupported"))
+        }
+    }
+    /// Unsupported platforms cannot retain original collection input custody.
+    pub(crate) struct CollectedLaunch;
+    impl CollectedLaunch {
+        /// Fail without invoking the reply callback.
+        pub(crate) fn finish_reply(
+            self,
+            _: impl FnOnce(NativeCollectionIdentity) -> Result<()>,
+        ) -> Result<NativeCollectionIdentity> {
+            Err(eyre!("secure native collection filesystem is unsupported"))
+        }
+    }
+    /// Reject collection before accessing original inputs on unsupported platforms.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn collect_bound(
+        _: ProofInputBinding,
+        _: ProofInputBinding,
+        _: iroha_model_base::chain::ChainId,
+        _: iroha_data_model::NetworkId,
+        _: [u8; 32],
+        _: &Path,
+        _: &Path,
+        _: CanonicalKuraEvidenceLimits,
+        _: super::super::collector::CollectionLimits,
+        _: CollectedOutputPair,
+    ) -> Result<CollectedLaunch> {
+        Err(eyre!("secure native collection filesystem is unsupported"))
     }
     /// Unavailable retained preparation owner on this target.
     pub(crate) struct PreparedLaunch;
@@ -274,8 +332,8 @@ mod unsupported {
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 )))]
 pub(crate) use unsupported::{
-    PreparedOutputPair, ProofOutput, export_bound_request, observe_stopped_tip, open_launcher,
-    prepare_bound, replay_bound_request,
+    CollectedOutputPair, PreparedOutputPair, ProofOutput, collect_bound, export_bound_request,
+    observe_stopped_tip, open_launcher, prepare_bound, replay_bound_request,
 };
 
 #[cfg(not(all(
@@ -292,12 +350,12 @@ pub(in crate::kura::scaling_evidence::export) struct FactsInputBindings {
     pub(in crate::kura::scaling_evidence::export) signed_genesis: ProofInputBinding,
     /// Four final peer configurations in independent validator order.
     pub(in crate::kura::scaling_evidence::export) peer_configs: [ProofInputBinding; 4],
-    /// Original canonical revision-four genesis context.
+    /// Original canonical ValidatorEpochContextV1 from signed native genesis.
     pub(in crate::kura::scaling_evidence::export) context: ProofInputBinding,
     /// Complete original physical signed-request event journal.
     pub(in crate::kura::scaling_evidence::export) journal: ProofInputBinding,
-    /// Original canonical finality/context-witness vector for the entire selected interval.
-    pub(in crate::kura::scaling_evidence::export) finality: ProofInputBinding,
+    /// Original canonical native carrier/context-projection vector for the entire selected interval.
+    pub(in crate::kura::scaling_evidence::export) carrier: ProofInputBinding,
     /// Original canonical committed-query vector in complete merge order.
     pub(in crate::kura::scaling_evidence::export) queries: ProofInputBinding,
 }
@@ -360,3 +418,44 @@ mod unsupported_facts {
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 )))]
 pub(in crate::kura::scaling_evidence::export) use unsupported_facts::produce_facts;
+
+#[cfg(all(
+    unix,
+    any(target_vendor = "apple", target_os = "linux", target_os = "android")
+))]
+pub(in crate::kura::scaling_evidence::export) use supported::LaneFrameReader;
+
+#[cfg(not(all(
+    unix,
+    any(target_vendor = "apple", target_os = "linux", target_os = "android")
+)))]
+pub(in crate::kura::scaling_evidence::export) struct LaneFrameReader;
+#[cfg(not(all(
+    unix,
+    any(target_vendor = "apple", target_os = "linux", target_os = "android")
+)))]
+impl LaneFrameReader {
+    pub(in crate::kura::scaling_evidence::export) fn new(
+        _: &std::path::Path,
+        _: usize,
+    ) -> Result<Self> {
+        Err(eyre!(
+            "secure original lane source acquisition is unsupported"
+        ))
+    }
+    pub(in crate::kura::scaling_evidence::export) fn read(
+        &mut self,
+        _: [u8; 32],
+        _: u64,
+        _: usize,
+    ) -> Result<Vec<u8>> {
+        Err(eyre!(
+            "secure original lane source acquisition is unsupported"
+        ))
+    }
+    pub(in crate::kura::scaling_evidence::export) fn recheck_sources(&self) -> Result<()> {
+        Err(eyre!(
+            "secure original lane source acquisition is unsupported"
+        ))
+    }
+}

@@ -2033,6 +2033,8 @@ final class TxBuilderTests: XCTestCase {
     func testBuildMintWithoutBridgeThrows() throws {
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
         let destination = authority
         let request = MintRequest(networkId: Self.fixtureNetworkId,
                                   authority: authority,
@@ -2055,6 +2057,8 @@ final class TxBuilderTests: XCTestCase {
     func testBuildSetMetadataWithoutBridgeThrows() throws {
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
         let request = try SetMetadataRequest(networkId: Self.fixtureNetworkId,
                                              authority: authority,
                                              target: .domain(Self.fixtureDomain),
@@ -2076,6 +2080,8 @@ final class TxBuilderTests: XCTestCase {
     func testBuildBurnWithoutBridgeThrows() throws {
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
         let destination = authority
         let request = BurnRequest(networkId: Self.fixtureNetworkId,
                                   authority: authority,

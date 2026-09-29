@@ -9,6 +9,9 @@
 //! never use cold capture as a per-height fallback for a mismatched baseline.
 
 use super::*;
+use crate::state::storage_transactions::authority::{
+    TransactionMembershipAuthorityError, TransactionMembershipSide, TransactionMembershipVisitError,
+};
 use iroha_crypto::{
     Hash as Digest, MerkleMapEdit, MerkleMapNodeStore, MerkleMapReadError, MerkleMapRoot,
     MerkleMapUpdateError, MerkleMapUpdateWorkspace, MerkleMapValueRef,
@@ -104,6 +107,9 @@ pub(in crate::state) enum MembershipRootError<E> {
     /// A local platform height cannot be represented canonically.
     #[error("membership height exceeds its canonical u64 representation")]
     HeightOverflow,
+    /// Complete original membership traversal was refused or malformed.
+    #[error(transparent)]
+    Authority(#[from] TransactionMembershipAuthorityError),
     /// The original storage transition failed its existing semantic validation.
     #[error(transparent)]
     Membership(#[from] TransactionsBlockError),
@@ -225,27 +231,36 @@ fn read_at<S: MembershipStore>(
 
 impl TransactionsBlock<'_> {
     /// Cold-capture the actual committed membership under its original writer.
-    /// The caller retains the admitted store/workspace, including through failure
-    /// or unwind. Errors leave only unreachable immutable provisional nodes.
+    /// Complete entry visits are admitted before store I/O. The caller retains
+    /// the admitted store/workspace, including through failure or unwind. Errors
+    /// leave only unreachable immutable provisional nodes.
     pub(in crate::state) fn capture_committed_root<S: MembershipStore>(
         &self,
+        max_row_visits: usize,
         store: &mut S,
         workspace: &mut MerkleMapUpdateWorkspace<S::NodeLocation, S::ValueLocation>,
     ) -> Result<CommittedMembershipRoot<S::NodeLocation>, MembershipRootError<S::Error>> {
+        let cut = self.membership_authority_cut(max_row_visits)?;
         let identity = self._guard.identity();
-        let height = self
-            .latest_block_ref
-            .load()
-            .as_ref()
-            .map_or(0, |tip| tip.height.get());
-        let height = u64::try_from(height).map_err(|_| MembershipRootError::HeightOverflow)?;
+        let height = cut.frontier_height();
         let mut root = MerkleMapRoot::from_parts(0, None);
-        self.visit_committed_membership(|key, value| {
-            insert_captured_member(&mut root, key, value, store, workspace)
-        })?;
         let mut predecessor = MerkleMapRoot::from_parts(0, None);
-        self.visit_committed_predecessor_membership(|key, value| {
-            insert_captured_member(&mut predecessor, key, value, store, workspace)
+        cut.visit(|side, key, height| {
+            let value = usize::try_from(height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or(MembershipRootError::HeightOverflow)?;
+            let target = match side {
+                TransactionMembershipSide::Current => &mut root,
+                TransactionMembershipSide::Rollback => &mut predecessor,
+            };
+            insert_captured_member(target, key, value, store, workspace)
+        })
+        .map_err(|error| match error {
+            TransactionMembershipVisitError::Authority(error) => {
+                MembershipRootError::Authority(error)
+            }
+            TransactionMembershipVisitError::Consumer(error) => error,
         })?;
         Ok(CommittedMembershipRoot {
             identity: identity.clone(),

@@ -79,6 +79,8 @@ pub(crate) mod crypto_util;
 pub mod da;
 /// Guard-owned execution witness recorder, its sparse Merkle tree and state-root projections.
 pub mod exec_witness;
+/// Local execution attempts and non-consensus retry outcomes.
+pub mod execution_attempt;
 /// Native transparent execution proofs and bounded deterministic race relations.
 pub mod execution_proofs;
 /// Runtime executor integration and helpers.
@@ -1254,6 +1256,8 @@ mod execute_trigger_events_tests;
 pub(crate) mod execution_output_test_support;
 #[cfg(test)]
 mod frame_identity_tests;
+#[cfg(test)]
+pub(crate) mod ivm_test_support;
 #[cfg(test)]
 pub(crate) mod unit_test_support;
 // Governance height/custody fixtures use explicit synthetic publication,

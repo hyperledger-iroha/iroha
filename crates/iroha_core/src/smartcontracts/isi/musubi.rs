@@ -36,6 +36,13 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod attestation_records;
+use attestation_records::load_location_provider_attestations;
+mod current_providers;
+mod replication_binding;
+pub(crate) use current_providers::current_location_providers;
+use replication_binding::validate_replication_order_archive_binding;
 impl Execute for RegisterMusubiNamespaceBindingV1 {
     fn execute(
         self,
@@ -211,6 +218,52 @@ impl Execute for RegisterMusubiArchiveV1 {
                 Ok(())
             },
         )
+    }
+}
+impl Execute for AdvanceMusubiPinOutboxV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        self.validate()
+            .map_err(|error| invalid_parameter(error.reason()))?;
+        if &self.pin_authority != authority || &self.network_id != state_transaction.network_id() {
+            return Err(invariant(
+                "Musubi pin-outbox advance signer or network mismatch",
+            ));
+        }
+        let transaction_hash = state_transaction
+            .current_tx_hash
+            .as_ref()
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| invariant("Musubi pin-outbox advance requires a signed transaction"))?;
+        let current = state_transaction
+            .world
+            .musubi_pin_outbox_high_waters
+            .get(authority);
+        match current {
+            None if self.expected_revision == 0 => {}
+            Some(record)
+                if record.network_id == self.network_id
+                    && record.pin_authority == *authority
+                    && record.session_id == self.session_id
+                    && record.revision == self.expected_revision
+                    && record.inventory_digest == self.expected_inventory_digest => {}
+            _ => {
+                return Err(invariant(
+                    "Musubi pin-outbox predecessor is stale or substituted",
+                ));
+            }
+        }
+        let record = self
+            .recorded_high_water(execution_height(state_transaction), transaction_hash)
+            .map_err(|error| invalid_parameter(error.reason()))?;
+        state_transaction
+            .world
+            .musubi_pin_outbox_high_waters
+            .insert(authority.clone(), record);
+        Ok(())
     }
 }
 impl Execute for RegisterMusubiProviderBundleAttestationV1 {
@@ -2703,31 +2756,6 @@ fn ensure_admitted(
         }
     }
 }
-fn validate_replication_order_archive_binding(
-    archive: &MusubiArchiveRecordV1,
-    replication_order: &iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
-    world: &impl WorldReadOnly,
-) -> Result<MusubiReplicationOrderLocationLifecycleV1, Error> {
-    archive
-        .validate()
-        .map_err(|error| invariant(error.reason()))?;
-    let reference = world
-        .musubi_locations_by_replication_order()
-        .get(replication_order)
-        .ok_or_else(|| invariant("Musubi replication order has no consensus archive binding"))?;
-    reference
-        .validate()
-        .map_err(|error| invariant(error.reason()))?;
-    if reference.binding.replication_order != *replication_order
-        || reference.binding.archive_id != archive.archive_id
-        || reference.binding.commitment != archive.commitment
-    {
-        return Err(invariant(
-            "Musubi replication-order binding does not match the authoritative archive commitment",
-        ));
-    }
-    Ok(reference.lifecycle.clone())
-}
 fn bind_location_reverse_indices(
     existing: Option<&MusubiArchiveLocationV1>,
     location: &MusubiArchiveLocationV1,
@@ -2764,7 +2792,7 @@ fn bind_location_reverse_indices(
     match new_order_lifecycle {
         MusubiReplicationOrderLocationLifecycleV1::PreLocation => {}
         MusubiReplicationOrderLocationLifecycleV1::Active(bound_location)
-            if bound_location == key && existing == Some(location) => {}
+            if *bound_location == key && existing == Some(location) => {}
         MusubiReplicationOrderLocationLifecycleV1::Active(_)
         | MusubiReplicationOrderLocationLifecycleV1::Retired(_) => {
             return Err(invariant(
@@ -2852,92 +2880,6 @@ fn bind_location_reverse_indices(
             .insert(MusubiProviderLocationKeyV1::new(*provider, key), ());
     }
     Ok(())
-}
-fn load_location_provider_attestations(
-    archive: &MusubiArchiveRecordV1,
-    location: &MusubiArchiveLocationV1,
-    world: &impl WorldReadOnly,
-) -> Result<Vec<MusubiProviderBundleAttestationRecordV1>, Error> {
-    archive
-        .validate()
-        .map_err(|error| invariant(error.reason()))?;
-    location
-        .validate()
-        .map_err(|error| invariant(error.reason()))?;
-    if location.archive_id != archive.archive_id {
-        return Err(invariant(
-            "Musubi archive location does not match its archive directory",
-        ));
-    }
-    let receipt = &archive.staging_receipt.payload.binding;
-    let mut verification_lock_digest = None;
-    let mut references = Vec::with_capacity(location.providers.len());
-    let mut records = Vec::with_capacity(location.providers.len());
-    for provider in &location.providers {
-        let key = MusubiProviderBundleAttestationKeyV1 {
-            archive_id: archive.archive_id,
-            replication_order: location.replication_order,
-            provider_id: *provider,
-        };
-        let record = world
-            .musubi_provider_bundle_attestations()
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| {
-                invariant("Musubi archive location provider attestation record was not found")
-            })?;
-        record
-            .validate()
-            .map_err(|error| invariant(error.reason()))?;
-        if record.key != key
-            || record.registered_at_height < archive.registered_at_height
-            || record.registered_at_height >= location.finalized_height
-        {
-            return Err(invariant(
-                "Musubi archive location provider attestation record is not a finalized predecessor",
-            ));
-        }
-        let binding = &record.attestation.payload.binding;
-        if binding.network_id != receipt.network_id
-            || binding.provider_id != *provider
-            || binding.replication_order != location.replication_order
-            || binding.archive_id != archive.archive_id
-            || binding.bundle_digest != archive.commitment.bundle_digest
-            || binding.descriptor_digest != archive.commitment.descriptor_digest
-            || binding.semantic_release_manifest_digest != receipt.semantic_release_manifest_digest
-            || binding.source_tree_digest != archive.commitment.source_tree_digest
-        {
-            return Err(invariant(
-                "Musubi archive location attestation does not match its immutable archive commitments",
-            ));
-        }
-        if verification_lock_digest
-            .replace(binding.verification_lock_digest)
-            .is_some_and(|digest| digest != binding.verification_lock_digest)
-        {
-            return Err(invariant(
-                "Musubi archive location attestations disagree on the verification lock",
-            ));
-        }
-        record
-            .attestation
-            .verify(binding)
-            .map_err(|error| invariant(error.reason()))?;
-        references.push(record.attestation.reference());
-        records.push(record);
-    }
-    let set_digest = musubi_provider_bundle_attestation_set_digest_v1(
-        archive.archive_id,
-        location.replication_order,
-        &references,
-    )
-    .map_err(|error| invariant(error.reason()))?;
-    if set_digest != location.provider_attestation_set_digest {
-        return Err(invariant(
-            "Musubi archive location provider attestation set digest is inconsistent",
-        ));
-    }
-    Ok(records)
 }
 fn validate_exact_archive_location_replay(
     archive: &MusubiArchiveRecordV1,
@@ -3311,7 +3253,7 @@ fn validate_publication_archive_evidence(
             .get(&key)
             .ok_or_else(|| invariant("Musubi archive location directory is inconsistent"))?;
         let records = load_location_provider_attestations(archive, location, world)?;
-        for record in records {
+        for record in records.iter() {
             let binding = &record.attestation.payload.binding;
             if binding.semantic_release_manifest_digest != semantic_digest
                 || binding.verification_lock_digest != publication.manifest.verification_lock_digest
@@ -3616,93 +3558,6 @@ fn plan_archive_reverse_reference(
         .validate()
         .map_err(|error| invariant(error.reason()))?;
     Ok(references)
-}
-pub(crate) fn current_location_providers(
-    location: &MusubiArchiveLocationV1,
-    world: &impl WorldReadOnly,
-) -> Option<Vec<iroha_data_model::sorafs::capacity::ProviderId>> {
-    if location.state == MusubiArchiveLocationStateV1::Retired || location.validate().is_err() {
-        return None;
-    }
-    let key = location.key();
-    if !world
-        .musubi_locations_by_pin()
-        .get(&location.pin_manifest)
-        .is_some_and(|reference| reference.active && reference.location == key)
-    {
-        return None;
-    }
-    let archive = world.musubi_archives().get(&location.archive_id)?;
-    archive.validate().ok()?;
-    if !matches!(
-        validate_replication_order_archive_binding(
-            archive,
-            &location.replication_order,
-            world,
-        ),
-        Ok(MusubiReplicationOrderLocationLifecycleV1::Active(bound_location))
-            if bound_location == key
-    ) {
-        return None;
-    }
-    let pin = world.pin_manifests().get(&location.pin_manifest)?;
-    if !pin.status.is_active()
-        || pin.root_cid != archive.commitment.root_cid
-        || pin.chunker != archive.commitment.chunker
-        || pin.chunk_digest_sha3_256 != *archive.commitment.chunk_plan_digest.as_bytes()
-        || pin.por_root != *archive.commitment.por_root.as_bytes()
-        || pin.content_length != archive.commitment.content_length
-        || pin.policy.retention_epoch != location.expires_at_epoch
-    {
-        return None;
-    }
-    let order = world
-        .replication_orders()
-        .get(&location.replication_order)?;
-    if order.manifest_digest != location.pin_manifest
-        || order.manifest_root_cid != archive.commitment.root_cid
-        || !matches!(order.status, ReplicationOrderStatus::Completed(_))
-    {
-        return None;
-    }
-    let mut completion_providers = order
-        .provider_completions
-        .iter()
-        .map(|completion| completion.provider_id)
-        .collect::<Vec<_>>();
-    completion_providers.sort();
-    if completion_providers != location.providers {
-        return None;
-    }
-    let records = load_location_provider_attestations(archive, location, world).ok()?;
-    let providers = location
-        .providers
-        .iter()
-        .zip(&records)
-        .filter_map(|(provider, record)| {
-            let reverse_key = MusubiProviderLocationKeyV1::new(*provider, key);
-            if world
-                .musubi_locations_by_provider()
-                .get(&reverse_key)
-                .is_none()
-            {
-                return None;
-            }
-            let owner = world.provider_owners().get(provider)?;
-            let completion = order.provider_completion(*provider)?;
-            let binding = &record.attestation.payload.binding;
-            (completion.completed_by == *owner
-                && completion.completion_authority.provider_owner == *owner
-                && binding.provider_id == *provider
-                && binding.completed_by == completion.completed_by
-                && binding.completion_authority == completion.completion_authority
-                && binding.assignment_revision == completion.assignment_revision
-                && binding.completion_epoch == completion.completion_epoch
-                && binding.finalized_anchor == completion.finalized_anchor)
-                .then_some(*provider)
-        })
-        .collect::<Vec<_>>();
-    Some(providers)
 }
 /// Prevent an explicit lifecycle change from removing the last quorum-healthy
 /// location of an active or yanked release.
@@ -4456,5 +4311,9 @@ fn emit_musubi_event(event: MusubiEvent, state_transaction: &mut StateTransactio
 mod tests {
     use iroha_model_base::topology::DataSpaceId;
     include!("musubi/archive_replay_tests.rs");
+    include!("musubi/attestation_records_tests.rs");
+    include!("musubi/current_providers_tests.rs");
+    include!("musubi/replication_binding_tests.rs");
     include!("musubi/governance_tests.rs");
+    include!("musubi/pin_outbox_high_water_tests.rs");
 }

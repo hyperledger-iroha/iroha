@@ -199,9 +199,9 @@ public final class Java8CompatibilitySurfaceTests {
   @Test
   public void verifierParserAndFakeTransportJava8SurfaceRejectsDrift() throws Exception {
     assertTrue(
-        "exact IVM verifier profile must remain registry-admissible",
-        VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(
-            "halo2/pasta/ivm-replay-binding-v1"));
+        "retired IVM binding profile must be rejected",
+        !VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(
+            "halo2/pasta/ivm-execution-v1"));
     try {
       VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(" halo2/ipa", "backend");
       fail("verifier-registry labels must reject padding");

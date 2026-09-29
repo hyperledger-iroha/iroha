@@ -1,8 +1,7 @@
 //! Pointer‑ABI Types (IDs and Policies)
 
-This document lists IVM pointer‑ABI types, their stable numeric IDs, and which
-ABI policies allow them. IDs are wire‑stable and never renumbered. New types are
-added with new IDs; existing IDs must not change.
+This document lists the sole admitted IVM pointer-ABI V1 type table. IDs absent
+from this table are invalid, including the retired handle pointer ID 0x000C.
 
 - Validation and policy mapping are centralized in `ivm::pointer_abi`.
 - Unknown/forbidden types under a policy are rejected during TLV validation.
@@ -21,20 +20,20 @@ added with new IDs; existing IDs must not change.
 | 0x0009 | NoritoBytes | OK |
 | 0x000A | DataSpaceId | OK |
 | 0x000B | AxtDescriptor | OK |
-| 0x000C | AssetHandle | OK |
 | 0x000D | ProofBlob | OK |
 | 0x000E | SoracloudRequest | OK |
 | 0x000F | SoracloudResponse | OK |
 | 0x0010 | Quantity | OK |
 | 0x0011 | Int | OK |
 | 0x0012 | Decimal | OK |
+| 0x0013 | AxtAnchoredSpendV1 | OK |
 <!-- END GENERATED POINTER TYPES -->
 
 Notes
 - Column denotes whether the type is accepted under ABI v1 (the only supported policy in this release).
 - ABI v1 now includes the Soracloud and AXT pointer types shown above; further additions require a deliberate ABI surface change rather than an in-place runtime upgrade.
 - TLV structure is enforced regardless of policy; type IDs gate which categories are accepted for host syscalls.
-- `DataSpaceId`, `AxtDescriptor`, `AssetHandle`, and `ProofBlob` underpin the AXT (atomic cross-transaction) flow. Every V1 `AssetHandle` carries one exact issuer-signed `AssetDefinitionId`, its non-zero registration incarnation, a non-zero authorization generation, and sub-nonce; default and WSV hosts fully validate these pointers when servicing AXT syscalls, ensuring descriptor membership, exact handle/registry incarnation and handle/intent/proof asset equality, capability binding equality, proof material, and both dimensions of the permanent consensus-persisted per-dataspace ratchet are honoured across policy rotations and restarts.
+- `DataSpaceId`, `AxtDescriptor`, `ProofBlob`, and `AxtAnchoredSpendV1` form the AXT pointer surface. B5 stages one canonical issuer-signed anchored spend. A handle is an internal field of that signed data-model value and has no standalone TLV type or reusable-handle syscall. Production State admission still rejects nonempty spends until finalized source authority and exact transfer occurrence are authenticated.
 - `SoracloudRequest` and `SoracloudResponse` carry Norito envelopes for the Soracloud runtime host ABI. They are only meaningful on the dedicated Soracloud syscall block and remain part of ABI v1.
 - `Int`, `Decimal`, and `Quantity` are distinct canonical numeric pointer
   domains. `Quantity` is the nonnegative nominal ledger domain used for source

@@ -539,7 +539,9 @@ fn detect_best_impl() -> fn(&[u8]) -> u64 {
 }
 #[cfg(feature = "simd-accel")]
 fn crc64_candidate_matches_reference(candidate: fn(&[u8]) -> u64) -> bool {
-    let mut large = vec![0u8; 8192];
+    // Stack storage: the one-time selection runs inside the first checksum
+    // call, which allocation-free frame writers may be the first to make.
+    let mut large = [0u8; 8192];
     let mut seed = 0x9e37_79b9_7f4a_7c15u64;
     for byte in &mut large {
         seed ^= seed << 7;

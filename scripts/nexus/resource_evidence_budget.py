@@ -32,7 +32,7 @@ _VARIANTS = ("one_lane", "four_lane")
 _LABEL = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
 RUN_FILE_FIELDS = (
     "collector_journal", "transaction_trace", "canonical_proof", "run_receipt", "raw_run",
-    "native_finality", "native_queries", "native_facts", "native_request", "native_bundle",
+    "native_carrier", "native_queries", "native_facts", "native_request", "native_bundle",
     "genesis_manifest", "signed_genesis", "genesis_context", "genesis_network_record", "genesis_anchors",
 )
 
@@ -192,7 +192,7 @@ class RunBudget:
     canonical_proof: FileBudget
     run_receipt: FileBudget
     raw_run: FileBudget
-    native_finality: FileBudget
+    native_carrier: FileBudget
     native_queries: FileBudget
     native_facts: FileBudget
     native_request: FileBudget

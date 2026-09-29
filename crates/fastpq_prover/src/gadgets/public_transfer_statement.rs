@@ -8,7 +8,7 @@
 //!
 //! Construction does not authenticate a caller, authority digest, transaction or
 //! state root. The enclosing verifier must bind the complete public claims,
-//! profile, PublicIO and intermediate-root commitments before its challenges,
+//! profile, `PublicIO` and intermediate-root commitments before its challenges,
 //! and prove every private node hash and root link. The current transfer roots
 //! describe a touched-balance tree, not automatically consensus-wide state.
 //! TODO: Integrate this public/private boundary into a reviewed succinct proof
@@ -371,7 +371,7 @@ pub fn public_claims_from_transcripts(
 /// remain outside this constructor.
 ///
 /// Public-byte accounting streams fixed-default bare Norito encodings of full
-/// PublicInputs, the canonical row vector, a u32 transcript count, each transcript's
+/// `PublicInputs`, the canonical row vector, a u32 transcript count, each transcript's
 /// two hashes/optional digest/u32 delta count, and each delta's three identities
 /// and five quantities in declaration order. It is a resource measure, not a new
 /// wire schema or substitute for binding those fields in the enclosing statement.

@@ -1083,6 +1083,8 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: Duration::from_secs(3600),
         lane_history_retention: LANE_HISTORY_RETENTION,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -1198,6 +1200,8 @@ fn evicted_block_caches_after_remote_rehydrate() {
             fsync_mode: FsyncMode::Batched,
             fsync_interval: FSYNC_INTERVAL,
             lane_history_retention: LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:

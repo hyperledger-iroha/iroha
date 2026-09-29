@@ -1799,6 +1799,7 @@ mod tests {
             session_id: [0x22; 32],
             roster_hash: [0x33; 32],
             transcript_hash: [0x44; 32],
+            context: crate::beacon::pulse_context_fixture_v1(),
             height: 4,
             round: 0,
             finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {

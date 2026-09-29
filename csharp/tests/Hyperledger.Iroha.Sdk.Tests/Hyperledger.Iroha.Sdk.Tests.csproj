@@ -22,6 +22,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="../../../artifacts/openapi/torii.json" Link="Fixtures/torii-openapi.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/governance/parliament_api_v1.json" Link="Fixtures/parliament_api_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/governance/kagemusha_verifier_release_install_v1.json" Link="Fixtures/kagemusha_verifier_release_install_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/governance/kagemusha_verifier_release_activate_v1.json" Link="Fixtures/kagemusha_verifier_release_activate_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/account/address_vectors.json" Link="Fixtures/address_vectors.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/numeric_v1_golden.json" Link="Fixtures/numeric_v1_golden.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/offline/kagemusha_v1.json" Link="Fixtures/kagemusha_v1.json" CopyToOutputDirectory="PreserveNewest" />

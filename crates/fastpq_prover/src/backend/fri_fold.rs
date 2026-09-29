@@ -12,9 +12,9 @@
 #[cfg(test)]
 use rayon::prelude::*;
 
-use super::polynomial_field::PolynomialField;
 #[cfg(test)]
 use super::FriDomain;
+use super::polynomial_field::PolynomialField;
 use super::{GOLDILOCKS_MODULUS, field_inverse, field_pow, mul_mod};
 use crate::{Error, Result, field::GoldilocksFp4V1};
 

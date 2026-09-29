@@ -4,7 +4,7 @@ fn monetary_plan_context_binds_genesis_network_and_governed_expiry() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
-    let stx = block.transaction();
+    let stx = block.transaction_for_callback_testing();
     let network = PublicLaneMonetaryScopeV1::Network(*stx.network_id());
     for expiry in [2, 8] {
         effects::validate_plan_context(&stx, &network, expiry).unwrap();
@@ -22,7 +22,7 @@ fn monetary_plan_context_binds_genesis_network_and_governed_expiry() {
     drop(block);
     let mut genesis = state.block(block_header_with_height(1));
     effects::validate_plan_context(
-        &genesis.transaction(),
+        &genesis.transaction_for_callback_testing(),
         &PublicLaneMonetaryScopeV1::Genesis,
         1,
     )
@@ -30,10 +30,14 @@ fn monetary_plan_context_binds_genesis_network_and_governed_expiry() {
     drop(genesis);
     let mut overflow = state.block(block_header_with_height(u64::MAX));
     assert!(
-        effects::validate_plan_context(&overflow.transaction(), &network, u64::MAX)
-            .unwrap_err()
-            .to_string()
-            .contains("overflow")
+        effects::validate_plan_context(
+            &overflow.transaction_for_callback_testing(),
+            &network,
+            u64::MAX
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("overflow")
     );
     let empty_state = State::new_with_nexus_for_testing(
         World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []),
@@ -41,15 +45,27 @@ fn monetary_plan_context_binds_genesis_network_and_governed_expiry() {
         LiveQueryStore::start_test(),
     );
     let mut empty_block = empty_state.block(block_header_with_height(1));
+    let empty_transaction = empty_block.transaction_for_callback_testing();
+    effects::validate_plan_context(&empty_transaction, &PublicLaneMonetaryScopeV1::Genesis, 1)
+        .expect("genesis scope is exactly height-bound, independently of the election schedule");
+    for expiry in [0, 2] {
+        assert!(
+            effects::validate_plan_context(
+                &empty_transaction,
+                &PublicLaneMonetaryScopeV1::Genesis,
+                expiry
+            )
+            .is_err()
+        );
+    }
+    // Actual monetary execution independently requires the committed XOR identity;
+    // genesis scope never supplies a default or substitute currency.
     assert!(
-        effects::validate_plan_context(
-            &empty_block.transaction(),
-            &PublicLaneMonetaryScopeV1::Genesis,
-            1
+        ensure_committed_xor_asset(
+            &empty_transaction.world,
+            &SumeragiNposParameters::default().xor_asset_definition_id
         )
-        .unwrap_err()
-        .to_string()
-        .contains("committed NPoS")
+        .is_err()
     );
 }
 
@@ -57,7 +73,7 @@ fn monetary_plan_context_binds_genesis_network_and_governed_expiry() {
 fn registration_monetary_plan_rejects_every_changed_effect_before_custody_writes() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);
     let lane = LaneId::new(42);
     let base = RegisterPublicLaneValidator::new(
@@ -123,9 +139,7 @@ fn registration_monetary_plan_rejects_every_changed_effect_before_custody_writes
 fn reward_claim_rejects_skips_forged_records_accruals_payouts_and_oversized_prefixes() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction_for_fastpq_testing(Hash::new(
-        b"reward_claim_rejects_skips_forged_records_accruals_payouts_and_oversized_prefixes",
-    ));
+    let mut stx = block.transaction_for_callback_testing();
     let lane = LaneId::SINGLE;
     let (sink, recipient, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -258,9 +272,7 @@ fn reward_claim_processes_more_than_sixty_four_dust_records_without_forfeiture()
 fn reward_claim_zero_entitlements_advance_without_creating_accrual() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction_for_fastpq_testing(Hash::new(
-        b"reward_claim_zero_entitlements_advance_without_creating_accrual",
-    ));
+    let mut stx = block.transaction_for_callback_testing();
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     reward_distribution(lane, 0, &asset, &validator, 10)
@@ -301,7 +313,7 @@ fn reward_claim_zero_entitlements_advance_without_creating_accrual() {
 fn staking_asset_resolution_requires_the_exact_committed_network_currency() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let (validator, _, _, definition) = prepare_accounts(&mut stx);
     ensure_committed_xor_asset(&stx.world, &definition).unwrap();
     let other = AssetDefinitionId::derive_from_components(
@@ -346,7 +358,7 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
     let request_id = Hash::new(b"signed-unbond-preimage");
     let (validator, request, nexus) = {
         let mut block = state.block(block_header_with_height(1));
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         stx.nexus.staking.unbonding_delay = Duration::ZERO;
         RegisterPublicLaneValidator::new(
@@ -385,9 +397,8 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
     let block =
         new_block_with_height_and_time(request.liability_release_height, request.release_at_ms);
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xE3; Hash::LENGTH]));
     stx.nexus = nexus;
-    seed_test_call_hash(&mut stx, 0xE3);
     let good = fixture_unbond_plan(&stx, lane, &validator, &validator, &request_id);
     let reserve_before = stx
         .world

@@ -73,13 +73,13 @@ fn render_revision(value: &u64) -> CodecResult<Value> {
 
 macro_rules! activation_contracts {
     ($($ty:ident { $($field:ident: $read:ident => $write:ident),+ $(,)? }),+ $(,)?) => {
-        pub(super) fn is_activation_instruction(instruction: &InstructionBox) -> bool {
+        pub fn is_activation_instruction(instruction: &InstructionBox) -> bool {
             let instruction: &dyn Instruction = &**instruction;
             let value = instruction.as_any();
             $(value.is::<$ty>())||+
         }
 
-        pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+        pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
             let Value::Object(envelope) = value else { return None; };
             $(if let Some(payload) = envelope.get(stringify!($ty)) {
                 return Some((|| {
@@ -95,7 +95,7 @@ macro_rules! activation_contracts {
             None
         }
 
-        pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+        pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
             let instruction: &dyn Instruction = &**instruction;
             let value = instruction.as_any();
             $(if let Some(value) = value.downcast_ref::<$ty>() {

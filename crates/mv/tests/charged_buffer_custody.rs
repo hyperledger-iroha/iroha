@@ -12,7 +12,10 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError};
+use mv::allocation::{
+    AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError,
+    ChargedBufferFromChargeError,
+};
 
 struct ObservedAllocator;
 
@@ -32,6 +35,60 @@ static REQUESTED_ALIGN: AtomicUsize = AtomicUsize::new(0);
 static FREED_SIZE: AtomicUsize = AtomicUsize::new(0);
 static FREED_ALIGN: AtomicUsize = AtomicUsize::new(0);
 static FREED: AtomicBool = AtomicBool::new(false);
+
+#[test]
+fn child_backing_consumes_parent_credit_before_allocating_without_reacquisition() {
+    let _serial = SERIAL.lock().unwrap();
+    let budget = AllocationBudget::new(137);
+    let mut parent = budget.try_reserve_bytes(137).unwrap();
+    let mut child = parent.try_partition_bytes(137).unwrap();
+    observe_next(137, false, &budget);
+    let charge = child.try_split(Layout::array::<u8>(137).unwrap()).unwrap();
+    let bytes = ChargedBuffer::<u8>::try_from_charge(137, charge).unwrap();
+    assert_eq!(REQUESTED_SIZE.load(SeqCst), 137);
+    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), 137);
+    assert_eq!(parent.remaining_bytes(), 0);
+    assert_eq!(child.remaining_bytes(), 0);
+    drop(parent);
+    drop(child);
+    assert_eq!(budget.reserved_bytes(), 137);
+    drop(bytes);
+    assert!(FREED.load(SeqCst));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn prepaid_refusal_never_allocates_and_allocator_failure_retains_original_charge_for_retry() {
+    let _serial = SERIAL.lock().unwrap();
+    let budget = AllocationBudget::new(113);
+    let mut parent = budget.try_reserve_bytes(113).unwrap();
+    observe_next(114, false, &budget);
+    assert!(parent.try_split(Layout::array::<u8>(114).unwrap()).is_err());
+    assert_eq!(NEXT_SIZE.load(SeqCst), 114);
+    assert_eq!(parent.remaining_bytes(), 113);
+    let layout = Layout::array::<u8>(101).unwrap();
+    let charge = parent.try_split(layout).unwrap();
+    observe_next(101, true, &budget);
+    let (charge, error) = ChargedBuffer::<u8>::try_from_charge(101, charge)
+        .err()
+        .expect("the observed allocator must refuse backing");
+    assert_eq!(error, ChargedBufferFromChargeError::Allocator { layout });
+    assert_eq!(charge.layout(), layout);
+    assert_eq!(parent.remaining_bytes(), 12);
+    assert_eq!(budget.reserved_bytes(), 113);
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    observe_next(101, false, &budget);
+    let bytes = ChargedBuffer::<u8>::try_from_charge(101, charge).unwrap();
+    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), 113);
+    drop(bytes);
+    assert!(FREED.load(SeqCst));
+    assert_eq!(budget.reserved_bytes(), 12);
+    drop(parent);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
 
 unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -579,3 +636,6 @@ fn non_copy_zero_sized_elements_keep_logical_capacity_and_drop_once() {
 
 #[path = "charged_buffer_custody/from_charge.rs"]
 mod from_charge;
+
+#[path = "charged_buffer_custody/from_reservation.rs"]
+mod from_reservation;

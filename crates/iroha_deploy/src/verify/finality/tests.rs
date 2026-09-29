@@ -1159,8 +1159,24 @@ fn preparation(chain: &Chain, selection_height: u64) -> ValidatorCommitteePrepar
         authority_generation: 1,
         preparing_authorization_id: [0x5A; 32],
         election_seed: [0x5B; 32],
-        roster: committee.roster.clone(),
-        validator_set_pops: committee.validator_set_pops.clone(),
+        eligibility: iroha_data_model::nexus::ValidatorElectionPolicyV1 {
+            epoch_length_blocks: 20,
+            ..iroha_data_model::nexus::ValidatorElectionPolicyV1::from_npos_parameters(
+                &iroha_data_model::parameter::system::SumeragiNposParameters::default(),
+            )
+            .unwrap()
+        },
+        committee: committee
+            .roster
+            .iter()
+            .zip(&committee.validator_set_pops)
+            .map(
+                |(seat, pop)| iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1 {
+                    validator: seat.validator.clone(),
+                    proof_of_possession: pop.clone(),
+                },
+            )
+            .collect(),
     }
 }
 

@@ -207,7 +207,8 @@ pub use mint_finality::{
     validate_kagemusha_mint_finality_roster_keys_v1,
     verify_kagemusha_mint_finality_candidate_possession_v1,
     verify_kagemusha_mint_finality_seal_bundle_v1, verify_kagemusha_mint_finality_seal_share_v1,
-    verify_kagemusha_mint_finality_seat_readiness_v1, verify_kagemusha_top_up_membership_v1,
+    verify_kagemusha_mint_finality_seat_readiness_v1,
+    verify_kagemusha_mint_finality_validator_seal_v1, verify_kagemusha_top_up_membership_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use mint_helper::{KagemushaMintAuthorityStepV1, KagemushaMintCertificateWitnessV1};

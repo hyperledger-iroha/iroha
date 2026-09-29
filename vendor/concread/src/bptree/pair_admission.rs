@@ -160,24 +160,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<
-        (
-            (
-                BptreeMapOwned<K, V, Prepaid<P>>,
-                BptreeMapOwned<K, Option<V>, Prepaid<P>>,
-            ),
-            Option<V>,
-        ),
-        (
-            (
-                BptreeMapOwned<K, V, Prepaid<P>>,
-                BptreeMapOwned<K, Option<V>, Prepaid<P>>,
-                K,
-                V,
-            ),
-            PairInsertError<E>,
-        ),
-    > {
+    ) -> OwnedPairInsertResult<K, V, P, E> {
         let mut undo_writer = match undo_map.inner.try_write_owned(undo.inner) {
             Ok(writer) => writer,
             Err((inner, error)) => {

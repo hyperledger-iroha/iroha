@@ -14,8 +14,10 @@ thread_local! {
     static TEST_ENV_OVERRIDES: RefCell<HashMap<String, String>> =
         RefCell::new(HashMap::new());
 }
-#[cfg(any(test, debug_assertions))]
-#[allow(dead_code)]
+#[cfg(any(
+    test,
+    all(debug_assertions, feature = "fastpq-gpu", target_os = "macos")
+))]
 fn parse_bool_env(name: &str) -> Option<bool> {
     debug_env_string(name).map(|value| {
         matches!(
@@ -23,11 +25,6 @@ fn parse_bool_env(name: &str) -> Option<bool> {
             "1" | "true" | "yes" | "on"
         )
     })
-}
-#[cfg(not(any(test, debug_assertions)))]
-#[allow(dead_code)]
-fn parse_bool_env(_name: &str) -> Option<bool> {
-    None
 }
 #[cfg(any(test, debug_assertions))]
 pub fn debug_env_string(name: &str) -> Option<String> {
@@ -41,13 +38,18 @@ pub fn debug_env_string(name: &str) -> Option<String> {
 pub fn debug_env_string(_name: &str) -> Option<String> {
     None
 }
-#[cfg(any(test, debug_assertions))]
-#[allow(dead_code)]
+#[cfg(any(
+    test,
+    all(debug_assertions, feature = "fastpq-gpu", target_os = "macos")
+))]
 pub fn debug_env_bool(name: &str) -> Option<bool> {
     parse_bool_env(name)
 }
-#[cfg(not(any(test, debug_assertions)))]
-#[allow(dead_code)]
+#[cfg(all(
+    not(any(test, debug_assertions)),
+    feature = "fastpq-gpu",
+    target_os = "macos"
+))]
 pub fn debug_env_bool(_name: &str) -> Option<bool> {
     None
 }
@@ -97,32 +99,30 @@ pub fn apply_metal_overrides(overrides: MetalOverrides) -> Result<(), &'static s
     Ok(())
 }
 /// Resolve the configured Metal command-buffer cap override, if any.
-#[allow(dead_code)]
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
 pub fn metal_max_in_flight_override() -> Option<usize> {
     METAL_MAX_IN_FLIGHT_OVERRIDE.get().copied().flatten()
 }
 /// Resolve the configured Metal threadgroup width override, if any.
-#[allow(dead_code)]
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
 pub fn metal_threadgroup_override() -> Option<u64> {
     METAL_THREADGROUP_OVERRIDE.get().copied().flatten()
 }
 /// Resolve the configured Metal dispatch-trace override, if any.
-#[allow(dead_code)]
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
 pub fn metal_dispatch_trace_override() -> Option<bool> {
     METAL_DISPATCH_TRACE_OVERRIDE.get().copied().flatten()
 }
 /// Resolve the configured Metal enumeration-debug override, if any.
-#[allow(dead_code)]
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
 pub fn metal_debug_enum_override() -> Option<bool> {
     METAL_DEBUG_ENUM_OVERRIDE.get().copied().flatten()
 }
 /// Whether configuration has been applied, freezing runtime env fallbacks.
-#[allow(dead_code)]
 pub fn env_overrides_locked() -> bool {
     ENV_OVERRIDES_LOCKED.load(Ordering::Acquire)
 }
 /// Guarded environment fallback: returns `None` once configuration has been applied.
-#[allow(dead_code)]
 pub fn guard_env_override<T>(loader: impl FnOnce() -> Option<T>) -> Option<T> {
     if env_overrides_locked() {
         return None;

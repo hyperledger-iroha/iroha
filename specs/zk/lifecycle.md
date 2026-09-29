@@ -42,7 +42,7 @@ configuration:
 
 - `iroha_cli app zk vk register --json path/to/register.json`
 - `iroha_cli app zk vk update --json path/to/update.json`
-- `iroha_cli app zk vk get --backend halo2/ipa --name ivm-replay-binding-v1`
+- `iroha_cli app zk vk get --backend halo2/ipa --name kaigi-usage-v1`
 
 The CLI JSON files contain public VK record data only and reject embedded authorities, private keys,
 and unknown fields. Embedded VK record bytes remain base64-encoded, while commitments are lowercase
@@ -67,17 +67,17 @@ payload, payload hash, chain, authority, single instruction, key id, and record 
   - Optional `vk_ref` and `vk_commitment`
 - ZK1/TLV envelopes are inspected at verification time. Recognised 4-byte tags are recorded lazily to power tag-based queries.
 
-### IVM execution prove statement (`ivm-replay-binding-v1`)
+### IVM execution proofs
 
-- `POST /v1/zk/ivm/derive` and `POST /v1/zk/ivm/prove` execute the supplied IVM bytecode on-node using request context (`authority`, `metadata`, `bytecode`; metadata must include `gas_limit`).
-- The proof statement for `ivm-replay-binding-v1` binds four commitments as public inputs:
-  - `code_hash`
-  - `overlay_hash`
-  - `events_commitment`
-  - `gas_policy_commitment`
-- Torii derives the authoritative `IvmProved` payload from deterministic execution before proving. If clients supply an optional `proved` object, Torii treats it as a strict consistency check and rejects mismatches.
-- Witness inputs are node-local execution artefacts (program body, tx context, deterministic execution trace/host effects needed to derive the commitments). Plaintext `gas_used` is not exposed by the app API.
-- Admission verifies proof bindings and backend proof validity, then always performs deterministic ABI V1 execution replay. The active on-chain `ivm-replay-binding-v1` verifier-key record is the sole circuit admission policy; its activation/withdrawal window and `max_proof_bytes` limit are enforced. There is no node-local enable, circuit allowlist, or replay-bypass switch.
+`IvmProved` admission is closed until the complete native STARK execution
+relation and State-owned finalized anchor are implemented. The former
+four-commitment Halo2/STARK binding circuits and Torii proof job endpoint are
+retired; deterministic replay of a supplied payload does not prove private
+execution. The canonical `IvmExecutionStatementV1` value and normalized
+signed-intent digest define public claims only and grant no authorization by
+themselves. The binding-only Torii derive and proof-job routes are removed;
+public preparation will require a distinct admissible response shape. Raw
+private inputs stay local to future native proving.
 
 ### Query surface
 

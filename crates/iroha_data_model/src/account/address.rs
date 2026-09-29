@@ -609,7 +609,6 @@ impl AddressHeader {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AddressClass {
     SingleKey = 0,
-    #[allow(dead_code)]
     MultiSig = 1,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

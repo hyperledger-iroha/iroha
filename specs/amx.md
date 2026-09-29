@@ -120,12 +120,18 @@ Norito fixtures for the descriptor, signed handle, policy snapshot, two-dimensio
 - On startup and after Space Directory changes, expect one `cache_miss` followed by steady `cache_hit` events on the policy snapshot metric; a sustained miss rate points to a stale or missing manifest feed.
 - When a handle is rejected, look at `iroha_axt_policy_reject_total{lane,reason}` and the snapshot version to decide whether to request a refreshed handle (`expiry`/`era`/`sub_nonce`) or to repair the lane/manifest binding (`lane`/`manifest`). The Torii debug endpoint `/v1/debug/axt/cache` also returns `reject_hints` with `dataspace`, `target_lane`, `active_handle_era`, and `next_handle_counter` so operators can refresh handles deterministically after a policy bump.
 
-### SDK sample: remote spend without token egress
+### Remote spend availability
 
-1. Build an AXT descriptor listing the dataspace bucket that the remote spend uses plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
-2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect. Do not use non-null `AXT_VERIFY_DS_PROOF` as proof of remote authorization; production CoreHost rejects that standalone path.
-3. Request or refresh an asset-specific handle and invoke `AXT_USE_ASSET_HANDLE` with the proof supplied inline plus a `RemoteSpendIntent` that spends the exact signed `AssetDefinitionId` inside the remote dataspace (no bridge leg). The handle's issuer-signed asset must equal `RemoteSpendIntent.op.asset_definition_id`; budget enforcement uses that asset identity plus the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above. This specialized path remains outside release qualification while its intent/amount binding is only roughly 32 bits.
-4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
+Production block, State and Core host admission reject every nonempty remote
+spend before mutation. `AxtEnvelopeRecord.spends` carries only signed
+`AxtAnchoredSpendV1` values; the earlier handle-fragment transport and IVM
+handle accumulator have been removed. The signed shape binds a claimed
+finalized source anchor, successful-execution receipt, exact ordered transfer
+occurrence, intent, proof, amount and fresh nonce. These claims do not
+authenticate source success. No SDK should submit a remote spend until
+State-owned complete roots, verified source execution and transfer occurrence,
+fresh issuer authorization, and durable atomic nonce/budget/effect consumption
+are connected and qualified together.
 
 ## Operator Expectations
 
@@ -191,7 +197,8 @@ The canonical data-model types live in
 | `AxtProofEnvelope.da_commitment` | Outer mirror of the proof-bound optional DA commitment. `axt_fastpq_da_commitment_v1` is always present as 33 bytes: `0 || 32*0` for `None`, or `1 || digest` for `Some(digest)`. |
 | `AxtProofEnvelope.proof` | Non-empty backend proof bytes, limited to 1 MiB before FastPQ payload decoding or verification. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
-| `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, asset-definition incarnation, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
+| `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, asset-definition incarnation, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by final signed-spend admission must contain and consume exactly one matching claim. |
+| `axt_fastpq_source_transfer_occurrences_v1` | Canonical Norito proof-trace metadata containing one `AxtSourceTransferOccurrenceV1` per remote-spend claim and ordered transfer delta. Each occurrence commits the claimed successful-source-receipt digest, exact source transaction index, transcript/delta coordinate and pair ordinal, full public transfer facts (including before/after balances), and the exact handle/intent claim. The anchored FASTPQ verifier requires the metadata and checks the index against canonical finalized wires. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
 | `amount_commitment` | Optional deterministic envelope/amount consistency digest. It does not hide or authenticate an amount, and recomputing it cannot replace the proof-bound `committed_amount`. |
 
@@ -211,7 +218,11 @@ canonical block header, commit QC, ordered committee, pre/post state roots,
 ordered transaction-set digest, and signed RS16 DA-manifest digest. The fresh
 issuer signature additionally binds the complete reusable handle, exact
 `RemoteSpendIntent`, canonical proof blob, clear or committed amount fields,
-expiry, and a non-zero `AxtSpendNonceV1`. The nonce replay key includes the full
+claimed successful-execution receipt digest, full ordered transfer occurrence,
+expiry, and a non-zero `AxtSpendNonceV1`. The model checks that the claimed
+receipt selects this anchor and source execution, and that the occurrence's
+claim appears in the proof binding. These checks cannot authenticate source
+success or the transfer against finalized State. The nonce replay key includes the full
 issuer context, so key/policy, asset-incarnation, network, and dataspace changes
 cannot alias an earlier spend. A submitted anchor is only a selector: block and
 host admission must exact-match it to the immutable WSV record before checking
@@ -237,6 +248,28 @@ result and exact transfer facts for the selected entry. Current per-bundle
 transfer trees cover touched balances; they cannot replace authoritative WSV
 roots in an anchor. Anchored admission remains unavailable until the proof
 witnesses establish the required membership and updates against those roots.
+
+`AxtSourceSuccessReceiptV1` gives the finalized State owner a claimed receipt
+preimage: exact anchor digest, source execution commitment and transaction
+index, post-transaction state root, and complete effect-set digest. The
+proof-bound occurrence references its digest and selects one ordered transfer
+delta. Altering its coordinate, claim, or full public transfer facts fails
+FASTPQ verification; changing the receipt digest changes the sealed proof
+trace. These are binding checks only. Neither constructing the receipt value
+nor verifying the FASTPQ transcript proves that the source transaction
+succeeded or that the claimed root and effects belong to authoritative State.
+
+The signed AXT V1 wire directly carries the claimed source receipt and exact
+occurrence in addition to the proof-trace metadata. The operational envelope
+uses only `AxtAnchoredSpendV1` values. State and block replay refuse every
+nonempty spend set before changing replay, budget, policy, or effects because
+the finalized source resolver does not yet exist. TODO: State must resolve the
+successful receipt and complete authenticated roots, then Core must apply the
+fresh issuer nonce, budget, and effects atomically through one admission path.
+Core maps local FASTPQ allocation failure to operational deferral in the block,
+Core host, lane relay and fee sponsor vault consumers. The current-source
+tests and a fresh compiler-captured schema baseline remain required for the
+changed signed wire.
 
 The proof metadata also always contains `axt_fastpq_expiry_slot_v1` as an
 eight-byte little-endian `u64`, where zero means authenticated `None` and any
@@ -304,7 +337,7 @@ execution identity, and big-endian lifecycle ordinal. The final two fields
 distinguish exact events when autonomous executions share a header context. Only an
 absent-to-present registration or re-registration installs a new token;
 ordinary metadata, ownership, mintability, mint, or burn updates do not rotate
-it. `USE_ASSET_HANDLE`, commit revalidation, and block admission all require the
+it. Signed-spend admission, commit revalidation, and block admission all require the
 current token to equal both the issuer-signed token and the immutable block-start
 token, so unregister/re-register and stale-handle use cannot coexist in one
 block. An unrelated asset registration leaves other tokens and handles valid.
@@ -343,9 +376,10 @@ matched proof transcript.
    The builder extracts or exact-compares the outer manifest, DA, amount, and
    expiry mirrors; callers cannot attach different values after proof
    generation.
-4. Attach the proof and any `AssetHandle` to the AXT envelope. The host verifies
-   policy, manifest, lane, descriptor, amount, budget, and freshness bindings
-   before commit.
+4. Bind the proof, handle, source receipt and exact occurrence into one signed
+   `AxtAnchoredSpendV1`, then place it in `AxtEnvelopeRecord.spends`. Production
+   admission rejects this spend until the finalized State resolver and atomic
+   nonce/budget/effect owner are available.
 5. Refresh expired proof blobs or handles. The canonical error catalog retains
    `PVO_MISSING_OR_EXPIRED` as the machine-readable missing/expiry code.
 
@@ -377,27 +411,33 @@ unauthenticated computed edge and cannot support an exact scheduler access set.
 
 ## Space Directory policy enforcement
 
-AXT handle verification now defaults to the Space Directory snapshot when the host has access to it (CoreHost in tests, WsvHost in integration flows). Per-dataspace policy entries carry `manifest_root`, `target_lane`, `active_handle_era`, `next_handle_counter`, and `current_slot`. Hosts enforce:
+The following Space Directory checks define the required signed-spend admission
+relation. CoreHost stages a canonical `AxtAnchoredSpendV1` through typed syscall
+`0xB5` after checking public field consistency, but does not authenticate the
+issuer or source. State refuses every nonempty spend before effects; it does not
+consume a nonce or advance a budget. Per-dataspace
+policy entries carry `manifest_root`, `target_lane`, `active_handle_era`,
+`next_handle_counter`, and `current_slot`. Completed admission must enforce:
 
 - lane binding: handle `target_lane` must match the Space Directory entry;
 - manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
 - expiry: `current_slot` greater than the handle’s `expiry_slot` is rejected;
-- counters: `handle_era` must be non-zero and equal the permanent per-dataspace authorization generation, and `sub_nonce` must equal its next value; stale and caller-selected future values are rejected, advancement uses checked arithmetic, and CoreHost includes both the active envelope and earlier completed envelopes in the same transaction when deriving the next counter. The ratchet is required consensus state and is never reset or removed by manifest rotation, issuer-key changes, lane reassignment/incarnation, dataspace removal, or restart. One or more effective policy transitions in a block advance both generation and next counter exactly once per affected dataspace at the block boundary; the authenticated transition set preserves even transient A→B→A changes, so an earlier-generation handle cannot revive at any pre-signed sub-nonce;
+- counters: `handle_era` must be non-zero and equal the permanent per-dataspace authorization generation, and `sub_nonce` must equal its next value; stale and caller-selected future values must be rejected, and advancement must use checked arithmetic. The ratchet is required consensus state and is never reset or removed by manifest rotation, issuer-key changes, lane reassignment/incarnation, dataspace removal, or restart. One or more effective policy transitions in a block advance both generation and next counter exactly once per affected dataspace at the block boundary; the authenticated transition set preserves even transient A→B→A changes, so an earlier-generation handle cannot revive at any pre-signed sub-nonce;
 - replay scope: the canonical replay key is `(asset_dsid, asset_definition_incarnation, descriptor_binding, handle_era, sub_nonce, target_lane)`, where `asset_dsid` and the non-zero incarnation come from the authenticated issuer/policy context. Re-registering the same asset identifier therefore cannot reuse a historical proof or replay entry. Distinct dataspaces retain independent per-dataspace counters even when they share a lane and identical counter values; optional `origin_dsid` is not replay authority;
 - account identity: `HandleSubject.account` and `RemoteSpendIntent.op.{from,to}` must carry exact canonical I105 account identifiers; aliases, padded text, and alternate encodings are rejected before policy evaluation;
 - issuer authentication: the signature must bind the exact asset definition, its current non-zero registration incarnation, and every V1 policy/network field, and verify with the single-key account resolved from the active manifest's committed UAID and dataspace binding;
 - membership: handles for dataspaces absent from the snapshot are denied.
 
-Failures map to `PermissionDenied`. IVM policy tests cover field-level allow/deny
-cases, while CoreHost regressions cover active and completed-envelope counter
-progression.
+Local IVM policy tests cover field-level decisions, but they are not successful
+remote-spend admission evidence. Production remote spend fails closed.
 `AXT_COMMIT` is failure-atomic across host implementations: the host validates
-the recorded descriptor, touches, proofs, and handle uses before clearing or
+the recorded descriptor, touches and proofs before clearing or
 moving the active envelope. A validation error restores the active state so
 required touches or proofs can be supplied and the same envelope retried; only
 a successful commit ends that envelope.
 
-Block validation authenticates unique handles before FASTPQ verification,
+The future source-anchored block path must authenticate unique signed spends
+before FASTPQ verification,
 scopes replay by the authenticated asset dataspace, and groups budgets by the
 normalized V1 issuer-signed family key. `AxtHandleBudgetKey` contains every
 `AssetHandleIssuerPayloadV1` field except `next_handle_counter`; signature bytes
@@ -411,7 +451,14 @@ the configured skew allowance) and not expiring before the handle, enforces
 descriptor binding plus touch manifests for declared specs (and rejects
 out-of-prefix entries), and checks exact signed-handle/intent/proof asset
 equality.
-Normalized signed handle-family consumption is consensus-persisted and aggregates across completed transaction envelopes, all envelope records in a block, and later blocks; splitting sequential `sub_nonce` values therefore cannot reset `remaining` or `per_use` limits.
+Normalized signed handle-family consumption must be consensus-persisted and
+aggregate across completed transaction envelopes, all envelope records in a
+block, and later blocks; splitting sequential `sub_nonce` values cannot reset
+the cumulative `remaining` limit. The signed `per_use` limit applies to each
+individual spend. Persisted cumulative records cannot reconstruct individual
+amounts, so completed block admission must check `per_use` for each spend
+before updating the family record. The current fail-closed path writes no
+remote-spend budget or replay record.
 V1 does not yet prune this ledger. The permanent dataspace generation and exact
 asset incarnation provide the authority fences needed for a future deterministic
 compactor, but the first-release implementation deliberately retains every
@@ -445,7 +492,10 @@ state-tiering decisions without claiming allocator-exact resident-memory bytes.
 These persisted AXT stores and transition evidence are a first-release state- and
 block-format hard cut. The required, non-skipped World fields are
 `axt_policies`, `axt_handle_counters`, `axt_asset_incarnations`,
-`axt_replay_ledger`, and `axt_handle_budget_ledger`. The required block-result
+`axt_replay_ledger`, `axt_spend_nonce_ledger`,
+`axt_source_transfer_replay_ledger`, and `axt_handle_budget_ledger`. The two
+anchored-spend replay ledgers must contain matching, one-to-one nonce and
+physical-transfer records on snapshot restore. The required block-result
 fields include `BlockResult.axt_policy_snapshot` and
 `BlockResult.axt_transitioned_dataspaces`. They change WSV checkpoint or
 block-result bytes even when their collections are empty. Snapshot restoration

@@ -60,6 +60,23 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                 .is_some_and(|record| record.admits_anchor(height.saturating_sub(1)))
     }
 
+    /// The sole execution route of a transaction at the next global height.
+    /// The global lane owns the universal dataspace; another lane keeps its original record's
+    /// dataspace even when the global chain rescues the transaction directly.
+    pub fn execution_route(
+        &self,
+        tx: &dyn TransactionRoutingView,
+        height: u64,
+    ) -> Option<crate::queue::RoutingDecision> {
+        let lane = self.route(tx, height);
+        let dataspace = if lane == GLOBAL_LANE {
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL
+        } else {
+            self.lanes.lane(lane)?.dataspace
+        };
+        Some(crate::queue::RoutingDecision::new(lane, dataspace))
+    }
+
     /// The default-route lanes at `height`: lane `0` and the admitted elastic lanes, ascending.
     #[must_use]
     pub fn shards(&self, height: u64) -> Vec<LaneId> {
@@ -353,5 +370,48 @@ mod tests {
         assert_eq!(with_policy(&policy(vec![to(3, "Log")]), 5), GLOBAL_LANE);
         // A route whose matcher does not match leaves the default route (lane 0 only here).
         assert_eq!(with_policy(&policy(vec![to(3, "Mint")]), 6), GLOBAL_LANE);
+    }
+    #[test]
+    fn execution_route_preserves_actual_pinned_dataspace_and_closing_boundary() {
+        let world = World::default();
+        let view = world.view();
+        let dataspaces = DataSpaceCatalog::default();
+        let mut pinned = record(3, 5, Some(8));
+        pinned.dataspace = DataSpaceId::new(7);
+        let lanes = lanes(vec![pinned]);
+        let tx = tx(1);
+        let policy = policy(vec![SumeragiLaneRoute {
+            lane: LaneId::new(3),
+            account: None,
+            instruction: Some("Log".into()),
+        }]);
+        let inputs = RoutingInputs {
+            policy: Some(&policy),
+            lanes: &lanes,
+            dataspaces: &dataspaces,
+            world: &view,
+            ledger_time_ms: 0,
+        };
+        assert_eq!(
+            inputs.execution_route(&tx, 6),
+            Some(crate::queue::RoutingDecision::new(
+                LaneId::new(3),
+                DataSpaceId::new(7)
+            ))
+        );
+        assert_eq!(
+            inputs.execution_route(&tx, 8),
+            Some(crate::queue::RoutingDecision::new(
+                LaneId::new(3),
+                DataSpaceId::new(7)
+            ))
+        );
+        assert_eq!(
+            inputs.execution_route(&tx, 9),
+            Some(crate::queue::RoutingDecision::new(
+                GLOBAL_LANE,
+                DataSpaceId::UNIVERSAL
+            ))
+        );
     }
 }

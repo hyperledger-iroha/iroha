@@ -1,6 +1,7 @@
 //! Actual scheduled invocation ownership, full-row fit and rollback controls.
 
 use super::*;
+use crate::exec_witness;
 use crate::state::WorldReadOnly;
 use iroha_data_model::{
     account::Account,
@@ -85,7 +86,9 @@ fn plain_network() -> Vec<InstructionBox> {
     vec![Log::new(Level::DEBUG, "actual Network source".to_owned()).into()]
 }
 
-fn execute_network(producer: &mut ExecutionOutputProducer<'_, '_, '_>) -> Result<(), String> {
+fn execute_network(
+    producer: &mut ExecutionOutputProducer<'_, '_, '_>,
+) -> Result<(), ExecutionAttemptError<String>> {
     assert_eq!(
         producer.try_apply_network_success(0, |input, transaction| {
             let TransactionEntrypoint::External(signed) = input else {
@@ -161,9 +164,7 @@ fn scheduled_time_owns_actual_root_nested_trace_and_completion_call() {
     block
         .produce_ordinary_execution_outputs(&source, |producer| {
             execute_network(producer)?;
-            producer
-                .execute_scheduled_time_outputs()
-                .map_err(|error| error.to_string())
+            producer.execute_scheduled_time_outputs()
         })
         .unwrap();
     let time = time_row(&block);
@@ -245,9 +246,7 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
         block
             .produce_ordinary_execution_outputs(&source, |producer| {
                 execute_network(producer)?;
-                producer
-                    .execute_scheduled_time_outputs()
-                    .map_err(|error| error.to_string())
+                producer.execute_scheduled_time_outputs()
             })
             .unwrap();
         let output = &retained(&block).rows[1];
@@ -364,9 +363,7 @@ fn time_matching_uses_frozen_count_and_revalidates_later_removed_action() {
                     .get(),
                 1
             );
-            producer
-                .execute_scheduled_time_outputs()
-                .map_err(|error| error.to_string())
+            producer.execute_scheduled_time_outputs()
         })
         .unwrap();
     let times = retained(&block)
@@ -473,9 +470,7 @@ fn time_phase_cannot_bypass_network_or_run_twice() {
                 .produce_ordinary_execution_outputs(&source, |producer| {
                     if !early {
                         execute_network(producer)?;
-                        producer
-                            .execute_scheduled_time_outputs()
-                            .map_err(|error| error.to_string())?;
+                        producer.execute_scheduled_time_outputs()?;
                     }
                     assert!(producer.execute_scheduled_time_outputs().is_err());
                     Ok(())
@@ -667,9 +662,7 @@ mod retry_and_periodic {
         block
             .produce_ordinary_execution_outputs(&source, |producer| {
                 execute_network(producer)?;
-                producer
-                    .execute_scheduled_time_outputs()
-                    .map_err(|e| e.to_string())
+                producer.execute_scheduled_time_outputs()
             })
             .unwrap();
         let outputs = &retained(&block).rows;
@@ -776,9 +769,7 @@ mod retry_and_periodic {
             block
                 .produce_ordinary_execution_outputs(&source, |producer| {
                     execute_network(producer)?;
-                    producer
-                        .execute_scheduled_time_outputs()
-                        .map_err(|e| e.to_string())
+                    producer.execute_scheduled_time_outputs()
                 })
                 .unwrap();
             assert_eq!(retained(&block).rows.len(), 2);
@@ -893,6 +884,9 @@ mod retry_and_periodic {
         // fixtures; a fresh-State test constructor would provision another H0.
         let prior_wire = history.target_disk_bytes();
         let mut state = State::try_new_with_chain_and_network_id(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             World::default(),
             Arc::clone(&history.kura),
             LiveQueryStore::start_test(),
@@ -979,9 +973,7 @@ mod retry_and_periodic {
         block
             .produce_ordinary_execution_outputs(&source, |producer| {
                 execute_network(producer)?;
-                producer
-                    .execute_scheduled_time_outputs()
-                    .map_err(|e| e.to_string())
+                producer.execute_scheduled_time_outputs()
             })
             .unwrap();
         let outputs = &retained(&block).rows;
@@ -1111,9 +1103,7 @@ mod retry_and_periodic {
         block
             .produce_ordinary_execution_outputs(&source, |producer| {
                 execute_network(producer)?;
-                producer
-                    .execute_scheduled_time_outputs()
-                    .map_err(|e| e.to_string())
+                producer.execute_scheduled_time_outputs()
             })
             .unwrap();
         assert_eq!(retained(&block).rows.len(), 2);
@@ -1168,4 +1158,79 @@ mod retry_and_periodic {
         assert_eq!(original.retry_state, Some(retry));
         assert_eq!(original.repeats, Repeats::Exactly(2));
     }
+}
+
+#[test]
+fn scheduled_vm_refusal_does_not_advance_retry_policy_or_emit_a_failure() {
+    use iroha_data_model::transaction::IvmBytecode;
+    use ivm::error::ExecutionDeferral;
+    let _guard = exec_witness::exec_witness_guard();
+    let id: TriggerId = "time_local_refusal".parse().unwrap();
+    let mut program = ivm::ProgramMetadata {
+        max_cycles: 100,
+        ..Default::default()
+    }
+    .encode();
+    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let action = Action::new(
+        Executable::Ivm(IvmBytecode::from_compiled(program)),
+        Repeats::Exactly(2),
+        ALICE_ID.clone(),
+        TimeEventFilter::new(ExecutionTime::PreCommit),
+    )
+    .unwrap();
+    let (state, source) = fixture(
+        65_536,
+        1,
+        vec![Trigger::new(id.clone(), action)],
+        plain_network(),
+    );
+    let cache_owner = state.trigger_ivm_cache.lock().prepared_contract_cache();
+    let reason = ExecutionDeferral::AllocationUnavailable;
+    cache_owner.set_checkout_refusal_for_test(Some(reason));
+    exec_witness::start_block();
+    {
+        let mut block = state.block(source.header());
+        block.reserve_ordinary_execution_outputs(&source).unwrap();
+        let outcome = block.produce_ordinary_execution_outputs(&source, |producer| {
+            execute_network(producer)?;
+            producer.execute_scheduled_time_outputs()
+        });
+        assert_eq!(outcome, Err(ExecutionAttemptError::Deferred(reason.into())));
+        assert!(block.retained_execution_outputs_for_test().is_err());
+        let action = block.world.triggers.time_triggers().get(&id).unwrap();
+        assert_eq!(action.repeats, Repeats::Exactly(2));
+        assert!(action.retry_state.is_none());
+        assert!(
+            block
+                .world
+                .external_event_buf
+                .iter()
+                .all(|event| !matches!(event, EventBox::TriggerCompleted(_)))
+        );
+    }
+    cache_owner.set_checkout_refusal_for_test(None);
+    exec_witness::start_block();
+    let mut retry = state.block(source.header());
+    retry.reserve_ordinary_execution_outputs(&source).unwrap();
+    retry
+        .produce_ordinary_execution_outputs(&source, |producer| {
+            execute_network(producer)?;
+            producer.execute_scheduled_time_outputs()
+        })
+        .expect("same scheduled invocation completes after local recovery");
+    let ExecutionOutputV1::Time(row) = retained(&retry).rows.last().unwrap() else {
+        panic!("actual Time output");
+    };
+    assert!(row.result.is_ok());
+    assert_eq!(
+        retry
+            .world
+            .triggers
+            .time_triggers()
+            .get(&id)
+            .unwrap()
+            .repeats,
+        Repeats::Exactly(1)
+    );
 }

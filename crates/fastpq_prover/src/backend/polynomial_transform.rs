@@ -302,7 +302,7 @@ pub(super) fn validate_coefficients(
 }
 
 /// Reserve a checked public-data or owner-handle vector before population.
-/// Private field contents use SecretPolynomial instead of a growable Vec.
+/// Private field contents use `SecretPolynomial` instead of a growable Vec.
 pub(super) fn reserved<T>(length: usize) -> Result<Vec<T>> {
     let bytes = length
         .checked_mul(core::mem::size_of::<T>())

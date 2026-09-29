@@ -59,7 +59,7 @@ fn fetch_hosted_http_text_accepts_paths_without_a_leading_slash() -> Result<()> 
     Ok(())
 }
 #[test]
-fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cache() -> Result<()> {
+fn execute_ordered_mailbox_retries_when_local_bundle_cache_is_missing() -> Result<()> {
     let state = test_state()?;
     let mut bundle = load_deployment_bundle_fixture()?;
     let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
@@ -75,17 +75,51 @@ fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cach
         "update",
         sample_mailbox_message(&bundle, "update", b"missing-bundle".to_vec()),
     );
-    let result = handle
+    let error = handle
         .execute_ordered_mailbox(request)
-        .map_err(|error| eyre::eyre!("{error:?}"))?;
-    assert!(result.state_mutations.is_empty());
-    assert!(result.outbound_mailbox_messages.is_empty());
-    assert_eq!(
-        result.runtime_state.expect("runtime state").health_status,
-        SoraServiceHealthStatusV1::Degraded
+        .expect_err("missing local bundle must remain retryable");
+    assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+    Ok(())
+}
+
+#[test]
+fn vm_deferrals_are_local_unavailable_and_never_deterministic_faults() -> Result<()> {
+    use ivm::ExecutionDeferral;
+    let bundle = load_deployment_bundle_fixture()?;
+    let request = sample_ordered_mailbox_request(
+        &bundle,
+        "update",
+        sample_mailbox_message(&bundle, "update", b"retry-me".to_vec()),
     );
-    assert_eq!(result.runtime_receipt.journal_artifact_hash, None);
-    assert_eq!(result.runtime_receipt.checkpoint_artifact_hash, None);
+    let active = VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity);
+    let allocation = VMError::AllocationDeferred(mv::allocation::AllocationRefusal::DemandOverflow);
+    for (error, label) in [
+        (active, "execution_deferred"),
+        (allocation, "allocation_deferred"),
+    ] {
+        assert_eq!(vm_error_label(&error), label);
+        assert_eq!(
+            vm_error_kind(&error),
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+        );
+        let result = ordered_mailbox_vm_failure(request.clone(), &error)
+            .expect_err("local deferral must not produce a durable mailbox result");
+        assert_eq!(result.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+    }
+    assert_eq!(vm_error_label(&VMError::OutOfGas), "out_of_gas");
+    assert_eq!(
+        vm_error_kind(&VMError::OutOfGas),
+        SoracloudRuntimeExecutionErrorKind::Internal,
+    );
+    let deterministic = ordered_mailbox_vm_failure(request, &VMError::OutOfGas)
+        .expect("guest gas exhaustion is a deterministic runtime result");
+    assert_eq!(
+        deterministic
+            .runtime_state
+            .expect("runtime state")
+            .health_status,
+        SoraServiceHealthStatusV1::Degraded,
+    );
     Ok(())
 }
 #[test]

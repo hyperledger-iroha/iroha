@@ -5,10 +5,6 @@ fn test_cuda_sha256_round() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    if ivm::GpuManager::shared().is_none() {
-        eprintln!("Failed to init GpuManager; skipping test");
-        return;
-    }
     let block = [0u8; 64];
     let mut cpu_state = [
         0x6a09e667u32,

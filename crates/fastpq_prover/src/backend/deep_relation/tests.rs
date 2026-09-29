@@ -32,7 +32,7 @@ pub(in crate::backend) fn quantity_copy(
     (rows, prepared.claims().to_vec(), *prepared.public_inputs())
 }
 
-/// Independently construct the complete expected seven-field PublicIO.
+/// Independently construct the complete expected seven-field `PublicIO`.
 pub(in crate::backend) fn expected<V>(prepared: &PreparedPublicTransfers<'_, V>) -> PublicIO {
     let inputs = prepared.public_inputs();
     PublicIO {

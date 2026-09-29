@@ -1,12 +1,10 @@
 //! Carrier-owned opening, closure and witness sealing of lane consensus instances.
 
-use super::lane_consensus_commitment::LaneConsensusContextsCommitmentV1;
+use super::LaneConsensusContextsCommitmentV1;
 use super::*;
-use iroha_data_model::block::consensus_v2 as wire;
 
 /// Fixed synthetic write authenticating the complete set, including absence.
-pub(crate) const LANE_CONSENSUS_CONTEXTS_WITNESS_KEY: &[u8] =
-    b"iroha:sumeragi:open-lane-contexts:v1";
+pub(crate) use iroha_data_model::sumeragi_finality::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY;
 
 /// Check the final metadata against canonical pending work and applied frontiers.
 /// This is also used when restoring the authenticated full snapshot.
@@ -99,7 +97,7 @@ impl StateBlock<'_> {
     pub(crate) fn finalize_lane_consensus_contexts(
         &mut self,
         block: &SignedBlock,
-        opening: Option<&wire::HeightContext>,
+        opening: Option<&NativeLaneOpeningSource>,
     ) -> Result<(), String> {
         if self.lane_consensus_contexts_seal.is_some() {
             return Err("lane consensus contexts were already sealed".to_owned());
@@ -109,11 +107,7 @@ impl StateBlock<'_> {
             return Err("lane context carrier height differs from its execution".to_owned());
         }
         if let Some(opening) = opening {
-            opening.validate().map_err(|error| error.to_string())?;
-            if opening.height != height || opening.network_id != self.network_id {
-                return Err("lane opening authority belongs to another carrier".to_owned());
-            }
-            self.finalize_validator_committee_boundary(opening)?;
+            opening.validate_post_execution(self, block)?;
         }
         self.lane_consensus_contexts
             .get()
@@ -238,9 +232,9 @@ impl StateBlock<'_> {
                 )?;
             let context = FrozenLaneConsensusContextV1 {
                 network_id: self.network_id,
-                protocol_version: opening.protocol_version,
+                protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
                 opening_global_height: height,
-                opening_global_context_id: opening.id(),
+                opening_consensus_hash: opening.consensus_hash,
                 admitted_binding_hash: head.binding.canonical_hash(),
                 admission_priority: head.priority,
                 epoch: opening.epoch,
@@ -257,9 +251,9 @@ impl StateBlock<'_> {
                 predecessor_applied_global_height: frontier.2,
                 committee,
                 validator_set_pops,
-                nexus_amx_context_hash: opening.nexus_amx_context_hash,
-                execution_policy_hash: opening.execution_policy_hash,
-                da_layout: opening.da_layout,
+                nexus_amx_context_hash: opening.nexus,
+                execution_policy_hash: opening.policy,
+                da_layout: opening.layout,
                 leader_seed: opening.leader_seed,
             };
             context.validate().map_err(|error| error.to_string())?;

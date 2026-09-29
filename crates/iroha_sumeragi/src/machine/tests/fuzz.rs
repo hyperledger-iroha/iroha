@@ -95,8 +95,10 @@ fn genuine(h: &H, rng: &mut Rng) -> WireMessage {
             let echo = rng.chance(30).then(|| {
                 let from = member(h, rng);
                 let nonce = if rng.chance(70) { h.nonce } else { rng.next() };
-                let msg = preimage::echo_preimage(&I, nonce, height);
+                let msg =
+                    preimage::echo_preimage(&I, &crate::testing::TEST_EPOCH.id, nonce, height);
                 Echo {
+                    epoch: crate::testing::TEST_EPOCH.id,
                     nonce,
                     key: h.key_at(from),
                     sig: h.signer_of(&h.key_at(member(h, rng))).sign(&msg),

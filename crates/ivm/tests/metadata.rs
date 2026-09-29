@@ -1,5 +1,6 @@
 //! Tests for IVM bytecode header (ProgramMetadata) validation.
 use ivm::{ProgramMetadata, VMError, ivm_mode};
+mod common;
 fn encode_with(mut meta: ProgramMetadata, f: impl FnOnce(&mut ProgramMetadata)) -> Vec<u8> {
     f(&mut meta);
     meta.encode()
@@ -14,6 +15,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -42,7 +44,9 @@ fn minimal_contract_artifact() -> Vec<u8> {
     };
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());
-    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
     bytes
 }
 fn minimal_contract_artifact_with_debug() -> Vec<u8> {
@@ -55,6 +59,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -85,7 +90,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
         source_map: vec![ivm::EmbeddedSourceMapEntryV1 {
             function_name: "main".to_owned(),
             pc_start: 0,
-            pc_end: 4,
+            pc_end: 16,
             source: ivm::EmbeddedSourceLocation {
                 source_path: Some("contracts/demo.ko".to_owned()),
                 source_id: 1,
@@ -98,10 +103,10 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
         budget_report: vec![ivm::EmbeddedFunctionBudgetReportV1 {
             function_name: "main".to_owned(),
             pc_start: 0,
-            pc_end: 4,
-            bytecode_bytes: 4,
-            bytecode_words: 1,
-            frame_bytes: 16,
+            pc_end: 16,
+            bytecode_bytes: 16,
+            bytecode_words: 4,
+            frame_bytes: 0,
             jump_span_words: 1,
             jump_range_risk: false,
             source: Some(ivm::EmbeddedSourceLocation {
@@ -117,7 +122,9 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());
     bytes.extend_from_slice(&debug.encode_section());
-    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
     bytes
 }
 #[test]
@@ -269,7 +276,7 @@ fn parse_accepts_contract_debug_section() {
     );
     assert_eq!(debug.source_map[0].source.line, 2);
     assert_eq!(debug.budget_report.len(), 1);
-    assert_eq!(debug.budget_report[0].frame_bytes, 16);
+    assert_eq!(debug.budget_report[0].frame_bytes, 0);
     assert_eq!(
         debug.budget_report[0]
             .source

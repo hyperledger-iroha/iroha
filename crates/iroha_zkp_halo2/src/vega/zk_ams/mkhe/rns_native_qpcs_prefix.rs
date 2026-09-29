@@ -1530,8 +1530,8 @@ fn derive_relation_points_from_seed_v1(
                     attempt,
                 )
                 .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidChallenge)?;
-                if let Some(point) = point {
-                    if point != 0
+                if let Some(point) = point
+                    && point != 0
                         && !prior.contains(&point)
                         && mod_add_v1(
                             mod_pow_v1(point, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 as u64, modulus),
@@ -1543,7 +1543,6 @@ fn derive_relation_points_from_seed_v1(
                         accepted = Some(point);
                         break;
                     }
-                }
             }
             points[coordinate] = accepted.ok_or(RnsNativeQpcsPrefixErrorV1::InvalidChallenge)?;
         }

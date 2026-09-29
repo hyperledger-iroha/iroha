@@ -403,7 +403,7 @@ fn native_results_allow_equal_time_displays_with_distinct_untrusted_evidence_key
             second.execution_call_hash(block.hash(), &block).unwrap()
         );
         for output in [&time, &second] {
-            let call = Hash::from(output.execution_call_hash(block.hash(), &block).unwrap());
+            let call = output.execution_call_hash(block.hash(), &block).unwrap();
             transcripts.insert(call, vec![native_model_transcript(call)]);
         }
         let rows = vec![

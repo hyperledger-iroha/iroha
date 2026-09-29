@@ -28,6 +28,8 @@ fn new_queue_test_state_with_telemetry(
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -48,8 +50,16 @@ fn new_queue_test_state_with_telemetry(
     .expect("open the fixture's exact immutable Kura baseline");
     // State attaches this same sink to Kura and the tiered backend. Reattaching after a
     // default State constructor would leave Kura's OnceLock bound to another sink.
-    let mut state = State::try_new(world, kura, query_handle, telemetry)
-        .expect("construct State against the authenticated configured Kura");
+    let mut state = State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
+        world,
+        kura,
+        query_handle,
+        telemetry,
+    )
+    .expect("construct State against the authenticated configured Kura");
     state.install_pre_genesis_nexus_for_testing(nexus);
     state.configure_test_runtime_defaults();
     state

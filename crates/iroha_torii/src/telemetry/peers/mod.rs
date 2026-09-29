@@ -486,8 +486,10 @@ impl TryFrom<Url> for ToriiUrl {
                 ToriiUrlError::new(format!("failed to derive endpoint `{path}`: {error}"))
             })
         };
-        let configuration_endpoint = derive_endpoint(iroha_torii_shared::uri::CONFIGURATION)?;
-        let peers_endpoint = derive_endpoint(iroha_torii_shared::uri::PEERS)?;
+        let configuration_endpoint =
+            derive_endpoint(iroha_torii_shared::route_catalog::core::CONFIGURATION_GET.path())?;
+        let peers_endpoint =
+            derive_endpoint(iroha_torii_shared::route_catalog::core::PEERS.path())?;
         let status_endpoint = derive_endpoint("/status")?;
         Ok(Self {
             base: url,

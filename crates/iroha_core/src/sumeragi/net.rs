@@ -2,10 +2,9 @@
 //! integration map §5).
 //!
 //! - **Envelope.** [`NetworkMessage::Sumeragi`] carries one [`SumeragiFrame`]: the exact
-//!   canonical consensus or current beacon-partial bytes and the 32-byte instance id.
-//!   The instance sink dispatches the fixed bounded beacon domain to its crypto worker;
-//!   the driver decodes consensus bytes with `WireMessage::decode`. Both paths enforce
-//!   canonical, size-limited decoding; the network codec sees an opaque byte string.
+//!   canonical consensus bytes, including source-bound application control, and the
+//!   32-byte instance id. The driver enforces canonical, size-limited decoding with
+//!   `WireMessage::decode`; the network codec sees an opaque byte string.
 //! - **Classes.** A frame's traffic class comes from ONE helper, [`frame_class`] (the core's
 //!   `traffic_class_of_frame` over the exact bytes), used by the decoded path
 //!   ([`SumeragiFrame::topic`], hence `NetworkMessage::topic`/`admission_class`) and by the raw
@@ -117,14 +116,10 @@ impl SumeragiFrame {
     }
 }
 
-/// The traffic class of a current consensus or bounded beacon frame (§12.3 O8): the single
+/// The traffic class of a canonical consensus frame (§12.3 O8): the single
 /// classifier of both the decoded and the raw P2P paths.
 pub fn frame_class(frame: &[u8]) -> Option<TrafficClass> {
-    if super::beacon::is_frame(frame) {
-        Some(TrafficClass::Control)
-    } else {
-        traffic_class_of_frame(frame)
-    }
+    traffic_class_of_frame(frame)
 }
 
 /// The P2P topic of a traffic class: control → `ConsensusSafety` (reserved safety FIFO),
@@ -678,7 +673,7 @@ mod tests {
             SyncRequest, SyncResponse, TcEntry, TimeoutCert, TimeoutVote, Vote, VoteKind,
             WireMessage,
         },
-        types::{AggregateSignature, Bitmap, SIGNATURE_LEN, Signature},
+        types::{AggregateSignature, Bitmap, EpochId, SIGNATURE_LEN, Signature},
     };
     use norito::core as ncore;
     use rand::{Rng, SeedableRng, rngs::StdRng};
@@ -687,6 +682,13 @@ mod tests {
 
     fn h(rng: &mut StdRng) -> Hash32 {
         Hash32(rng.random())
+    }
+
+    fn epoch(rng: &mut StdRng) -> EpochId {
+        EpochId {
+            epoch: rng.random_range(0..100),
+            context: h(rng),
+        }
     }
 
     fn sig(rng: &mut StdRng) -> Signature {
@@ -701,6 +703,7 @@ mod tests {
                 VoteKind::Commit
             },
             instance,
+            epoch: epoch(rng),
             height: rng.random_range(1..1_000),
             view: rng.random_range(0..10),
             block_hash: h(rng),
@@ -709,6 +712,7 @@ mod tests {
             signers: Bitmap::new(rng.random_range(1..20)),
             agg_sig: AggregateSignature([rng.random(); SIGNATURE_LEN]),
             attestations: Vec::new(),
+            attestation_witness: None,
         }
     }
 
@@ -719,6 +723,7 @@ mod tests {
         Block {
             header: BlockHeader {
                 instance,
+                epoch: epoch(rng),
                 height: rng.random_range(1..1_000),
                 origin_view: 0,
                 parent_hash: h(rng),
@@ -727,6 +732,7 @@ mod tests {
                 payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer: 0,
                 skipped_leaders: Vec::new(),
+                control_witness: iroha_sumeragi::types::ControlWitness::empty(),
                 attest: false,
             },
             payload,
@@ -756,6 +762,7 @@ mod tests {
             1 => WireMessage::Vote(Vote {
                 kind: VoteKind::Prepare,
                 instance,
+                epoch: epoch(rng),
                 height,
                 view,
                 block_hash: h(rng),
@@ -768,6 +775,7 @@ mod tests {
             2 => WireMessage::Qc(qc(rng, instance)),
             3 => WireMessage::Timeout(Box::new(TimeoutVote {
                 instance,
+                epoch: epoch(rng),
                 height,
                 view,
                 high_pqc: None,
@@ -776,6 +784,7 @@ mod tests {
             })),
             4 => WireMessage::Tc(Box::new(TimeoutCert {
                 instance,
+                epoch: epoch(rng),
                 height,
                 view,
                 entries: vec![TcEntry {
@@ -950,8 +959,14 @@ mod tests {
     fn frame_caps() {
         let caps = FrameCaps::for_params(4 << 20, 16 << 20);
         assert_eq!(caps.control, 2 << 20);
-        assert_eq!(caps.proposal, (4 << 20) + 64 * 1024);
-        assert_eq!(caps.bulk, (16 << 20) + 64 * 1024);
+        assert_eq!(
+            caps.proposal,
+            (4 << 20) + usize::try_from(FRAME_OVERHEAD).unwrap()
+        );
+        assert_eq!(
+            caps.bulk,
+            (16 << 20) + usize::try_from(FRAME_OVERHEAD).unwrap()
+        );
         assert_eq!(caps.of(TrafficClass::Bulk), caps.bulk);
         let huge = FrameCaps::for_params(u32::MAX, u32::MAX);
         assert_eq!(huge.proposal, FrameCaps::TRANSPORT.proposal);
@@ -1243,6 +1258,10 @@ mod tests {
             block: Block {
                 header: BlockHeader {
                     instance: i,
+                    epoch: EpochId {
+                        epoch: 0,
+                        context: Hash32([0x61; 32]),
+                    },
                     height: 1,
                     origin_view: 0,
                     parent_hash: Hash32::ZERO,
@@ -1251,6 +1270,7 @@ mod tests {
                     payload_len: 0,
                     proposer: 0,
                     skipped_leaders: Vec::new(),
+                    control_witness: iroha_sumeragi::types::ControlWitness::empty(),
                     attest: false,
                 },
                 payload: vec![0; 70 * 1024],
@@ -1326,4 +1346,13 @@ mod tests {
         assert_eq!(sink.frames.lock().len(), 3);
         assert_eq!(ingress.stats().delivered, 3);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn retired_beacon_sideframes_have_no_transport_classifier() {
+    let mut retired = b"IROHA-BEACON\x01".to_vec();
+    retired.extend_from_slice(&[0; 256]);
+    assert_eq!(frame_class(&retired), None);
+    assert_eq!(SumeragiFrame::new(Hash32([1; 32]), retired).class(), None);
 }

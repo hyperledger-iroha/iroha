@@ -47,7 +47,10 @@ seiyaku CycleCallee { view fn value() -> int { return 42; } }
             let (result, parent, overlay, _) = run(&allowance);
             result.unwrap();
             assert!(overlay.is_empty());
-            let tlv = parent.memory.validate_tlv(parent.register(10)).unwrap();
+            let tlv = parent
+                .memory
+                .validate_tlv(authenticated_test_probe_result(&parent))
+                .unwrap();
             assert_eq!(
                 decode_nested_return(
                     tlv.payload,
@@ -62,7 +65,8 @@ seiyaku CycleCallee { view fn value() -> int { return 42; } }
         let (result, parent, overlay, target) = run(&allowance);
         assert_eq!(result, Err(ivm::VMError::ExceededMaxCycles));
         assert_eq!(parent.get_cycle_count(), 0);
-        assert_eq!(parent.register(10), target);
+        assert_eq!(parent.register(14), target);
+        assert!(parent.call_result_word_count().is_err());
         assert!(overlay.is_empty());
         assert_eq!(allowance.consumed(), exact * 2);
         assert!(allowance.exhausted());
@@ -98,7 +102,9 @@ seiyaku CycleFailure {
             1,
         );
         grant_asset_ops_to_account(&state, &authority, caller.subject_id());
-        for limit in [1_000_000, 1] {
+        let prologue_cycles = authenticated_test_probe_prologue().len() as u64;
+        let boundary_only_limit = prologue_cycles + 1;
+        for limit in [1_000_000, boundary_only_limit] {
             let allowance = ivm::VmCycleBudget::new(NonZeroU64::new(limit).unwrap());
             let (result, parent, overlay, target) =
                 dispatch_call_contract_syscall_with_cycle_budget(
@@ -112,12 +118,12 @@ seiyaku CycleFailure {
                     Some(&allowance),
                 );
             let error = result.unwrap_err();
-            if limit == 1 {
+            if limit == boundary_only_limit {
                 assert_eq!(error.as_unmetered(), &ivm::VMError::ExceededMaxCycles);
                 assert_eq!(
                     allowance.consumed(),
-                    0,
-                    "parent reservation leaves no child cycle available"
+                    prologue_cycles,
+                    "after staging, the parent reservation leaves no child cycle available"
                 );
                 assert!(allowance.exhausted());
             } else {

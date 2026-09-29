@@ -236,9 +236,7 @@ fn altered_regeneration_cache_nodes_and_partial_callbacks_cannot_publish() {
                 .unwrap()
                 .open(&query, DigestExecutionV1::Cpu, |_, out| {
                     out.fill(91);
-                    if unwind {
-                        panic!("public injected regeneration failure");
-                    }
+                    assert!(!unwind, "public injected regeneration failure");
                     Err(invalid("injected callback failure"))
                 })
         }));

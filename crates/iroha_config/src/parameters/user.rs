@@ -906,6 +906,8 @@ pub struct Root {
     #[config(nested)]
     soracloud_runtime: SoracloudRuntime,
     #[config(nested)]
+    musubi_publication: MusubiPublication,
+    #[config(nested)]
     sorafs: Sorafs,
     #[config(nested)]
     pipeline: Pipeline,
@@ -1038,6 +1040,9 @@ pub enum ParseError {
     /// Soracloud runtime configuration contained invalid or unsafe values.
     #[error("Invalid Soracloud runtime configuration")]
     InvalidSoracloudConfig,
+    /// Private Musubi publication listener settings were invalid.
+    #[error("Invalid Musubi publication configuration")]
+    InvalidMusubiPublicationConfig,
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
@@ -1304,6 +1309,7 @@ impl Root {
         let parsed_sorafs = self.sorafs.parse(&mut emitter);
         let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse(&mut emitter);
+        let musubi_publication = self.musubi_publication.parse(&mut emitter);
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = actual::TelemetryProfile::from(self.telemetry_profile);
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
@@ -1550,6 +1556,7 @@ impl Root {
             genesis,
             torii,
             soracloud_runtime,
+            musubi_publication,
             kura,
             sumeragi,
             block_sync,
@@ -3579,40 +3586,87 @@ pub struct Nts {
     )]
     pub enforcement_mode: NtsEnforcementMode,
 }
-/// Hardware acceleration settings for IVM (user view).
-/// User-level configuration container for `Acceleration`.
+/// File-configured acceleration policy; environment aliases are not a second path.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Acceleration {
-    /// Enable SIMD acceleration (NEON/AVX/SSE) when available.
-    #[config(env = "ACCEL_ENABLE_SIMD", default = "defaults::accel::ENABLE_SIMD")]
+    /// Enable SIMD acceleration when available.
+    #[config(default = "defaults::accel::ENABLE_SIMD")]
     pub enable_simd: bool,
-    /// Enable CUDA backend when compiled and available.
-    #[config(env = "ACCEL_ENABLE_CUDA", default = "defaults::accel::ENABLE_CUDA")]
+    /// Enable IVM CUDA use when qualified hardware is available.
+    #[config(default = "defaults::accel::ENABLE_CUDA")]
     pub enable_cuda: bool,
-    /// Enable Metal backend when compiled and available (macOS).
-    #[config(env = "ACCEL_ENABLE_METAL", default = "defaults::accel::ENABLE_METAL")]
+    /// Enable IVM Metal use when qualified hardware is available.
+    #[config(default = "defaults::accel::ENABLE_METAL")]
     pub enable_metal: bool,
-    /// Maximum number of GPUs to initialize (0 = auto/no cap).
-    #[config(env = "ACCEL_MAX_GPUS", default = "defaults::accel::MAX_GPUS")]
-    pub max_gpus: usize,
-    /// Minimum number of leaves to use GPU for Merkle leaf hashing (0 = auto default).
-    #[config(
-        env = "ACCEL_MERKLE_MIN_LEAVES_GPU",
-        default = "defaults::accel::MERKLE_MIN_LEAVES_GPU"
-    )]
+    /// Optional device-selection cap; Some(0) explicitly opts out.
+    pub max_gpus: Option<usize>,
+    /// GPU Merkle workload threshold; zero is an explicit threshold.
+    #[config(default = "defaults::accel::MERKLE_MIN_LEAVES_GPU")]
     pub merkle_min_leaves_gpu: usize,
-    /// Override for Metal backend minimum Merkle leaf count (0 inherits GPU default).
-    #[config(env = "ACCEL_MERKLE_MIN_LEAVES_METAL", default = "0")]
-    pub merkle_min_leaves_metal: usize,
-    /// Override for CUDA backend minimum Merkle leaf count (0 inherits GPU default).
-    #[config(env = "ACCEL_MERKLE_MIN_LEAVES_CUDA", default = "0")]
-    pub merkle_min_leaves_cuda: usize,
-    /// Prefer CPU SHA2 for trees up to this many leaves (per-arch). 0 = keep defaults.
-    #[config(env = "ACCEL_PREFER_CPU_SHA2_MAX_AARCH64", default = "0")]
-    pub prefer_cpu_sha2_max_leaves_aarch64: usize,
-    /// Prefer CPU SHA2 for trees up to this many leaves on x86 hosts (0 keeps defaults).
-    #[config(env = "ACCEL_PREFER_CPU_SHA2_MAX_X86", default = "0")]
-    pub prefer_cpu_sha2_max_leaves_x86: usize,
+    /// Optional Metal threshold; omission inherits the generic threshold.
+    pub merkle_min_leaves_metal: Option<usize>,
+    /// Optional CUDA threshold; omission inherits the generic threshold.
+    pub merkle_min_leaves_cuda: Option<usize>,
+    /// Optional CPU SHA2 preference threshold on aarch64.
+    pub prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
+    /// Optional CPU SHA2 preference threshold on x86.
+    pub prefer_cpu_sha2_max_leaves_x86: Option<usize>,
+    /// Shared physical-owner resource ceilings, supplied only by configuration.
+    #[config(nested)]
+    pub resource_limits: AccelerationResourceLimits,
+}
+
+/// Finite file-only process attempt limits, distinct from State execution credit.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct AccelerationResourceLimits {
+    /// Aggregate ordinary host backing bytes. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::HOST_BYTES")]
+    pub host_bytes: usize,
+    /// Aggregate pinned host backing bytes. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::PINNED_BYTES")]
+    pub pinned_bytes: usize,
+    /// Aggregate requested device backing bytes. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::DEVICE_BYTES")]
+    pub device_bytes: usize,
+    /// Concurrently retained complete work aggregates. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::IN_FLIGHT")]
+    pub in_flight: usize,
+    /// Variable shared Rust control and policy metadata bytes. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::METADATA_BYTES")]
+    pub metadata_bytes: usize,
+    /// Lifetime-observed physical device records, including quarantine. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::OBSERVED_DEVICES")]
+    pub observed_devices: usize,
+    /// Ordinal probes per discovery pass. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::DISCOVERY_ORDINALS")]
+    pub discovery_ordinals: u32,
+    /// Retained native module owners. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::MODULES")]
+    pub modules: usize,
+    /// Retained native stream owners. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::STREAMS")]
+    pub streams: usize,
+    /// Immutable artifact bytes admitted per module. Zero is an explicit zero ceiling.
+    #[config(default = "defaults::accel::ARTIFACT_BYTES")]
+    pub artifact_bytes: usize,
+}
+impl AccelerationResourceLimits {
+    fn parse(self) -> iroha_accel::RegistryLimits {
+        iroha_accel::RegistryLimits {
+            metadata_bytes: self.metadata_bytes,
+            devices: self.observed_devices,
+            discovery_ordinals: self.discovery_ordinals,
+            modules: self.modules,
+            streams: self.streams,
+            artifact_bytes: self.artifact_bytes,
+            work: iroha_accel::GpuResourceLimits {
+                host_bytes: self.host_bytes,
+                pinned_bytes: self.pinned_bytes,
+                device_bytes: self.device_bytes,
+                in_flight: self.in_flight,
+            },
+        }
+    }
 }
 impl Acceleration {
     fn parse(self) -> actual::Acceleration {
@@ -3620,36 +3674,13 @@ impl Acceleration {
             enable_simd: self.enable_simd,
             enable_cuda: self.enable_cuda,
             enable_metal: self.enable_metal,
-            max_gpus: if self.max_gpus == 0 {
-                None
-            } else {
-                Some(self.max_gpus)
-            },
-            merkle_min_leaves_gpu: if self.merkle_min_leaves_gpu == 0 {
-                defaults::accel::MERKLE_MIN_LEAVES_GPU
-            } else {
-                self.merkle_min_leaves_gpu
-            },
-            merkle_min_leaves_metal: if self.merkle_min_leaves_metal == 0 {
-                None
-            } else {
-                Some(self.merkle_min_leaves_metal)
-            },
-            merkle_min_leaves_cuda: if self.merkle_min_leaves_cuda == 0 {
-                None
-            } else {
-                Some(self.merkle_min_leaves_cuda)
-            },
-            prefer_cpu_sha2_max_leaves_aarch64: if self.prefer_cpu_sha2_max_leaves_aarch64 == 0 {
-                None
-            } else {
-                Some(self.prefer_cpu_sha2_max_leaves_aarch64)
-            },
-            prefer_cpu_sha2_max_leaves_x86: if self.prefer_cpu_sha2_max_leaves_x86 == 0 {
-                None
-            } else {
-                Some(self.prefer_cpu_sha2_max_leaves_x86)
-            },
+            max_gpus: self.max_gpus,
+            merkle_min_leaves_gpu: self.merkle_min_leaves_gpu,
+            merkle_min_leaves_metal: self.merkle_min_leaves_metal,
+            merkle_min_leaves_cuda: self.merkle_min_leaves_cuda,
+            prefer_cpu_sha2_max_leaves_aarch64: self.prefer_cpu_sha2_max_leaves_aarch64,
+            prefer_cpu_sha2_max_leaves_x86: self.prefer_cpu_sha2_max_leaves_x86,
+            resource_limits: self.resource_limits.parse(),
         }
     }
 }
@@ -3803,12 +3834,15 @@ pub struct Pipeline {
         default = "defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS"
     )]
     pub ivm_cache_max_decoded_ops: usize,
-    /// Approximate byte budget for cached pre-decode entries (bytes, 0 = unlimited).
+    /// Aggregate IVM preparation/runtime allocation retention budget (bytes; 0 disables).
     #[config(
         env = "PIPELINE_IVM_CACHE_MAX_BYTES",
         default = "defaults::pipeline::IVM_CACHE_MAX_BYTES"
     )]
     pub ivm_cache_max_bytes: usize,
+    /// Finite active IVM allocation budget, distinct from idle retention (zero denies allocation).
+    #[config(default = "defaults::pipeline::IVM_EXECUTION_MAX_BYTES")]
+    pub ivm_execution_max_bytes: usize,
     /// Rayon worker cap for prover/trace verification (0 = number of physical cores).
     #[config(
         env = "PIPELINE_IVM_PROVER_THREADS",
@@ -4575,6 +4609,7 @@ impl Pipeline {
             cache_size: self.cache_size,
             ivm_cache_max_decoded_ops: self.ivm_cache_max_decoded_ops,
             ivm_cache_max_bytes: self.ivm_cache_max_bytes,
+            ivm_execution_max_bytes: self.ivm_execution_max_bytes,
             ivm_prover_threads: self.ivm_prover_threads,
             signature_batch_max_bls: self.signature_batch_max_bls,
             overlay_max_instructions: self.overlay_max_instructions,
@@ -4654,6 +4689,7 @@ mod pipeline_tests {
             cache_size: defaults::pipeline::CACHE_SIZE,
             ivm_cache_max_decoded_ops: defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
             ivm_cache_max_bytes: defaults::pipeline::IVM_CACHE_MAX_BYTES,
+            ivm_execution_max_bytes: defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ivm_prover_threads: defaults::pipeline::IVM_PROVER_THREADS,
             overlay_max_instructions: defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
             overlay_max_bytes: defaults::pipeline::OVERLAY_MAX_BYTES,
@@ -7251,18 +7287,115 @@ impl SoranetHandshake {
 #[cfg(test)]
 mod accel_tests {
     use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn omitted_acceleration_fields_supply_enabled_finite_process_defaults() {
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(toml::Table::new()))
+            .read_and_complete::<Acceleration>()
+            .unwrap()
+            .parse();
+        assert!(parsed.enable_simd && parsed.enable_metal && parsed.enable_cuda);
+        assert_eq!(
+            parsed.resource_limits,
+            iroha_accel::RegistryLimits::STANDARD
+        );
+        assert_eq!(parsed.max_gpus, None);
+        assert_eq!(parsed.merkle_min_leaves_metal, None);
+        assert_eq!(parsed.merkle_min_leaves_cuda, None);
+    }
+
+    #[test]
+    fn explicit_zero_limits_and_thresholds_are_preserved() {
+        let table = toml::toml! {
+            max_gpus = 0
+            merkle_min_leaves_gpu = 0
+            merkle_min_leaves_metal = 0
+            merkle_min_leaves_cuda = 0
+            prefer_cpu_sha2_max_leaves_aarch64 = 0
+            prefer_cpu_sha2_max_leaves_x86 = 0
+            [resource_limits]
+            host_bytes = 0
+            pinned_bytes = 0
+            device_bytes = 0
+            in_flight = 0
+            metadata_bytes = 0
+            observed_devices = 0
+            discovery_ordinals = 0
+            modules = 0
+            streams = 0
+            artifact_bytes = 0
+        };
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Acceleration>()
+            .unwrap()
+            .parse();
+        assert_eq!(parsed.max_gpus, Some(0));
+        assert_eq!(parsed.merkle_min_leaves_gpu, 0);
+        assert_eq!(parsed.merkle_min_leaves_metal, Some(0));
+        assert_eq!(parsed.merkle_min_leaves_cuda, Some(0));
+        assert_eq!(parsed.prefer_cpu_sha2_max_leaves_aarch64, Some(0));
+        assert_eq!(parsed.prefer_cpu_sha2_max_leaves_x86, Some(0));
+        assert_eq!(
+            parsed.resource_limits,
+            iroha_accel::RegistryLimits {
+                metadata_bytes: 0,
+                devices: 0,
+                discovery_ordinals: 0,
+                modules: 0,
+                streams: 0,
+                artifact_bytes: 0,
+                work: iroha_accel::GpuResourceLimits {
+                    host_bytes: 0,
+                    pinned_bytes: 0,
+                    device_bytes: 0,
+                    in_flight: 0
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn acceleration_resource_counts_reject_negative_and_oversized_geometry() {
+        for table in [
+            toml::toml! { [resource_limits] host_bytes = -1 },
+            toml::toml! { [resource_limits] discovery_ordinals = 4294967296i64 },
+            toml::toml! { max_gpus = -1 },
+        ] {
+            assert!(
+                ConfigReader::new()
+                    .with_toml_source(TomlSource::inline(table))
+                    .read_and_complete::<Acceleration>()
+                    .is_err()
+            );
+        }
+    }
     #[test]
     fn accel_parse_respects_enable_simd_flag() {
         let user = Acceleration {
+            resource_limits: AccelerationResourceLimits {
+                host_bytes: defaults::accel::HOST_BYTES,
+                pinned_bytes: defaults::accel::PINNED_BYTES,
+                device_bytes: defaults::accel::DEVICE_BYTES,
+                in_flight: defaults::accel::IN_FLIGHT,
+                metadata_bytes: defaults::accel::METADATA_BYTES,
+                observed_devices: defaults::accel::OBSERVED_DEVICES,
+                discovery_ordinals: defaults::accel::DISCOVERY_ORDINALS,
+                modules: defaults::accel::MODULES,
+                streams: defaults::accel::STREAMS,
+                artifact_bytes: defaults::accel::ARTIFACT_BYTES,
+            },
             enable_simd: false,
             enable_cuda: true,
             enable_metal: true,
-            max_gpus: 0,
-            merkle_min_leaves_gpu: 0,
-            merkle_min_leaves_metal: 0,
-            merkle_min_leaves_cuda: 0,
-            prefer_cpu_sha2_max_leaves_aarch64: 0,
-            prefer_cpu_sha2_max_leaves_x86: 0,
+            max_gpus: None,
+            merkle_min_leaves_gpu: defaults::accel::MERKLE_MIN_LEAVES_GPU,
+            merkle_min_leaves_metal: None,
+            merkle_min_leaves_cuda: None,
+            prefer_cpu_sha2_max_leaves_aarch64: None,
+            prefer_cpu_sha2_max_leaves_x86: None,
         };
         let actual = user.parse();
         assert!(!actual.enable_simd);
@@ -9847,7 +9980,7 @@ impl StreamingSync {
 /// Cryptography configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Crypto {
-    /// Whether the OpenSSL-backed SM preview helpers are enabled.
+    /// Whether optional OpenSSL SM3/SM4 helpers are enabled; SM2 verification is unaffected.
     #[config(
         env = "CRYPTO_SM_OPENSSL_PREVIEW",
         default = "defaults::crypto::ENABLE_SM_OPENSSL_PREVIEW"
@@ -13948,6 +14081,201 @@ impl SnapshotBootstrapPolicy {
         self.authorizes_digest(actual_sha256) && self.audited_height == Some(height)
     }
 }
+/// User-level non-secret custody and private TLS listener settings for Musubi publication.
+#[derive(Debug, Clone, ReadConfig)]
+pub struct MusubiPublication {
+    /// Parent directory for the independent durable journal, seed and clock owners.
+    #[config(default = "PathBuf::from(defaults::musubi_publication::CUSTODY_ROOT)")]
+    pub custody_root: WithOrigin<PathBuf>,
+    /// Bind address for the injected private TLS listener.
+    #[config(default = "defaults::musubi_publication::PRIVATE_TLS_BIND.to_owned()")]
+    pub private_tls_bind: String,
+    /// Exact prefix removed before one of the three private publication routes is matched.
+    #[config(default = "defaults::musubi_publication::PRIVATE_MOUNT_PREFIX.to_owned()")]
+    pub private_mount_prefix: String,
+    /// Maximum simultaneous private TLS requests and bounded request buffers.
+    #[config(default = "defaults::musubi_publication::MAX_INFLIGHT_REQUESTS")]
+    pub max_inflight_requests: u16,
+    /// Lifetime operation capacity of the durable publication journal.
+    #[config(default = "defaults::musubi_publication::JOURNAL_MAX_OPERATIONS")]
+    pub journal_max_operations: u32,
+    /// Unexpired authorization capacity of the durable publication journal.
+    #[config(default = "defaults::musubi_publication::JOURNAL_MAX_AUTHORIZATIONS")]
+    pub journal_max_authorizations: u32,
+    /// Total durable response bytes, including in-flight terminal reservations.
+    #[config(default = "defaults::musubi_publication::JOURNAL_MAX_TOTAL_RESPONSE_BYTES")]
+    pub journal_max_total_response_bytes: u64,
+    /// Maximum complete canonical journal snapshot size.
+    #[config(default = "defaults::musubi_publication::JOURNAL_MAX_SNAPSHOT_BYTES")]
+    pub journal_max_snapshot_bytes: u64,
+    /// Maximum number of exact CAR seed records retained in local custody.
+    #[config(default = "defaults::musubi_publication::MAX_SEED_RECORDS")]
+    pub max_seed_records: u32,
+    /// Maximum total bytes of exact CAR seed records retained in local custody.
+    #[config(default = "defaults::musubi_publication::MAX_SEED_BYTES")]
+    pub max_seed_bytes: u64,
+    /// Maximum publisher-clock lead accepted by publication authorization.
+    #[config(default = "defaults::musubi_publication::MAX_FUTURE_CLOCK_SKEW_MS")]
+    pub max_future_clock_skew_ms: u64,
+    /// Lifetime assigned to a broker-signed seed-ingress receipt.
+    #[config(default = "defaults::musubi_publication::RECEIPT_LIFETIME_MS")]
+    pub receipt_lifetime_ms: u64,
+    /// Paid-pin tier: exactly `hot`, `warm`, or `cold`.
+    #[config(default = "defaults::musubi_publication::PIN_STORAGE_CLASS.to_owned()")]
+    pub pin_storage_class: String,
+    /// Paid-pin lifetime after submission, in seconds; must exceed the ingest deadline.
+    #[config(default = "defaults::musubi_publication::PIN_RETENTION_HORIZON_SECS")]
+    pub pin_retention_horizon_secs: u64,
+    /// Canonical I105 account or exactly `ingress_broker`; no signing key is stored here.
+    #[config(default = "defaults::musubi_publication::PIN_TRANSACTION_AUTHORITY.to_owned()")]
+    pub pin_transaction_authority: String,
+}
+impl MusubiPublication {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::MusubiPublication {
+        let pin_storage_class = parse_storage_class(&self.pin_storage_class).unwrap_or_else(|_| {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig).attach(
+                    "musubi_publication.pin_storage_class must be exactly hot, warm, or cold",
+                ),
+            );
+            SorafsStorageClass::Hot
+        });
+        let pin_transaction_authority = if self.pin_transaction_authority
+            == defaults::musubi_publication::PIN_TRANSACTION_AUTHORITY
+        {
+            actual::MusubiPinTransactionAuthority::IngressBroker
+        } else {
+            match AccountId::parse_encoded(&self.pin_transaction_authority) {
+                Ok(account) if account.to_string() == self.pin_transaction_authority => {
+                    actual::MusubiPinTransactionAuthority::Account(account)
+                }
+                Ok(_) | Err(_) => {
+                    emitter.emit(
+                            Report::new(ParseError::InvalidMusubiPublicationConfig).attach(
+                                "musubi_publication.pin_transaction_authority must be ingress_broker or one canonical domainless I105 account",
+                            ),
+                        );
+                    actual::MusubiPinTransactionAuthority::IngressBroker
+                }
+            }
+        };
+        let private_tls_bind: std::net::SocketAddr =
+            self.private_tls_bind.parse().unwrap_or_else(|_| {
+                emitter.emit(
+                    Report::new(ParseError::InvalidMusubiPublicationConfig)
+                        .attach("musubi_publication.private_tls_bind must be a socket address"),
+                );
+                defaults::musubi_publication::private_tls_bind()
+            });
+        if self.max_inflight_requests == 0 || self.max_inflight_requests > 4 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.max_inflight_requests must be within 1..=4"),
+            );
+        }
+        if !valid_musubi_private_mount_prefix(&self.private_mount_prefix) {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig).attach(
+                    "musubi_publication.private_mount_prefix is not a canonical path prefix",
+                ),
+            );
+        }
+        if self.journal_max_operations == 0 || self.journal_max_operations > 1_000_000 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.journal_max_operations must be within 1..=1000000"),
+            );
+        }
+        if self.journal_max_authorizations == 0 || self.journal_max_authorizations > 1_000_000 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig).attach(
+                    "musubi_publication.journal_max_authorizations must be within 1..=1000000",
+                ),
+            );
+        }
+        if !(16 * 1024 * 1024..=64 * 1024 * 1024).contains(&self.journal_max_total_response_bytes) {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.journal_max_total_response_bytes must be within 16..=64 MiB"),
+            );
+        }
+        if self.journal_max_snapshot_bytes
+            < self
+                .journal_max_total_response_bytes
+                .saturating_add(256 * 1024)
+            || self.journal_max_snapshot_bytes > 96 * 1024 * 1024
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.journal_max_snapshot_bytes must cover response bytes plus 256 KiB and be at most 96 MiB"),
+            );
+        }
+        if self.max_seed_records == 0 || self.max_seed_records > 1_024 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.max_seed_records must be within 1..=1024"),
+            );
+        }
+        if self.max_seed_bytes == 0 || self.max_seed_bytes > 64 * 1024 * 1024 * 1024 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.max_seed_bytes must be within 1 byte..=64 GiB"),
+            );
+        }
+        if self.max_future_clock_skew_ms > 30_000 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.max_future_clock_skew_ms must be at most 30000"),
+            );
+        }
+        if self.receipt_lifetime_ms == 0 || self.receipt_lifetime_ms > 24 * 60 * 60 * 1_000 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("musubi_publication.receipt_lifetime_ms must be within 1..=86400000"),
+            );
+        }
+        if self.pin_retention_horizon_secs
+            <= u64::from(
+                iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+            )
+            || self.pin_retention_horizon_secs
+                > defaults::musubi_publication::MAX_PIN_RETENTION_HORIZON_SECS
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig).attach(
+                    "musubi_publication.pin_retention_horizon_secs must exceed the SoraFS ingest deadline and be at most 365 days",
+                ),
+            );
+        }
+        actual::MusubiPublication {
+            custody_root: self.custody_root.resolve_relative_path(),
+            private_tls_bind,
+            private_mount_prefix: self.private_mount_prefix,
+            max_inflight_requests: self.max_inflight_requests,
+            journal_max_operations: self.journal_max_operations,
+            journal_max_authorizations: self.journal_max_authorizations,
+            journal_max_total_response_bytes: self.journal_max_total_response_bytes,
+            journal_max_snapshot_bytes: self.journal_max_snapshot_bytes,
+            max_seed_records: self.max_seed_records,
+            max_seed_bytes: self.max_seed_bytes,
+            max_future_clock_skew_ms: self.max_future_clock_skew_ms,
+            receipt_lifetime_ms: self.receipt_lifetime_ms,
+            pin_storage_class,
+            pin_retention_horizon_secs: self.pin_retention_horizon_secs,
+            pin_transaction_authority,
+        }
+    }
+}
+fn valid_musubi_private_mount_prefix(prefix: &str) -> bool {
+    prefix.len() <= 64
+        && prefix.starts_with('/')
+        && prefix[1..].split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}
 /// User-level configuration container for the embedded Soracloud runtime manager.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SoracloudRuntime {
@@ -15321,64 +15649,18 @@ pub struct Torii {
     /// Allowlisted circuit identifiers for the background prover (empty = allow all).
     #[config(default = "defaults::torii::zk_prover_allowed_circuits()")]
     pub zk_prover_allowed_circuits: Vec<String>,
-    /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
-    ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    /// Maximum concurrent IVM contract simulation and view workers.
     #[config(
-        env = "TORII_ZK_IVM_PROVE_MAX_INFLIGHT",
-        default = "defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT"
+        env = "TORII_IVM_TOOLING_MAX_INFLIGHT",
+        default = "defaults::torii::IVM_TOOLING_MAX_INFLIGHT"
     )]
-    pub zk_ivm_prove_max_inflight: usize,
-    /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
-    ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    pub ivm_tooling_max_inflight: usize,
+    /// Wall-clock timeout for synchronous IVM simulation and view tooling.
     #[config(
-        env = "TORII_ZK_IVM_PROVE_MAX_QUEUE",
-        default = "defaults::torii::ZK_IVM_PROVE_MAX_QUEUE"
+        env = "TORII_IVM_TOOLING_TIMEOUT_MS",
+        default = "defaults::torii::IVM_TOOLING_TIMEOUT_MS"
     )]
-    pub zk_ivm_prove_max_queue: usize,
-    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
-    #[config(
-        env = "TORII_ZK_IVM_TOOLING_TIMEOUT_MS",
-        default = "defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS"
-    )]
-    pub zk_ivm_tooling_timeout_ms: u64,
-    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
-    #[config(
-        env = "TORII_ZK_IVM_PROVE_JOB_TTL_SECS",
-        default = "defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS"
-    )]
-    pub zk_ivm_prove_job_ttl_secs: u64,
-    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
-    ///
-    /// Set to 0 to disable the cap (not recommended).
-    #[config(
-        env = "TORII_ZK_IVM_PROVE_JOB_MAX_ENTRIES",
-        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES"
-    )]
-    pub zk_ivm_prove_job_max_entries: usize,
-    /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
-    #[config(
-        env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES",
-        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES"
-    )]
-    pub zk_ivm_prove_job_max_retained_bytes: Bytes,
-    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one authenticated account.
-    ///
-    /// Set to 0 to disable the per-account count cap (not recommended).
-    #[config(
-        env = "TORII_ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER",
-        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER"
-    )]
-    pub zk_ivm_prove_job_max_entries_per_owner: usize,
-    /// Maximum bytes retained by `/v1/zk/ivm/prove` for one authenticated account.
-    ///
-    /// Set to 0 to disable the per-account byte cap (not recommended).
-    #[config(
-        env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER",
-        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER"
-    )]
-    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes,
+    pub ivm_tooling_timeout_ms: u64,
     /// Push notification configuration (feature-gated in runtime).
     #[config(nested)]
     pub push: ToriiPush,
@@ -16660,15 +16942,8 @@ impl Torii {
             zk_prover_keys_dir: self.zk_prover_keys_dir,
             zk_prover_allowed_backends: self.zk_prover_allowed_backends,
             zk_prover_allowed_circuits: self.zk_prover_allowed_circuits,
-            zk_ivm_prove_max_inflight: self.zk_ivm_prove_max_inflight,
-            zk_ivm_prove_max_queue: self.zk_ivm_prove_max_queue,
-            zk_ivm_tooling_timeout_ms: self.zk_ivm_tooling_timeout_ms,
-            zk_ivm_prove_job_ttl_secs: self.zk_ivm_prove_job_ttl_secs,
-            zk_ivm_prove_job_max_entries: self.zk_ivm_prove_job_max_entries,
-            zk_ivm_prove_job_max_retained_bytes: self.zk_ivm_prove_job_max_retained_bytes,
-            zk_ivm_prove_job_max_entries_per_owner: self.zk_ivm_prove_job_max_entries_per_owner,
-            zk_ivm_prove_job_max_retained_bytes_per_owner: self
-                .zk_ivm_prove_job_max_retained_bytes_per_owner,
+            ivm_tooling_max_inflight: self.ivm_tooling_max_inflight,
+            ivm_tooling_timeout_ms: self.ivm_tooling_timeout_ms,
             connect: self.connect.parse(emitter),
             iso_bridge: self.iso_bridge.parse(),
             transaction_ingress: self.transaction_ingress.parse(emitter),

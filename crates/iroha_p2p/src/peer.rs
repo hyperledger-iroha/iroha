@@ -4816,7 +4816,6 @@ mod run {
         pub outbound_frame_queue_limits: OutboundFrameQueueLimits,
         pub outbound_post_byte_budgets: OutboundPostByteBudgets,
         pub inbound_frame_byte_budgets: InboundFrameByteBudgets,
-        #[allow(dead_code)]
         pub max_frame_bytes: usize,
         pub quic_datagrams_enabled: bool,
         pub quic_datagram_max_payload_bytes: usize,
@@ -11918,11 +11917,11 @@ mod state {
                 hex_bytes(&got.nexus_policy_digest),
             ));
         }
-        if expected.v2_config_fingerprint != got.v2_config_fingerprint {
+        if expected.native_config_fingerprint != got.native_config_fingerprint {
             return Some(format!(
-                "v2_config_fingerprint mismatch (expected 0x{}, got 0x{})",
-                hex_bytes(&expected.v2_config_fingerprint),
-                hex_bytes(&got.v2_config_fingerprint),
+                "native_config_fingerprint mismatch (expected 0x{}, got 0x{})",
+                hex_bytes(&expected.native_config_fingerprint),
+                hex_bytes(&got.native_config_fingerprint),
             ));
         }
         if expected.ivm_gas_schedule_hash != got.ivm_gas_schedule_hash {
@@ -12160,7 +12159,8 @@ mod state {
             *current_error = Some(error);
             Ok(())
         }
-        #[allow(unused_variables, clippy::too_many_lines, clippy::single_match_else)]
+        #[allow(clippy::too_many_lines, clippy::single_match_else)]
+        #[cfg_attr(not(feature = "quic"), allow(unused_variables))]
         pub(super) async fn connect_to(
             Self {
                 peer_addr,

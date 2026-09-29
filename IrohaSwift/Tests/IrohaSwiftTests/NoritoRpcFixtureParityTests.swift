@@ -747,7 +747,7 @@ private struct NoritoRpcFixtureLoader {
             name = try container.decode(String.self, forKey: .name)
             authority = try container.decode(String.self, forKey: .authority)
             networkId = try container.decode(String.self, forKey: .networkId)
-            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+            guard ToriiCanonicalWire.isCanonicalHash(networkId) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .networkId,
                     in: container,
@@ -808,7 +808,7 @@ private struct NoritoRpcFixtureLoader {
             name = try container.decode(String.self, forKey: .name)
             authority = try container.decode(String.self, forKey: .authority)
             networkId = try container.decode(String.self, forKey: .networkId)
-            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+            guard ToriiCanonicalWire.isCanonicalHash(networkId) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .networkId,
                     in: container,
@@ -859,7 +859,7 @@ private struct NoritoRpcFixtureLoader {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             authority = try container.decode(String.self, forKey: .authority)
             networkId = try container.decode(String.self, forKey: .networkId)
-            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+            guard ToriiCanonicalWire.isCanonicalHash(networkId) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .networkId,
                     in: container,
@@ -1291,7 +1291,7 @@ private struct NoritoRpcFixtureLoader {
         var signedHashes = Set<String>()
         var signedBytesValues = Set<Data>()
         for entry in fixtures {
-            guard ToriiNativeAmxWire.isCanonicalHash(entry.networkId) else {
+            guard ToriiCanonicalWire.isCanonicalHash(entry.networkId) else {
                 throw FixtureError.invalidNetworkId(entry.networkId)
             }
             guard entry.timeToLiveMs > 0 else {
@@ -1355,8 +1355,8 @@ private struct NoritoRpcFixtureLoader {
             guard entries[entry.name] == nil else {
                 throw FixtureError.duplicateFixtureName(entry.name)
             }
-            guard ToriiNativeAmxWire.isCanonicalHash(entry.networkId),
-                  ToriiNativeAmxWire.isCanonicalHash(entry.payload.networkId) else {
+            guard ToriiCanonicalWire.isCanonicalHash(entry.networkId),
+                  ToriiCanonicalWire.isCanonicalHash(entry.payload.networkId) else {
                 throw FixtureError.invalidNetworkId(entry.networkId)
             }
             guard entry.authority == entry.payload.authority,

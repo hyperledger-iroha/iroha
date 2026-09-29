@@ -504,7 +504,10 @@ state_test!(consensus_stack component_commit_topology_preserves_scheduled_networ
     component_commit_topology_preserves_scheduled_network_authority_on_consensus_stack();
 );
 fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_stack() {
-    let state = blank_test_state();
+    let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+        crate::sumeragi::test_chain::TestChainConfig::new(World::default(), 1_000))
+        .expect("authenticated global committee");
+    let state = chain.state();
     let validators = merge_carrier_finality_fixture_keypairs();
     seed_consensus_keys_with_pops(&state, &validators);
     let before = state

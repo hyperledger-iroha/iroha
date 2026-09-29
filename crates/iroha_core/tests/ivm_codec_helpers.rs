@@ -35,6 +35,12 @@ fn load_metadata(vm: &mut IVM) {
 }
 fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
     let interface = EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm::call::CallWordV1::Unit],
+            }],
         seiyaku_name: "CodecHelperFixture".to_owned(),
         compiler_fingerprint: "iroha-core-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -69,7 +75,14 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
     };
     let mut artifact = ProgramMetadata::default().encode();
     artifact.extend_from_slice(&interface.encode_section());
-    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        artifact.extend_from_slice(&instruction.to_le_bytes());
+    }
     vm.load_program(&artifact)
         .expect("load schema-bound StateMap metadata");
 }

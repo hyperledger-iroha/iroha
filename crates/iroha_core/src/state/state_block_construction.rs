@@ -44,8 +44,6 @@ impl State {
         let mut batch_transfer_outcomes;
         let mut verified_lane_relay_records;
         let mut touched_lanes;
-        let mut merge_carrier_entrypoints;
-        let mut staged_queue_plan_admissions;
         let mut pending_nexus_fee_receipt_source_ids;
         #[cfg(feature = "telemetry")]
         let mut pending_parliament_telemetry_events;
@@ -90,7 +88,7 @@ impl State {
         gov = Some(self.gov.clone());
         content = Some(self.content.clone());
         settlement = Some(self.settlement.clone());
-        kagemusha_v1_runtime_verifier = Some(Arc::clone(&self.kagemusha_v1_runtime_verifier));
+        kagemusha_v1_runtime_verifier = Some(self.kagemusha_v1_runtime_verifier());
         settlement_engine = Some(self.settlement_engine.clone());
         chain_id = Some(self.chain_id.clone());
         settlement_accumulator = Some(crate::settlement::SettlementAccumulator::default());
@@ -105,8 +103,6 @@ impl State {
         batch_transfer_outcomes = Some(BTreeMap::new());
         verified_lane_relay_records = Some(Vec::new());
         touched_lanes = Some(BTreeSet::new());
-        merge_carrier_entrypoints = Some(HashSet::new());
-        staged_queue_plan_admissions = Some(Vec::new());
         pending_nexus_fee_receipt_source_ids = Some(BTreeSet::new());
         #[cfg(feature = "telemetry")]
         {
@@ -153,8 +149,6 @@ impl State {
         assert!(batch_transfer_outcomes.is_some());
         assert!(verified_lane_relay_records.is_some());
         assert!(touched_lanes.is_some());
-        assert!(merge_carrier_entrypoints.is_some());
-        assert!(staged_queue_plan_admissions.is_some());
         assert!(pending_nexus_fee_receipt_source_ids.is_some());
         #[cfg(feature = "telemetry")]
         assert!(pending_parliament_telemetry_events.is_some());
@@ -169,7 +163,6 @@ impl State {
                 transactions,
                 commit_topology,
                 prev_commit_topology,
-                lane_consensus_contexts,
                 canonical_runtime,
                 projection,
                 block_hashes,
@@ -180,6 +173,11 @@ impl State {
                 .into_fields();
             let block = StateBlock::from_fields(StateBlockFields {
                 local_storage_refusal: None,
+                ivm_refunds: pipeline_ivm_prepared_cache
+                    .as_ref()
+                    .expect("prepared State input")
+                    .execution_budget()
+                    .deferred_refund_batch(),
                 state_ref: self,
                 read_releases: StateViewReleases::new(self),
                 da_rewind_releases,
@@ -191,8 +189,7 @@ impl State {
                 ordinary_carrier_membership_source: None,
                 commit_topology: block_field::BlockField::new(commit_topology),
                 prev_commit_topology: block_field::BlockField::new(prev_commit_topology),
-                lane_consensus_contexts: block_field::BlockField::new(lane_consensus_contexts),
-                lane_consensus_contexts_seal: None,
+                sumeragi_lane_state_seal: None,
                 ivm: &self.ivm,
                 pipeline_ivm_prepared_cache: pipeline_ivm_prepared_cache
                     .take()
@@ -223,6 +220,7 @@ impl State {
                 kagemusha_v1_runtime_verifier: kagemusha_v1_runtime_verifier
                     .take()
                     .expect("prepared State input"),
+                kagemusha_registry_transition_authorization: None,
                 settlement_engine: settlement_engine.take().expect("prepared State input"),
                 chain_id: chain_id.take().expect("prepared State input"),
                 network_id: self.network_id,
@@ -240,7 +238,6 @@ impl State {
                 fastpq_source_context: None,
                 fastpq_source_policy_at_block_start: None,
                 fastpq_source_quota: None,
-                merge_execution_prefix: None,
                 fastpq_source_captures: fastpq_source_captures
                     .take()
                     .expect("prepared State input"),
@@ -268,22 +265,13 @@ impl State {
                 autoscale_sample_history_dirty: false,
                 autoscale_evaluated_committed_fragment_count: None,
                 autoscale_lifecycle_evaluated: false,
-                merge_carrier_entrypoints: merge_carrier_entrypoints
-                    .take()
-                    .expect("prepared State input"),
-                staged_merge_entry: None,
-                native_lane_stage: None,
-                staged_queue_plan_admissions: staged_queue_plan_admissions
-                    .take()
-                    .expect("prepared State input"),
-                canonical_wsv_merge_commit_authorization: None,
-                canonical_carrier_commit_metadata_authorization: None,
                 pending_nexus_fee_receipt_source_ids: pending_nexus_fee_receipt_source_ids
                     .take()
                     .expect("prepared State input"),
                 start_of_block_effects_applied: false,
                 applied_npos_consensus_effects_hash: None,
                 axt_policy_transition_ratchets_finalized: false,
+                original_execution_recorder: None,
                 exec_witness: None,
                 parliament_timed_ovn_casting_bindings: None,
                 #[cfg(feature = "telemetry")]
@@ -301,8 +289,8 @@ impl State {
                 privacy_budget_in_block: privacy_budget_in_block
                     .take()
                     .expect("prepared State input"),
-                sccp_verifier_work_in_block:
-                    iroha_sccp::light_client::SccpVerifierWorkV1::default(),
+                sccp_verifier_work_in_block: iroha_sccp::light_client::SccpVerifierWorkV1::default(
+                ),
                 implicit_account_creations_in_block: 0,
                 gas_limit_per_block: gas_limit_per_block.take().expect("prepared State input"),
                 frozen_execution_output_capacity: None,
@@ -320,8 +308,6 @@ impl State {
                 #[cfg(feature = "zk-preverify")]
                 zk_dedup: zk_dedup.take().expect("prepared State input"),
                 committed_fragments: 0,
-                authenticated_replay_commit: false,
-                replay_prevalidation: false,
             });
             finish.take().expect("original State finish continuation")(block)
         })

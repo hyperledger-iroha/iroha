@@ -175,8 +175,12 @@ fn provisioning(
         SignerRoleV1::FinalPromotionProvenance => "final-promotion-provenance",
         SignerRoleV1::FinalPromotionAccountTransaction => "final-promotion-account-transaction",
         SignerRoleV1::TopologyApproval => "topology-approval",
+        SignerRoleV1::MusubiProviderAttestation => "musubi-provider-attestation",
     };
     let purpose_binding = match role {
+        SignerRoleV1::MusubiProviderAttestation => {
+            panic!("Musubi custody uses an exact pre-provisioned controller fixture")
+        }
         SignerRoleV1::ProofOutcome
         | SignerRoleV1::Repair
         | SignerRoleV1::Reserve

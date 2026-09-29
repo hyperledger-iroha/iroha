@@ -42,9 +42,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenGameSessionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -124,9 +121,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for JoinGameSessionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -200,9 +194,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for StartGameSessionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -249,9 +240,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitGameCheckpointV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -317,9 +305,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ChallengeGameSessionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -374,9 +359,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitGameInputsV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let input = super::decode_aos_canonical_field::<crate::game::GameInputCommitmentV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -411,9 +393,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevealGameInputsV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let reveal = super::decode_aos_canonical_field::<crate::game::GameInputRevealV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -448,9 +427,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AdvanceGameDeadlineV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -497,9 +473,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettleGameSessionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -582,9 +555,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ClaimGamePayoutV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -621,9 +591,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExpireGameSessionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -658,9 +625,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterExecutionProofProfileV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let profile_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -695,9 +659,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for VerifyExecutionProofV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let proof = super::decode_aos_canonical_field::<
             crate::execution_proofs::ExecutionProofEnvelopeV1,
@@ -744,9 +705,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for StakeGameItemV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let session_id = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,

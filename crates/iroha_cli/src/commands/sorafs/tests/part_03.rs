@@ -278,6 +278,14 @@ fn incentives_compute_generates_instruction() {
     assert!(decoded.payout_amount > Quantity::zero());
 }
 fn incentives_open_dispute_produces_payload() {
+    use clap::Parser as _;
+
+    #[derive(clap::Parser)]
+    struct DisputeCli {
+        #[command(flatten)]
+        args: IncentivesOpenDisputeArgs,
+    }
+
     let instruction = sample_reward_instruction();
     let mut instruction_file = NamedTempFile::new().expect("instruction file");
     let instruction_bytes = to_bytes(&instruction).expect("encode instruction");
@@ -286,16 +294,26 @@ fn incentives_open_dispute_produces_payload() {
         .expect("write instruction");
     let dispute_file = NamedTempFile::new().expect("dispute file");
     let dispute_path = dispute_file.path().to_path_buf();
-    let args = IncentivesOpenDisputeArgs {
-        instruction: instruction_file.path().to_path_buf(),
-        treasury_account: sample_account_literal("treasury"),
-        submitted_by: sample_account_literal("operator"),
-        requested_amount: "25".into(),
-        reason: "calibration".into(),
-        submitted_at: Some(1_234),
-        norito_out: Some(dispute_path.clone()),
-        pretty: false,
-    };
+    let mut argv = vec![
+        "open-dispute".to_owned(),
+        "--instruction".to_owned(),
+        instruction_file.path().to_string_lossy().into_owned(),
+        "--submitted-by".to_owned(),
+        sample_account_literal("operator"),
+        "--requested-amount".to_owned(),
+        "25".to_owned(),
+        "--reason".to_owned(),
+        "calibration".to_owned(),
+        "--submitted-at".to_owned(),
+        "1234".to_owned(),
+        "--norito-out".to_owned(),
+        dispute_path.to_string_lossy().into_owned(),
+    ];
+    let args = DisputeCli::try_parse_from(&argv)
+        .expect("dispute authoring needs no treasury account")
+        .args;
+    argv.extend(["--treasury-account".to_owned(), sample_account_literal("treasury")]);
+    assert!(DisputeCli::try_parse_from(&argv).is_err());
     let mut ctx = TestContext::new();
     args.run(&mut ctx).expect("open dispute runs");
     assert_eq!(ctx.outputs().len(), 1, "expected JSON output");

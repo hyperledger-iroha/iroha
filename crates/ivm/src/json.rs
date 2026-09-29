@@ -414,7 +414,6 @@ fn convert_leaf(
             njson::Value::from(decode_canonical::<DataSpaceId>(payload)?.to_string())
         }
         StateValueKindV1::AxtDescriptor
-        | StateValueKindV1::AssetHandle
         | StateValueKindV1::ProofBlob
         | StateValueKindV1::SoracloudRequest
         | StateValueKindV1::SoracloudResponse => return Err(VMError::DecodeError),
@@ -1938,9 +1937,8 @@ mod tests {
             vm.set_register(10, record_ptr);
             vm.set_register(11, schema_ptr);
             crate::argument_record::decode_argument_record(&mut vm).unwrap();
-            let table = vm.validate_tlv(vm.register(10)).unwrap();
-            assert_eq!(table.payload.len(), 9);
-            let materialized = u64::from_le_bytes(table.payload[1..].try_into().unwrap());
+            assert_eq!(vm.register(11), 1);
+            let materialized = vm.memory.load_u64(vm.register(10)).unwrap();
             install_build_inputs(&mut vm, &construction, &[materialized]);
             assert_eq!(
                 build_json(&mut vm, CoreHost::resolve_code_tlv_addr),

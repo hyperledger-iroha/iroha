@@ -25,10 +25,21 @@ macro_rules! runtime_cells {
         }
 
         impl<'state> CellPhase<'state> {
-            fn new(state: &'state State) -> Self {
-                Self::Pending(PendingCells {
-                    $($field: Some(state.$field.block_acquisition()),)+
-                })
+            fn admit(state: &'state State, budget: &mv::allocation::AllocationBudget) -> Result<Self, StateStorageAdmissionError> {
+                let layout = mv::cell::CellPublicationSuccessor::allocation_layout();
+                let mut demand = 0_usize;
+                $(let _ = &state.$field;
+                  demand = demand.checked_add(layout.size()).ok_or_else(||
+                      StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Allocation(mv::allocation::AllocationRefusal::DemandOverflow)))?;)+
+                let mut parent = budget.try_reserve_bytes(demand)
+                    .map_err(mv::storage::AdmittedStorageError::Allocation)?;
+                // All four original tokens exist before World can acquire its
+                // first writer. A partial allocation refusal has no physical locks.
+                let pending = PendingCells {
+                    $($field: Some(crate::state::world_acquisition::original_cell(&state.$field, budget, &mut parent)?),)+
+                };
+                assert_eq!(parent.remaining_bytes(), 0, "complete State Cell successor inventory");
+                Ok(Self::Pending(pending))
             }
 
             fn initialize(&mut self, mode: BlockMode) {
@@ -121,7 +132,6 @@ macro_rules! runtime_cells {
 runtime_cells! {
     commit_topology: Vec<PeerId>,
     prev_commit_topology: Vec<PeerId>,
-    lane_consensus_contexts: LaneConsensusContextsV1,
     canonical_runtime: SnapshotNexusRuntime,
 }
 
@@ -192,7 +202,8 @@ pub(super) struct RuntimeBlockAcquisition<'state> {
 }
 
 impl<'state> RuntimeBlockAcquisition<'state> {
-    /// Inert slots and the already detached original funded successor only.
+    /// Inert custody of the original detached hash and membership successors.
+    /// Initialization admits every Cell token before entering any physical writer.
     pub(super) fn new(
         target: &'state State,
         block_hashes: BlockHashesBlock<'state>,
@@ -201,7 +212,7 @@ impl<'state> RuntimeBlockAcquisition<'state> {
         Self {
             world: None,
             transactions: None,
-            cells: CellPhase::new(target),
+            cells: CellPhase::Empty,
             block_hashes: Some(block_hashes),
             membership: Some(membership),
             target,
@@ -213,15 +224,17 @@ impl<'state> RuntimeBlockAcquisition<'state> {
     pub(super) fn initialize(&mut self, replacement: bool) -> Result<(), StateAdmissionError> {
         assert!(!self.started, "original State acquisition is one-shot");
         self.started = true;
+        let budget = self.target.ivm_execution_budget();
+        self.cells = CellPhase::admit(self.target, &budget)?;
         self.world = Some(if replacement {
             self.target
                 .world
-                .try_block_and_revert()
+                .try_block_and_revert(&budget)
                 .map_err(StateStorageAdmissionError::World)?
         } else {
             self.target
                 .world
-                .try_block()
+                .try_block(&budget)
                 .map_err(StateStorageAdmissionError::World)?
         });
         self.transactions = Some(

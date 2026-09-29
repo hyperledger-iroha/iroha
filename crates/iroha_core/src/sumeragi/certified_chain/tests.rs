@@ -36,7 +36,7 @@ fn chain() -> (CertifiedTestChain, HashOf<TransactionEntrypoint>) {
     );
     let entry = transaction.hash_as_entrypoint();
     chain.commit_at(3_000, vec![transaction]);
-    chain.commit_with(Some(4_000), Vec::new(), Signers::All);
+    chain.commit_with(Some(4_000), Vec::new(), Signers::LastThree);
     chain.commit_at(5_000, Vec::new());
     (chain, entry)
 }
@@ -55,7 +55,7 @@ fn with_parts(
 ) -> Arc<SignedBlock> {
     let certificate = frame.commit_certificate().expect("certificate");
     let (mut header, mut qc) = decode_certificate(certificate).expect("parts");
-    let mut preimage = certificate.result_preimage.clone();
+    let mut preimage = certificate.result_preimage().to_vec();
     edit(&mut header, &mut qc, &mut preimage);
     Arc::new(
         frame
@@ -108,10 +108,9 @@ fn committed_and_certified_reads_of_a_real_chain() {
         !blocks[3].extends(&blocks[1]),
         "block 4 does not extend block 2"
     );
-    // R_g commits the genesis committee as C_{g+2}, the committee that certified g + 1.
     assert_eq!(
-        genesis.commitment().next_committee_digest,
-        reader.candidates().expect("candidates").genesis
+        genesis.commitment().schedule.current,
+        super::super::epoch::genesis_epoch(chain.genesis()).unwrap()
     );
     // The transaction of block 3 is anchored by the executed wire R commits.
     let anchor = blocks[2].entry_anchor(&entry).expect("anchor");
@@ -209,7 +208,11 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
     let genesis = frame(&chain, 1);
     let certificate = genesis.commit_certificate().unwrap().clone();
     let headed = Arc::new(genesis.as_ref().clone().with_commit_certificate(Some(
-        CommitCertificate::new(vec![1], Vec::new(), certificate.result_preimage),
+        CommitCertificate::from_untrusted_parts(
+            vec![1],
+            Vec::new(),
+            certificate.result_preimage().to_vec(),
+        ),
     )));
     assert!(matches!(
         read_frame(headed, 1),
@@ -228,7 +231,10 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
     // A preimage whose `R` is not the certified one (its executed wire is unchanged).
     let other_result = with_parts(&original, |_, _, preimage| {
         let mut commitment = ExecutionResultCommitment::decode(preimage).unwrap();
-        commitment.next_committee_digest = [9; 32];
+        let schedule::ScheduledSlot::Ready(next) = &mut commitment.schedule.after_next else {
+            unreachable!()
+        };
+        next.params.block_time_ms += 1;
         *preimage = commitment.preimage().unwrap();
     });
     assert_eq!(
@@ -267,6 +273,16 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
         Some(ChainReadError::Certificate {
             height: 4,
             error: CertError::TooFewSigners
+        })
+    );
+    // More signatures cannot widen the protocol's exact finality authority either.
+    let all = chain.commit_qc(4, qc.block_hash, qc.result, qc.attest, Signers::All);
+    let all = with_parts(&original, |_, qc, _| *qc = all);
+    assert_eq!(
+        certify(all).err(),
+        Some(ChainReadError::Certificate {
+            height: 4,
+            error: CertError::TooManySigners
         })
     );
     let forged = with_parts(&original, |_, qc, _| qc.agg_sig.0[5] ^= 1);
@@ -312,118 +328,25 @@ fn two_valid_certificates_of_one_block_give_one_consensus_receipt() {
     }
 }
 
-#[test]
-fn an_unknown_historical_committee_relies_on_the_commit_time_check() {
-    let (chain, _) = chain();
-    let view = chain.state().view();
-    let reader = CertifiedChain::new(&view).expect("reader");
-    assert!(
-        reader
-            .candidates
-            .set(Ok(Candidates {
-                by_digest: BTreeMap::new(),
-                genesis: [0; 32],
-            }))
-            .is_ok()
-    );
-    assert_eq!(
-        reader.certified(4).expect("read").verification(),
-        QcVerification::CommittedLocally
-    );
-    // The genesis committee is known again: the certificate is verified.
-    let reader = CertifiedChain::new(&view).expect("reader");
-    assert_eq!(
-        reader.certified(4).expect("read").verification(),
-        QcVerification::Verified
-    );
-}
-
-/// A State of the chain's network over a fresh Kura that holds the chain's frames, each passed
-/// through `edit` first (local tampering of the certificates: the iroha blocks, and so the view's
-/// block-hash journal, stay the chain's).
-fn tampered_state(
-    chain: &CertifiedTestChain,
-    edit: impl Fn(u64, Arc<SignedBlock>) -> Arc<SignedBlock>,
-) -> State {
+/// Store authentic history with no live registry or schedule candidates to help the reader.
+fn state_with_history(history: &[Arc<SignedBlock>]) -> State {
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_with_chain_and_network_id_for_testing(
         World::new(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         "sumeragi-certified-test-chain".parse().unwrap(),
-        chain.network_id(),
+        iroha_data_model::NetworkId::from_genesis_hash(history[0].hash()),
     );
-    for height in 1..=chain.height() {
-        let block = edit(height, frame(chain, height));
+    for block in history {
+        kura.store_block(Arc::clone(block)).unwrap();
         state.push_block_hash_for_testing(block.hash());
-        kura.store_block(block).unwrap();
     }
     state
 }
 
-/// The committee of a height is authenticated by `R_{h-2}` through the headers its `CommitQC`
-/// certifies: a stored `R_{h-2}` preimage that names another committee is refused, and so is a
-/// header of `h - 1` rewritten to agree with it (the certified header of `h` binds the original).
-#[test]
-fn a_tampered_committee_digest_does_not_select_the_committee() {
-    let (chain, _) = chain();
-    let untouched = tampered_state(&chain, |_, frame| frame);
-    let view = untouched.view();
-    assert_eq!(
-        CertifiedChain::new(&view)
-            .expect("reader")
-            .certified(4)
-            .expect("read")
-            .verification(),
-        QcVerification::Verified
-    );
-    let tampered_preimage = |preimage: &mut Vec<u8>| {
-        let mut commitment = ExecutionResultCommitment::decode(preimage).unwrap();
-        commitment.next_committee_digest = [9; 32];
-        *preimage = commitment.preimage().unwrap();
-    };
-    let mut other_r2 = frame(&chain, 2)
-        .commit_certificate()
-        .unwrap()
-        .result_preimage
-        .clone();
-    tampered_preimage(&mut other_r2);
-    let other_r2 = result_of_preimage(&other_r2);
-    // `R_2` names another committee for height 4; the header of 3 still binds the original `R_2`.
-    let state = tampered_state(&chain, |height, frame| match height {
-        2 => with_parts(&frame, |_, _, preimage| tampered_preimage(preimage)),
-        _ => frame,
-    });
-    let view = state.view();
-    let reader = CertifiedChain::new(&view).expect("reader");
-    assert_eq!(
-        reader.certified(4).err(),
-        Some(ChainReadError::ResultMismatch { height: 2 })
-    );
-    assert!(reader.proof_committee(4).is_err());
-    // The header of 3 rewritten to bind the tampered `R_2`: the certified header of 4 does not
-    // extend it.
-    let state = tampered_state(&chain, |height, frame| match height {
-        2 => with_parts(&frame, |_, _, preimage| tampered_preimage(preimage)),
-        3 => with_parts(&frame, |header, _, _| header.parent_result = other_r2),
-        _ => frame,
-    });
-    let view = state.view();
-    let reader = CertifiedChain::new(&view).expect("reader");
-    assert_eq!(
-        reader.certified(4).err(),
-        Some(ChainReadError::Discontinuous { height: 4 })
-    );
-    assert_eq!(
-        reader.proof_committee(4).err(),
-        Some(ChainReadError::Discontinuous { height: 4 })
-    );
-    // The consensus-visible receipt of 4 does not depend on either certificate.
-    assert_eq!(
-        committed_block(&view, 4).expect("committed").id(),
-        chain.committed(4).id()
-    );
-}
+#[path = "boundary_tests.rs"]
+mod boundaries;
 
 #[test]
 fn a_view_of_another_network_is_refused() {
@@ -461,3 +384,405 @@ fn a_view_of_another_network_is_refused() {
         Some(ChainReadError::NotInView { height: 1 })
     );
 }
+
+#[test]
+fn historical_committee_material_cannot_bypass_global_voting_geometry() {
+    use iroha_data_model::sumeragi::epoch::{ValidatorCommitteeMemberV1, validate_committee};
+    use iroha_model_base::peer::PeerId;
+    let pairs = (1_u8..=35)
+        .map(|index| KeyPair::from_seed(vec![index; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    for count in 0..=pairs.len() {
+        let mut members = pairs[..count]
+            .iter()
+            .map(|pair| ValidatorCommitteeMemberV1 {
+                validator: PeerId::new(pair.public_key().clone()),
+                proof_of_possession: iroha_crypto::bls_normal_pop_prove(pair.private_key())
+                    .unwrap(),
+            })
+            .collect::<Vec<_>>();
+        members.sort_by_key(|member| {
+            super::super::crypto::core_key(member.validator.public_key()).unwrap()
+        });
+        let result = validate_committee(&members);
+        if count >= 4 && count <= 31 && (count - 1) % 3 == 0 {
+            result.expect("exact global committee");
+            let entry = schedule::global_committee(
+                members
+                    .iter()
+                    .map(|member| core_key(member.validator.public_key()).unwrap())
+                    .collect(),
+            )
+            .unwrap();
+            assert_eq!(entry.q(), 2 * entry.f() + 1);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
+fn genesis_signature_is_verified_even_when_its_header_hash_matches_the_view() {
+    use iroha_crypto::SignatureOf;
+    use iroha_data_model::block::BlockSignature;
+
+    let (chain, _) = chain();
+    let original = frame(&chain, 1);
+    let foreign = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+    let mut forged = original.as_ref().clone();
+    forged
+        .replace_signatures(
+            [BlockSignature::new(
+                0,
+                SignatureOf::from_hash(foreign.private_key(), original.hash()),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .unwrap();
+    assert_eq!(forged.hash(), original.hash());
+    let mut extra = original.as_ref().clone();
+    extra.sign(foreign.private_key(), 1);
+    for block in [forged, extra] {
+        let state = state_with_history(&[Arc::new(block)]);
+        assert!(matches!(
+            CertifiedChain::new(&state.view()),
+            Err(ChainReadError::ForeignGenesis)
+        ));
+    }
+}
+
+#[test]
+fn genesis_payload_is_bound_to_its_signed_header_before_authority_is_read() {
+    let (chain, _) = chain();
+    let original = frame(&chain, 1);
+    let signature = original.signatures().next().unwrap().clone();
+    let mut substituted = original.payload().clone();
+    // Every transaction still has its genuine signature, but this extra copy was never
+    // committed by the signed genesis header. Unauthenticated payloads cannot supply keys.
+    substituted
+        .external_entrypoints
+        .push(substituted.external_entrypoints[0].clone());
+    let mut missing_policy = original.payload().clone();
+    missing_policy.da_proof_policies = None;
+    for payload in [substituted, missing_policy] {
+        let block = SignedBlock::presigned_with_payload(signature.clone(), payload);
+        assert_eq!(block.hash(), original.hash());
+        assert!(
+            block
+                .external_transactions()
+                .all(|tx| tx.verify_signature().is_ok())
+        );
+        assert!(
+            signature
+                .signature()
+                .verify_hash(
+                    block
+                        .external_transactions()
+                        .next()
+                        .unwrap()
+                        .authority()
+                        .try_signatory()
+                        .unwrap(),
+                    block.hash(),
+                )
+                .is_ok()
+        );
+        assert!(block.validate_proposal_commitments().is_err());
+        let state = state_with_history(&[Arc::new(block)]);
+        assert!(matches!(
+            CertifiedChain::new(&state.view()),
+            Err(ChainReadError::ForeignGenesis)
+        ));
+    }
+    let view = chain.state().view();
+    assert!(CertifiedChain::new(&view).unwrap().certified(2).is_ok());
+}
+
+#[test]
+fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() {
+    let (chain, _) = chain();
+    let mut history = vec![frame(&chain, 1)];
+    let mut parent = read_frame(Arc::clone(&history[0]), 1).unwrap();
+    for height in 2..=3 {
+        let changed = with_parts(&frame(&chain, height), |header, qc, preimage| {
+            header.parent_hash = parent.core_hash();
+            header.parent_result = parent.result();
+            header.attest = height == 2;
+            *qc = chain.commit_qc(
+                height,
+                header.hash(&BlsCrypto::new()),
+                result_of_preimage(preimage),
+                false,
+                Signers::Quorum,
+            );
+            if header.attest {
+                qc.attest = true;
+                let mut keys = (0xC1..=0xC4)
+                    .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+                    .collect::<Vec<_>>();
+                keys.sort_by_key(|key| core_key(key.public_key()).unwrap());
+                let signatures = keys
+                    .iter()
+                    .take(3)
+                    .map(|key| {
+                        use iroha_sumeragi::crypto::Signer as _;
+                        crate::sumeragi::crypto::KeyPairSigner::new(key)
+                            .unwrap()
+                            .sign(&qc.preimage())
+                    })
+                    .collect::<Vec<_>>();
+                qc.agg_sig =
+                    iroha_sumeragi::crypto::Crypto::aggregate(&BlsCrypto::new(), &signatures);
+                let invalid_signature =
+                    iroha_sumeragi::message::AttestationSignature::try_from_slice(&[0x42]).unwrap();
+                qc.attestations = vec![invalid_signature; 3];
+                qc.attestation_witness = Some(
+                    iroha_sumeragi::message::ResultWitness::from_untrusted(preimage.clone())
+                        .unwrap(),
+                );
+            }
+        });
+        parent = read_frame(Arc::clone(&changed), height).unwrap();
+        history.push(changed);
+    }
+    let state = state_with_history(&history);
+    let view = state.view();
+    let native = CertifiedChain::new(&view).unwrap();
+    assert!(matches!(
+        native.certified(2),
+        Err(ChainReadError::Certificate {
+            error: CertError::BadAttestation,
+            ..
+        })
+    ));
+    struct ExplicitFixtureVerifier;
+    impl AttestationVerifier for ExplicitFixtureVerifier {
+        fn verify(
+            &self,
+            _: u64,
+            _: u32,
+            _: &iroha_sumeragi::types::PublicKey,
+            _: &[u8],
+            _: &iroha_sumeragi::message::ResultWitness,
+            signature: &[u8],
+        ) -> bool {
+            signature == [0x42]
+        }
+    }
+    let reader = CertifiedChain::new(&view)
+        .unwrap()
+        .with_attestation_verifier(&ExplicitFixtureVerifier);
+    assert_eq!(
+        reader.certified(2).unwrap().verification(),
+        QcVerification::Verified
+    );
+    assert!(reader.prefix.lock().is_some());
+    let full = reader.with_attestation_verifier(&NoAttestation);
+    assert!(matches!(
+        full.certified(3),
+        Err(ChainReadError::Certificate {
+            height: 2,
+            error: CertError::BadAttestation,
+        })
+    ));
+}
+
+#[test]
+fn pinned_prefix_uses_the_exact_cut_without_a_world_authority() {
+    let (chain, _) = chain();
+    let chain_id = ChainId::from("sumeragi-certified-test-chain");
+    let network = chain.network_id();
+    let hashes = (1..=3)
+        .map(|height| frame(&chain, height).hash())
+        .collect::<Vec<_>>();
+    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, chain.kura()).unwrap();
+    let receipts = reader.walk(1, 3).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(receipts.len(), 3);
+    assert_eq!(receipts[0].verification(), QcVerification::Genesis);
+    assert_eq!(receipts[2].verification(), QcVerification::Verified);
+    assert_eq!(receipts[2].commitment(), chain.committed(3).commitment());
+    // Kura also holds heights four and five, but they are outside this restoration cut.
+    assert_eq!(
+        reader.certified(4).err(),
+        Some(ChainReadError::NotCommitted { height: 4 })
+    );
+    assert_eq!(
+        reader.committed(0).err(),
+        Some(ChainReadError::NotCommitted { height: 0 })
+    );
+    assert!(matches!(reader.source, ChainSource::Pinned { .. }));
+    let prefix = reader.prefix.lock();
+    let prefix = prefix.as_ref().unwrap();
+    assert_eq!(prefix.tip.height(), 3);
+    assert!(prefix.schedule.entries().len() <= 3);
+}
+
+#[test]
+fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
+    let (chain, _) = chain();
+    let chain_id = ChainId::from("sumeragi-certified-test-chain");
+    let network = chain.network_id();
+    let hashes = (1..=3)
+        .map(|height| frame(&chain, height).hash())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        CertifiedChain::from_pinned(&chain_id, &network, &[], chain.kura()).err(),
+        Some(ChainReadError::NotCommitted { height: 1 })
+    );
+    let wrong_hash = HashOf::from_untyped_unchecked(Hash::new(b"not the pinned block"));
+    let foreign = NetworkId::from_genesis_hash(wrong_hash);
+    assert_eq!(
+        CertifiedChain::from_pinned(&chain_id, &foreign, &hashes, chain.kura()).err(),
+        Some(ChainReadError::ForeignGenesis)
+    );
+    let absent = Kura::blank_kura_for_testing();
+    assert_eq!(
+        CertifiedChain::from_pinned(&chain_id, &network, &hashes, &absent).err(),
+        Some(ChainReadError::NotInView { height: 1 })
+    );
+    let mut changed = hashes.clone();
+    changed[0] = wrong_hash;
+    assert_eq!(
+        CertifiedChain::from_pinned(&chain_id, &network, &changed, chain.kura()).err(),
+        Some(ChainReadError::NotInView { height: 1 })
+    );
+    let mut changed = hashes.clone();
+    changed[2] = wrong_hash;
+    let reader = CertifiedChain::from_pinned(&chain_id, &network, &changed, chain.kura()).unwrap();
+    assert_eq!(
+        reader.certified(3).err(),
+        Some(ChainReadError::NotInView { height: 3 })
+    );
+    let wrong_chain = ChainId::from("another-configured-consensus-instance");
+    let reader =
+        CertifiedChain::from_pinned(&wrong_chain, &network, &hashes, chain.kura()).unwrap();
+    assert_eq!(
+        reader.certified(2).err(),
+        Some(ChainReadError::WrongInstance { height: 2 })
+    );
+    chain
+        .kura()
+        .force_hash_only_block_for_testing(NonZeroUsize::new(3).unwrap())
+        .unwrap();
+    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, chain.kura()).unwrap();
+    assert_eq!(
+        reader.certified(3).err(),
+        Some(ChainReadError::NotInView { height: 3 })
+    );
+}
+
+#[test]
+fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
+    let (chain, _) = chain();
+    let genesis = frame(&chain, 1);
+    let certificate = genesis.commit_certificate().unwrap();
+    let mut result = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
+    result.execution.ordinary_writes_root =
+        Hash::new(b"unsigned pinned genesis execution replacement");
+    let changed = Arc::new(genesis.as_ref().clone().with_commit_certificate(Some(
+        CommitCertificate::from_untrusted_parts(
+            certificate.consensus_header().to_vec(),
+            certificate.commit_qc().to_vec(),
+            result.preimage().unwrap(),
+        ),
+    )));
+    assert_eq!(changed.hash(), genesis.hash());
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(changed).unwrap();
+    kura.store_block(frame(&chain, 2)).unwrap();
+    let chain_id = ChainId::from("sumeragi-certified-test-chain");
+    let network = chain.network_id();
+    let hashes = [genesis.hash(), frame(&chain, 2).hash()];
+    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes[..1], &kura).unwrap();
+    let receipt = reader.certified(1).unwrap();
+    assert_eq!(receipt.verification(), QcVerification::Genesis);
+    assert_eq!(
+        receipt.commitment().execution.ordinary_writes_root,
+        result.execution.ordinary_writes_root
+    );
+    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura).unwrap();
+    assert_eq!(
+        reader.certified(2).err(),
+        Some(ChainReadError::Discontinuous { height: 2 })
+    );
+}
+
+#[test]
+fn portable_committee_uses_the_authenticated_original_epoch_members() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    for height in 1..=chain.height() {
+        let expected = chain
+            .validators()
+            .iter()
+            .map(|(peer, pop)| (peer.public_key().clone(), pop.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(reader.proof_committee(height).unwrap(), expected);
+    }
+}
+
+#[test]
+fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
+    let (chain, _) = chain();
+    let chain_id = ChainId::from("sumeragi-certified-test-chain");
+    let network = chain.network_id();
+    let frames = (1..=3)
+        .map(|height| frame(&chain, height))
+        .collect::<Vec<_>>();
+    let hashes = frames.iter().map(|block| block.hash()).collect::<Vec<_>>();
+    let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &frames).unwrap();
+    let reads = reader.walk(1, 3).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(reads[0].verification(), QcVerification::Genesis);
+    assert_eq!(reads[2].verification(), QcVerification::Verified);
+    assert!(Arc::ptr_eq(reads[2].block(), &frames[2]));
+    assert_eq!(reads[2].commitment(), chain.committed(3).commitment());
+    assert_eq!(
+        reader.certified(4).err(),
+        Some(ChainReadError::NotCommitted { height: 4 })
+    );
+    assert!(CertifiedChain::from_frames(&chain_id, &network, &hashes[..2], &frames).is_err());
+    assert!(CertifiedChain::from_frames(&chain_id, &network, &[], &[]).is_err());
+    let foreign =
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
+    assert_eq!(
+        CertifiedChain::from_frames(&chain_id, &foreign, &hashes, &frames).err(),
+        Some(ChainReadError::ForeignGenesis)
+    );
+    let other_chain = ChainId::from("foreign instance");
+    let reader = CertifiedChain::from_frames(&other_chain, &network, &hashes, &frames).unwrap();
+    assert_eq!(
+        reader.certified(3).err(),
+        Some(ChainReadError::WrongInstance { height: 2 })
+    );
+    let mut reordered = frames.clone();
+    reordered.swap(1, 2);
+    let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &reordered).unwrap();
+    assert_eq!(
+        reader.certified(2).err(),
+        Some(ChainReadError::NotInView { height: 2 })
+    );
+}
+
+#[test]
+fn borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash() {
+    let (chain, _) = chain();
+    let chain_id = ChainId::from("sumeragi-certified-test-chain");
+    let network = chain.network_id();
+    let mut frames = (1..=3)
+        .map(|height| frame(&chain, height))
+        .collect::<Vec<_>>();
+    let hashes = frames.iter().map(|block| block.hash()).collect::<Vec<_>>();
+    frames[1] = with_parts(&frames[1], |_, _, preimage| {
+        let mut result = ExecutionResultCommitment::decode(preimage).unwrap();
+        result.execution.ordinary_writes_root = Hash::new(b"changed borrowed R");
+        *preimage = result.preimage().unwrap();
+    });
+    assert_eq!(frames[1].hash(), hashes[1]);
+    let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &frames).unwrap();
+    assert!(reader.certified(3).is_err());
+}
+
+#[path = "prefix_tests.rs"]
+mod prefix_tests;

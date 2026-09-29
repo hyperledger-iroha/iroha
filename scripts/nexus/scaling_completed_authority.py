@@ -69,7 +69,7 @@ _PUBLIC_RECORDS = {record: NamedTuple(record.__name__ + 'Snapshot',
 _RESOURCE_FIELDS = tuple(field.name for field in fields(ReplayResult)
     if field.name not in ('signed_requests', 'applied_requests', 'geometry', 'allocation'))
 ResourceSnapshot = NamedTuple('ResourceSnapshot', [(name, object) for name in _RESOURCE_FIELDS])
-_NATIVE_ROLES = (('native_finality', 'finality'), ('native_queries', 'queries'),
+_NATIVE_ROLES = (('native_carrier', 'carrier'), ('native_queries', 'queries'),
     ('native_facts', 'facts'), ('native_request', 'request'),
     ('native_bundle', 'bundle'), ('canonical_proof', 'proof'))
 _GENESIS = (('genesis_manifest', 'genesis.json'), ('signed_genesis', 'genesis.signed.nrt'),
@@ -307,12 +307,12 @@ def _source(trial):
     cli, kagami, daemon = (trial._runtime.cli.sha256, trial._runtime.kagami.sha256,
                            trial._runtime.daemon.sha256)
     _require(gen.generator_sha256 == tip.kagami_sha256 == facts.kagami_sha256
-             == canonical.verifier_sha256 == kagami
-             and loaded.cli_sha256 == vectors.cli_sha256 == cli)
+             == canonical.verifier_sha256 == vectors.kagami_sha256 == kagami
+             and loaded.cli_sha256 == cli)
     _require(gen.anchors_sha256 == native.anchors_sha256 == tip.original_anchor_sha256
              == facts.original_anchor_sha256 == vectors.anchors_sha256
-             and (gen.genesis_hash, gen.context_id, gen.network_id, gen.genesis_public_key, gen.chain_discriminant)
-             == (native.genesis_hash, native.context_id, native.network_id, native.genesis_public_key, native.chain_discriminant)
+             and (gen.genesis_hash, gen.genesis_epoch_context_id, gen.network_id, gen.genesis_public_key, gen.chain_discriminant)
+             == (native.genesis_hash, native.genesis_epoch_context_id, native.network_id, native.genesis_public_key, native.chain_discriminant)
              and gen.accounts == native.generation.accounts and gen.artifacts == native.generation.artifacts
              and tuple(peer.role for peer in gen.peers) == native.roles
              and tip.reader.block_store == native.roles[3].primary_block_store
@@ -383,11 +383,12 @@ def _source(trial):
              == (originals['genesis.signed.nrt'].sha256, originals['genesis.signed.nrt'].bytes)
              and (vectors.context_sha256, vectors.context_bytes)
              == (originals['genesis-context.nrt'].sha256, originals['genesis-context.nrt'].bytes)
-             and vectors.client_config_sha256 == native.roles[0].client_config_sha256
-             and vectors.finality == output['finality'] and vectors.queries == output['queries']
+             and (vectors.genesis_sha256, vectors.genesis_bytes)
+             == (originals['genesis.signed.nrt'].sha256, originals['genesis.signed.nrt'].bytes)
+             and vectors.carrier == output['carrier'] and vectors.queries == output['queries']
              and facts.facts == output['facts']
              and facts.journal_sha256 == loaded.collector_journal.sha256 == result.resources.journal_sha256
-             and facts.finality_sha256 == output['finality'].sha256
+             and facts.carrier_sha256 == output['carrier'].sha256
              and facts.queries_sha256 == output['queries'].sha256
              and canonical.request_sha256 == output['request'].sha256
              and (canonical.proof_sha256, canonical.proof_bytes) == (output['proof'].sha256, output['proof'].bytes)

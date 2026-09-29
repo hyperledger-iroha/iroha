@@ -5,9 +5,11 @@
 
 use super::{Error, OperationHistoryV1, OperationRecordV1, read_history, request_digest};
 use crate::{
-    query::signer_check::native_signed_entry_frame_v1,
+    query::signer_check::{
+        SignerCertifiedBlockV1, SignerCertifiedWalkV1, native_signed_entry_frame_v1,
+    },
     state::{StateReadOnly, StateView, TransactionsReadOnly},
-    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain},
+    sumeragi::certified_chain::CertifiedBlock,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -241,8 +243,10 @@ fn authenticate_target(
 /// The caller must pin `floor` before looking at the candidate operation and later use the same
 /// borrowed view for custody, permission, phase and finalized Check eligibility. A decoded row,
 /// self-selected floor, or this history capability alone cannot authorize private key use.
-/// The protocol caps one replay at 4,096 heights and 64 MiB of commit-certificate frames; exhaustion returns
-/// `CheckUnavailable` before any State side effect. Kura's own per-record bounds apply as well.
+/// The requested operation-history window is capped at 4,096 heights and 64 MiB of
+/// commit-certificate frames; exhaustion returns `CheckUnavailable` before any State side
+/// effect. The certified reader also authenticates the earlier genesis authority prefix;
+/// these window limits do not bound that prefix. Kura's per-record bounds still apply.
 ///
 /// # Errors
 /// Rejects missing or incoherent State rows, an unavailable bounded proof window, discontinuous
@@ -253,71 +257,19 @@ pub fn authenticate_stream_token_history_to_floor_v1<'view, 'state>(
     operation_id: [u8; 32],
     floor: StreamTokenFinalityFloorV1,
 ) -> Result<VerifiedStreamTokenHistoryV1<'view, 'state>, Error> {
-    if floor.height == 0 || floor.block_hash == [0; 32] || *floor.context_id.0.as_ref() == [0; 32] {
-        return Err(Error::Finality);
+    let mut proof = PreparedStreamTokenHistoryV1::new(view, provider, operation_id, floor)?;
+    let chain = SignerCertifiedWalkV1::new(view).map_err(|_| Error::Finality)?;
+    for block in chain.walk(proof.start_height(), floor.height) {
+        proof.consume(&block.map_err(|_| Error::Finality)?)?;
     }
-    let history = read_history(&view.world, provider, operation_id)?.ok_or(Error::Conflict)?;
-    let start = history.reserved.operation.reserved_execution.height;
-    let terminal_height = if history.current == history.reserved {
-        None
-    } else {
-        Some(
-            history
-                .current
-                .operation
-                .terminal_execution
-                .as_ref()
-                .ok_or(Error::CorruptHistory)?
-                .height,
-        )
-    };
-    if start == 0 || terminal_height.is_some_and(|height| height <= start || height > floor.height)
-    {
-        return Err(Error::CorruptHistory);
-    }
-    bound_history_span(start, floor.height)?;
-    if floor.height > u64::try_from(view.block_hashes().len()).map_err(|_| Error::Finality)? {
-        return Err(Error::Finality);
-    }
-    let chain = CertifiedChain::new(view).map_err(|_| Error::Finality)?;
-    let mut finality_bytes = 0_usize;
-    let mut reserved = None;
-    let mut terminal = None;
-    for block in chain.walk(start, floor.height) {
-        let block = block.map_err(|_| Error::Finality)?;
-        charge_finality_len(&mut finality_bytes, block.certificate_len())?;
-        let height = block.height();
-        if height == floor.height
-            && (*block.block_hash().as_ref() != floor.block_hash || block.id() != floor.context_id)
-        {
-            return Err(Error::Finality);
-        }
-        if height == start {
-            reserved = Some(block);
-        } else if terminal_height == Some(height) {
-            terminal = Some(block);
-        }
-    }
-    authenticate_target(
-        view,
-        &history.reserved,
-        TargetKind::Reserved,
-        reserved.as_ref().ok_or(Error::Finality)?,
-    )?;
-    if terminal_height.is_some() {
-        authenticate_target(
-            view,
-            &history.current,
-            TargetKind::Terminal,
-            terminal.as_ref().ok_or(Error::Finality)?,
-        )?;
-    }
-    Ok(VerifiedStreamTokenHistoryV1 {
-        view,
-        history,
-        floor,
-    })
+    proof.finish()
 }
+
+#[cfg(test)]
+use crate::sumeragi::certified_chain::CertifiedChain;
+
+mod verification;
+pub(super) use verification::PreparedStreamTokenHistoryV1;
 
 #[cfg(test)]
 #[path = "historical_execution/tests.rs"]

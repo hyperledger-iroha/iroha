@@ -88,6 +88,20 @@ impl NextPublication {
         Self(Shared::new(Version, None))
     }
 
+    pub(crate) fn allocation_layout() -> std::alloc::Layout {
+        Identity::<Version>::layout()
+    }
+
+    pub(crate) fn try_from_charge(
+        charge: AllocationCharge,
+    ) -> Result<Self, (AllocationCharge, concread::shared::ReservationError)> {
+        match Shared::try_new(Version, Some(charge)) {
+            Ok(original) => Ok(Self(original)),
+            Err((_, Some(charge), error)) => Err((charge, error)),
+            Err((_, None, _)) => unreachable!("original exact successor charge"),
+        }
+    }
+
     pub(crate) fn allocation_demand() -> Result<AllocationDemand, PlanningError> {
         let mut demand = AllocationDemand::new();
         demand.add_layout(Identity::<Version>::layout())?;
@@ -209,10 +223,60 @@ impl Publication {
     pub(crate) fn allocation_demand() -> Result<AllocationDemand, PlanningError> {
         let mut demand = NextPublication::allocation_demand()?;
         demand.add_layout(Identity::<Owner>::layout())?;
+        demand.add_layout(ReleaseNotification::allocation_layout::<AllocationCharge>())?;
         Ok(demand)
     }
 
+    pub(crate) fn initial_layouts() -> [std::alloc::Layout; 3] {
+        [
+            Identity::<Owner>::layout(),
+            Identity::<Version>::layout(),
+            ReleaseNotification::allocation_layout::<AllocationCharge>(),
+        ]
+    }
+
+    /// Build initial controls from the enclosing exact reservation. Partial
+    /// physical failure retires every constructed control before refunding it.
+    pub(crate) fn try_from_original(
+        reservation: &mut AllocationReservation,
+    ) -> Result<Self, concread::shared::ReservationError> {
+        let [owner_layout, version_layout, release_layout] = Self::initial_layouts();
+        let owner_charge = reservation
+            .try_split(owner_layout)
+            .expect("original owner demand");
+        let owner = Shared::try_new(Owner, Some(owner_charge)).map_err(|(_, charge, error)| {
+            drop(charge);
+            error
+        })?;
+        let version_charge = reservation
+            .try_split(version_layout)
+            .expect("original version demand");
+        let version =
+            Shared::try_new(Version, Some(version_charge)).map_err(|(_, charge, error)| {
+                drop(charge);
+                error
+            })?;
+        let release_charge = reservation
+            .try_split(release_layout)
+            .expect("original release demand");
+        let released =
+            ReleaseNotification::try_new_charged(release_charge).map_err(|(charge, error)| {
+                drop(charge);
+                error
+            })?;
+        Ok(Self {
+            owner,
+            version: Mutex::new(version),
+            released,
+        })
+    }
+
     pub(crate) fn from_admission(mut reservation: AllocationReservation) -> Self {
+        // The identity mutex's original notification belongs to the same finite
+        // admission. Observers may retain it after both identity owners drop.
+        let notification_charge = reservation
+            .try_split(ReleaseNotification::allocation_layout::<AllocationCharge>())
+            .expect("original publication notification admission");
         let owner_charge = reservation
             .try_split(Identity::<Owner>::layout())
             .expect("original storage identity admission");
@@ -220,7 +284,7 @@ impl Publication {
         Self {
             owner: Shared::new(Owner, Some(owner_charge)),
             version: Mutex::new(next.0),
-            released: ReleaseNotification::default(),
+            released: ReleaseNotification::new_charged(notification_charge),
         }
     }
 
@@ -400,3 +464,7 @@ mod tests {
 #[cfg(test)]
 #[path = "detached_publication_tests.rs"]
 mod detached_publication_tests;
+
+#[cfg(test)]
+#[path = "publication_admission_tests.rs"]
+mod admission_tests;

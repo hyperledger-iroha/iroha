@@ -72,8 +72,8 @@ impl DeepGeometry {
         for round in 0..FRI_ARITIES.len() {
             if FRI_LENGTHS[round] / FRI_ARITIES[round] != FRI_LENGTHS[round + 1]
                 || FRI_DEGREES[round] / FRI_ARITIES[round] != FRI_DEGREES[round + 1]
-                || FRI_LENGTHS[round] % FRI_ARITIES[round] != 0
-                || FRI_DEGREES[round] % FRI_ARITIES[round] != 0
+                || !FRI_LENGTHS[round].is_multiple_of(FRI_ARITIES[round])
+                || !FRI_DEGREES[round].is_multiple_of(FRI_ARITIES[round])
             {
                 return Err(shape("DEEP folding domains and degrees are inconsistent"));
             }

@@ -1,0 +1,114 @@
+//! Exact original publication controls retain admission through release observers.
+
+use super::*;
+use crate::allocation::AllocationBudget;
+
+#[test]
+fn complete_initial_publication_admission_includes_original_release_control() {
+    let identities = Identity::<Owner>::layout().size() + Identity::<Version>::layout().size();
+    let notification = ReleaseNotification::allocation_layout::<AllocationCharge>().size();
+    let required = Publication::allocation_demand().unwrap().bytes();
+    assert_eq!(required, identities + notification);
+    let budget = AllocationBudget::new(required - 1);
+    assert!(budget.try_reserve_bytes(required).is_err());
+    assert_eq!(budget.reserved_bytes(), 0);
+    budget.set_limit_bytes(required);
+    let original = budget.try_reserve_bytes(required).unwrap();
+    // Construction only splits the already admitted complete owner. It never
+    // silently acquires more capacity after another participant takes a writer.
+    budget.set_limit_bytes(0);
+    let publication = Publication::from_admission(original);
+    assert_eq!(budget.reserved_bytes(), required);
+    drop(publication);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn original_publication_observers_keep_their_exact_charge_after_identity_destruction() {
+    let required = Publication::allocation_demand().unwrap().bytes();
+    let notification = ReleaseNotification::allocation_layout::<AllocationCharge>().size();
+    let budget = AllocationBudget::new(required);
+    let foreign = AllocationBudget::new(required);
+    let foreign_publication =
+        Publication::from_admission(foreign.try_reserve_bytes(required).unwrap());
+    let publication = Publication::from_admission(budget.try_reserve_bytes(required).unwrap());
+    let identity = publication.capture();
+    let original = publication.released.observe();
+    let retained = original.clone();
+    assert_ne!(
+        original,
+        foreign_publication.released.observe(),
+        "equal release sequence is not source identity"
+    );
+    drop(publication);
+    assert_eq!(budget.reserved_bytes(), required);
+    assert_eq!(foreign.reserved_bytes(), required);
+    drop(identity);
+    assert_eq!(budget.reserved_bytes(), notification);
+    drop(original);
+    assert_eq!(budget.reserved_bytes(), notification);
+    drop(retained);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(foreign.reserved_bytes(), required);
+    drop(foreign_publication);
+    assert_eq!(foreign.reserved_bytes(), 0);
+}
+
+#[test]
+fn charged_identity_busy_release_unlocks_before_signal_and_retains_original_control() {
+    let required = Publication::allocation_demand().unwrap().bytes();
+    let notification = ReleaseNotification::allocation_layout::<AllocationCharge>().size();
+    let budget = AllocationBudget::new(required);
+    let publication = Publication::from_admission(budget.try_reserve_bytes(required).unwrap());
+    let identity = publication.capture();
+    let writer = publication.lock_version();
+    let wait = match identity.try_prepare_current::<()>(&publication) {
+        Err((PublicationPreparationError::Busy(wait), None)) => wait,
+        _ => panic!("actual identity mutex contention must retain its original release"),
+    };
+    assert_eq!(wait, publication.released.observe());
+    let ((), deferred) = writer.release_deferred(drop);
+    assert!(
+        publication.version.try_lock().is_ok(),
+        "physical lock is already free"
+    );
+    assert_eq!(
+        wait,
+        publication.released.observe(),
+        "no notification before aggregate cleanup"
+    );
+    drop(deferred);
+    assert_ne!(
+        wait,
+        publication.released.observe(),
+        "the actual release advances this source"
+    );
+    drop(identity);
+    drop(publication);
+    assert_eq!(budget.reserved_bytes(), notification);
+    drop(wait);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn pending_publication_waiter_keeps_original_control_until_cancelled() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+
+    let required = Publication::allocation_demand().unwrap().bytes();
+    let notification = ReleaseNotification::allocation_layout::<AllocationCharge>().size();
+    let budget = AllocationBudget::new(required);
+    let publication = Publication::from_admission(budget.try_reserve_bytes(required).unwrap());
+    let mut future = publication.released.observe().wait_for_release();
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut future).poll(&mut context).is_pending());
+    // Registration backing is a separate, still-unfunded obligation. This
+    // assertion covers only the exact charged original notification control.
+    drop(publication);
+    assert_eq!(budget.reserved_bytes(), notification);
+    drop(future);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

@@ -1,39 +1,22 @@
 //! Executable acceptance tests for the final Kotodama V1 language surface.
 use crate::{
-    CoreHost, IVM, ProgramMetadata, VMError, host::IVMHost, kotodama::compiler::Compiler,
-    parallel::StateAccessSet,
+    CoreHost, IVM, VMError, host::IVMHost, kotodama::compiler::Compiler, parallel::StateAccessSet,
 };
 
 fn compiled_main(source: &str) -> IVM {
-    let (code, _, report) = Compiler::new()
-        .compile_source_with_manifest_and_report(source)
+    let code = Compiler::new()
+        .compile_source(source)
         .expect("compile final V1 contract");
-    let metadata = ProgramMetadata::parse(&code).expect("parse V1 artifact");
-    let entry = report
-        .budget_report
-        .iter()
-        .find(|function| function.function_name == "__entrypoint_impl__main")
-        .or_else(|| {
-            report
-                .budget_report
-                .iter()
-                .find(|function| function.function_name == "main")
-        })
-        .expect("main implementation");
     let mut vm = IVM::new(1_000_000_000);
     vm.load_program(&code).expect("load V1 contract");
-    // Select the compiler-owned implementation while retaining the signed
-    // interface used by typed state and nominal errors. Authorization and
-    // public JSON record decoding are exercised by the invocation suites.
-    vm.set_register(1, (code.len() - metadata.header_len - 4) as u64);
-    vm.set_program_counter(metadata.prefix_len() as u64 + entry.pc_start)
-        .unwrap();
+    vm.select_entrypoint("main")
+        .expect("select public main entrypoint");
     vm
 }
 
 fn returned_int(vm: &IVM) -> String {
     iroha_primitives::numeric_abi::IntValueV1::decode_frame(
-        vm.validate_tlv(vm.register(10))
+        vm.validate_tlv(vm.public_call_result_word(0).expect("completed int result"))
             .expect("returned int envelope")
             .payload,
     )
@@ -43,26 +26,7 @@ fn returned_int(vm: &IVM) -> String {
 }
 
 fn transaction_main(source: &str) -> Vec<u8> {
-    let mut code = Compiler::new().compile_source(source).unwrap();
-    let metadata = ProgramMetadata::parse(&code).unwrap();
-    let entry = metadata
-        .contract_interface
-        .as_ref()
-        .unwrap()
-        .entrypoints
-        .iter()
-        .find(|entry| entry.name == "main")
-        .unwrap();
-    // The transaction harness loads each image at PC zero. Replace its idle HALT
-    // with a test-only jump to the compiler's public call/HALT wrapper. This
-    // selects an invocation without moving code, literals, or CNTR targets.
-    let target_words = i32::try_from(entry.entry_pc / 4).unwrap();
-    let jump = crate::encoding::wide::encode_offset24(
-        crate::instruction::wide::control::JMP,
-        target_words,
-    );
-    code[metadata.code_offset..metadata.code_offset + 4].copy_from_slice(&jump.to_le_bytes());
-    code
+    Compiler::new().compile_source(source).unwrap()
 }
 
 /// Execute `code` as one transaction against the VM's installed host `H`.
@@ -87,6 +51,8 @@ fn run_transaction<H: IVMHost + 'static>(
     vm.load_program(code).expect("load transaction");
     vm.set_gas_limit(1_000_000_000);
     vm.reset();
+    vm.select_entrypoint("main")
+        .expect("select public transaction entrypoint");
     let ran = vm.run().is_ok();
     let success = host::<H>(vm).finish_tx().is_ok_and(|log| {
         ran && log.read_keys.is_subset(&declared.read_keys)
@@ -302,7 +268,7 @@ fn fused_rounding_matches_constant_folding_through_generated_code_in_every_mode(
             .unwrap_or_else(|error| {
                 panic!("generated fused arithmetic differs in {mode}: {error}")
             });
-        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.public_call_result_word(0), Ok(0));
     }
 }
 
@@ -347,7 +313,8 @@ fn unit_and_nominal_errors_round_trip_through_durable_values() {
     vm.run_with_host(&mut CoreHost::new())
         .expect("durable Unit and nominal errors");
     assert_eq!(
-        vm.register(10),
+        vm.public_call_result_word(0)
+            .expect("completed Unit result"),
         0,
         "Unit has one canonical zero scalar word"
     );

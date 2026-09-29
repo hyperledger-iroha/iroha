@@ -110,13 +110,13 @@ pub use iroha_torii_shared::parliament_api::{
     PARLIAMENT_API_VERSION_V1, PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
     ParliamentAttemptDraftResponseV1, ParliamentAttemptPlanResponseV1,
-    ParliamentAttemptReadResponseV1,
-    ParliamentDecisionModeProjectionV1, ParliamentInstructionDraftV1,
-    ParliamentTimedOvnCastingContextResponseV1, ParliamentTimedOvnCastingPhaseProjectionV1,
-    ParliamentTimedOvnCastingProofRequestV1, ParliamentTimedOvnCastingProofResponseV1,
-    ParliamentTimedOvnSessionProjectionV1, ParliamentTlePartialReleaseShareV1,
-    ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
-    ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
+    ParliamentAttemptReadResponseV1, ParliamentDecisionModeProjectionV1,
+    ParliamentInstructionDraftV1, ParliamentTimedOvnCastingContextResponseV1,
+    ParliamentTimedOvnCastingPhaseProjectionV1, ParliamentTimedOvnCastingProofRequestV1,
+    ParliamentTimedOvnCastingProofResponseV1, ParliamentTimedOvnSessionProjectionV1,
+    ParliamentTlePartialReleaseShareV1, ParliamentTleReleaseContextResponseV1,
+    ParliamentTransitionDraftRequestV1, ParliamentTransitionDraftResponseV1,
+    RequiredParliamentBodyProjectionV1,
 };
 pub use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
@@ -236,7 +236,7 @@ use iroha_torii_shared::{
         decode_unverified_kagemusha_operation_status_v1,
         validate_kagemusha_top_up_signed_transaction_v1,
     },
-    uri as torii_uri,
+    route_catalog as torii_routes,
 };
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned};
 use norito::{
@@ -4501,11 +4501,6 @@ fn validate_zk_proofs_filter(filter: &ZkProofsFilter<'_>) -> Result<()> {
     }
     Ok(())
 }
-fn validate_zk_ivm_json(value: &norito::json::Value, context: &str) -> Result<()> {
-    let object = require_json_object(value, context)?;
-    require_json_vk_ref(object, context, None)?;
-    Ok(())
-}
 fn validate_zk_vk_submission_json(
     value: &norito::json::Value,
     context: &str,
@@ -5095,27 +5090,6 @@ fn zk_vk_commitment_hex(backend: &str, bytes: &[u8]) -> Result<String> {
     hasher.update(bytes_len.to_be_bytes());
     hasher.update(bytes);
     Ok(hex::encode(hasher.finalize()))
-}
-fn require_json_vk_ref(
-    object: &norito::json::Map,
-    context: &str,
-    expected_backend: Option<&str>,
-) -> Result<()> {
-    let vk_ref = object
-        .get("vk_ref")
-        .and_then(norito::json::Value::as_object)
-        .ok_or_else(|| eyre!("{context}.vk_ref must be a JSON object"))?;
-    let backend =
-        require_json_backend_field(vk_ref, "backend", &format!("{context}.vk_ref.backend"))?;
-    if let Some(expected) = expected_backend
-        && backend != expected
-    {
-        return Err(eyre!(
-            "{context}.vk_ref.backend must match {context}.backend"
-        ));
-    }
-    require_json_non_empty_string_field(vk_ref, "name", &format!("{context}.vk_ref.name"))?;
-    Ok(())
 }
 fn require_verifier_backend_registry_label_v1<'a>(
     backend: &'a str,
@@ -8026,7 +8000,7 @@ impl Client {
     /// negotiated representations, or a response that does not describe the
     /// exact four-field first-release `kagemusha_handoff_v1` capability.
     pub fn get_kagemusha_readiness(&self) -> Result<KagemushaReadinessV1> {
-        let url = join_torii_url(&self.torii_url, torii_uri::KAGEMUSHA_READINESS);
+        let url = join_torii_url(&self.torii_url, torii_routes::kagemusha::READINESS_PATH);
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", self.wire_format_preference.accept_header())
@@ -8061,7 +8035,7 @@ impl Client {
             validate_kagemusha_top_up_signed_transaction_v1(&self.network_id, transaction)
                 .wrap_err("invalid payer-signed KAGEMUSHA V1 top-up transaction")?;
         self.submit_kagemusha_operation_body(
-            torii_uri::KAGEMUSHA_TOP_UP,
+            torii_routes::kagemusha::TOP_UP_PATH,
             transaction.encode_versioned(),
             request.operation_id,
             KagemushaOperationKindV1::TopUp,
@@ -8085,7 +8059,7 @@ impl Client {
             .validate_shape()
             .wrap_err("invalid KAGEMUSHA V1 redemption request")?;
         self.submit_kagemusha_operation(
-            torii_uri::KAGEMUSHA_REDEEM,
+            torii_routes::kagemusha::REDEEM_PATH,
             request,
             request.operation_id,
             KagemushaOperationKindV1::Redemption,
@@ -8148,7 +8122,8 @@ impl Client {
             return Err(eyre!("KAGEMUSHA V1 operation id must be non-zero"));
         }
         let operation_id_text = hex::encode(operation_id);
-        let path = torii_uri::KAGEMUSHA_OPERATION.replace("{operation_id}", &operation_id_text);
+        let path =
+            torii_routes::kagemusha::OPERATION_PATH.replace("{operation_id}", &operation_id_text);
         let url = join_torii_url(&self.torii_url, &path);
         let max_response_bytes = match self.wire_format_preference {
             WireFormatPreference::NoritoOnly => KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
@@ -10695,7 +10670,10 @@ mod evidence_http_tests {
                 response.get("pipeline_status").is_some_and(Value::is_null),
                 "admission is not observed queue state"
             );
-            assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
+            assert_eq!(
+                snapshots[1].url.path(),
+                torii_routes::pipeline::TRANSACTION.path()
+            );
             assert_eq!(snapshots[1].body.as_slice(), expected_wire.as_bytes());
             assert_eq!(
                 response.get("tx_hash_hex"),
@@ -10779,7 +10757,9 @@ mod evidence_http_tests {
                 move |snapshot| {
                     let response = match snapshot.url.path() {
                         "/v1/contracts/call" => prepared_response.clone(),
-                        torii_uri::TRANSACTION => empty_response(StatusCode::OK),
+                        p if p == torii_routes::pipeline::TRANSACTION.path() => {
+                            empty_response(StatusCode::OK)
+                        }
                         unexpected => panic!("unexpected contract workflow request: {unexpected}"),
                     };
                     store.lock().expect("snapshot store").push(snapshot);
@@ -11231,118 +11211,6 @@ mod evidence_http_tests {
             );
         }
     }
-    #[test]
-    fn post_zk_ivm_prove_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        let req = norito::json!({
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
-            "authority": { "placeholder": true },
-            "fee_payment": {
-                "payer": "authority",
-                "value": { "charge_limits": [], "gas_limit": 123 }
-            },
-            "metadata": {},
-            "bytecode": { "placeholder": true },
-            "proved": { "placeholder": true }
-        });
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.post_zk_ivm_prove_json(&req)
-        });
-        let resp = resp.expect("post zk ivm prove json");
-        assert_eq!(resp["job_id"].as_str(), Some("abc"));
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/prove");
-        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(body, req);
-        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
-        });
-        assert!(has_content_type, "Content-Type header missing");
-    }
-    #[test]
-    fn post_zk_ivm_derive_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"proved\": {\"placeholder\": true}}");
-        let req = norito::json!({
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
-            "authority": { "placeholder": true },
-            "fee_payment": {
-                "payer": "authority",
-                "value": { "charge_limits": [], "gas_limit": 123 }
-            },
-            "metadata": {},
-            "bytecode": { "placeholder": true }
-        });
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.post_zk_ivm_derive_json(&req)
-        });
-        let resp = resp.expect("post zk ivm derive json");
-        assert!(resp.get("proved").is_some());
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/derive");
-        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(body, req);
-        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
-        });
-        assert!(has_content_type, "Content-Type header missing");
-    }
-    #[test]
-    fn post_zk_ivm_json_rejects_bad_vk_ref_before_request() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        for req in [
-            norito::json!({ "authority": { "placeholder": true } }),
-            norito::json!({ "vk_ref": "halo2/ipa:vk_main" }),
-            norito::json!({ "vk_ref": { "backend": "aztec/plonkish/private-kernel", "name": "vk_main" } }),
-            norito::json!({ "vk_ref": { "backend": "halo2/ipa", "name": "   " } }),
-        ] {
-            let derive_err = with_mock_http(
-                respond_with(&snapshots, response.clone()),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-
-                    client
-                        .post_zk_ivm_derive_json(&req)
-                        .expect_err("bad derive vk_ref must be rejected")
-                },
-            );
-            assert!(
-                derive_err.to_string().contains("vk_ref"),
-                "unexpected derive error: {derive_err}"
-            );
-            let prove_err = with_mock_http(
-                respond_with(&snapshots, response.clone()),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-
-                    client
-                        .post_zk_ivm_prove_json(&req)
-                        .expect_err("bad prove vk_ref must be rejected")
-                },
-            );
-            assert!(
-                prove_err.to_string().contains("vk_ref"),
-                "unexpected prove error: {prove_err}"
-            );
-        }
-        assert!(
-            snapshots.lock().expect("lock snapshot store").is_empty(),
-            "rejected IVM JSON must not be sent"
-        );
-    }
     fn vk_submission_json(
         authority: &AccountId,
         overrides: &[(&str, norito::json::Value)],
@@ -11751,44 +11619,6 @@ mod evidence_http_tests {
             snapshots.lock().expect("lock snapshot store").is_empty(),
             "rejected VK JSON must not be sent"
         );
-    }
-    #[test]
-    fn get_zk_ivm_prove_job_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\",\"status\":\"done\"}");
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.get_zk_ivm_prove_job_json("abc")
-        });
-        let resp = resp.expect("get zk ivm prove job json");
-        assert_eq!(resp["status"].as_str(), Some("done"));
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.as_str(),
-            "http://mock.local/v1/zk/ivm/prove/abc"
-        );
-        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
-    }
-    #[test]
-    fn delete_zk_ivm_prove_job_json_builds_request() {
-        let client = client_with_base_url(base_url());
-        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
-        let (resp, snapshot) = capture_request(response, |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.delete_zk_ivm_prove_job_json("abc")
-        });
-        let resp = resp.expect("delete zk ivm prove job json");
-        assert_eq!(resp["job_id"].as_str(), Some("abc"));
-        assert_eq!(snapshot.method, HttpMethod::DELETE);
-        assert_eq!(
-            snapshot.url.as_str(),
-            "http://mock.local/v1/zk/ivm/prove/abc"
-        );
-        super::tests::assert_canonical_account_signed_request(&client, &snapshot);
     }
     fn alias_proof_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         let mut bundle = AliasProofBundleV1 {
@@ -12891,7 +12721,9 @@ mod evidence_http_tests {
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                        Ok(details_response.clone())
+                    }
                     _ => panic!("unexpected rejection-details request path: {path}"),
                 }
             }
@@ -12925,7 +12757,7 @@ mod evidence_http_tests {
             &snapshots,
             &[
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
             ],
         );
     }
@@ -12964,7 +12796,9 @@ mod evidence_http_tests {
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                        Ok(details_response.clone())
+                    }
                     _ => panic!("unexpected rejection-details request path: {path}"),
                 }
             }
@@ -13001,7 +12835,7 @@ mod evidence_http_tests {
             &snapshots,
             &[
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
             ],
         );
     }
@@ -13025,7 +12859,9 @@ mod evidence_http_tests {
         );
         let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
             "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-            torii_uri::TRANSACTION_DETAILS => Ok(empty_response(StatusCode::FORBIDDEN)),
+            p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                Ok(empty_response(StatusCode::FORBIDDEN))
+            }
             path => panic!("unexpected rejection-details request path: {path}"),
         };
         let error = with_mock_http(responder, |mock_transport| {
@@ -13084,12 +12920,14 @@ mod evidence_http_tests {
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-                    torii_uri::TRANSACTION_DETAILS
-                        if detail_attempts.fetch_add(1, Ordering::SeqCst) == 0 =>
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path()
+                        && detail_attempts.fetch_add(1, Ordering::SeqCst) == 0 =>
                     {
                         Ok(missing_response.clone())
                     }
-                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                        Ok(details_response.clone())
+                    }
                     _ => panic!("unexpected rejection-details request path: {path}"),
                 }
             }
@@ -13124,9 +12962,9 @@ mod evidence_http_tests {
             &snapshots,
             &[
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
             ],
         );
     }
@@ -13150,7 +12988,9 @@ mod evidence_http_tests {
         let details_response = norito_response(StatusCode::OK, &details);
         let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
             "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-            torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+            p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                Ok(details_response.clone())
+            }
             path => panic!("unexpected rejection-details request path: {path}"),
         };
         let error = with_mock_http(responder, |mock_transport| {
@@ -15737,7 +15577,7 @@ impl AccountClient {
         let client = self.client();
         let url = join_torii_url(
             &client.torii_url,
-            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+            torii_routes::fees::QUOTE_PATH.trim_start_matches('/'),
         );
         let body = norito::json::to_vec(&FeeQuoteWireRequest {
             payload: payload.clone(),
@@ -15943,7 +15783,10 @@ impl AccountClient {
         let mut request = client
             .default_request(
                 HttpMethod::POST,
-                join_torii_url(&client.torii_url, torii_uri::TRANSACTIONS_BATCH),
+                join_torii_url(
+                    &client.torii_url,
+                    torii_routes::pipeline::TRANSACTIONS_BATCH.path(),
+                ),
             )
             .header("Content-Type", APPLICATION_NORITO)
             .header("Accept", "application/json")
@@ -16585,7 +16428,7 @@ impl Client {
         // TransactionEntrypoint wrapping happens on the server boundary.
         let mut request = DefaultRequestBuilder::new(
             HttpMethod::POST,
-            join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
+            join_torii_url(&self.torii_url, torii_routes::pipeline::TRANSACTION.path()),
         )
         .with_transport(self.http_transport.clone())
         .headers(self.transaction_headers_without_content_type())
@@ -16616,7 +16459,10 @@ impl Client {
                 details: "event WebSocket requires at least one filter".to_owned(),
             });
         }
-        let url = join_torii_url(&self.torii_url, torii_uri::SUBSCRIPTION);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::streaming::SUBSCRIPTION_WS.path(),
+        );
         let headers = self
             .account_signed_headers(&HttpMethod::GET, &url, &[])
             .map_err(|error| crate::Error::RequestSigning {
@@ -16641,7 +16487,7 @@ impl Client {
     #[inline]
     fn blocks_handler(&self, height: NonZeroU64) -> crate::Result<blocks_api::flow::Init> {
         let operation = streams::BLOCKS_OPERATION;
-        let url = join_torii_url(&self.torii_url, torii_uri::BLOCKS_STREAM);
+        let url = join_torii_url(&self.torii_url, torii_routes::streaming::BLOCKS_WS.path());
         let headers = self
             .account_signed_headers(&HttpMethod::GET, &url, &[])
             .map_err(|error| crate::Error::RequestSigning {
@@ -16683,7 +16529,10 @@ impl Client {
         let response = self.send_builder(
             self.default_request(
                 HttpMethod::GET,
-                join_torii_url(&self.torii_url, torii_uri::NEXUS_LANE_LIFECYCLE),
+                join_torii_url(
+                    &self.torii_url,
+                    torii_routes::core::NEXUS_LIFECYCLE_GET.path(),
+                ),
             )
             .header(
                 http::header::ACCEPT,
@@ -17793,7 +17642,7 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(
             &self.torii_url,
-            torii_uri::FEE_SPONSOR_PROGRAM_BY_ID.trim_start_matches('/'),
+            torii_routes::fees::SPONSOR_PROGRAM_BY_ID_PATH.trim_start_matches('/'),
         );
         let body = norito::json::to_vec(&FeeSponsorProgramByIdRequest::new(program_id))?;
         let response = self.send_builder(
@@ -19415,86 +19264,6 @@ impl Client {
             "Failed to verify-batch (json) with HTTP status",
         )
     }
-    /// Convenience: POST `/v1/zk/ivm/derive` with a JSON DTO body.
-    ///
-    /// The configured account signs the exact-network request and must match
-    /// `authority`. The body is expected to match the Torii app API DTO:
-    /// `{ vk_ref: { backend, name }, authority, fee_payment, metadata, bytecode }`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_ivm_derive_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        validate_zk_ivm_json(value, "zk ivm derive json")?;
-        let url = join_torii_url(&self.torii_url, "v1/zk/ivm/derive");
-        let body = norito::json::to_vec(value)?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON),
-        )?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to derive ivm proved payload (json) with HTTP status",
-        )
-    }
-    /// Convenience: POST a ZK IVM prove job to `/v1/zk/ivm/prove` with a JSON DTO body.
-    ///
-    /// The request body is expected to match the Torii app API DTO:
-    /// `{ vk_ref: { backend, name }, authority, fee_payment, metadata, bytecode, proved? }`.
-    /// The configured client account signs the exact request and must equal `authority`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_zk_ivm_prove_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        validate_zk_ivm_json(value, "zk ivm prove json")?;
-        let url = join_torii_url(&self.torii_url, "v1/zk/ivm/prove");
-        let body = norito::json::to_vec(value)?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON),
-        )?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to submit ivm prove job (json) with HTTP status",
-        )
-    }
-    /// Convenience: GET a ZK IVM prove job status from `/v1/zk/ivm/prove/{job_id}` (JSON).
-    /// The configured client account signs the exact request and must own the job.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn get_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
-        let resp =
-            self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to get ivm prove job (json) with HTTP status",
-        )
-    }
-    /// Convenience: DELETE a ZK IVM prove job from `/v1/zk/ivm/prove/{job_id}` (JSON).
-    /// The configured client account signs the exact request and must own the job.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn delete_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
-        let resp =
-            self.send_builder(self.account_signed_request(HttpMethod::DELETE, url, Vec::new())?)?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to delete ivm prove job (json) with HTTP status",
-        )
-    }
     /// Convenience: POST `/v1/zk/vote/tally` with a JSON DTO body `{ election_id }`.
     /// Returns JSON `{ finalized: bool, tally: [u64; N] }`.
     /// # Errors
@@ -19566,7 +19335,10 @@ impl Client {
                 "deploy-contract proposal must select exactly one contract address or alias"
             ));
         }
-        let url = join_torii_url(&self.torii_url, iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::GOV_PROPOSE_DEPLOY.path(),
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode deploy-contract proposal draft request")?;
         let response = self.send_builder(
@@ -19612,7 +19384,7 @@ impl Client {
         validate_sccp_route_governance_draft_request(request, &self.network_id)?;
         let url = join_torii_url(
             &self.torii_url,
-            iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE,
+            torii_routes::runtime_governance::GOV_PROPOSE_SCCP.path(),
         );
         let body = norito::json::to_vec(request)?;
         let resp = self.send_builder(
@@ -19655,7 +19427,10 @@ impl Client {
         if request.version != PARLIAMENT_API_VERSION_V1 {
             return Err(eyre!("unsupported Parliament attempt draft version"));
         }
-        let url = join_torii_url(&self.torii_url, torii_uri::GOV_PARLIAMENT_ATTEMPT_DRAFT);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT.path(),
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode Parliament attempt draft request")?;
         let response = self.send_builder(
@@ -19692,7 +19467,10 @@ impl Client {
         request
             .validate_static()
             .map_err(|reason| eyre!("invalid Parliament transition draft request: {reason}"))?;
-        let url = join_torii_url(&self.torii_url, torii_uri::GOV_PARLIAMENT_TRANSITION_DRAFT);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT.path(),
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode Parliament transition draft request")?;
         let response = self.send_builder(
@@ -19730,7 +19508,8 @@ impl Client {
         {
             return Err(eyre!("Parliament governance attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_ATTEMPT_READ
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ
+            .path()
             .replace("{governance_attempt_id}", &governance_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19774,7 +19553,8 @@ impl Client {
         {
             return Err(eyre!("Parliament governance attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_ATTEMPT_PLAN
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_ATTEMPT_PLAN
+            .path()
             .replace("{governance_attempt_id}", &governance_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19821,7 +19601,8 @@ impl Client {
         if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
             return Err(eyre!("Parliament ballot attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
+            .path()
             .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19871,7 +19652,8 @@ impl Client {
         };
         let body = to_bytes(&request)
             .wrap_err("failed to encode Parliament casting proof request as Norito")?;
-        let path = torii_uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF
+            .path()
             .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19975,7 +19757,8 @@ impl Client {
         if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
             return Err(eyre!("Parliament ballot attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ
+            .path()
             .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -20015,7 +19798,8 @@ impl Client {
         context
             .validate_for_ballot(context.ballot_attempt_id)
             .map_err(|reason| eyre!(reason))?;
-        let path = torii_uri::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE
+            .path()
             .replace("{ballot_attempt_id}", &context.ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -20072,7 +19856,7 @@ impl Client {
         }
         let url = join_torii_url(
             &self.torii_url,
-            torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+            torii_routes::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
         );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, request_norito.to_vec())?
@@ -20141,7 +19925,7 @@ impl Client {
             .wrap_err("failed to encode validation-fee proof request as Norito")?;
         let url = join_torii_url(
             &self.torii_url,
-            torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+            torii_routes::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
         );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
@@ -20193,7 +19977,10 @@ impl Client {
             .map_err(|error| eyre!("invalid Hijiri validation-fee quote request: {error}"))?;
         let body = to_bytes(request)
             .wrap_err("failed to encode Hijiri validation-fee quote request as Norito")?;
-        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+        );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_NORITO)
@@ -20291,7 +20078,10 @@ impl Client {
             .map(decode_validation_fee_proposal_cursor_v1)
             .transpose()
             .map_err(|error| eyre!("invalid validation-fee proposal cursor: {error}"))?;
-        let mut url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSALS);
+        let mut url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::VALIDATION_FEE_PROPOSALS_PATH,
+        );
         url.query_pairs_mut()
             .append_pair("limit", &limit.to_string());
         if let Some(cursor) = cursor {
@@ -20372,7 +20162,8 @@ impl Client {
         proposal_id: &str,
     ) -> Result<ValidationFeeProposalDetailV1> {
         Self::require_lower_hex_32(proposal_id, "proposal_id")?;
-        let path = torii_uri::VALIDATION_FEE_PROPOSAL_DETAIL.replace("{proposal_id}", proposal_id);
+        let path = torii_routes::runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL_PATH
+            .replace("{proposal_id}", proposal_id);
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
@@ -20416,7 +20207,10 @@ impl Client {
             ));
         }
         let _ = canonical_validation_fee_draft_instruction(request)?;
-        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSAL_DRAFT);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH,
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode validation-fee proposal draft")?;
         let response = self.send_builder(
@@ -21607,7 +21401,9 @@ impl OperatorClient {
         let client = &self.context;
         let url = join_torii_url(
             &client.torii_url,
-            iroha_torii_shared::uri::PROOF_RETENTION_STATUS.trim_start_matches('/'),
+            torii_routes::pipeline::PROOF_RETENTION
+                .path()
+                .trim_start_matches('/'),
         );
         let request = client
             .identity_signed_request(&self.operator_key_pair, HttpMethod::GET, url, Vec::new())?
@@ -24129,11 +23925,12 @@ mod tests {
                     .lock()
                     .expect("async path log")
                     .push(request.url.path().to_owned());
-                let accepted_count = if request.url.path() == torii_uri::TRANSACTIONS_BATCH {
-                    Some("1")
-                } else {
-                    None
-                };
+                let accepted_count =
+                    if request.url.path() == torii_routes::pipeline::TRANSACTIONS_BATCH.path() {
+                        Some("1")
+                    } else {
+                        None
+                    };
                 Box::pin(async move {
                     let mut response = HttpResponse::builder().status(StatusCode::ACCEPTED);
                     if let Some(count) = accepted_count {
@@ -24179,7 +23976,10 @@ mod tests {
         assert_eq!(sync_sends.load(Ordering::Relaxed), 0);
         assert_eq!(
             *async_paths.lock().expect("async path log"),
-            [torii_uri::TRANSACTION, torii_uri::TRANSACTIONS_BATCH]
+            [
+                torii_routes::pipeline::TRANSACTION.path(),
+                torii_routes::pipeline::TRANSACTIONS_BATCH.path()
+            ]
         );
     }
     #[test]
@@ -24561,7 +24361,10 @@ mod tests {
         });
         assert_eq!(actual.expect("valid Hijiri quote response"), expected);
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH
+        );
         assert_eq!(snapshot.url.query(), None);
         assert_eq!(
             snapshot.max_response_bytes,
@@ -28294,7 +28097,7 @@ mod tests {
             .expect("account signature remains valid");
         let requests = requests.lock().expect("fee quote request store");
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].url.path(), torii_uri::FEES_QUOTE);
+        assert_eq!(requests[0].url.path(), torii_routes::fees::QUOTE_PATH);
     }
     struct MultisigFeeQuoteFixture {
         client: Client,
@@ -28336,7 +28139,7 @@ mod tests {
             .expect("build exact multisig fee-quote payload");
         let url = join_torii_url(
             &client.torii_url,
-            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+            torii_routes::fees::QUOTE_PATH.trim_start_matches('/'),
         );
         let body = norito::json::to_vec(&FeeQuoteWireRequest {
             payload: payload.clone(),
@@ -28888,7 +28691,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "503f4936525f4790f6a9a123aacfaa49a7fd636bde4e1704833bf7a729c99f1f",
+            "6105b45abb0080bc6aea6e72093990ee7f5749c604683ea2f75a60b95a88d4fb",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact
@@ -29504,7 +29307,10 @@ mod tests {
 
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.scheme(), "ws");
-        assert_eq!(snapshot.url.path(), torii_uri::SUBSCRIPTION);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::streaming::SUBSCRIPTION_WS.path()
+        );
         assert_eq!(snapshot.url.query(), None);
         assert!(
             snapshot
@@ -29542,7 +29348,10 @@ mod tests {
 
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.scheme(), "ws");
-        assert_eq!(snapshot.url.path(), torii_uri::BLOCKS_STREAM);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::streaming::BLOCKS_WS.path()
+        );
         assert_eq!(snapshot.url.query(), None);
         assert!(
             snapshot
@@ -30748,7 +30557,10 @@ mod tests {
             });
         let actual = actual.expect("lifecycle status request succeeds");
         assert_eq!(actual, expected);
-        assert_eq!(snapshot.url.path(), torii_uri::NEXUS_LANE_LIFECYCLE);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::core::NEXUS_LIFECYCLE_GET.path()
+        );
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept")
                 && value == client.wire_format_preference.accept_header()
@@ -30993,7 +30805,7 @@ mod tests {
         assert_single_accept_header(capabilities_snapshot, APPLICATION_JSON);
         let snapshot = store_guard
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .cloned()
             .expect("transaction snapshot captured");
         let content_type_headers: Vec<_> = snapshot
@@ -31075,7 +30887,7 @@ mod tests {
                             json_response(StatusCode::OK, &compatible_capabilities_body())
                         }
                     }
-                    path if path == torii_uri::TRANSACTION => json_response(
+                    path if path == torii_routes::pipeline::TRANSACTION.path() => json_response(
                         StatusCode::BAD_REQUEST,
                         r#"{"code":"transaction_rejected","message":"bootstrap dispatch observed"}"#,
                     ),
@@ -31261,7 +31073,7 @@ mod tests {
         let store_guard = store.lock().expect("snapshot lock");
         let snapshot = store_guard
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .cloned()
             .expect("transaction snapshot captured");
         let submitted = SignedTransaction::decode_all_versioned(&snapshot.body)
@@ -31318,7 +31130,7 @@ mod tests {
         let snapshots = store.lock().expect("snapshot lock");
         let submitted = snapshots
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .expect("multisig transaction request captured");
         let decoded = SignedTransaction::decode_all_versioned(&submitted.body)
             .expect("captured multisig transaction is canonical versioned bytes");
@@ -31437,7 +31249,7 @@ mod tests {
                         })
                     }
                 }
-                path if path == torii_uri::TRANSACTION => {
+                path if path == torii_routes::pipeline::TRANSACTION.path() => {
                     self.transaction_requests.fetch_add(1, Ordering::SeqCst);
                     Box::pin(async {
                         Ok(HttpResponse::builder()
@@ -31595,7 +31407,10 @@ mod tests {
             let request_len = stream
                 .read(&mut request)
                 .expect("read raw transaction request");
-            let expected_request_line = format!("POST {} HTTP/1.1\r\n", torii_uri::TRANSACTION);
+            let expected_request_line = format!(
+                "POST {} HTTP/1.1\r\n",
+                torii_routes::pipeline::TRANSACTION.path()
+            );
             assert!(
                 request[..request_len].starts_with(expected_request_line.as_bytes()),
                 "unexpected raw transaction request: {}",
@@ -31952,7 +31767,10 @@ mod tests {
         assert_eq!(snapshots.len(), 3);
         assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
         assert_eq!(snapshots[1].url.path(), "/v1/node/capabilities");
-        assert_eq!(snapshots[2].url.path(), torii_uri::TRANSACTION);
+        assert_eq!(
+            snapshots[2].url.path(),
+            torii_routes::pipeline::TRANSACTION.path()
+        );
     }
     #[test]
     fn blocking_facade_returns_submit_rejection_without_waiting_for_timeout() {
@@ -31968,11 +31786,11 @@ mod tests {
                 store.lock().expect("snapshot lock").push(snapshot);
                 let response = match path.as_str() {
                     "/v1/node/capabilities" => json_response(StatusCode::OK, &capabilities_body),
-                    p if p == torii_uri::TRANSACTION => json_response(
+                    p if p == torii_routes::pipeline::TRANSACTION.path() => json_response(
                         StatusCode::BAD_REQUEST,
                         r#"{"code":"transaction_rejected","message":"failed to accept transaction: missing gas limit in fee payment intent"}"#,
                     ),
-                    p if p == torii_uri::QUERY => {
+                    p if p == torii_routes::pipeline::QUERY.path() => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple::from_batch(
                                 QueryOutputBatchBox::CommittedTransaction(Vec::new()),
@@ -32036,7 +31854,7 @@ mod tests {
                 let path = snapshot.url.path().to_owned();
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
-                    p if p == torii_uri::TRANSACTION => Ok(json_response(
+                    p if p == torii_routes::pipeline::TRANSACTION.path() => Ok(json_response(
                         StatusCode::BAD_REQUEST,
                         r#"{"code":"transaction_rejected","message":"timeout snapshot rejection"}"#,
                     )),
@@ -32067,7 +31885,7 @@ mod tests {
         let snapshots = snapshots.lock().expect("snapshot lock");
         let submission = snapshots
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .expect("blocking submission must issue one transaction POST");
         assert_eq!(submission.timeout, Some(configured_timeout));
     }
@@ -32100,7 +31918,7 @@ mod tests {
             let status_checks = Arc::clone(&status_checks);
             let premature_status_checks = Arc::clone(&premature_status_checks);
             move |snapshot: RequestSnapshot| match snapshot.url.path() {
-                path if path == torii_uri::TRANSACTION => {
+                path if path == torii_routes::pipeline::TRANSACTION.path() => {
                     std::thread::sleep(Duration::from_millis(75));
                     post_completed.store(true, Ordering::SeqCst);
                     Ok(empty_response(StatusCode::ACCEPTED))
@@ -32162,7 +31980,10 @@ mod tests {
             &identity.signed_transaction_hash
         );
         assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
-        assert_eq!(snapshots[0].url.path(), torii_uri::TRANSACTION);
+        assert_eq!(
+            snapshots[0].url.path(),
+            torii_routes::pipeline::TRANSACTION.path()
+        );
     }
     #[test]
     fn nonblocking_prepared_queue_plan_exact_outcome_unknown_uses_local_identity() {
@@ -32263,7 +32084,10 @@ mod tests {
         assert!(format!("{error:#}").contains("connection reset after"));
         let snapshots = snapshots.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
-        assert_eq!(snapshots[0].url.path(), torii_uri::TRANSACTION);
+        assert_eq!(
+            snapshots[0].url.path(),
+            torii_routes::pipeline::TRANSACTION.path()
+        );
     }
     #[tokio::test]
     async fn async_nonblocking_queue_plan_ambiguities_are_structured_and_never_retried() {
@@ -32430,7 +32254,7 @@ mod tests {
             move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_owned();
                 snapshots.lock().expect("snapshot lock").push(snapshot);
-                if path == torii_uri::TRANSACTION {
+                if path == torii_routes::pipeline::TRANSACTION.path() {
                     Err(eyre!("connection reset after dispatch"))
                 } else if path == "/v1/pipeline/transactions/status" {
                     Ok(json_response(StatusCode::OK, &status_body))
@@ -32454,7 +32278,8 @@ mod tests {
         assert_eq!(
             snapshots
                 .iter()
-                .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+                .filter(|snapshot| snapshot.url.path()
+                    == torii_routes::pipeline::TRANSACTION.path())
                 .count(),
             1,
             "blocking reconciliation must never auto-resubmit"
@@ -32533,7 +32358,7 @@ mod tests {
             .count();
         let tx_requests = store_guard
             .iter()
-            .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .filter(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .count();
         assert_eq!(
             capability_requests, 1,
@@ -32582,7 +32407,7 @@ mod tests {
             .count();
         let transaction_requests = store_guard
             .iter()
-            .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .filter(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .count();
         assert_eq!(
             capability_requests, 2,
@@ -32700,7 +32525,10 @@ mod tests {
             });
         let _ = result.expect_err("mocked unauthorized response should fail");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::core::CONFIGURATION_GET.path()
+        );
         assert_operator_signature_headers(&snapshot);
     }
     #[test]
@@ -32805,10 +32633,8 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/params",
-            Client::get_sumeragi_params_json,
-        )];
+        let cases: [SumeragiEndpointCase; 1] =
+            [("/v1/sumeragi/params", Client::get_sumeragi_params_json)];
         for (path, request) in cases {
             let (result, snapshot) =
                 capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
@@ -32824,10 +32650,8 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_reject_malformed_ok_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/params",
-            Client::get_sumeragi_params_json,
-        )];
+        let cases: [SumeragiEndpointCase; 1] =
+            [("/v1/sumeragi/params", Client::get_sumeragi_params_json)];
         for (path, request) in cases {
             let (result, snapshot) = capture_request(
                 json_response(StatusCode::OK, r#"{"broken":"#),
@@ -33078,6 +32902,9 @@ mod tests {
             .public_key()
             .clone();
         SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: Hash::new(b"native client status configuration fixture"),
+            beacon_horizon: None,
             instance: [3; 32],
             height: 12,
             view: 5,
@@ -35158,7 +34985,7 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(
             snapshots[0].url.path(),
-            iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY
+            torii_routes::runtime_governance::GOV_PROPOSE_DEPLOY.path()
         );
         assert_eq!(snapshots[0].method, HttpMethod::POST);
         assert_signed_json_headers(&snapshots[0]);
@@ -35368,7 +35195,7 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(
             snapshots[0].url.path(),
-            iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+            torii_routes::runtime_governance::GOV_PROPOSE_SCCP.path()
         );
         assert_eq!(snapshots[0].method, HttpMethod::POST);
         assert_signed_json_headers(&snapshots[0]);

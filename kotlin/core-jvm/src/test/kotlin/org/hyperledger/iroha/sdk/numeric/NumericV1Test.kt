@@ -108,7 +108,7 @@ class NumericV1Test {
         assertCode(NumericV1ErrorCode.PAYLOAD_HASH_MISMATCH) { NumericV1Codec.decodeIntEnvelope(badHash) }
 
         val unassigned = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))
-            .also { it[0] = 0; it[1] = 0x13.toByte(); it[2] = 2 }
+            .also { it[0] = 0; it[1] = 0x0C.toByte(); it[2] = 2 }
         assertCode(NumericV1ErrorCode.UNKNOWN_TYPE) { NumericV1Codec.decodeIntEnvelope(unassigned) }
 
         val knownWrong = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))

@@ -26,10 +26,8 @@ import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.crypto.Blake3
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
-import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
-import org.hyperledger.iroha.sdk.consensus.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES
 import org.hyperledger.iroha.sdk.consensus.SUMERAGI_STATUS_JSON_MAX_BYTES
-import org.hyperledger.iroha.sdk.consensus.SumeragiV2Status
+import org.hyperledger.iroha.sdk.consensus.SumeragiStatus
 import org.hyperledger.iroha.sdk.nexus.*
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1
@@ -922,24 +920,14 @@ class HttpClientTransport private constructor(
         200,
     )
 
-    override fun getSumeragiStatus(): CompletableFuture<SumeragiV2Status> =
+    override fun getSumeragiStatus(): CompletableFuture<SumeragiStatus> =
         fetchExactJson(
             buildExactOperatorJsonGetRequest(
                 "/v1/sumeragi/status",
                 SUMERAGI_STATUS_JSON_MAX_BYTES,
             ),
-            Function { payload -> SumeragiV2Status.parseJson(payload) },
+            Function { payload -> SumeragiStatus.parseJson(payload) },
             "Sumeragi status",
-        )
-
-    override fun getSumeragiDiagnostics(): CompletableFuture<SumeragiDiagnosticsStatus> =
-        fetchExactJson(
-            buildExactOperatorJsonGetRequest(
-                "/v1/sumeragi/diagnostics",
-                SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES,
-            ),
-            Function { payload -> SumeragiDiagnosticsStatus.parseJson(payload) },
-            "Sumeragi diagnostics",
         )
 
     override fun resolveAccountAliasIndex(

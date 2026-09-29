@@ -1601,7 +1601,7 @@ on callback-first code.
 
 ### Verifying key registry
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+Binding-only IVM verifier labels are retired and rejected. Production proof-backed IVM invocation remains closed until the complete native execution relation and finalized State authority are implemented and qualified.
 
 Inspect verifying keys via the Torii helpers:
 
@@ -1848,18 +1848,19 @@ silently filtered as an unrelated event. These generic event helpers remain anon
 without `canonicalRequestAuth`; when configured, the SDK signs the final GET including
 its exact `filter` query so restricted-dataspace events visible to that account are included.
 
-### Hardware acceleration (Metal / NEON / StrongBox)
+### Hardware acceleration
 
 `NoritoNativeBridge` now exposes the same acceleration controls as the Rust host via
-`AccelerationSettings`. Defaults match the Rust workspace (Metal enabled on Apple
-platforms, CUDA disabled). Configure before encoding or interacting with the bridge:
+`AccelerationSettings`. SIMD, Metal and CUDA are enabled by default with finite
+process resource ceilings; device support and qualification determine availability.
+Configure before encoding or interacting with the bridge:
 
 ```swift
 // Enable Metal compute kernels and tweak Merkle GPU thresholds.
 var accel = AccelerationSettings(enableMetal: true,
                                  merkleMinLeavesMetal: 256,
                                  preferCpuSha2MaxLeavesAarch64: 128)
-accel.apply() // Applies to the required native bridge.
+let accepted = accel.apply() // True when the available native owner accepts policy.
 
 // Or initialize the SDK with explicit settings
 let tunedSDK = IrohaSDK(baseURL: torii.baseURL, accelerationSettings: accel)
@@ -1867,7 +1868,7 @@ let tunedSDK = IrohaSDK(baseURL: torii.baseURL, accelerationSettings: accel)
 // Load the same structure from an iroha_config JSON file.
 if let configURL = Bundle.main.url(forResource: "acceleration", withExtension: "json") {
     do {
-        let configSettings = try AccelerationSettings.fromJSONFile(at: configURL)
+        let configSettings = try AccelerationSettings.fromIrohaConfigFile(at: configURL)
         let sdkFromConfig = IrohaSDK(baseURL: torii.baseURL, accelerationSettings: configSettings)
         _ = sdkFromConfig // use in your app
     } catch {
@@ -1876,9 +1877,15 @@ if let configURL = Bundle.main.url(forResource: "acceleration", withExtension: "
 }
 ```
 
-Setting values to `nil` keeps the engine defaults; negative numbers are ignored. The
-bridge automatically applies the default configuration on startup so projects that do
-not call `apply()` use the same deterministic defaults.
+Optional counts use `nil` to inherit defaults and preserve an explicit zero.
+Negative or overflowing file values are errors. Resource ceilings live under
+`[accel.resource_limits]`; zero remains a zero ceiling. The loader accepts an explicit
+file URL or bundled configuration and throws for malformed present policy. It does
+not read runtime environment toggles. The native process owner supplies enabled
+defaults; loading the Swift bridge preserves any existing native policy. Policy
+acceptance is separate from hardware availability and qualification.
+SDK construction without explicit acceleration settings inherits the current process
+policy, preserving file-configured opt-outs.
 
 To surface telemetry and parity evidence in dashboards, read the runtime state before
 publishing metrics:
@@ -1900,13 +1907,20 @@ symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 
-`getSumeragiDiagnostics()` validates raw JSON number tokens before typed decoding:
-integer fields reject decimal and exponent notation, while the full `UInt64` range
-remains exact. Settlement quantities and TWAP values use canonical decimal
-strings. TWAP retains the signed `Numeric` schema; settlement quantities are
-nonnegative. Swap metadata and its tagged values reject unknown fields.
-The Sumeragi wire decoder bounds vector counts by the available encoded fields
-and checks byte-vector lengths before allocating their payloads.
+`getSumeragiStatus()` returns the sole native protocol-8 status model. Its
+current-round, memory and same-applied-cut beacon readiness observations do not
+confer finality authority. The JSON decoder requires every nullable field,
+rejects duplicate/unknown fields and signed or non-integral number tokens, and
+keeps all `UInt64` values exact. `SumeragiStatusWire` encodes the same model in a
+complete canonical uncompressed Norito frame; bare payloads and retired status
+layouts are rejected. JSON and wire parity share the Rust-generated corpus at
+`fixtures/sumeragi/native_status_v1.tsv`.
+
+The obsolete global revision-4 wire codec and inactive grouped AMX diagnostics
+surface are removed. Native operator preparation/readiness models remain open
+until their schema is wired to the actual committee and published lane-state
+owners. Cross-dataspace settlement remains a separate qualification requirement;
+see `docs/source/native_protocol_retirement.md`.
 
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated

@@ -5,7 +5,6 @@ use std::{fs, path::Path};
 fn ptx_artifacts_are_present_and_non_empty() {
     let out_dir = env!("OUT_DIR");
     let files = [
-        "add.ptx",
         "aes.ptx",
         "bitonic_sort.ptx",
         "bn254.ptx",

@@ -65,7 +65,7 @@ Admission/host guardrails
   (including manifest-backed programs), and manifest `abi_hash` enforcement across both metadata and
   WSV manifests to keep the ABI surface deterministic end-to-end.
 
-`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for the first-release ABI surface that does not fit in the legacy byte slot. The host receives all syscall numbers as `u32`, and admission checks both encodings before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
+`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for ABI V1 calls outside the `SCALL` range. The host receives all syscall numbers as `u32`, and admission checks both encodings before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
 
 Query syscall (Norito)
 - `0xA1` and extended `0x010000` expect `r10=&NoritoBytes(QueryRequest)` and return `r10=&NoritoBytes(QueryResponse)`. The authority is always the calling contract; embedded authorities are ignored.
@@ -82,7 +82,7 @@ Ordering and OUTPUT
 - The VM clears OUTPUT (and resets its append-only cursor) when loading a program; within a run, OUTPUT writes must move forward (rewinds trap).
 - Event emission that reflects syscall outcomes must preserve syscall order. VM implementations must not reorder syscalls, including under acceleration. Deterministic overlays and commit phases in the node preserve this ordering across the pipeline.
 - Host lifecycle: `begin_tx`/`finish_tx` return `Result`; hosts must surface overlay flush errors (e.g., durable state writes) instead of swallowing them, clear staged overlays on failure, and rely on checkpoints to restore pre-tx state when a VM run aborts.
-- Deployed-contract overlays, including deterministic `IvmProved` replay, retain the selected entrypoint authorization for every queued effect and every physical durable-state path. Apply revalidates the exact caller permission, address/code/alias binding, nested caller lineage, and path ownership before effects and again immediately before each durable write; stale or structurally incomplete replay metadata applies no effects.
+- Deployed-contract overlays retain the selected entrypoint authorization for every queued effect and every physical durable-state path. Apply revalidates the exact caller permission, address/code/alias binding, nested caller lineage, and path ownership before effects and again immediately before each durable write; stale or structurally incomplete metadata applies no effects. `IvmProved` admission is closed until complete native execution proofs and authenticated finalized State anchors are available.
 
 Legend
 - Args: registers and pointer types; `&Type` indicates a provenance-valid pointer to a canonical Norito TLV.
@@ -183,13 +183,21 @@ Kotodama intrinsics
 - ``block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
 
 Exact numeric helpers
-- `0x010100..0x010113` implement signed checked and explicit modulo-`2^512`
+- `0x010100..0x01011A` implement signed checked and explicit modulo-`2^512`
   `int` operations; `0x010120..0x01012F` implement exact `decimal` operations;
   and `0x010140..0x01014F` implement nominal non-negative `quantity`
   operations. The generated table below is the signature source of truth.
+- `INT_ISQRT`, `INT_ABS`, `INT_MIN`, `INT_MAX`, `INT_DIV_CEIL`, `INT_GCD`,
+  and `INT_MEAN` share full-width primitive algorithms with compiler folding.
+  Square root floors and rejects negative inputs with `NegativeSquareRoot=13`;
+  absolute value and gcd reject an unrepresentable positive result. Ceiling
+  division follows mathematical signed ceiling, while mean truncates a wide
+  intermediate sum divided by two toward zero. Each work phase is charged
+  before execution; trap/status failure modes follow the other checked calls.
 - Numeric operands are schema-bound, uncompressed Norito frames in pointer
   types `Quantity=0x0010`, `Int=0x0011`, and `Decimal=0x0012`. Pointer ID
-  `0x0013` is unassigned and rejected as unknown.
+  `0x0013` is the assigned `AxtAnchoredSpendV1` type and is wrong for numeric
+  operands. `0x000C` and `0x0014` are unassigned and rejected as unknown.
 - The domain is `-2^511..=2^511-1`; decimal and quantity scale is `0..=28`.
   Exact division distinguishes division by zero, repeating expansion, and a
   terminating result whose minimum scale exceeds 28. Rounded operations name
@@ -199,7 +207,7 @@ Exact numeric helpers
 - Numeric syscalls use Gas: `G_numeric_staged`
   (`asset:gas/G_numeric_staged@ivm.core/v2`) and quote-free staged gas:
   `384 + input_envelope_bytes + input_hash_frame_bytes + output_envelope_bytes
-  + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 5).
+  + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 6).
   The entry weight covers dispatch, staged bookkeeping, and at most four
   bounded control-register checks. Each logical base-`2^64` work cell receives
   four units for operand access, arithmetic/carry or quotient trial, result
@@ -382,7 +390,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010023 SYSVAR_AUTHORITY — Args: none → `ptr (&AccountId)` — Gas: G_get_auth + bytes
 - 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&NoritoBytes(ContractAddress))` or `0` — Gas: G_sysvar + bytes
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
-- 0x010026 DECODE_ARGUMENT_RECORD — Args: raw hosts use `r10=&NoritoBytes(EntrypointArgumentRecordV1)`; prepared contract calls use the exact host-issued `&NoritoBytes(domain-separated record binding)`; `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=&Blob(pad:u8 then [u64; word_count])` — Gas: G_argument_decode + record + schema + materialized output. Prepared calls first validate the trusted flat schema and derive its conservative maximum aggregate and pointer-allocation bound; that bound must be affordable before the untrusted canonical record is decoded. Raw syscall quoting authenticates neither payload: it uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. For prepared calls, the complete signed record remains host-owned and the guest sees only its domain-separated binding. Before any allocation, the host preflights the complete aligned TLV sequence plus raw aggregate storage. Pointer TLVs and the output word table prefer INPUT and spill into owned HEAP, while raw `List` and sum storage is always owned HEAP. The record limit is inclusive at 1 MiB. Raw hosts then validate the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
+- 0x010026 DECODE_ARGUMENT_RECORD — Args: `r10=&NoritoBytes(EntrypointArgumentRecordV1)`, `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=aligned owned-HEAP table base (0 if empty)`, `r11=exact word count` — Gas: G_argument_decode + record + schema + complete materialization. Raw syscall quoting uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. The decoder validates the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. It preflights all aligned pointer TLV allocations and raw aggregate/table storage together. Pointer TLVs prefer INPUT and spill into owned HEAP; aggregate storage and argument tables always use owned HEAP. The record limit is inclusive at 1 MiB. Public invocation preparation is mandatory before guest execution and consumes a host-owned prepared record directly; it does not expose a guest binding or invoke this syscall. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
 - 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
 - 0x010028 NORMALIZE_NORITO_BYTES — Args: `r10=&Blob or &NoritoBytes` in validated public memory → `ptr (&NoritoBytes(same payload))` — Gas: G_pointer + bytes
   - Compiler transport helper for strict Norito-consuming syscalls. It rejects null, malformed, disallowed, and non-bytes pointers, then allocates a fresh canonical V1 `NoritoBytes` envelope with an identical payload and recomputed hash. It performs no serialization and does not weaken the receiving syscall's exact pointer-type checks.
@@ -425,22 +433,30 @@ Canonical instruction bridge
 - 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Blob(alias literal)` → host-owned `ptr (&AccountId)` — Gas: G_alias_resolve
 
 AXT host flow
-- 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in‑progress envelope and records the descriptor; hosts derive the canonical binding used by capability handles from this descriptor. Gas: G_axt + bytes.
+- 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in-progress envelope and records its canonical binding. Gas: G_axt + bytes.
 - 0xB1 AXT_TOUCH — Args: `r10=&DataSpaceId`, `r11=&NoritoBytes(TouchManifest)` or `0`. Declares the manifest of keys touched for the dataspace within the current envelope. Gas: G_axt + bytes.
-- 0xB2 AXT_COMMIT — Args: none. Validates recorded handles, manifests, and proofs for the active envelope and clears host state on success. Gas: G_axt + entries.
+- 0xB2 AXT_COMMIT — Args: none. Validates the declared dataspaces, touches, and proofs for the active public envelope and clears host state on success. Remote spends are not accumulated through this syscall. Gas: G_axt + entries.
 - 0xB3 VERIFY_DS_PROOF — Args: `r10=&DataSpaceId`, `r11=&ProofBlob` (or `0` to clear). A zero proof pointer clears the recorded proof and cache entry. Iroha's production CoreHost rejects every non-zero standalone proof with `PermissionDenied` and an `AxtRejectReason::Proof` context until the proof is bound to an authoritative finalized source-state anchor; rejection does not record the proof or alter an existing verified-proof cache entry. Gas: G_verify + bytes.
-- 0xB4 USE_ASSET_HANDLE — Args: `r10=&AssetHandle`, `r11=&NoritoBytes(RemoteSpendIntent)`, `r12=&ProofBlob` (optional). Validates the issuer-signed asset identity and exact non-zero registration incarnation, capability bindings/budgets, and records spend intents for later commit checks. Gas: G_axt + bytes.
-- Default and WSV hosts enforce descriptor membership, exact equality between the issuer-signed handle asset/incarnation and committed registry state, exact intent/proof asset equality, capability binding equality, asset-scoped budget checks, and proof presence before permitting commit. The incarnation changes only on absent-to-present registration or re-registration of that exact asset; unrelated registry activity cannot revoke the handle.
+- 0xB5 AXT_STAGE_ANCHORED_SPEND — Args: `r10=&AxtAnchoredSpendV1`. CoreHost accepts only a canonical typed TLV whose public signed-spend fields and active descriptor binding are internally consistent, then stages that exact wire in the active envelope. Staging does not authenticate issuer authority, finality, source execution, transfer occurrence, or replay state. State admission rejects every nonempty spend before effects until those owners are connected. Standalone hosts reject the call. Gas: G_axt + bytes.
 
-Handle eras and sub-nonces are checked against a permanent consensus-persisted
-per-dataspace authorization generation and counter. Zero is the inactive
-sentinel and an active generation is at least one. Accepted handles advance
-only the exact next counter. Policy-identity transitions atomically advance
+The final V1 remote-spend wire is `AxtAnchoredSpendV1` inside
+`AxtEnvelopeRecord.spends`. Core block and State admission also refuse every
+nonempty spend before mutation until a complete State-owned source anchor,
+successful execution receipt, exact transfer occurrence, and atomic
+nonce/budget/effect owner are connected. Syscall `0xB4` is unassigned in ABI
+V1; it returns `UnknownSyscall` before reading caller memory or charging gas.
+There is no reusable-handle remote-spend syscall in the release ABI. The B5
+typed producer stages a public signed-spend claim; authenticated State
+admission remains open.
+
+The completed anchored-spend admission relation must check handle eras and
+sub-nonces against a permanent consensus-persisted per-dataspace authorization
+generation and counter. Zero is the inactive sentinel and an active generation
+is at least one. Policy-identity transitions atomically advance
 both dimensions, with the generation also bounded below by the new manifest's
 derived activation era, and neither dimension resets on rotation, reassignment,
-removal, or restart. Family-budget and replay records are restored from the same
-required World snapshot, so splitting uses across envelopes, blocks, or node
-lifecycles cannot restore either allowance or nonce authority.
+removal, or restart. The retained World budget and replay tables are not
+currently consumed by remote-spend admission because that path remains closed.
 
 AXT FastPQ proofs authenticate the exact manifest root, optional DA commitment,
 optional committed amount, and optional expiry in metadata inserted before the
@@ -452,28 +468,27 @@ or with the retired single-field metadata projection must be regenerated.
 `AssetHandle` and `RemoteSpendIntent.op` both carry the exact
 `AssetDefinitionId`; the handle field is part of the mandatory issuer-signature
 payload, and V1 accepts only the canonical `transfer` operation. Every handle
-use must consume one proof-bound claim containing that handle's replay
+use in the completed admission path must consume one proof-bound claim containing that handle's replay
 identity—including its exact asset-definition incarnation—asset, canonical
 accounts, and effective amount, matched one-for-one to a concrete FASTPQ
-transfer transcript. A historical claim cannot authorize a handle for a later
+transfer transcript. This is a proof-binding requirement, not a currently
+accepted host call. A historical claim cannot authorize a handle for a later
 registration of the same asset identifier. The `authorization` and
 `compliance` labels select an
 opaque-effect profile and do not themselves prove authority; such proofs cannot
-authorize a remote spend. A handle/intent asset mismatch fails at both USE and
-COMMIT and during block admission. Pre-change handles, claims, proofs, and JSON
-fixtures must be regenerated together.
+authorize a remote spend. A reusable handle and intent do not become an
+`AxtAnchoredSpendV1` through a VM syscall, and block admission rejects a
+nonempty signed-spend set independently of these earlier checks.
 
 `VERIFY_DS_PROOF` is not a standalone authorization primitive. FASTPQ's current
 one-field commitment has only a roughly 32-bit collision-binding ceiling, and
 the verifier reconstructs the complete caller-carried witness rather than
 authenticating a finalized remote state. Production CoreHost admission therefore
 fails closed for a non-zero standalone proof. Proofs may still enter the
-specialized `USE_ASSET_HANDLE` flow only after issuer capability authentication;
-however, the handle signature does not cover the `RemoteSpendIntent`, proof, or
-effective amount. Those facts remain bound only by FASTPQ metadata, so the
-handle path is not release-qualified as a ledger authorization boundary until
-that binding reaches at least 128-bit security or an authoritative finalized
-source-state statement independently authenticates the exact facts. Native lane
+signed `AxtAnchoredSpendV1` shape only after issuer authorization binds the
+intent, proof, amount, receipt, occurrence, anchor and nonce. That signed
+shape is still only a claim until State authenticates the finalized source
+execution and exact transfer. Native lane
 relay and fee-vault admissions use separate finalized/current-state anchors and
 do not derive authority from standalone `VERIFY_DS_PROOF` success.
 
@@ -630,8 +645,6 @@ node enforces that policy unconditionally.
 | 0x50 | STATE_GET | r10=&NoritoBytes(StatePath) | r10=ptr (&NoritoBytes) or 0 | asset:gas/G_state_get@ivm.core/v2 + canonical path frame bytes + returned value bytes |
 | 0x51 | STATE_SET | r10=&NoritoBytes(StatePath), r11=&NoritoBytes | u64=0 | asset:gas/G_state_set@ivm.core/v2 + canonical path frame bytes + value bytes |
 | 0x52 | STATE_DEL | r10=&NoritoBytes(StatePath) | u64=0 | asset:gas/G_state_del@ivm.core/v2 + canonical path frame bytes |
-| 0x53 | DECODE_INT | r10=&NoritoBytes(Norito-framed i64) | r10=i64 | asset:gas/G_numeric@ivm.core/v2 + bytes |
-| 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Norito-framed i64)) | asset:gas/G_numeric@ivm.core/v2 + bytes |
 | 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&NoritoBytes(StatePath)) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes) | asset:gas/G_json_encode@ivm.core/v2 + bytes |
 | 0x58 | JSON_DECODE | r10=&NoritoBytes(JSON bytes) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v2 + bytes |
@@ -685,7 +698,7 @@ node enforces that policy unconditionally.
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
 | 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
-| 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
+| 0xB5 | AXT_STAGE_ANCHORED_SPEND | r10=&AxtAnchoredSpendV1 | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Quantity, r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
@@ -726,7 +739,7 @@ node enforces that policy unconditionally.
 | 0x10023 | SYSVAR_AUTHORITY | - | r10=ptr (&AccountId) | asset:gas/G_get_auth@ivm.core/v2 + bytes |
 | 0x10024 | SYSVAR_CONTRACT_ADDRESS | - | r10=ptr (&NoritoBytes(ContractAddress)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10025 | SYSVAR_ENTRYPOINT | - | r10=ptr (&Blob(entrypoint)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
-| 0x10026 | DECODE_ARGUMENT_RECORD | r10=raw &NoritoBytes(EntrypointArgumentRecordV1) or prepared &NoritoBytes(record binding), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + complete materialization |
+| 0x10026 | DECODE_ARGUMENT_RECORD | r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=aligned owned-HEAP table base (0 if empty), r11=exact word count | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + complete materialization |
 | 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10028 | NORMALIZE_NORITO_BYTES | r10=&Blob or &NoritoBytes (validated public TLV) | r10=&NoritoBytes(same payload) | asset:gas/G_pointer@ivm.core/v2 + bytes |
 | 0x10029 | CALL_CONTRACT_QUANTITY2 | r10=&Blob(contract_address), r11=&Blob(literal entrypoint), r12=&Quantity(amount_in), r13=&Quantity(min_out) | r10=ptr (&Quantity) | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
@@ -759,6 +772,13 @@ node enforces that policy unconditionally.
 | 0x10111 | INT_WRAP_ADD | r10=&Int, r11=&Int | r10=&Int | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10112 | INT_WRAP_SUB | r10=&Int, r11=&Int | r10=&Int | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10113 | INT_WRAP_MUL | r10=&Int, r11=&Int | r10=&Int | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10114 | INT_ISQRT | r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10115 | INT_ABS | r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10116 | INT_MIN | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10117 | INT_MAX | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10118 | INT_DIV_CEIL | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10119 | INT_GCD | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1011A | INT_MEAN | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10120 | DECIMAL_FROM_INT | r10=&Int | r10=&Decimal | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10121 | DECIMAL_NEG | r10=&Decimal, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10122 | DECIMAL_ADD | r10=&Decimal, r11=&Decimal, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
@@ -844,8 +864,6 @@ node enforces that policy unconditionally.
 
 
 Codec helpers
-- 0x53 DECODE_INT — Args: `r10=&NoritoBytes(Norito-framed i64)` → Return: `r10=i64` — Gas: G_numeric + bytes
-- 0x55 ENCODE_INT — Args: `r10=value:i64` → Return: `ptr (&NoritoBytes(Norito-framed i64))` — Gas: G_numeric + bytes
 - 0x56 BUILD_PATH_KEY_NORITO — Args: `r10=&Name(base), r11=&NoritoBytes(key)` → Return: `ptr (&NoritoBytes(StatePath))` — Gas: G_path + bytes
   - Compiler-internal schema-bound helper. The base must name exactly one CNTR-declared `StateMap`; the key must be the unique canonical encoding of that map's nominal key type. It produces the distinct nominal storage path `base/<lowercase hex of canonical key bytes>`, rejects missing schemas, type confusion, malformed/noncanonical frames, and keys larger than 4 KiB. The exact suffix is reversible and lexicographic path order equals unsigned canonical-byte order.
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode + bytes
@@ -861,11 +879,11 @@ Codec helpers
 - 0x5C NAME_DECODE — Args: `r10=&NoritoBytes(Name)` → Return: `ptr (&Name)` — Gas: G_name_decode + bytes
 - NAME_DECODE requires the canonical Norito `Name` frame; raw UTF-8, framed `String`, and alternate-layout frames are rejected.
 - 0x5D POINTER_TO_NORITO — Args: `r10=&PointerType<T>` → Return: `ptr (&NoritoBytes(TLV envelope))` — Gas: G_pointer + bytes
-  - Copies the canonical byte-for-byte pointer-ABI TLV envelope into a NoritoBytes payload. Gas charges the fixed conversion base plus the envelope bytes copied.
+  - Copies the canonical pointer-ABI TLV envelope into a NoritoBytes payload, validating Int, Decimal, and Quantity frames before publication. Gas charges the fixed conversion base plus the envelope bytes copied.
 - 0x5E POINTER_FROM_NORITO — Args: `r10=&NoritoBytes(TLV envelope), r11=expected?:u16` → Return: `ptr (&PointerType<T>)` — Gas: G_pointer + bytes
 - POINTER_FROM_NORITO accepts only the canonical `NoritoBytes` carrier; a `Blob` containing the same inner envelope is a nominal type error.
-  - Validates the embedded canonical TLV envelope, optionally checks the expected type id, and rehydrates the pointer. Gas charges the fixed conversion base plus the envelope bytes inspected.
-- Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
+  - Validates the embedded canonical TLV envelope, optionally checks the expected type id, and rehydrates the pointer. Numeric frames must be canonical and within their nominal V1 domains. Expected numeric types (Int, Decimal, Quantity) reject null. Gas charges the fixed conversion base plus the envelope bytes inspected.
+- Null inputs: JSON_DECODE and NAME_DECODE accept `r10=0` and return `r10=0`. POINTER_FROM_NORITO rejects null when the expected type is Int, Decimal, or Quantity; other generic pointer decodes return null.
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
 - 0x64 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: configured V1 proof + public-input-unit + encoded request/response byte schedule; 1 MiB encoded-payload and 16-proof hard caps

@@ -319,6 +319,9 @@ impl Default for Checks {
     }
 }
 
+/// Committee schedule: from height → members as `(machine, key slot)`.
+pub type CommitteeSchedule = Vec<(u64, Vec<(usize, usize)>)>;
+
 /// A complete scenario.
 pub struct Scenario {
     /// Name (e.g. `F5`).
@@ -368,11 +371,11 @@ pub struct Scenario {
     pub workload: Option<Workload>,
     /// Committee schedule: from height → members as `(machine, key slot)`; the first entry
     /// must start at height 0 (it is the genesis committee).
-    pub committees: Vec<(u64, Vec<(usize, usize)>)>,
+    pub committees: CommitteeSchedule,
     /// Committee schedules of individual instances that differ from [`Self::committees`]
     /// (`(instance, schedule)`), e.g. a lane instance whose committee is a subset of the global
     /// one. Instance 0 always uses [`Self::committees`].
-    pub instance_committees: Vec<(usize, Vec<(u64, Vec<(usize, usize)>)>)>,
+    pub instance_committees: Vec<(usize, CommitteeSchedule)>,
     /// Every machine follows every instance: a machine without a key in an instance's schedule
     /// runs it as an observer (the node's lane rule, `specs/sumeragi_lanes.md` §4.1). Otherwise
     /// only machines outside the initial committee observe.

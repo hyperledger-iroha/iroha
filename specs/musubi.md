@@ -923,6 +923,33 @@ missing, rejected, forked, or substituted evidence fails permanently. The
 adapter performs no SoraFS or registry mutation and does not activate the stock
 service.
 
+The daemon finality fixture now publishes its executed genesis and archive
+registration through a test-feature State owner that consumes the actual
+execution witness, an externally signed V2 finality artifact, and Kura's exact
+durable receipt before State publication. The focused daemon finality suite
+passes 12/12, including missing-finality refusal, current location and owner
+substitution, signed provider-attestation substitution, and reader restart.
+This fixture does not establish a complete authenticated State root or qualify
+production finality ownership. Stock publication stays closed until the
+remaining State-root, custody, provider, and network gates below are met.
+
+The daemon's local publication factory wraps its deployment-selected storage
+coordinator with a mandatory finalized-registration preflight. Before an
+effectful coordinator receives a request, the wrapper validates the request and
+re-reads the exact registration through the daemon-owned State/Kura finality
+adapter, including network, transaction, immutable registration projection,
+snapshot, and policy revision. A locally future finalized view is retryable;
+malformed, absent, substituted, or uncertified evidence is permanent. The
+service also invokes the wrapper's read-only check before returning a journal-
+cached storage response, so replay cannot bypass the current State/Kura check
+or repeat pin and replication effects. The V1 backend trait requires this
+read-only check for every implementation. The wrapper does not itself pin,
+order, or replicate data and does not enable stock publication; those effects
+still require the qualified deployment coordinator and the remaining complete
+State-root and provider gates. The focused daemon preflight test passes after
+the cached-response change; the full service library passes 82 tests with one
+explicit fixture exporter ignored.
+
 Archive locations use a separate append-only journal of at most eight one-based
 generations. Before submitting a location Add, the publisher persists the
 complete finalized preparation page, current location-set CAS revision,
@@ -1160,7 +1187,10 @@ canonical typed success or redacted error bodies. Its injected
 crash-safe journal atomically consumes authorizations, binds each operation ID
 to one genesis-derived `NetworkId`, publisher, and immutable archive/CAR
 commitment, rejects equivocation, and reuses an exact completed result. When
-only a completed seed receipt has expired, a fresh exact
+replaying a completed seed result, the backend re-reads the retained exact
+operation, binding, plan, and CAR before the journaled receipt is returned; a
+missing or substituted staged file fails closed and is never recreated by that
+read-only check. When only a completed seed receipt has expired, a fresh exact
 authorization may atomically reopen that same request: ingress idempotently
 confirms the same CAR and the broker replaces only the expired receipt, while a
 failure restores the prior completed record. This refresh cannot alter the
@@ -1195,7 +1225,8 @@ assemble the service core, crash-safe journal, qualified deployment-selected
 signing provider, SoraFS backends, and qualified private HTTPS/TLS ingress; its runner then joins
 the daemon supervisor. TLS material and backend credentials never enter
 argv, project files, publication journals, Torii, or the daemon-private runtime
-provider broker. Hostname binding to deployment-signed provider adverts and
+provider broker. The gated daemon readback adapter binds the configured gateway
+hostname to a council-admitted signed provider advert. Live council refresh and
 the concrete signer/storage adapters remain deployment qualification gates.
 Provider implementation details remain deployment-owned.
 The stock tree now supplies the read-only authoritative finalized
@@ -1207,6 +1238,109 @@ sufficient for the immutable projection because Core never mutates those
 fields after registration; historical mutable location state is no longer
 part of the request contract. Trait injection and authenticated requester
 bytes alone are not finality evidence.
+
+The daemon now has a bounded local factory for the protocol core. It reopens
+the original journal, handle-pinned seed store, and durable clock, binds the
+authenticated provider-fetch client to the live daemon network, and passes the
+finalized reader to the injected storage coordinator. A non-secret
+`iroha_config` supplies the custody root, durable journal and seed-retention
+limits, authorization clock skew, and receipt lifetime. The factory derives
+separate journal, seed, and clock paths from that root; only the public live
+network, broker, and provider identities enter as explicit runtime inputs;
+signing keys and provider operator credentials remain runtime-owned. The
+service retains the only seed-staging authority. The storage builder receives
+a read-only finalized-seed capability bound to the same daemon reader and seed
+owner. It checks the exact current State/Kura registration before taking the
+seed lock, then returns one bounded, non-clone lease over the verified plan and
+CAR. A second concurrent materialization is refused until the lease drops;
+the caller cannot substitute its own finality reader or use a cached journal
+response to obtain unfinalized seed bytes. This is a read boundary for a
+future paid pin coordinator, not an effectful pin or replication runner. The
+daemon also exposes a read-only signed pin-registration recovery reader. In one
+State query view it reauthenticates the source archive, requires the exact
+signed sole-`RegisterPinManifest` transaction and canonical manifest to match
+the archive CID, chunker, POR, CAR digest and size, then verifies the unique
+successful network output in a Kura-finalized block and the current non-retired
+pin record with its public fee payer. Three focused daemon tests cover the
+signed-intent, current-record and output boundaries. The reader cannot sign,
+submit an intent, prove current governance/pricing and configured paid-pin
+policy, approve a pending pin, or cause replication. A separate Unix outbox substrate
+can retain the exact signed V1 pin transaction in an immutable, bounded,
+process-exclusive, owner-only directory before any Queue effect. Its canonical
+owner marker binds the network, exact public paid-pin authority, fresh signing
+session identity, storage tier,
+retention horizon and limits. Isolated stage, reopen and recovery controls reauthenticate every
+retained source registration through the daemon-owned finalized reader. The
+manifest must name at least three replicas, the configured tier and the exact
+retention epoch derived from the signed creation time, fixed transaction TTL
+and configured horizon. Reopen rejects missing markers, interrupted writes,
+changed records or a changed paid-pin policy; exact retries are idempotent,
+and conflicting operation IDs or signed wires close in isolated controls. The
+daemon-facing outbox constructor returns `MissingFinalizedAnchor` even for a
+locally valid inventory. The first-release native `AdvanceMusubiPinOutboxV1`
+instruction now ratchets a publisher-owned State high-water under exact network,
+signer, session, contiguous revision, and predecessor inventory digest. The
+canonical State table is required in snapshots, and a daemon read-only adapter
+checks the current record against its exact successful signed transaction and
+Kura V2 finality artifact. Local custody computes a domain-separated digest of
+the entire owner marker and sorted immutable signed-intent inventory; isolated
+rollback tests show an older, well-formed directory differs from a later
+high-water. The effectful stage → finalized advance → same-view inventory
+comparison → Queue sequence is not yet owned and qualified, so these components
+do not authorize production recovery or Queue effects. Before effects, recovery
+also needs an independently current network-finality checkpoint: an internally
+consistent rollback of both local State and Kura cannot be detected from that
+old local view alone. A separate read-only
+recovery join looks up the original signed wire by
+operation ID and refuses a
+different source, network or pin authority. It reports pin completion only
+when the same-view State/Kura reader proves the exact successful transaction
+and current non-retired fee-paid pin record. Neither custody nor recovery
+submits to Queue or claims provider publication. Deployment-sealed monotonic
+lineage, current fee and governance rechecks at admission, Queue submission,
+replication/provider completion, and physical network qualification still
+precede stock publication activation.
+
+The Unix clock and journal child reads, bounded enumeration, lock creation,
+pending-file creation, state replacement, and stale-file removal now use each
+owner's pinned directory handle. Focused clock controls pass 15/15 and journal
+controls pass 14/14, including configured-path replacement, restart, rollback,
+and replay recovery. The refreshed final-V1 publication frame fixture and
+service library pass 82/82. The daemon publication module passes 41/41 focused
+controls, including the finalized seed lease and effect preflight. Deployment-sealed monotonic CAS, finalized lineage binding,
+and filesystem qualification on other supported platforms remain open before
+production custody is qualified.
+The readback backend fetches the exact provider manifest and plan, consumes the
+committed-size CAR through EOF, and repeats complete bundle, semantic-release,
+and verification-lock checks. The readback request now carries the exact
+finalized registration and policy revision. Before and after transport, the
+daemon reader verifies that registration against its result-bearing Kura block,
+pins one coherent current State view for the archive/location/provider-owner
+rows, verifies the complete signed provider-attestation set and current owner
+against its immutable completion, checks the finalized tip, and requires the
+configured HTTPS origin to equal a
+council-admitted provider advert endpoint with the needed capabilities. The
+request is retried when the local finalized cut or admitted advert is not yet
+available. An exact cached readback response is replayed only after a fresh,
+read-only check of that current finalized target and admitted endpoint; the
+historical response bytes are unchanged. This uses State's committed-world
+ownership; a complete State-root
+witness is still a separate gate. These adapters do not install a listener.
+Effectful provider coordination, independent replica readbacks, live council
+admission refresh, qualified receipt-signer custody, and stock activation
+still gate production publication. A deployment may inject the daemon's
+prebound private TLS ingress builder with an in-memory server identity;
+`iroha_config` supplies only the bind socket, exact private mount prefix,
+and a maximum of four concurrent requests. The builder disables TLS early
+data, serves only the three closed HTTP/1.1 routes, rejects duplicate
+security-sensitive headers, and bounds header and body reads before handing
+the exact request to the service core. On supervised shutdown it drains
+in-flight blocking service calls. If the supervisor's bounded wait expires,
+the blocking call still retains the service and its durable custody until it
+finishes. Loopback and shutdown controls pass 5/5; configuration projection
+and invalid-geometry controls pass 2/2. Runtime TLS credentials, certificate
+rotation, provider coordination, and live network qualification remain
+deployment gates; the stock daemon opens no publication listener.
 
 The production adapter dependency order is therefore explicit and fail-closed.
 The plan-bearing seed boundary is implemented in the stock service core. A
@@ -1622,8 +1756,11 @@ The remaining deployment dependencies are:
    attestations plus authoritative current archive/location state; the publisher
    durably registers those proofs one transaction at a time before the compact
    location CAS. Providers must not mutate the attestation registry directly;
-5. implement authenticated provider readback with redirect denial, DNS/IP
-   pinning, bounded streaming, and invocation of the same shared verifier; and
+5. qualify the daemon's current-State and admitted-advert-bound provider
+   readback against independent replicas, live council admission refresh, and
+   complete finalized State-root witnesses. Its fetch client denies redirects,
+   pins bounded public DNS/IP answers, streams a committed-size CAR, and invokes
+   the shared full-bundle verifier; and
 6. supply the concrete combined time/head/blob durability provider, signer, and
    inventory providers, broker support, bounded readiness, supervised
    restart/shutdown behavior, and crash, cancellation, revocation, corruption,

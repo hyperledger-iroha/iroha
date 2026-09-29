@@ -55,6 +55,571 @@ fn assert_exact_due_parliament_effect_enacted(
 }
 
 #[test]
+fn parliament_kagemusha_initial_policy_installs_only_at_exact_due_height() {
+    use iroha_data_model::{
+        governance::types::KagemushaVerifierPolicyInstallProposalV1,
+        kagemusha::{
+            KAGEMUSHA_WIRE_VERSION_V1, KagemushaGovernedVerifierRegistryV1,
+            KagemushaReleaseAuthorityPolicyV1,
+        },
+    };
+
+    let state = blank_test_state();
+    for height in 1..PARLIAMENT_DUE_CERTIFICATE_HEIGHT {
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(height).expect("predecessor height is nonzero"),
+            None,
+            None,
+            0,
+            0,
+        );
+        state
+            .block(header)
+            .commit_empty_block_for_testing()
+            .expect("contiguous State predecessor for exact-due certificate");
+    }
+    let block = new_dummy_block_at_height(
+        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+    );
+    let mut state_block = state.block(block.as_ref().header());
+    let policy = KagemushaReleaseAuthorityPolicyV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        authority_set_id: [0xD1; 32],
+        threshold: 1,
+        authorized_signers: vec![
+            iroha_crypto::KeyPair::try_random()
+                .expect("fixture signer")
+                .public_key()
+                .clone(),
+        ],
+    };
+    let fixture = {
+        let mut seed = state_block.transaction();
+        let kind = ProposalKind::KagemushaVerifierPolicyInstall(
+            KagemushaVerifierPolicyInstallProposalV1 {
+                proposal_operator: ALICE_ID.clone(),
+                network_id: seed.network_id,
+                expected_predecessor: KagemushaGovernedVerifierRegistryV1::default(),
+                authority_policy: policy.clone(),
+            },
+        );
+        let fixture = seed_due_parliament_certificate(&mut seed, kind);
+        seed.apply();
+        fixture
+    };
+    let certificate_digest =
+        crate::governance::parliament::kagemusha_registry_certificate_digest_v1(
+            &fixture.certificate,
+        )
+        .expect("canonical certificate digest");
+    let domain = b"iroha:state:kagemusha-registry-transition-token:certificate:v1";
+    let mut expected_digest = blake3::Hasher::new();
+    expected_digest.update(
+        &u64::try_from(domain.len())
+            .expect("fixed certificate domain length")
+            .to_le_bytes(),
+    );
+    expected_digest.update(domain);
+    expected_digest.update(
+        &norito::encode_canonical(&fixture.certificate).expect("canonical certificate frame"),
+    );
+    assert_eq!(certificate_digest, *expected_digest.finalize().as_bytes());
+    let mut changed_certificate = fixture.certificate.clone();
+    changed_certificate.effect_preimage_hash[0] ^= 1;
+    assert_ne!(
+        certificate_digest,
+        crate::governance::parliament::kagemusha_registry_certificate_digest_v1(
+            &changed_certificate,
+        )
+        .expect("changed canonical certificate digest"),
+    );
+
+    let authorization = {
+        let inspection = state_block.transaction();
+        let proposal = inspection
+            .world
+            .governance_proposals
+            .get(&fixture.proposal_id)
+            .expect("retained exact policy proposal");
+        let attempt = inspection
+            .world
+            .parliament_attempts
+            .get(&fixture.governance_attempt_id)
+            .expect("certified exact policy attempt");
+        let head = parliament_expected_head_v1(&proposal.kind, &inspection)
+            .expect("canonical empty registry head");
+        let mut wrong_head = head;
+        if let GovernanceExpectedHeadV1::Present(ref mut present) = wrong_head {
+            present.head_root[0] ^= 1;
+        }
+        assert!(
+            crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
+                attempt,
+                proposal,
+                &fixture.certificate,
+                inspection.network_id,
+                inspection.block_height(),
+                wrong_head,
+                inspection.world.kagemusha_verifier_registry.get(),
+            )
+            .is_err(),
+            "changed compare-and-set head cannot issue the State token"
+        );
+        crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
+            attempt,
+            proposal,
+            &fixture.certificate,
+            inspection.network_id,
+            inspection.block_height(),
+            head,
+            inspection.world.kagemusha_verifier_registry.get(),
+        )
+        .expect("exact certified policy State token")
+    };
+
+    let mut execution = state_block.transaction();
+    assert_eq!(
+        execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution)
+            .expect("execute certified policy install"),
+        DueParliamentCertificateExecutionV1::Applied
+    );
+    assert_eq!(
+        execution
+            .world
+            .kagemusha_verifier_registry
+            .get()
+            .authority_policy,
+        Some(policy)
+    );
+    assert_exact_due_parliament_effect_enacted(&execution, &fixture);
+    let committed_proposal = execution
+        .world
+        .governance_proposals
+        .get(&fixture.proposal_id)
+        .expect("enacted policy proposal");
+    let committed_attempt = execution
+        .world
+        .parliament_attempts
+        .get(&fixture.governance_attempt_id)
+        .expect("enacted policy attempt");
+    let predecessor = KagemushaGovernedVerifierRegistryV1::default();
+    let successor = execution.world.kagemusha_verifier_registry.get();
+    let verify = |
+        network_id: iroha_data_model::NetworkId,
+        height: u64,
+        predecessor: &KagemushaGovernedVerifierRegistryV1,
+        successor: &KagemushaGovernedVerifierRegistryV1,
+        proposal: Option<&crate::state::GovernanceProposalRecord>,
+        attempt: Option<&crate::governance::parliament::ParliamentAttemptStateV1>,
+    | {
+        authorization.validate_for_state_commit(
+            network_id,
+            height,
+            predecessor,
+            successor,
+            proposal,
+            attempt,
+        )
+    };
+    verify(
+        execution.network_id,
+        execution.block_height(),
+        &predecessor,
+        successor,
+        Some(committed_proposal),
+        Some(committed_attempt),
+    )
+    .expect("exact certified State transition");
+    assert!(
+        verify(
+            execution.network_id,
+            execution.block_height(),
+            &predecessor,
+            successor,
+            None,
+            Some(committed_attempt),
+        )
+        .is_err()
+    );
+    assert!(
+        verify(
+            execution.network_id,
+            execution.block_height(),
+            &predecessor,
+            successor,
+            Some(committed_proposal),
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        verify(
+            execution.network_id,
+            execution.block_height() + 1,
+            &predecessor,
+            successor,
+            Some(committed_proposal),
+            Some(committed_attempt),
+        )
+        .is_err()
+    );
+    let wrong_network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xEE; 32]),
+        ),
+    );
+    assert_ne!(wrong_network, execution.network_id);
+    assert!(
+        verify(
+            wrong_network,
+            execution.block_height(),
+            &predecessor,
+            successor,
+            Some(committed_proposal),
+            Some(committed_attempt),
+        )
+        .is_err()
+    );
+    let mut wrong_successor = successor.clone();
+    wrong_successor.authority_policy = None;
+    assert!(
+        verify(
+            execution.network_id,
+            execution.block_height(),
+            &predecessor,
+            &wrong_successor,
+            Some(committed_proposal),
+            Some(committed_attempt),
+        )
+        .is_err()
+    );
+    let mut wrong_predecessor = predecessor.clone();
+    wrong_predecessor.version = 0;
+    assert!(
+        verify(
+            execution.network_id,
+            execution.block_height(),
+            &wrong_predecessor,
+            successor,
+            Some(committed_proposal),
+            Some(committed_attempt),
+        )
+        .is_err()
+    );
+    execution.apply();
+    let mut replay = state_block.transaction();
+    assert_ne!(
+        replay.world.kagemusha_verifier_registry.get(),
+        &KagemushaGovernedVerifierRegistryV1::default()
+    );
+    assert_eq!(
+        replay
+            .world
+            .parliament_attempts
+            .get(&fixture.governance_attempt_id)
+            .expect("retained attempt")
+            .attempt()
+            .status,
+        GovernanceAttemptStatusV1::Enacted
+    );
+    assert!(
+        execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut replay).is_err(),
+        "one certified policy attempt cannot enact twice"
+    );
+    drop(replay);
+    state_block
+        .commit_empty_block_for_testing()
+        .expect("certified exact-due policy transition publishes to State");
+    assert!(state.world.kagemusha_verifier_registry.view().get().authority_policy.is_some());
+}
+
+#[test]
+fn parliament_kagemusha_release_installs_standby_only_at_exact_due_height() {
+    use iroha_data_model::{
+        governance::types::KagemushaVerifierReleaseInstallProposalV1,
+        isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
+        kagemusha::KAGEMUSHA_RELEASE_STANDBY_V1,
+    };
+
+    let instruction: ProposeKagemushaVerifierReleaseInstallV1 = norito::decode_canonical(
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
+        )),
+    )
+    .expect("canonical authenticated release fixture");
+    let KagemushaVerifierReleaseInstallProposalV1 {
+        expected_predecessor,
+        ..
+    } = &instruction.proposal;
+    let predecessor = expected_predecessor.clone();
+    let world = World::default();
+    {
+        let mut initial = world.block();
+        *initial.kagemusha_verifier_registry.get_mut() = predecessor.clone();
+        initial.commit();
+    }
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    for height in 1..PARLIAMENT_DUE_CERTIFICATE_HEIGHT {
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(height).expect("predecessor height is nonzero"),
+            None,
+            None,
+            0,
+            0,
+        );
+        state
+            .block(header)
+            .commit_empty_block_for_testing()
+            .expect("contiguous State predecessor for exact-due certificate");
+    }
+    let block = new_dummy_block_at_height(
+        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+    );
+    let mut state_block = state.block(block.as_ref().header());
+    let fixture = {
+        let mut seed = state_block.transaction();
+        let mut proposal = instruction.proposal;
+        proposal.proposal_operator = ALICE_ID.clone();
+        proposal.network_id = seed.network_id;
+        assert_eq!(proposal.expected_predecessor, predecessor);
+        proposal.validate().expect("exact authenticated release proposal");
+        let fixture = seed_due_parliament_certificate(
+            &mut seed,
+            ProposalKind::KagemushaVerifierReleaseInstall(proposal),
+        );
+        seed.apply();
+        fixture
+    };
+
+    let authorization = {
+        let inspection = state_block.transaction();
+        let proposal = inspection
+            .world
+            .governance_proposals
+            .get(&fixture.proposal_id)
+            .expect("retained release proposal");
+        let attempt = inspection
+            .world
+            .parliament_attempts
+            .get(&fixture.governance_attempt_id)
+            .expect("certified release attempt");
+        let head = parliament_expected_head_v1(&proposal.kind, &inspection)
+            .expect("canonical predecessor registry head");
+        crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
+            attempt,
+            proposal,
+            &fixture.certificate,
+            inspection.network_id,
+            inspection.block_height(),
+            head,
+            inspection.world.kagemusha_verifier_registry.get(),
+        )
+        .expect("exact certified release State token")
+    };
+
+    let mut execution = state_block.transaction();
+    assert_eq!(
+        execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution)
+            .expect("execute certified release install"),
+        DueParliamentCertificateExecutionV1::Applied
+    );
+    let successor = execution.world.kagemusha_verifier_registry.get();
+    assert_eq!(successor.active_release_id, None);
+    assert_eq!(successor.releases.len(), 1);
+    assert_eq!(successor.releases[0].status, KAGEMUSHA_RELEASE_STANDBY_V1);
+    assert_exact_due_parliament_effect_enacted(&execution, &fixture);
+    let committed_proposal = execution
+        .world
+        .governance_proposals
+        .get(&fixture.proposal_id)
+        .expect("enacted release proposal");
+    let committed_attempt = execution
+        .world
+        .parliament_attempts
+        .get(&fixture.governance_attempt_id)
+        .expect("enacted release attempt");
+    authorization
+        .validate_for_state_commit(
+            execution.network_id,
+            execution.block_height(),
+            &predecessor,
+            successor,
+            Some(committed_proposal),
+            Some(committed_attempt),
+        )
+        .expect("exact release successor accepted by State");
+    let mut forged = successor.clone();
+    forged.releases[0].receipt_digest[0] ^= 1;
+    assert!(
+        authorization
+            .validate_for_state_commit(
+                execution.network_id,
+                execution.block_height(),
+                &predecessor,
+                &forged,
+                Some(committed_proposal),
+                Some(committed_attempt),
+            )
+            .is_err(),
+        "State token cannot authorize a different release"
+    );
+    execution.apply();
+    state_block
+        .commit_empty_block_for_testing()
+        .expect("certified inactive release publishes to State");
+    assert_eq!(
+        state.world.kagemusha_verifier_registry.view().get().releases.len(),
+        1
+    );
+    state
+        .validate_kagemusha_v1_runtime_for_startup()
+        .expect("inactive release keeps runtime rejection closed");
+}
+
+#[test]
+fn parliament_kagemusha_activation_publishes_only_the_exact_due_successor() {
+    use iroha_data_model::{
+        isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
+        kagemusha::KAGEMUSHA_RELEASE_ACTIVE_V1,
+    };
+
+    let instruction: ProposeKagemushaVerifierReleaseActivateV1 = norito::decode_canonical(
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
+        )),
+    )
+    .expect("canonical verifier activation fixture");
+    let predecessor = instruction.proposal.expected_predecessor.clone();
+    let world = World::default();
+    {
+        let mut initial = world.block();
+        *initial.kagemusha_verifier_registry.get_mut() = predecessor.clone();
+        initial.commit();
+    }
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    for height in 1..PARLIAMENT_DUE_CERTIFICATE_HEIGHT {
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(height).expect("predecessor height is nonzero"),
+            None,
+            None,
+            0,
+            0,
+        );
+        state
+            .block(header)
+            .commit_empty_block_for_testing()
+            .expect("contiguous State predecessor for exact-due certificate");
+    }
+    let block = new_dummy_block_at_height(
+        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+    );
+    let mut state_block = state.block(block.as_ref().header());
+    let fixture = {
+        let mut seed = state_block.transaction();
+        let mut proposal = instruction.proposal;
+        proposal.proposal_operator = ALICE_ID.clone();
+        proposal.network_id = seed.network_id;
+        proposal.validate().expect("exact standby activation proposal");
+        let fixture = seed_due_parliament_certificate(
+            &mut seed,
+            ProposalKind::KagemushaVerifierReleaseActivate(proposal),
+        );
+        seed.apply();
+        fixture
+    };
+    let authorization = {
+        let inspection = state_block.transaction();
+        let proposal = inspection
+            .world
+            .governance_proposals
+            .get(&fixture.proposal_id)
+            .expect("retained activation proposal");
+        let attempt = inspection
+            .world
+            .parliament_attempts
+            .get(&fixture.governance_attempt_id)
+            .expect("certified activation attempt");
+        let head = parliament_expected_head_v1(&proposal.kind, &inspection)
+            .expect("canonical predecessor registry head");
+        crate::governance::parliament::KagemushaRegistryTransitionAuthorizationV1::issue(
+            attempt,
+            proposal,
+            &fixture.certificate,
+            inspection.network_id,
+            inspection.block_height(),
+            head,
+            inspection.world.kagemusha_verifier_registry.get(),
+        )
+        .expect("exact certified activation State token")
+    };
+    let mut execution = state_block.transaction();
+    assert_eq!(
+        execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution)
+            .expect("execute certified activation"),
+        DueParliamentCertificateExecutionV1::Applied
+    );
+    let successor = execution.world.kagemusha_verifier_registry.get();
+    assert_eq!(successor.releases.len(), 1);
+    assert_eq!(successor.releases[0].status, KAGEMUSHA_RELEASE_ACTIVE_V1);
+    assert_eq!(successor.active_release_id, Some(successor.releases[0].release_id));
+    let successor_active = successor.active_release_id;
+    assert_exact_due_parliament_effect_enacted(&execution, &fixture);
+    let committed_proposal = execution
+        .world
+        .governance_proposals
+        .get(&fixture.proposal_id)
+        .expect("enacted activation proposal");
+    let committed_attempt = execution
+        .world
+        .parliament_attempts
+        .get(&fixture.governance_attempt_id)
+        .expect("enacted activation attempt");
+    authorization
+        .validate_for_state_commit(
+            execution.network_id,
+            execution.block_height(),
+            &predecessor,
+            successor,
+            Some(committed_proposal),
+            Some(committed_attempt),
+        )
+        .expect("exact active successor accepted by State");
+    let mut forged = successor.clone();
+    forged.releases[0].receipt_digest[0] ^= 1;
+    assert!(authorization
+        .validate_for_state_commit(
+            execution.network_id,
+            execution.block_height(),
+            &predecessor,
+            &forged,
+            Some(committed_proposal),
+            Some(committed_attempt),
+        )
+        .is_err());
+    execution.apply();
+    state_block
+        .commit_empty_block_for_testing()
+        .expect("certified activation publishes with the fail-closed local runtime");
+    assert_eq!(
+        state.world.kagemusha_verifier_registry.view().get().active_release_id,
+        successor_active,
+    );
+    state
+        .validate_kagemusha_v1_runtime_for_startup()
+        .expect("an active finalized release can await exact local artifact reload");
+}
+
+#[test]
 fn parliament_runtime_upgrade_enacts_at_the_exact_due_height() {
     let state = blank_test_state();
     let block = new_dummy_block_at_height(

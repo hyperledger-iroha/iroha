@@ -2063,6 +2063,21 @@ int32_t connect_norito_decode_transaction_receipt_json(
     uint8_t** out_json_ptr, unsigned long* out_json_len);
 
 // ---------------- Acceleration configuration ----------------
+// Process attempt storage is separate from caller-owned State execution leases.
+// Every field is a finite ceiling; zero denies admission of that resource.
+typedef struct {
+    uint64_t host_bytes;
+    uint64_t pinned_bytes;
+    uint64_t device_bytes;
+    uint64_t in_flight;
+    uint64_t metadata_bytes;
+    uint64_t observed_devices;
+    uint64_t discovery_ordinals;
+    uint64_t modules;
+    uint64_t streams;
+    uint64_t artifact_bytes;
+} connect_norito_acceleration_resource_limits;
+
 typedef struct {
     uint8_t enable_simd;
     uint8_t enable_metal;
@@ -2079,10 +2094,15 @@ typedef struct {
     uint8_t prefer_cpu_sha2_max_leaves_aarch64_present;
     uint64_t prefer_cpu_sha2_max_leaves_x86;
     uint8_t prefer_cpu_sha2_max_leaves_x86_present;
+    connect_norito_acceleration_resource_limits resource_limits;
 } connect_norito_acceleration_config;
 
-void connect_norito_set_acceleration_config(const connect_norito_acceleration_config* cfg);
-int32_t connect_norito_get_acceleration_config(connect_norito_acceleration_config* out_cfg);
+// Exact current record lengths only: -3 is returned before pointer access for any
+// other size. Returns 0 on requested-policy application or -2 for malformed data.
+// Null cfg with cfg_len == 0 restores ordinary enabled defaults and finite limits.
+// These V1 symbols replace the retired size-less exports; no aliases are shipped.
+int32_t connect_norito_acceleration_config_set_v1(const connect_norito_acceleration_config* cfg, size_t cfg_len);
+int32_t connect_norito_acceleration_config_get_v1(connect_norito_acceleration_config* out_cfg, size_t out_len);
 
 typedef struct {
     uint8_t supported;
@@ -2102,7 +2122,7 @@ typedef struct {
     connect_norito_acceleration_backend_status cuda;
 } connect_norito_acceleration_state;
 
-int32_t connect_norito_get_acceleration_state(connect_norito_acceleration_state* out_state);
+int32_t connect_norito_acceleration_state_get_v1(connect_norito_acceleration_state* out_state, size_t out_len);
 
 #ifdef __cplusplus
 } // extern "C"

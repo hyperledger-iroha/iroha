@@ -12,6 +12,8 @@ use std::{borrow::Borrow, collections::BTreeSet, ops::RangeBounds};
 
 #[path = "storage/detached_publication.rs"]
 mod detached_publication;
+#[path = "storage/frozen_read.rs"]
+mod frozen_read;
 #[path = "storage/physical.rs"]
 mod physical;
 pub use detached_publication::DetachedPublicationSlot;
@@ -443,7 +445,7 @@ impl<K: Key, V: Value, Admission, M: StorageMode<K, V>> Detached<K, V, Admission
     /// responsibility; prepare every component before publishing the first one.
     #[expect(
         clippy::result_large_err,
-        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+        reason = "refusal returns the same map journals and deferred release custody without allocating a box under resource pressure"
     )]
     fn prepare_publication<'target, Installation, E>(
         self,
@@ -483,7 +485,7 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
     /// aggregate component before publication and owns separate resource admission.
     #[expect(
         clippy::result_large_err,
-        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+        reason = "refusal returns the same map journals and deferred release custody without allocating a box under resource pressure"
     )]
     pub fn try_prepare_publication<'target, Installation, E>(
         self,
@@ -1150,17 +1152,23 @@ mod block {
                 &mut self.touched,
                 TransactionTouches::Untracked(BTreeSet::new()),
             ));
-            // Untracked checkpoints grow their buffers in place, so neither
-            // retirement owns a displaced allocation needing deferred cleanup.
-            self.blocks
-                .take()
-                .expect("live transaction current root")
-                .apply_retaining();
-            self.revert
-                .take()
-                .expect("live transaction undo root")
-                .apply_retaining();
-            *self.parent_dirty = self.dirty;
+            {
+                let current_retirement = self
+                    .blocks
+                    .take()
+                    .expect("live transaction current root")
+                    .apply_retaining();
+                let undo_retirement = self
+                    .revert
+                    .take()
+                    .expect("live transaction undo root")
+                    .apply_retaining();
+                *self.parent_dirty = self.dirty;
+                // Tuple fields retire current then undo before resolving the
+                // parent below. Untracked buffers are empty, but this boundary
+                // still keeps both transfers and metadata ahead of cleanup.
+                let _retirements = (current_retirement, undo_retirement);
+            }
             self.parent_failure
                 .as_mut()
                 .expect("original parent")

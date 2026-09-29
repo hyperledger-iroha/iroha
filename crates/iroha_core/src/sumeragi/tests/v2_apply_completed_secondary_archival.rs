@@ -50,6 +50,8 @@ fn completed_secondary_kura_config(
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: defaults::FSYNC_INTERVAL,
         lane_history_retention: defaults::LANE_HISTORY_RETENTION,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:

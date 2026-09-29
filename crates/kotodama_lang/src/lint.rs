@@ -341,8 +341,8 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     Builtin::ResolveAccountAlias.source_name(),
     Builtin::AxtBegin.source_name(),
     Builtin::AxtTouch.source_name(),
+    Builtin::StageAnchoredSpend.source_name(),
     Builtin::VerifyDsProof.source_name(),
-    Builtin::UseAssetHandle.source_name(),
     Builtin::AxtCommit.source_name(),
 ];
 const EXECUTE_INSTRUCTION_CALL: &str = "execute_instruction";
@@ -949,7 +949,6 @@ fn is_literal_state_key(expr: &Expr) -> bool {
                             | PointerConstructor::NoritoBytes
                             | PointerConstructor::DataSpaceId
                             | PointerConstructor::AxtDescriptor
-                            | PointerConstructor::AssetHandle
                             | PointerConstructor::ProofBlob
                     ))
                 )

@@ -37,11 +37,11 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
     );
     map.insert(
         "chunk_digest_hex".into(),
-        Value::from(hex::encode(&proof.chunk_digest)),
+        Value::from(hex::encode(proof.chunk_digest)),
     );
     map.insert(
         "chunk_root_hex".into(),
-        Value::from(hex::encode(&proof.chunk_root)),
+        Value::from(hex::encode(proof.chunk_root)),
     );
     map.insert(
         "segment_index".into(),
@@ -54,7 +54,7 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
     );
     map.insert(
         "segment_digest_hex".into(),
-        Value::from(hex::encode(&proof.segment_digest)),
+        Value::from(hex::encode(proof.segment_digest)),
     );
     map.insert("leaf_index".into(), Value::from(proof.leaf_index as u64));
     map.insert("leaf_offset".into(), Value::from(proof.leaf_offset));
@@ -65,7 +65,7 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
     );
     map.insert(
         "leaf_digest_hex".into(),
-        Value::from(hex::encode(&proof.leaf_digest)),
+        Value::from(hex::encode(proof.leaf_digest)),
     );
     map.insert(
         "segment_leaves_hex".into(),
@@ -291,9 +291,9 @@ fn chunk_to_map(chunk: &PorChunkTree) -> Map {
     obj.insert("length".into(), Value::from(chunk.length as u64));
     obj.insert(
         "chunk_digest_hex".into(),
-        Value::from(hex::encode(&chunk.chunk_digest)),
+        Value::from(hex::encode(chunk.chunk_digest)),
     );
-    obj.insert("root_hex".into(), Value::from(hex::encode(&chunk.root)));
+    obj.insert("root_hex".into(), Value::from(hex::encode(chunk.root)));
     let mut segments = Vec::with_capacity(chunk.segments.len());
     for segment in &chunk.segments {
         segments.push(Value::Object(segment_to_map(segment)));
@@ -307,7 +307,7 @@ fn segment_to_map(segment: &PorSegment) -> Map {
     obj.insert("length".into(), Value::from(segment.length as u64));
     obj.insert(
         "digest_hex".into(),
-        Value::from(hex::encode(&segment.digest)),
+        Value::from(hex::encode(segment.digest)),
     );
     let mut leaves = Vec::with_capacity(segment.leaves.len());
     for leaf in &segment.leaves {
@@ -321,7 +321,7 @@ fn leaf_to_map(leaf: &PorLeaf) -> Map {
     obj.insert("leaf_index_flat".into(), Value::from(leaf.flat_index));
     obj.insert("offset".into(), Value::from(leaf.offset));
     obj.insert("length".into(), Value::from(leaf.length as u64));
-    obj.insert("digest_hex".into(), Value::from(hex::encode(&leaf.digest)));
+    obj.insert("digest_hex".into(), Value::from(hex::encode(leaf.digest)));
     obj
 }
 fn expect_u64(map: &Map, key: &str) -> Result<u64, String> {

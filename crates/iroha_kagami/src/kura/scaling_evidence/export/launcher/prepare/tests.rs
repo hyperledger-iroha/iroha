@@ -3,9 +3,7 @@
 use super::*;
 use norito::codec::Encode as _;
 
-#[path = "../../../fixture.rs"]
-#[allow(dead_code, reason = "fixture is shared by focused test suites")]
-mod fixture;
+use crate::kura::scaling_evidence::fixture;
 
 /// Test-only raw transport assembly for the retained pair owner's signed fixtures.
 /// It performs no admission and returns no authority or publication capability.
@@ -23,8 +21,8 @@ pub(in crate::kura::scaling_evidence::export) fn encode_facts(
             .into_iter()
             .map(|height| SuppliedEvidenceHeightV1 {
                 height: height.height,
-                finality: height.finality,
-                contexts: height.contexts,
+                carrier: height.carrier,
+                lane_evidence: height.lane_evidence,
                 queries: height.queries,
             })
             .collect(),
@@ -45,8 +43,8 @@ fn facts(f: &fixture::Fixture) -> PrepareFactsV1 {
             .enumerate()
             .map(|(index, height)| SuppliedEvidenceHeightV1 {
                 height: index as u64 + 1,
-                finality: norito::encode_canonical(&height.proof).unwrap(),
-                contexts: height.evidence.clone(),
+                carrier: height.block.encode_wire().unwrap(),
+                lane_evidence: height.evidence.clone(),
                 queries: height.queries(),
             })
             .collect(),
@@ -105,8 +103,8 @@ fn one_and_four_lane_pair_preserves_every_independent_fact_binding_and_original_
                     .map(|(index, height)| {
                         crate::kura::scaling_evidence::export::SuppliedHeightEvidence {
                             height: index as u64 + 1,
-                            finality: norito::encode_canonical(&height.proof).unwrap(),
-                            contexts: height.evidence.clone(),
+                            carrier: height.block.encode_wire().unwrap(),
+                            lane_evidence: height.evidence.clone(),
                             queries: height.queries(),
                         }
                     })
@@ -130,12 +128,12 @@ fn one_and_four_lane_pair_preserves_every_independent_fact_binding_and_original_
             .zip(&original.heights)
         {
             assert_eq!(got.height, raw.height);
-            assert_eq!(got.finality, raw.finality);
-            assert_eq!(got.contexts, raw.contexts);
-            assert_eq!(binding.contexts_hash, Hash::new(&raw.contexts));
+            assert_eq!(got.carrier, raw.carrier);
+            assert_eq!(got.lane_evidence, raw.lane_evidence);
+            assert_eq!(binding.lane_evidence_hash, Hash::new(&raw.lane_evidence));
             assert_eq!(got.queries, raw.queries);
             assert_eq!(binding.height, raw.height);
-            assert_eq!(binding.finality_hash, Hash::new(&raw.finality));
+            assert_eq!(binding.carrier_hash, Hash::new(&raw.carrier));
             assert_eq!(
                 binding.query_hashes,
                 raw.queries.iter().map(Hash::new).collect::<Vec<_>>()
@@ -317,8 +315,8 @@ fn height_interval_rejects_missing_extra_duplicate_reordered_zero_and_overflow_r
             1 => {
                 value.heights.push(SuppliedEvidenceHeightV1 {
                     height: 3,
-                    finality: vec![1],
-                    contexts: vec![1],
+                    carrier: vec![1],
+                    lane_evidence: vec![1],
                     queries: vec![],
                 });
             }
@@ -347,10 +345,10 @@ fn bounded_inner_preflight_runs_before_decoding_finality_or_query_frames() {
             .contains("prepare query count exceeds work allocation")
     );
     let mut heights = facts(&f).heights;
-    heights[0].finality = vec![0; MAX_FINALITY_BYTES + 1];
+    heights[0].carrier = vec![0; MAX_CARRIER_BYTES + 1];
     assert!(derive_bindings(&heights, &f.plan(), fixture::limits()).is_err());
     let mut heights = facts(&f).heights;
-    heights[0].contexts = vec![0; MAX_FINALITY_BYTES + 1];
+    heights[0].lane_evidence = vec![0; MAX_CONTEXT_BYTES + 1];
     assert!(derive_bindings(&heights, &f.plan(), fixture::limits()).is_err());
     let mut heights = facts(&f).heights;
     heights[1].queries[0] = vec![0; MAX_TRANSACTION_BYTES + 1];
@@ -393,18 +391,14 @@ fn canonical_inner_schema_version_and_original_digest_bindings_are_not_summary_c
     for change in 0..6 {
         let mut value = facts(&f);
         match change {
-            0 => value.heights[0].finality = f.heights[0].proof.encode(),
+            0 => value.heights[0].carrier = f.heights[0].block.encode_wire().unwrap()[1..].to_vec(),
             1 => value.heights[1].queries[0].push(0),
-            2 => {
-                value.heights[1].queries[0] = norito::encode_canonical(&f.heights[1].proof).unwrap()
-            }
-            3 => value.heights[0].finality = value.heights[1].queries[0].clone(),
+            2 => value.heights[1].queries[0] = f.heights[1].block.encode_wire().unwrap(),
+            3 => value.heights[0].carrier = value.heights[1].queries[0].clone(),
             4 => {
-                let mut proof = f.heights[0].proof.clone();
-                proof.version = 0;
-                value.heights[0].finality = norito::encode_canonical(&proof).unwrap();
+                value.heights[0].carrier[0] = 0;
             }
-            _ => value.heights[1].finality = norito::encode_canonical(&f.heights[0].proof).unwrap(),
+            _ => value.heights[1].carrier = f.heights[0].block.encode_wire().unwrap(),
         }
         assert!(
             prepare_facts(&value).is_err(),
@@ -425,11 +419,7 @@ fn independent_network_context_route_and_original_signed_bytes_are_required() {
                         HashOf::from_untyped_unchecked(Hash::new(b"different launch network")),
                     )
                 }
-                1 => {
-                    value.plan.first_context = HeightContextId(HashOf::from_untyped_unchecked(
-                        Hash::new(b"different launch anchor"),
-                    ))
-                }
+                1 => value.plan.genesis_epoch_context_id[0] ^= 1,
                 2 => value.plan.scheduled[0].route.lane_id = LaneId::new(900),
                 _ => {
                     let bytes = &mut value.plan.scheduled[0].signed_transaction;
@@ -598,7 +588,7 @@ fn unaligned_facts_preserve_the_exact_two_canonical_outputs() {
 }
 
 #[test]
-fn preparation_does_not_authenticate_a_claimed_inclusion_proof() {
+fn preparation_rejects_a_claimed_inclusion_proof_before_returning_transports() {
     let f = fixture::Fixture::new(4);
     let mut value = facts(&f);
     // Claim a different input proof with the same leaf index and self-consistent
@@ -607,27 +597,12 @@ fn preparation_does_not_authenticate_a_claimed_inclusion_proof() {
         let other: CommittedTransaction = canonical(&f.heights[2].queries()[0]).unwrap();
         query.entrypoint_proof = other.entrypoint_proof;
     });
-    let (request, bundle) = prepare_facts(&value).unwrap().into_buffers();
-    let (plan, limits, _) = super::super::decode(
-        &request,
-        iroha_crypto::sha256(&request),
-        request.len() as u64,
-    )
-    .unwrap()
-    .into_parts();
-    let bundle: SuppliedEvidenceBundleV1 = canonical(&bundle).unwrap();
-    let mut verifier = f.start(plan, limits);
-    let row = &bundle.heights[1];
-    let result = verifier.push_height(
-        &row.finality,
-        &f.heights[1].block.encode_wire().unwrap(),
-        &row.contexts,
-        &row.queries.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    let error = prepare_facts(&value)
+        .err()
+        .expect("native preparation verifies inclusion");
+    assert!(
+        error
+            .to_string()
+            .contains("queried leaf is not this exact typed Network output")
     );
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "queried leaf is not this exact typed Network output"
-    );
-    assert!(verifier.finish().is_err());
 }

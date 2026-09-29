@@ -26,11 +26,10 @@ use iroha_sumeragi::types::Hash32;
 use super::{LaneBatch, lane_policy, routing::GLOBAL_LANE};
 pub use crate::sumeragi::payload::MergeProposal;
 use crate::{
-    queue::{
-        evaluate_policy_plan_with_nexus_and_world_at_block_height,
-        execution_context_for_routing_plan,
+    state::{
+        State, StateReadOnly, StateReadOnlyWithTransactions, WorldReadOnly,
+        is_stable_state_view_generation,
     },
-    state::{StateReadOnly, StateReadOnlyWithTransactions, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 
@@ -119,30 +118,69 @@ pub struct LaneStepInput {
     pub time_ms: u64,
 }
 
-/// A global block's merged entrypoints and its lane step input.
-#[derive(Clone, Debug, Default)]
-pub struct Expansion {
-    /// Merged entrypoints, in execution order.
-    pub entrypoints: Vec<TransactionEntrypoint>,
-    /// Their execution contexts.
-    pub contexts: Vec<ExternalExecutionContext>,
-    /// The lane step input.
-    pub step: LaneStepInput,
+/// Source-bound merged entrypoints and lane step from one exact original proposal.
+/// Only `expand` can create it; it cannot move to another proposal, State, or publication.
+pub struct Expansion<'state> {
+    state: &'state State,
+    generation: u64,
+    source: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    entrypoints: Vec<TransactionEntrypoint>,
+    contexts: Vec<ExternalExecutionContext>,
+    step: LaneStepInput,
 }
-
-impl Expansion {
-    /// The executed block: `proposal` with the merged entrypoints appended, or `proposal` itself
-    /// when it carries no merge section.
-    ///
-    /// # Errors
-    /// The proposal is not a resultless proposal that can take them.
-    pub fn apply(&self, proposal: SignedBlock) -> Result<SignedBlock, MergeError> {
-        if proposal.lane_merge().is_none() {
-            return Ok(proposal);
+impl std::fmt::Debug for Expansion<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Expansion")
+            .field("generation", &self.generation)
+            .field("source", &self.source)
+            .field("entrypoints", &self.entrypoints)
+            .field("contexts", &self.contexts)
+            .field("step", &self.step)
+            .finish_non_exhaustive()
+    }
+}
+impl Expansion<'_> {
+    /// Consume the original expansion after native proposal-wire validation, preserving
+    /// the original proposal on refusal and moving the exact lane step into execution.
+    pub(crate) fn apply(
+        self,
+        proposal: SignedBlock,
+        state: &State,
+        generation: u64,
+    ) -> Result<(SignedBlock, LaneStepInput), (SignedBlock, MergeError)> {
+        if !std::ptr::eq(self.state, state)
+            || !is_stable_state_view_generation(self.generation, generation)
+            || !is_stable_state_view_generation(generation, state.state_view_generation())
+        {
+            return Err((
+                proposal,
+                MergeError::Pending("expansion differs from original State publication".into()),
+            ));
         }
-        proposal
-            .with_merged_entrypoints(self.entrypoints.clone(), self.contexts.clone())
-            .map_err(|reason| MergeError::Invalid(reason.to_owned()))
+        if proposal.hash() != self.source {
+            return Err((
+                proposal,
+                MergeError::Invalid("expansion differs from original proposal".into()),
+            ));
+        }
+        if proposal.lane_merge().is_none() {
+            if !self.entrypoints.is_empty()
+                || !self.contexts.is_empty()
+                || !self.step.merges.is_empty()
+            {
+                return Err((
+                    proposal,
+                    MergeError::Invalid("expansion invents an unsigned merge".into()),
+                ));
+            }
+            return Ok((proposal, self.step));
+        }
+        match proposal.with_merged_entrypoints(self.entrypoints, self.contexts) {
+            Ok(executed) => Ok((executed, self.step)),
+            Err((proposal, _merged, _contexts, reason)) => {
+                Err((proposal, MergeError::Invalid(reason.to_owned())))
+            }
+        }
     }
 }
 
@@ -160,18 +198,46 @@ fn block_capacity(world: &impl WorldReadOnly) -> usize {
 }
 
 /// Check the merge references of `proposal` (global height `h`) against the committed
-/// pre-state `view` and the node's lane stores, waiting up to `wait` for lane blocks, and
-/// expand them.
+/// pre-state and the node's lane stores, waiting up to `wait` for lane blocks, and expand them.
+/// The exact State owner and stable publication are retained before releasing the read view.
 ///
 /// # Errors
 /// [`MergeError::Pending`] while referenced lane blocks are not committed locally;
 /// [`MergeError::Invalid`] for a malformed merge.
-pub fn expand<V: StateReadOnlyWithTransactions>(
+pub fn expand<'state>(
+    state: &'state State,
+    proposal: &SignedBlock,
+    source: &dyn LaneBlockSource,
+    wait: Duration,
+) -> Result<Expansion<'state>, MergeError> {
+    let generation = state.state_view_generation();
+    if !is_stable_state_view_generation(generation, generation) {
+        return Err(MergeError::Pending(
+            "State publication is in progress".into(),
+        ));
+    }
+    let view = state
+        .try_view_once()
+        .map_err(|error| MergeError::Pending(error.to_string()))?
+        .ok_or_else(|| MergeError::Pending("State publication changed before expansion".into()))?;
+    let expanded = expand_from_view(state, generation, &view, proposal, source, wait);
+    drop(view);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Err(MergeError::Pending(
+            "State publication changed during expansion".into(),
+        ));
+    }
+    expanded
+}
+
+fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
+    state: &'state State,
+    generation: u64,
     view: &V,
     proposal: &SignedBlock,
     source: &dyn LaneBlockSource,
     wait: Duration,
-) -> Result<Expansion, MergeError> {
+) -> Result<Expansion<'state>, MergeError> {
     let height = proposal.header().height().get();
     let time_ms = u64::try_from(proposal.header().creation_time().as_millis()).unwrap_or(u64::MAX);
     let policy = lane_policy(view.world());
@@ -198,8 +264,12 @@ pub fn expand<V: StateReadOnlyWithTransactions>(
     }
     let Some(section) = proposal.lane_merge() else {
         return Ok(Expansion {
+            state,
+            generation,
+            source: proposal.hash(),
+            entrypoints: Vec::new(),
+            contexts: Vec::new(),
             step,
-            ..Expansion::default()
         });
     };
     if section.merged_count != 0 {
@@ -244,8 +314,12 @@ pub fn expand<V: StateReadOnlyWithTransactions>(
         .collect::<std::collections::BTreeSet<_>>();
     let admission = Admissibility::of(view);
     let mut expansion = Expansion {
+        state,
+        generation,
+        source: proposal.hash(),
+        entrypoints: Vec::new(),
+        contexts: Vec::new(),
         step,
-        ..Expansion::default()
     };
     for (lane, tx) in candidates {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -257,18 +331,20 @@ pub fn expand<V: StateReadOnlyWithTransactions>(
         {
             continue;
         }
-        let Ok(plan) = evaluate_policy_plan_with_nexus_and_world_at_block_height(
-            view.nexus(),
-            &accepted,
-            view.world(),
-            time_ms,
-            height,
-        ) else {
-            continue;
-        };
-        expansion
-            .contexts
-            .push(execution_context_for_routing_plan(hash, &plan));
+        // `load` verified the range against this exact committed incarnation; routing
+        // above independently checked that this transaction still belongs to its lane.
+        // Its execution scope is the source lane's pinned dataspace. Re-evaluating the
+        // retired Nexus policy here would silently turn an actual lane into lane zero.
+        let record = lanes.lane(lane).ok_or_else(|| {
+            MergeError::Invalid(format!(
+                "lane {lane}: admitted source has no committed record"
+            ))
+        })?;
+        expansion.contexts.push(ExternalExecutionContext::new(
+            hash,
+            record.lane,
+            record.dataspace,
+        ));
         expansion
             .entrypoints
             .push(TransactionEntrypoint::External(accepted.as_ref().clone()));

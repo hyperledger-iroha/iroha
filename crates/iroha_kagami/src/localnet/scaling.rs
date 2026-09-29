@@ -116,6 +116,7 @@ impl ScalingLayout {
         self,
         genesis: RawGenesisTransaction,
         accounts: &[LocalnetClientIdentity],
+        peers: &[Peer],
     ) -> Result<RawGenesisTransaction> {
         self.validate_accounts(accounts)?;
         let existing = BootstrapRegistrations::from_manifest(&genesis);
@@ -143,7 +144,52 @@ impl ScalingLayout {
         );
         // Continue the existing bootstrap transaction so account count does not
         // increase the number of genesis transactions or create another layout.
-        let mut builder = genesis.into_builder();
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+        };
+        let mut committee = peers
+            .iter()
+            .map(|peer| SumeragiLaneMember {
+                peer: PeerId::new(peer.public_key.clone()),
+                pop: peer.bls_pop.clone(),
+            })
+            .collect::<Vec<_>>();
+        committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+        ensure!(
+            committee.len() == 4 && committee.windows(2).all(|w| w[0].peer < w[1].peer),
+            "native fixed lanes require the exact four original peers"
+        );
+        let policy = SumeragiLanePolicy {
+            anchor_freshness: 16,
+            max_merge_blocks: 32,
+            stall_window: 256,
+            lane_params: genesis.effective_parameters()?.sumeragi().clone(),
+            fixed: (1..self.lane_count())
+                .map(|lane| SumeragiFixedLane {
+                    lane: LaneId::new(u32::from(lane)),
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    committee: committee.clone(),
+                })
+                .collect(),
+            routes: accounts
+                .iter()
+                .enumerate()
+                .map(|(index, account)| SumeragiLaneRoute {
+                    lane: LaneId::new(
+                        u32::try_from(index % usize::from(self.lane_count()))
+                            .expect("bounded account index"),
+                    ),
+                    account: Some(account.account_id.to_string()),
+                    instruction: None,
+                })
+                .collect(),
+            autoscale: None,
+        };
+        policy.validate()?;
+        let mut builder = genesis
+            .into_builder()
+            .append_parameter(Parameter::Custom(policy.into_custom_parameter()));
+
         for account in accounts {
             builder = builder
                 .append_instruction(Register::account(Account::new(account.account_id.clone())))
@@ -165,6 +211,10 @@ impl ScalingLayout {
             &rendered,
             "generated scaling peer config",
         )?);
+        ensure!(
+            root.get("nexus").is_some_and(Value::is_table),
+            "generated scaling config lacks Nexus table"
+        );
         // Workload accounts are registered and funded in the signed genesis. The fixed
         // benchmark has no onboarding or faucet service, so parsing its retained peer
         // configs must not open either service's private-key sidecar.
@@ -178,66 +228,8 @@ impl ScalingLayout {
         if let Some(streaming) = root.get_mut("streaming").and_then(Value::as_table_mut) {
             crate::secret_toml::remove(streaming, "codec");
         }
-        let nexus = root
-            .get_mut("nexus")
-            .and_then(Value::as_table_mut)
-            .ok_or_else(|| eyre!("generated peer config lacks Nexus settings"))?;
-        let lanes = (0..self.lane_count())
-            .map(|index| {
-                let mut lane = Table::new();
-                lane.insert("index".into(), Value::Integer(i64::from(index)));
-                lane.insert("alias".into(), Value::String(format!("scaling-{index}")));
-                lane.insert(
-                    "description".into(),
-                    Value::String("Fixed scaling execution lane".to_owned()),
-                );
-                lane.insert("dataspace".into(), Value::String("universal".to_owned()));
-                lane.insert("visibility".into(), Value::String("public".to_owned()));
-                lane.insert("metadata".into(), Value::Table(Table::new()));
-                Value::Table(lane)
-            })
-            .collect();
-        crate::secret_toml::insert(
-            nexus,
-            "lane_count".into(),
-            Value::Integer(i64::from(self.lane_count())),
-        );
-        crate::secret_toml::insert(nexus, "lane_catalog".into(), Value::Array(lanes));
-        crate::secret_toml::insert(
-            nexus,
-            "dataspace_catalog".into(),
-            Value::Array(localnet_dataspace_catalog(None, 1, false)),
-        );
-        let mut autoscale = Table::new();
-        autoscale.insert("enabled".into(), Value::Boolean(false));
-        crate::secret_toml::insert(nexus, "autoscale".into(), Value::Table(autoscale));
-        let rules = accounts
-            .iter()
-            .enumerate()
-            .map(|(index, account)| {
-                let mut matcher = Table::new();
-                matcher.insert(
-                    "account".into(),
-                    Value::String(account.account_id.to_string()),
-                );
-                let mut rule = Table::new();
-                rule.insert(
-                    "lane".into(),
-                    Value::Integer((index % usize::from(self.lane_count())) as i64),
-                );
-                rule.insert("dataspace".into(), Value::String("universal".to_owned()));
-                rule.insert("matcher".into(), Value::Table(matcher));
-                Value::Table(rule)
-            })
-            .collect();
-        let mut routing = Table::new();
-        routing.insert("default_lane".into(), Value::Integer(0));
-        routing.insert(
-            "default_dataspace".into(),
-            Value::String("universal".to_owned()),
-        );
-        routing.insert("rules".into(), Value::Array(rules));
-        crate::secret_toml::insert(nexus, "routing_policy".into(), Value::Table(routing));
+        // Scheduling lanes and their account routes are signed on-chain policy. The base
+        // config retains the single universal World; there is no parallel local lane catalog.
         toml::to_string(&*root)
             .map(Zeroizing::new)
             .wrap_err("render fixed scaling peer config")
@@ -295,23 +287,19 @@ pub(super) fn genesis_context_bytes(
         .wrap_err("read bounded final scaling genesis manifest")?;
     let signed = iroha_genesis::read_signed_genesis_bytes(signed_path)
         .wrap_err("read bounded final scaling signed genesis")?;
-    let authority =
-        crate::genesis::staged_signed_genesis_merge_authority(&manifest, &signed, config)
-            .wrap_err("authenticate final scaling genesis context")?;
+    let authority = crate::genesis::staged_signed_native_genesis(&manifest, &signed, config)
+        .wrap_err("authenticate final scaling genesis context")?;
     ensure!(
-        authority.context().network_id
-            == NetworkId::from_genesis_hash(config.genesis.expected_hash),
+        authority.epoch().network_id == NetworkId::from_genesis_hash(config.genesis.expected_hash),
         "fixed scaling genesis context has a foreign network"
     );
     encode_genesis_context(&authority)
 }
 
-fn encode_genesis_context(
-    authority: &iroha_core::sumeragi::GenesisMergeAuthority,
-) -> Result<Vec<u8>> {
-    let context = authority.context();
+fn encode_genesis_context(authority: &crate::genesis::StagedNativeGenesis) -> Result<Vec<u8>> {
+    let context = authority.epoch();
     ensure!(
-        context.height == 1 && context.roster.len() == 4,
+        context.authorization.first_height == 1 && context.committee.len() == 4,
         "fixed scaling genesis context must anchor height one and four validators"
     );
     let count = norito::canonical_frame_len(context)?;

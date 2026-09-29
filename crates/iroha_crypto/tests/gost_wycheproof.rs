@@ -1,4 +1,5 @@
-//! Wycheproof-derived regression tests for the TC26 GOST backend.
+//! Locally generated deterministic regression vectors for the five admitted GOST sets.
+//! The fixture filename does not establish independent upstream Wycheproof provenance.
 #![cfg(feature = "gost")]
 use hex::decode as hex_decode;
 use iroha_crypto::{Algorithm, PublicKey, Signature};

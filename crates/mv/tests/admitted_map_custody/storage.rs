@@ -603,7 +603,13 @@ fn actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_image
     let identity = concread::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
     let notification =
         concread::release::ReleaseNotification::allocation_layout::<AllocationCharge>().size();
-    assert_eq!(initial, maps + 2 * identity + 2 * notification);
+    // Each physical current/undo writer and the joint publication mutex owns
+    // its prepaid release source, beside the two identities and native maps.
+    let expected = maps
+        .checked_add(2 * identity)
+        .and_then(|bytes| bytes.checked_add(3 * notification))
+        .unwrap();
+    assert_eq!(initial, expected);
     let insufficient = AllocationBudget::new(initial - 1);
     let error = without_allocations(|| NativeStorage::try_new_admitted(insufficient.clone()))
         .err()
@@ -2713,3 +2719,6 @@ fn storage_writer_identity_refusal_precedes_policies_and_preserves_retry() {
 
 #[path = "capture.rs"]
 mod capture;
+
+#[path = "frozen_reads.rs"]
+mod frozen_reads;

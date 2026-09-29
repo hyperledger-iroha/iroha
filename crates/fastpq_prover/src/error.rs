@@ -18,6 +18,12 @@ pub enum Error {
         /// Public diagnostic; staged frame contents are never included.
         details: String,
     },
+    /// Local verifier allocation was unavailable after deterministic size preflight.
+    #[error("FASTPQ local allocation unavailable for {context}")]
+    LocalAllocationUnavailable {
+        /// Public allocation site, never private witness content.
+        context: &'static str,
+    },
     /// Batch parameter does not match the prover configuration.
     #[error("parameter mismatch: expected `{expected}`, got `{actual}`")]
     ParameterMismatch {

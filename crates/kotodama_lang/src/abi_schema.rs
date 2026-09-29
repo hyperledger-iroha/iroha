@@ -44,7 +44,6 @@ pub(crate) fn state_value_kind_for_type(
         Type::Name => Kind::Name,
         Type::DataSpaceId => Kind::DataSpaceId,
         Type::AxtDescriptor => Kind::AxtDescriptor,
-        Type::AssetHandle => Kind::AssetHandle,
         Type::ProofBlob => Kind::ProofBlob,
         Type::SoracloudRequest => Kind::SoracloudRequest,
         Type::SoracloudResponse => Kind::SoracloudResponse,
@@ -53,6 +52,7 @@ pub(crate) fn state_value_kind_for_type(
         | Type::ErrorEnum(_)
         | Type::Secret(_)
         | Type::StateMap(_, _)
+        | Type::AxtAnchoredSpendV1
         | Type::Option(_)
         | Type::Result(_, _)
         | Type::List(_, _)

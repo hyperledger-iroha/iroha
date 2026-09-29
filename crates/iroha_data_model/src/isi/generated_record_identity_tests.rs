@@ -16,6 +16,8 @@ mod inventory;
 #[path = "kaigi_record_identity_tests.rs"]
 mod kaigi_records;
 
+mod native_capture;
+
 use crate::fixture_json;
 
 fn hex(bytes: &[u8]) -> String {
@@ -69,7 +71,7 @@ where
 }
 
 /// Capture the populated staking records whose required monetary plans changed.
-pub(crate) fn staking_monetary_fixture_rows() -> Vec<Value> {
+pub fn staking_monetary_fixture_rows() -> Vec<Value> {
     values::values()
         .into_iter()
         .filter(|row| {
@@ -92,14 +94,14 @@ fn missing_record_values() -> Vec<Value> {
     ));
     assert_eq!(
         records.len(),
-        51,
+        52,
         "complete missing record fixture inventory"
     );
     let names: std::collections::BTreeSet<_> = records
         .iter()
         .map(|row| row.get("nominal").and_then(Value::as_str).expect("nominal"))
         .collect();
-    assert_eq!(names.len(), 51, "one populated value per missing record");
+    assert_eq!(names.len(), 52, "one populated value per missing record");
     records.sort_by(|a, b| {
         a.get("nominal")
             .and_then(Value::as_str)
@@ -119,13 +121,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "5ce0d2b4c7861f75680cbded7415c499b387a09456a181ec88ff28cd1b5181ca",
+                "39a371818b4dbc04d04b4723739fd9e9b64ddf3f469990e0a190b1e7d1fb467d",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 329, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 330, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -143,12 +145,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 365, "complete populated record case inventory");
+            assert_eq!(case_count, 366, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 329, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 330, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));
@@ -253,58 +255,14 @@ fn print_privacy_qualification_record_fixture_row() {
 #[test]
 #[ignore = "explicit maintenance command captures first-release SoraFS instruction frames"]
 fn print_capacity_declaration_record_fixture_row() {
-    let row = capture(super::sorafs::RegisterCapacityDeclaration::new(vec![
-        1, 2, 3,
-    ]));
-    println!(
-        "CAPACITY_DECLARATION_FIXTURE_ROW={}",
-        json::to_json(&row).expect("capacity declaration record")
-    );
-    let key =
-        iroha_crypto::KeyPair::try_from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519)
-            .expect("capture council/owner key");
-    let envelope: sorafs_manifest::ProviderAdmissionEnvelopeV1 = norito::decode_from_bytes(
-        include_bytes!("../../../../fixtures/sorafs_manifest/provider_admission/envelope_v1.to"),
-    )
-    .expect("structural provider material fixture");
-    let material = sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1 {
-        proposal: envelope.proposal,
-        advert_body: envelope.advert_body,
-        issued_at: envelope.issued_at,
-        retention_epoch: envelope.retention_epoch,
-    };
-    material
-        .validate()
-        .expect("valid network-independent material");
-    let initializer = super::sorafs::InitializeSorafsProviderAdmissionV1 {
-        council: crate::sorafs::provider_admission::governance::InitialProviderAdmissionCouncilV1 {
-            policy_id: [0x52; 32],
-            trusted_signers: vec![key.public_key().to_bytes().1.try_into().expect("Ed25519")],
-            signature_threshold: 1,
-        },
-        providers: vec![
-            crate::sorafs::provider_admission::governance::InitialProviderAdmissionV1 {
-                owner: crate::account::AccountId::new(key.public_key().clone()),
-                material: norito::encode_canonical(&material).expect("canonical genesis material"),
-            },
-        ],
-    };
-    println!(
-        "INITIALIZE_SORAFS_ADMISSION_FIXTURE_ROW={}",
-        json::to_json(&capture(initializer)).expect("initializer record")
-    );
-    let assertion = super::sorafs::AssertSorafsPublicationV1 {
-        manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new([0x61; 32]),
-        order_id: crate::sorafs::pin_registry::ReplicationOrderId::new([0x62; 32]),
-        assignment_revision: 3,
-        canonical_order_digest: [0x63; 32],
-        require_complete: true,
-        challenge: [0x64; 32],
-        minimum_height: 9,
-        minimum_block_hash: [0x65; 32],
-    };
-    println!(
-        "ASSERT_SORAFS_PUBLICATION_FIXTURE_ROW={}",
-        json::to_json(&capture(assertion)).expect("publication assertion record")
-    );
+    for (label, row) in [
+        "CAPACITY_DECLARATION_FIXTURE_ROW",
+        "INITIALIZE_SORAFS_ADMISSION_FIXTURE_ROW",
+        "ASSERT_SORAFS_PUBLICATION_FIXTURE_ROW",
+    ]
+    .into_iter()
+    .zip(native_capture::sorafs_values())
+    {
+        println!("{label}={}", json::to_json(&row).expect("SoraFS record"));
+    }
 }

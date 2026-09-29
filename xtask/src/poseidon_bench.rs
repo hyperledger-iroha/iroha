@@ -420,8 +420,10 @@ fn measure_cuda_poseidon2(
         inputs.len(),
         iterations,
         scalar,
-        ivm::poseidon2_cuda_many(inputs),
-        || ivm::poseidon2_cuda_many(inputs),
+        probe_cuda_batch(inputs.len(), |output| {
+            ivm::poseidon2_cuda_many_into(inputs, output)
+        }),
+        |output| ivm::poseidon2_cuda_many_into(inputs, output),
         expected,
     )
 }
@@ -435,21 +437,30 @@ fn measure_cuda_poseidon6(
         inputs.len(),
         iterations,
         scalar,
-        ivm::poseidon6_cuda_many(inputs),
-        || ivm::poseidon6_cuda_many(inputs),
+        probe_cuda_batch(inputs.len(), |output| {
+            ivm::poseidon6_cuda_many_into(inputs, output)
+        }),
+        |output| ivm::poseidon6_cuda_many_into(inputs, output),
         expected,
     )
+}
+fn probe_cuda_batch(
+    count: usize,
+    call: impl FnOnce(&mut [u64]) -> bool,
+) -> Option<ivm::AccelerationOutput<u64>> {
+    let mut output = ivm::try_acceleration_output(count).ok()?;
+    call(&mut output).then_some(output)
 }
 fn measure_cuda_backend<F>(
     batch_len: usize,
     iterations: u32,
     scalar: &PerfSample,
-    first_call: Option<Vec<u64>>,
-    call: F,
+    first_call: Option<ivm::AccelerationOutput<u64>>,
+    mut call: F,
     expected: &[u64],
 ) -> CudaSample
 where
-    F: FnMut() -> Option<Vec<u64>>,
+    F: FnMut(&mut [u64]) -> bool,
 {
     let available = ivm::cuda_available();
     let disabled = ivm::cuda_disabled();
@@ -461,7 +472,7 @@ where
         actual: None,
     };
     let mut note = ivm::acceleration_runtime_errors().cuda;
-    let Some(outputs) = first_call else {
+    let Some(mut outputs) = first_call else {
         return CudaSample {
             available,
             disabled,
@@ -488,10 +499,11 @@ where
         };
     }
     let total_ops = batch_len * iterations as usize;
-    let elapsed = measure_iterations(iterations, call).unwrap_or_else(|| {
-        note.get_or_insert_with(|| "CUDA backend disabled during timing run".to_string());
-        Duration::from_secs(0)
-    });
+    let elapsed = measure_iterations(iterations, || call(&mut outputs).then_some(()))
+        .unwrap_or_else(|| {
+            note.get_or_insert_with(|| "CUDA backend disabled during timing run".to_string());
+            Duration::from_secs(0)
+        });
     let ops_sec = if elapsed.is_zero() {
         None
     } else {
@@ -622,8 +634,11 @@ mod tests {
             expected.len(),
             2,
             &scalar,
-            Some(vec![10, 99, 30]),
-            || -> Option<Vec<u64>> {
+            probe_cuda_batch(3, |output| {
+                output.copy_from_slice(&[10, 99, 30]);
+                true
+            }),
+            |_| -> bool {
                 panic!("mismatched CUDA output must not be timed");
             },
             &expected,
@@ -651,8 +666,11 @@ mod tests {
             expected.len(),
             2,
             &scalar,
-            Some(vec![10, 20]),
-            || -> Option<Vec<u64>> {
+            probe_cuda_batch(2, |output| {
+                output.copy_from_slice(&[10, 20]);
+                true
+            }),
+            |_| -> bool {
                 panic!("length-mismatched CUDA output must not be timed");
             },
             &expected,
@@ -678,8 +696,11 @@ mod tests {
             expected.len(),
             2,
             &scalar,
-            Some(expected.to_vec()),
-            || None::<Vec<u64>>,
+            probe_cuda_batch(3, |output| {
+                output.copy_from_slice(&expected);
+                true
+            }),
+            |_| false,
             &expected,
         );
         assert_eq!(sample.total_ops, expected.len() * 2);

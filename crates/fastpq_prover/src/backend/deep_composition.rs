@@ -8,7 +8,7 @@
 //! caller's authenticated geometry; exact-order validation alone is not binding.
 //!
 //! The power-batched order is `(h_j, X^2 h_j)` for every projected column, then
-//! `(t_0, X t_0, t_1, X t_1)`. Here h_j divides by the two OOD roots and t_k
+//! `(t_0, X t_0, t_1, X t_1)`. Here `h_j` divides by the two OOD roots and `t_k`
 //! divides by the first. The shifts enforce the distinct reconstructed degree
 //! obligations; dropping them is not an equivalent composition.
 //! The point evaluator is for bounded verifier queries. The honest producer must

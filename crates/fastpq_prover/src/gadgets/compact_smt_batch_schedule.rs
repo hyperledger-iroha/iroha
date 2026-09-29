@@ -29,7 +29,7 @@ use crate::{Error, Result};
 
 /// Checked integer counts; constructing these never allocates a trace or updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BatchScheduleCounts {
+pub struct BatchScheduleCounts {
     /// Original public delta count, excluding all internal capacity fillers.
     pub(crate) actual_deltas: usize,
     /// Power-of-two number of delta slots in the prospective physical schedule.
@@ -95,7 +95,7 @@ impl BatchScheduleCounts {
 /// Never pass a sampled LDE index here to choose AIR equations. A future coset
 /// evaluator must interpolate these fixed events on its declared subgroup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BatchBaseRow {
+pub struct BatchBaseRow {
     /// Absolute base schedule row, always below `counts().rows`.
     pub(crate) index: usize,
     /// Scheduled delta-slot ordinal; ordinals at/after the actual count are fillers.
@@ -135,7 +135,7 @@ pub(crate) struct BatchBaseRow {
 /// enlarged domain or authorize a transfer. Actual and scheduled update views
 /// deliberately remain separate so a bundle cannot mistake fillers for claims.
 #[derive(Debug)]
-pub(crate) struct CompactBatchSchedule {
+pub struct CompactBatchSchedule {
     counts: BatchScheduleCounts,
     updates: Vec<PublicUpdate>,
     old_root: DigestLimbs,

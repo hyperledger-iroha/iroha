@@ -6,24 +6,24 @@ async fn current_admission_http(
 ) -> Response {
     use iroha_version::codec::EncodeVersioned as _;
     use tower::ServiceExt as _;
-    let body = if endpoint == uri::TRANSACTIONS_BATCH {
+    let body = if endpoint == route_catalog::pipeline::TRANSACTIONS_BATCH.path() {
         norito::to_bytes(&vec![transaction.encode_versioned()]).unwrap()
-    } else if endpoint == uri::TRANSACTION_ENTRYPOINT {
+    } else if endpoint == route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path() {
         TransactionEntrypoint::External(transaction.clone()).encode_versioned()
     } else {
         transaction.encode_versioned()
     };
     let router = axum::Router::new()
         .route(
-            uri::TRANSACTION,
+            route_catalog::pipeline::TRANSACTION.path(),
             axum::routing::post(super::handler_post_transaction),
         )
         .route(
-            uri::TRANSACTION_ENTRYPOINT,
+            route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
             axum::routing::post(super::handler_post_transaction_entrypoint),
         )
         .route(
-            uri::TRANSACTIONS_BATCH,
+            route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
             axum::routing::post(super::handler_post_transactions_batch),
         )
         .with_state(app);
@@ -91,9 +91,9 @@ async fn current_http_admission_rejects_unsupported_intent_before_any_durable_pr
         .sign(key.private_key());
     let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
     for endpoint in [
-        uri::TRANSACTION,
-        uri::TRANSACTION_ENTRYPOINT,
-        uri::TRANSACTIONS_BATCH,
+        route_catalog::pipeline::TRANSACTION.path(),
+        route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
+        route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
     ] {
         assert_unsupported_current_admission(
             current_admission_http(app.clone(), &unsupported, endpoint).await,
@@ -105,7 +105,12 @@ async fn current_http_admission_rejects_unsupported_intent_before_any_durable_pr
             before
         );
     }
-    let accepted = current_admission_http(app.clone(), &ordinary, uri::TRANSACTION).await;
+    let accepted = current_admission_http(
+        app.clone(),
+        &ordinary,
+        route_catalog::pipeline::TRANSACTION.path(),
+    )
+    .await;
     assert_eq!(
         accepted.status(),
         StatusCode::ACCEPTED,
@@ -166,9 +171,9 @@ async fn current_http_admission_rejects_actual_multiroute_before_journal_write()
         .unwrap();
     let before = std::fs::read(&path).unwrap();
     for endpoint in [
-        uri::TRANSACTION,
-        uri::TRANSACTION_ENTRYPOINT,
-        uri::TRANSACTIONS_BATCH,
+        route_catalog::pipeline::TRANSACTION.path(),
+        route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
+        route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
     ] {
         assert_unsupported_current_admission(
             current_admission_http(app.clone(), &transaction, endpoint).await,
@@ -195,9 +200,9 @@ async fn current_peer_and_canonical_retry_reject_unsupported_admission_without_c
         panic!("signed fixture")
     };
     for endpoint in [
-        uri::TRANSACTION,
-        uri::TRANSACTION_ENTRYPOINT,
-        uri::TRANSACTIONS_BATCH,
+        route_catalog::pipeline::TRANSACTION.path(),
+        route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
+        route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
     ] {
         assert_unsupported_current_admission(
             current_admission_http(app.clone(), transaction, endpoint).await,

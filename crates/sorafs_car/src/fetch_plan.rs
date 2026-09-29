@@ -246,7 +246,7 @@ fn chunk_fetch_specs_to_array(specs: &[ChunkFetchSpec]) -> Vec<Value> {
             obj.insert("length".into(), Value::from(spec.length as u64));
             obj.insert(
                 "digest_blake3".into(),
-                Value::from(hex::encode(&spec.digest)),
+                Value::from(hex::encode(spec.digest)),
             );
             Value::Object(obj)
         })

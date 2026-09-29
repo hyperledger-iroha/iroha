@@ -24,8 +24,8 @@ consensus = ["rand", "bls"]
 node-crypto = ["application", "consensus", "gost", "sm", "rayon"]
 json = ["norito/json"]
 bfv-accel = []
-# Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.
-# Implementation lives in `signature::gost` (Streebog hashing + TC26 curves).
+# Enable GOST R 34.10-2012 with Streebog, CryptoPro 256-bit A/B/C and RFC 7836 512-bit A/B.
+# Implementation and parameter ownership live in `signature::gost`.
 gost = ["dep:once_cell", "dep:num-bigint", "dep:num-traits", "dep:streebog", "dep:crypto-bigint", "dep:subtle"]
 # Enable Chinese national (SM2/SM3/SM4) algorithms.
 sm-ccm = []
@@ -35,7 +35,7 @@ sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
 crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
 # Enable support for BLS signatures. The shipping `node-crypto` aggregate includes it.
-bls = ["dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle", "dep:w3f-bls"]
+bls = ["dep:ark-serialize", "dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle", "dep:w3f-bls"]
 
 # Allow creating key using random number generator which is tricky in some environments like Smart Contracts
 rand = []
@@ -48,6 +48,7 @@ ecc-batch = ["dep:subtle", "ed25519-dalek/batch"]
 pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq", "dep:subtle"]
 
 [dependencies]
+mv = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
 iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
@@ -68,6 +69,8 @@ blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
+# Preserve the actual typed point-decoder diagnostic without formatting in the fixed core.
+ark-serialize = { version = "0.4.2", default-features = false, optional = true, features = ["std"] }
 w3f-bls = { version = "0.1.9", default-features = false, optional = true, features = ["std"] }
 rayon = { version = "1.11.0", optional = true }
 blst = { version = "0.3.16", default-features = false, optional = true }
@@ -181,3 +184,28 @@ path = "tests/grouped/group_01.rs"
 [[test]]
 name = "manual_scalar_identity"
 path = "tests/manual_scalar_identity.rs"
+
+# Observe the real private tree allocation, including concurrent final owners.
+[[test]]
+name = "ordered_digest_allocation_custody"
+path = "tests/ordered_digest_allocation_custody.rs"
+
+# Exact resident lookup-node allocation and final-refund controls.
+[[test]]
+name = "merkle_map_allocation_custody"
+path = "tests/merkle_map_allocation_custody.rs"
+
+# Exact original-pool allocation/refusal and final-release order for public keys.
+[[test]]
+name = "public_key_allocation_custody"
+path = "tests/public_key_allocation_custody.rs"
+
+# Observe borrowed ML-DSA verification separately from caller-owned envelopes.
+[[test]]
+name = "mldsa_borrowed_verification"
+path = "tests/mldsa_borrowed_verification.rs"
+
+# Observe fixed semantic rejections independently of decode-budget counters.
+[[test]]
+name = "public_key_decode_failure_custody"
+path = "tests/public_key_decode_failure_custody.rs"

@@ -4,7 +4,7 @@ use iroha_data_model::isi::consensus_keys::{
 };
 
 fn lifecycle_ordinary_fixture(
-    persist_finality: bool,
+    commit_genesis: bool,
 ) -> (
     SharedAppState,
     KeyPair,
@@ -12,13 +12,34 @@ fn lifecycle_ordinary_fixture(
     ThresholdKeyLifecycleCertificateV1,
     tempfile::TempDir,
 ) {
-    let (mut app, _) = app_with_finalized_block_for_test(persist_finality);
+    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
     let authority_key = checked_torii_test_ed25519_keypair(0x39, "lifecycle ingress authority");
     let authority = AccountId::new(authority_key.public_key().clone());
-    let mut validators = (1_u8..=4)
+    // Signed genesis executes synchronously before the chain spawns its executor.
+    // Give that execution the same stack budget as production consensus workers.
+    let genesis_authority = authority.clone();
+    let genesis_owner = std::thread::Builder::new()
+        .name("torii-lifecycle-genesis".to_owned())
+        .stack_size(iroha_config::parameters::defaults::concurrency::SUMERAGI_STACK_BYTES)
+        .spawn(move || {
+            CertifiedTestChain::start(TestChainConfig::new(
+                world_with_account(&genesis_authority),
+                1,
+            ))
+            .expect("apply the original signed four-validator genesis")
+        })
+        .expect("spawn signed-genesis fixture owner");
+    let chain = match genesis_owner.join() {
+        Ok(chain) => chain,
+        Err(payload) => std::panic::resume_unwind(payload),
+    };
+    // These are the maintained test chain's fixed signing keys. Check their order
+    // against its actual genesis committee before using them as certificate custody.
+    let mut validators = (0xC1_u8..=0xC4)
         .map(|seed| {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("derive exact durable-finality validator")
+                .expect("derive signed-genesis fixture custody")
         })
         .collect::<Vec<_>>();
     validators.sort_by_key(|key| PeerId::new(key.public_key().clone()));
@@ -26,33 +47,34 @@ fn lifecycle_ordinary_fixture(
         .iter()
         .map(|key| PeerId::new(key.public_key().clone()))
         .collect::<Vec<_>>();
+    assert_eq!(
+        roster,
+        chain
+            .validators()
+            .iter()
+            .map(|(peer, _)| peer.clone())
+            .collect::<Vec<_>>(),
+    );
+    let genesis_hash = chain.genesis().hash();
+    let mut app = mk_app_state_for_tests_with_world_and_options_and_network_id(
+        world_with_account(&authority),
+        None,
+        None,
+        None,
+        None,
+        chain.state().chain_id_ref().clone(),
+        chain.network_id(),
+    );
     {
         let app = Arc::get_mut(&mut app).expect("unique lifecycle app");
+        if commit_genesis {
+            // Admission reads the committed schedule. Peer registrations, mutable role
+            // topology and an unrelated finality file cannot stand in for signed genesis.
+            app.state = chain.state().clone();
+            app.kura = chain.kura().clone();
+        }
         app.local_peer_id = Some(roster[0].clone());
         app.torii_proxy_bridge_signer = validators[0].clone();
-        let state = Arc::get_mut(&mut app.state).expect("unique lifecycle state");
-        state.world = world_with_account(&authority);
-        let bindings = validators
-            .iter()
-            .enumerate()
-            .map(|(index, key)| {
-                let validator = AccountId::new(key.public_key().clone());
-                ensure_runtime_peer_binding_for_test(
-                    state,
-                    &validator,
-                    key,
-                    &format!("lifecycle-{index}"),
-                );
-                (validator, PeerId::new(key.public_key().clone()))
-            })
-            .collect::<Vec<_>>();
-        let mut topology = state.commit_topology.block();
-        topology.clear();
-        for peer in &roster {
-            topology.push(peer.clone());
-        }
-        topology.commit();
-        install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, bindings)]);
     }
     let mut certificate = ThresholdKeyLifecycleCertificateV1 {
         version: iroha_core::state::THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
@@ -69,6 +91,25 @@ fn lifecycle_ordinary_fixture(
         signatures: Vec::new(),
     };
     lifecycle_sign_certificate(&mut certificate, &validators);
+    if commit_genesis {
+        assert_eq!(app.state.committed_height(), 1);
+        assert_eq!(
+            app.state
+                .verify_next_height_threshold_key_lifecycle_certificate_v1(&certificate),
+            Ok((genesis_hash, roster)),
+            "the exact next-height certificate authenticates against committed genesis",
+        );
+        let route =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        let context = app
+            .queue
+            .plan_admission_context_with_state(&app.state, &route)
+            .expect("the global route has signed-genesis committee authority");
+        assert_eq!(context.predecessor_block_hash, Some(genesis_hash));
+        assert_eq!(context.proposal_height, certificate.effective_height);
+        assert_eq!(context.route_incarnations.len(), 1);
+        assert_eq!(context.route_incarnations[0].validator_set.len(), 4);
+    }
     let journal = tempfile::tempdir().expect("lifecycle durable journal");
     app.queue
         .install_plan_journal(&journal.path().join("queue.norito"), 1024 * 1024, true)
@@ -383,28 +424,52 @@ async fn lifecycle_ordinary_ingress_rejects_invalid_certificate_authority() {
     duplicate.signatures[1].signer_index = duplicate.signatures[0].signer_index;
     let mut insufficient = certificate;
     insufficient.signatures.pop();
-    for invalid in [
-        wrong_height,
-        wrong_network,
-        wrong_roster,
-        forged,
-        duplicate,
-        insufficient,
+    for (invalid, expected_error) in [
+        (
+            wrong_height,
+            "lifecycle route does not bind the certified next height",
+        ),
+        (
+            wrong_network,
+            "threshold-key lifecycle certificate context binding is invalid",
+        ),
+        (
+            wrong_roster,
+            "threshold-key lifecycle certificate context binding is invalid",
+        ),
+        (
+            forged,
+            "threshold-key lifecycle certificate quorum authentication failed",
+        ),
+        (
+            duplicate,
+            "threshold-key lifecycle certificate quorum authentication failed",
+        ),
+        (
+            insufficient,
+            "threshold-key lifecycle certificate quorum authentication failed",
+        ),
     ] {
-        let response = lifecycle_submit(
+        let transaction = lifecycle_ordinary_transaction(
             &app,
-            lifecycle_ordinary_transaction(
+            &key,
+            vec![
+                ApplyThresholdKeyLifecycleCertificateV1 {
+                    certificate: invalid,
+                }
+                .into(),
+            ],
+        );
+        assert_eq!(
+            super::ordinary_transaction_ingress::authenticate(
                 &app,
-                &key,
-                vec![
-                    ApplyThresholdKeyLifecycleCertificateV1 {
-                        certificate: invalid,
-                    }
-                    .into(),
-                ],
+                &TransactionEntrypoint::External(transaction.clone()),
+                &RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL,)),
             ),
-        )
-        .await;
+            Err(expected_error.to_owned()),
+            "the malformed certificate must reach its intended authorization check",
+        );
+        let response = lifecycle_submit(&app, transaction).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
     assert_eq!(app.queue.active_len(), 0);
@@ -416,22 +481,47 @@ async fn lifecycle_ordinary_ingress_rejects_invalid_certificate_authority() {
 
 #[tokio::test]
 async fn lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route() {
-    for persist in [false, true] {
-        let (mut app, key, _, certificate, journal) = lifecycle_ordinary_fixture(persist);
-        if persist {
-            Arc::get_mut(&mut app).unwrap().local_peer_id =
-                Some(PeerId::new(key.public_key().clone()));
-        }
+    let (uncommitted, _, _, certificate, journal) = lifecycle_ordinary_fixture(false);
+    let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
+    assert_eq!(
+        uncommitted
+            .state
+            .verify_next_height_threshold_key_lifecycle_certificate_v1(&certificate),
+        Err("lifecycle admission requires a committed parent".to_owned()),
+        "the signed genesis network identity alone does not establish a committed parent",
+    );
+    assert_eq!(uncommitted.queue.active_len(), 0);
+    assert_eq!(
+        std::fs::read(journal.path().join("queue.norito")).unwrap(),
+        before,
+    );
+    for missing_identity in [false, true] {
+        let (mut app, key, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+        Arc::get_mut(&mut app).unwrap().local_peer_id = if missing_identity {
+            None
+        } else {
+            Some(PeerId::new(key.public_key().clone()))
+        };
         let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
-        let response = lifecycle_submit(
+        let transaction = lifecycle_ordinary_transaction(
             &app,
-            lifecycle_ordinary_transaction(
+            &key,
+            vec![ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into()],
+        );
+        let expected_error = if missing_identity {
+            "lifecycle ingress has no local validator identity"
+        } else {
+            "lifecycle ingress does not own the authenticated global control route"
+        };
+        assert_eq!(
+            super::ordinary_transaction_ingress::authenticate(
                 &app,
-                &key,
-                vec![ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into()],
+                &TransactionEntrypoint::External(transaction.clone()),
+                &RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL,)),
             ),
-        )
-        .await;
+            Err(expected_error.to_owned()),
+        );
+        let response = lifecycle_submit(&app, transaction).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(app.queue.active_len(), 0);
         assert_eq!(
@@ -444,12 +534,17 @@ async fn lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_rou
     let transaction = lifecycle_ordinary_transaction(
         &app,
         &key,
-        vec![
-            ApplyThresholdKeyLifecycleCertificateV1 {
-                certificate: certificate.clone(),
-            }
-            .into(),
-        ],
+        vec![ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into()],
+    );
+    let wrong_route =
+        RoutingPlan::single(RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9)));
+    assert_eq!(
+        super::ordinary_transaction_ingress::authenticate(
+            &app,
+            &TransactionEntrypoint::External(transaction.clone()),
+            &wrong_route,
+        ),
+        Err("lifecycle certificate requires the exact single global control route".to_owned()),
     );
     let parameters = app.state.view().world().parameters().clone();
     let accepted = iroha_core::tx::AcceptedTransaction::accept_entrypoint(
@@ -463,22 +558,10 @@ async fn lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_rou
     let response = super::execute_torii_transaction_via_proxy(
         &app,
         accepted,
-        RoutingPlan::single(RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9))),
+        wrong_route,
         None,
         true,
         ResponseFormat::Norito,
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let finality_path = app.kura.v2_finality_artifact_path_for_testing(1);
-    std::fs::write(finality_path, b"corrupt authenticated parent").unwrap();
-    let response = lifecycle_submit(
-        &app,
-        lifecycle_ordinary_transaction(
-            &app,
-            &key,
-            vec![ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into()],
-        ),
     )
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);

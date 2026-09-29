@@ -46,7 +46,6 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_STATE_VALUE_DECODE | 0x10036 |  |
 | SYSCALL_STATE_PATH_FROM_NAME | 0x10037 |  |
 | SYSCALL_STATE_SCAN | 0x10038 |  |
-| SYSCALL_DECODE_INT | 0x53 |  |
 | SYSCALL_TLV_LEN | 0x77 |  |
 | SYSCALL_JSON_GET_JSON | 0x79 |  |
 | SYSCALL_JSON_GET_NAME | 0x7A |  |
@@ -57,7 +56,6 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_JSON_OBJECT | 0x81 |  |
 | SYSCALL_JSON_SET_I64 | 0x82 |  |
 | SYSCALL_JSON_SET_ACCOUNT_ID | 0x83 |  |
-| SYSCALL_ENCODE_INT | 0x55 |  |
 | SYSCALL_BUILD_PATH_KEY_NORITO | 0x56 |  |
 | SYSCALL_JSON_ENCODE | 0x57 |  |
 | SYSCALL_JSON_DECODE | 0x58 |  |
@@ -129,7 +127,7 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_AXT_TOUCH | 0xB1 |  |
 | SYSCALL_AXT_COMMIT | 0xB2 |  |
 | SYSCALL_VERIFY_DS_PROOF | 0xB3 |  |
-| SYSCALL_USE_ASSET_HANDLE | 0xB4 |  |
+| SYSCALL_AXT_STAGE_ANCHORED_SPEND | 0xB5 |  |
 | SYSCALL_ESCROW_OPEN_OFFER | 0xB8 |  |
 | SYSCALL_ESCROW_ACCEPT | 0xB9 |  |
 | SYSCALL_ESCROW_MARK_PAYMENT_SENT | 0xBA |  |
@@ -187,6 +185,13 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_INT_WRAP_ADD | 0x10111 |  |
 | SYSCALL_INT_WRAP_SUB | 0x10112 |  |
 | SYSCALL_INT_WRAP_MUL | 0x10113 |  |
+| SYSCALL_INT_ISQRT | 0x10114 |  |
+| SYSCALL_INT_ABS | 0x10115 |  |
+| SYSCALL_INT_MIN | 0x10116 |  |
+| SYSCALL_INT_MAX | 0x10117 |  |
+| SYSCALL_INT_DIV_CEIL | 0x10118 |  |
+| SYSCALL_INT_GCD | 0x10119 |  |
+| SYSCALL_INT_MEAN | 0x1011A |  |
 | SYSCALL_DECIMAL_FROM_INT | 0x10120 |  |
 | SYSCALL_DECIMAL_NEG | 0x10121 |  |
 | SYSCALL_DECIMAL_ADD | 0x10122 |  |

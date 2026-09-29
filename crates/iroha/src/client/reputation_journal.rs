@@ -412,7 +412,10 @@ mod tests {
         client: &Client,
         check: impl FnOnce(&SingularQueryBox),
     ) {
-        assert_eq!(snapshot.url.path(), iroha_torii_shared::uri::QUERY);
+        assert_eq!(
+            snapshot.url.path(),
+            iroha_torii_shared::route_catalog::pipeline::QUERY.path()
+        );
         let signed = SignedQuery::decode_all_versioned(&snapshot.body).expect("signed query");
         signed.verify_signature().expect("query signature");
         assert_eq!(signed.payload.network_id, client.network_id);

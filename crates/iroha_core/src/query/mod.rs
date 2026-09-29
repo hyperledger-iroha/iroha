@@ -11,6 +11,8 @@ mod finalized_archive_fs;
 mod fixture_write_tests;
 pub mod index_status;
 mod journal_io;
+/// Original complete native context projection archive, authenticated by canonical R.
+pub mod native_context_archive;
 pub mod pagination;
 pub mod projection_checkpoint;
 pub mod projection_checkpoint_journal;

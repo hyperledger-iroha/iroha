@@ -26,8 +26,6 @@
 #[cfg(feature = "full")]
 pub mod backend;
 #[cfg(feature = "full")]
-pub mod confidential;
-#[cfg(feature = "full")]
 mod errors;
 #[cfg(feature = "full")]
 mod field;
@@ -81,11 +79,16 @@ pub use ipa::{
     IpaRoundChallenge, IpaVerifierAccumulation, IpaVerifierAccumulationRound,
     IpaVerifierBVectorReduction, IpaVerifierBVectorReductionRound, IpaVerifierTranscriptBinding,
     IpaVerifierTranscriptProjection, IpaVerifierWitness, derive_ipa_verifier_accumulation,
-    derive_ipa_verifier_b_vector_reduction, derive_ipa_verifier_round_challenges,
-    derive_ipa_verifier_transcript_binding, derive_ipa_verifier_transcript_projection,
-    derive_ipa_verifier_witness, ipa_transcript_binding_compress, ipa_transcript_binding_round,
-    validate_ipa_verifier_transcript_binding, validate_ipa_verifier_transcript_projection,
-    validate_ipa_verifier_witness,
+    derive_ipa_verifier_b_vector_reduction, derive_ipa_verifier_transcript_binding,
+    derive_ipa_verifier_transcript_projection, derive_ipa_verifier_witness,
+    ipa_transcript_binding_compress, ipa_transcript_binding_round,
+};
+// TODO: export the standalone verifier-witness validators once a recursive verifier consumes them;
+// until then they are compiled only for this crate's tests.
+#[cfg(all(test, feature = "full"))]
+pub use ipa::{
+    derive_ipa_verifier_round_challenges, validate_ipa_verifier_transcript_binding,
+    validate_ipa_verifier_transcript_projection, validate_ipa_verifier_witness,
 };
 #[cfg(feature = "full")]
 pub use norito_types::{
@@ -172,6 +175,7 @@ pub mod norito_helpers {
         }
     }
     /// Decode an IPA proof for a specific backend.
+    #[cfg(test)]
     pub fn proof_from_wire<B: IpaBackend>(
         w: &IpaProofData,
     ) -> Result<crate::ipa::IpaProof<B>, Error> {
@@ -380,6 +384,8 @@ pub mod norito_helpers {
     pub fn group_from_bytes(bytes: &[u8; 32]) -> Result<GroupElem, Error> {
         <PallasBackend as IpaBackend>::Group::from_bytes(bytes)
     }
+    // TODO: export the envelope witness helpers once recursive verifier preflight consumes them;
+    // until then they are compiled only for this crate's tests.
     /// Derive a Pallas verifier witness directly from a transparent opening envelope.
     ///
     /// The witness is reconstructed from the envelope's parameters, public
@@ -390,6 +396,7 @@ pub mod norito_helpers {
     ///
     /// Returns an error when the envelope is malformed, is not a Pallas opening,
     /// or does not verify under the transparent IPA verifier.
+    #[cfg(test)]
     pub fn derive_pallas_ipa_verifier_witness_from_envelope(
         env: &OpenVerifyEnvelope,
     ) -> Result<
@@ -414,6 +421,7 @@ pub mod norito_helpers {
     ///
     /// Returns an error when the envelope exceeds the supplied limits, is malformed, is not a
     /// Pallas opening, or does not verify under the transparent IPA verifier.
+    #[cfg(test)]
     pub fn derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
         env: &OpenVerifyEnvelope,
         limits: OpenVerifyLimits,

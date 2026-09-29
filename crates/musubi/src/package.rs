@@ -2468,9 +2468,35 @@ version = "1.0.0"
             self.admitted.store(true, Ordering::SeqCst);
             Ok(())
         }
+        fn verify_staged_car(
+            &self,
+            operation_id: [u8; 32],
+            binding: &MusubiSeedIngressReceiptBindingV1,
+            commitment: &MusubiArchiveCommitmentV1,
+            plan: &CarBuildPlan,
+            car: &[u8],
+        ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+            if !self.admitted.load(Ordering::SeqCst)
+                || operation_id != self.operation_id
+                || binding != &self.binding
+                || commitment != &self.commitment
+                || plan != &self.plan
+                || car != self.car.as_slice()
+            {
+                return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
+            }
+            Ok(())
+        }
     }
     struct UnusedPackageStorageBackend;
     impl MusubiStorageCoordinationBackendV1 for UnusedPackageStorageBackend {
+        fn verify_current_registration(
+            &self,
+            _request: &MusubiStorageCoordinationRequestV1,
+        ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent)
+        }
+
         fn coordinate_storage(
             &mut self,
             _request: &MusubiStorageCoordinationRequestV1,
@@ -2481,6 +2507,12 @@ version = "1.0.0"
     }
     struct UnusedPackageReadbackBackend;
     impl MusubiProviderReadbackBackendV1 for UnusedPackageReadbackBackend {
+        fn verify_current_target(
+            &self,
+            _request: &MusubiProviderReadbackRequestV1,
+        ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent)
+        }
         fn readback_provider(
             &mut self,
             _request: &MusubiProviderReadbackRequestV1,

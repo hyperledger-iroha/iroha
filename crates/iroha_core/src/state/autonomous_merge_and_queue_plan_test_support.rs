@@ -64,7 +64,7 @@ fn configured_runtime_effect_queue_plan_state() -> (State, Vec<KeyPair>, Vec<Key
         "frozen baseline must retain the exact four lane validators"
     );
     assert_eq!(rules.quorum, Some(3));
-    state.install_lane_manifests(&registry);
+    state.install_lane_manifests_for_testing(&registry);
     // The native loader has frozen the source before genesis/checkpoint creation.
     drop(directory);
     let commit_keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
@@ -222,7 +222,7 @@ fn install_native_runtime_startup_registry(state: &State, keys: &[KeyPair]) {
         },
     ));
     assert!(registry.is_bound_to_catalog(&nexus.lane_catalog));
-    state.install_lane_manifests(&registry);
+    state.install_lane_manifests_for_testing(&registry);
 }
 
 fn autonomous_native_runtime_effect_fixture(

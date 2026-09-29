@@ -1,5 +1,6 @@
 //! Current-format cryptographic proof and wire regressions, independent of retired V2 fixtures.
 use super::*;
+use crate::sumeragi::epoch::ValidatorEpochContextV1;
 use crate::{
     account::AccountId,
     block::{CommitCertificate, builder::BlockBuilder, output_test_support},
@@ -8,7 +9,7 @@ use crate::{
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_crypto::{KeyPair, bls_normal_pop_prove};
-use iroha_sumeragi::types::{Bitmap, ChainParams, HeightConfig};
+use iroha_sumeragi::types::{Bitmap, ChainParams};
 use std::{collections::BTreeSet, num::NonZeroU64};
 
 pub(super) struct Fixture {
@@ -20,13 +21,27 @@ pub(super) struct Fixture {
     pub(super) network: NetworkId,
 }
 
-pub(super) fn result(block: &SignedBlock, committee: Committee) -> ExecutionResultCommitment {
+pub(super) fn result(
+    block: &SignedBlock,
+    epoch: &ValidatorEpochContextV1,
+) -> ExecutionResultCommitment {
     let (len, hash) = block.executed_block_wire_identity().unwrap();
+    let height = block.header().height().get();
+    let slot = |height| {
+        ScheduledSlot::Ready(ScheduledConfig {
+            height,
+            epoch: epoch.clone(),
+            params: ChainParamsRecord::from_core(&ChainParams::default()),
+        })
+    };
+    let (native_lanes, ordinary_root) =
+        NativeLaneStateProof::empty_for_testing(epoch.network_id, height);
     ExecutionResultCommitment::new(
+        height,
         ExecutionCommitment {
             parent_state_root: Hash::new(b"parent"),
-            post_state_root: Hash::new(b"post"),
-            ordinary_writes_root: Hash::new(b"ordinary"),
+            post_state_root: ordinary_root,
+            ordinary_writes_root: ordinary_root,
             kagemusha_top_up_root: None,
             kagemusha_top_up_count: 0,
             executed_block_wire_len: len,
@@ -34,11 +49,17 @@ pub(super) fn result(block: &SignedBlock, committee: Committee) -> ExecutionResu
             transaction_input_commitment: block.network_input_merkle_commitment(),
             transaction_output_commitment: block.output_merkle_commitment(),
         },
-        &HeightConfig {
-            committee,
-            params: ChainParams::default(),
+        ScheduleOutcome {
+            height,
+            current: epoch.clone(),
+            boundary: None,
+            next: slot(height + 1),
+            after_next: slot(height + 2),
         },
+        None,
+        native_lanes,
     )
+    .unwrap()
 }
 
 pub(super) fn sign_qc(qc: &mut Qc, keys: &[KeyPair], chosen: &[u32]) {
@@ -52,7 +73,7 @@ pub(super) fn sign_qc(qc: &mut Qc, keys: &[KeyPair], chosen: &[u32]) {
         .collect();
     let bytes: Vec<_> = signatures
         .iter()
-        .map(|signature| signature.payload())
+        .map(iroha_crypto::Signature::payload)
         .collect();
     qc.agg_sig = AggregateSignature(
         bls_normal_aggregate_signatures(&bytes)
@@ -75,18 +96,67 @@ impl Fixture {
                 proof_of_possession: bls_normal_pop_prove(key.private_key()).unwrap(),
             })
             .collect();
-        let (crypto, committee) = ProofCrypto::new(&validators).unwrap();
+        let (crypto, _) = ProofCrypto::new(&validators).unwrap();
         let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
         let account = AccountId::new(authority.public_key().clone());
+        use crate::{
+            block::consensus_v2::SumeragiV2GenesisContextParameters,
+            isi::{
+                InstructionBox, RegisterPeerWithPop, SetParameter,
+                kagemusha_v1::{
+                    KagemushaMintFinalityAuthorityGenerationTemplateV1,
+                    KagemushaMintFinalityGenesisParametersV1,
+                },
+            },
+            parameter::{
+                CustomParameter, Parameter,
+                system::{
+                    ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+                    consensus_metadata,
+                },
+            },
+        };
+        let epoch_fixture = crate::sumeragi::epoch::tests::fixture(4);
+        let metadata = ConsensusHandshakeMetadata {
+            mode: SumeragiConsensusMode::Permissioned,
+            block_cadence_ms: NonZeroU64::new(1000).unwrap(),
+            wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
+            consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
+            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 {
+                authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+                    version: 1,
+                    generation: 0,
+                    validators: epoch_fixture.authority.validators,
+                },
+            },
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        };
+        let mut instructions = validators
+            .iter()
+            .map(|validator| {
+                InstructionBox::from(RegisterPeerWithPop::new(
+                    PeerId::new(validator.public_key.clone()),
+                    validator.proof_of_possession.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        instructions.push(
+            SetParameter::new(Parameter::Custom(CustomParameter::new(
+                consensus_metadata::handshake_meta_id(),
+                iroha_primitives::json::Json::new(metadata),
+            )))
+            .into(),
+        );
         let tx = TransactionBuilder::new_genesis(
             account.clone(),
             FeePaymentIntent::authority(vec![], None),
         )
-        .with_instructions([Log::new(Level::INFO, "signed genesis".into())])
+        .with_instructions(instructions)
         .sign(authority.private_key());
         let genesis =
             SignedBlock::try_genesis(vec![tx], authority.private_key(), None, None).unwrap();
         let network = NetworkId::from_genesis_hash(genesis.hash());
+        let epoch = genesis_epoch(&genesis).unwrap();
         let instance = instance_id(
             &crypto,
             &Hash32(Hash::from(genesis.hash()).into()),
@@ -97,8 +167,8 @@ impl Fixture {
         let mut first_block = genesis.clone();
         output_test_support::install_network(&mut first_block, vec![Ok(Default::default())])
             .unwrap();
-        let first_result = result(&first_block, committee.clone());
-        first_block.set_commit_certificate(Some(CommitCertificate::new(
+        let first_result = result(&first_block, &epoch);
+        first_block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
             vec![],
             vec![],
             first_result.preimage().unwrap(),
@@ -122,10 +192,12 @@ impl Fixture {
         builder.push_transaction(tx);
         let mut block = builder.build(BTreeSet::new());
         output_test_support::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
-        let result = result(&block, committee);
+        let result = result(&block, &epoch);
         let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
         let header = CoreHeader {
+            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
             instance,
+            epoch: core_epoch(&epoch).unwrap().id,
             height: 2,
             origin_view: 0,
             parent_hash: Hash32(Hash::from(genesis.hash()).into()),
@@ -139,6 +211,7 @@ impl Fixture {
         let mut qc = Qc {
             kind: VoteKind::Commit,
             instance,
+            epoch: header.epoch,
             height: 2,
             view: 0,
             block_hash: header.hash(&crypto),
@@ -149,7 +222,7 @@ impl Fixture {
             attestations: vec![],
         };
         sign_qc(&mut qc, &keys, &[0, 1, 2]);
-        block.set_commit_certificate(Some(CommitCertificate::new(
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
             norito::encode_canonical(&header).unwrap(),
             norito::encode_canonical(&qc).unwrap(),
             result.preimage().unwrap(),
@@ -179,12 +252,17 @@ impl Fixture {
     pub(super) fn alternate(&self) -> SumeragiFinalityProof {
         let mut proof = self.second.clone();
         let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
-        let mut certificate = block.commit_certificate().unwrap().clone();
-        let mut qc: Qc = norito::decode_canonical(&certificate.commit_qc).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let consensus_header = certificate.consensus_header().to_vec();
+        let result_preimage = certificate.result_preimage().to_vec();
+        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         qc.view = 1;
         sign_qc(&mut qc, &self.keys, &[1, 2, 3]);
-        certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
-        block.set_commit_certificate(Some(certificate));
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            consensus_header,
+            norito::encode_canonical(&qc).unwrap(),
+            result_preimage,
+        )));
         proof.block_wire = block.encode_wire().unwrap();
         proof
     }
@@ -257,26 +335,30 @@ fn current_proof_rejects_tampered_qc_result_committee_parent_and_wire() {
     for mutation in 0..6 {
         let mut bad = fixture.second.clone();
         let mut block = decode_versioned_signed_block(&bad.block_wire).unwrap();
-        let mut certificate = block.commit_certificate().unwrap().clone();
-        let mut qc: Qc = norito::decode_canonical(&certificate.commit_qc).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let mut consensus_header = certificate.consensus_header().to_vec();
+        let mut result_preimage = certificate.result_preimage().to_vec();
+        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         match mutation {
             0 => qc.agg_sig.0[0] ^= 1,
             1 => qc.result = Hash32([9; 32]),
             2 => bad.committee[0].proof_of_possession[0] ^= 1,
             3 => {
-                let mut header: CoreHeader =
-                    norito::decode_canonical(&certificate.consensus_header).unwrap();
+                let mut header: CoreHeader = norito::decode_canonical(&consensus_header).unwrap();
                 header.parent_result = Hash32([9; 32]);
                 let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
                 qc.block_hash = header.hash(&crypto);
                 sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
-                certificate.consensus_header = norito::encode_canonical(&header).unwrap();
+                consensus_header = norito::encode_canonical(&header).unwrap();
             }
             4 => sign_qc(&mut qc, &fixture.keys, &[0, 1]),
-            _ => certificate.result_preimage.push(0),
+            _ => result_preimage.push(0),
         }
-        certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
-        block.set_commit_certificate(Some(certificate));
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            consensus_header,
+            norito::encode_canonical(&qc).unwrap(),
+            result_preimage,
+        )));
         bad.block_wire = block.encode_wire().unwrap();
         let mut verifier = fixture.verifier();
         verifier.verify(&fixture.first).unwrap();
@@ -348,5 +430,335 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
             _ => bad.body.config_fingerprint = Hash::new(b"different config"),
         }
         assert!(bad.verify().is_err(), "mutation {mutation}");
+    }
+}
+
+#[test]
+fn complete_result_roundtrip_rejects_retired_scalar_schedule_layout() {
+    let fixture = Fixture::new();
+    let value = fixture.second.decode_checked().unwrap().commitment;
+    let bytes = value.preimage().unwrap();
+    assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
+    #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionResultCommitment")]
+    struct RetiredResult {
+        execution: ExecutionCommitment,
+        next_committee_digest: [u8; 32],
+        next_params: ChainParamsRecord,
+    }
+    let retired = RetiredResult {
+        execution: value.execution,
+        next_committee_digest: [3; 32],
+        next_params: *value.schedule.next.params(),
+    };
+    assert!(
+        ExecutionResultCommitment::decode(&norito::encode_canonical(&retired).unwrap()).is_err()
+    );
+}
+
+#[test]
+fn certified_result_cannot_replace_its_incumbent_or_fixed_next_parameters() {
+    let fixture = Fixture::new();
+    for change_epoch in [false, true] {
+        let mut proof = fixture.second.clone();
+        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
+        let mut header: CoreHeader =
+            norito::decode_canonical(certificate.consensus_header()).unwrap();
+        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+        if change_epoch {
+            value.schedule.current.leader_seed[0] ^= 1;
+            let changed = value.schedule.current.clone();
+            for slot in [&mut value.schedule.next, &mut value.schedule.after_next] {
+                let ScheduledSlot::Ready(config) = slot else {
+                    panic!("permissioned ready slot");
+                };
+                config.epoch = changed.clone();
+            }
+            header.epoch = core_epoch(&changed).unwrap().id;
+            qc.epoch = header.epoch;
+        } else {
+            let ScheduledSlot::Ready(config) = &mut value.schedule.next else {
+                panic!("ready slot");
+            };
+            config.params.max_block_bytes -= 1;
+        }
+        value.validate().unwrap();
+        let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
+        qc.block_hash = header.hash(&crypto);
+        qc.result = value.result().unwrap();
+        sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            norito::encode_canonical(&header).unwrap(),
+            norito::encode_canonical(&qc).unwrap(),
+            value.preimage().unwrap(),
+        )));
+        proof.block_wire = block.encode_wire().unwrap();
+        proof.decode_checked().unwrap();
+        let mut verifier = fixture.verifier();
+        verifier.verify(&fixture.first).unwrap();
+        assert!(
+            verifier.verify(&proof).is_err(),
+            "a valid signature cannot replace independently scheduled authority"
+        );
+    }
+}
+
+#[test]
+fn certified_beacon_pulse_requires_the_exact_committed_parent() {
+    use crate::consensus::{
+        FinalizedGlobalThresholdBeaconPulseV1, GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+        GlobalThresholdBeaconChainAnchorV1,
+    };
+
+    let fixture = Fixture::new();
+    for foreign_parent in [false, true] {
+        let mut proof = fixture.second.clone();
+        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let header = certificate.consensus_header().to_vec();
+        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+        let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
+        // The portable receipt authenticates the execution result with its quorum signature;
+        // threshold-beacon verification belongs to execution. Supply a canonical nonzero G1
+        // point to isolate the exact public anchor binding checked by this receipt.
+        let (_, signature) = fixture.keys[0].public_key().try_to_bytes().unwrap();
+        let mut pulse = FinalizedGlobalThresholdBeaconPulseV1 {
+            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+            network_id: fixture.network,
+            session_id: [1; 32],
+            roster_hash: [2; 32],
+            transcript_hash: [3; 32],
+            height: 2,
+            round: 0,
+            finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {
+                height: 1,
+                block_hash: if foreign_parent {
+                    HashOf::from_untyped_unchecked(Hash::new(b"foreign finalized parent"))
+                } else {
+                    fixture.genesis.hash()
+                },
+            },
+            signature: signature.try_into().unwrap(),
+            seed: [4; 32],
+            pulse_id: [0; 32],
+        };
+        pulse.pulse_id = global_threshold_beacon_pulse_id_v1(&pulse, pulse.seed);
+        value.beacon = Some(pulse);
+        value.validate().unwrap();
+        qc.result = value.result().unwrap();
+        sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            header,
+            norito::encode_canonical(&qc).unwrap(),
+            value.preimage().unwrap(),
+        )));
+        proof.block_wire = block.encode_wire().unwrap();
+        let mut verifier = fixture.verifier();
+        verifier.verify(&fixture.first).unwrap();
+        if foreign_parent {
+            assert_eq!(
+                proof.decode_checked().unwrap_err().0,
+                "beacon pulse names another committed parent"
+            );
+            assert!(verifier.verify(&proof).is_err());
+        } else {
+            proof.decode_checked().unwrap();
+            verifier.verify(&proof).unwrap();
+        }
+    }
+}
+
+#[test]
+fn boundary_schedule_roundtrip_preserves_barrier_and_exact_successor_authority() {
+    use crate::sumeragi::epoch::{
+        ValidatorEpochBoundaryV1,
+        tests::{fixture, retained},
+    };
+    let current = fixture(4);
+    let next_epoch = retained(&current);
+    let params = ChainParamsRecord::from_core(&ChainParams::default());
+    let slot = |height, epoch: &ValidatorEpochContextV1| {
+        ScheduledSlot::Ready(ScheduledConfig {
+            height,
+            epoch: epoch.clone(),
+            params,
+        })
+    };
+    let before = ScheduleOutcome {
+        height: 9,
+        current: current.clone(),
+        boundary: None,
+        next: slot(10, &current),
+        after_next: ScheduledSlot::PendingBoundary {
+            height: 11,
+            boundary_height: 10,
+            predecessor_context_id: current.context_id().unwrap(),
+            params,
+        },
+    };
+    let boundary = ScheduleOutcome {
+        height: 10,
+        current: current.clone(),
+        boundary: Some(ValidatorEpochBoundaryV1 {
+            version: 1,
+            height: 10,
+            predecessor_context_id: current.context_id().unwrap(),
+            selection_anchor: HashOf::from_untyped_unchecked(Hash::new(
+                b"certified boundary parent",
+            )),
+            next: next_epoch.clone(),
+            preparation: None,
+        }),
+        next: slot(11, &next_epoch),
+        after_next: slot(12, &next_epoch),
+    };
+    before.validate_successor(&boundary).unwrap();
+    let bytes = norito::encode_canonical(&boundary).unwrap();
+    let decoded: ScheduleOutcome = norito::decode_canonical(&bytes).unwrap();
+    assert_eq!(decoded, boundary);
+    before.validate_successor(&decoded).unwrap();
+    let mut changed = boundary.clone();
+    let ScheduledSlot::Ready(next) = &mut changed.next else {
+        panic!("installed successor");
+    };
+    next.params.max_block_bytes -= 1;
+    assert!(before.validate_successor(&changed).is_err());
+    let mut no_barrier = before;
+    no_barrier.after_next = slot(11, &next_epoch);
+    assert!(no_barrier.validate_successor(&boundary).is_err());
+}
+
+#[test]
+fn certified_beacon_pulse_requires_exact_parent_and_native_context() {
+    use crate::consensus::{
+        FinalizedGlobalThresholdBeaconPulseV1, GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+        GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconPulseContextV1,
+    };
+
+    let fixture = Fixture::new();
+    for mutation in 0..7 {
+        let mut proof = fixture.second.clone();
+        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let header = certificate.consensus_header().to_vec();
+        let native_header: CoreHeader = norito::decode_canonical(&header).unwrap();
+        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+        let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
+        // The portable receipt authenticates the execution result with its quorum signature;
+        // threshold-beacon verification belongs to execution. Supply a canonical nonzero G1
+        // point to isolate the exact public anchor binding checked by this receipt.
+        let (_, signature) = fixture.keys[0].public_key().try_to_bytes().unwrap();
+        let mut pulse = FinalizedGlobalThresholdBeaconPulseV1 {
+            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+            network_id: fixture.network,
+            session_id: [1; 32],
+            roster_hash: [2; 32],
+            transcript_hash: [3; 32],
+            context: GlobalThresholdBeaconPulseContextV1 {
+                instance: native_header.instance.0,
+                epoch: value.schedule.current.authorization.epoch,
+                epoch_context_id: native_header.epoch.context.0,
+                parent_consensus_hash: native_header.parent_hash.0,
+                parent_result: native_header.parent_result.0,
+            },
+            height: 2,
+            round: 0,
+            finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {
+                height: 1,
+                block_hash: if mutation == 6 {
+                    HashOf::from_untyped_unchecked(Hash::new(b"foreign finalized parent"))
+                } else {
+                    fixture.genesis.hash()
+                },
+            },
+            signature: signature.try_into().unwrap(),
+            seed: [4; 32],
+            pulse_id: [0; 32],
+        };
+        match mutation {
+            1 => pulse.context.instance[0] ^= 1,
+            2 => pulse.context.epoch += 1,
+            3 => pulse.context.epoch_context_id[0] ^= 1,
+            4 => pulse.context.parent_consensus_hash[0] ^= 1,
+            5 => pulse.context.parent_result[0] ^= 1,
+            _ => {}
+        }
+        pulse.pulse_id = global_threshold_beacon_pulse_id_v1(&pulse, pulse.seed);
+        value.beacon = Some(pulse);
+        value.validate().unwrap();
+        qc.result = value.result().unwrap();
+        sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            header,
+            norito::encode_canonical(&qc).unwrap(),
+            value.preimage().unwrap(),
+        )));
+        proof.block_wire = block.encode_wire().unwrap();
+        let mut verifier = fixture.verifier();
+        verifier.verify(&fixture.first).unwrap();
+        if mutation == 6 {
+            assert_eq!(
+                proof.decode_checked().unwrap_err().0,
+                "beacon pulse names another committed parent"
+            );
+            assert!(verifier.verify(&proof).is_err());
+        } else if mutation != 0 {
+            assert_eq!(
+                proof.decode_checked().unwrap_err().0,
+                "beacon pulse names another native consensus context"
+            );
+            assert!(verifier.verify(&proof).is_err());
+        } else {
+            proof.decode_checked().unwrap();
+            verifier.verify(&proof).unwrap();
+        }
+    }
+}
+
+#[test]
+fn quorum_certificate_and_control_bytes_cannot_authorize_no_work() {
+    let fixture = Fixture::new();
+    let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
+    for with_control in [false, true] {
+        let mut proof = fixture.second.clone();
+        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let certificate = block.commit_certificate().unwrap();
+        let mut header: CoreHeader =
+            norito::decode_canonical(certificate.consensus_header()).unwrap();
+        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+        let epoch = genesis_epoch(&fixture.genesis).unwrap();
+        block.set_external_entrypoints(Vec::new());
+        block.set_commit_certificate(None);
+        output_test_support::install_network(&mut block, Vec::new()).unwrap();
+        assert!(!block.has_consensus_work());
+        let result = result(&block, &epoch);
+        let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
+        header.origin_view = 19;
+        // Public control bytes cannot change the original work predicate. No
+        // threshold validity is claimed or needed for this early no-work rejection.
+        header.control_witness = if with_control {
+            iroha_sumeragi::types::ControlWitness::try_from_slice(&[1, 2, 3]).unwrap()
+        } else {
+            iroha_sumeragi::types::ControlWitness::empty()
+        };
+        header.payload_hash = payload_hash(&crypto, &payload);
+        header.payload_len = payload.len().try_into().unwrap();
+        qc.view = 19;
+        qc.block_hash = header.hash(&crypto);
+        qc.result = result.result().unwrap();
+        sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
+        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+            norito::encode_canonical(&header).unwrap(),
+            norito::encode_canonical(&qc).unwrap(),
+            result.preimage().unwrap(),
+        )));
+        proof.block_header = block.header();
+        proof.block_wire = block.encode_wire().unwrap();
+        assert_eq!(
+            proof.decode_checked().unwrap_err().0,
+            "empty blocks are invalid"
+        );
     }
 }

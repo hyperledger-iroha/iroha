@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / "crates/ivm/src/ivm.rs"
-LINE_CEILING = 9_464
+LINE_CEILING = 8_658
 REGION_SHA256 = "0b09cf2e764dcc176ad7de50b472f6b5bfb5435191c35774e740a4ae35edb92e"
 CASE_IDS = (
     "indexed_i64_out_of_range_is_rejected_at_load",
@@ -104,10 +104,13 @@ def check_source(source: str) -> None:
         set_banner_enabled(false);
         IVM::new(gas_limit)
     }"""
-    if quiet_helper not in source:
-        raise GuardError("quiet IVM fixture changed")
-    if source.count("quiet_vm(") != 22:
-        raise GuardError("quiet IVM fixture call inventory changed")
+    if source.count(quiet_helper) != 1:
+        raise GuardError("quiet IVM fixture changed or duplicated")
+    # The protected admission matrix creates each VM directly. Other VM tests
+    # may reuse quiet_vm without changing this metadata contract.
+    for constructor in ("set_banner_enabled(false);", "let mut vm = IVM::new(u64::MAX);"):
+        if matrix.count(constructor) != 1:
+            raise GuardError(f"indexed admission setup changed: {constructor}")
 
     code_hash_contracts = (
         "kind_mutation[metadata_len + 16 + 7] = 0",
@@ -128,6 +131,8 @@ class IndexedMetadataSourceTest(unittest.TestCase):
         cls.source = TARGET.read_text()
 
     def assert_rejected(self, source: str) -> None:
+        check_source(self.source)
+        self.assertNotEqual(source, self.source, "mutation did not change the fixture")
         with self.assertRaises(GuardError):
             check_source(source)
 
@@ -157,6 +162,14 @@ class IndexedMetadataSourceTest(unittest.TestCase):
     def test_callback_escape_hatch_is_rejected(self) -> None:
         marker = "for (case_id, programs) in case_groups"
         self.assert_rejected(self.source.replace(marker, "let _: Box<dyn Fn()>;\n        " + marker, 1))
+
+    def test_quiet_fixture_body_drift_is_rejected(self) -> None:
+        self.assert_rejected(self.source.replace("IVM::new(gas_limit)", "IVM::new(0)", 1))
+
+    def test_unrelated_quiet_fixture_call_does_not_change_metadata_contract(self) -> None:
+        anchor = "let mut vm = quiet_vm(100);"
+        self.assertEqual(self.source.count(anchor), 1)
+        check_source(self.source.replace(anchor, anchor + " let _other = quiet_vm(1);", 1))
 
     def test_line_growth_is_rejected(self) -> None:
         self.assert_rejected(self.source + "\n" * (LINE_CEILING + 1))

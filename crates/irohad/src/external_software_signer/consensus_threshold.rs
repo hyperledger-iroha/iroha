@@ -1334,8 +1334,13 @@ pub(crate) mod tests {
                 [block_hash_byte; 32],
             )),
         };
-        GlobalThresholdBeaconPulseAggregatorV1::new(session.clone(), 41, anchor)
-            .expect("construct canonical beacon pulse")
+        GlobalThresholdBeaconPulseAggregatorV1::new(
+            session.clone(),
+            41,
+            anchor,
+            iroha_core::beacon::pulse_context_fixture_v1(),
+        )
+        .expect("construct canonical beacon pulse")
     }
 
     fn consensus_threshold_beacon_broker_test_fixture_for_committee_v1(
@@ -1695,9 +1700,13 @@ pub(crate) mod tests {
             height: 40,
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x81; 32])),
         };
-        let mut verifier =
-            GlobalThresholdBeaconPulseAggregatorV1::new(validated.clone(), 41, anchor)
-                .expect("construct canonical beacon pulse");
+        let mut verifier = GlobalThresholdBeaconPulseAggregatorV1::new(
+            validated.clone(),
+            41,
+            anchor,
+            iroha_core::beacon::pulse_context_fixture_v1(),
+        )
+        .expect("construct canonical beacon pulse");
         let partial = loaded
             .global_beacon
             .as_deref()

@@ -489,6 +489,11 @@ certificate carriers before persistence or deferred retries; a valid historical
 certificate cannot grant execution support. Regression tests check unchanged
 journal bytes, no queue or certificate custody, explicit unsupported replay failure,
 and successful durable admission of supported Ordinary work.
+Current Ordinary queue regressions preserve exact signed FIFO bytes across a
+nonempty committed successor and journal replay, and select a full-block gas
+call while an unrelated catalog route is idle. The early beacon stage checks
+that component commit topology leaves the scheduled network authority unchanged
+and authenticates the shared validator fixture before dependent regressions.
 Certificate verification and bounded transport component tests remain selected;
 they do not establish current multi-route execution support. In particular,
 Kagemusha top-up/redemption still require that unsupported admission contract and

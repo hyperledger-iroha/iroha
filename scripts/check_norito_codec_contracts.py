@@ -19,7 +19,6 @@ from pathlib import Path
 
 CORE = "crates/norito/src/core.rs"
 ENCODER = "crates/norito/src/core/encoder.rs"
-FIELDS = "crates/norito/src/core/encode_fields.rs"
 FRAMES = "crates/norito/src/core/encode_frames.rs"
 COLUMNAR = "crates/norito/src/columnar.rs"
 DERIVE = "crates/norito_derive/src/lib.rs"
@@ -29,7 +28,7 @@ IDENTITY = "crates/norito/src/schema/identity.rs"
 IDENTITY_DERIVE = "crates/norito_derive/src/schema_identity.rs"
 CODEGEN = "crates/norito_derive/src/tests/deserialize_codegen.rs"
 COUNT_TESTS = "crates/norito/src/core/counting_tests.rs"
-OWNERS = (CORE, ENCODER, FIELDS, FRAMES, COLUMNAR, DERIVE, ATTRS, JSON_WRITER, IDENTITY, IDENTITY_DERIVE)
+OWNERS = (CORE, ENCODER, FRAMES, COLUMNAR, DERIVE, ATTRS, JSON_WRITER, IDENTITY, IDENTITY_DERIVE)
 SOURCE_FILES = (*OWNERS, CODEGEN, COUNT_TESTS)
 RAW_STRING_START = re.compile(r'(?:b?r)(#*)"')
 
@@ -278,10 +277,6 @@ def validate_encoding(sources: dict[str, str]) -> None:
         writer_name, expected_name = binding.groups()
         checked = bool(re.search(rf"if{writer_name}\.\w+\(\)\{{returnErr\(Error::LengthMismatch\);\}}", exact.code)) and bool(re.search(rf"{writer_name}\.\w+\(\)=={expected_name}", exact.code))
     require(checked and "result?;" in exact.code and f".{skip.name}(" not in exact.code, "encoding.public_exact_checks_output")
-    packed = operation(sources, FIELDS, "write_packed_fields")
-    require(".try_reserve_exact(fields.len())" in packed.code and "Error::AllocationFailed" in packed.code and ".checked_mul(" in packed.code, "encoding.packed_allocation_bound")
-    require("bits.len()!=fields.len().div_ceil(8)" in packed.code and "byte>>tail!=0" in packed.code, "encoding.packed_bitset_bounds")
-    require("encoded_payload_len(*value)?" in packed.code and f"{owned.name}(*value,writer,length)?" in packed.code, "encoding.packed_owned_measurement")
     frame = operation(sources, FRAMES, "write_frame_with_prefix")
     require("encoded_frame_len(value)?" in frame.code and "prefix(writer,frame_len)?" in frame.code and f".{skip.name}(frame_len)?" in frame.code and ".ok_or(Error::NonCanonicalEncoding)" in frame.code, "encoding.frame_owned_measurement")
     emission = role(sources, FRAMES, lambda item: "ExactLengthWriter::new(" in item.code and "FramedPayloadWriter" in item.code, "encoding.frame_emission_owner")
@@ -293,11 +288,10 @@ def validate_encoding(sources: dict[str, str]) -> None:
 def validate_codegen(sources: dict[str, str]) -> None:
     binary = reachable(sources, ("derive_norito_serialize",))
     code = "".join(item.code for item in binary)
-    require("norito::core::write_len_prefixed(" in code and "norito::core::write_packed_fields(" in code, "codegen.canonical_field_owners")
+    require("norito::core::write_len_prefixed(" in code, "codegen.canonical_field_owners")
     generated = [child for item in binary for child in functions(item.raw_body) if child.name == "serialize"]
     require(bool(generated), "codegen.serializer_bodies")
     require(all("EncodeValueDepthGuard::enter()?;" in item.code for item in generated), "codegen.binary_depth_guard")
-    require("PackedField::Bytes(" in code and "PackedField::Value(" in code, "codegen.typed_packed_fields")
     require(all("try_reserve_exact(" not in item.code and "Vec::with_capacity(" not in item.code for item in generated), "codegen.runtime_allocation_owner")
     classification = [item for item in binary if has_literal_syntax(item.raw_body, 'path.path.is_ident("u8")') and "syn::Type::Array" in item.code]
     require(bool(classification), "codegen.raw_array_is_u8_only")
@@ -340,9 +334,8 @@ RUNTIME_CONTRACTS = {
         "nested_buffer_and_checksum_writers_still_receive_real_bytes",
         "count_overflow_is_sticky_even_if_a_serializer_ignores_it",
     ),
-    FIELDS: ("packed_fields_reject_invalid_bitsets_before_visiting_or_writing", "packed_fields_reject_changed_lengths_on_real_output"),
     FRAMES: ("nested_prefixed_frames_measure_each_leaf_once_and_preserve_wire_bytes", "prefixed_frame_rejects_length_checksum_and_flag_drift_with_bounded_output"),
-    CODEGEN: ("generated_serializers_use_two_argument_field_writers_without_scratch_buffers", "binary_default_attributes_do_not_generate_missing_field_fallbacks", "packed_tuple_descriptors_keep_field_order"),
+    CODEGEN: ("generated_serializers_use_two_argument_field_writers_without_scratch_buffers", "binary_default_attributes_do_not_generate_missing_field_fallbacks"),
 }
 
 

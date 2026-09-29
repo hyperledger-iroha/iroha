@@ -180,7 +180,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         invocation: InternalInvocation,
         event: EventBox,
         action: &impl LoadedActionTrait,
-    ) -> Result<InternalOutputDisposition, String> {
+    ) -> Result<InternalOutputDisposition, ExecutionAttemptError<String>> {
         let height = self.source.header().height().get();
         let now = u64::try_from(self.source.header().creation_time().as_millis())
             .map_err(|_| "internal timestamp exceeds u64")?;
@@ -238,6 +238,9 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 )),
                 None,
             ));
+        }
+        if let Some(reason) = tx.execution_deferral() {
+            return Err(ExecutionAttemptError::Deferred(reason));
         }
         if tx.tx_call_hash != Some(call)
             || tx.current_tx_hash.is_some()
@@ -319,10 +322,10 @@ fn append_completions(
     events: &mut Vec<EventBox>,
     call: Hash,
     row: &ExecutionOutputV1,
-) -> Result<(), String> {
-    events
-        .try_reserve(row.completions().len())
-        .map_err(|_| "host cannot retain internal completion events")?;
+) -> Result<(), ExecutionAttemptError<String>> {
+    events.try_reserve(row.completions().len()).map_err(|_| {
+        ExecutionAttemptError::Deferred(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+    })?;
     for completion in row.completions() {
         events.push(
             TriggerCompletedEvent::new(
@@ -345,7 +348,7 @@ fn rejected_row(
     returned: Option<ExecutionStep>,
     reason: TransactionRejectionReason,
     maximum: u64,
-) -> Result<ExecutionOutputV1, String> {
+) -> Result<ExecutionOutputV1, ExecutionAttemptError<String>> {
     use crate::smartcontracts::isi::triggers::set::ExecutableRef;
     let limit = usize::try_from(maximum).map_err(|_| "diagnostic ceiling exceeds host width")?;
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -412,7 +415,7 @@ fn rejected_row(
 fn bounded_diagnostic(
     reason: &impl std::fmt::Display,
     maximum: usize,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, ExecutionAttemptError<String>> {
     use std::fmt::Write;
     struct Writer {
         text: String,
@@ -441,7 +444,12 @@ fn bounded_diagnostic(
         refused: false,
     };
     let result = write!(&mut writer, "{reason}");
-    if writer.refused || (result.is_err() && !writer.overflow) {
+    if writer.refused {
+        return Err(ExecutionAttemptError::Deferred(
+            ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+        ));
+    }
+    if result.is_err() && !writer.overflow {
         return Err("host cannot retain internal failure diagnostic".into());
     }
     Ok(if writer.overflow {

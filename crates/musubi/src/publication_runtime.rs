@@ -1677,6 +1677,7 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         &mut self,
         operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
         location: &iroha_data_model::musubi::MusubiArchiveLocationV1,
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
@@ -1689,6 +1690,14 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             operation_id: *operation_id.as_bytes(),
             network_id: request.network_id(),
             publisher: request.publisher.clone(),
+            expected_policy_revision: request.expected_policy_revision,
+            finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
+                version: 1,
+                network_id: request.network_id(),
+                transaction_hash: registered.finalized_transaction_hash,
+                snapshot: registered.snapshot,
+                registration: registered.archive.registration_projection(),
+            },
             location: location.clone(),
             provider,
             commitment: request.archive_commitment.clone(),

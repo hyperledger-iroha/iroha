@@ -157,6 +157,9 @@ mod receipt_capability_audit;
 mod release_evidence;
 #[path = "mkhe/resource.rs"]
 mod resource;
+#[cfg(test)]
+#[path = "mkhe/rns_native_bulletproof_common.rs"]
+mod rns_native_bulletproof_common;
 #[path = "mkhe/rns_native_centering_subtraction_relation.rs"]
 mod rns_native_centering_subtraction_relation;
 #[cfg(test)]
@@ -1632,10 +1635,6 @@ impl SecretPolynomial {
     fn as_rns(&self, profile: &BgvProfile) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
         RnsPolynomial::from_signed(profile, &self.coefficients)
     }
-    #[allow(
-        dead_code,
-        reason = "used by the private fail-closed collective evaluated-key generator"
-    )]
     fn sub(&self, rhs: &Self) -> Result<Self, ZkAmsMkheErrorV1> {
         if self.coefficients.len() != rhs.coefficients.len() {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -1650,10 +1649,6 @@ impl SecretPolynomial {
                 .collect(),
         })
     }
-    #[allow(
-        dead_code,
-        reason = "used by the private fail-closed collective evaluated-key generator"
-    )]
     fn automorphism(
         &self,
         exponent: usize,

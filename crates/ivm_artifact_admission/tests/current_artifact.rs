@@ -96,16 +96,25 @@ fn rewrite_interface(
         .expect("contract fixture carries CNTR");
     mutate(&mut interface);
     let replacement = interface.encode_section();
-    assert_eq!(
-        replacement.len(),
-        section_end - section_start,
-        "CNTR mutation must preserve artifact prefix geometry"
-    );
     let mut rewritten =
         Vec::with_capacity(artifact.len() - (section_end - section_start) + replacement.len());
     rewritten.extend_from_slice(&artifact[..section_start]);
     rewritten.extend_from_slice(&replacement);
-    rewritten.extend_from_slice(&artifact[section_end..]);
+    if let Some(section) = parsed.literal_section {
+        assert_eq!(section.start, section_end, "LTLB directly follows CNTR");
+        let literal_start = rewritten.len();
+        rewritten.extend_from_slice(&artifact[section.start..section.data_end]);
+        let padding = (4 - (rewritten.len() - parsed.header_len) % 4) % 4;
+        rewritten[literal_start + 8..literal_start + 12]
+            .copy_from_slice(&(padding as u32).to_le_bytes());
+        rewritten.resize(rewritten.len() + padding, 0);
+    } else {
+        assert_eq!(
+            section_end, parsed.code_offset,
+            "code directly follows CNTR"
+        );
+    }
+    rewritten.extend_from_slice(&artifact[parsed.code_offset..]);
     rewritten
 }
 
@@ -285,20 +294,8 @@ fn every_public_entrypoint_requires_an_explicit_unit_return_descriptor() {
         .compile_source("seiyaku UnitBoundary { view fn inspect() { () } }")
         .expect("compile implicit Unit source return");
     verify_contract_artifact(&artifact).expect("explicit Unit descriptor is admitted");
-    let parsed = ProgramMetadata::parse(&artifact).expect("parse Unit fixture");
-    assert!(
-        parsed
-            .literal_section
-            .as_ref()
-            .is_none_or(|section| section.count == 0),
-        "Unit fixture must not reference pointer or scalar literals"
-    );
     for (remove_type, remove_schema) in [(true, false), (false, true), (true, true)] {
-        let mut interface = parsed
-            .contract_interface
-            .clone()
-            .expect("Unit CNTR interface");
-        {
+        let mutated = rewrite_interface(&artifact, |interface| {
             let entrypoint = interface
                 .entrypoints
                 .iter_mut()
@@ -315,13 +312,7 @@ fn every_public_entrypoint_requires_an_explicit_unit_return_descriptor() {
             if remove_schema {
                 entrypoint.return_schema = None;
             }
-        }
-        // An absent descriptor changes the CNTR frame length. This literal-free
-        // program has relative entry PCs, so preserve its exact code stream
-        // while rebuilding the header and changed interface without LTLB padding.
-        let mut mutated = artifact[..parsed.header_len].to_vec();
-        mutated.extend_from_slice(&interface.encode_section());
-        mutated.extend_from_slice(&artifact[parsed.code_offset..]);
+        });
         let error =
             verify_contract_artifact(&mutated).expect_err("missing return descriptor is invalid");
         assert!(
@@ -333,11 +324,11 @@ fn every_public_entrypoint_requires_an_explicit_unit_return_descriptor() {
 
 #[test]
 fn cntr_return_type_schema_mismatch_is_rejected() {
-    let source = r#"
+    let source = r"
         seiyaku SchemaBound {
             view fn inspect() -> int { return 1; }
         }
-    "#;
+    ";
     let (artifact, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)
         .expect("compile schema-bound contract");

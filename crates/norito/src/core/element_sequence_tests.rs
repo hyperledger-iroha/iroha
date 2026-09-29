@@ -31,7 +31,6 @@ impl SerializePayload for ProjectedSequence<'_> {
         write_element_sequence::<ProjectedEntry<'_>, _>(
             writer,
             self.0.iter().map(|entry| ProjectedEntry(entry, self.1)),
-            u64::MAX,
         )
     }
 }
@@ -111,17 +110,12 @@ fn element_sequences_reject_wrong_reported_cardinality_in_both_destinations() {
                 write_element_sequence::<u16, _>(
                     &mut Encoder::for_counting(&mut counter),
                     iter.clone(),
-                    u64::MAX,
                 ),
                 Err(Error::LengthMismatch)
             ));
             let mut bytes = Vec::new();
             assert!(matches!(
-                write_element_sequence::<u16, _>(
-                    &mut Encoder::for_buffer(&mut bytes),
-                    iter,
-                    u64::MAX,
-                ),
+                write_element_sequence::<u16, _>(&mut Encoder::for_buffer(&mut bytes), iter),
                 Err(Error::LengthMismatch)
             ));
             let mut expected = u64::try_from(reported).unwrap().to_le_bytes().to_vec();
@@ -190,7 +184,6 @@ fn projected_sequences_reject_real_output_growth_and_shrinkage() {
                 write_element_sequence::<PayloadView<'_>, _>(
                     &mut Encoder::for_buffer(&mut bytes),
                     std::iter::once(&item).map(PayloadView),
-                    u64::MAX,
                 ),
                 Err(Error::LengthMismatch)
             ));
@@ -222,7 +215,6 @@ fn projected_sequences_preserve_measurement_and_emission_errors() {
                 write_element_sequence::<PayloadView<'_>, _>(
                     &mut Encoder::for_buffer(&mut bytes),
                     std::iter::once(&item).map(PayloadView),
-                    u64::MAX,
                 ),
                 Err(Error::NonCanonicalEncoding)
             ));

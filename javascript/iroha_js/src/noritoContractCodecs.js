@@ -7,7 +7,7 @@ import {
   HEX_ENCODING,
   JS_TYPE_STRING,
 } from "./commonLiterals.js";
-import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import { analyzeEntrypointValueTypeV1, MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 } from "./entrypointSchema.js";
 
 /** Bind Merkle proof codecs independently of confidential memo envelopes. */
 export function createNoritoMerkleProofCodecs(
@@ -492,8 +492,8 @@ export function createNoritoContractCodecs(
       throw new TypeError(`${context} requires return_type and return_schema, including () and Unit`);
     }
     const analysis = analyzeEntrypointValueTypeV1(value.return_schema, `${context}.return_schema`);
-    if (analysis.canonicalName !== value.return_type || analysis.wordCount > 13) {
-      throw new TypeError(`${context}.return_schema must match return_type within the 13-word return window`);
+    if (analysis.canonicalName !== value.return_type || analysis.wordCount > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1) {
+      throw new TypeError(`${context}.return_schema must match return_type within the 8192-word result table`);
     }
   }
 

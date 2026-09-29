@@ -19,6 +19,10 @@ use super::BlockProofError;
 use crate::{
     kura::Kura,
     smartcontracts::isi::query::{BorrowedSingularStruct, bounded_bare_encoded_len},
+    sumeragi::certified_chain::{
+        NativeExecutionReadError, NativeExecutionReadLimits, NativeExecutionReadResource,
+        read_authenticated_execution,
+    },
 };
 
 /// Finite per-request admission for finalized block and Network proof serving.
@@ -29,6 +33,10 @@ use crate::{
 /// These ceilings do not reserve the Norito decoder's complete resident graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockProofLimits {
+    /// Maximum source heights authenticated from genesis, including H2 for a genesis request.
+    pub max_source_blocks: u64,
+    /// Aggregate bytes of the native source prefix, admitted before each frame read.
+    pub max_source_wire_bytes: u64,
     /// Maximum exact executed block wire bytes, also capped by the proof protocol.
     pub max_block_wire_bytes: u64,
     /// Maximum aggregate source, output, transcript-owner and transcript rows.
@@ -40,6 +48,10 @@ pub struct BlockProofLimits {
 /// Resource refused by finalized proof serving.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockProofResource {
+    /// Native source heights, before source body reads or cryptographic verification.
+    SourceBlocks,
+    /// Aggregate native source frame bytes, before the corresponding body read.
+    SourceWireBytes,
     /// QC-authenticated body bytes, refused before reading the body.
     BlockWireBytes,
     /// Source/output/transcript rows, refused before validating or constructing trees.
@@ -51,6 +63,8 @@ pub enum BlockProofResource {
 impl BlockProofLimits {
     fn limit(self, resource: BlockProofResource) -> u64 {
         match resource {
+            BlockProofResource::SourceBlocks => self.max_source_blocks,
+            BlockProofResource::SourceWireBytes => self.max_source_wire_bytes,
             BlockProofResource::BlockWireBytes => self
                 .max_block_wire_bytes
                 .min(AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 as u64),
@@ -85,19 +99,31 @@ fn invalid_outputs(block_height: NonZeroU64, reason: impl ToString) -> BlockProo
     }
 }
 
+/// Independently configured chain identity and original immutable hash journal cut.
+#[derive(Clone, Copy)]
+pub(super) struct NativeProofSource<'a> {
+    pub(super) kura: &'a Kura,
+    pub(super) chain_id: &'a iroha_model_base::chain::ChainId,
+    pub(super) network: iroha_data_model::NetworkId,
+    pub(super) hashes: &'a dyn super::BlockHashRead,
+}
+
 fn read_finalized_body(
-    kura: &Kura,
+    source: NativeProofSource<'_>,
     block_height: NonZeroU64,
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
     wire_response: bool,
 ) -> Result<(Arc<SignedBlock>, Vec<u8>), BlockProofError> {
+    let kura = source.kura;
     let height = usize::try_from(block_height.get())
         .ok()
         .and_then(NonZeroUsize::new)
         .ok_or(BlockProofError::HeightOutOfRange(block_height))?;
     // A zero resource allowance is a refusal, never an unlimited sentinel.
     for resource in [
+        BlockProofResource::SourceBlocks,
+        BlockProofResource::SourceWireBytes,
         BlockProofResource::BlockWireBytes,
         BlockProofResource::WorkItems,
         BlockProofResource::ResponseBytes,
@@ -117,30 +143,63 @@ fn read_finalized_body(
         block_height,
         reason: error.to_string(),
     };
-    let (durable_height, wire_len) = kura
-        .durable_block_payload_len_by_hash(expected_hash)
+    let target = kura
+        .native_frame_read(block_height.get(), expected_hash)
         .map_err(storage_error)?
         .ok_or_else(|| BlockProofError::Storage {
             block_height,
-            reason: "committed body has no available exact finalized wire authority".into(),
+            reason: "committed native body is unavailable".into(),
         })?;
-    if durable_height != block_height.get() {
-        return Err(BlockProofError::Storage {
-            block_height,
-            reason: "durable hash locator differs from the committed height".into(),
-        });
-    }
+    let wire_len = target.wire_len();
     limits.admit(block_height, BlockProofResource::BlockWireBytes, wire_len)?;
     if wire_response {
         limits.admit(block_height, BlockProofResource::ResponseBytes, wire_len)?;
     }
-    let (block, wire) = kura
-        .read_block_body_and_wire_with_wire_bound(height, expected_hash, wire_len)
-        .map_err(storage_error)?
-        .ok_or_else(|| BlockProofError::Storage {
+    // Native prefix authority reads every source under its own finite allowance. The original
+    // hash cut is retained, not a full World view; an unsigned result-only H1 is never enough.
+    let verified = read_authenticated_execution(
+        kura,
+        source.chain_id,
+        source.network,
+        source.hashes,
+        block_height.get(),
+        NativeExecutionReadLimits {
+            admitted_target_wire_bytes: wire_len,
+            max_source_blocks: limits.max_source_blocks,
+            max_source_wire_bytes: limits.max_source_wire_bytes,
+            max_frame_wire_bytes: crate::kura::STRICT_INIT_MAX_BLOCK_BYTES,
+        },
+    )
+    .map_err(|error| match error {
+        NativeExecutionReadError::Capacity {
+            resource,
+            actual,
+            limit,
+        } => BlockProofError::CapacityExceeded {
             block_height,
-            reason: "committed finalized body is unavailable".into(),
-        })?;
+            resource: match resource {
+                NativeExecutionReadResource::SourceBlocks => BlockProofResource::SourceBlocks,
+                NativeExecutionReadResource::SourceWireBytes => BlockProofResource::SourceWireBytes,
+                NativeExecutionReadResource::FrameWireBytes => BlockProofResource::BlockWireBytes,
+            },
+            actual,
+            limit,
+        },
+        error => BlockProofError::Storage {
+            block_height,
+            reason: error.to_string(),
+        },
+    })?;
+    // Target metadata was admitted independently before the prefix's first body read. Refuse
+    // any changed length rather than silently extending its response/output allowance.
+    if verified.wire.len() as u64 != wire_len {
+        return Err(BlockProofError::Storage {
+            block_height,
+            reason: "native target length changed after admission".into(),
+        });
+    }
+    let block = Arc::clone(verified.authority.block());
+    let wire = verified.wire;
     if block.header().height() != block_height {
         return Err(BlockProofError::BlockHeightMismatch {
             requested: block_height,
@@ -191,22 +250,22 @@ fn read_finalized_body(
 }
 
 pub(super) fn executed_block_wire_from_kura(
-    kura: &Kura,
+    source: NativeProofSource<'_>,
     block_height: NonZeroU64,
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
 ) -> Result<Vec<u8>, BlockProofError> {
-    read_finalized_body(kura, block_height, expected_hash, limits, true).map(|(_, wire)| wire)
+    read_finalized_body(source, block_height, expected_hash, limits, true).map(|(_, wire)| wire)
 }
 
 pub(super) fn block_proofs_for_entry_from_kura(
-    kura: &Kura,
+    source: NativeProofSource<'_>,
     block_height: NonZeroU64,
     expected_hash: HashOf<BlockHeader>,
     entry_hash: HashOf<TransactionEntrypoint>,
     limits: BlockProofLimits,
 ) -> Result<BlockProofs, BlockProofError> {
-    let (block, wire) = read_finalized_body(kura, block_height, expected_hash, limits, false)?;
+    let (block, wire) = read_finalized_body(source, block_height, expected_hash, limits, false)?;
     let executed_block_wire_hash = Hash::new(&wire);
     // The original wire served its authentication purpose. Do not retain this
     // second representation while materializing the proof response.
@@ -293,4 +352,88 @@ pub(super) fn block_proofs_for_entry_from_kura(
         ));
     }
     Ok(proofs)
+}
+
+#[cfg(test)]
+mod native_proof_reader_tests {
+    use super::*;
+    use crate::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    fn limits() -> BlockProofLimits {
+        BlockProofLimits {
+            max_source_blocks: 8,
+            max_source_wire_bytes: 16 * 1024 * 1024,
+            max_block_wire_bytes: 4 * 1024 * 1024,
+            max_work_items: 1_024,
+            max_response_bytes: 4 * 1024 * 1024,
+        }
+    }
+
+    #[test]
+    fn serves_only_actual_native_execution_and_original_wire() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let target = chain.committed(2);
+        let height = NonZeroU64::new(2).unwrap();
+        let hash = target.block().network_entrypoint_at(0).unwrap().hash();
+        assert!(
+            chain
+                .state()
+                .block_proofs_for_entry(height, hash, limits())
+                .is_ok()
+        );
+        assert_eq!(
+            chain.state().executed_block_wire(height, limits()).unwrap(),
+            target.block().encode_wire().unwrap()
+        );
+        assert_eq!(
+            chain
+                .state()
+                .executed_block_wire(NonZeroU64::new(1).unwrap(), limits())
+                .unwrap(),
+            chain.committed(1).block().encode_wire().unwrap()
+        );
+    }
+
+    #[test]
+    fn proof_serving_counts_all_native_source_heights_and_bytes() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let height = NonZeroU64::new(2).unwrap();
+        for (bounds, resource) in [
+            (
+                BlockProofLimits {
+                    max_source_blocks: 1,
+                    ..limits()
+                },
+                BlockProofResource::SourceBlocks,
+            ),
+            (
+                BlockProofLimits {
+                    max_source_wire_bytes: 1,
+                    ..limits()
+                },
+                BlockProofResource::SourceWireBytes,
+            ),
+        ] {
+            assert!(matches!(chain.state().executed_block_wire(height, bounds),
+                Err(BlockProofError::CapacityExceeded { resource: actual, .. }) if actual == resource));
+        }
+    }
+
+    #[test]
+    fn proof_serving_does_not_accept_genesis_result_before_h2() {
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        assert!(matches!(
+            chain
+                .state()
+                .executed_block_wire(NonZeroU64::new(1).unwrap(), limits()),
+            Err(BlockProofError::Storage { .. })
+        ));
+    }
 }

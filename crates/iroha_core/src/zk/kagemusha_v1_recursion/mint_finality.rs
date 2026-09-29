@@ -391,16 +391,11 @@ fn validate_kagemusha_mint_finality_validator_keys_v1(
     validators: &[KagemushaMintFinalityValidatorKeysV1],
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
     for keys in validators {
-        decode_nonidentity_point::<EpAffine>(keys.eq_proof_public_key).ok_or_else(|| {
-            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
-                "Eq/Fp helper key is not a canonical non-identity Pallas point".to_owned(),
-            )
-        })?;
-        decode_nonidentity_point::<EqAffine>(keys.ep_proof_public_key).ok_or_else(|| {
-            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
-                "Ep/Fq helper key is not a canonical non-identity Vesta point".to_owned(),
-            )
-        })?;
+        iroha_zkp_poseidon::pasta_keys::validate_paired_public_keys(
+            &keys.eq_proof_public_key,
+            &keys.ep_proof_public_key,
+        )
+        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.into()))?;
     }
     Ok(())
 }
@@ -1072,7 +1067,7 @@ pub fn verify_kagemusha_mint_finality_seal_share_v1(
             "share message or signer differs from the enclosing vote".to_owned(),
         ));
     }
-    verify_validator_seal(generation, &share.message, &share.seal)
+    verify_kagemusha_mint_finality_validator_seal_v1(generation, &share.message, &share.seal)
 }
 
 /// Verify one exact-quorum seal bundle against its enclosing CommitQC.
@@ -1131,7 +1126,7 @@ pub fn verify_kagemusha_mint_finality_seal_bundle_v1(
         ));
     }
     for seal in &bundle.seals {
-        verify_validator_seal(generation, &bundle.message, seal)?;
+        verify_kagemusha_mint_finality_validator_seal_v1(generation, &bundle.message, seal)?;
     }
     Ok(())
 }
@@ -1331,11 +1326,30 @@ fn seal_message_from_parts(
     Ok(message)
 }
 
-fn verify_validator_seal(
+/// Verify one genuine paired-Pasta seal against its exact immutable generation and epoch.
+/// The native consensus caller additionally binds the message to its source-complete signed R.
+///
+/// # Errors
+/// Rejects substituted generation, network, authorization, count, signer or either signature.
+pub fn verify_kagemusha_mint_finality_validator_seal_v1(
     generation: &KagemushaMintFinalityAuthorityGenerationV1,
     message: &KagemushaMintFinalitySealMessageV1,
     seal: &KagemushaMintFinalityValidatorSealV1,
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
+    validate_kagemusha_mint_finality_roster_keys_v1(generation)?;
+    message
+        .epoch_authorization
+        .validate_against_authority(generation)
+        .map_err(|error| {
+            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+        })?;
+    if message.network_id != generation.network_id
+        || usize::try_from(message.validator_count).ok() != Some(generation.validators.len())
+    {
+        return Err(KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
+            "seal message differs from its complete immutable authority".into(),
+        ));
+    }
     let index = usize::try_from(seal.validator_index).map_err(|_| {
         KagemushaMintFinalityErrorV1::InvalidSignature(
             "validator index does not fit usize".to_owned(),
@@ -2141,8 +2155,20 @@ mod tests {
             initial_seal.ep_proof_signature.nonce_commitment,
             retained_seal.ep_proof_signature.nonce_commitment
         );
-        verify_validator_seal(&authority, &retained_message, &retained_seal).unwrap();
-        assert!(verify_validator_seal(&authority, &retained_message, &initial_seal).is_err());
+        verify_kagemusha_mint_finality_validator_seal_v1(
+            &authority,
+            &retained_message,
+            &retained_seal,
+        )
+        .unwrap();
+        assert!(
+            verify_kagemusha_mint_finality_validator_seal_v1(
+                &authority,
+                &retained_message,
+                &initial_seal
+            )
+            .is_err()
+        );
         let mut wrong_generation = retained_message;
         wrong_generation.epoch_authorization.authority_generation = 1;
         assert!(signer.sign(&wrong_generation).is_err());

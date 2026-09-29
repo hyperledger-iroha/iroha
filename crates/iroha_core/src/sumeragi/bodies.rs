@@ -255,7 +255,10 @@ impl BodyStore for FileBodyStore {
 #[cfg(test)]
 mod tests {
     use iroha_sumeragi::{
-        message::BlockHeader, preimage::payload_hash, testing::FakeCrypto, types::Hash32,
+        message::BlockHeader,
+        preimage::payload_hash,
+        testing::FakeCrypto,
+        types::{EpochId, Hash32},
     };
 
     use super::*;
@@ -271,6 +274,10 @@ mod tests {
         let block = Block {
             header: BlockHeader {
                 instance: I,
+                epoch: EpochId {
+                    epoch: 3,
+                    context: Hash32([0x1B; 32]),
+                },
                 height,
                 origin_view: 0,
                 parent_hash: Hash32([1; 32]),
@@ -279,6 +286,7 @@ mod tests {
                 payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer: 0,
                 skipped_leaders: Vec::new(),
+                control_witness: iroha_sumeragi::types::ControlWitness::empty(),
                 attest: false,
             },
             payload,

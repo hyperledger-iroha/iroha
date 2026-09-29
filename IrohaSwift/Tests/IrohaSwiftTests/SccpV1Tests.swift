@@ -2245,6 +2245,32 @@ final class SccpV1Tests: XCTestCase {
         ]
     }
 
+    private func validReplayWitnessFrame() throws -> Data {
+        let zero = Data(repeating: 0, count: 32)
+        let provisional = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: zero,
+            priorRecordDigest: zero,
+            siblingBitmap: zero,
+            siblings: []
+        )
+        let root = try SccpReplayV1.rootFromWitness(
+            key: Data(repeating: 1, count: 32),
+            recordDigest: zero,
+            witness: provisional
+        ).root
+        let siblings = Data(repeating: 0, count: MemoryLayout<UInt64>.size)
+        var payload = Data()
+        for field in [root, zero, zero, siblings] {
+            payload.append(UInt8(field.count))
+            payload.append(field)
+        }
+        return noritoEncode(
+            typeName: SccpSubmitValidation.replayWitnessTypeName,
+            payload: payload,
+            flags: NoritoHeader.compactLen
+        )
+    }
+
     private func transferProjection(destinationDomain: UInt32) -> [String: Any] {
         let route: String
         let recipient: [String: Any]
@@ -2305,7 +2331,7 @@ final class SccpV1Tests: XCTestCase {
             "contract_artifact_sha256": upper(0xb1, bytes: 32),
             "vk_ref": [
                 "backend": "stark/fri/v1",
-                "name": "ivm-replay-binding-v1",
+                "name": "sccp-source-execution-fixture",
                 "version": 1,
                 "commitment": upper(0xb2, bytes: 32),
             ],

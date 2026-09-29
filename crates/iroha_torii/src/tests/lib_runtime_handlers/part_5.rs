@@ -2640,7 +2640,7 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
     let network_id = *app.state.network_id_ref();
     let router = Router::new()
         .route(
-            iroha_torii_shared::uri::TRANSACTION_DETAILS,
+            route_catalog::pipeline::TRANSACTION_DETAILS.path(),
             post(super::handler_pipeline_transaction_details),
         )
         .route(
@@ -3524,7 +3524,10 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         .execution_commitment
         .post_state_root;
     let router = Router::new()
-        .route(uri::LEDGER_STATE_PROOF, get(handler_ledger_state_proof))
+        .route(
+            route_catalog::core::LEDGER_STATE_PROOF.path(),
+            get(handler_ledger_state_proof),
+        )
         .with_state(app.clone());
     let request = Request::builder()
         .uri("/v1/ledger/state-proof/1")

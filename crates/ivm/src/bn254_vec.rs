@@ -3,6 +3,12 @@
 //! Field elements are represented as four little-endian 64-bit limbs. At runtime
 //! [`field_dispatch::field_impl`] selects an implementation based on the host CPU features (SSE2,
 //! AVX2, AVX-512 or NEON). The scalar routines serve as a portable fallback.
+#[path = "bn254_vec/batch.rs"]
+mod batch;
+pub use batch::{add_batch_into, mul_batch_into, sub_batch_into};
+#[cfg(feature = "cuda")]
+pub(crate) use batch::{canonical, valid_batch};
+
 use crate::field_dispatch::field_impl;
 use halo2curves::{bn256::Fr, ff::PrimeField};
 /// BN254 field modulus in little-endian limb form.
@@ -16,6 +22,10 @@ pub const MODULUS: [u64; 4] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FieldElem(pub [u64; 4]);
 impl FieldElem {
+    /// Whether these limbs are the canonical encoding of a BN254 field value.
+    pub fn is_canonical(&self) -> bool {
+        batch::canonical(&self.0)
+    }
     /// Convert from an `Fr` element.
     pub fn from_fr(f: Fr) -> Self {
         let repr = f.to_repr();
@@ -130,28 +140,19 @@ pub fn reduce_wide(val: [u64; 8]) -> [u64; 4] {
     let limbs = reduced.to_words();
     [limbs[0], limbs[1], limbs[2], limbs[3]]
 }
-/// Add two field elements using the selected SIMD backend.
+/// Add one field-element pair on the selected CPU/SIMD backend.
+///
+/// A single operation cannot amortize CUDA transfer and launch costs. CUDA
+/// is selected automatically by the caller-owned batch helpers.
 pub fn add(a: FieldElem, b: FieldElem) -> FieldElem {
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::bn254_add_cuda(a.0, b.0) {
-        return FieldElem(res);
-    }
     field_impl().add(a, b)
 }
 /// Subtract two field elements using the selected SIMD backend.
 pub fn sub(a: FieldElem, b: FieldElem) -> FieldElem {
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::bn254_sub_cuda(a.0, b.0) {
-        return FieldElem(res);
-    }
     field_impl().sub(a, b)
 }
 /// Multiply two field elements using the selected SIMD backend.
 pub fn mul(a: FieldElem, b: FieldElem) -> FieldElem {
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::bn254_mul_cuda(a.0, b.0) {
-        return FieldElem(res);
-    }
     field_impl().mul(a, b)
 }
 #[cfg(target_arch = "x86_64")]

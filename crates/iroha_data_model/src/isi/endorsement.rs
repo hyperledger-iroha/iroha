@@ -76,9 +76,6 @@ fn endorsement_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterDomainCommittee {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = endorsement_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let committee = super::decode_aos_canonical_field::<crate::nexus::DomainCommittee>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -94,9 +91,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterDomainCommittee {
 impl<'a> norito::core::DecodeFromSlice<'a> for SetDomainEndorsementPolicy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = endorsement_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let domain = super::decode_aos_canonical_field::<iroha_model_base::domain::DomainId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -116,9 +110,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetDomainEndorsementPolicy {
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDomainEndorsement {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = endorsement_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let endorsement = super::decode_aos_canonical_field::<crate::nexus::DomainEndorsement>(
             super::read_aos_field(bytes, &mut offset, flags)?,

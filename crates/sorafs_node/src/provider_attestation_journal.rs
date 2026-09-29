@@ -3633,7 +3633,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     /// # Errors
     ///
     /// Returns an error for clock, stale request/claim, signer, or persistence failure.
-    #[allow(dead_code)]
     #[cfg(test)]
     pub(crate) async fn approve_claim_with_signer<Signer>(
         &self,
@@ -3689,7 +3688,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     // configured handle, revision, policy, and local scope around readiness and
     // every fallible call. This operation additionally enforces structural
     // validity and snapshot stability.
-    #[allow(dead_code)]
     #[cfg(test)]
     pub(crate) async fn handoff_claim_with_inventory<Inventory>(
         &self,

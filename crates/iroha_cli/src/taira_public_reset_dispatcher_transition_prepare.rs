@@ -1,4 +1,7 @@
 //! Native plan producer: qualified import plus explicit current typed occupied bindings.
+// The root transaction runs on Linux only; other platforms compile these items solely for their
+// unit tests, which do not reach every Linux entry point.
+#![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 #[cfg(any(target_os = "linux", test))]
 use super::super::super::{EdgeAdmittedReleaseV1, ValidatorAdmittedReleaseV1};
 use super::*;

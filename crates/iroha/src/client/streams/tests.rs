@@ -231,7 +231,7 @@ async fn injected_event_stream_signs_exact_upgrade_and_subscribes_once() {
         assert_eq!(request.operation, EVENTS_OPERATION);
         assert_eq!(
             request.request.uri().path(),
-            iroha_torii_shared::uri::SUBSCRIPTION
+            iroha_torii_shared::route_catalog::streaming::SUBSCRIPTION_WS.path()
         );
         let snapshot = crate::http_default::RequestSnapshot {
             method: request.request.method().clone(),

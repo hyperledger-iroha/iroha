@@ -61,6 +61,9 @@ fn world_constructor_and_snapshot_restore_preserve_history_on_default_stack() {
         let storage_owner = std::ptr::from_ref(&*world);
         let kura = Kura::blank_kura_for_testing();
         let state = State::try_new(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             world,
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
@@ -72,6 +75,9 @@ fn world_constructor_and_snapshot_restore_preserve_history_on_default_stack() {
         let snapshot = json::to_json(&state).expect("serialize canonical State snapshot");
         let restored = deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             lane_manifests: state.lane_manifests.read().clone(),
             kura,
             query_handle: LiveQueryStore::start_test(),

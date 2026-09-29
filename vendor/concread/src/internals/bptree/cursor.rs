@@ -6,7 +6,7 @@
 
 use super::allocation::NodeCloning;
 use super::node::*;
-use super::tracking::TrackingBuffer;
+use super::tracking::{NodeTrackingBuffer, TrackingBuffer};
 use crate::bptree::MapMode;
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
@@ -717,8 +717,8 @@ impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
     pub(crate) fn resume_admitted_funding(
         &mut self,
         provider: P,
-        first: Option<super::tracking::FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
-        last: Option<super::tracking::FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
+        first: Option<NodeTrackingBuffer<K, V, P::Charge>>,
+        last: Option<NodeTrackingBuffer<K, V, P::Charge>>,
         mut saved: Option<&mut CheckpointBuffers<K, V, crate::bptree::Prepaid<P>>>,
     ) {
         assert!(self.funding.0.is_none(), "previous edit must be sealed");

@@ -713,7 +713,10 @@ fn canonical_stream_operations_publish_fail_closed_contract() {
         assert!(responses.contains_key("200"));
         assert!(responses.contains_key("400"));
     }
-    for path in [uri::SUBSCRIPTION, uri::BLOCKS_STREAM] {
+    for path in [
+        route_catalog::streaming::SUBSCRIPTION_WS.path(),
+        route_catalog::streaming::BLOCKS_WS.path(),
+    ] {
         let get = paths[path]["get"]
             .as_object()
             .expect("WebSocket GET operation");
@@ -1031,19 +1034,19 @@ fn generated_spec_includes_documented_paths() {
     {
         assert!(paths.contains_key(path));
     }
-    assert!(paths.contains_key(uri::TRANSACTION));
-    assert!(paths.contains_key(uri::TRANSACTION_ENTRYPOINT));
-    assert!(paths.contains_key(uri::TRANSACTIONS_BATCH));
-    assert!(paths.contains_key(uri::QUERY));
-    assert!(paths.contains_key(uri::SUBSCRIPTION));
+    assert!(paths.contains_key(route_catalog::pipeline::TRANSACTION.path()));
+    assert!(paths.contains_key(route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path()));
+    assert!(paths.contains_key(route_catalog::pipeline::TRANSACTIONS_BATCH.path()));
+    assert!(paths.contains_key(route_catalog::pipeline::QUERY.path()));
+    assert!(paths.contains_key(route_catalog::streaming::SUBSCRIPTION_WS.path()));
     #[cfg(feature = "schema")]
-    assert!(paths.contains_key(uri::SCHEMA));
+    assert!(paths.contains_key(route_catalog::diagnostic::SCHEMA.path()));
     #[cfg(not(feature = "schema"))]
-    assert!(!paths.contains_key(uri::SCHEMA));
+    assert!(!paths.contains_key(route_catalog::diagnostic::SCHEMA.path()));
     #[cfg(feature = "profiling")]
-    assert!(paths.contains_key(uri::PROFILE));
+    assert!(paths.contains_key(route_catalog::diagnostic::PROFILE.path()));
     #[cfg(not(feature = "profiling"))]
-    assert!(!paths.contains_key(uri::PROFILE));
+    assert!(!paths.contains_key(route_catalog::diagnostic::PROFILE.path()));
     for path in
         openapi_contract_strings("openapi.generated_spec_includes_documented_paths.path_absent.6")
     {
@@ -1118,9 +1121,9 @@ fn generated_spec_includes_documented_paths() {
     {
         assert!(paths.contains_key(path));
     }
-    assert!(paths.contains_key(iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE));
-    assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CAPABILITIES));
-    assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CITIZEN_DRAFT));
+    assert!(paths.contains_key(route_catalog::runtime_governance::GOV_PROPOSE_SCCP.path()));
+    assert!(paths.contains_key(route_catalog::runtime_governance::GOV_CAPABILITIES.path()));
+    assert!(paths.contains_key(route_catalog::runtime_governance::GOV_CITIZEN_DRAFT.path()));
     assert!(paths.contains_key("/v1/gov/citizens"));
     assert!(paths.contains_key("/v1/gov/stream"));
     for path in
@@ -2020,7 +2023,7 @@ fn generated_operations_declare_tool_effects() {
         }
     }
     let query = paths
-        .get(uri::QUERY)
+        .get(route_catalog::pipeline::QUERY.path())
         .and_then(Value::as_object)
         .and_then(|path| path.get("post"))
         .and_then(Value::as_object)
@@ -2062,7 +2065,7 @@ fn generated_operations_declare_tool_effects() {
     );
     for route in RouteCatalog::new(CATALOGED_ROUTES)
         .project(
-            iroha_torii_shared::route_catalog::CatalogProjection::OpenApi,
+            route_catalog::CatalogProjection::OpenApi,
             crate::router::builder::compiled_route_features(),
         )
         .into_iter()
@@ -2690,7 +2693,7 @@ fn validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_a
 #[test]
 fn pipeline_fastpq_recovery_documents_operator_auth_and_bounds() {
     use iroha_torii_shared::route_catalog::{ApiSurface, AuthenticationPolicy};
-    let route = iroha_torii_shared::route_catalog::pipeline::RECOVERY_FASTPQ_PROOFS;
+    let route = route_catalog::pipeline::RECOVERY_FASTPQ_PROOFS;
     assert_eq!(route.surface(), ApiSurface::Operator);
     assert_eq!(
         route.authentication(),
@@ -2754,7 +2757,7 @@ fn signed_transaction_submission_documents_exact_preadmission_contract() {
     let responses = document
         .get("paths")
         .and_then(Value::as_object)
-        .and_then(|paths| paths.get(uri::TRANSACTION))
+        .and_then(|paths| paths.get(route_catalog::pipeline::TRANSACTION.path()))
         .and_then(Value::as_object)
         .and_then(|path| path.get("post"))
         .and_then(Value::as_object)
@@ -2802,7 +2805,10 @@ fn signed_transaction_submission_documents_exact_preadmission_contract() {
 #[test]
 fn transaction_submission_503s_document_exact_outcome_unknown_identity() {
     let document = canonical_document();
-    for path in [uri::TRANSACTION, uri::TRANSACTION_ENTRYPOINT] {
+    for path in [
+        route_catalog::pipeline::TRANSACTION.path(),
+        route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
+    ] {
         let operation = openapi_operation(&document, path, "post");
         assert_eq!(
             operation_response_schema_ref(operation, "503", path),
@@ -2852,7 +2858,7 @@ fn transaction_submission_503s_document_exact_outcome_unknown_identity() {
                 ) && header_description.contains(detail_name),
                 "POST {path} HTTP 503 {header_name} must document its conditional exact body binding"
             );
-            if path == uri::TRANSACTION_ENTRYPOINT
+            if path == route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path()
                 && header_name == "x-iroha-signed-transaction-hash"
             {
                 assert!(

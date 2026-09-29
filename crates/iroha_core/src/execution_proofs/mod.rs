@@ -8,6 +8,11 @@ mod environment;
 mod environment_air;
 mod error;
 mod integer_air;
+#[allow(
+    dead_code,
+    reason = "the ALU step chip is retained for the unfinished complete IVM execution relation"
+)]
+mod ivm_step_air;
 mod kernel_export;
 mod proof;
 pub mod race;

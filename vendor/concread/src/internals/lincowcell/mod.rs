@@ -55,6 +55,9 @@
  *
  */
 
+mod results;
+use results::{OwnedAcquireResult, OwnedWriteResult, WriterAdmissionResult};
+
 use std::alloc::Layout;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -489,7 +492,7 @@ where
     pub fn try_write_charged<E>(
         self,
         admit: impl FnOnce(&T, WriterLayouts) -> Result<WriterAdmission<Charge, T::WriterInput>, E>,
-    ) -> Result<LinCowCellWriteTxn<'a, T, R, U, Charge>, (Self, WriterAdmissionError<E>)> {
+    ) -> WriterAdmissionResult<'a, T, R, U, Charge, E> {
         if self.poisoned {
             return Err((self, WriterAdmissionError::Poisoned));
         }
@@ -954,10 +957,7 @@ where
     pub fn try_acquire_owned(
         &self,
         owned: LinCowCellOwned<T, R, U, Charge>,
-    ) -> Result<
-        LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,
-        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
-    > {
+    ) -> OwnedAcquireResult<'_, T, R, U, Charge> {
         self.acquire_owned(owned, false)
     }
 
@@ -969,10 +969,7 @@ where
     pub fn try_acquire_owned_retained(
         &self,
         owned: LinCowCellOwned<T, R, U, Charge>,
-    ) -> Result<
-        LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,
-        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
-    > {
+    ) -> OwnedAcquireResult<'_, T, R, U, Charge> {
         self.acquire_owned(owned, true)
     }
 
@@ -980,10 +977,7 @@ where
         &self,
         owned: LinCowCellOwned<T, R, U, Charge>,
         retained: bool,
-    ) -> Result<
-        LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,
-        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
-    > {
+    ) -> OwnedAcquireResult<'_, T, R, U, Charge> {
         if !Shared::ptr_eq(&self.write, &owned.root) {
             return Err((owned, OwnedWriteError::Changed));
         }
@@ -1012,10 +1006,7 @@ where
     pub fn try_write_owned(
         &self,
         owned: LinCowCellOwned<T, R, U, Charge>,
-    ) -> Result<
-        LinCowCellWriteTxn<'_, T, R, U, Charge>,
-        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
-    > {
+    ) -> OwnedWriteResult<'_, T, R, U, Charge> {
         self.try_acquire_owned(owned)?
             .validate()
             .map_err(|(acquired, error)| (acquired.abort(), error))

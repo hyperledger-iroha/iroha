@@ -608,7 +608,6 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
-    npos_beacon: &mut V2GlobalBeaconLifecycle,
     limit: usize,
     terminal_finalization_cut: Option<&LifecycleTerminalFinalizationCutV1>,
 ) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
@@ -869,7 +868,6 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                                 block_sync_server,
                                 block_sync,
                                 block_sync_request,
-                                npos_beacon,
                             )?;
                             match consumption {
                                 super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
@@ -892,7 +890,6 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                                 block_sync_server,
                                 block_sync,
                                 block_sync_request,
-                                npos_beacon,
                             )?;
                             match consumption {
                                 super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
@@ -990,7 +987,6 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             block_sync_server,
                             block_sync,
                             block_sync_request,
-                            npos_beacon,
                         );
                         if let Err(error) = consumed {
                             iroha_logger::error!(

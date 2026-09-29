@@ -25,7 +25,7 @@ use crate::{
         },
         ivm::{
             cache::ProgramSummary,
-            host::{AmxBudgetViolation, HostOutputLimits, QueryStateSource},
+            host::{AmxBudgetViolation, QueryStateSource},
         },
     },
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
@@ -50,16 +50,9 @@ use iroha_data_model::{
     },
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
-    proof::VerifyingKeyId,
-    smart_contract::{
-        ContractAddress,
-        manifest::{ContractManifest, MANIFEST_METADATA_KEY},
-    },
+    smart_contract::ContractAddress,
+    smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{Executable, SignedTransaction},
-    zk::{
-        BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
-        OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
-    },
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
@@ -67,12 +60,12 @@ use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 #[cfg(all(test, feature = "telemetry"))]
 use std::time::Instant;
 use std::{
     collections::BTreeMap,
-    io::{Cursor, Seek, SeekFrom, Write},
     mem,
     num::NonZeroU64,
     sync::{Arc, OnceLock},
@@ -450,6 +443,7 @@ fn parse_prepared_contract_invocation_execution_context(
         argument_record,
     })
 }
+#[cfg(test)]
 fn authorize_and_prepare_raw_contract_dispatch<R: StateReadOnly>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -650,6 +644,7 @@ fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
         cache_size: defaults::pipeline::CACHE_SIZE,
         ivm_cache_max_decoded_ops: defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
         ivm_cache_max_bytes: defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        ivm_execution_max_bytes: defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ivm_prover_threads: defaults::pipeline::IVM_PROVER_THREADS,
         overlay_max_instructions: defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
         overlay_max_bytes: defaults::pipeline::OVERLAY_MAX_BYTES,
@@ -1161,19 +1156,11 @@ pub struct TxOverlay {
     byte_size: OnceLock<usize>,
 }
 #[cfg(test)]
-/// Overlay and same-run access evidence retained for scheduler regression tests.
+/// Overlay and prepared runtime inputs retained for scheduler regression tests.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedTxOverlay {
     /// Built transaction overlay.
     pub(crate) overlay: TxOverlay,
-    /// Dynamic state access log captured while building the overlay.
-    pub(crate) access_log: Option<ivm::host::AccessLog>,
-    /// Bytecode-derived scheduler fence for accesses whose concrete target is
-    /// not proven by the instruction scanner.
-    pub(crate) access_fence: VmAccessFence,
-    /// Whether an opaque/nested or ledger-read syscall requires execution
-    /// against the live scheduler state rather than the block-start snapshot.
-    pub(crate) force_live_rebuild: bool,
     /// Canonical argument plan retained across a selective live-state rebuild.
     pub(crate) prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
     /// Immutable validated contract retained for access derivation without
@@ -1369,15 +1356,12 @@ where
 impl PreparedTxOverlay {
     fn new(
         overlay: TxOverlay,
-        access_log: Option<ivm::host::AccessLog>,
-        access_fence: VmAccessFence,
-        force_live_rebuild: bool,
+        _access_log: Option<ivm::host::AccessLog>,
+        _access_fence: VmAccessFence,
+        _force_live_rebuild: bool,
     ) -> Self {
         Self {
             overlay,
-            access_log,
-            access_fence,
-            force_live_rebuild,
             prepared_argument_record: None,
             prepared_contract: None,
         }
@@ -2021,8 +2005,6 @@ fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
         #[cfg(test)]
             access_log: _,
         gas_used,
-        events_commitment: _,
-        trace_hash: _,
     } = replay;
     let mut queued_instructions: Vec<_> = replay_queued
         .iter()
@@ -2680,7 +2662,7 @@ pub fn build_overlay_for_transaction_with_accounts(
             reject_raw_contract_without_state(bytecode.as_ref())?;
             crate::smartcontracts::ivm::validate_generic_execution_metadata(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
-            let mut vm = ivm::IVM::new(tx_gas_limit);
+            let mut vm = ivm::IVM::try_new(tx_gas_limit).map_err(OverlayBuildError::IvmLoad)?;
             let contract_call_context = parse_raw_contract_call_execution_context(
                 tx.metadata(),
                 bytecode.as_ref(),
@@ -4053,10 +4035,11 @@ mod tests_overlay_manifest {
             version_minor: 1,
             mode: 0,
             vector_length: 0,
-            max_cycles: 1,
+            max_cycles: 4,
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "HajimariGuard".to_owned(),
             compiler_fingerprint: "iroha-core-lifecycle-overlay-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -4085,7 +4068,7 @@ mod tests_overlay_manifest {
         };
         let mut artifact = metadata.encode();
         artifact.extend_from_slice(&interface.encode_section());
-        artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        artifact.extend_from_slice(&crate::ivm_test_support::unit_return());
         let verified = ivm::verify_contract_artifact(&artifact).expect("valid hajimari artifact");
         let code_hash = verified.code_hash;
         let manifest = verified.manifest;
@@ -4176,10 +4159,11 @@ mod tests_overlay_manifest {
             version_minor: 1,
             mode: 0,
             vector_length: 0,
-            max_cycles: 1,
+            max_cycles: 4,
             abi_version,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-overlay-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -4208,7 +4192,7 @@ mod tests_overlay_manifest {
         };
         let mut artifact = meta.encode();
         artifact.extend_from_slice(&interface.encode_section());
-        artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        artifact.extend_from_slice(&crate::ivm_test_support::unit_return());
         artifact
     }
     fn minimal_contract_artifact_with_permission(
@@ -4316,7 +4300,6 @@ mod tests_overlay_manifest {
             ivm::syscalls::SYSCALL_AXT_TOUCH,
             ivm::syscalls::SYSCALL_AXT_COMMIT,
             ivm::syscalls::SYSCALL_VERIFY_DS_PROOF,
-            ivm::syscalls::SYSCALL_USE_ASSET_HANDLE,
         ] {
             let program = minimal_generic_program_with_syscall(syscall);
             assert!(
@@ -6221,7 +6204,6 @@ mod tests {
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
@@ -6242,221 +6224,7 @@ mod tests {
         configure_zk_lane_trace_collection(&mut vm, true);
         assert!(vm.zk_trace_enabled());
     }
-    #[test]
-    fn ivm_proved_canonical_boundaries_reject_alternate_outer_and_nested_layouts() {
-        let open = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![[7_u8; 32]]],
-            envelope_bytes: vec![1, 2, 3],
-        };
-        let canonical_open = norito::encode_canonical(&open).expect("canonical STARK open proof");
-        assert_eq!(
-            decode_ivm_proved_stark_open_proof(&canonical_open)
-                .expect("canonical nested proof must decode"),
-            open
-        );
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let alternate_open = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&open).expect("alternate-layout STARK open proof")
-        };
-        assert_ne!(alternate_open, canonical_open);
-        assert!(decode_ivm_proved_stark_open_proof(&alternate_open).is_err());
-        let envelope = ZkOpenVerifyEnvelope {
-            backend: ZkBackendTag::Stark,
-            circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1".to_owned(),
-            vk_hash: [9_u8; 32],
-            public_inputs: b"ivm-replay-binding-v1".to_vec(),
-            proof_bytes: canonical_open,
-            aux: Vec::new(),
-        };
-        let canonical_envelope =
-            norito::encode_canonical(&envelope).expect("canonical OpenVerifyEnvelope");
-        assert_eq!(
-            decode_ivm_proved_open_envelope(&canonical_envelope)
-                .expect("canonical outer envelope must decode"),
-            envelope
-        );
-        let alternate_envelope = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&envelope).expect("alternate-layout OpenVerifyEnvelope")
-        };
-        assert_ne!(alternate_envelope, canonical_envelope);
-        assert!(decode_ivm_proved_open_envelope(&alternate_envelope).is_err());
-        let nested_alternate_envelope = ZkOpenVerifyEnvelope {
-            proof_bytes: alternate_open,
-            ..envelope
-        };
-        let nested_alternate_bytes = norito::encode_canonical(&nested_alternate_envelope)
-            .expect("canonical outer envelope with alternate nested proof");
-        let decoded_outer = decode_ivm_proved_open_envelope(&nested_alternate_bytes)
-            .expect("outer envelope remains canonical");
-        assert!(decode_ivm_proved_stark_open_proof(&decoded_outer.proof_bytes).is_err());
-    }
-    #[test]
-    fn ivm_proved_commitment_encoders_ignore_ambient_norito_layout() {
-        let trace = IvmTraceBundleV1 {
-            register_trace: Vec::new(),
-            constraints: Vec::new(),
-            memory_log: Vec::new(),
-            register_log: Vec::new(),
-            step_log: Vec::new(),
-        };
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let expected_trace_hash =
-            expected_ivm_trace_hash(&trace).expect("canonical trace commitment");
-        let expected_overlay =
-            norito::encode_canonical(&overlay).expect("canonical overlay encoding");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        assert_eq!(
-            expected_ivm_trace_hash(&trace).expect("ambient-independent trace commitment"),
-            expected_trace_hash
-        );
-        assert_eq!(
-            encode_proved_overlay_bounded(&overlay, expected_overlay.len())
-                .expect("bounded canonical overlay"),
-            expected_overlay
-        );
-    }
     include!("overlay_admission_policy_tests.rs");
-    #[test]
-    fn plain_ivm_axt_only_overlay_fails_closed_without_authenticated_proof() {
-        use iroha_data_model::{block::BlockHeader, nexus::AxtHandleReplayKey};
-        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-        use ivm::axt::{
-            AssetHandle, GroupBinding, HandleBudget, HandleSubject, HandleUsage, ProofBlob,
-            RemoteSpendIntent, SpendOp, TouchManifest,
-        };
-        use nonzero_ext::nonzero;
-        let authority = AccountId::new(checked_keypair().public_key().clone());
-        let dsid = DataSpaceId::UNIVERSAL;
-        let lane = LaneId::new(0);
-        let (descriptor, binding) = ivm::axt::AxtDescriptor::builder()
-            .dataspace(dsid)
-            .build_with_binding()
-            .expect("AXT descriptor");
-        let handle = AssetHandle {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-            ])
-            .expect("valid AXT fixture asset id"),
-            scope: vec!["transfer".to_owned()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: "10".parse().expect("canonical handle quantity"),
-                per_use: Some("10".parse().expect("canonical per-use quantity")),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xA5; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding.to_vec(),
-            manifest_view_root: vec![0x5A; 32],
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".to_owned(),
-                from: authority.to_string(),
-                to: authority.to_string(),
-                amount: Some("5".parse().expect("canonical spend quantity")),
-            },
-        };
-        let replay_key = AxtHandleReplayKey::from_parts(
-            dsid,
-            handle.issuer_context.asset_definition_incarnation,
-            binding,
-            1,
-            1,
-            lane,
-        );
-        let mut completed = ivm::axt::HostAxtState::new(descriptor, binding);
-        completed
-            .record_touch(
-                dsid,
-                TouchManifest {
-                    read: Vec::new(),
-                    write: Vec::new(),
-                },
-            )
-            .expect("record empty canonical touch");
-        completed
-            .record_proof(
-                dsid,
-                Some(ProofBlob {
-                    payload: vec![1],
-                    expiry_slot: None,
-                }),
-                None,
-            )
-            .expect("record AXT proof");
-        completed
-            .record_handle(HandleUsage {
-                handle,
-                intent,
-                proof: None,
-                amount: "5".parse().expect("canonical used quantity"),
-                amount_commitment: None,
-            })
-            .expect("record AXT handle");
-        completed.validate_commit().expect("completed AXT fixture");
-        let state = crate::state::State::new_for_testing(
-            crate::state::World::default(),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-        );
-        let overlay = tx_overlay_from_host_queued(
-            &state.view(),
-            Vec::new(),
-            1,
-            vec![completed],
-            BTreeMap::new(),
-            BTreeMap::new(),
-        );
-        assert!(
-            !overlay.is_empty(),
-            "AXT-only plain IVM execution must not collapse into an empty overlay"
-        );
-        assert!(overlay.has_durable_state_changes());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut state_tx = block.transaction();
-        let error = overlay
-            .apply(&mut state_tx, &authority)
-            .expect_err("an unverifiable AXT proof must not create durable replay state");
-        assert!(
-            matches!(
-                &error,
-                ValidationFail::InstructionFailed(
-                    iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
-                        message,
-                    ),
-                ) if message.contains("committed AXT handle amount cannot be resolved")
-                    && message.contains("InvalidProofEnvelope")
-            ),
-            "unexpected unverifiable-proof rejection: {error:?}"
-        );
-        drop(state_tx);
-        assert!(block.axt_envelopes().is_empty());
-        assert!(block.world.axt_replay_ledger.get(&replay_key).is_none());
-    }
     #[test]
     fn ivm_proved_axt_only_replay_is_not_dropped() {
         use iroha_data_model::block::BlockHeader;
@@ -6490,9 +6258,7 @@ mod tests {
                 durable_state_overlay: BTreeMap::new(),
                 durable_state_authorizations: BTreeMap::new(),
                 access_log: None,
-                events_commitment: Hash::new(b"events"),
                 gas_used: 1,
-                trace_hash: Hash::new(b"trace"),
             },
         );
         assert!(
@@ -6562,61 +6328,14 @@ mod tests {
         ));
     }
     #[test]
-    fn overlay_rejects_ivm_proved_overlay_bind_standin_circuit() {
+    fn overlay_rejects_ivm_proved_without_complete_execution_relation() {
         use iroha_data_model::{
-            confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
             transaction::{Executable, IvmProved},
-            zk::BackendTag,
         };
-        use std::sync::Arc;
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        // Compute the (code_hash, overlay_hash) public inputs expected by `IvmProved`.
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let events_commitment = Hash::new(b"events");
-        let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            Hash::prehashed(*summary.code_hash.as_ref()),
-            overlay_hash,
-            events_commitment,
-            gas_policy_commitment,
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_overlay_bind");
-        let vk_box = fixture
-            .vk_box("halo2/ipa")
-            .expect("fixture provides vk bytes");
-        let vk_commitment = fixture
-            .vk_hash("halo2/ipa")
-            .expect("fixture provides vk hash");
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            fixture.schema_hash,
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.activation_height = Some(1);
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        vk_record.circuit_id = "halo2/pasta/ipa/ivm-overlay-bind".to_owned();
-        // Minimal authority/world setup.
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
@@ -6624,1944 +6343,29 @@ mod tests {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 101);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
+        let state = crate::state::State::new_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
         );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
-        // time-based rejection so slow debug builds don't flap.
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let attachment = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            fixture.proof_box("halo2/ipa"),
-            vk_id.clone(),
-        );
-        let attachments = ProofAttachmentList::try_from(vec![attachment])
-            .expect("one attachment is a valid bounded proof list");
         let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
-                overlay: overlay.clone(),
-                events_commitment,
-                gas_policy_commitment,
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas-policy"),
             }))
-            .with_attachments(attachments)
             .sign(kp.private_key());
-        let err = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect_err("overlay-bind stand-in must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg)
-                    if msg == "invalid stored verifying-key record: Halo2 IPA verifying-key circuit is not admitted for the registry backend"
-            ),
-            "the registry must reject the binding-only circuit before proof verification: {err:?}"
-        );
-    }
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn proved_overlay_builder_carries_complete_entrypoint_authorization() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            permission::{Permission, Permissions},
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        const REQUIRED_PERMISSION: &str = "CanBuildProvedOverlay";
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                force_zk: true,
-                max_cycles: 10_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Production,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
-        let (program, manifest) = compiler
-            .compile_source_with_manifest(
-                r#"
-seiyaku ProtectedProvedOverlay {
-  state StateMap<int, int> Values;
-
-  kotoage fn open() -> int authorize("CanBuildProvedOverlay") {
-    let current = Values.get(7).unwrap_or(0);
-    Values[7] = current + 11;
-    ledger::account::set_detail(
-      account: context::authority(),
-      key: Name::parse("proved_overlay_applied"),
-      value: Json::parse("{\"source\":\"top_level\"}")
-    );
-    return 0;
-  }
-}
-"#,
-            )
-            .expect("compile protected ZK-mode contract");
-        let bytecode = IvmBytecode::from_compiled(program.clone());
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let vk_fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            Hash::new(b"vk-seed-overlay"),
-            Hash::new(b"vk-events"),
-            Hash::new(b"vk-gas-policy"),
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
-        let vk_box = vk_fixture
-            .vk_box("halo2/ipa")
-            .expect("fixture provides vk bytes");
-        let vk_commitment = vk_fixture
-            .vk_hash("halo2/ipa")
-            .expect("fixture provides vk hash");
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            vk_fixture.schema_hash,
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.namespace = "universal".to_owned();
-        vk_record.activation_height = Some(1);
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &authority,
-            92,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive proved-overlay contract address");
-        let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-            "proved",
-            Some("wonderland"),
-            "universal",
-        )
-        .expect("valid proved-overlay contract alias");
-        world
-            .contract_code
-            .insert(summary.code_hash, program.clone());
-        world
-            .contract_manifests
-            .insert(summary.code_hash, manifest.signed(&kp));
-        seed_active_contract(&mut world, &contract_address, summary.code_hash, &authority);
-        world
-            .bind_contract_alias(&contract_address, contract_alias.clone(), None, None, 0)
-            .expect("bind proved-overlay contract alias");
-        let mut permissions = Permissions::new();
-        assert!(permissions.insert(Permission::new(
-            REQUIRED_PERMISSION.to_owned(),
-            iroha_primitives::json::Json::new(()),
-        )));
-        world
-            .account_permissions_mut_for_testing()
-            .insert(authority.clone(), permissions);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
-        // time-based rejection so slow debug builds don't flap.
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        metadata.insert(
-            "contract_entrypoint".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new("open"),
-        );
-        metadata.insert(
-            "contract_address".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(contract_address.to_string()),
-        );
-        metadata.insert(
-            "contract_alias".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(contract_alias.to_string()),
-        );
-        let derivation_tx =
-            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-                .with_metadata(metadata.clone())
-                .with_executable(Executable::Ivm(bytecode.clone()))
-                .sign(kp.private_key());
-        let proved = derive_ivm_proved_payload_from_ivm_execution(
-            &*execution_block(&state),
-            &derivation_tx,
-            &vk_record,
-        )
-        .expect("derive non-empty proved overlay payload");
-        assert_eq!(
-            proved.overlay.len(),
-            1,
-            "top-level set_account_detail must produce one proved instruction"
-        );
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&proved.overlay).expect("encode derived proved overlay");
-            Hash::new(&bytes)
-        };
-        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            overlay_hash,
-            proved.events_commitment,
-            proved.gas_policy_commitment,
-        );
-        assert_eq!(
-            fixture
-                .vk_hash("halo2/ipa")
-                .expect("derived fixture provides vk hash"),
-            vk_commitment,
-            "the real payload envelope must use the registered execution verifying key"
-        );
-        let attachment = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            fixture.proof_box("halo2/ipa"),
-            vk_id.clone(),
-        );
-        let attachments = ProofAttachmentList::try_from(vec![attachment])
-            .expect("one attachment is a valid bounded proof list");
-        let tx = TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: proved.bytecode,
-                overlay: proved.overlay.clone(),
-                events_commitment: proved.events_commitment,
-                gas_policy_commitment: proved.gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
-        // Proof validity is governed by the on-chain verifier record. Local backend enablement
-        // controls proving/tooling availability and must not fork proof-carrying admission.
-        state.zk.halo2.enabled = false;
-        state.zk.stark.enabled = false;
-        let overlay_built = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect("proved execution overlay");
-        let prepared_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let accounts = state.view().accounts_snapshot();
-        let prepared = build_prepared_overlay_for_transaction_with_accounts_zk(
-            &tx,
-            accounts,
-            &*execution_block(&state),
-            false,
-            &prepared_header,
-            StreamingOverlayMetadata::default(),
-            &mut ivm_cache,
-            true,
-            None,
-        )
-        .expect("prepare proved execution overlay with access capture");
-        assert_eq!(
-            prepared.access_fence,
-            VmAccessFence::Global,
-            "the proved program's ledger write must retain a global scheduler fence"
-        );
-        assert!(
-            prepared.force_live_rebuild,
-            "proved programs with ledger access must be replayed against live scheduler state"
-        );
-        let prepared_reads =
-            DurableStateReadSnapshot::capture(&tx, prepared.access_log.as_ref(), &state.view())
-                .expect("proved StateMap read must produce a durable-state snapshot");
-        assert!(prepared_reads.is_current(&state.view()));
-        let marker: Name = "proved_overlay_applied"
-            .parse()
-            .expect("valid proved-overlay marker");
-        let built: Vec<InstructionBox> = overlay_built.instructions().cloned().collect();
-        let expected_instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
-            authority.clone(),
-            marker.clone(),
-            Json::from(norito::json!({ "source": "top_level" })),
-        )
-        .into();
-        assert_eq!(built, vec![expected_instruction]);
-        assert_eq!(built.as_slice(), proved.overlay.as_ref());
-        let execute_with_current_local_verifier_config = |state: &crate::state::State| {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut state_transaction = block
-                .transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
-            let executor = state_transaction.world.executor.clone();
-            let mut execution_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-            executor
-                .execute_transaction(
-                    &mut state_transaction,
-                    &authority,
-                    tx.clone(),
-                    &mut execution_cache,
-                )
-                .expect("governed proved execution must not depend on local verifier enablement");
-            let marker_value = state_transaction
-                .world
-                .account(&authority)
-                .expect("authority account after proved execution")
-                .metadata()
-                .get(&marker)
-                .cloned();
-            let durable_state = state_transaction
-                .world
-                .smart_contract_state
-                .iter()
-                .map(|(path, value)| (path.clone(), value.clone()))
-                .collect::<Vec<_>>();
-            (
-                marker_value,
-                durable_state,
-                state_transaction.last_tx_gas_used,
-            )
-        };
-        let executor_without_local_backend = execute_with_current_local_verifier_config(&state);
-        let prepared_without_local_backend: Vec<InstructionBox> =
-            prepared.overlay.instructions().cloned().collect();
-        let prepared_without_local_backend_durable = prepared.overlay.durable_state_overlay.clone();
-        let prepared_without_local_backend_gas = prepared.overlay.ivm_gas_used;
-        let prepared_without_local_backend_authorization =
-            prepared.overlay.entrypoint_authorization.clone();
-        state.zk.halo2.enabled = true;
-        let locally_enabled_overlay = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect("local Halo2 enablement must not change governed proved admission");
-        let accounts = state.view().accounts_snapshot();
-        let locally_enabled_prepared = build_prepared_overlay_for_transaction_with_accounts_zk(
-            &tx,
-            accounts,
-            &*execution_block(&state),
-            true,
-            &prepared_header,
-            StreamingOverlayMetadata::default(),
-            &mut ivm_cache,
-            true,
-            None,
-        )
-        .expect("local Halo2 enablement must not change prepared proved admission");
-        let executor_with_local_backend = execute_with_current_local_verifier_config(&state);
-        assert_eq!(
-            executor_with_local_backend, executor_without_local_backend,
-            "executor effects and gas must be independent of local verifier enablement"
-        );
-        assert_eq!(
-            locally_enabled_overlay
-                .instructions()
-                .cloned()
-                .collect::<Vec<_>>(),
-            built,
-            "local verifier enablement must not change proved replay instructions"
-        );
-        assert_eq!(
-            &locally_enabled_overlay.durable_state_overlay, &overlay_built.durable_state_overlay,
-            "local verifier enablement must not change proved durable-state replay"
-        );
-        assert_eq!(
-            locally_enabled_overlay.ivm_gas_used, overlay_built.ivm_gas_used,
-            "local verifier enablement must not change proved replay gas"
-        );
-        assert_eq!(
-            &locally_enabled_overlay.entrypoint_authorization,
-            &overlay_built.entrypoint_authorization,
-            "local verifier enablement must not change proved entrypoint authorization"
-        );
-        assert_eq!(
-            locally_enabled_prepared
-                .overlay
-                .instructions()
-                .cloned()
-                .collect::<Vec<_>>(),
-            prepared_without_local_backend,
-            "prepared proved replay instructions must be independent of local verifier enablement"
-        );
-        assert_eq!(
-            &locally_enabled_prepared.overlay.durable_state_overlay,
-            &prepared_without_local_backend_durable,
-            "prepared proved durable-state replay must be independent of local verifier enablement"
-        );
-        assert_eq!(
-            locally_enabled_prepared.overlay.ivm_gas_used, prepared_without_local_backend_gas,
-            "prepared proved replay gas must be independent of local verifier enablement"
-        );
-        assert_eq!(
-            &locally_enabled_prepared.overlay.entrypoint_authorization,
-            &prepared_without_local_backend_authorization,
-            "prepared proved authorization must be independent of local verifier enablement"
-        );
-        assert_eq!(locally_enabled_prepared.access_fence, prepared.access_fence);
-        assert_eq!(
-            locally_enabled_prepared.force_live_rebuild,
-            prepared.force_live_rebuild
-        );
-        state.pipeline.dynamic_prepass = !state.pipeline.dynamic_prepass;
-        state.pipeline.access_set_cache_enabled = !state.pipeline.access_set_cache_enabled;
-        state.pipeline.parallel_overlay = !state.pipeline.parallel_overlay;
-        state.pipeline.parallel_apply = !state.pipeline.parallel_apply;
-        state.pipeline.workers = state.pipeline.workers.saturating_add(1);
-        state.pipeline.cache_size = state.pipeline.cache_size.saturating_add(1);
-        state.pipeline.ivm_cache_max_decoded_ops =
-            state.pipeline.ivm_cache_max_decoded_ops.saturating_add(1);
-        state.pipeline.ivm_cache_max_bytes = state.pipeline.ivm_cache_max_bytes.saturating_add(1);
-        state.pipeline.ivm_prover_threads = state.pipeline.ivm_prover_threads.saturating_add(1);
-        let rebuilt: Vec<InstructionBox> =
-            build_overlay_for_transaction(&tx, &*execution_block(&state))
-                .expect(
-                    "operator-only pipeline performance settings must not change proved validity",
-                )
-                .instructions()
-                .cloned()
-                .collect();
-        assert_eq!(
-            rebuilt, built,
-            "restart-time performance configuration changes must preserve ABI V1 replay output"
-        );
-        assert_eq!(
-            overlay_built.durable_state_overlay.len(),
-            1,
-            "deterministic proved replay must retain the StateMap write"
-        );
-        let (durable_path, durable_value) = overlay_built
-            .durable_state_overlay
-            .iter()
-            .next()
-            .expect("one proved StateMap write");
-        let durable_path = durable_path.clone();
-        let durable_value = durable_value
-            .clone()
-            .expect("the proved StateMap operation stores a value");
-        let authorization = overlay_built
-            .entrypoint_authorization
-            .as_ref()
-            .expect("proved overlay must retain selected entrypoint authorization");
-        assert_eq!(authorization.entrypoint, "open");
-        assert_eq!(
-            authorization.permission.as_deref(),
-            Some(REQUIRED_PERMISSION)
-        );
-        assert_eq!(&authorization.contract_address, &contract_address);
-        assert_eq!(authorization.contract_alias.as_ref(), Some(&contract_alias));
-        assert_eq!(authorization.code_hash, summary.code_hash);
-        assert_eq!(
-            overlay_built
-                .durable_state_authorizations
-                .get(&durable_path)
-                .and_then(Option::as_ref),
-            Some(authorization),
-            "the proved StateMap write must retain the complete root authorization snapshot"
-        );
-        assert!(authorization.owns_durable_state_path(&durable_path));
-        let execution_contexts = overlay_built
-            .execution_contexts
-            .as_deref()
-            .expect("proved host write must retain its execution context");
-        assert_eq!(execution_contexts.len(), 1);
-        assert_eq!(
-            execution_contexts[0].entrypoint_authorization.as_ref(),
-            Some(authorization),
-            "the queued host write must retain the complete root authorization snapshot"
-        );
-        let runtime_context = execution_contexts[0]
-            .contract_runtime_context
-            .as_ref()
-            .expect("proved host write must retain its contract runtime context");
-        assert_eq!(&runtime_context.contract_address, &contract_address);
-        assert_eq!(
-            runtime_context.contract_alias.as_ref(),
-            Some(&contract_alias)
-        );
-        assert_eq!(runtime_context.entrypoint, "open");
-        let replacement_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-            "proved2",
-            Some("wonderland"),
-            "universal",
-        )
-        .expect("valid replacement proved-overlay alias");
-        let changed_code_hash = Hash::new(b"changed-proved-overlay-code");
-        for (mutation, expected_error) in [
-            ("permission", REQUIRED_PERMISSION),
-            ("instance", "no longer active"),
-            ("code", "changed code binding"),
-            ("alias", "changed alias binding"),
-            ("alias_lease", "changed alias binding"),
-        ] {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut state_tx = block.transaction();
-            match mutation {
-                "permission" => {
-                    state_tx.world.account_permissions.remove(authority.clone());
-                }
-                "instance" => {
-                    state_tx
-                        .world
-                        .contract_instances
-                        .remove(contract_address.clone());
-                }
-                "code" => {
-                    state_tx
-                        .world
-                        .contract_instances
-                        .insert(contract_address.clone(), changed_code_hash);
-                }
-                "alias" => {
-                    state_tx
-                        .world
-                        .bind_contract_alias(
-                            &contract_address,
-                            replacement_alias.clone(),
-                            None,
-                            None,
-                            1,
-                        )
-                        .expect("replace proved-overlay contract alias");
-                }
-                "alias_lease" => {
-                    state_tx
-                        .world
-                        .bind_contract_alias(
-                            &contract_address,
-                            contract_alias.clone(),
-                            Some(10),
-                            Some(20),
-                            1,
-                        )
-                        .expect("refresh the same alias with different lease provenance");
-                }
-                _ => unreachable!("complete mutation fixture"),
-            }
-            let error = overlay_built
-                .apply(&mut state_tx, &authority)
-                .expect_err("stale proved authorization must reject before its host write");
-            assert!(
-                matches!(
-                    &error,
-                    ValidationFail::NotPermitted(message)
-                        if message.contains(expected_error)
-                ),
-                "unexpected {mutation} mutation error: {error:?}"
-            );
-            if mutation == "code" {
-                let ValidationFail::NotPermitted(message) = &error else {
-                    unreachable!("code mutation is reported as a permission denial");
-                };
-                assert!(
-                    message.contains(&contract_address.to_string())
-                        && message.contains(&summary.code_hash.to_string())
-                        && message.contains(&changed_code_hash.to_string()),
-                    "proved code-drift revalidation must identify the address and both hashes: {error:?}"
-                );
-            }
-            assert!(
-                state_tx
-                    .world
-                    .account(&authority)
-                    .expect("authority account")
-                    .metadata()
-                    .get(&marker)
-                    .is_none(),
-                "{mutation} mutation must reject before the proved metadata write"
-            );
-            assert!(
-                state_tx
-                    .world
-                    .smart_contract_state
-                    .get(&durable_path)
-                    .is_none(),
-                "{mutation} mutation must reject before the proved StateMap write"
-            );
-        }
-        {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut state_tx = block.transaction();
-            overlay_built
-                .apply(&mut state_tx, &authority)
-                .expect("unchanged permission and binding must apply the proved host write");
-            assert!(
-                state_tx
-                    .world
-                    .account(&authority)
-                    .expect("authority account")
-                    .metadata()
-                    .get(&marker)
-                    .is_some(),
-                "granted proved authorization must apply the queued metadata write"
-            );
-            assert_eq!(
-                state_tx.world.smart_contract_state.get(&durable_path),
-                Some(&durable_value),
-                "granted proved authorization must apply the replayed StateMap write"
-            );
-        }
-        state
-            .world
-            .smart_contract_state_mut_for_testing()
-            .insert(durable_path, durable_value);
-        assert!(
-            !prepared_reads.is_current(&state.view()),
-            "a conflicting predecessor write must invalidate the proved replay read snapshot"
-        );
-        let accounts = state.view().accounts_snapshot();
-        let error = build_prepared_overlay_for_transaction_with_accounts_zk(
-            &tx,
-            accounts,
-            &*execution_block(&state),
-            true,
-            &prepared_header,
-            StreamingOverlayMetadata::default(),
-            &mut ivm_cache,
-            true,
-            None,
-        )
-        .expect_err("the original proof must not authorize replay after a predecessor conflict");
-        assert!(
-            matches!(
-                &error,
-                OverlayBuildError::IvmProvedReplay(message)
-                    if message.contains("commitment mismatch")
-                        || message.contains("deterministic IVM replay")
-            ),
-            "unexpected predecessor-conflict error: {error:?}"
-        );
-        let mut unbounded = vk_record.clone();
-        unbounded.max_proof_bytes = 0;
-        state.world.verifying_keys.insert(vk_id.clone(), unbounded);
         let error = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect_err("proved execution requires an explicit governed proof-size limit");
-        assert!(
-            matches!(
-                &error,
-                OverlayBuildError::ZkProof(message)
-                    if message.contains("governed max_proof_bytes")
-            ),
-            "unexpected unbounded-verifier error: {error:?}"
-        );
-        let mut withdrawn = vk_record;
-        withdrawn.activation_height = Some(0);
-        withdrawn.withdraw_height = Some(1);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &withdrawn)
-            .expect("withdrawn verifier has a valid activation window");
-        state.world.verifying_keys.insert(vk_id, withdrawn);
-        let error = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect_err("a verifier withdrawn at the execution height must reject admission");
-        assert!(
-            matches!(
-                &error,
-                OverlayBuildError::ZkProof(message)
-                    if message.contains("not active at the execution height")
-            ),
-            "unexpected withdrawn-verifier error: {error:?}"
-        );
-    }
-    #[test]
-    fn overlay_rejects_ivm_proved_backend_tag_mismatches_before_verify() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
-        let bytecode = IvmBytecode::from_compiled(program);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let events_commitment = Hash::new(b"events");
-        let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            overlay_hash,
-            events_commitment,
-            gas_policy_commitment,
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
-        let vk_box = fixture
-            .vk_box("halo2/ipa")
-            .expect("fixture provides vk bytes");
-        let vk_commitment = fixture
-            .vk_hash("halo2/ipa")
-            .expect("fixture provides vk hash");
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            fixture.schema_hash,
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 102);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let network_id = state.network_id;
-        let build_tx = |vk_ref: VerifyingKeyId| {
-            let attachment = ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                fixture.proof_box("halo2/ipa"),
-                vk_ref,
-            );
-            TransactionBuilder::new(network_id, authority.clone(), test_fee_payment())
-                .with_metadata(metadata.clone())
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: bytecode.clone(),
-                    overlay: overlay.clone(),
-                    events_commitment,
-                    gas_policy_commitment,
-                }))
-                .with_attachments(
-                    ProofAttachmentList::try_from(vec![attachment])
-                        .expect("one attachment is a valid bounded proof list"),
-                )
-                .sign(kp.private_key())
-        };
-        let wrong_ref_tx = build_tx(VerifyingKeyId::new("stark/fri", "ivm_execution"));
-        let err = build_overlay_for_transaction(&wrong_ref_tx, &*execution_block(&state))
-            .expect_err("mismatched attachment verifier-key backend must reject before lookup");
+            .expect_err("binding-only proofs cannot establish IVM execution");
         assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg)
-                if msg.contains("proof attachment verifier-key backend mismatch")
+            error,
+            OverlayBuildError::ZkProof(message)
+                if message == "IvmProved requires the complete native STARK execution relation"
         ));
-        let mut bad_record = vk_record;
-        bad_record.backend = BackendTag::Stark;
-        state.world.verifying_keys.insert(vk_id.clone(), bad_record);
-        let bad_record_tx = build_tx(vk_id.clone());
-        let err = build_overlay_for_transaction(&bad_record_tx, &*execution_block(&state))
-            .expect_err("mismatched verifier record backend tag must reject before verify");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg)
-                    if msg == "invalid stored verifying-key record: verifying-key record backend does not match the production registry backend"
-            ),
-            "unexpected verifier backend rejection: {err:?}"
-        );
-    }
-    #[test]
-    #[cfg(feature = "zk-stark")]
-    fn overlay_accepts_stark_ivm_proved_binding_air_proof() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{
-                ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
-                VerifyingKeyRecord,
-            },
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
-        let bytecode = IvmBytecode::from_compiled(program);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
-        let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
-        let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.to_owned(),
-            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-        };
-        let vk_box = VerifyingKeyBox::new(
-            backend.into(),
-            norito::to_bytes(&vk_payload).expect("encode STARK VK payload"),
-        );
-        let vk_commitment = crate::zk::hash_vk(&vk_box);
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            circuit_id,
-            BackendTag::Stark,
-            "goldilocks",
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box.clone());
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 103);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.stark.enabled = true;
-        state.zk.halo2.enabled = false;
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx =
-            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-                .with_metadata(metadata.clone())
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: bytecode.clone(),
-                    overlay: overlay.clone(),
-                    events_commitment: Hash::new(b"replay-events"),
-                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-                }))
-                .sign(kp.private_key());
-        let replay = replay_ivm_proved_overlay(
-            &*execution_block(&state),
-            &replay_tx,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
-            None,
-            &mut IvmProvedReplayWork::default(),
-        )
-        .expect("ivm proved replay");
-        let events_commitment = replay.events_commitment;
-        let gas_policy_commitment = expected_ivm_gas_policy_commitment(
-            summary.code_hash,
-            overlay_hash,
-            &vk_record.circuit_id,
-            vk_record.version,
-            vk_record
-                .gas_schedule_id
-                .as_deref()
-                .expect("gas schedule id must be set"),
-            TEST_GAS_LIMIT,
-            replay.gas_used,
-            replay.trace_hash,
-        );
-        let proof_box = crate::zk::prove_stark_fri_ivm_replay_binding_envelope(
-            backend,
-            circuit_id,
-            &vk_box,
-            code_hash,
-            overlay_hash,
-            events_commitment,
-            gas_policy_commitment,
-        )
-        .expect("STARK binding AIR proof");
-        let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
-        let attachments = ProofAttachmentList::try_from(vec![attachment])
-            .expect("one attachment is a valid bounded proof list");
-        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode,
-                overlay: overlay.clone(),
-                events_commitment,
-                gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
-        let overlay_built = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect("proved execution overlay");
-        let built: Vec<InstructionBox> = overlay_built.instructions().cloned().collect();
-        assert_eq!(built.as_slice(), overlay.as_ref());
-    }
-    #[test]
-    #[cfg(feature = "zk-stark")]
-    fn overlay_stark_prover_rejects_circuit_mismatch() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
-        let bytecode = IvmBytecode::from_compiled(program);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
-        let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
-        let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.to_owned(),
-            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-        };
-        let vk_box = VerifyingKeyBox::new(
-            backend.into(),
-            norito::to_bytes(&vk_payload).expect("encode STARK VK payload"),
-        );
-        let vk_commitment = crate::zk::hash_vk(&vk_box);
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            circuit_id,
-            BackendTag::Stark,
-            "goldilocks",
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box.clone());
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 104);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.stark.enabled = true;
-        state.zk.halo2.enabled = false;
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx =
-            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-                .with_metadata(metadata.clone())
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: bytecode.clone(),
-                    overlay: overlay.clone(),
-                    events_commitment: Hash::new(b"replay-events"),
-                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-                }))
-                .sign(kp.private_key());
-        let replay = replay_ivm_proved_overlay(
-            &*execution_block(&state),
-            &replay_tx,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
-            None,
-            &mut IvmProvedReplayWork::default(),
-        )
-        .expect("ivm proved replay");
-        let events_commitment = replay.events_commitment;
-        let gas_policy_commitment = expected_ivm_gas_policy_commitment(
-            summary.code_hash,
-            overlay_hash,
-            &vk_record.circuit_id,
-            vk_record.version,
-            vk_record
-                .gas_schedule_id
-                .as_deref()
-                .expect("gas schedule id must be set"),
-            TEST_GAS_LIMIT,
-            replay.gas_used,
-            replay.trace_hash,
-        );
-        let err = crate::zk::prove_stark_fri_ivm_replay_binding_envelope(
-            backend,
-            "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-ivm-replay-binding-v1",
-            &vk_box,
-            code_hash,
-            overlay_hash,
-            events_commitment,
-            gas_policy_commitment,
-        )
-        .expect_err("mismatched STARK circuit must be rejected");
-        assert!(
-            err.contains("circuit_id mismatch")
-                || err.contains("circuit id mismatch")
-                || err.contains("STARK IVM execution proving requires"),
-            "unexpected mismatch error: {err}"
-        );
-    }
-    #[test]
-    fn overlay_rejects_ivm_proved_when_commitments_mismatch() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_metered_program_zk_mode(2);
-        let bytecode = IvmBytecode::from_compiled(program);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let vk_fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            overlay_hash,
-            Hash::new(b"vk-events"),
-            Hash::new(b"vk-gas-policy"),
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
-        let vk_box = vk_fixture
-            .vk_box("halo2/ipa")
-            .expect("fixture provides vk bytes");
-        let vk_commitment = vk_fixture
-            .vk_hash("halo2/ipa")
-            .expect("fixture provides vk hash");
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            vk_fixture.schema_hash,
-            vk_commitment,
-        );
-        vk_record.namespace = "universal".to_owned();
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 105);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
-        // time-based rejection so slow debug builds don't flap.
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx =
-            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-                .with_metadata(metadata.clone())
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: bytecode.clone(),
-                    overlay: overlay.clone(),
-                    events_commitment: Hash::new(b"replay-events"),
-                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-                }))
-                .sign(kp.private_key());
-        let replay = replay_ivm_proved_overlay(
-            &*execution_block(&state),
-            &replay_tx,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
-            None,
-            &mut IvmProvedReplayWork::default(),
-        )
-        .expect("ivm proved replay");
-        let expected_events_commitment = replay.events_commitment;
-        let expected_gas_policy_commitment = expected_ivm_gas_policy_commitment(
-            summary.code_hash,
-            overlay_hash,
-            &vk_record.circuit_id,
-            vk_record.version,
-            vk_record
-                .gas_schedule_id
-                .as_deref()
-                .expect("gas schedule id must be set"),
-            TEST_GAS_LIMIT,
-            replay.gas_used,
-            replay.trace_hash,
-        );
-        // Let oversized public-input metadata reach the shared envelope validator instead of
-        // the existing outer proof-size guard.
-        state.zk.halo2.max_envelope_bytes = usize::MAX;
-        state.zk.halo2.max_proof_bytes = usize::MAX;
-        let build_tx =
-            |events_commitment: Hash,
-             gas_policy_commitment: Hash,
-             mutate_envelope: Option<fn(&mut ZkOpenVerifyEnvelope)>| {
-                let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-                    code_hash,
-                    overlay_hash,
-                    events_commitment,
-                    gas_policy_commitment,
-                );
-                let mut proof_box = fixture.proof_box("halo2/ipa");
-                if let Some(mutate) = mutate_envelope {
-                    proof_box = mutate_open_verify_envelope_proof_box(proof_box, mutate);
-                }
-                let attachment =
-                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-                let attachments = ProofAttachmentList::try_from(vec![attachment])
-                    .expect("one attachment is a valid bounded proof list");
-                TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-                    .with_metadata(metadata.clone())
-                    .with_executable(Executable::IvmProved(IvmProved {
-                        bytecode: bytecode.clone(),
-                        overlay: overlay.clone(),
-                        events_commitment,
-                        gas_policy_commitment,
-                    }))
-                    .with_attachments(attachments)
-                    .sign(kp.private_key())
-            };
-        let invalid_envelope_cases: [(&str, fn(&mut ZkOpenVerifyEnvelope), &str); 6] = [
-            (
-                "empty circuit id",
-                |env| env.circuit_id.clear(),
-                "circuit id is empty",
-            ),
-            (
-                "zero verifier-key hash",
-                |env| env.vk_hash = [0u8; 32],
-                "verifier-key hash is zero",
-            ),
-            (
-                "empty public inputs",
-                |env| env.public_inputs.clear(),
-                "public inputs are empty",
-            ),
-            (
-                "oversized public inputs",
-                |env| {
-                    env.public_inputs = vec![
-                        0xA5;
-                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
-                            + 1
-                    ];
-                },
-                "public inputs length",
-            ),
-            (
-                "empty proof bytes",
-                |env| env.proof_bytes.clear(),
-                "proof bytes are empty",
-            ),
-            (
-                "auxiliary bytes",
-                |env| env.aux = b"ignored-hint".to_vec(),
-                "auxiliary bytes must be empty",
-            ),
-        ];
-        for (label, mutate, expected_msg) in invalid_envelope_cases {
-            let tx = build_tx(
-                expected_events_commitment,
-                expected_gas_policy_commitment,
-                Some(mutate),
-            );
-            let err = match build_overlay_for_transaction(&tx, &*execution_block(&state)) {
-                Ok(_) => panic!("{label} must be rejected"),
-                Err(err) => err,
-            };
-            assert!(
-                matches!(
-                    &err,
-                    OverlayBuildError::ZkProof(msg)
-                        if msg.contains("invalid OpenVerifyEnvelope")
-                            && msg.contains(expected_msg)
-                ),
-                "unexpected {label} error: {err:?}"
-            );
-        }
-        let bad_events_tx = build_tx(
-            Hash::new(b"bad-events"),
-            expected_gas_policy_commitment,
-            None,
-        );
-        let err = build_overlay_for_transaction(&bad_events_tx, &*execution_block(&state))
-            .expect_err("events commitment mismatch must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::IvmProvedReplay(msg)
-                    if msg.contains("events commitment mismatch")
-            ),
-            "unexpected error: {err:?}"
-        );
-        let bad_gas_policy_tx = build_tx(
-            expected_events_commitment,
-            Hash::new(b"bad-gas-policy"),
-            None,
-        );
-        let err = build_overlay_for_transaction(&bad_gas_policy_tx, &*execution_block(&state))
-            .expect_err("gas policy commitment mismatch must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::IvmProvedReplay(msg)
-                    if msg.contains("gas policy commitment mismatch")
-            ),
-            "unexpected error: {err:?}"
-        );
-
-        // Exercise the actual signed Executor, including the verifier and real
-        // replay. A later block-cap refusal retains that already completed work.
-        let valid_tx = build_tx(
-            expected_events_commitment,
-            expected_gas_policy_commitment,
-            None,
-        );
-        for block_full in [false, true] {
-            let mut block = execution_block(&state);
-            let fragments = block.committed_fragment_count();
-            let mut transaction = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
-                valid_tx.hash_as_entrypoint(),
-            ));
-            if block_full {
-                transaction.gas_limit_per_block = 1;
-                transaction.gas_used_in_block_so_far = 1;
-            }
-            let result = crate::executor::Executor::Initial.execute_transaction(
-                &mut transaction,
-                &authority,
-                valid_tx.clone(),
-                &mut ivm_cache,
-            );
-            if block_full {
-                assert!(
-                    matches!(result, Err(ValidationFail::NotPermitted(ref reason))
-                    if reason.starts_with("block gas limit exceeded:")),
-                    "{result:?}"
-                );
-            } else {
-                result.expect("valid actual proof and replay reach signed execution");
-            }
-            assert_eq!(transaction.last_tx_gas_used, replay.gas_used);
-            assert!(transaction.last_tx_gas_used > 0);
-            drop(transaction);
-            assert_eq!(block.committed_fragment_count(), fragments);
-        }
-    }
-    #[test]
-    fn overlay_rejects_ivm_proved_when_overlay_hash_mismatches() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            isi::Log,
-            level::Level,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
-        let bytecode = IvmBytecode::from_compiled(program);
-        let overlay_ok: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let overlay_bad: iroha_primitives::const_vec::ConstVec<InstructionBox> =
-            vec![InstructionBox::from(Log {
-                level: Level::INFO,
-                msg: "tampered".to_owned(),
-            })]
-            .into();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let overlay_ok_hash = {
-            let bytes = norito::to_bytes(&overlay_ok).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let overlay_bad_hash = {
-            let bytes = norito::to_bytes(&overlay_bad).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let events_commitment = Hash::new(b"events");
-        let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            overlay_ok_hash,
-            events_commitment,
-            gas_policy_commitment,
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
-        let vk_box = fixture
-            .vk_box("halo2/ipa")
-            .expect("fixture provides vk bytes");
-        let vk_commitment = fixture
-            .vk_hash("halo2/ipa")
-            .expect("fixture provides vk hash");
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            fixture.schema_hash,
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 108);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
-        // time-based rejection so slow debug builds don't flap.
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let attachment =
-            ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
-        let attachments = ProofAttachmentList::try_from(vec![attachment])
-            .expect("one attachment is a valid bounded proof list");
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let _ = overlay_bad_hash; // mismatch is exercised via `overlay_hash` in proof public inputs.
-        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode,
-                overlay: overlay_bad,
-                events_commitment,
-                gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
-        let err = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect_err("overlay hash mismatch must be rejected");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg) if msg.contains("proof public inputs do not match")
-        ));
-    }
-    #[test]
-    fn overlay_rejects_ivm_proved_when_vk_schema_hash_mismatches() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
-        let bytecode = IvmBytecode::from_compiled(program);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let events_commitment = Hash::new(b"events");
-        let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            overlay_hash,
-            events_commitment,
-            gas_policy_commitment,
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
-        let vk_box = fixture
-            .vk_box("halo2/ipa")
-            .expect("fixture provides vk bytes");
-        let vk_commitment = fixture
-            .vk_hash("halo2/ipa")
-            .expect("fixture provides vk hash");
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            fixture.schema_hash,
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        vk_record.public_inputs_schema_hash = *Hash::new(b"wrong-schema").as_ref();
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 109);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
-        // time-based rejection so slow debug builds don't flap.
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let attachment =
-            ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
-        let attachments = ProofAttachmentList::try_from(vec![attachment])
-            .expect("one attachment is a valid bounded proof list");
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode,
-                overlay,
-                events_commitment,
-                gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
-        let err = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect_err("schema hash mismatch must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg)
-                    if msg == "invalid stored verifying-key record: Halo2 IPA verifying-key public-input schema hash is not canonical"
-            ),
-            "unexpected verifier schema rejection: {err:?}"
-        );
-    }
-    #[test]
-    fn overlay_rejects_ivm_proved_when_replay_overlay_mismatches() {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            domain::Domain,
-            isi::Log,
-            level::Level,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_metered_program_zk_mode(2);
-        let bytecode = IvmBytecode::from_compiled(program);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> =
-            vec![InstructionBox::from(Log {
-                level: Level::INFO,
-                msg: "tampered".to_owned(),
-            })]
-            .into();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(bytecode.as_ref())
-            .expect("summarize IVM program");
-        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let vk_fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            overlay_hash,
-            Hash::new(b"vk-events"),
-            Hash::new(b"vk-gas-policy"),
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm_execution");
-        let vk_box = vk_fixture
-            .vk_box("halo2/ipa")
-            .expect("fixture provides vk bytes");
-        let vk_commitment = vk_fixture
-            .vk_hash("halo2/ipa")
-            .expect("fixture provides vk hash");
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            vk_fixture.schema_hash,
-            vk_commitment,
-        );
-        vk_record.status = ConfidentialStatus::Active;
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        vk_record.max_proof_bytes = 8 * 1024 * 1024;
-        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
-        vk_record.key = Some(vk_box);
-        crate::zk::validate_and_prepare_verifying_key_record_v1(&vk_id, &vk_record)
-            .expect("canonical execution verifier fixture");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 110);
-        world
-            .verifying_keys
-            .insert(vk_id.clone(), vk_record.clone());
-        world.verifying_keys_by_circuit.insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
-        // time-based rejection so slow debug builds don't flap.
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx =
-            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-                .with_metadata(metadata.clone())
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: bytecode.clone(),
-                    overlay: overlay.clone(),
-                    events_commitment: Hash::new(b"replay-events"),
-                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-                }))
-                .sign(kp.private_key());
-        let replay = replay_ivm_proved_overlay(
-            &*execution_block(&state),
-            &replay_tx,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
-            None,
-            &mut IvmProvedReplayWork::default(),
-        )
-        .expect("ivm proved replay");
-        let events_commitment = replay.events_commitment;
-        let gas_policy_commitment = expected_ivm_gas_policy_commitment(
-            summary.code_hash,
-            overlay_hash,
-            &vk_record.circuit_id,
-            vk_record.version,
-            vk_record
-                .gas_schedule_id
-                .as_deref()
-                .expect("gas schedule id must be set"),
-            TEST_GAS_LIMIT,
-            replay.gas_used,
-            replay.trace_hash,
-        );
-        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            code_hash,
-            overlay_hash,
-            events_commitment,
-            gas_policy_commitment,
-        );
-        let attachment =
-            ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
-        let attachments = ProofAttachmentList::try_from(vec![attachment])
-            .expect("one attachment is a valid bounded proof list");
-        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode,
-                overlay,
-                events_commitment,
-                gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
-        let err = build_overlay_for_transaction(&tx, &*execution_block(&state))
-            .expect_err("overlay replay mismatch must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::IvmProvedReplay(msg)
-                    if msg.contains("deterministic IVM replay")
-            ),
-            "unexpected error: {err:?}"
-        );
-
-        // The real cryptographic verifier reaches replay, then rejects the
-        // dishonest overlay. Its completed work must survive that rejection.
-        let Executable::IvmProved(proved) = tx.instructions() else {
-            panic!("proved fixture");
-        };
-        let allowance = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(2).unwrap());
-        let mut work = IvmProvedReplayWork::default();
-        let bounded_error = verify_ivm_proved_execution(
-            &*execution_block(&state),
-            &tx,
-            proved,
-            &summary,
-            Some(&allowance),
-            &mut work,
-        )
-        .expect_err("authenticated proof does not make its dishonest replay overlay valid");
-        assert!(
-            matches!(bounded_error, OverlayBuildError::IvmProvedReplay(ref message)
-            if message.contains("deterministic IVM replay"))
-        );
-        assert_eq!(allowance.consumed(), 2);
-        assert!(!allowance.exhausted());
-        assert_eq!(work.gas_used().unwrap(), Some(replay.gas_used));
-        assert!(replay.gas_used > 0);
-    }
-    #[test]
-    fn derive_ivm_proved_payload_matches_replay_commitments() {
-        use iroha_data_model::{
-            domain::Domain,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::VerifyingKeyRecord,
-            transaction::{Executable, IvmProved},
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
-        let bytecode = IvmBytecode::from_compiled(program);
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 111);
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let tx = TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::Ivm(bytecode.clone()))
-            .sign(kp.private_key());
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
-            [0u8; 32],
-        );
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        let proved = derive_ivm_proved_payload_from_ivm_execution(
-            &*execution_block(&state),
-            &tx,
-            &vk_record,
-        )
-        .expect("derive proved payload");
-        let tx_proved = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: proved.bytecode.clone(),
-                overlay: proved.overlay.clone(),
-                events_commitment: proved.events_commitment,
-                gas_policy_commitment: proved.gas_policy_commitment,
-            }))
-            .sign(kp.private_key());
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(proved.bytecode.as_ref())
-            .expect("summarize IVM program");
-        let overlay_hash = {
-            let bytes = norito::to_bytes(&proved.overlay).expect("encode overlay");
-            Hash::new(&bytes)
-        };
-        let replay = replay_ivm_proved_overlay(
-            &*execution_block(&state),
-            &tx_proved,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
-            None,
-            &mut IvmProvedReplayWork::default(),
-        )
-        .expect("replay proved overlay");
-        assert_eq!(
-            proved.events_commitment, replay.events_commitment,
-            "events commitment should match deterministic replay"
-        );
-        let expected_gas_policy_commitment = expected_ivm_gas_policy_commitment(
-            summary.code_hash,
-            overlay_hash,
-            &vk_record.circuit_id,
-            vk_record.version,
-            vk_record
-                .gas_schedule_id
-                .as_deref()
-                .expect("gas schedule id"),
-            TEST_GAS_LIMIT,
-            replay.gas_used,
-            replay.trace_hash,
-        );
-        assert_eq!(
-            proved.gas_policy_commitment, expected_gas_policy_commitment,
-            "gas policy commitment should match deterministic replay"
-        );
-    }
-    #[test]
-    fn derive_ivm_proved_payload_dispatches_contract_entrypoint_metadata() {
-        use iroha_data_model::{
-            domain::Domain,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::VerifyingKeyRecord,
-            transaction::Executable,
-            zk::BackendTag,
-        };
-        use std::sync::Arc;
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                force_zk: true,
-                max_cycles: 10_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Production,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
-        let (program, manifest) = compiler
-            .compile_source_with_manifest(
-                r#"
-seiyaku DeriveDispatch {
-  error enum DispatchError {
-    UnexpectedEntrypoint = 1,
-    InvalidAmount = 2,
-  }
-
-  kotoage fn main() -> int authorize("DeriveDispatch") {
-    require(false, DispatchError::UnexpectedEntrypoint);
-    return 0;
-  }
-
-  kotoage fn open(int amount) -> int authorize("DeriveDispatch") {
-    require(amount == 7, DispatchError::InvalidAmount);
-    ledger::account::set_detail(
-      account: context::authority(),
-      key: Name::parse("derive_dispatch_open"),
-      value: Json::parse("{\"entrypoint\":\"open\"}")
-    );
-    return amount;
-  }
-
-  kotoage fn restricted() -> int authorize("AssetOps") {
-    return 0;
-  }
-}
-"#,
-            )
-            .expect("compile ZK-mode contract artifact");
-        let bytecode = IvmBytecode::from_compiled(program.clone());
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let account = build_wonderland_account(&authority);
-        let mut world = crate::state::World::with([domain], [account], []);
-        let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &authority,
-            94,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive proved-payload contract address");
-        let code_hash = manifest.code_hash.expect("verified code hash");
-        world.contract_code.insert(code_hash, program);
-        world.contract_manifests.insert(code_hash, manifest);
-        seed_active_contract(&mut world, &contract_address, code_hash, &authority);
-        let mut permissions = iroha_data_model::permission::Permissions::new();
-        assert!(
-            permissions.insert(iroha_data_model::permission::Permission::new(
-                "DeriveDispatch".to_owned(),
-                iroha_primitives::json::Json::new(()),
-            )),
-            "fixture permission should be newly granted"
-        );
-        world
-            .account_permissions_mut_for_testing()
-            .insert(authority.clone(), permissions);
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-        state.zk.halo2.enabled = true;
-        let mut metadata = iroha_model_base::metadata::Metadata::default();
-        metadata.insert(
-            "contract_entrypoint".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new("open"),
-        );
-        metadata.insert(
-            "contract_payload".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(norito::json!({ "amount": "7" })),
-        );
-        metadata.insert(
-            "contract_address".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(contract_address.to_string()),
-        );
-        let tx = TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(bytecode.clone()))
-            .sign(kp.private_key());
-        let mut vk_record = VerifyingKeyRecord::new(
-            1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
-            [0u8; 32],
-        );
-        vk_record.gas_schedule_id = Some("sched_0".to_owned());
-        let proved = derive_ivm_proved_payload_from_ivm_execution(
-            &*execution_block(&state),
-            &tx,
-            &vk_record,
-        )
-        .expect("derive proved payload using contract entrypoint metadata");
-        let expected: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
-            authority.clone(),
-            "derive_dispatch_open".parse().expect("valid marker"),
-            iroha_primitives::json::Json::from(norito::json!({ "entrypoint": "open" })),
-        )
-        .into();
-        assert_eq!(proved.overlay.as_ref(), &[expected]);
-        let mut restricted_metadata = iroha_model_base::metadata::Metadata::default();
-        restricted_metadata.insert(
-            "contract_entrypoint".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new("restricted"),
-        );
-        restricted_metadata.insert(
-            "contract_address".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(contract_address.to_string()),
-        );
-        let restricted_tx =
-            TransactionBuilder::new(state.network_id, authority, test_fee_payment())
-                .with_metadata(restricted_metadata)
-                .with_executable(Executable::Ivm(bytecode))
-                .sign(kp.private_key());
-        let err = derive_ivm_proved_payload_from_ivm_execution(
-            &*execution_block(&state),
-            &restricted_tx,
-            &vk_record,
-        )
-        .expect_err("proved derivation must enforce protected entrypoint permissions");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ContractCall(message)
-                    if message.contains("requires permission `AssetOps`")
-            ),
-            "unexpected permission error: {err:?}"
-        );
     }
     #[test]
     fn ivm_proved_replay_rejects_nested_or_mismatched_authorization_context() {
@@ -8794,133 +6598,19 @@ seiyaku ProtectedProved {
     }
     fn sample_program() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
-            max_cycles: 1,
+            max_cycles: 4,
             version_minor: 1,
             ..ivm::ProgramMetadata::default()
         };
         let mut program = meta.encode();
         program.extend_from_slice(&sample_contract_interface(0).encode_section());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::unit_return());
         let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
         (program, parsed.header_len, parsed.metadata)
     }
-    #[test]
-    fn actual_proved_replay_shares_cycles_and_retains_work_on_run_failure() {
-        // Exercise the real authorized replay VM. This fixture deliberately
-        // does not claim cryptographic proof verification; the verifier's
-        // post-replay rejection has its own authenticated-proof control above.
-        let (program, _, _) = sample_metered_program_zk_mode(8);
-        let bytecode = IvmBytecode::from_compiled(program);
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let mut world = crate::state::World::with(
-            [],
-            [iroha_data_model::account::Account::new(authority.clone()).build(&authority)],
-            [],
-        );
-        let address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 181);
-        let state = crate::state::State::new_for_testing(
-            world,
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-        );
-        let mut metadata = Metadata::default();
-        bind_sample_raw_metadata(&mut metadata, &address);
-        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
-        let overlay_hash = Hash::new(norito::to_bytes(&overlay).unwrap());
-        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(
-                iroha_data_model::transaction::IvmProved {
-                    bytecode: bytecode.clone(),
-                    overlay,
-                    events_commitment: Hash::new(b"unverified-events"),
-                    gas_policy_commitment: Hash::new(b"unverified-gas-policy"),
-                },
-            ))
-            .sign(kp.private_key());
-        let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = cache.summarize_program(bytecode.as_ref()).unwrap();
-        let mut baseline_work = IvmProvedReplayWork::default();
-        let baseline = replay_ivm_proved_overlay(
-            &*execution_block(&state),
-            &tx,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
-            None,
-            &mut baseline_work,
-        )
-        .unwrap();
-        assert_eq!(baseline_work.gas_used().unwrap(), Some(baseline.gas_used));
-        let allowance = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(16).unwrap());
-        for expected in [8, 16] {
-            let mut work = IvmProvedReplayWork::default();
-            let replay = replay_ivm_proved_overlay(
-                &*execution_block(&state),
-                &tx,
-                &summary,
-                TEST_GAS_LIMIT,
-                overlay_hash,
-                Some(&allowance),
-                &mut work,
-            )
-            .unwrap();
-            assert_eq!(replay.gas_used, baseline.gas_used);
-            assert_eq!(replay.trace_hash, baseline.trace_hash);
-            assert_eq!(replay.events_commitment, baseline.events_commitment);
-            assert_eq!(work.gas_used().unwrap(), Some(baseline.gas_used));
-            assert_eq!(allowance.consumed(), expected);
-            assert!(!allowance.exhausted());
-            let error = replay_ivm_proved_overlay(
-                &*execution_block(&state),
-                &tx,
-                &summary,
-                TEST_GAS_LIMIT,
-                overlay_hash,
-                Some(&allowance),
-                &mut work,
-            )
-            .unwrap_err();
-            assert!(matches!(error, OverlayBuildError::ExecutionOwner(_)));
-            assert_eq!(
-                allowance.consumed(),
-                expected,
-                "reused work owner cannot run the VM again"
-            );
-        }
-        let short = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(7).unwrap());
-        let mut failed_work = IvmProvedReplayWork::default();
-        let error = replay_ivm_proved_overlay(
-            &*execution_block(&state),
-            &tx,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
-            Some(&short),
-            &mut failed_work,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(
-                error,
-                OverlayBuildError::IvmRun(ivm::VMError::ExceededMaxCycles)
-            ),
-            "{error:?}"
-        );
-        assert!(short.exhausted());
-        assert_eq!(
-            short.consumed(),
-            2,
-            "completed arithmetic and HALT remain charged when padding is refused"
-        );
-        let failed_gas = failed_work.gas_used().unwrap().unwrap();
-        assert!(failed_gas > 0 && failed_gas < baseline.gas_used);
-    }
-
     fn sample_program_zk_mode() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
-            max_cycles: 1,
+            max_cycles: 4,
             version_minor: 1,
             mode: ivm::ivm_mode::ZK,
             ..ivm::ProgramMetadata::default()
@@ -8929,32 +6619,13 @@ seiyaku ProtectedProved {
         program.extend_from_slice(
             &sample_contract_interface(ivm::CONTRACT_FEATURE_BIT_ZK).encode_section(),
         );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::unit_return());
         let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
-        (program, parsed.header_len, parsed.metadata)
-    }
-    /// A real metered instruction followed by HALT, with optional ZK padding.
-    fn sample_metered_program_zk_mode(max_cycles: u64) -> (Vec<u8>, usize, ivm::ProgramMetadata) {
-        let meta = ivm::ProgramMetadata {
-            max_cycles,
-            version_minor: 1,
-            mode: ivm::ivm_mode::ZK,
-            ..ivm::ProgramMetadata::default()
-        };
-        let mut program = meta.encode();
-        program.extend_from_slice(
-            &sample_contract_interface(ivm::CONTRACT_FEATURE_BIT_ZK).encode_section(),
-        );
-        program.extend_from_slice(
-            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
-                .to_le_bytes(),
-        );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse metered sample program");
         (program, parsed.header_len, parsed.metadata)
     }
     fn sample_contract_interface(features_bitmap: u64) -> ivm::EmbeddedContractInterfaceV1 {
         ivm::EmbeddedContractInterfaceV1 {
+            callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "OverlayFixture".to_owned(),
             compiler_fingerprint: "iroha-core-overlay-tests".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -9425,78 +7096,28 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn overlay_rejects_axt_without_policy_entries() {
+    fn overlay_rejects_axt_proof_without_policy_entry() {
         use iroha_data_model::{
             nexus::AxtRejectReason,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             transaction::Executable,
         };
-        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-        use ivm::{
-            axt::{
-                self, AssetHandle, GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent,
-            },
-            encoding, instruction,
-            pointer_abi::PointerType,
-            syscalls as ivm_sys,
-        };
+        use iroha_model_base::topology::DataSpaceId;
+        use ivm::{axt, encoding, instruction, pointer_abi::PointerType, syscalls as ivm_sys};
         use std::sync::Arc;
         let dsid = DataSpaceId::new(7);
         let descriptor = axt::AxtDescriptor {
             dsids: vec![dsid],
             touches: Vec::new(),
         };
-        let binding = axt::compute_binding(&descriptor).expect("binding");
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
-        let authority_str = authority.to_string();
-        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-        ])
-        .expect("valid AXT fixture asset id");
-        let handle = AssetHandle {
-            asset_definition_id: asset_definition_id.clone(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority_str.clone(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: "10".parse().expect("canonical handle quantity"),
-                per_use: Some("10".parse().expect("canonical handle quantity")),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xAA; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(1),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: vec![0x11; 32],
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: axt::SpendOp {
-                asset_definition_id: asset_definition_id.clone(),
-                kind: "transfer".into(),
-                from: authority_str,
-                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
-                amount: Some("5".parse().expect("canonical spend quantity")),
-            },
-        };
         let descriptor_tlv = make_tlv(PointerType::AxtDescriptor as u16, &norito_blob(&descriptor));
         let dsid_tlv = make_tlv(PointerType::DataSpaceId as u16, &norito_blob(&dsid));
-        let handle_tlv = make_tlv(PointerType::AssetHandle as u16, &norito_blob(&handle));
-        let intent_tlv = make_tlv(PointerType::NoritoBytes as u16, &norito_blob(&intent));
-        let literals = [descriptor_tlv, dsid_tlv, handle_tlv, intent_tlv];
+        let literals = [descriptor_tlv, dsid_tlv];
         let mut code = Vec::new();
         let mut emit = |word: u32| code.extend_from_slice(&word.to_le_bytes());
-        for (index, register) in [40_u8, 41, 42, 43].into_iter().enumerate() {
+        for (index, register) in [40_u8, 41].into_iter().enumerate() {
             emit(encoding::wide::encode_literal(
                 instruction::wide::memory::LDLIT,
                 10,
@@ -9542,40 +7163,18 @@ seiyaku AliasBoundArguments {
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
-            42,
-            0,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            11,
-            43,
-            0,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            12,
-            0,
+            41,
             0,
         ));
         emit(encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_USE_ASSET_HANDLE).expect("syscall fits in u8"),
+            u8::try_from(ivm_sys::SYSCALL_VERIFY_DS_PROOF).expect("syscall fits in u8"),
         ));
         emit(encoding::wide::encode_halt());
         let program = program_with_literals(&code, &literals);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let mut world = crate::state::World::default();
-        world.asset_definitions.insert(
-            asset_definition_id.clone(),
-            iroha_data_model::asset::AssetDefinition::numeric(
-                asset_definition_id,
-                "AXT missing-policy fixture",
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                None,
-            )
-            .build(&authority),
-        );
+        let world = crate::state::World::default();
         let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         assert!(
             state.view().axt_policy_snapshot().entries.is_empty(),
@@ -9595,12 +7194,12 @@ seiyaku AliasBoundArguments {
         );
         let block = state.block(header);
         let err = build_overlay_for_transaction(&tx, &block)
-            .expect_err("overlay should reject AXT handle without policy entry");
+            .expect_err("overlay should reject AXT proof without policy entry");
         match err {
             OverlayBuildError::AxtReject(ctx) => {
                 assert_eq!(ctx.reason, AxtRejectReason::MissingPolicy);
                 assert_eq!(ctx.dataspace, Some(dsid));
-                assert_eq!(ctx.lane, Some(LaneId::new(1)));
+                assert_eq!(ctx.lane, None);
             }
             other => panic!("expected AxtReject, got {other:?}"),
         }
@@ -10163,6 +7762,15 @@ pub enum OverlayBuildError {
     ExecutionOwner(String),
 }
 impl OverlayBuildError {
+    /// Return the typed local refusal before any consensus rejection mapping.
+    pub(crate) fn execution_deferral(&self) -> Option<crate::execution_attempt::ExecutionDeferred> {
+        match self {
+            Self::IvmLoad(error) | Self::IvmRun(error) => {
+                crate::execution_attempt::ExecutionDeferred::from_vm_error(error)
+            }
+            _ => None,
+        }
+    }
     #[cfg(test)]
     /// Return whether rebuilding against a later serial state may change the result. Structural,
     /// policy, gas, cryptographic-proof, and quarantine failures are invariant and must remain
@@ -10227,42 +7835,7 @@ pub(crate) fn enforce_manifest_is_pre_registered<R: StateReadOnly>(
             .to_owned(),
     ))
 }
-include!("overlay_circuit_id_match_tests.rs");
-fn hash_to_u64_limbs_le(hash: &Hash) -> [u64; 4] {
-    let bytes: &[u8; 32] = hash.as_ref();
-    let mut limbs = [0u64; 4];
-    for (i, limb) in limbs.iter_mut().enumerate() {
-        let start = i * 8;
-        let end = start + 8;
-        *limb = u64::from_le_bytes(bytes[start..end].try_into().expect("slice len = 8"));
-    }
-    limbs
-}
-fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[..8].copy_from_slice(&limb.to_le_bytes());
-    out
-}
-fn expected_ivm_exec_public_inputs(
-    code_hash: Hash,
-    overlay_hash: Hash,
-    events_commitment: Hash,
-    gas_policy_commitment: Hash,
-) -> Vec<[u8; 32]> {
-    let code_limbs = hash_to_u64_limbs_le(&code_hash);
-    let overlay_limbs = hash_to_u64_limbs_le(&overlay_hash);
-    let events_limbs = hash_to_u64_limbs_le(&events_commitment);
-    let gas_limbs = hash_to_u64_limbs_le(&gas_policy_commitment);
-    code_limbs
-        .into_iter()
-        .chain(overlay_limbs)
-        .chain(events_limbs)
-        .chain(gas_limbs)
-        .map(limb_as_instance_bytes)
-        .collect()
-}
-const IVM_EVENTS_COMMITMENT_DOMAIN: &[u8] = b"iroha.ivm_proved.events_commitment.v3";
-const IVM_GAS_POLICY_COMMITMENT_DOMAIN: &[u8] = b"iroha.ivm_proved.gas_policy_commitment.v3";
+#[cfg(test)]
 fn sha256_to_hash(bytes: &[u8]) -> Hash {
     let digest = Sha256::digest(bytes);
     let mut arr = [0u8; 32];
@@ -10279,6 +7852,7 @@ fn sha256_to_hash(bytes: &[u8]) -> Hash {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::pipeline::overlay::IvmTraceBundleV1")]
+#[cfg(test)]
 struct IvmTraceBundleV1 {
     register_trace: Vec<IvmRegisterStateV1>,
     constraints: Vec<IvmConstraintV1>,
@@ -10291,6 +7865,7 @@ struct IvmTraceBundleV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg(test)]
 struct IvmRegisterStateV1 {
     pc: u64,
     gpr: Vec<u64>,
@@ -10307,6 +7882,7 @@ struct IvmRegisterStateV1 {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[cfg(test)]
 enum IvmConstraintV1 {
     Zero { reg: u16, cycle: u64 },
     Eq { reg1: u16, reg2: u16, cycle: u64 },
@@ -10317,6 +7893,7 @@ enum IvmConstraintV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg(test)]
 enum IvmMemEventV1 {
     Load {
         addr: u64,
@@ -10338,6 +7915,7 @@ enum IvmMemEventV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg(test)]
 enum IvmRegEventV1 {
     Read {
         index: u16,
@@ -10359,183 +7937,19 @@ enum IvmRegEventV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg(test)]
 struct IvmStepEntryV1 {
     pc: u64,
     reg_root: [u8; 32],
     mem_root: [u8; 32],
 }
-fn build_ivm_trace_bundle(vm: &ivm::IVM) -> IvmTraceBundleV1 {
-    let register_trace = vm
-        .register_trace()
-        .into_iter()
-        .map(|state| IvmRegisterStateV1 {
-            pc: state.pc,
-            gpr: state.gpr.to_vec(),
-            tags: state
-                .tags
-                .iter()
-                .map(|tag| u8::from(*tag))
-                .collect::<Vec<_>>(),
-        })
-        .collect::<Vec<_>>();
-    let constraints = vm
-        .constraints()
-        .iter()
-        .map(|c| match *c {
-            ivm::zk::Constraint::Zero { reg, cycle } => IvmConstraintV1::Zero {
-                reg: u16::try_from(reg).unwrap_or(u16::MAX),
-                cycle,
-            },
-            ivm::zk::Constraint::Eq { reg1, reg2, cycle } => IvmConstraintV1::Eq {
-                reg1: u16::try_from(reg1).unwrap_or(u16::MAX),
-                reg2: u16::try_from(reg2).unwrap_or(u16::MAX),
-                cycle,
-            },
-            ivm::zk::Constraint::Range { reg, bits, cycle } => IvmConstraintV1::Range {
-                reg: u16::try_from(reg).unwrap_or(u16::MAX),
-                bits,
-                cycle,
-            },
-        })
-        .collect::<Vec<_>>();
-    let memory_log = vm
-        .memory_log()
-        .iter()
-        .map(|e| match e {
-            ivm::zk::MemEvent::Load {
-                addr,
-                value,
-                size,
-                path,
-                root,
-            } => IvmMemEventV1::Load {
-                addr: *addr,
-                value: *value,
-                size: *size,
-                path: path.clone(),
-                root: *root.as_ref(),
-            },
-            ivm::zk::MemEvent::Store {
-                addr,
-                value,
-                size,
-                path,
-                root,
-            } => IvmMemEventV1::Store {
-                addr: *addr,
-                value: *value,
-                size: *size,
-                path: path.clone(),
-                root: *root.as_ref(),
-            },
-        })
-        .collect::<Vec<_>>();
-    let register_log = vm
-        .register_log()
-        .iter()
-        .map(|e| match e {
-            ivm::zk::RegEvent::Read {
-                index,
-                value,
-                tag,
-                path,
-                root,
-            } => IvmRegEventV1::Read {
-                index: u16::try_from(*index).unwrap_or(u16::MAX),
-                value: *value,
-                tag: *tag,
-                path: path.clone(),
-                root: *root.as_ref(),
-            },
-            ivm::zk::RegEvent::Write {
-                index,
-                value,
-                tag,
-                path,
-                root,
-            } => IvmRegEventV1::Write {
-                index: u16::try_from(*index).unwrap_or(u16::MAX),
-                value: *value,
-                tag: *tag,
-                path: path.clone(),
-                root: *root.as_ref(),
-            },
-        })
-        .collect::<Vec<_>>();
-    let step_log = vm
-        .step_log()
-        .iter()
-        .map(|entry| IvmStepEntryV1 {
-            pc: entry.pc,
-            reg_root: *entry.reg_root.as_ref(),
-            mem_root: *entry.mem_root.as_ref(),
-        })
-        .collect::<Vec<_>>();
-    IvmTraceBundleV1 {
-        register_trace,
-        constraints,
-        memory_log,
-        register_log,
-        step_log,
-    }
-}
-fn append_len_prefixed_str(out: &mut Vec<u8>, value: &str) {
-    let len = u64::try_from(value.len()).unwrap_or(u64::MAX);
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(value.as_bytes());
-}
+#[cfg(test)]
 fn expected_ivm_trace_hash(trace_bundle: &IvmTraceBundleV1) -> Result<Hash, OverlayBuildError> {
     let trace_bytes = norito::encode_canonical(trace_bundle)
         .map_err(|_| OverlayBuildError::ZkProof("failed to encode IVM trace bundle".to_owned()))?;
     Ok(sha256_to_hash(&trace_bytes))
 }
-fn expected_ivm_events_commitment(code_hash: Hash, overlay_hash: Hash, trace_hash: Hash) -> Hash {
-    let mut preimage = Vec::with_capacity(
-        IVM_EVENTS_COMMITMENT_DOMAIN.len()
-            + code_hash.as_ref().len() * 2
-            + trace_hash.as_ref().len(),
-    );
-    preimage.extend_from_slice(IVM_EVENTS_COMMITMENT_DOMAIN);
-    preimage.extend_from_slice(code_hash.as_ref());
-    preimage.extend_from_slice(overlay_hash.as_ref());
-    preimage.extend_from_slice(trace_hash.as_ref());
-    sha256_to_hash(&preimage)
-}
-fn expected_ivm_gas_policy_commitment(
-    code_hash: Hash,
-    overlay_hash: Hash,
-    circuit_id: &str,
-    circuit_version: u32,
-    gas_schedule_id: &str,
-    tx_gas_limit: u64,
-    gas_used: u64,
-    trace_hash: Hash,
-) -> Hash {
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(IVM_GAS_POLICY_COMMITMENT_DOMAIN);
-    preimage.extend_from_slice(code_hash.as_ref());
-    preimage.extend_from_slice(overlay_hash.as_ref());
-    preimage.extend_from_slice(crate::smartcontracts::limits::ivm_gas_schedule_hash().as_ref());
-    preimage.extend_from_slice(&circuit_version.to_le_bytes());
-    preimage.extend_from_slice(&tx_gas_limit.to_le_bytes());
-    preimage.extend_from_slice(&gas_used.to_le_bytes());
-    // Include a commitment to the execution trace hash so that `gas_used` cannot be
-    // brute-forced from the commitment without reproducing the VM trace.
-    preimage.extend_from_slice(trace_hash.as_ref());
-    append_len_prefixed_str(&mut preimage, circuit_id);
-    append_len_prefixed_str(&mut preimage, gas_schedule_id);
-    sha256_to_hash(&preimage)
-}
-fn extract_expected_single_row_columns(columns: Vec<Vec<[u8; 32]>>) -> Option<Vec<[u8; 32]>> {
-    let mut out = Vec::with_capacity(columns.len());
-    for mut col in columns {
-        if col.len() != 1 {
-            return None;
-        }
-        out.push(col.pop()?);
-    }
-    Some(out)
-}
+#[cfg(test)]
 fn validate_ivm_proved_queued_authorization(
     queued: &[crate::smartcontracts::ivm::host::QueuedInstruction],
     authority: &AccountId,
@@ -10604,143 +8018,6 @@ pub(crate) fn validate_ivm_proved_durable_authorizations(
     }
     Ok(())
 }
-fn replay_ivm_proved_overlay<R>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    summary: &ProgramSummary,
-    gas_limit: u64,
-    overlay_hash: Hash,
-    cycle_budget: Option<&ivm::VmCycleBudget>,
-    work: &mut IvmProvedReplayWork,
-) -> Result<IvmProvedReplay, OverlayBuildError>
-where
-    R: StateReadOnly + QueryStateSource,
-{
-    let (contract_call_context, contract_runtime_context, entrypoint_authorization) =
-        authorize_and_prepare_raw_contract_dispatch(state_ro, tx, summary, gas_limit)?;
-    let mut vm = summary
-        .checkout_runtime(gas_limit, smart_contract_heap_limit(state_ro))
-        .map_err(OverlayBuildError::IvmLoad)?;
-    vm.set_zk_trace_enabled(true);
-    let accounts = state_ro.accounts_snapshot();
-    let mut host =
-        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
-            tx.authority().clone(),
-            Arc::clone(&accounts),
-            contract_call_context.argument_record.clone(),
-        );
-    let amx_analysis = ivm::analysis::analyze_prepared(summary.prepared_contract());
-    host.set_output_limits_from_parameters(state_ro.world().parameters().smart_contract());
-    host.set_prepared_contract_cache(summary.prepared_contract_cache());
-    host.set_amx_analysis(amx_analysis);
-    let amx_limits =
-        crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
-    host.set_amx_limits(amx_limits);
-    host.hydrate_axt_state(state_ro)?;
-    host.set_public_inputs_from_parameters(state_ro.world().parameters());
-    host.set_vrf_epoch_seeds_from_state(state_ro);
-    host.set_query_state(state_ro);
-    host.set_contract_runtime_context(Some(contract_runtime_context.clone()));
-    host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
-    host.set_bound_contract_records_by_subject_snapshot(
-        code::snapshot_bound_contract_records_by_subject(state_ro),
-    );
-    apply_streaming_metadata(
-        &mut host,
-        resolve_streaming_metadata(state_ro, tx.authority()),
-    );
-    #[cfg(feature = "telemetry")]
-    host.set_telemetry(state_ro.metrics().clone());
-    host.set_crypto_config(state_ro.crypto());
-    host.set_zk_config(state_ro.zk());
-    host.set_chain_id(state_ro.chain_id());
-    host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
-        .map_err(OverlayBuildError::IvmRun)?;
-    host = host.with_access_logging();
-    begin_overlay_access_log(&mut host, true)?;
-    vm.set_gas_limit(gas_limit);
-    apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-    work.begin()?;
-    let run_result = match cycle_budget {
-        Some(budget) => {
-            host.clear_axt_reject();
-            let result = vm.run_with_host_and_cycle_budget(&mut host, budget);
-            finish_vm_run_with_host(&mut host, result)
-        }
-        None => run_vm_with_host(&mut vm, &mut host),
-    };
-    work.gas_used = Some(gas_limit.saturating_sub(vm.remaining_gas()));
-    run_result?;
-    let _access_log = finish_overlay_access_log(&mut host, true)?;
-    let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-    let trace_bundle = build_ivm_trace_bundle(&vm);
-    let trace_hash = expected_ivm_trace_hash(&trace_bundle)?;
-    let events_commitment =
-        expected_ivm_events_commitment(summary.code_hash, overlay_hash, trace_hash);
-    let queued = host.drain_queued_instructions_with_contract_runtime_context(Some(
-        contract_runtime_context.clone(),
-    ));
-    let (durable_state_overlay, durable_state_authorizations) =
-        host.drain_durable_state_overlay_with_authorizations();
-    let completed_axt = host.drain_completed_axt_states();
-    validate_ivm_proved_durable_authorizations(
-        state_ro.world(),
-        &durable_state_overlay,
-        &durable_state_authorizations,
-        &entrypoint_authorization,
-    )
-    .map_err(|error| {
-        OverlayBuildError::ZkProof(format!(
-            "Executable::IvmProved replay produced invalid durable-state authorization metadata: {error}"
-        ))
-    })?;
-    validate_ivm_proved_queued_authorization(
-        &queued,
-        tx.authority(),
-        &contract_runtime_context,
-        &entrypoint_authorization,
-    )?;
-    let mut queued_instructions = queued
-        .iter()
-        .map(|queued| queued.instruction.clone())
-        .collect::<Vec<_>>();
-    let mut execution_contexts = queued
-        .into_iter()
-        .map(|queued| OverlayInstructionExecutionContext {
-            authority: queued.authority,
-            contract_runtime_context: queued.contract_runtime_context,
-            entrypoint_authorization: queued.entrypoint_authorization,
-        })
-        .collect::<Vec<_>>();
-    prune_redundant_contract_ops_with_metadata(
-        state_ro,
-        &mut queued_instructions,
-        Some(&mut execution_contexts),
-    );
-    let queued = queued_instructions
-        .into_iter()
-        .zip(execution_contexts)
-        .map(
-            |(instruction, context)| crate::smartcontracts::ivm::host::QueuedInstruction {
-                instruction,
-                authority: context.authority,
-                contract_runtime_context: context.contract_runtime_context,
-                entrypoint_authorization: context.entrypoint_authorization,
-            },
-        )
-        .collect();
-    Ok(IvmProvedReplay {
-        queued,
-        completed_axt,
-        durable_state_overlay,
-        durable_state_authorizations,
-        #[cfg(test)]
-        access_log: _access_log,
-        events_commitment,
-        gas_used,
-        trace_hash,
-    })
-}
 #[derive(Debug)]
 pub(crate) struct IvmProvedReplay {
     pub(crate) queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
@@ -10750,9 +8027,7 @@ pub(crate) struct IvmProvedReplay {
         BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
     #[cfg(test)]
     pub(crate) access_log: Option<ivm::host::AccessLog>,
-    pub(crate) events_commitment: Hash,
     pub(crate) gas_used: u64,
-    pub(crate) trace_hash: Hash,
 }
 
 /// Sole observation of actual replay work, retained even when verification fails.
@@ -10764,16 +8039,6 @@ pub(crate) struct IvmProvedReplayWork {
 }
 
 impl IvmProvedReplayWork {
-    fn begin(&mut self) -> Result<(), OverlayBuildError> {
-        if self.started || self.gas_used.is_some() {
-            return Err(OverlayBuildError::ExecutionOwner(
-                "replay work record was reused".into(),
-            ));
-        }
-        self.started = true;
-        Ok(())
-    }
-
     /// Actual run gas; absent when validation refused before VM execution began.
     pub(crate) fn gas_used(&self) -> Result<Option<u64>, &'static str> {
         if self.started && self.gas_used.is_none() {
@@ -10782,584 +8047,24 @@ impl IvmProvedReplayWork {
         Ok(self.gas_used)
     }
 }
-fn decode_ivm_proved_open_envelope(
-    bytes: &[u8],
-) -> Result<ZkOpenVerifyEnvelope, OverlayBuildError> {
-    norito::decode_canonical(bytes)
-        .map_err(|_| OverlayBuildError::ZkProof("malformed OpenVerifyEnvelope".to_owned()))
-}
-fn decode_ivm_proved_stark_open_proof(
-    bytes: &[u8],
-) -> Result<StarkFriOpenProofV1, OverlayBuildError> {
-    norito::decode_canonical(bytes)
-        .map_err(|_| OverlayBuildError::ZkProof("malformed STARK open proof".to_owned()))
-}
 pub(crate) fn verify_ivm_proved_execution<R>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    proved: &iroha_data_model::transaction::IvmProved,
-    summary: &ProgramSummary,
-    cycle_budget: Option<&ivm::VmCycleBudget>,
-    work: &mut IvmProvedReplayWork,
+    _state_ro: &R,
+    _tx: &SignedTransaction,
+    _proved: &iroha_data_model::transaction::IvmProved,
+    _summary: &ProgramSummary,
+    _cycle_budget: Option<&ivm::VmCycleBudget>,
+    _work: &mut IvmProvedReplayWork,
 ) -> Result<IvmProvedReplay, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
 {
-    if summary.metadata.mode & ivm::ivm_mode::ZK == 0 {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
-        ));
-    }
-    let tx_gas_limit = require_tx_gas_limit(tx)?;
-    let _ = authorize_and_prepare_raw_contract_dispatch(state_ro, tx, summary, tx_gas_limit)?;
-    let attachments = tx
-        .attachments()
-        .ok_or_else(|| OverlayBuildError::ZkProof("missing proof attachments".to_owned()))?;
-    let list = attachments.as_slice();
-    if list.len() != 1 {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved expects exactly one proof attachment".to_owned(),
-        ));
-    }
-    let attachment = &list[0];
-    if attachment.backend != attachment.proof.backend {
-        return Err(OverlayBuildError::ZkProof(
-            "proof attachment backend mismatch".to_owned(),
-        ));
-    }
-    if attachment.backend != attachment.vk_ref.backend {
-        return Err(OverlayBuildError::ZkProof(
-            "proof attachment verifier-key backend mismatch".to_owned(),
-        ));
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum IvmProvedBackendKind {
-        Halo2Ipa,
-        StarkFriV1,
-    }
-    let backend_kind = if attachment.backend.as_str() == crate::zk::ZK_BACKEND_HALO2_IPA {
-        IvmProvedBackendKind::Halo2Ipa
-    } else if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
-        IvmProvedBackendKind::StarkFriV1
-    } else {
-        return Err(OverlayBuildError::ZkProof(
-            "unsupported backend for Executable::IvmProved (expected halo2/ipa or stark/fri)"
-                .to_owned(),
-        ));
-    };
-    // Require VK references for governance-controlled circuit selection.
-    let vk_id: &VerifyingKeyId = &attachment.vk_ref;
-    let vk_record = state_ro
-        .world()
-        .verifying_keys()
-        .get(vk_id)
-        .ok_or_else(|| {
-            OverlayBuildError::ZkProof(format!(
-                "verifying key not found: {}::{}",
-                vk_id.backend, vk_id.name
-            ))
-        })?;
-    crate::zk::validate_and_prepare_verifying_key_record_v1(vk_id, vk_record).map_err(|err| {
-        OverlayBuildError::ZkProof(format!("invalid stored verifying-key record: {err}"))
-    })?;
-    let execution_height = u64::try_from(state_ro.height())
-        .ok()
-        .and_then(|height| height.checked_add(1))
-        .ok_or_else(|| {
-            OverlayBuildError::ZkProof(
-                "execution height overflow while resolving verifier-key policy".to_owned(),
-            )
-        })?;
-    if !vk_record.is_active_at(execution_height) {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key is not active at the execution height".to_owned(),
-        ));
-    }
-    let expected_record_backend = crate::zk::verifier_backend_registry_tag_v1(
-        attachment.backend.as_str(),
-    )
-    .ok_or_else(|| {
-        OverlayBuildError::ZkProof(
-            "proof attachment backend is not admitted by the native verifier registry".to_owned(),
-        )
-    })?;
-    if vk_record.backend != expected_record_backend {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key backend tag mismatch".to_owned(),
-        ));
-    }
-    let gas_schedule_id = vk_record.gas_schedule_id.as_deref().ok_or_else(|| {
-        OverlayBuildError::ZkProof("verifying key missing gas_schedule_id".to_owned())
-    })?;
-    let governed_max_proof_bytes = usize::try_from(vk_record.max_proof_bytes).unwrap_or(usize::MAX);
-    if governed_max_proof_bytes == 0 {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key missing a governed max_proof_bytes limit".to_owned(),
-        ));
-    }
-    let proof_len = attachment.proof.bytes.len();
-    if proof_len > governed_max_proof_bytes {
-        return Err(OverlayBuildError::ZkProof(
-            "proof exceeds verifying key max_proof_bytes".to_owned(),
-        ));
-    }
-    let circuit_key = (vk_record.circuit_id.clone(), vk_record.version);
-    match state_ro
-        .world()
-        .verifying_keys_by_circuit()
-        .get(&circuit_key)
-    {
-        Some(mapped) if mapped == vk_id => {}
-        _ => {
-            return Err(OverlayBuildError::ZkProof(
-                "verifying key circuit/version not active".to_owned(),
-            ));
-        }
-    }
-    let vk_box = vk_record
-        .key
-        .as_ref()
-        .ok_or_else(|| OverlayBuildError::ZkProof("verifying key bytes missing".to_owned()))?;
-    let computed_commitment = crate::zk::hash_vk(vk_box);
-    if vk_record.commitment != computed_commitment {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key commitment mismatch".to_owned(),
-        ));
-    }
-    if vk_box.backend != attachment.backend {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key backend mismatch".to_owned(),
-        ));
-    }
-    // Decode and sanity-check the OpenVerifyEnvelope carried in the proof box.
-    let env = decode_ivm_proved_open_envelope(&attachment.proof.bytes)?;
-    env.validate_with_bounds(ZkOpenVerifyEnvelopeBounds {
-        max_proof_bytes: governed_max_proof_bytes,
-        ..ZkOpenVerifyEnvelopeBounds::default()
-    })
-    .map_err(|err| OverlayBuildError::ZkProof(format!("invalid OpenVerifyEnvelope: {err}")))?;
-    match backend_kind {
-        IvmProvedBackendKind::Halo2Ipa => {
-            if env.backend != ZkBackendTag::Halo2IpaPasta {
-                return Err(OverlayBuildError::ZkProof(
-                    "unsupported OpenVerifyEnvelope backend tag for IvmProved".to_owned(),
-                ));
-            }
-        }
-        IvmProvedBackendKind::StarkFriV1 => {
-            if env.backend != ZkBackendTag::Stark {
-                return Err(OverlayBuildError::ZkProof(
-                    "unsupported OpenVerifyEnvelope backend tag for IvmProved".to_owned(),
-                ));
-            }
-        }
-    }
-    if !circuit_id_matches(
-        attachment.backend.as_str(),
-        &vk_record.circuit_id,
-        &env.circuit_id,
-    ) {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key and proof must use the exact canonical ivm-replay-binding-v1 circuit id"
-                .to_owned(),
-        ));
-    }
-    let expected_schema_hash = crate::zk::ivm_replay_binding_public_inputs_schema_hash();
-    if vk_record.public_inputs_schema_hash != expected_schema_hash {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key schema hash mismatch for ivm-replay-binding-v1".to_owned(),
-        ));
-    }
-    let observed_schema_hash: [u8; 32] = *Hash::new(&env.public_inputs).as_ref();
-    if observed_schema_hash != expected_schema_hash {
-        return Err(OverlayBuildError::ZkProof(
-            "proof public input schema hash mismatch".to_owned(),
-        ));
-    }
-    if env.vk_hash != vk_record.commitment {
-        return Err(OverlayBuildError::ZkProof(
-            "verifying key commitment mismatch".to_owned(),
-        ));
-    }
-    let overlay_hash = {
-        let bytes = norito::encode_canonical(&proved.overlay).map_err(|_| {
-            OverlayBuildError::ZkProof("failed to encode proved overlay".to_owned())
-        })?;
-        Hash::new(&bytes)
-    };
-    let expected = expected_ivm_exec_public_inputs(
-        summary.code_hash,
-        overlay_hash,
-        proved.events_commitment,
-        proved.gas_policy_commitment,
-    );
-    let observed = match backend_kind {
-        IvmProvedBackendKind::Halo2Ipa => {
-            let instance_cols = crate::zk::extract_pasta_instance_columns_bytes(&env.proof_bytes)
-                .ok_or_else(|| {
-                OverlayBuildError::ZkProof("missing proof instances".to_owned())
-            })?;
-            extract_expected_single_row_columns(instance_cols).ok_or_else(|| {
-                OverlayBuildError::ZkProof(
-                    "expected instance columns layout: 1 row per column".to_owned(),
-                )
-            })?
-        }
-        IvmProvedBackendKind::StarkFriV1 => {
-            let open = decode_ivm_proved_stark_open_proof(&env.proof_bytes)?;
-            if open.version != 1 {
-                return Err(OverlayBuildError::ZkProof(
-                    "unsupported STARK open proof version".to_owned(),
-                ));
-            }
-            extract_expected_single_row_columns(open.public_inputs).ok_or_else(|| {
-                OverlayBuildError::ZkProof(
-                    "expected instance columns layout: 1 row per column".to_owned(),
-                )
-            })?
-        }
-    };
-    if observed != expected {
-        return Err(OverlayBuildError::ZkProof(
-            "proof public inputs do not match (code_hash, overlay_hash, events_commitment, gas_policy_commitment)"
-                .to_owned(),
-        ));
-    }
-    let verifier_guardrails = match backend_kind {
-        IvmProvedBackendKind::Halo2Ipa => crate::zk::ZkVerifyGuardrails {
-            halo2_enabled: true,
-            halo2_max_envelope_bytes: governed_max_proof_bytes,
-            halo2_max_proof_bytes: governed_max_proof_bytes,
-            stark_enabled: false,
-            stark_max_envelope_bytes: governed_max_proof_bytes,
-            stark_max_proof_bytes: governed_max_proof_bytes,
-        },
-        IvmProvedBackendKind::StarkFriV1 => crate::zk::ZkVerifyGuardrails {
-            halo2_enabled: false,
-            halo2_max_envelope_bytes: governed_max_proof_bytes,
-            halo2_max_proof_bytes: governed_max_proof_bytes,
-            stark_enabled: true,
-            stark_max_envelope_bytes: governed_max_proof_bytes,
-            stark_max_proof_bytes: governed_max_proof_bytes,
-        },
-    };
-    crate::zk::verify_for_relation(
-        crate::zk::ProofRelation::IvmReplayBinding,
-        &attachment.proof,
-        vk_box,
-        verifier_guardrails,
-    )
-    .map_err(|error| OverlayBuildError::ZkProof(error.to_string()))?;
-    // ABI V1 replay is consensus validation; no node-local setting may bypass it.
-    let replay = replay_ivm_proved_overlay(
-        state_ro,
-        tx,
-        summary,
-        tx_gas_limit,
-        overlay_hash,
-        cycle_budget,
-        work,
-    )?;
-    if proved.events_commitment != replay.events_commitment {
-        return Err(OverlayBuildError::IvmProvedReplay(
-            "events commitment mismatch".to_owned(),
-        ));
-    }
-    let expected_gas_policy_commitment = expected_ivm_gas_policy_commitment(
-        summary.code_hash,
-        overlay_hash,
-        &vk_record.circuit_id,
-        vk_record.version,
-        gas_schedule_id,
-        tx_gas_limit,
-        replay.gas_used,
-        replay.trace_hash,
-    );
-    if proved.gas_policy_commitment != expected_gas_policy_commitment {
-        return Err(OverlayBuildError::IvmProvedReplay(
-            "gas policy commitment mismatch".to_owned(),
-        ));
-    }
-    let replay_overlay: Vec<_> = replay
-        .queued
-        .iter()
-        .map(|queued| queued.instruction.clone())
-        .collect();
-    let mut provided_overlay: Vec<InstructionBox> = proved.overlay.iter().cloned().collect();
-    prune_redundant_contract_ops(state_ro, &mut provided_overlay);
-    if replay_overlay != provided_overlay {
-        return Err(OverlayBuildError::IvmProvedReplay(
-            "proved overlay does not match deterministic IVM replay".to_owned(),
-        ));
-    }
-    Ok(replay)
-}
-struct BoundedSeekBuffer {
-    cursor: Cursor<Vec<u8>>,
-    max_bytes: usize,
-}
-impl BoundedSeekBuffer {
-    fn new(max_bytes: usize) -> Self {
-        Self {
-            cursor: Cursor::new(Vec::new()),
-            max_bytes,
-        }
-    }
-    fn into_inner(self) -> Vec<u8> {
-        self.cursor.into_inner()
-    }
-}
-impl Write for BoundedSeekBuffer {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let position = usize::try_from(self.cursor.position()).unwrap_or(usize::MAX);
-        let end = position
-            .checked_add(bytes.len())
-            .ok_or_else(|| std::io::Error::other("proved overlay length overflow"))?;
-        if end > self.max_bytes {
-            return Err(std::io::Error::other(
-                "proved overlay exceeds transport limit",
-            ));
-        }
-        self.cursor.write(bytes)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.cursor.flush()
-    }
-}
-impl Seek for BoundedSeekBuffer {
-    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-        let next = self.cursor.seek(position)?;
-        if usize::try_from(next).unwrap_or(usize::MAX) > self.max_bytes {
-            return Err(std::io::Error::other(
-                "proved overlay seek exceeds transport limit",
-            ));
-        }
-        Ok(next)
-    }
-}
-fn encode_proved_overlay_bounded<T: norito::NoritoSerialize>(
-    value: &T,
-    max_bytes: usize,
-) -> Result<Vec<u8>, OverlayBuildError> {
-    let mut writer = BoundedSeekBuffer::new(max_bytes);
-    let _canonical_flags =
-        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::core::to_writer_seek(&mut writer, value).map_err(|_| {
-        OverlayBuildError::ZkProof(format!(
-            "proved overlay exceeds the {max_bytes}-byte tooling transport limit"
-        ))
-    })?;
-    Ok(writer.into_inner())
-}
-#[cfg(any(test, feature = "iroha-core-tests"))]
-/// Execute an `Executable::Ivm` transaction in the local state view and derive the corresponding
-/// [`iroha_data_model::transaction::IvmProved`] payload.
-///
-/// This helper is intended for Torii/operator tooling to construct the proved payload in a way
-/// that matches node-side admission replay verification (`verify_ivm_proved_execution`).
-///
-/// Note: callers should treat `gas_used` as private; this function returns commitments only.
-pub fn derive_ivm_proved_payload_from_ivm_execution<R>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    vk_record: &iroha_data_model::proof::VerifyingKeyRecord,
-) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
-where
-    R: StateReadOnly + QueryStateSource,
-{
-    derive_ivm_proved_payload_from_ivm_execution_inner(
-        state_ro,
-        tx,
-        &vk_record.circuit_id,
-        vk_record.version,
-        vk_record.gas_schedule_id.as_deref(),
-        None,
-    )
-}
-/// Bounded tooling derivation using only the lightweight verifier policy
-/// fields required to construct the gas-policy commitment.
-///
-/// This variant lets request handlers avoid cloning an optional multi-megabyte
-/// inline verifying key merely to execute and derive an overlay.
-pub fn derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context<R>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    circuit_id: &str,
-    version: u32,
-    gas_schedule_id: Option<&str>,
-    max_output_bytes: usize,
-) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
-where
-    R: StateReadOnly + QueryStateSource,
-{
-    derive_ivm_proved_payload_from_ivm_execution_inner(
-        state_ro,
-        tx,
-        circuit_id,
-        version,
-        gas_schedule_id,
-        Some(max_output_bytes),
-    )
-}
-fn derive_ivm_proved_payload_from_ivm_execution_inner<R>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    circuit_id: &str,
-    version: u32,
-    gas_schedule_id: Option<&str>,
-    max_output_bytes: Option<usize>,
-) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
-where
-    R: StateReadOnly + QueryStateSource,
-{
-    let bytecode = match tx.instructions() {
-        Executable::Ivm(bytecode) => bytecode.clone(),
-        other => {
-            return Err(OverlayBuildError::ZkProof(format!(
-                "expected Executable::Ivm for proved derivation, got {other:?}"
-            )));
-        }
-    };
-    let gas_limit = require_tx_gas_limit(tx)?;
-    let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-    let summary = ivm_cache
-        .summarize_program(bytecode.as_ref())
-        .map_err(map_program_summary_error)?;
-    let meta = summary.metadata.clone();
-    validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-    let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
-    if !wants_zk {
-        return Err(OverlayBuildError::ZkProof(
-            "ivm proved derivation requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
-        ));
-    }
-    if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
-        return Err(OverlayBuildError::HeaderPolicy(
-            IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
-        ));
-    }
-    enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
-    validate_contract_binding(state_ro, tx, &summary)?;
-    // Proved executions do not support implicit manifest registration append.
-    enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
-    let gas_schedule_id = gas_schedule_id.ok_or_else(|| {
-        OverlayBuildError::ZkProof("verifying key missing gas_schedule_id".to_owned())
-    })?;
-    let amx_analysis = ivm_cache
-        .analyze_program(&summary, bytecode.as_ref())
-        .map_err(map_program_analysis_error)?;
-    let (contract_call_context, contract_runtime_context, entrypoint_authorization) =
-        authorize_and_prepare_raw_contract_dispatch(state_ro, tx, &summary, gas_limit)?;
-    let mut vm = summary
-        .checkout_runtime(gas_limit, smart_contract_heap_limit(state_ro))
-        .map_err(OverlayBuildError::IvmLoad)?;
-    vm.set_zk_trace_enabled(true);
-    let accounts = state_ro.accounts_snapshot();
-    let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
-    let mut host =
-        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
-            tx.authority().clone(),
-            Arc::clone(&accounts),
-            contract_call_context.argument_record.clone(),
-        );
-    host.set_output_limits_from_parameters(state_ro.world().parameters().smart_contract());
-    host.set_prepared_contract_cache(summary.prepared_contract_cache());
-    if let Some(max_output_bytes) = max_output_bytes {
-        host.restrict_output_limits(HostOutputLimits::new(
-            u64::MAX,
-            u64::try_from(max_output_bytes).unwrap_or(u64::MAX),
-        ));
-    }
-    host.set_amx_analysis(amx_analysis);
-    let amx_limits =
-        crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
-    host.set_amx_limits(amx_limits);
-    host.hydrate_axt_state(state_ro)?;
-    host.set_public_inputs_from_parameters(state_ro.world().parameters());
-    host.set_vrf_epoch_seeds_from_state(state_ro);
-    host.set_query_state(state_ro);
-    host.set_contract_runtime_context(Some(contract_runtime_context.clone()));
-    host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
-    host.set_bound_contract_records_by_subject_snapshot(
-        code::snapshot_bound_contract_records_by_subject(state_ro),
-    );
-    apply_streaming_metadata(&mut host, streaming_meta);
-    #[cfg(feature = "telemetry")]
-    host.set_telemetry(state_ro.metrics().clone());
-    host.set_crypto_config(state_ro.crypto());
-    host.set_zk_config(state_ro.zk());
-    host.set_chain_id(state_ro.chain_id());
-    host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
-        .map_err(OverlayBuildError::IvmRun)?;
-    vm.set_gas_limit(gas_limit);
-    vm.set_zk_trace_enabled(true);
-    apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-    let run_result = run_vm_with_host(&mut vm, &mut host);
-    if let Some(violation) = host.output_budget_violation() {
-        return Err(OverlayBuildError::ZkProof(format!(
-            "IVM tooling output budget exceeded before retention: {violation:?}"
-        )));
-    }
-    run_result?;
-    let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-    let trace_bundle = build_ivm_trace_bundle(&vm);
-    let trace_hash = expected_ivm_trace_hash(&trace_bundle)?;
-    let queued = host.drain_queued_instructions_with_contract_runtime_context(Some(
-        contract_runtime_context.clone(),
-    ));
-    let (durable_state_overlay, durable_state_authorizations) =
-        host.drain_durable_state_overlay_with_authorizations();
-    validate_ivm_proved_durable_authorizations(
-        state_ro.world(),
-        &durable_state_overlay,
-        &durable_state_authorizations,
-        &entrypoint_authorization,
-    )
-    .map_err(|error| {
-        OverlayBuildError::ZkProof(format!(
-            "proved payload derivation produced invalid durable-state authorization metadata: {error}"
-        ))
-    })?;
-    validate_ivm_proved_queued_authorization(
-        &queued,
-        tx.authority(),
-        &contract_runtime_context,
-        &entrypoint_authorization,
-    )?;
-    let mut queued = queued
-        .into_iter()
-        .map(|queued| queued.instruction)
-        .collect::<Vec<_>>();
-    prune_redundant_contract_ops(state_ro, &mut queued);
-    let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = queued.into();
-    let overlay_hash = {
-        let bytes = if let Some(max_output_bytes) = max_output_bytes {
-            encode_proved_overlay_bounded(&overlay, max_output_bytes)?
-        } else {
-            norito::encode_canonical(&overlay).map_err(|_| {
-                OverlayBuildError::ZkProof("failed to encode proved overlay".to_owned())
-            })?
-        };
-        Hash::new(&bytes)
-    };
-    let events_commitment =
-        expected_ivm_events_commitment(summary.code_hash, overlay_hash, trace_hash);
-    let gas_policy_commitment = expected_ivm_gas_policy_commitment(
-        summary.code_hash,
-        overlay_hash,
-        circuit_id,
-        version,
-        gas_schedule_id,
-        gas_limit,
-        gas_used,
-        trace_hash,
-    );
-    Ok(iroha_data_model::transaction::IvmProved {
-        bytecode,
-        overlay,
-        events_commitment,
-        gas_policy_commitment,
-    })
+    // TODO: Admit IvmProved only after the complete native STARK relation,
+    // State-owned finalized anchor, and local private prover are connected.
+    // The retired Halo2 and STARK binding circuits prove only public values;
+    // replay cannot turn either into an execution proof.
+    Err(OverlayBuildError::ZkProof(
+        "IvmProved requires the complete native STARK execution relation".to_owned(),
+    ))
 }
 
 #[cfg(test)]

@@ -6,7 +6,8 @@
 //! [`BlockHeader`] and `CommitQC` and the preimage of the certified result `R` — written
 //! atomically and durably by [`Kura::store_block`]. There is no finality sidecar, so there is no
 //! "durable block without its certificate" state to recover from. Genesis (height `g`) keeps its
-//! signature and has no certificate; the core never asks the store for it.
+//! signature and an executed-result certificate without a core header or QC; the core never
+//! asks the store for a genesis quorum certificate.
 //!
 //! **Payloads (§3 rule 2).** The core payload of a block is not stored separately: it is the
 //! canonical resultless, certificate-free proposal wire of the stored block
@@ -17,7 +18,7 @@
 //! bug, reported as a failed write (retried by the driver), never as an invalid block.
 //!
 //! **Hand-off.** The executor's `prepare` of a committed block leaves the result-bearing block
-//! and its result preimage in the shared [`Staging`] slot; the driver's next step is the append
+//! and its exact certificate in the shared [`Staging`] slot; the driver's next step is the append
 //! of that block (§12.2 apply sequencing), which picks it up from there.
 
 use std::{io, num::NonZeroUsize, sync::Arc};
@@ -28,6 +29,7 @@ use iroha_sumeragi::{
     preimage::payload_hash,
     types::Hash32,
 };
+use mv::allocation::AllocationBudget;
 use parking_lot::Mutex;
 use thiserror::Error;
 
@@ -42,17 +44,15 @@ use crate::kura::Kura;
 pub struct StagedBlock {
     /// Core block hash of the committed block.
     pub block_hash: Hash32,
-    /// The result-bearing iroha block, without a certificate.
+    /// The original prepared result-bearing frame, including its exact certificate.
     pub executed: Arc<SignedBlock>,
-    /// Canonical `ExecutionResultCommitment` bytes, `R = H(tag ‖ result_preimage)`.
-    pub result_preimage: Vec<u8>,
 }
 
-/// The single-slot hand-off from the executor's `prepare` to the block store's `append` (both
-/// run on the executor thread, one after the other).
+/// The single-slot hand-off from the executor worker's `prepare` to the driver's
+/// block-store `append`. Both retain the same certified frame through retries.
 #[derive(Clone, Debug, Default)]
 pub struct Staging {
-    slot: Arc<Mutex<Option<StagedBlock>>>,
+    slot: Arc<Mutex<Option<Arc<StagedBlock>>>>,
 }
 
 impl Staging {
@@ -63,13 +63,13 @@ impl Staging {
     }
 
     /// Stage `block`, replacing whatever was staged.
-    pub fn stage(&self, block: StagedBlock) {
+    pub fn stage(&self, block: Arc<StagedBlock>) {
         *self.slot.lock() = Some(block);
     }
 
     /// The staged block of `block_hash`, if that is what is staged.
     #[must_use]
-    pub fn get(&self, block_hash: &Hash32) -> Option<StagedBlock> {
+    pub fn get(&self, block_hash: &Hash32) -> Option<Arc<StagedBlock>> {
         self.slot
             .lock()
             .as_ref()
@@ -129,6 +129,12 @@ pub enum BlockStoreError {
         /// Height of the block.
         height: u64,
     },
+    /// Another caller is progressing the single original certified-read owner.
+    #[error("the original certified read is busy")]
+    CertifiedReadBusy,
+    /// A decoded witness could not be retained from the independently supplied original pool.
+    #[error("commit witness admission: {0}")]
+    WitnessAdmission(iroha_sumeragi::message::WitnessAdmissionError),
     /// A Norito encoding or decoding failure.
     #[error("encoding: {0}")]
     Encoding(String),
@@ -159,18 +165,19 @@ pub fn derive_payload(block: &SignedBlock, payload_len: u32) -> Result<Vec<u8>, 
         .map_err(|error| BlockStoreError::Encoding(error.to_string()))
 }
 
-/// The certificate of a committed block: canonical Norito frames of its core header and
-/// `CommitQC`, and its result preimage.
+/// An explicitly untrusted certificate for read-only verification fixtures.
+/// Production publication uses the executor's original charged buffers.
 ///
 /// # Errors
 /// A Norito encoding failure.
-pub fn commit_certificate(
+#[cfg(test)]
+pub(crate) fn commit_certificate(
     header: &BlockHeader,
     commit_qc: &Qc,
     result_preimage: Vec<u8>,
 ) -> Result<CommitCertificate, BlockStoreError> {
     let encode = |error: norito::Error| BlockStoreError::Encoding(error.to_string());
-    Ok(CommitCertificate::new(
+    Ok(CommitCertificate::from_untrusted_parts(
         norito::encode_canonical(header).map_err(encode)?,
         norito::encode_canonical(commit_qc).map_err(encode)?,
         result_preimage,
@@ -186,9 +193,16 @@ pub fn decode_certificate(
 ) -> Result<(BlockHeader, Qc), BlockStoreError> {
     let decode = |error: norito::Error| BlockStoreError::Encoding(error.to_string());
     Ok((
-        norito::decode_canonical(&certificate.consensus_header).map_err(decode)?,
-        norito::decode_canonical(&certificate.commit_qc).map_err(decode)?,
+        norito::decode_canonical(certificate.consensus_header()).map_err(decode)?,
+        norito::decode_canonical(certificate.commit_qc()).map_err(decode)?,
     ))
+}
+
+/// One exact stored source and decoded certificate retained across local admission refusal.
+struct CertifiedRead {
+    source: Arc<SignedBlock>,
+    header: BlockHeader,
+    qc: Qc,
 }
 
 /// The committed chain in Kura, as the driver sees it.
@@ -197,23 +211,31 @@ pub struct KuraBlockStore {
     hasher: SharedCrypto,
     genesis_height: u64,
     staging: Staging,
+    /// Independently supplied original State pool, never taken from a staged certificate.
+    execution_budget: AllocationBudget,
+    /// Bounded to one original read; partial witness backing never escapes or restarts.
+    certified_read: Mutex<Option<CertifiedRead>>,
 }
 
 impl KuraBlockStore {
     /// A block store over `kura` (holding genesis at `genesis_height`), hashing with the
-    /// instance's crypto and taking prepared blocks from `staging`.
+    /// instance's crypto and taking prepared blocks from `staging`. `execution_budget`
+    /// must be the original State pool also supplied to its executor.
     #[must_use]
     pub fn new(
         kura: Arc<Kura>,
         hasher: SharedCrypto,
         genesis_height: u64,
         staging: Staging,
+        execution_budget: AllocationBudget,
     ) -> Self {
         Self {
             kura,
             hasher,
             genesis_height,
             staging,
+            execution_budget,
+            certified_read: Mutex::new(None),
         }
     }
 
@@ -240,13 +262,72 @@ impl KuraBlockStore {
         let Some(block) = self.stored(height) else {
             return Ok(None);
         };
-        certified_parts(&block, height).map(Some)
+        self.admitted_parts(block, height).map(Some)
+    }
+
+    /// Progress the same pending read before handing any decoded witness to runtime.
+    /// Another-height request first completes existing admission; it may replace that
+    /// completed cache, but cannot discard its partial backing on local refusal.
+    fn admitted_parts(
+        &self,
+        block: Arc<SignedBlock>,
+        height: u64,
+    ) -> Result<(BlockHeader, Qc), BlockStoreError> {
+        let mut pending = self
+            .certified_read
+            .try_lock()
+            .ok_or(BlockStoreError::CertifiedReadBusy)?;
+        if let Some(original) = pending.as_mut() {
+            if original.header.height == height
+                && (original.source.hash() != block.hash()
+                    || original.source.commit_certificate() != block.commit_certificate())
+            {
+                return Err(BlockStoreError::Conflict { height });
+            }
+            original
+                .qc
+                .admit_attestation_witness(&self.execution_budget)
+                .map_err(BlockStoreError::WitnessAdmission)?;
+            if original.header.height != height {
+                // A completed abandoned read no longer pins an unavailable resource.
+                *pending = None;
+            }
+        }
+        if pending.is_none() {
+            let (header, qc) = certified_parts(&block, height)?;
+            *pending = Some(CertifiedRead {
+                source: block,
+                header,
+                qc,
+            });
+        }
+        let original = pending.as_mut().expect("one original certified read");
+        original
+            .qc
+            .admit_attestation_witness(&self.execution_budget)
+            .map_err(BlockStoreError::WitnessAdmission)?;
+        let original = pending
+            .take()
+            .expect("complete original read remains owned");
+        Ok((original.header, original.qc))
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_witness_pointer_for_test(&self) -> Option<*const u8> {
+        self.certified_read.lock().as_ref().and_then(|original| {
+            original
+                .qc
+                .attestation_witness
+                .as_ref()
+                .map(|witness| witness.as_slice().as_ptr())
+        })
     }
 
     /// The core header stored at `height`.
     #[must_use]
     pub fn header(&self, height: u64) -> Option<BlockHeader> {
-        log_unreadable(height, self.certified(height)).map(|(header, _)| header)
+        let block = self.stored(height)?;
+        log_unreadable(height, certified_parts(&block, height).map(Some)).map(|(header, _)| header)
     }
 
     /// The committed tip above genesis (`None` at genesis).
@@ -267,12 +348,18 @@ impl KuraBlockStore {
             .saturating_add(1)
             .max(self.genesis_height.saturating_add(1));
         (first..=tip)
-            .map(|height| match self.certified(height) {
-                Ok(Some((header, _))) => Ok(header),
-                Ok(None) => Err(io::Error::other(format!(
-                    "sumeragi block store: height {height} missing below the tip {tip}"
-                ))),
-                Err(error) => Err(error.into()),
+            .map(|height| {
+                match self
+                    .stored(height)
+                    .map(|block| certified_parts(&block, height))
+                    .transpose()
+                {
+                    Ok(Some((header, _))) => Ok(header),
+                    Ok(None) => Err(io::Error::other(format!(
+                        "sumeragi block store: height {height} missing below the tip {tip}"
+                    ))),
+                    Err(error) => Err(error.into()),
+                }
             })
             .collect()
     }
@@ -295,14 +382,12 @@ impl KuraBlockStore {
         let tip = self.height();
         if height <= tip {
             // A retry after a write that reached the disk: the same certified block is stored.
-            return match self.certified(height)? {
-                Some((header, stored))
-                    if header == block.header
-                        && (stored.block_hash, stored.result)
-                            == (commit_qc.block_hash, commit_qc.result) =>
-                {
-                    Ok(())
-                }
+            return match self
+                .stored(height)
+                .map(|stored| certified_parts(&stored, height))
+                .transpose()?
+            {
+                Some((header, stored)) if header == block.header && stored == *commit_qc => Ok(()),
                 _ => Err(BlockStoreError::Conflict { height }),
             };
         }
@@ -316,10 +401,26 @@ impl KuraBlockStore {
         if staged.executed.header().height().get() != height {
             return Err(BlockStoreError::StagedMismatch("height"));
         }
-        if result_of_preimage(&staged.result_preimage) != commit_qc.result {
+        let certificate =
+            staged
+                .executed
+                .commit_certificate()
+                .ok_or(BlockStoreError::StagedMismatch(
+                    "missing prepared certificate",
+                ))?;
+        if !certificate.admitted_to(&self.execution_budget) {
+            return Err(BlockStoreError::StagedMismatch(
+                "certificate allocation source",
+            ));
+        }
+        let (prepared_header, prepared_qc) = decode_certificate(certificate)?;
+        if prepared_header != block.header || prepared_qc != *commit_qc {
+            return Err(BlockStoreError::StagedMismatch("certificate"));
+        }
+        if result_of_preimage(certificate.result_preimage()) != commit_qc.result {
             return Err(BlockStoreError::StagedMismatch("result"));
         }
-        if !staged.executed.has_results() || staged.executed.commit_certificate().is_some() {
+        if !staged.executed.has_results() {
             return Err(BlockStoreError::StagedMismatch(
                 "not a result-bearing block",
             ));
@@ -330,15 +431,8 @@ impl KuraBlockStore {
         {
             return Err(BlockStoreError::PayloadMismatch { height });
         }
-        let certificate =
-            commit_certificate(&block.header, commit_qc, staged.result_preimage.clone())?;
-        let frame = staged
-            .executed
-            .as_ref()
-            .clone()
-            .with_commit_certificate(Some(certificate));
         self.kura
-            .store_block(frame)
+            .store_block(Arc::clone(&staged.executed))
             .map_err(|error| BlockStoreError::Kura(error.to_string()))
     }
 }
@@ -356,7 +450,8 @@ fn certified_parts(block: &SignedBlock, height: u64) -> Result<(BlockHeader, Qc)
 }
 
 /// The sync entry of a stored block: its core block (payload re-derived and checked against the
-/// header, §3 rule 2) and `CommitQC`.
+/// header, §3 rule 2) and `CommitQC`. Decoded witnesses remain explicitly untrusted;
+/// KuraBlockStore admits them to its original pool before any production handoff.
 ///
 /// # Errors
 /// A missing or malformed certificate, or a payload that does not match the header.
@@ -390,7 +485,19 @@ impl BlockStore for KuraBlockStore {
 
     fn entry(&self, height: u64) -> Option<SyncEntry> {
         let block = self.stored(height)?;
-        log_unreadable(height, stored_entry(&block, height, &self.hasher).map(Some))
+        let entry =
+            self.admitted_parts(Arc::clone(&block), height)
+                .and_then(|(header, commit_qc)| {
+                    let payload = derive_payload(&block, header.payload_len)?;
+                    let block = Block { header, payload };
+                    if !block.body_ok(&*self.hasher)
+                        || block.hash(&*self.hasher) != commit_qc.block_hash
+                    {
+                        return Err(BlockStoreError::PayloadMismatch { height });
+                    }
+                    Ok(Some(SyncEntry { block, commit_qc }))
+                });
+        log_unreadable(height, entry)
     }
 
     fn append(&self, block: &Block, commit_qc: &Qc) -> io::Result<()> {
@@ -406,13 +513,17 @@ mod tests {
     use iroha_data_model::block::decode_framed_signed_block;
     use iroha_sumeragi::{
         testing::FakeCrypto,
-        types::{AggregateSignature, Bitmap, SIGNATURE_LEN},
+        types::{AggregateSignature, Bitmap, EpochId, SIGNATURE_LEN},
     };
 
     use super::*;
     use crate::block::ValidBlock;
 
     const INSTANCE: Hash32 = Hash32([7; 32]);
+    const EPOCH: EpochId = EpochId {
+        epoch: 0,
+        context: Hash32([0x62; 32]),
+    };
 
     struct Chain {
         store: KuraBlockStore,
@@ -446,7 +557,13 @@ mod tests {
         kura.store_block(genesis).expect("genesis");
         let hasher: SharedCrypto = Arc::new(FakeCrypto::new());
         Chain {
-            store: KuraBlockStore::new(kura, Arc::clone(&hasher), 1, Staging::new()),
+            store: KuraBlockStore::new(
+                kura,
+                Arc::clone(&hasher),
+                1,
+                Staging::new(),
+                AllocationBudget::new(8 * 1024 * 1024),
+            ),
             hasher,
             key,
             tip: (genesis_hash, Hash32([1; 32]), Hash32([2; 32])),
@@ -464,10 +581,12 @@ mod tests {
             .expect("wire");
         let header = BlockHeader {
             instance: INSTANCE,
+            epoch: EPOCH,
             height,
             origin_view: 0,
             parent_hash,
             parent_result,
+            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
             payload_hash: payload_hash(&*chain.hasher, &payload),
             payload_len: u32::try_from(payload.len()).expect("len"),
             proposer: 0,
@@ -479,6 +598,7 @@ mod tests {
         let qc = Qc {
             kind: VoteKind::Commit,
             instance: INSTANCE,
+            epoch: EPOCH,
             height,
             view: 0,
             block_hash: block.hash(&*chain.hasher),
@@ -487,11 +607,18 @@ mod tests {
             signers: Bitmap::from_indices(1, [0]).expect("bitmap"),
             agg_sig: AggregateSignature([3; SIGNATURE_LEN]),
             attestations: Vec::new(),
+            attestation_witness: None,
         };
         let staged = StagedBlock {
             block_hash: qc.block_hash,
-            executed: Arc::new(executed),
-            result_preimage,
+            executed: Arc::new(
+                executed.with_commit_certificate(Some(
+                    commit_certificate(&block.header, &qc, result_preimage)
+                        .unwrap()
+                        .admit(&chain.store.execution_budget)
+                        .expect("fixture original-pool admission"),
+                )),
+            ),
         };
         (block, qc, staged)
     }
@@ -499,7 +626,7 @@ mod tests {
     fn commit(chain: &mut Chain) -> (Block, Qc) {
         let (block, qc, staged) = next(chain);
         let iroha_hash = staged.executed.hash();
-        chain.store.staging().stage(staged);
+        chain.store.staging().stage(Arc::new(staged));
         chain.store.append(&block, &qc).expect("append");
         chain.tip = (iroha_hash, qc.block_hash, qc.result);
         (block, qc)
@@ -529,7 +656,7 @@ mod tests {
             decode_certificate(certificate).expect("parts"),
             (block.header.clone(), qc.clone())
         );
-        assert_eq!(result_of_preimage(&certificate.result_preimage), qc.result);
+        assert_eq!(result_of_preimage(certificate.result_preimage()), qc.result);
         let reread = stored_entry(&decoded, 2, &chain.hasher).expect("entry from frame");
         assert_eq!(reread.block, block);
         // The certificate changes neither the iroha block hash nor the executed wire hash.
@@ -577,6 +704,7 @@ mod tests {
             Arc::clone(&chain.hasher),
             1,
             Staging::new(),
+            chain.store.execution_budget.clone(),
         );
         assert_eq!(reopened.height(), 5);
         assert_eq!(reopened.entries(2, 10, u32::MAX), all);
@@ -614,7 +742,7 @@ mod tests {
         let (block, qc, staged) = next(&chain);
         assert!(chain.store.append(&block, &qc).is_err());
         // A QC for another block.
-        chain.store.staging().stage(staged.clone());
+        chain.store.staging().stage(Arc::new(staged.clone()));
         let mut wrong_qc = qc.clone();
         wrong_qc.block_hash = Hash32([9; 32]);
         assert!(chain.store.append(&block, &wrong_qc).is_err());
@@ -624,19 +752,30 @@ mod tests {
         let mut gap_qc = qc.clone();
         gap_qc.height = 4;
         gap_qc.block_hash = gap.hash(&*chain.hasher);
-        chain.store.staging().stage(StagedBlock {
+        chain.store.staging().stage(Arc::new(StagedBlock {
             block_hash: gap_qc.block_hash,
             ..staged.clone()
-        });
+        }));
         assert!(chain.store.append(&gap, &gap_qc).is_err());
         // A staged result preimage that does not hash to the certified result.
-        chain.store.staging().stage(StagedBlock {
-            result_preimage: vec![0; 3],
+        chain.store.staging().stage(Arc::new(StagedBlock {
+            executed: Arc::new(
+                staged
+                    .executed
+                    .as_ref()
+                    .clone()
+                    .with_commit_certificate(Some(
+                        commit_certificate(&block.header, &qc, vec![0; 3])
+                            .unwrap()
+                            .admit(&chain.store.execution_budget)
+                            .expect("fixture original-pool admission"),
+                    )),
+            ),
             ..staged.clone()
-        });
+        }));
         assert!(chain.store.append(&block, &qc).is_err());
         assert_eq!(chain.store.height(), 2, "nothing was written");
-        chain.store.staging().stage(staged);
+        chain.store.staging().stage(Arc::new(staged));
         chain.store.append(&block, &qc).expect("the real block");
         assert_eq!(chain.store.height(), 3);
     }
@@ -654,10 +793,29 @@ mod tests {
             block_hash: block.hash(&*chain.hasher),
             ..next(&chain).1
         };
-        chain.store.staging().stage(StagedBlock {
+        // Keep the certificate exact so this exercises the payload guard, not the
+        // independent refusal of a certificate from a different prepared frame.
+        let result_preimage = staged
+            .executed
+            .commit_certificate()
+            .unwrap()
+            .result_preimage()
+            .to_vec();
+        chain.store.staging().stage(Arc::new(StagedBlock {
             block_hash: qc.block_hash,
-            ..staged
-        });
+            executed: Arc::new(
+                staged
+                    .executed
+                    .as_ref()
+                    .clone()
+                    .with_commit_certificate(Some(
+                        commit_certificate(&block.header, &qc, result_preimage)
+                            .unwrap()
+                            .admit(&chain.store.execution_budget)
+                            .expect("fixture original-pool admission"),
+                    )),
+            ),
+        }));
         let error = chain.store.write(&block, &qc).expect_err("mismatch");
         assert!(matches!(
             error,
@@ -669,25 +827,78 @@ mod tests {
     }
 
     #[test]
-    fn staging_hands_off_only_the_matching_block() {
+    fn staging_hands_off_only_the_matching_original_block() {
+        let chain = chain();
+        let (_, qc, staged) = next(&chain);
+        let staged = Arc::new(staged);
         let staging = Staging::new();
-        let staged = StagedBlock {
-            block_hash: Hash32([1; 32]),
-            executed: Arc::new(executed_block(&KeyPair::random(), 2, None)),
-            result_preimage: vec![1],
-        };
-        assert!(staging.get(&Hash32([1; 32])).is_none());
-        staging.stage(staged);
+        assert!(staging.get(&qc.block_hash).is_none());
+        staging.stage(Arc::clone(&staged));
         assert!(staging.get(&Hash32([2; 32])).is_none());
-        assert_eq!(
-            staging
-                .get(&Hash32([1; 32]))
-                .expect("staged")
-                .result_preimage,
-            vec![1]
-        );
+        let first = staging.get(&qc.block_hash).unwrap();
+        let retry = staging.get(&qc.block_hash).unwrap();
+        assert!(Arc::ptr_eq(&first, &retry));
+        assert!(Arc::ptr_eq(&first, &staged));
+        assert!(Arc::ptr_eq(&first.executed, &retry.executed));
+        assert!(std::ptr::eq(
+            first.executed.commit_certificate().unwrap(),
+            retry.executed.commit_certificate().unwrap()
+        ));
         staging.clear();
-        assert!(staging.get(&Hash32([1; 32])).is_none());
+        assert!(staging.get(&qc.block_hash).is_none());
+        assert_eq!(
+            first.block_hash, qc.block_hash,
+            "the original owner survives clearing the handoff"
+        );
+    }
+
+    #[test]
+    fn append_requires_certificate_custody_from_the_independent_original_pool() {
+        let chain = chain();
+        let (block, qc, staged) = next(&chain);
+        let certificate = staged.executed.commit_certificate().unwrap();
+        let untrusted = CommitCertificate::from_untrusted_parts(
+            certificate.consensus_header().to_vec(),
+            certificate.commit_qc().to_vec(),
+            certificate.result_preimage().to_vec(),
+        );
+        let foreign = AllocationBudget::new(8 * 1024 * 1024);
+        for refused in [untrusted.clone(), untrusted.admit(&foreign).unwrap()] {
+            chain.store.staging().stage(Arc::new(StagedBlock {
+                block_hash: qc.block_hash,
+                executed: Arc::new(
+                    staged
+                        .executed
+                        .as_ref()
+                        .clone()
+                        .with_commit_certificate(Some(refused)),
+                ),
+            }));
+            assert!(matches!(
+                chain.store.write(&block, &qc),
+                Err(BlockStoreError::StagedMismatch(
+                    "certificate allocation source"
+                ))
+            ));
+            assert_eq!(chain.store.height(), 1);
+            assert!(chain.store.entry(2).is_none());
+        }
+        // Explicit admission against the independently held original pool permits
+        // the same canonical frame; neither byte equality nor equal limits suffice.
+        chain.store.staging().stage(Arc::new(StagedBlock {
+            block_hash: qc.block_hash,
+            executed: Arc::new(
+                staged
+                    .executed
+                    .as_ref()
+                    .clone()
+                    .with_commit_certificate(Some(
+                        untrusted.admit(&chain.store.execution_budget).unwrap(),
+                    )),
+            ),
+        }));
+        chain.store.append(&block, &qc).unwrap();
+        assert_eq!(chain.store.height(), 2);
     }
 
     #[test]
@@ -699,7 +910,8 @@ mod tests {
             decode_certificate(&certificate).expect("decode"),
             (block.header.clone(), qc)
         );
-        let garbage = CommitCertificate::new(vec![1, 2, 3], Vec::new(), Vec::new());
+        let garbage =
+            CommitCertificate::from_untrusted_parts(vec![1, 2, 3], Vec::new(), Vec::new());
         assert!(decode_certificate(&garbage).is_err());
         // A stored block without a certificate is not an entry.
         let uncertified = executed_block(&KeyPair::random(), 2, None);

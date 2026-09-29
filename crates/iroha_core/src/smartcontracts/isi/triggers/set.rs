@@ -10,9 +10,14 @@ pub(crate) mod invocation_identity;
 
 #[path = "set_acquisition.rs"]
 mod acquisition;
+#[path = "set_authority_capture.rs"]
+mod authority_capture;
+#[path = "set_authority_registry.rs"]
+mod authority_registry;
 #[path = "set_detachment.rs"]
 mod detachment;
 pub(crate) use acquisition::SetBlockAcquisition;
+pub(crate) use authority_registry::AUTHORITY_FIELDS;
 pub(crate) use detachment::{
     AbortedSet, DetachError, DetachedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet,
     SetBlockCapture, SetPublicationError,
@@ -71,6 +76,8 @@ pub enum Error {
     DataTriggerCapacity,
     /// Data trigger authority `{0}` capacity exceeded: maximum 64
     DataTriggerAuthorityCapacity(AccountId),
+    /// Proof-backed IVM executables cannot be registered as triggers.
+    ProofBackedTriggerUnavailable,
 }
 /// Result type for [`Set`] operations.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
@@ -198,24 +205,18 @@ impl<'a> BorrowedWorldAction<'a> {
         }
     }
 }
-/// Exact retained contract identity, excluding any prepared-code cache.
+/// Exact retained contract bytecode, excluding derived usage and prepared caches.
 #[derive(Encode)]
 struct BorrowedWorldContract<'a> {
     original_contract: WorldDeltaFieldRef<'a>,
-    code_hash: Hash,
-    count: u64,
 }
 impl<'a> From<&'a IvmBytecodeEntry> for BorrowedWorldContract<'a> {
     fn from(entry: &'a IvmBytecodeEntry) -> Self {
         let IvmBytecodeEntry {
-            original_contract,
-            code_hash,
-            count,
+            original_contract, ..
         } = entry;
         Self {
             original_contract: WorldDeltaFieldRef(original_contract),
-            code_hash: *code_hash,
-            count: count.get(),
         }
     }
 }
@@ -225,6 +226,9 @@ fn hash_world_action<F: norito::core::SerializePayload>(
     crate::state::world_projection::hash_value(&BorrowedWorldAction::new(action))
 }
 fn hash_world_contract(entry: &IvmBytecodeEntry) -> core::result::Result<Hash, String> {
+    if ivm::contract_code_hash(entry.original_contract.as_ref()) != entry.code_hash {
+        return Err("trigger contract code hash does not match its original bytecode".into());
+    }
     crate::state::world_projection::hash_value(&BorrowedWorldContract::from(entry))
 }
 
@@ -1137,12 +1141,15 @@ impl SetBlock<'_> {
     /// Delta and baseline owners share borrowed semantic encoders. This covers
     /// the same ten stores as the merge encoder without changing that format or
     /// cloning action instructions, metadata, contract arguments, or bytecode.
+    /// Contract leaves contain only original bytecode; the lookup hash, deployable
+    /// code hash, and reference count are checked against the four action stores.
     /// It provides no snapshot, read-witness, or full-state-root authority.
-    pub(crate) fn append_world_projection(
+    pub(crate) fn append_world_projection<P: crate::state::world_projection::WorldProjection>(
         &self,
-        builder: &mut impl crate::state::world_projection::WorldProjection,
-    ) -> core::result::Result<(), String> {
+        builder: &mut P,
+    ) -> core::result::Result<(), P::Error> {
         use crate::state::world_projection::hash_value;
+        self.validate_world_contract_rows()?;
         builder.append_storage_with("triggers.data", &self.data_triggers, hash_world_action)?;
         builder.append_storage_with(
             "triggers.pipeline",
@@ -1497,6 +1504,45 @@ pub trait SetReadOnly {
     fn active_by_call_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
     /// Mapping from code hash to bytecode entry.
     fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry>;
+    /// Verify every contract's lookup identity and its derived live action count.
+    fn validate_world_contract_rows(&self) -> core::result::Result<(), String> {
+        let mut expected_counts: BTreeMap<HashOf<IvmBytecode>, u64> = BTreeMap::new();
+        macro_rules! count_references {
+            ($store:expr) => {
+                for (_, action) in $store.iter() {
+                    if let Some(hash) = action.extract_blob_hash() {
+                        let count = expected_counts.entry(hash).or_default();
+                        *count = count.checked_add(1).ok_or_else(|| {
+                            "trigger contract reference count exceeds u64".to_owned()
+                        })?;
+                    }
+                }
+            };
+        }
+        count_references!(self.data_triggers());
+        count_references!(self.pipeline_triggers());
+        count_references!(self.time_triggers());
+        count_references!(self.by_call_triggers());
+        for (key, entry) in self.contracts().iter() {
+            if HashOf::new(&entry.original_contract) != *key {
+                return Err(
+                    "trigger contract lookup hash does not match its original bytecode".into(),
+                );
+            }
+            if ivm::contract_code_hash(entry.original_contract.as_ref()) != entry.code_hash {
+                return Err(
+                    "trigger contract code hash does not match its original bytecode".into(),
+                );
+            }
+            if expected_counts.remove(key) != Some(entry.count.get()) {
+                return Err("trigger contract reference count does not match its actions".into());
+            }
+        }
+        if !expected_counts.is_empty() {
+            return Err("trigger action references a missing original contract".into());
+        }
+        Ok(())
+    }
     /// Get original [`IvmBytecode`] for [`TriggerId`]. Returns `None` if there's no [`Trigger`]
     /// with specified `id` that has IVM executable
     #[inline]
@@ -2277,8 +2323,8 @@ impl<'block> SetTransaction<'block> {
     ///
     /// # Errors
     ///
-    /// Returns [`Err`] when scope authorization is malformed or a global/per-authority
-    /// registration cap has already been reached.
+    /// Returns [`Err`] when scope authorization is malformed, a registration cap
+    /// is reached, or the action carries an unavailable proved IVM executable.
     #[inline]
     pub fn add_data_trigger(
         &mut self,
@@ -2307,7 +2353,7 @@ impl<'block> SetTransaction<'block> {
         let filter = trigger.action.filter.clone();
         let added = self.add_to(trigger, TriggeringEventType::Data, |me| {
             &mut me.data_triggers
-        });
+        })?;
         if added {
             self.data_trigger_index.insert(&trigger_id, &filter);
         }
@@ -2319,15 +2365,15 @@ impl<'block> SetTransaction<'block> {
     ///
     /// # Errors
     ///
-    /// Return [`Err`] if failed to preload IVM trigger
+    /// Rejects proof-backed IVM executables, whose proof cannot be a trigger attachment.
     #[inline]
     pub fn add_pipeline_trigger(
         &mut self,
         trigger: SpecializedTrigger<PipelineEventFilterBox>,
     ) -> Result<bool> {
-        Ok(self.add_to(trigger, TriggeringEventType::Pipeline, |me| {
+        self.add_to(trigger, TriggeringEventType::Pipeline, |me| {
             &mut me.pipeline_triggers
-        }))
+        })
     }
     /// Add trigger with [`TimeEventFilter`]
     ///
@@ -2335,15 +2381,15 @@ impl<'block> SetTransaction<'block> {
     ///
     /// # Errors
     ///
-    /// Return [`Err`] if failed to preload IVM trigger
+    /// Rejects proof-backed IVM executables, whose proof cannot be a trigger attachment.
     #[inline]
     pub fn add_time_trigger(
         &mut self,
         trigger: SpecializedTrigger<TimeEventFilter>,
     ) -> Result<bool> {
-        Ok(self.add_to(trigger, TriggeringEventType::Time, |me| {
+        self.add_to(trigger, TriggeringEventType::Time, |me| {
             &mut me.time_triggers
-        }))
+        })
     }
     /// Add trigger with [`ExecuteTriggerEventFilter`]
     ///
@@ -2351,17 +2397,15 @@ impl<'block> SetTransaction<'block> {
     ///
     /// # Errors
     ///
-    /// Return [`Err`] if failed to preload IVM trigger
+    /// Rejects proof-backed IVM executables, whose proof cannot be a trigger attachment.
     #[inline]
     pub fn add_by_call_trigger(
         &mut self,
         trigger: SpecializedTrigger<ExecuteTriggerEventFilter>,
     ) -> Result<bool> {
-        Ok(
-            self.add_to(trigger, TriggeringEventType::ExecuteTrigger, |me| {
-                &mut me.by_call_triggers
-            }),
-        )
+        self.add_to(trigger, TriggeringEventType::ExecuteTrigger, |me| {
+            &mut me.by_call_triggers
+        })
     }
     /// Add generic trigger to generic collection
     ///
@@ -2369,13 +2413,13 @@ impl<'block> SetTransaction<'block> {
     ///
     /// # Errors
     ///
-    /// Return [`Err`] if failed to preload IVM trigger
+    /// Rejects proof-backed IVM executables before mutating trigger storage.
     fn add_to<F: TriggeringEventFilter + mv::Value>(
         &mut self,
         trigger: SpecializedTrigger<F>,
         event_type: TriggeringEventType,
         map: impl FnOnce(&mut Self) -> &mut StorageTransaction<'block, TriggerId, LoadedAction<F>>,
-    ) -> bool {
+    ) -> Result<bool> {
         let SpecializedTrigger {
             id: trigger_id,
             action:
@@ -2389,7 +2433,7 @@ impl<'block> SetTransaction<'block> {
                 },
         } = trigger;
         if self.ids.get(&trigger_id).is_some() {
-            return false;
+            return Ok(false);
         }
         let active = !repeats.is_depleted() && trigger_is_enabled(&metadata);
         let loaded_executable = match executable {
@@ -2413,29 +2457,7 @@ impl<'block> SetTransaction<'block> {
                 }
                 ExecutableRef::Ivm(hash)
             }
-            Executable::IvmProved(proved) => {
-                // Triggers do not carry proof attachments; treat proved IVM executables as plain
-                // bytecode and execute them via the standard IVM trigger machinery.
-                let bytes = proved.bytecode;
-                let hash = HashOf::new(&bytes);
-                if let Some(IvmBytecodeEntry { count, .. }) = self.contracts.get_mut(&hash) {
-                    let updated = count.get().strict_add(1);
-                    *count = NonZeroU64::new(updated).expect(
-                        "There is no way someone could register 2^64 amount of same triggers",
-                    );
-                } else {
-                    let code_hash = ivm::contract_code_hash(bytes.as_ref());
-                    self.contracts.insert(
-                        hash,
-                        IvmBytecodeEntry {
-                            original_contract: bytes,
-                            code_hash,
-                            count: NonZeroU64::MIN,
-                        },
-                    );
-                }
-                ExecutableRef::Ivm(hash)
-            }
+            Executable::IvmProved(_) => return Err(Error::ProofBackedTriggerUnavailable),
             Executable::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
             Executable::Batch(items) => ExecutableRef::Batch(items),
@@ -2461,7 +2483,7 @@ impl<'block> SetTransaction<'block> {
             self.data_trigger_eligibility_generations
                 .insert(trigger_id, if active { generation } else { u64::MAX });
         }
-        true
+        Ok(true)
     }
     /// Apply `f` to the trigger identified by `id`.
     ///

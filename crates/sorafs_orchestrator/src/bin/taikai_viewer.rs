@@ -17,10 +17,10 @@ use norito::{
 use rand::{rand_core::TryRngCore, rngs::OsRng};
 #[cfg(unix)]
 use sorafs_car::platform_no_follow_flag;
-use sorafs_car::set_no_follow_flag;
 use sorafs_car::taikai::{
     validate_distinct_artifact_paths, validate_track_metadata, verify_taikai_car,
 };
+use sorafs_car::{ensure_output_parent_dir, set_no_follow_flag};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
@@ -284,7 +284,7 @@ struct StagedOutput {
 impl StagedOutput {
     fn prepare(path: &Path, label: &str, bytes: &[u8]) -> io::Result<Self> {
         validate_output_path(path)?;
-        ensure_parent_dir(path)?;
+        ensure_output_parent_dir(path)?;
         validate_output_path(path)?;
         let (temporary_path, mut file) = create_temporary_output(path, label)?;
         if let Err(err) = file.write_all(bytes).and_then(|()| file.sync_all()) {
@@ -525,23 +525,6 @@ fn create_temporary_output(path: &Path, label: &str) -> io::Result<(PathBuf, fs:
             path.display()
         ),
     ))
-}
-fn ensure_parent_dir(path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| {
-            io::Error::new(
-                err.kind(),
-                format!(
-                    "failed to create output parent `{}`: {err}",
-                    parent.display()
-                ),
-            )
-        })?;
-    }
-    Ok(())
 }
 fn validate_output_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {

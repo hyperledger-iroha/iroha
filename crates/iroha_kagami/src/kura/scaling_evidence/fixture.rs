@@ -1,271 +1,80 @@
-//! Explicit offline Native transcripts with genuine four-validator signatures.
+//! Original signed genesis, actual lane admission/QCs and global economic execution.
 //!
-//! Each distinct route contributes at most one input per carrier. Context writes,
-//! admission attestations, lane Decisions, RS16 manifests and global finality are
-//! authenticated by their actual producers. Opaque State roots and successful
-//! outputs are structural fixtures; these tests make no State execution claim.
+//! Positive bytes are captured from production StateExecutor/Kura and LaneExecutor/store
+//! owners. Negative helpers mutate certified claims only after execution and never provide
+//! a positive workload capture. This proves same-World lane merging, not cross-dataspace AMX.
 
 use super::*;
-use iroha_core::state::{
-    native_context_evidence_for_testing, native_lane_instance_for_testing,
-    native_lane_manifest_for_testing,
+use iroha_core::{
+    query::native_context_archive::NativeContextArchive,
+    state::{AllocationBudget, NativeLaneStateProjectionV1},
+    sumeragi::test_chain::CertifiedTestChain,
 };
-use iroha_core::torii_proxy::{
-    new_queue_plan_admission_binding, queue_plan_admission_attestation_signing_bytes_v1,
-};
-use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
+use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
-    block::{
-        BlockExecutionContextBundle, BlockSignature,
-        builder::BlockBuilder,
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-            QuorumCertificate, ValidatorPower, Vote, finality::V2FinalityArtifact,
-        },
-        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
-        lane_admission::*,
-        lane_consensus::*,
-        lane_decision_batch::LaneDecisionBatchV1,
-        lane_input::*,
-        output_budget::ExecutionOutputLimits,
-    },
-    bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
-    isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityValidatorKeysV1,
-    },
-    transaction::{
-        FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder, signed::TransactionResult,
-    },
-    trigger::DataTriggerSequence,
+    block::{BlockSignature, CommitCertificate},
+    sumeragi_finality::ExecutionResultCommitment,
 };
-use iroha_model_base::peer::PeerId;
-use norito::codec::DecodeAll as _;
-use std::num::NonZeroU64;
+use iroha_sumeragi::{
+    message::{BlockHeader as NativeHeader, Qc},
+    types::AggregateSignature,
+};
+use norito::codec::{DecodeAll as _, Encode as _};
+use std::{num::NonZeroUsize, sync::Arc};
+
+pub(crate) mod producer;
+use super::lane_proof::LaneFrameV1;
+use producer::{Deferred, LaneProducer};
 
 pub(super) fn h(label: &str) -> Hash {
     Hash::new(label.as_bytes())
-}
-fn keys() -> Vec<KeyPair> {
-    let mut keys: Vec<_> = (1..=4)
-        .map(|n| KeyPair::try_from_seed(vec![n; 32], Algorithm::BlsNormal).unwrap())
-        .collect();
-    keys.sort_by_key(|k| PeerId::new(k.public_key().clone()));
-    keys
-}
-fn peers(keys: &[KeyPair]) -> Vec<PeerId> {
-    keys.iter()
-        .map(|k| PeerId::new(k.public_key().clone()))
-        .collect()
-}
-fn aggregate(keys: &[KeyPair], message: &[u8]) -> Vec<u8> {
-    let shares: Vec<_> = keys
-        .iter()
-        .take(3)
-        .map(|k| {
-            Signature::try_new(k.private_key(), message)
-                .unwrap()
-                .payload()
-                .to_vec()
-        })
-        .collect();
-    iroha_crypto::bls_normal_aggregate_signatures(
-        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-    )
-    .unwrap()
-}
-fn pops(keys: &[KeyPair]) -> Vec<Vec<u8>> {
-    keys.iter()
-        .map(|k| iroha_crypto::bls_normal_pop_prove(k.private_key()).unwrap())
-        .collect()
-}
-fn network() -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(h(
-        "canonical workload genesis pin",
-    )))
-}
-pub(super) fn context(keys: &[KeyPair]) -> HeightContext {
-    let roster: Vec<_> = peers(keys)
-        .into_iter()
-        .map(|validator| ValidatorPower {
-            validator,
-            power: 1,
-        })
-        .collect();
-    let mint = KagemushaMintFinalityAuthorityGenerationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: network(),
-        generation: 0,
-        validators: roster
-            .iter()
-            .enumerate()
-            .map(|(i, v)| KagemushaMintFinalityValidatorKeysV1 {
-                validator: v.validator.clone(),
-                eq_proof_public_key: [u8::try_from(i + 1).unwrap(); 32],
-                ep_proof_public_key: [u8::try_from(i + 17).unwrap(); 32],
-            })
-            .collect(),
-    };
-    HeightContext {
-        network_id: network(),
-        protocol_version: PROTOCOL_VERSION,
-        height: 1,
-        epoch: 0,
-        kagemusha_mint_finality_authorization:
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                &mint, 2048,
-            )
-            .unwrap(),
-        kagemusha_mint_finality_authority: mint,
-        epoch_end_height: 2048,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).unwrap(),
-        roster,
-        nexus_amx_context_hash: h("nexus execution context"),
-        execution_policy_hash: h("runtime execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 8192,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 2 * 1024 * 1024,
-            max_chunk_count: 512,
-        },
-        leader_seed: [0xA5; 32],
-    }
-}
-pub(super) fn signed_proof(
-    keys: &[KeyPair],
-    context: HeightContext,
-    block: &SignedBlock,
-    ordinary_writes_root: Hash,
-) -> BridgeFinalityProof {
-    let wire = block.encode_wire().unwrap();
-    let execution = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        h("pre state"),
-        h("post state"),
-        ordinary_writes_root,
-        wire.len() as u64,
-        Hash::new(&wire),
-    )
-    .with_transaction_commitments_from_block(block)
-    .expect("fixture finality must commit exact Network inputs and typed outputs");
-    let subject = BlockSubject {
-        parent_block_hash: block.header().prev_block_hash(),
-        block_hash: block.hash(),
-        payload_hash: block.canonical_proposal_wire_hash().unwrap(),
-    };
-    let round = ConsensusRound {
-        context_id: context.id(),
-        height: context.height,
-        view: block.header().view_change_index(),
-    };
-    let vote = Vote {
-        round,
-        proposal_round: round,
-        phase: GlobalPhase::Commit,
-        subject,
-        execution_commitment: execution,
-        signer: 0,
-        signature: Vec::new(),
-    };
-    let qc = QuorumCertificate {
-        round,
-        proposal_round: round,
-        phase: GlobalPhase::Commit,
-        subject,
-        execution_commitment: execution,
-        signers: vec![0, 1, 2],
-        aggregate_signature: aggregate(keys, &vote.signature_preimage()),
-    };
-    let artifact = V2FinalityArtifact::new(context, subject, qc, pops(keys));
-    artifact.verify().expect("actual 3-of-4 global finality");
-    artifact.validate_for_header(&block.header()).unwrap();
-    BridgeFinalityProof {
-        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-        block_header: block.header(),
-        finality_artifact: artifact,
-    }
-}
-
-pub(super) fn binding(index: usize) -> NativeWorkloadLane {
-    NativeWorkloadLane {
-        lane_id: LaneId::new(index as u32),
-        dataspace_id: DataSpaceId::new(index as u64),
-        incarnation: h(&format!("incarnation {index}")),
-        activation_height: 1,
-    }
-}
-
-pub(super) fn attach_outputs(
-    block: &mut SignedBlock,
-    outputs: Vec<ExecutionOutputV1>,
-    keys: &[KeyPair],
-) {
-    let fragments = outputs
-        .iter()
-        .filter(|output| output.result().0.is_ok())
-        .count() as u64;
-    block
-        .set_execution_outputs(
-            outputs,
-            fragments,
-            BTreeMap::new(),
-            Vec::new(),
-            Default::default(),
-            BTreeSet::new(),
-            Vec::new(),
-            &ExecutionOutputLimits {
-                max_outputs: 1024,
-                max_output_bytes: 1024 * 1024,
-                max_total_output_bytes: 4 * 1024 * 1024,
-                max_executed_wire_bytes: 32 * 1024 * 1024,
-            },
-        )
-        .unwrap();
-    block
-        .replace_signatures(
-            [BlockSignature::new(
-                0,
-                SignatureOf::from_hash(keys[0].private_key(), block.hash()),
-            )]
-            .into_iter()
-            .collect(),
-        )
-        .unwrap();
-}
-
-pub(super) fn successful_outputs(block: &SignedBlock) -> Vec<ExecutionOutputV1> {
-    (0..block.network_entrypoint_count())
-        .map(|index| {
-            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                input_index: index as u32,
-                result: TransactionResult::from(Ok(DataTriggerSequence::default())),
-                completions: Vec::new(),
-            })
-        })
-        .collect()
 }
 
 #[derive(Clone)]
 pub(super) struct Height {
     pub block: SignedBlock,
-    pub proof: BridgeFinalityProof,
-    pub contexts: LaneConsensusContextsV1,
+    pub lane_evidence: LaneMergeEvidenceV1,
     pub evidence: Vec<u8>,
 }
 impl Height {
+    pub(super) fn capture(
+        chain: &CertifiedTestChain,
+        height: u64,
+        frames: Vec<LaneFrameV1>,
+    ) -> Self {
+        let committed = chain.committed(height);
+        let block = committed.block().as_ref().clone();
+        let archive = NativeContextArchive::open_read_only(
+            chain.kura().store_root(),
+            AllocationBudget::new(MAX_CONTEXT_BYTES),
+            NonZeroUsize::new(MAX_CONTEXT_BYTES).unwrap(),
+        )
+        .unwrap();
+        let original = archive.read_exact(height, block.hash()).unwrap();
+        let state: NativeLaneStateProjectionV1 = canonical(original.as_slice()).unwrap();
+        assert_eq!(state.carrier_hash, block.hash());
+        assert_eq!(state.carrier_height, height);
+        assert!(
+            committed
+                .commitment()
+                .native_lanes
+                .matches_state(chain.network_id(), height, &state.lanes)
+                .unwrap()
+        );
+        archive.recheck_namespace().unwrap();
+        let lane_evidence = LaneMergeEvidenceV1 { state, frames };
+        let evidence = norito::encode_canonical(&lane_evidence).unwrap();
+        Self {
+            block,
+            lane_evidence,
+            evidence,
+        }
+    }
+    pub fn commitment(&self) -> ExecutionResultCommitment {
+        canonical(self.block.commit_certificate().unwrap().result_preimage()).unwrap()
+    }
     pub fn queries(&self) -> Vec<Vec<u8>> {
-        if self
-            .block
-            .execution_context()
-            .and_then(|context| context.native_lane_decisions.as_ref())
-            .is_none()
-        {
+        if self.block.header().height().get() == 1 {
             return Vec::new();
         }
         self.block
@@ -290,26 +99,87 @@ impl Height {
     pub fn push(&self, verifier: &mut ScalingProofVerifier) -> Result<()> {
         let queries = self.queries();
         verifier.push_height(
-            &norito::encode_canonical(&self.proof).unwrap(),
             &self.block.encode_wire().unwrap(),
             &self.evidence,
             &queries.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
     }
-    pub fn resign(&mut self, keys: &[KeyPair]) {
-        let (evidence, root) = native_context_evidence_for_testing(
-            self.proof.finality_artifact.height_context.network_id,
-            self.proof.block_header.height().get(),
-            self.contexts.clone(),
+    pub fn refresh_evidence(&mut self) {
+        self.lane_evidence.state.carrier_height = self.block.header().height().get();
+        self.lane_evidence.state.carrier_hash = self.block.hash();
+        self.evidence = norito::encode_canonical(&self.lane_evidence).unwrap();
+    }
+    pub fn native_parts(&self) -> (NativeHeader, Qc) {
+        iroha_core::sumeragi::block_store::decode_certificate(
+            self.block.commit_certificate().unwrap(),
         )
-        .unwrap();
-        self.evidence = evidence;
-        self.proof = signed_proof(
-            keys,
-            self.proof.finality_artifact.height_context.clone(),
-            &self.block,
-            root,
+        .unwrap()
+    }
+    pub fn change_certificate(
+        &mut self,
+        change: impl FnOnce(&mut NativeHeader, &mut Qc, &mut ExecutionResultCommitment),
+    ) {
+        let (mut header, mut qc) = self.native_parts();
+        let mut result = self.commitment();
+        change(&mut header, &mut qc, &mut result);
+        self.block
+            .set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+                norito::encode_canonical(&header).unwrap(),
+                norito::encode_canonical(&qc).unwrap(),
+                norito::encode_canonical(&result).unwrap(),
+            )));
+    }
+    // Negative control only. Original state claims remain unchanged, while exact wire and
+    // transaction roots are recomputed so semantic output/source checks still run after QC.
+    pub fn resign(&mut self, keys: &[KeyPair]) {
+        let (mut header, mut qc) = self.native_parts();
+        let mut result = self.commitment();
+        assert!(
+            !header.attest && !qc.attest,
+            "negative controls cannot forge Pasta custody"
         );
+        let mut executed = self.block.clone();
+        executed.set_commit_certificate(None);
+        let wire = executed.encode_wire().unwrap();
+        result.execution.executed_block_wire_len = wire.len() as u64;
+        result.execution.executed_block_wire_hash = Hash::new(&wire);
+        result.execution.transaction_input_commitment =
+            self.block.network_input_merkle_commitment();
+        result.execution.transaction_output_commitment = self.block.output_merkle_commitment();
+        let payload = self
+            .block
+            .canonical_resultless_proposal()
+            .encode_wire()
+            .unwrap();
+        let crypto = iroha_core::sumeragi::crypto::BlsCrypto::new();
+        header.payload_hash = iroha_sumeragi::preimage::payload_hash(&crypto, &payload);
+        header.payload_len = payload.len().try_into().unwrap();
+        qc.block_hash = header.hash(&crypto);
+        qc.result = result.result().unwrap();
+        let shares = keys
+            .iter()
+            .take(3)
+            .map(|key| {
+                Signature::new(key.private_key(), &qc.preimage())
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        qc.agg_sig = AggregateSignature(
+            iroha_crypto::bls_normal_aggregate_signatures(
+                &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        );
+        self.block
+            .set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+                norito::encode_canonical(&header).unwrap(),
+                norito::encode_canonical(&qc).unwrap(),
+                result.preimage().unwrap(),
+            )));
+        self.refresh_evidence();
     }
 }
 
@@ -317,81 +187,71 @@ pub(super) struct Fixture {
     pub keys: Vec<KeyPair>,
     pub heights: Vec<Height>,
     pub lane_count: usize,
-    bindings: Vec<NativeWorkloadLane>,
+    pub chain: CertifiedTestChain,
     pub requests: Vec<(String, SignedTransaction, RoutingDecision, WorkloadPhase)>,
+    policy: SumeragiLanePolicy,
 }
 impl Fixture {
     pub fn new(lane_count: usize) -> Self {
         Self::with_request_count(lane_count, 8)
     }
     pub fn with_request_count(lane_count: usize, request_count: usize) -> Self {
+        Self::seeded(lane_count, request_count, false)
+    }
+    pub fn global_rescue(lane_count: usize) -> Self {
+        Self::seeded(lane_count, 8, true)
+    }
+    fn seeded(lane_count: usize, request_count: usize, rescue: bool) -> Self {
         assert!(matches!(lane_count, 1 | 4));
         assert!((8..=1024).contains(&request_count));
-        let keys = keys();
-        let mut requests = Vec::new();
-        for index in 0..request_count {
-            let owner =
-                KeyPair::try_from_seed(vec![80 + (index % 4) as u8; 32], Algorithm::Ed25519)
-                    .unwrap();
-            let authority = AccountId::new(owner.public_key().clone());
-            let logical = format!("{index:064x}");
-            let binding = binding(index % lane_count);
-            let route = RoutingDecision::new(binding.lane_id, binding.dataspace_id);
-            let mut builder = TransactionBuilder::new(
-                network(),
-                authority.clone(),
-                FeePaymentIntent::authority(Vec::new(), None),
-            );
-            builder.set_creation_time(std::time::Duration::from_millis(index as u64));
-            let tx = builder
-                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-                .with_executable(expected_executable(&authority, &logical).unwrap())
-                .sign(owner.private_key());
-            requests.push((
-                logical,
-                tx,
-                route,
-                if index < 4 {
-                    WorkloadPhase::Warmup
-                } else {
-                    WorkloadPhase::Measurement
-                },
-            ));
-        }
-        Self::from_requests(
-            keys.clone(),
-            context(&keys),
-            (0..lane_count).map(binding).collect(),
-            requests,
-            None,
-        )
-    }
-    pub fn from_generated_genesis(
-        mut keys: Vec<KeyPair>,
-        genesis: SignedBlock,
-        authority: &iroha_core::sumeragi::GenesisMergeAuthority,
-        scheduled: &[ScheduledRequest],
-    ) -> Self {
-        keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
-        assert_eq!(
-            peers(&keys),
-            authority
-                .context()
-                .roster
-                .iter()
-                .map(|row| row.validator.clone())
-                .collect::<Vec<_>>()
-        );
-        let bindings = authority
-            .active_lanes()
-            .iter()
-            .map(|lane| NativeWorkloadLane {
-                lane_id: lane.lane_id,
-                dataspace_id: lane.dataspace_id,
-                incarnation: lane.incarnation,
-                activation_height: lane.activation_height,
+        let producer = LaneProducer::start(lane_count);
+        let requests = (0..request_count)
+            .map(|index| {
+                let logical = format!("{index:064x}");
+                let transaction = producer.request(index % producer.users.len(), &logical);
+                (
+                    logical,
+                    transaction,
+                    RoutingDecision::new(
+                        LaneId::new((index % lane_count) as u32),
+                        DataSpaceId::UNIVERSAL,
+                    ),
+                    if index < 4 {
+                        WorkloadPhase::Warmup
+                    } else {
+                        WorkloadPhase::Measurement
+                    },
+                )
             })
             .collect();
+        Self::from_requests(producer, requests, rescue)
+    }
+    pub fn from_generated_genesis(
+        chain: CertifiedTestChain,
+        deferred: Arc<Deferred>,
+        keys: Vec<KeyPair>,
+        authority: &crate::genesis::StagedNativeGenesis,
+        scheduled: &[ScheduledRequest],
+    ) -> Self {
+        assert_eq!(chain.genesis().hash(), authority.genesis().hash());
+        assert_eq!(
+            keys.iter()
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>(),
+            authority
+                .epoch()
+                .committee
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect::<Vec<_>>()
+        );
+        let producer = LaneProducer::from_chain(
+            chain,
+            deferred,
+            authority.lane_policy().unwrap().clone(),
+            Vec::new(),
+            keys,
+        );
         let requests = scheduled
             .iter()
             .map(|row| {
@@ -403,320 +263,88 @@ impl Fixture {
                 )
             })
             .collect();
-        Self::from_requests(
-            keys,
-            authority.context().clone(),
-            bindings,
-            requests,
-            Some(genesis),
-        )
+        Self::from_requests(producer, requests, false)
     }
     fn from_requests(
-        keys: Vec<KeyPair>,
-        mut global_context: HeightContext,
-        bindings: Vec<NativeWorkloadLane>,
+        mut producer: LaneProducer,
         requests: Vec<(String, SignedTransaction, RoutingDecision, WorkloadPhase)>,
-        genesis: Option<SignedBlock>,
+        rescue: bool,
     ) -> Self {
-        let network_id = global_context.network_id;
-        let lane_count = bindings.len();
-        let roster = peers(&keys);
-        let admission_height = if genesis.is_some() { 2 } else { 1 };
-        let parent_hash = genesis.as_ref().map(SignedBlock::hash);
-        let mut inputs = Vec::new();
-        for (index, (_, tx, route, _)) in requests.iter().enumerate() {
-            let binding = bindings
-                .iter()
-                .find(|lane| {
-                    lane.lane_id == route.lane_id && lane.dataspace_id == route.dataspace_id
-                })
-                .unwrap();
-            let entrypoint = TransactionEntrypoint::External(tx.clone());
-            let routing = RoutingPlan::single(*route);
-            let context = QueuePlanAdmissionContextV1 {
-                version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
-                authority_height: admission_height - 1,
-                proposal_height: admission_height,
-                predecessor_block_hash: parent_hash,
-                routing_plan_digest: routing.digest(),
-                route_incarnations: vec![QueuePlanRouteIncarnationV1 {
-                    leg: routing.coordinator_leg(),
-                    lane_incarnation: binding.incarnation,
-                    validator_set_hash_version: 1,
-                    validator_set_hash: HashOf::new(&roster),
-                    validator_set: roster.clone(),
-                    validator_count: 4,
-                    durability_threshold: 2,
-                }],
-            };
-            let binding = new_queue_plan_admission_binding(
-                &network_id,
-                &entrypoint,
-                &routing,
-                context,
-                index as u64,
-            )
-            .unwrap();
-            let attestations = keys
-                .iter()
-                .take(2)
-                .enumerate()
-                .map(|(index, key)| QueuePlanAdmissionAttestationV1 {
-                    version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
-                    validator_index: index as u16,
-                    signature: Signature::new(
-                        key.private_key(),
-                        &queue_plan_admission_attestation_signing_bytes_v1(
-                            binding.canonical_hash(),
-                            index as u16,
-                        )
-                        .unwrap(),
-                    ),
-                })
-                .collect();
-            inputs.push(LaneAdmittedInputV1 {
-                entrypoint,
-                certificate: QueuePlanAdmissionCertificateV1 {
-                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-                    binding,
-                    attestations,
-                },
-            });
-        }
-        inputs.sort_by_key(|input| input.certificate.binding.registry_key());
-        let pending: Vec<Vec<usize>> = (0..lane_count)
+        let lane_count = producer.policy.fixed.len() + 1;
+        let mut heights = (1..=3)
+            .map(|height| Height::capture(&producer.chain, height, Vec::new()))
+            .collect::<Vec<_>>();
+        let mut offsets = vec![0; lane_count];
+        let pending = (0..lane_count)
             .map(|lane| {
-                inputs
+                requests
                     .iter()
-                    .enumerate()
-                    .filter_map(|(index, input)| {
-                        (input
-                            .routing_plan()
-                            .unwrap()
-                            .coordinator_leg()
-                            .route
-                            .lane_id
-                            == bindings[lane].lane_id)
-                            .then_some(index)
-                    })
-                    .collect()
+                    .filter(|row| row.2.lane_id.as_u32() as usize == lane)
+                    .collect::<Vec<_>>()
             })
-            .collect();
-        let mut offsets = vec![0usize; lane_count];
-        let mut frontiers = vec![(0u64, None, 0u64); lane_count];
-        let mut heights = Vec::new();
-        if let Some(genesis) = genesis {
-            let contexts = LaneConsensusContextsV1::default();
-            let (evidence, root) =
-                native_context_evidence_for_testing(network_id, 1, contexts.clone()).unwrap();
-            let proof = signed_proof(&keys, global_context.clone(), &genesis, root);
-            heights.push(Height {
-                block: genesis,
-                proof: proof.clone(),
-                contexts,
-                evidence,
-            });
-            global_context.height = admission_height;
-            global_context.parent_commit_qc = Some(proof.finality_artifact.commit_qc);
-        }
-        let admission_bytes: Vec<_> = inputs
-            .iter()
-            .map(|input| norito::encode_canonical(input).unwrap())
-            .collect();
-        let mut builder = BlockBuilder::new(BlockHeader::new(
-            NonZeroU64::new(admission_height).unwrap(),
-            parent_hash,
-            None,
-            admission_height * 100,
-            0,
-        ));
-        builder.set_execution_context(Some(
-            BlockExecutionContextBundle::default()
-                .with_queue_plan_admissions(admission_bytes.clone()),
-        ));
-        let mut block = builder.build(BTreeSet::new());
-        attach_outputs(&mut block, Vec::new(), &keys);
-        let admission_carrier_hash = block.hash();
+            .collect::<Vec<_>>();
         loop {
-            let height = block.header().height().get();
-            let contexts = LaneConsensusContextsV1::new(
-                (0..lane_count)
-                    .filter_map(|lane| {
-                        let index = *pending[lane].get(offsets[lane])?;
-                        let input = &inputs[index];
-                        let binding = &bindings[lane];
-                        let (previous, hash, applied) = frontiers[lane];
-                        Some(FrozenLaneConsensusContextV1 {
-                            network_id,
-                            protocol_version: PROTOCOL_VERSION,
-                            opening_global_height: height,
-                            opening_global_context_id: global_context.id(),
-                            admitted_binding_hash: input.certificate.binding.canonical_hash(),
-                            admission_priority: QueuePlanAdmissionPriorityV1::new(
-                                admission_height,
-                                index,
-                            )
-                            .unwrap(),
-                            epoch: global_context.epoch,
-                            mode: global_context.mode,
-                            lane_id: binding.lane_id,
-                            dataspace_id: binding.dataspace_id,
-                            lane_incarnation: binding.incarnation,
-                            next_lane_height: previous + 1,
-                            predecessor_height: previous,
-                            predecessor_hash: hash,
-                            predecessor_applied_global_height: applied,
-                            committee: roster.clone(),
-                            validator_set_pops: pops(&keys),
-                            nexus_amx_context_hash: global_context.nexus_amx_context_hash,
-                            execution_policy_hash: global_context.execution_policy_hash,
-                            da_layout: global_context.da_layout,
-                            leader_seed: global_context.leader_seed,
-                        })
-                    })
-                    .collect(),
-            )
-            .unwrap();
-            let (evidence, root) =
-                native_context_evidence_for_testing(network_id, height, contexts.clone()).unwrap();
-            let proof = signed_proof(&keys, global_context.clone(), &block, root);
-            heights.push(Height {
-                block: block.clone(),
-                proof: proof.clone(),
-                contexts: contexts.clone(),
-                evidence,
-            });
-            if contexts.contexts.is_empty() {
+            let mut direct = Vec::new();
+            let mut frames = Vec::new();
+            let mut any = false;
+            for lane in 0..lane_count {
+                if let Some(row) = pending[lane].get(offsets[lane]) {
+                    any = true;
+                    offsets[lane] += 1;
+                    if lane == 0 || rescue {
+                        direct.push(row.1.clone());
+                    } else {
+                        frames.push(producer.certify(lane, vec![row.1.clone()]));
+                    }
+                }
+            }
+            if !any {
                 break;
             }
-            let mut groups = Vec::new();
-            for frozen in &contexts.contexts {
-                let lane = bindings
-                    .iter()
-                    .position(|binding| binding.lane_id == frozen.lane_id)
-                    .unwrap();
-                let index = pending[lane][offsets[lane]];
-                let input = inputs[index].clone();
-                let instance =
-                    native_lane_instance_for_testing(frozen.clone(), &proof.finality_artifact)
-                        .unwrap();
-                let payload = LaneInputPayloadV1 {
-                    input,
-                    descriptor: LaneInputDescriptorV1 {
-                        version: LANE_INPUT_VERSION_V1,
-                        admission_priority: frozen.admission_priority,
-                        admission_carrier_hash,
-                        admitted_input_hash: Hash::new(&admission_bytes[index]),
-                        slots: vec![LaneInputRouteSlotV1 {
-                            route: RoutingDecision::new(frozen.lane_id, frozen.dataspace_id),
-                            lane_incarnation: frozen.lane_incarnation,
-                            instance_id: instance,
-                            lane_height: frozen.next_lane_height,
-                        }],
-                    },
-                };
-                let manifest = native_lane_manifest_for_testing(
-                    frozen.clone(),
-                    &proof.finality_artifact,
-                    &payload,
-                    0,
-                )
-                .unwrap();
-                let statement = LaneVoteStatementV1 {
-                    round: LaneRoundV1 {
-                        instance_id: instance,
-                        lane_height: frozen.next_lane_height,
-                        voting_view: 0,
-                    },
-                    phase: LanePhaseV1::Commit,
-                    value: manifest.value,
-                };
-                let shares = keys
-                    .iter()
-                    .take(3)
-                    .enumerate()
-                    .map(|(index, key)| LaneSignatureShareV1 {
-                        signer: index as u32,
-                        signature: Signature::try_new(
-                            key.private_key(),
-                            &statement.signature_preimage().unwrap(),
-                        )
+            assert!(producer.chain.commit(direct).into_iter().all(|ok| ok));
+            let height = Height::capture(&producer.chain, producer.chain.height(), frames);
+            for index in 0..height.block.network_entrypoint_count() {
+                assert!(
+                    height
+                        .block
+                        .network_output_at(index as u32)
                         .unwrap()
-                        .payload()
-                        .to_vec(),
-                    })
-                    .collect();
-                frontiers[lane] = (
-                    frozen.next_lane_height,
-                    Some(payload.descriptor.canonical_hash().unwrap()),
-                    height + 1,
+                        .1
+                        .result
+                        .is_ok(),
+                    "actual global execution must succeed"
                 );
-                offsets[lane] += 1;
-                groups.push(LaneDecisionGroupV1 {
-                    payload,
-                    decisions: vec![LaneDecisionV1 {
-                        manifest,
-                        commit_qc: LaneQcV1 { statement, shares },
-                    }],
-                });
             }
-            groups.sort_by_key(|group| group.payload.descriptor.admission_priority);
-            let batch = LaneDecisionBatchV1 {
-                base_state_height: height,
-                base_state_hash: HashOf::from_untyped_unchecked(h(&format!(
-                    "explicit offline State cut {height}"
-                ))),
-                groups,
-            };
-            let mut builder = BlockBuilder::new(BlockHeader::new(
-                NonZeroU64::new(height + 1).unwrap(),
-                Some(block.hash()),
-                None,
-                height * 100,
-                0,
-            ));
-            builder.set_execution_context(Some(
-                BlockExecutionContextBundle::default().with_native_lane_decisions(batch),
-            ));
-            block = builder.build(BTreeSet::new());
-            let outputs = successful_outputs(&block);
-            attach_outputs(&mut block, outputs, &keys);
-            global_context.height = height + 1;
-            global_context.parent_commit_qc = Some(proof.finality_artifact.commit_qc);
+            heights.push(height);
         }
         Self {
-            keys,
+            keys: producer.keys,
             heights,
             lane_count,
-            bindings,
+            chain: producer.chain,
             requests,
+            policy: producer.policy,
         }
     }
     pub fn plan(&self) -> TrustedRunPlan {
         TrustedRunPlan {
-            network_id: self.heights[0]
-                .proof
-                .finality_artifact
-                .height_context
-                .network_id,
-            first_context: self.heights[0].proof.finality_artifact.context_id(),
+            network_id: self.chain.network_id(),
+            chain_id: self.chain.state().chain_id_ref().clone(),
+            genesis_epoch_context_id: iroha_data_model::sumeragi_finality::genesis_epoch(
+                self.chain.genesis(),
+            )
+            .unwrap()
+            .context_id()
+            .unwrap(),
             first_height: 1,
             last_height: self.heights.len() as u64,
-            nexus_amx_context_hash: self.heights[0]
-                .proof
-                .finality_artifact
-                .height_context
-                .nexus_amx_context_hash,
-            execution_policy_hash: self.heights[0]
-                .proof
-                .finality_artifact
-                .height_context
-                .execution_policy_hash,
-            active_lanes: self.bindings.clone(),
-            lane_authorities: MergeLaneAuthorityCatalogV1::from_lane_committees(
-                &vec![peers(&self.keys); self.lane_count],
-            )
-            .unwrap(),
+            lane_policy: self.policy.clone(),
+            active_lanes: (0..self.lane_count)
+                .map(|lane| NativeWorkloadLane {
+                    lane_id: LaneId::new(lane as u32),
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                })
+                .collect(),
             scheduled: self
                 .requests
                 .iter()
@@ -731,11 +359,13 @@ impl Fixture {
     }
     pub fn start(&self, plan: TrustedRunPlan, limits: VerificationLimits) -> ScalingProofVerifier {
         let mut verifier = ScalingProofVerifier::new(plan, limits).unwrap();
-        self.heights[0].push(&mut verifier).unwrap();
+        for height in &self.heights[..3] {
+            height.push(&mut verifier).unwrap();
+        }
         verifier
     }
     pub fn push(&self, verifier: &mut ScalingProofVerifier) -> Result<()> {
-        for height in &self.heights[1..] {
+        for height in &self.heights[3..] {
             height.push(verifier)?;
         }
         Ok(())
@@ -746,126 +376,85 @@ pub(super) fn limits() -> VerificationLimits {
         admitted_proof_bytes: 64 * 1024 * 1024,
         input_bytes: 48 * 1024 * 1024,
         output_bytes: 16 * 1024 * 1024,
-        heights: 1025,
+        heights: 1027,
         requests: 1024,
         leaves_per_carrier: 1024,
     }
 }
-
-// Test-only raw wire projection permits adverse full-output and source mutations.
-// It is decoded through SignedBlock again; production has no unchecked setter.
+// Exact test-only raw projection; every mutation is decoded back through the real model.
 #[derive(norito::Encode, norito::Decode)]
 pub(super) struct RawBlock {
     pub signatures: BTreeSet<BlockSignature>,
     pub payload: iroha_data_model::block::BlockPayload,
     pub result: Option<iroha_data_model::block::BlockResult>,
-    pub commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
+    pub commit_certificate: Option<CommitCertificate>,
 }
 pub(super) fn mutate_height(
     height: &mut Height,
     keys: &[KeyPair],
     change: impl FnOnce(&mut RawBlock),
 ) {
-    let mut raw =
-        RawBlock::decode_all(&mut norito::codec::Encode::encode(&height.block).as_slice()).unwrap();
+    let mut raw = RawBlock::decode_all(&mut height.block.encode().as_slice()).unwrap();
     change(&mut raw);
     raw.payload
         .header
         .set_execution_context_hash(raw.payload.execution_context.as_ref().map(HashOf::new));
-    raw.signatures = [BlockSignature::new(
-        0,
-        SignatureOf::from_hash(keys[0].private_key(), raw.payload.header.hash()),
-    )]
-    .into_iter()
-    .collect();
-    height.block =
-        SignedBlock::decode_all(&mut norito::codec::Encode::encode(&raw).as_slice()).unwrap();
+    // Native proposals are unsigned: the sole native certificate authenticates their exact wire.
+    raw.signatures.clear();
+    height.block = SignedBlock::decode_all(&mut raw.encode().as_slice()).unwrap();
     height.resign(keys);
 }
 
-pub(super) fn successor(
-    keys: &[KeyPair],
-    parent: &Height,
-    execution: Option<BlockExecutionContextBundle>,
-    contexts: LaneConsensusContextsV1,
-) -> Height {
-    let number = parent.block.header().height().get() + 1;
-    let mut builder = BlockBuilder::new(BlockHeader::new(
-        NonZeroU64::new(number).unwrap(),
-        Some(parent.block.hash()),
-        None,
-        number * 100,
-        0,
-    ));
-    builder.set_execution_context(execution);
-    let mut block = builder.build(BTreeSet::new());
-    let outputs = successful_outputs(&block);
-    attach_outputs(&mut block, outputs, keys);
-    let mut context = parent.proof.finality_artifact.height_context.clone();
-    context.height = number;
-    context.parent_commit_qc = Some(parent.proof.finality_artifact.commit_qc.clone());
-    let (evidence, root) =
-        native_context_evidence_for_testing(context.network_id, number, contexts.clone()).unwrap();
-    let proof = signed_proof(keys, context, &block, root);
-    Height {
-        block,
-        proof,
-        contexts,
-        evidence,
-    }
-}
-
-pub(super) fn resign_group(
-    group: &mut LaneDecisionGroupV1,
-    frozen: &FrozenLaneConsensusContextV1,
-    opening: &V2FinalityArtifact,
-    keys: &[KeyPair],
+pub(super) fn attach_outputs(
+    block: &mut SignedBlock,
+    outputs: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+    _keys: &[KeyPair],
 ) {
-    let manifest =
-        native_lane_manifest_for_testing(frozen.clone(), opening, &group.payload, 0).unwrap();
-    let statement = LaneVoteStatementV1 {
-        round: LaneRoundV1 {
-            instance_id: manifest.value.instance_id,
-            lane_height: frozen.next_lane_height,
-            voting_view: 0,
-        },
-        phase: LanePhaseV1::Commit,
-        value: manifest.value,
-    };
-    let shares = keys
+    let certificate = block.commit_certificate().cloned();
+    block.set_commit_certificate(None);
+    let fragments = outputs
         .iter()
-        .take(3)
-        .enumerate()
-        .map(|(index, key)| LaneSignatureShareV1 {
-            signer: index as u32,
-            signature: Signature::try_new(
-                key.private_key(),
-                &statement.signature_preimage().unwrap(),
-            )
-            .unwrap()
-            .payload()
-            .to_vec(),
-        })
-        .collect();
-    group.decisions = vec![LaneDecisionV1 {
-        manifest,
-        commit_qc: LaneQcV1 { statement, shares },
-    }];
+        .filter(|output| output.result().0.is_ok())
+        .count() as u64;
+    block
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            BTreeMap::new(),
+            Vec::new(),
+            Default::default(),
+            BTreeSet::new(),
+            Vec::new(),
+            &iroha_data_model::block::output_budget::ExecutionOutputLimits {
+                max_outputs: 1024,
+                max_output_bytes: 1024 * 1024,
+                max_total_output_bytes: 4 * 1024 * 1024,
+                max_executed_wire_bytes: 32 * 1024 * 1024,
+            },
+        )
+        .unwrap();
+    block.set_commit_certificate(certificate);
 }
 
 pub(super) fn resign_claimed_subject(height: &mut Height, keys: &[KeyPair]) {
-    let artifact = &mut height.proof.finality_artifact;
-    artifact.commit_qc.subject = artifact.subject;
-    let qc = &mut artifact.commit_qc;
-    let vote = Vote {
-        round: qc.round,
-        proposal_round: qc.proposal_round,
-        phase: qc.phase,
-        subject: qc.subject,
-        execution_commitment: qc.execution_commitment,
-        signer: 0,
-        signature: Vec::new(),
-    };
-    qc.aggregate_signature = aggregate(keys, &vote.signature_preimage());
-    artifact.verify().unwrap();
+    height.change_certificate(|header, qc, _| {
+        qc.block_hash = header.hash(&iroha_core::sumeragi::crypto::BlsCrypto::new());
+        qc.agg_sig = AggregateSignature(aggregate(keys, &qc.preimage()).try_into().unwrap());
+    });
+}
+
+fn aggregate(keys: &[KeyPair], message: &[u8]) -> Vec<u8> {
+    let shares = keys
+        .iter()
+        .take(3)
+        .map(|key| {
+            Signature::new(key.private_key(), message)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .unwrap()
 }

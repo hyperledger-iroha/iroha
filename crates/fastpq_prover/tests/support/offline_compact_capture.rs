@@ -1,6 +1,6 @@
-//! Independent public inputs for bounded MixedScale DEEP artifact fixtures.
+//! Independent public inputs for bounded `MixedScale` DEEP artifact fixtures.
 //!
-//! These facts reproduce the one- or two-occurrence MixedScale source constants.
+//! These facts reproduce the one- or two-occurrence `MixedScale` source constants.
 //! Neither the statement, roots, ordering hash nor AXT expectations are read from a proof.
 
 use super::*;
@@ -16,7 +16,7 @@ use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
 /// Complete caller expectations derived before either retained artifact is read.
-pub(super) struct CaptureFixture {
+pub struct CaptureFixture {
     pub(super) statement: FastpqPublicTransferStatementV1,
     pub(super) expected: ExpectedStatement,
     binding: AxtFastpqBinding,
@@ -166,11 +166,31 @@ impl CaptureFixture {
             .map(compute_remote_spend_claim_commitment_v1)
             .collect();
         let outer_amount = 5 * u128::try_from(occurrences).unwrap();
+        let occurrences = remote
+            .iter()
+            .zip(&statement.transcripts)
+            .enumerate()
+            .map(|(ordinal, (claim, transcript))| {
+                iroha_data_model::nexus::AxtSourceTransferOccurrenceV1 {
+                    source_success_receipt_digest: [0x51; 32],
+                    source_tx_commitment: batch_hash.into(),
+                    source_tx_index: 0,
+                    transcript_index: ordinal as u32,
+                    delta_index: 0,
+                    pair_ordinal: ordinal as u32,
+                    transfer_digest: iroha_data_model::nexus::axt_source_transfer_digest_v1(
+                        &transcript.deltas[0],
+                    ),
+                    remote_spend_claim_commitment: compute_remote_spend_claim_commitment_v1(claim),
+                }
+            })
+            .collect();
         Self {
             statement,
             expected,
             binding,
             metadata: FastpqAxtPublicMetadataV1 {
+                source_transfer_occurrences: occurrences,
                 parameter: AXT_DEFAULT_PARAMETER.into(),
                 entry_hash: batch_hash.into(),
                 // Retain the original five-unit outer mirror per occurrence,
@@ -203,7 +223,7 @@ impl CaptureFixture {
 }
 
 /// Finite public facade limits with the normal 512 KiB child and 64-query envelope.
-pub(super) fn capture_policy() -> VerificationLimits {
+pub fn capture_policy() -> VerificationLimits {
     let mut limits = policy();
     limits.transport.max_wire_bytes = 1024 * 1024;
     limits.transport.max_bundle_frame_bytes = 1024 * 1024;
@@ -231,7 +251,7 @@ pub(super) fn capture_policy() -> VerificationLimits {
 }
 
 /// Read a bounded, SHA-addressed output of the existing fresh public producer test.
-pub(super) fn read_capture(variable: &str, label: &str) -> Vec<u8> {
+pub fn read_capture(variable: &str, label: &str) -> Vec<u8> {
     use std::io::Read;
     let path = std::path::PathBuf::from(std::env::var_os(variable).expect(variable))
         .canonicalize()

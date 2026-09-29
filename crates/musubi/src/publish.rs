@@ -3795,6 +3795,7 @@ pub trait PublicationBackend {
         &mut self,
         operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
+        registered: &PublicationRegisteredArchiveV1,
         location: &MusubiArchiveLocationV1,
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError>;

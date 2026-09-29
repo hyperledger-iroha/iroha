@@ -20,10 +20,11 @@ pub fn values() -> Vec<Value> {
         .get("cases")
         .and_then(Value::as_array)
         .expect("canonical Musubi instruction document cases");
-    assert_eq!(cases.len(), 19, "complete Musubi instruction fixture");
+    assert_eq!(cases.len(), 20, "complete Musubi instruction fixture");
     for wire_id in [
         RegisterMusubiNamespaceBindingV1::WIRE_ID,
         RegisterMusubiArchiveV1::WIRE_ID,
+        super::AdvanceMusubiPinOutboxV1::WIRE_ID,
         RetireMusubiArchiveLocationV1::WIRE_ID,
         SetMusubiPackageMetadataV1::WIRE_ID,
         InviteMusubiPackageMaintainerV1::WIRE_ID,

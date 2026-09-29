@@ -222,7 +222,7 @@ impl ProviderIngestHttpsSourceV1 {
         let lease = grant.lease;
         // DNS uses the system resolver. Keep its retained admission inside the blocking worker;
         // timing out this future cannot create unbounded detached resolver jobs.
-        let (context, permit) = tokio::task::spawn_blocking(move || {
+        let (context, permit) = build_gateway_context_recoverably(move || {
             let context = GatewayFetchContext::new_with_pinned_tls_roots(
                 config,
                 [grant.provider],
@@ -233,8 +233,7 @@ impl ProviderIngestHttpsSourceV1 {
             .map_err(|_| ProviderIngestSourceFetchErrorV1::Rejected);
             (context, permit)
         })
-        .await
-        .map_err(|_| ProviderIngestSourceFetchErrorV1::Unavailable)?;
+        .await?;
         let context = context?;
         ensure_current(&self.config, self.resolver.as_ref(), &lease, deadline)?;
         let verified = context
@@ -426,5 +425,19 @@ impl Read for LeaseCheckedReader {
         self.reader.read(output)
     }
 }
+async fn build_gateway_context_recoverably<F, T>(
+    operation: F,
+) -> Result<T, ProviderIngestSourceFetchErrorV1>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        operation,
+    ))
+    .await
+    .map_err(|_| ProviderIngestSourceFetchErrorV1::Unavailable)
+}
+
 #[cfg(test)]
 mod tests;

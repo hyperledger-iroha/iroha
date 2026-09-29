@@ -95,7 +95,10 @@ fn retained_proposal_operator(proposal_kind: &ProposalKind) -> Result<&AccountId
         | ProposalKind::SccpRouteGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_)
-        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => Err(inconsistent(
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
+        | ProposalKind::KagemushaVerifierPolicyInstall(_)
+        | ProposalKind::KagemushaVerifierReleaseInstall(_)
+        | ProposalKind::KagemushaVerifierReleaseActivate(_) => Err(inconsistent(
             "non-validation-fee proposal reached the typed validation-fee projection",
         )),
     }

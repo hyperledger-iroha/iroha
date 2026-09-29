@@ -232,7 +232,7 @@ fn install_autonomous_test_queue(
         &[(lane_id, dataspace_id)],
     ));
     let manifests = adapter.state.lane_manifests.read().clone();
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
     // Retain the explicit test router across the same generation check
     // performed before production reservation selection.
     queue.install_test_router_metadata_for_nexus(&adapter.state.nexus_snapshot());

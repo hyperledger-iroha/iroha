@@ -139,7 +139,7 @@ fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
     let state =
         State::new_with_pre_genesis_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     state
@@ -255,6 +255,7 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
     // enforces lane and executor permissions, and rolls back the whole transaction on failure.
     let result = block
         .validate_transaction(transaction, &mut IvmCache::new())
+        .expect("local execution completes")
         .1;
     result.map_err(|error| format!("{error:?}"))?;
     // Persist the validated world overlay without manufacturing consensus/QC evidence in this

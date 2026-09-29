@@ -311,9 +311,20 @@ expected_hash_file = "genesis.expected_hash"
 # enable_simd = true   # Allow SIMD/NEON/AVX; set false to force scalar execution for deterministic parity runs
 # enable_cuda = true   # Use CUDA backend when compiled and available
 # enable_metal = true  # Use Metal backend on macOS when available
-# max_gpus = 0         # Maximum GPUs to initialize (0 = auto/no cap)
+# max_gpus = 2         # Optional IVM selection cap; omit for available devices, 0 opts out
 # merkle_min_leaves_gpu = 8192  # Minimum leaves to offload Merkle leaf hashing to GPU
-# merkle_min_leaves_metal = 0    # Backend-specific override for Metal (0 = inherit GPU default)
-# merkle_min_leaves_cuda = 0     # Backend-specific override for CUDA (0 = inherit GPU default)
-# prefer_cpu_sha2_max_leaves_aarch64 = 0  # Prefer CPU SHA2 for trees up to this many leaves on AArch64 (0 = default)
-# prefer_cpu_sha2_max_leaves_x86 = 0      # Prefer CPU SHA2 for trees up to this many leaves on x86/x86_64 (0 = default)
+# merkle_min_leaves_metal = 8192 # Optional Metal threshold; omission inherits, zero is literal
+# merkle_min_leaves_cuda = 8192  # Optional CUDA threshold; omission inherits, zero is literal
+# prefer_cpu_sha2_max_leaves_aarch64 = 32768 # Omission inherits; zero is literal
+# prefer_cpu_sha2_max_leaves_x86 = 32768 # Omission inherits; zero is literal
+# [accel.resource_limits]
+# host_bytes = 268435456
+# pinned_bytes = 268435456
+# device_bytes = 1073741824
+# in_flight = 16
+# metadata_bytes = 16777216
+# observed_devices = 16
+# discovery_ordinals = 64
+# modules = 304
+# streams = 16
+# artifact_bytes = 16777216

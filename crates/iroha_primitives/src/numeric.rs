@@ -235,6 +235,8 @@ pub enum NumericOperationError {
     NegativeQuantity,
     /// Quantity subtraction would produce a negative result
     QuantityUnderflow,
+    /// Integer square root received a negative operand
+    NegativeSquareRoot,
 }
 /// Failures produced while multiplying a quantity by aggregate decimal factors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -296,6 +298,13 @@ pub enum RoundingMode {
 /// are never derived from a host bigint implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericWorkStep {
+    /// Compare two conceptual integers in signed order.
+    Compare {
+        /// Left operand width.
+        lhs_limbs: u16,
+        /// Right operand width.
+        rhs_limbs: u16,
+    },
     /// One canonicality probe dividing a nonzero scaled mantissa by ten.
     CanonicalityProbe {
         /// Width of the mantissa before the probe.
@@ -2353,6 +2362,7 @@ impl From<NumericOperationError> for XorQuantityError {
             | NumericOperationError::RepeatingDecimal
             | NumericOperationError::ExactDivisionScaleOverflow
             | NumericOperationError::InvalidScale
+            | NumericOperationError::NegativeSquareRoot
             | NumericOperationError::NonCanonical => Self::Overflow,
         }
     }

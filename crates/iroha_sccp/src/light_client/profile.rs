@@ -283,7 +283,7 @@ impl BscChainProfileV1 {
     /// Whether `height` is an epoch checkpoint.
     #[must_use]
     pub const fn is_epoch_checkpoint(&self, height: u64) -> bool {
-        self.epoch_length != 0 && height % self.epoch_length == 0
+        self.epoch_length != 0 && height.is_multiple_of(self.epoch_length)
     }
 
     /// Canonical fixed-layout bytes committed by the policy hash.

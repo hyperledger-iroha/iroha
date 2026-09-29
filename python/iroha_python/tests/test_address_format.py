@@ -754,6 +754,7 @@ def test_list_asset_holders_omits_canonical_i105() -> None:
         "http://localhost:8080/v1/assets/xor%23wonderland/holders"
     )
     assert "canonical_i105" not in session.calls[0]["params"]
+    assert session.calls[0]["url"].endswith("/v1/assets/xor%23wonderland/holders")
 
 
 def test_query_asset_holders_omits_canonical_i105() -> None:
@@ -772,7 +773,10 @@ def test_propose_multisig_posts_native_instruction_payload_and_requires_draft_in
         payload={
             "ok": True,
             "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-            **_unsigned_multisig_response_fields(),
+            "fee_payment": _authority_fee_payment(),
+            "creation_time_ms": 0,
+            "submitted": True,
+            "tx_hash_hex": "ab" * 32,
         }
     )
     client = ToriiClient("http://node.test", session=session)

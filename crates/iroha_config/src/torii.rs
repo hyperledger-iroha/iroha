@@ -12,7 +12,7 @@ impl From<&base::Sumeragi> for Consensus {
             base::NodeRole::Observer => "observer",
         };
         Self {
-            protocol_version: u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+            protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
             role: role.to_owned(),
         }
     }
@@ -323,7 +323,7 @@ mod tests {
                 max_retained_bytes: nonzero!(123_456_789_u64),
             },
             consensus: Consensus {
-                protocol_version: 4,
+                protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
                 role: "validator".to_string(),
             },
             confidential_gas: ConfidentialGas {

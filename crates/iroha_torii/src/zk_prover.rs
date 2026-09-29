@@ -2765,7 +2765,11 @@ pub(crate) fn start_worker(
 mod tests {
     use super::*;
     use crate::test_utils::TestDataDirGuard;
-    use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_replay_binding_envelope};
+    use iroha_core::zk::test_utils::FixtureEnvelope;
+    use iroha_core::zk_stark::{
+        STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        STARK_FRI_CONSENSUS_MIN_QUERIES, StarkFriVerifyingKeyV1,
+    };
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
 
@@ -2887,7 +2891,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_key_store_paths_are_canonical_fixed_length_and_collision_resistant() {
+    fn zk_verifying_key_store_paths_are_canonical_fixed_length_and_collision_resistant() {
         let slash = VerifyingKeyId::new("halo2/ipa", "a/b");
         let underscore = VerifyingKeyId::new("halo2/ipa", "a_b");
         let colon = VerifyingKeyId::new("halo2/ipa", "a:b");
@@ -2907,17 +2911,13 @@ mod tests {
             crate::zk_key_store_stem(&right_boundary)
         );
 
-        let golden = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1");
-        let expected = "zkid-v1-319239c9cb2dadb7426bc1a4d33b8e9fb133220e6cd25b2ee38dbd7f75506aa0";
+        let golden = VerifyingKeyId::new("halo2/ipa", "generic-proof-v1");
+        let expected = "zkid-v1-adffbb9383e62a2b6b84c908124a8f79ae58ce6a5bda1131696c73ad3a0deccf";
         assert_eq!(crate::zk_key_store_stem(&golden), expected);
         let keys_dir = Path::new("keys");
         let vk_path = crate::zk_vk_store_path(keys_dir, &golden);
-        let pk_path = crate::zk_pk_store_path(keys_dir, &golden);
         assert_eq!(vk_path, keys_dir.join(format!("{expected}.vk")));
-        assert_eq!(pk_path, keys_dir.join(format!("{expected}.pk")));
         assert_eq!(vk_path.parent(), Some(keys_dir));
-        assert_eq!(pk_path.parent(), Some(keys_dir));
-        assert_eq!(vk_path.file_stem(), pk_path.file_stem());
         assert_eq!(
             vk_path
                 .file_name()
@@ -3295,7 +3295,7 @@ mod tests {
             "halo2/ipa:ivm-replay-binding-v1",
             "halo2/ipa:tiny-add-public",
             "halo2/pasta/tiny-add",
-            "halo2/pasta/ivm-execution-v2",
+            "halo2/pasta/unknown-execution-v2",
             "halo2/pasta/unknown-native-v1",
         ] {
             assert!(
@@ -3309,7 +3309,7 @@ mod tests {
         }
         for backend in [
             "halo2/ipa",
-            "halo2/pasta/ivm-replay-binding-v1",
+            "halo2/pasta/kaigi-usage-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         ] {
             assert!(
@@ -3326,25 +3326,45 @@ mod tests {
         static FIXTURE: OnceLock<FixtureEnvelope> = OnceLock::new();
         FIXTURE
             .get_or_init(|| {
-                halo2_ivm_replay_binding_envelope(
-                    Hash::new(b"torii-prover-fixture/code"),
-                    Hash::new(b"torii-prover-fixture/overlay"),
-                    Hash::new(b"torii-prover-fixture/events"),
-                    Hash::new(b"torii-prover-fixture/gas-policy"),
+                let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+                let circuit_id = format!("{backend}:torii-worker-v1");
+                let vk = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    merkle_arity: 2,
+                };
+                let vk_bytes = norito::encode_canonical(&vk).expect("worker fixture verifying key");
+                let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes.clone());
+                let public_inputs = b"torii:worker:schema:v1".to_vec();
+                let proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    &public_inputs,
+                    vec![vec![[0x11; 32]]],
                 )
+                .expect("worker fixture STARK proof");
+                FixtureEnvelope {
+                    proof_bytes: proof.bytes,
+                    schema_hash: iroha_crypto::Hash::new(&public_inputs).into(),
+                    public_inputs,
+                    vk_bytes: Some(vk_bytes),
+                }
             })
             .clone()
     }
     fn fixture_attachment() -> ProofAttachment {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
         let fixture = fixture_envelope();
-        let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
+        let vk = fixture.vk_box(backend).expect("fixture vk bytes");
         let vk_commitment = hash_vk(&vk);
-        let proof = fixture.proof_box("halo2/ipa");
-        let vk_id = VerifyingKeyId::new(
-            "halo2/ipa",
-            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
-        );
-        let mut attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
+        let proof = fixture.proof_box(backend);
+        let vk_id = VerifyingKeyId::new(backend, "torii-worker-v1");
+        let mut attachment = ProofAttachment::new_ref(backend.into(), proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
         attachment
     }
@@ -3499,21 +3519,20 @@ mod tests {
         withdraw_height: Option<u64>,
         configure_zk: impl FnOnce(&mut iroha_config::parameters::actual::Zk),
     ) -> Arc<CoreState> {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:torii-worker-v1");
         let fixture = fixture_envelope();
-        let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
-        let vk_id = VerifyingKeyId::new(
-            "halo2/ipa",
-            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
-        );
+        let vk = fixture.vk_box(backend).expect("fixture vk bytes");
+        let vk_id = VerifyingKeyId::new(backend, "torii-worker-v1");
         let vk_commitment = hash_vk(&vk);
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
             1,
-            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            circuit_id.clone(),
             None,
             "test",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pasta",
-            iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            iroha_data_model::zk::BackendTag::Stark,
+            "goldilocks",
+            fixture.schema_hash,
             vk_commitment,
         );
         record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
@@ -3526,10 +3545,9 @@ mod tests {
         world
             .verifying_keys_mut_for_testing()
             .insert(vk_id.clone(), record);
-        world.verifying_keys_by_circuit_mut_for_testing().insert(
-            (iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID.into(), 1),
-            vk_id,
-        );
+        world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .insert((circuit_id, 1), vk_id);
         let mut state = iroha_core::state::State::new_for_testing(
             world,
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -3547,7 +3565,7 @@ mod tests {
         withdraw_height: Option<u64>,
     ) -> Arc<CoreState> {
         fixture_state_with_vk_window_and_zk(activation_height, withdraw_height, |zk| {
-            zk.halo2.enabled = true;
+            zk.stark.enabled = true;
         })
     }
     fn fixture_state() -> Arc<CoreState> {
@@ -3711,7 +3729,7 @@ mod tests {
         );
     }
     #[test]
-    fn prover_worker_retries_after_halo2_is_reenabled() {
+    fn prover_worker_retries_after_stark_is_reenabled() {
         let attachment = fixture_attachment();
         let disabled_ctx = ProverContext {
             build_identity: crate::build_identity_test_fixture::build_identity(),
@@ -3719,7 +3737,7 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state_with_vk_window_and_zk(None, None, |zk| {
-                zk.halo2.enabled = false;
+                zk.stark.enabled = false;
             })),
             verification_attempts: None,
         };
@@ -3730,7 +3748,7 @@ mod tests {
                 .report
                 .error
                 .as_deref()
-                .is_some_and(|error| error.contains("halo2 verification is disabled"))
+                .is_some_and(|error| error.contains("stark verification is disabled"))
         );
         assert!(
             disabled.retryable,
@@ -3743,8 +3761,8 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state_with_vk_window_and_zk(None, None, |zk| {
-                zk.halo2.enabled = true;
-                zk.halo2.max_proof_bytes = 0;
+                zk.stark.enabled = true;
+                zk.stark.max_proof_bytes = 0;
             })),
             verification_attempts: None,
         };
@@ -3773,7 +3791,7 @@ mod tests {
         let enabled = process_proof_attachment_with_disposition(&enabled_ctx, &attachment);
         assert!(
             enabled.report.ok,
-            "the same proof must verify once Halo2 is enabled"
+            "the same proof must verify once STARK is enabled"
         );
         assert!(!enabled.retryable);
     }

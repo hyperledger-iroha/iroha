@@ -202,7 +202,7 @@ impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksFp4V1 {
 ///
 /// This is arithmetic normalization, not admission of noncanonical proof cells.
 #[inline]
-pub(crate) fn add_base(left: u64, right: u64) -> u64 {
+pub fn add_base(left: u64, right: u64) -> u64 {
     let left = reduce_base(left);
     let right = reduce_base(right);
     let sum = left.wrapping_add(right);
@@ -218,7 +218,7 @@ pub(crate) fn add_base(left: u64, right: u64) -> u64 {
 
 /// Subtract arbitrary u64 representatives with a canonical, nonnegative result.
 #[inline]
-pub(crate) fn sub_base(left: u64, right: u64) -> u64 {
+pub fn sub_base(left: u64, right: u64) -> u64 {
     let left = reduce_base(left);
     let right = reduce_base(right);
     if left >= right {
@@ -231,7 +231,7 @@ pub(crate) fn sub_base(left: u64, right: u64) -> u64 {
 
 /// Multiply arbitrary u64 representatives and return their canonical field product.
 #[inline]
-pub(crate) fn mul_base(left: u64, right: u64) -> u64 {
+pub fn mul_base(left: u64, right: u64) -> u64 {
     reduce_wide(u128::from(left) * u128::from(right))
 }
 

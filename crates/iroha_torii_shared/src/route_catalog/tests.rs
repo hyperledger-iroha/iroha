@@ -618,7 +618,7 @@ mod tests {
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.path(),
-            crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+            "/v1/gov/proposals/sccp-route-governance"
         );
     }
     #[test]
@@ -2514,13 +2514,10 @@ mod tests {
         );
         assert_eq!(core::HEALTH.effect(), RouteEffect::ReadOnly);
         assert_eq!(core::HEALTH.admission(), AdmissionPolicy::Public);
-        assert_eq!(
-            runtime_governance::ZK_IVM_PROVE.effect(),
-            RouteEffect::ExpensiveCompute
-        );
-        assert_eq!(
-            runtime_governance::ZK_IVM_PROVE.admission(),
-            AdmissionPolicy::AuthenticatedAccount
+        assert!(
+            !CATALOGED_ROUTES
+                .iter()
+                .any(|route| { route.path().starts_with("/v1/zk/ivm/") })
         );
         assert_eq!(
             streaming::SUBSCRIPTION_WS.effect(),

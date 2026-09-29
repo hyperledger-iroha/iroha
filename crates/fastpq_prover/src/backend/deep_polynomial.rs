@@ -9,7 +9,7 @@
 //!
 //! The source borrows explicit masked base trace columns, two randomized quotient
 //! chunks, and a complete independent composition mask R, all of degree <2N.
-//! It constructs R + lambda H_lambda, reserving the constant batching coefficient
+//! It constructs R + lambda `H_lambda`, reserving the constant batching coefficient
 //! for R. It neither computes nor authenticates the AIR quotient or entropy.
 //! OOD answers are constructed before lambda; the caller must commit the source
 //! and R before the transcript derives that challenge.
@@ -192,7 +192,7 @@ impl PreparedDeepPolynomial<'_> {
         )
     }
 
-    /// Build R + lambda H_lambda after every exact division remainder is zero.
+    /// Build R + lambda `H_lambda` after every exact division remainder is zero.
     ///
     /// The workspace cap covers simultaneous owned coefficient allocations, not
     /// borrowed source storage or the separately bounded OOD answer arrays. The

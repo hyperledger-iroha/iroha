@@ -66,6 +66,17 @@ def workflow_job(source: str, name: str) -> str:
 class PrivacySwiftNativeContractTests(unittest.TestCase):
     """Guard the release Swift tests against native capability skips."""
 
+    def test_metal_bridge_links_coregraphics_for_every_apple_consumer(self) -> None:
+        builder = read("scripts/build_norito_xcframework.sh")
+        swift_package = read("IrohaSwift/Package.swift")
+        binary_podspec = read("crates/connect_norito_bridge/NoritoBridge.podspec.template")
+        self.assertIn("-framework CoreGraphics", builder)
+        self.assertIn(
+            '.linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS]))',
+            swift_package,
+        )
+        self.assertIn("s.frameworks       = ['CoreGraphics']", binary_podspec)
+
     def test_swift_release_test_inventory_has_no_runtime_skip(self) -> None:
         test_roots = (
             REPO_ROOT / "IrohaSwift" / "Tests",

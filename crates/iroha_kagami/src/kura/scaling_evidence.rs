@@ -13,6 +13,9 @@
 
 pub(crate) mod command;
 pub(crate) mod export;
+mod lane_proof;
+pub use lane_proof::AuthenticatedLaneSourceV1;
+use lane_proof::{LaneMergeEvidenceV1, LaneProofState};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,24 +31,24 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::{
-        BlockHeader, SignedBlock, consensus_v2::HeightContextId, decode_versioned_signed_block,
-    },
-    bridge::BridgeFinalityProof,
+    block::{BlockHeader, SignedBlock, decode_versioned_signed_block},
     isi::{InstructionBox, SetKeyValue},
-    merge::MergeLaneAuthorityCatalogV1,
     query::CommittedTransaction,
+    sumeragi_lanes::SumeragiLanePolicy,
     transaction::{Executable, SignedTransaction, signed::TransactionEntrypoint},
 };
-use iroha_model_base::topology::{DataSpaceId, LaneId};
+use iroha_model_base::{
+    chain::ChainId,
+    topology::{DataSpaceId, LaneId},
+};
 use iroha_primitives::json::Json;
 
 const MAX_PROOF_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_FINALITY_BYTES: usize = 9 * 1024 * 1024;
+const MAX_CONTEXT_BYTES: usize = 9 * 1024 * 1024;
 const MAX_CARRIER_BYTES: usize = 32 * 1024 * 1024;
 const MAX_TRANSACTION_BYTES: usize = 1024 * 1024;
 const MAX_REQUESTS: usize = 1_000_000;
-const ROW_RESERVATION: u64 = 1024;
+const ROW_RESERVATION: u64 = 2048;
 
 /// The two phases are independent of untrusted proof timestamps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
@@ -77,30 +80,24 @@ pub struct NativeWorkloadLane {
     pub lane_id: LaneId,
     /// Exact planned dataspace.
     pub dataspace_id: DataSpaceId,
-    /// Exact incarnation admitted by launch setup.
-    pub incarnation: Hash,
-    /// Earliest permitted opening under the independently retained launch policy.
-    pub activation_height: u64,
 }
 
 /// Independently supplied launch facts, never learned from a proof roster.
 pub struct TrustedRunPlan {
     /// Exact genesis-derived network identity.
     pub network_id: NetworkId,
-    /// Independently authenticated context at `first_height`.
-    pub first_context: HeightContextId,
+    /// Independently selected consensus chain identity.
+    pub chain_id: ChainId,
+    /// Independently authenticated complete native genesis epoch context digest.
+    pub genesis_epoch_context_id: [u8; 32],
     /// First height in the required contiguous finality interval.
     pub first_height: u64,
     /// Last height in that interval; a successful prefix is insufficient.
     pub last_height: u64,
-    /// Independently retained Nexus/AMX execution-context identity.
-    pub nexus_amx_context_hash: Hash,
-    /// Independently retained deterministic execution policy identity.
-    pub execution_policy_hash: Hash,
+    /// Exact original signed genesis lane policy, independently retained by launch setup.
+    pub lane_policy: SumeragiLanePolicy,
     /// Exact sorted one- or four-lane lifecycle bindings.
     pub active_lanes: Vec<NativeWorkloadLane>,
-    /// Exact committee catalog retained independently from deployment state.
-    pub lane_authorities: MergeLaneAuthorityCatalogV1,
     /// Complete scheduled cohort in logical offer order, including warmup.
     pub scheduled: Vec<ScheduledRequest>,
 }
@@ -138,20 +135,14 @@ pub struct AuthenticatedRequest {
     pub carrier_height: u64,
     /// Globally certified application carrier header identity.
     pub carrier_hash: HashOf<BlockHeader>,
-    /// Exact first finalized admission carrier containing the complete input.
-    pub admission_carrier_hash: HashOf<BlockHeader>,
-    /// Exact selected input descriptor authenticated by the Native Decision.
-    pub input_descriptor_hash: Hash,
-    /// Frozen lane instance that authenticated this Decision.
-    pub instance_id: Hash,
+    /// Original certified lane batch source; absent only for lane zero's direct global input.
+    pub lane_source: Option<AuthenticatedLaneSourceV1>,
     /// Network input index, distinct from the typed output index.
     pub leaf_index: u32,
     /// Actual executed lane.
     pub lane_id: LaneId,
     /// Actual executed dataspace.
     pub dataspace_id: DataSpaceId,
-    /// Actual executed incarnation.
-    pub incarnation: Hash,
 }
 
 /// Complete authenticated run; construction is private to successful `finish`.
@@ -188,6 +179,11 @@ pub struct ScalingProofVerifier {
     plan: TrustedRunPlan,
     limits: VerificationLimits,
     native: NativeExecutionEvidenceVerifier,
+    lane_proofs: LaneProofState,
+    pending_genesis: Option<(
+        SignedBlock,
+        iroha_data_model::sumeragi_lanes::SumeragiLaneState,
+    )>,
     expected: Vec<Expected>,
     by_hash: BTreeMap<HashOf<TransactionEntrypoint>, usize>,
     rows: Vec<Option<AuthenticatedRequest>>,
@@ -222,7 +218,8 @@ impl ScalingProofVerifier {
             .checked_sub(plan.first_height)
             .and_then(|n| n.checked_add(1));
         ensure!(
-            plan.first_height > 0
+            plan.first_height == 1
+                && plan.last_height >= 2
                 && plan.last_height < u64::MAX
                 && heights.is_some_and(|n| n <= limits.heights),
             "invalid finality interval"
@@ -235,17 +232,33 @@ impl ScalingProofVerifier {
                     .all(|w| w[0].lane_id < w[1].lane_id),
             "invalid active lane geometry"
         );
+        plan.lane_policy.validate()?;
         ensure!(
-            plan.lane_authorities.rosters.len() <= 4
+            plan.lane_policy.fixed.len() <= 64
                 && plan
-                    .lane_authorities
-                    .rosters
+                    .lane_policy
+                    .fixed
                     .iter()
-                    .all(|r| r.validators.len() <= 64),
-            "unbounded committee plan"
+                    .all(|fixed| fixed.committee.len() <= 64),
+            "unbounded lane policy"
         );
-        plan.lane_authorities
-            .validate_for_active_lanes(plan.active_lanes.len())?;
+        for binding in &plan.active_lanes {
+            if binding.lane_id.as_u32() == 0 {
+                ensure!(
+                    binding.dataspace_id.as_u64() == 0,
+                    "global lane has another dataspace"
+                );
+            } else {
+                let fixed = plan
+                    .lane_policy
+                    .fixed_lane(binding.lane_id)
+                    .ok_or_else(|| eyre!("workload lane is absent from pinned fixed policy"))?;
+                ensure!(
+                    fixed.dataspace == binding.dataspace_id,
+                    "workload dataspace differs from pinned policy"
+                );
+            }
+        }
         ensure!(
             !plan.scheduled.is_empty() && plan.scheduled.len() <= limits.requests,
             "invalid scheduled cohort count"
@@ -311,12 +324,12 @@ impl ScalingProofVerifier {
         let rows = (0..expected.len()).map(|_| None).collect();
         let next_height = plan.first_height;
         let native = NativeExecutionEvidenceVerifier::new(
+            plan.chain_id.clone(),
             plan.network_id,
-            plan.first_context,
             NativeExecutionEvidenceLimits {
                 max_carriers: limits.heights,
                 max_carrier_bytes: limits.input_bytes.min(MAX_CARRIER_BYTES as u64),
-                max_proof_bytes: limits.input_bytes.min(MAX_FINALITY_BYTES as u64),
+                max_context_bytes: limits.input_bytes.min(MAX_CONTEXT_BYTES as u64),
                 max_retained_bytes: limits.input_bytes,
             },
         )
@@ -325,6 +338,8 @@ impl ScalingProofVerifier {
             plan,
             limits,
             native,
+            lane_proofs: LaneProofState::default(),
+            pending_genesis: None,
             expected,
             by_hash,
             rows,
@@ -334,28 +349,26 @@ impl ScalingProofVerifier {
         })
     }
 
-    /// Consume one exact successor with its complete context-write proof.
-    /// Queries must cover every Native Network input at this height. Account
-    /// observations and ordinary execution cannot substitute for Native Decisions.
+    /// Consume one exact successor with its complete lane-state and original lane-frame proof.
+    /// Queries cover every actual Network input; scheduled nonzero-lane work must
+    /// occur in the authenticated merged suffix, and lane zero uses the global input.
     pub fn push_height(
         &mut self,
-        finality: &[u8],
         carrier: &[u8],
-        contexts: &[u8],
+        lane_evidence: &[u8],
         queries: &[&[u8]],
     ) -> Result<()> {
         ensure!(!self.poisoned, "proof owner is poisoned");
         self.poisoned = true;
-        self.consume_height(finality, carrier, contexts, queries)?;
+        self.consume_height(carrier, lane_evidence, queries)?;
         self.poisoned = false;
         Ok(())
     }
 
     fn consume_height(
         &mut self,
-        finality: &[u8],
         carrier: &[u8],
-        contexts: &[u8],
+        lane_evidence: &[u8],
         queries: &[&[u8]],
     ) -> Result<()> {
         ensure!(
@@ -367,9 +380,8 @@ impl ScalingProofVerifier {
             "too many queried transactions"
         );
         for (bytes, maximum) in [
-            (finality, MAX_FINALITY_BYTES),
             (carrier, MAX_CARRIER_BYTES),
-            (contexts, MAX_FINALITY_BYTES),
+            (lane_evidence, MAX_CONTEXT_BYTES),
         ] {
             bounded(bytes, maximum)?;
             self.input_bytes = charged(self.input_bytes, bytes.len(), self.limits.input_bytes)?;
@@ -378,11 +390,6 @@ impl ScalingProofVerifier {
             bounded(bytes, MAX_TRANSACTION_BYTES)?;
             self.input_bytes = charged(self.input_bytes, bytes.len(), self.limits.input_bytes)?;
         }
-        let proof: BridgeFinalityProof = canonical(finality)?;
-        ensure!(
-            proof.block_header.height().get() == self.next_height,
-            "noncontiguous carrier height"
-        );
         let block = norito::with_decode_limits_scope(decode_limits(carrier.len()), || {
             decode_versioned_signed_block(carrier)
         })?;
@@ -390,72 +397,105 @@ impl ScalingProofVerifier {
             block.encode_wire()?.as_slice() == carrier,
             "noncanonical carrier wire"
         );
+        ensure!(
+            block.header().height().get() == self.next_height,
+            "noncontiguous carrier height"
+        );
         validate_carrier(&block, self.limits.leaves_per_carrier)?;
-        let verified = self
-            .native
-            .push_height(&proof, block, contexts)
-            .map_err(|error| eyre!(error))?;
-        let block = verified.block();
-        if block
-            .execution_context()
-            .and_then(|context| context.native_lane_decisions.as_ref())
-            .is_some()
-        {
-            self.consume_native(&verified, &proof, queries)?;
-        } else {
+        if self.next_height == 1 {
+            let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&block)
+                .map_err(|error| eyre!(error))?;
             ensure!(
-                queries.is_empty(),
-                "ordinary fallback is not Native execution evidence"
+                epoch.context_id().map_err(|error| eyre!(error))?
+                    == self.plan.genesis_epoch_context_id,
+                "genesis native epoch differs from independently retained launch authority"
             );
-            let mut unique = BTreeSet::new();
-            for hash in block.network_input_hashes() {
-                ensure!(unique.insert(hash), "duplicate ordinary entrypoint");
-                ensure!(
-                    !self.by_hash.contains_key(&hash),
-                    "scheduled transaction used ordinary fallback"
-                );
-            }
+            ensure!(
+                lane_proof::signed_genesis_policy(&block)? == self.plan.lane_policy,
+                "signed genesis lane policy differs from independently retained launch plan"
+            );
+            ensure!(
+                queries.is_empty() && block.lane_merge().is_none(),
+                "genesis cannot supply workload outputs or lane merges"
+            );
         }
+        let evidence: LaneMergeEvidenceV1 = canonical(lane_evidence)?;
+        ensure!(
+            evidence.frames.len() <= self.limits.leaves_per_carrier,
+            "lane frame work bound exceeded"
+        );
+        let state_bytes = norito::encode_canonical(&evidence.state)?;
+        if self.next_height == 1 {
+            ensure!(evidence.frames.is_empty(), "genesis has lane frames");
+            // This retained value is quarantined until NativeExecutionEvidenceVerifier
+            // authenticates the original H1 result with the actual H2 certificate.
+            self.pending_genesis = Some((block.clone(), evidence.state.lanes.clone()));
+        }
+        let Some(verified) = self
+            .native
+            .push_height(block, &state_bytes)
+            .map_err(|error| eyre!(error))?
+        else {
+            ensure!(
+                self.next_height == 1,
+                "only genesis may await its successor anchor"
+            );
+            self.next_height += 1;
+            return Ok(());
+        };
+        if let Some((genesis, lanes)) = self.pending_genesis.take() {
+            self.lane_proofs.anchor_genesis(&genesis, lanes)?;
+        }
+        let sources = self.lane_proofs.verify(
+            verified.block(),
+            verified.lanes(),
+            &evidence.frames,
+            &self.plan.lane_policy,
+            self.plan.network_id,
+            &self.plan.chain_id,
+        )?;
+        self.consume_network(&verified, queries, sources)?;
         self.next_height += 1;
         Ok(())
     }
 
-    fn consume_native(
+    fn consume_network(
         &mut self,
         verified: &VerifiedNativeExecutionCarrier,
-        proof: &BridgeFinalityProof,
         queries: &[&[u8]],
+        mut sources: BTreeMap<usize, lane_proof::ProvenSource>,
     ) -> Result<()> {
         let block = verified.block();
-        let batch = block
-            .execution_context()
-            .and_then(|context| context.native_lane_decisions.as_deref())
-            .ok_or_else(|| eyre!("missing Native Decision batch"))?;
         ensure!(
-            batch.groups.len() == queries.len(),
-            "missing or extra Native query"
+            block.network_entrypoint_count() == queries.len(),
+            "missing or extra Network query"
         );
         let mut unique = BTreeSet::new();
-        for (index, (group, bytes)) in batch.groups.iter().zip(queries).enumerate() {
-            let input = &group.payload.input;
-            let entrypoint = &input.entrypoint;
+        for (index, (entrypoint, bytes)) in block.network_entrypoints().zip(queries).enumerate() {
             ensure!(
                 unique.insert(entrypoint.hash()),
                 "duplicate carrier entrypoint"
             );
             let queried: CommittedTransaction = canonical(bytes)?;
             ensure!(
-                queried.verify_inclusion_in_authenticated_execution(
-                    block,
-                    &proof.finality_artifact.commit_qc.execution_commitment
-                ) && usize::try_from(queried.entrypoint_proof.leaf_index())? == index
+                queried.verify_inclusion_in_block(block)
+                    && usize::try_from(queried.entrypoint_proof.leaf_index())? == index
                     && queried.entrypoint == *entrypoint,
                 "queried leaf is not this exact typed Network output"
             );
-            let expected_index = *self
-                .by_hash
-                .get(&entrypoint.hash())
-                .ok_or_else(|| eyre!("extra unscheduled Native entrypoint"))?;
+            let source = sources.remove(&index);
+            let Some(&expected_index) = self.by_hash.get(&entrypoint.hash()) else {
+                ensure!(source.is_none(), "extra unscheduled merged entrypoint");
+                if let TransactionEntrypoint::External(tx) = entrypoint
+                    && let Executable::Instructions(instructions) = tx.instructions()
+                {
+                    ensure!(!instructions.iter().any(|instruction| matches!(
+                        instruction.as_any().downcast_ref::<iroha_data_model::isi::SetKeyValueBox>(),
+                        Some(iroha_data_model::isi::SetKeyValueBox::Account(set)) if set.key.as_ref().starts_with("gscale_")
+                    )), "extra unscheduled workload effect");
+                }
+                continue;
+            };
             ensure!(
                 self.rows[expected_index].is_none(),
                 "scheduled request executed more than once"
@@ -473,42 +513,43 @@ impl ScalingProofVerifier {
                     && result.1.is_empty(),
                 "scheduled signed request failed or changed"
             );
+            let route = expected.request.route;
+            let context = block
+                .execution_context()
+                .and_then(|bundle| {
+                    bundle
+                        .external
+                        .iter()
+                        .find(|context| context.entrypoint_hash == entrypoint.hash())
+                })
+                .ok_or_else(|| eyre!("scheduled transaction lacks its actual execution context"))?;
             ensure!(
-                group.payload.descriptor.slots.len() == 1 && group.decisions.len() == 1,
-                "workload requires one coordinator route"
+                context
+                    == &iroha_data_model::block::ExternalExecutionContext::new(
+                        entrypoint.hash(),
+                        route.lane_id,
+                        route.dataspace_id
+                    ),
+                "actual execution context differs from the independently planned single route"
             );
-            let slot = &group.payload.descriptor.slots[0];
-            let frozen = verified
-                .decision_context(slot.instance_id)
-                .ok_or_else(|| eyre!("missing exact Decision authority"))?;
-            let route = RoutingDecision::new(slot.route.lane_id, slot.route.dataspace_id);
-            ensure!(
-                expected.request.route == route
-                    && input.routing_plan().map_err(|error| eyre!(error))?
-                        == RoutingPlan::single(route),
-                "actual route differs from planned single coordinator route"
-            );
-            let position = self
-                .plan
-                .active_lanes
-                .iter()
-                .position(|binding| binding.lane_id == route.lane_id)
-                .ok_or_else(|| eyre!("undeclared execution lane"))?;
-            let binding = &self.plan.active_lanes[position];
-            let roster = self.plan.lane_authorities.roster_for_lane(position)?;
-            ensure!(
-                frozen.network_id == self.plan.network_id
-                    && frozen.dataspace_id == binding.dataspace_id
-                    && frozen.lane_incarnation == binding.incarnation
-                    && frozen.opening_global_height >= binding.activation_height
-                    && frozen.opening_global_height < self.next_height
-                    && frozen.committee == roster.validators
-                    && HashOf::new(&frozen.committee) == roster.validator_set_hash
-                    && roster.validator_set_hash_version == 1
-                    && frozen.nexus_amx_context_hash == self.plan.nexus_amx_context_hash
-                    && frozen.execution_policy_hash == self.plan.execution_policy_hash,
-                "Native authority/activation differs from launch plan"
-            );
+            let lane_source = if route.lane_id.as_u32() == 0 {
+                ensure!(
+                    source.is_none(),
+                    "global lane cannot claim a separate lane instance"
+                );
+                None
+            } else {
+                let source = source.ok_or_else(|| {
+                    eyre!(
+                        "scheduled lane work used global rescue instead of a certified lane merge"
+                    )
+                })?;
+                ensure!(
+                    source.lane == route.lane_id && source.dataspace == route.dataspace_id,
+                    "original lane source differs from the actual scheduled route"
+                );
+                Some(source.source)
+            };
             let row = AuthenticatedRequest {
                 logical_id: expected.request.logical_id.clone(),
                 phase: expected.request.phase,
@@ -516,17 +557,10 @@ impl ScalingProofVerifier {
                 entrypoint_hash: entrypoint.hash(),
                 carrier_height: self.next_height,
                 carrier_hash: block.hash(),
-                admission_carrier_hash: group.payload.descriptor.admission_carrier_hash,
-                input_descriptor_hash: group
-                    .payload
-                    .descriptor
-                    .canonical_hash()
-                    .map_err(|error| eyre!(error))?,
-                instance_id: slot.instance_id,
+                lane_source,
                 leaf_index: u32::try_from(index)?,
                 lane_id: route.lane_id,
                 dataspace_id: route.dataspace_id,
-                incarnation: slot.lane_incarnation,
             };
             ensure!(
                 u64::try_from(norito::encode_canonical(&row)?.len())? <= ROW_RESERVATION,
@@ -534,6 +568,7 @@ impl ScalingProofVerifier {
             );
             self.rows[expected_index] = Some(row);
         }
+        ensure!(sources.is_empty(), "unmatched original merged source");
         Ok(())
     }
 
@@ -542,8 +577,16 @@ impl ScalingProofVerifier {
     /// Admission rejection, execution rejection, missing transactions and missing
     /// lanes fail this qualification; the caller must not filter such trace rows.
     pub fn finish(self) -> Result<AuthenticatedRun> {
+        self.finish_with_plan().map(|(run, _plan)| run)
+    }
+
+    /// Complete the same proof boundary while returning its original launch authority.
+    /// Retained scheduled requests are moved back without replacing or reconstructing them.
+    pub(crate) fn finish_with_plan(mut self) -> Result<(AuthenticatedRun, TrustedRunPlan)> {
         ensure!(
-            !self.poisoned && self.next_height == self.plan.last_height + 1,
+            !self.poisoned
+                && self.pending_genesis.is_none()
+                && self.next_height == self.plan.last_height + 1,
             "incomplete or poisoned proof interval"
         );
         let rows = self
@@ -562,11 +605,19 @@ impl ScalingProofVerifier {
             u64::try_from(canonical.len())? <= self.limits.output_bytes,
             "result output allocation exceeded"
         );
-        Ok(AuthenticatedRun {
-            rows,
-            canonical,
-            input_bytes: self.input_bytes,
-        })
+        self.plan.scheduled = self
+            .expected
+            .into_iter()
+            .map(|expected| expected.request)
+            .collect();
+        Ok((
+            AuthenticatedRun {
+                rows,
+                canonical,
+                input_bytes: self.input_bytes,
+            },
+            self.plan,
+        ))
     }
 }
 
@@ -629,9 +680,7 @@ fn validate_carrier(block: &SignedBlock, maximum: usize) -> Result<()> {
 
 #[cfg(test)]
 #[allow(dead_code, reason = "fixture is shared by focused test suites")]
-#[path = "scaling_evidence/fixture.rs"]
 mod fixture;
 
 #[cfg(test)]
-#[path = "scaling_evidence/tests.rs"]
 mod tests;

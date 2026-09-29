@@ -59,6 +59,8 @@ use crate::{
     },
 };
 
+use super::super::rns_native_bulletproof_common::{self as bulletproof_common, hash_v1};
+
 const VERSION_V1: u8 = 1;
 const FLAGS_V1: u8 = 0;
 const MAGIC_V1: [u8; 4] = *b"ZGIS";
@@ -580,12 +582,6 @@ fn commitment_set_digest_v1(
     (digest != [0; DIGEST_BYTES_V1])
         .then_some(digest)
         .ok_or(RnsNativeGlobalInverseProductErrorV1::InvalidIntegrity)
-}
-
-fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(bytes);
-    hash.finalize()
 }
 
 fn rho_challenge_digest_v1(rho: Scalar) -> [u8; DIGEST_BYTES_V1] {
@@ -1335,19 +1331,7 @@ impl<'a, S: ProofSuite<Scalar = Scalar, Point = Point>> EndpointVerifierTranscri
     }
 
     fn take_v1(&mut self, count: usize) -> Result<&'a [u8], GeneralizedBulletproofErrorV1> {
-        let end = self
-            .cursor
-            .checked_add(count)
-            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let value =
-            self.proof
-                .get(self.cursor..end)
-                .ok_or(GeneralizedBulletproofErrorV1::ProofLength {
-                    actual: self.proof.len(),
-                    expected: end,
-                })?;
-        self.cursor = end;
-        Ok(value)
+        bulletproof_common::take_v1(self.proof, &mut self.cursor, count)
     }
 
     fn finish_v1(self) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeGlobalInverseProductErrorV1> {
@@ -1362,27 +1346,13 @@ impl<S: ProofSuite<Scalar = Scalar, Point = Point>> VerifierTranscript<S>
     for EndpointVerifierTranscriptV1<'_, S>
 {
     fn read_scalar(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
-        let encoded: [u8; SCALAR_BYTES_V1] = self
-            .take_v1(SCALAR_BYTES_V1)?
-            .try_into()
-            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
-        let scalar = Scalar::from_le_bytes_exact(encoded)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
-        self.state.push(0);
-        self.state.extend_from_slice(&encoded);
-        Ok(scalar)
+        let encoded = self.take_v1(SCALAR_BYTES_V1)?;
+        bulletproof_common::absorb_scalar_v1(&mut self.state, encoded)
     }
 
     fn read_point(&mut self) -> Result<Point, GeneralizedBulletproofErrorV1> {
-        let encoded: [u8; POINT_BYTES_V1] = self
-            .take_v1(POINT_BYTES_V1)?
-            .try_into()
-            .map_err(|_| GeneralizedBulletproofErrorV1::PointEncoding)?;
-        let point = Point::from_non_identity_wire_bytes_exact(&encoded)
-            .map_err(|_| GeneralizedBulletproofErrorV1::PointEncoding)?;
-        self.state.push(1);
-        self.state.extend_from_slice(&encoded);
-        Ok(point)
+        let encoded = self.take_v1(POINT_BYTES_V1)?;
+        bulletproof_common::absorb_point_v1(&mut self.state, encoded)
     }
 
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
@@ -1883,11 +1853,7 @@ impl<'a> ProofViewV1<'a> {
 }
 
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(CODEC_DOMAIN_V1);
-    hash.update(&[VERSION_V1]);
-    hash.update(bytes);
-    hash.finalize()
+    bulletproof_common::codec_digest_v1(CODEC_DOMAIN_V1, VERSION_V1, bytes)
 }
 
 struct VerifiedKernelV1<'a> {

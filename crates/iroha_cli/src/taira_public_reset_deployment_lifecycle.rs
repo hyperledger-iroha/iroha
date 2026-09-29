@@ -1,4 +1,7 @@
 //! Physical-host deployment exclusion and durable reset ownership across dispatcher calls.
+// The root transaction runs on Linux only; other platforms compile these items solely for their
+// unit tests, which do not reach every Linux entry point.
+#![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 
 use super::super::FileSnapshot;
 use super::*;

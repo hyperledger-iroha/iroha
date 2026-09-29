@@ -47,9 +47,12 @@ def projection(run=None, files=None, invocation=INVOCATION):
         rows.append({'logical_id': hashlib.sha256(f'{run.seed}:{phase}:{sequence}'.encode()).hexdigest(),
             'phase': phase, 'sequence': sequence, 'authority': run.accounts[account],
             'entrypoint_hash': observation.transaction_hash, 'carrier_height': observation.global_height,
-            'carrier_hash': '9' * 64, 'merge_entry_hash': 'b' * 64, 'merge_epoch': 1,
-            'leaf_index': index, 'lane_id': account % run.lane_count, 'dataspace_id': 0,
-            'incarnation': 'd' * 64})
+            'carrier_hash': '9' * 64,
+            'lane_source': None if account % run.lane_count == 0 else {
+                'incarnation': 'd' * 64, 'instance': 'e' * 64, 'height': 1,
+                'block_hash': 'b' * 64, 'result': 'c' * 64, 'batch_index': 0,
+                'anchor_height': observation.global_height - 1, 'anchor_hash': 'f' * 64},
+            'leaf_index': index, 'lane_id': account % run.lane_count, 'dataspace_id': 0})
     return header, rows
 
 
@@ -165,7 +168,7 @@ def test_flat_scan_respects_escaped_quotes_and_braces():
         assert proof._object_end(raw[:size]) is None
 
 
-@pytest.mark.parametrize('raw', [b'', bytearray(b'a'), b'a' * 65537, b'{' + b'a' * 1024])
+@pytest.mark.parametrize('raw', [b'', bytearray(b'a'), b'a' * 65537, b'{' + b'a' * proof.MAX_OBJECT_BYTES])
 def test_chunk_and_partial_header_bounds(raw):
     reader = joiner()
     with pytest.raises(proof.CanonicalProofError): reader.consume(raw)
@@ -174,7 +177,7 @@ def test_chunk_and_partial_header_bounds(raw):
 
 def test_oversized_row_rejected_before_json_decode(monkeypatch):
     header, rows = projection()
-    rows[0]['authority'] = 'a' * 1025
+    rows[0]['authority'] = 'a' * (proof.MAX_OBJECT_BYTES + 1)
     raw = wire(header, rows)
     real = proof._object
     lengths = []
@@ -184,7 +187,7 @@ def test_oversized_row_rejected_before_json_decode(monkeypatch):
     monkeypatch.setattr(proof, '_object', bounded)
     reader = joiner()
     with pytest.raises(proof.CanonicalProofError): feed(reader, raw, 31)
-    assert lengths and max(lengths) <= 1024
+    assert lengths and max(lengths) <= proof.MAX_OBJECT_BYTES
 
 
 @pytest.mark.parametrize('field,value', [
@@ -212,7 +215,7 @@ def test_original_observation_identity_and_scope_are_mandatory(change):
 def test_complete_native_maximum_schedule_has_no_buffered_reply_cap():
     run = replace(plan(accounts=64, warmup=0, measurement=65536), last_height=20000)
     snapshot = proof._plan_snapshot(run)
-    files = bindings(reply_max_bytes=128 * 1024 * 1024)
+    files = bindings(reply_max_bytes=256 * 1024 * 1024)
     reader = joiner(run, files)
     assert len(snapshot[6]) == 65536
     assert len(reader._buffer) == 0
@@ -221,7 +224,7 @@ def test_complete_native_maximum_schedule_has_no_buffered_reply_cap():
 
 def test_complete_65536_row_stream_keeps_only_a_partial_object():
     run = replace(plan(accounts=64, warmup=0, measurement=65536), last_height=20000)
-    files = bindings(reply_max_bytes=128 * 1024 * 1024)
+    files = bindings(reply_max_bytes=256 * 1024 * 1024)
     reader = joiner(run, files)
     header, template = projection(files=files)
     reader.consume(json.dumps(header, separators=(',', ':'))[:-1].encode() + b',"rows":[')
@@ -233,7 +236,9 @@ def test_complete_65536_row_stream_keeps_only_a_partial_object():
         row = template[0] | {'logical_id': hashlib.sha256(f'{SEED}:measurement:{sequence}'.encode()).hexdigest(),
             'phase': 'measurement', 'sequence': sequence, 'authority': run.accounts[account],
             'entrypoint_hash': observation.transaction_hash, 'carrier_height': observation.global_height,
-            'leaf_index': index, 'lane_id': account % 4}
+            'leaf_index': index, 'lane_id': account % 4,
+            'lane_source': None if account % 4 == 0 else dict(template[0]['lane_source'],
+                anchor_height=observation.global_height - 1)}
         raw = (b',' if index else b'') + json.dumps(row, separators=(',', ':')).encode()
         reader.consume(raw)
         assert len(reader._buffer) <= proof.MAX_OBJECT_BYTES
@@ -379,3 +384,34 @@ def test_reentrant_guard_poison_cannot_be_swallowed(native):
     state.alter = reenter
     with pytest.raises(proof.CanonicalProofError): owner.run()
     assert state.calls == []
+
+
+@pytest.mark.parametrize('field,value', [
+    ('incarnation', 'x' * 64), ('instance', 'e' * 63), ('block_hash', True),
+    ('result', None), ('height', 0), ('height', True), ('height', 1 << 64),
+    ('anchor_height', 0), ('anchor_height', 100), ('anchor_hash', '8' * 64),
+    ('batch_index', -1), ('batch_index', True), ('batch_index', 1 << 32), ('extra', 1),
+])
+def test_native_lane_source_is_exact_bounded_and_cannot_supply_authority(field, value):
+    header, rows = projection()
+    row = next(row for row in rows if row['lane_id'] != 0)
+    row['lane_source'][field] = value
+    reader = joiner()
+    with pytest.raises(proof.CanonicalProofError): feed(reader, wire(header, rows), 7)
+    with pytest.raises(proof.CanonicalProofError): reader.finish()
+
+
+@pytest.mark.parametrize('field', sorted(proof._SOURCE_FIELDS))
+def test_native_lane_source_requires_every_field(field):
+    header, rows = projection()
+    row = next(row for row in rows if row['lane_id'] != 0)
+    del row['lane_source'][field]
+    with pytest.raises(proof.CanonicalProofError): feed(joiner(), wire(header, rows))
+
+
+def test_global_lane_has_no_separate_instance_and_nonzero_lane_requires_its_source():
+    for global_lane in (True, False):
+        header, rows = projection()
+        row = next(row for row in rows if (row['lane_id'] == 0) == global_lane)
+        row['lane_source'] = {} if global_lane else None
+        with pytest.raises(proof.CanonicalProofError): feed(joiner(), wire(header, rows))

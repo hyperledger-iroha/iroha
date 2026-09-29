@@ -6,6 +6,14 @@
 //! fields byte-for-byte to ensure stable hashing and compatibility across nodes.
 use crate::{confidential::ConfidentialStatus, zk::BackendTag};
 
+mod ivm_execution_statement;
+pub use ivm_execution_statement::{
+    IVM_EXECUTION_STATEMENT_DIGEST_DOMAIN_V1, IvmAccessDependencyClaimV1,
+    IvmCompleteStateRootClaimV1, IvmExecutionStatementDigestV1, IvmExecutionStatementErrorV1,
+    IvmExecutionStatementV1, IvmFinalizedPrestateClaimV1, IvmOrderedOutputClaimV1,
+    IvmReturnClaimV1, IvmVerifierProfileV1,
+};
+
 use base64::Engine as _;
 
 use base64::engine::general_purpose::STANDARD;
@@ -49,72 +57,17 @@ fn take_len_prefixed_slice<'a>(
 
 /// Split the two fields shared by proof and verifier-key byte boxes without allocating.
 ///
-/// These boxes use a bounded custom decoder, so they must parse every advertised struct
-/// layout themselves instead of assuming the length-prefixed `AoS` layout. The returned byte
-/// field includes its sequence-length header, allowing callers to reject oversized payloads
-/// before `Vec<u8>` allocates.
+/// These boxes use a bounded custom decoder over the length-prefixed `AoS` struct layout. The
+/// returned byte field includes its sequence-length header, allowing callers to reject oversized
+/// payloads before `Vec<u8>` allocates.
 fn take_byte_box_fields(
     bytes: &[u8],
     max_byte_field_len: usize,
-    max_payload_len: Option<usize>,
 ) -> Result<(&[u8], &[u8], usize), ncore::Error> {
-    if !ncore::use_packed_struct() {
-        let mut offset = 0usize;
-        let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
-        let byte_field = take_len_prefixed_slice(bytes, &mut offset, max_byte_field_len)?;
-        return Ok((backend, byte_field, offset));
-    }
-
-    if ncore::use_field_bitset() {
-        // `Ident` needs an explicit size while the raw-byte sequence is self-delimiting.
-        if bytes.first() != Some(&0b0000_0001) {
-            return Err(ncore::Error::NonCanonicalEncoding);
-        }
-        let mut offset = 1usize;
-        let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
-        let byte_tail = bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?;
-        let (byte_len, header_len) = ncore::inspect_seq_len_slice(byte_tail)?;
-        if max_payload_len.is_some_and(|maximum| byte_len > maximum) {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        let byte_field_len = header_len
-            .checked_add(byte_len)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        if byte_field_len > max_byte_field_len {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        let byte_field = byte_tail
-            .get(..byte_field_len)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        offset = offset
-            .checked_add(byte_field_len)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        return Ok((backend, byte_field, offset));
-    }
-
-    let (offsets, header_len, data_len, tail_len) = ncore::decode_packed_offsets_slice(bytes, 2)?;
-    let data_end = header_len
-        .checked_add(data_len)
-        .ok_or(ncore::Error::LengthMismatch)?;
-    let data = bytes
-        .get(header_len..data_end)
-        .ok_or(ncore::Error::LengthMismatch)?;
-    let backend = data
-        .get(offsets[0]..offsets[1])
-        .ok_or(ncore::Error::LengthMismatch)?;
-    if backend.len() > MAX_BACKEND_FIELD_BYTES {
-        return Err(ncore::Error::LengthMismatch);
-    }
-    let byte_field = data
-        .get(offsets[1]..offsets[2])
-        .ok_or(ncore::Error::LengthMismatch)?;
-    if byte_field.len() > max_byte_field_len {
-        return Err(ncore::Error::LengthMismatch);
-    }
-    let used = data_end
-        .checked_add(tail_len)
-        .ok_or(ncore::Error::LengthMismatch)?;
-    Ok((backend, byte_field, used))
+    let mut offset = 0usize;
+    let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
+    let byte_field = take_len_prefixed_slice(bytes, &mut offset, max_byte_field_len)?;
+    Ok((backend, byte_field, offset))
 }
 
 fn decode_byte_box_fields(
@@ -123,8 +76,7 @@ fn decode_byte_box_fields(
     max_payload_len: Option<usize>,
     max_canonical_box_len: Option<usize>,
 ) -> Result<(Ident, Vec<u8>, usize), ncore::Error> {
-    let (backend_bytes, byte_field, used) =
-        take_byte_box_fields(bytes, max_byte_field_len, max_payload_len)?;
+    let (backend_bytes, byte_field, used) = take_byte_box_fields(bytes, max_byte_field_len)?;
     let (backend, backend_used) =
         <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
     if backend_used != backend_bytes.len() {
@@ -2944,12 +2896,9 @@ mod tests {
             assert_eq!(key_used, key_payload.len());
 
             let key_byte_field_start = {
-                let (_, byte_field, _) = take_byte_box_fields(
-                    &key_payload,
-                    VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1,
-                    Some(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1),
-                )
-                .expect("locate encoded verifier-key byte field");
+                let (_, byte_field, _) =
+                    take_byte_box_fields(&key_payload, VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1)
+                        .expect("locate encoded verifier-key byte field");
                 (byte_field.as_ptr() as usize).saturating_sub(key_payload.as_ptr() as usize)
             };
             let mut oversized = key_payload;
@@ -2986,7 +2935,7 @@ mod tests {
 
             let byte_field_start = {
                 let (_, byte_field, _) =
-                    take_byte_box_fields(&payload, MAX_LEN_PREFIXED_FIELD_BYTES, None)
+                    take_byte_box_fields(&payload, MAX_LEN_PREFIXED_FIELD_BYTES)
                         .expect("locate exact-cap proof byte field");
                 (byte_field.as_ptr() as usize).saturating_sub(payload.as_ptr() as usize)
             };

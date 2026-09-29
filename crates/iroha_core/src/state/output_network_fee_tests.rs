@@ -1,6 +1,7 @@
 //! Actual rejected Instructions/Batch fee ownership, rollback and block-gas boundaries.
 
 use super::*;
+use crate::exec_witness;
 use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     events::data::prelude::{AccountEventFilter, DataEventFilter},
@@ -496,4 +497,92 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
     );
     assert_eq!(block.committed_fragment_count(), fragments + 1);
     assert!(network_row(&block, 0).completions.is_empty());
+}
+
+#[test]
+fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry() {
+    use crate::{smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction};
+    use iroha_data_model::transaction::IvmBytecode;
+    use ivm::error::ExecutionDeferral;
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    for reason in [
+        ExecutionDeferral::AllocationUnavailable,
+        ExecutionDeferral::ActiveMemoryCapacity,
+    ] {
+        let (state, asset) = priced_fixture(None);
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..Default::default()
+        }
+        .encode();
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 5, 1)
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let fee = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                asset.clone(),
+                Quantity::from(1_u32),
+            )],
+            NonZeroU64::new(100),
+        );
+        let mut builder = TransactionBuilder::new(state.network_id, ALICE_ID.clone(), fee);
+        builder.set_creation_time(Duration::from_millis(1));
+        let signed = builder
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+            .sign(ALICE_KEYPAIR.private_key());
+        let source = carrier(vec![TransactionEntrypoint::External(signed.clone())]);
+        let cache_owner = state.pipeline_ivm_prepared_cache.read().clone();
+        cache_owner.set_checkout_refusal_for_test(Some(reason));
+        exec_witness::start_block();
+        {
+            let mut block = state.block(source.header());
+            let fragments = block.committed_fragment_count();
+            assert_eq!(
+                execute(&mut block, &source),
+                Err(ExecutionAttemptError::Deferred(reason.into()))
+            );
+            assert_eq!(block.gas_used_in_block, 0);
+            assert_eq!(block.committed_fragment_count(), fragments);
+            assert_eq!(balance(&block, &asset, &ALICE_ID), Quantity::from(10_u32));
+            assert_eq!(
+                balance(&block, &asset, &iroha_test_samples::BOB_ID),
+                Quantity::zero()
+            );
+            assert!(block.retained_execution_outputs_for_test().is_err());
+            assert!(matches!(
+                block.execution_output_plan,
+                Some(ExecutionOutputPlanState::Poisoned)
+            ));
+        }
+        // The direct transaction boundary also returns the typed local refusal,
+        // so a caller cannot turn it into a serializable transaction rejection.
+        exec_witness::start_block();
+        {
+            let mut block = state.block(source.header());
+            let mut cache = IvmCache::with_prepared_contract_cache(
+                block.pipeline.cache_size,
+                cache_owner.clone(),
+            );
+            let accepted =
+                AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed.clone()));
+            assert_eq!(
+                block.validate_transaction(accepted, &mut cache),
+                Err(reason.into())
+            );
+            assert_eq!(block.gas_used_in_block, 0);
+            assert_eq!(balance(&block, &asset, &ALICE_ID), Quantity::from(10_u32));
+        }
+        cache_owner.set_checkout_refusal_for_test(None);
+        exec_witness::start_block();
+        let mut retry = state.block(source.header());
+        execute(&mut retry, &source)
+            .expect("same authenticated source completes after local recovery");
+        assert!(network_row(&retry, 0).result.is_ok());
+        assert!(retry.gas_used_in_block > 0);
+        assert_eq!(balance(&retry, &asset, &ALICE_ID), Quantity::from(9_u32));
+    }
 }

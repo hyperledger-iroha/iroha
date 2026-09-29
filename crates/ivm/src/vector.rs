@@ -10,6 +10,20 @@
 //! from that width.  When no SIMD support is available, a 32-bit scalar fallback
 //! is used.  Additional cryptographic primitives such as AESENC or BLAKE2s
 //! should also be implemented here with optional hardware acceleration.
+use crate::sha256_ref::sha256_compress_scalar_ref;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+mod metal_buffers;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+mod metal_cost;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+use metal_buffers::MetalBuffer;
+#[cfg(any(test, all(target_os = "macos", feature = "metal")))]
+mod metal_owner;
+mod metal_receipts;
+pub use metal_receipts::{MetalKernel, metal_completed_dispatches};
+#[cfg(all(test, feature = "metal-hardware-tests"))]
+mod metal_qualification;
+
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2::Message;
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -27,10 +41,9 @@ fn warm_up_core_graphics_display() {
         let _ = CGMainDisplayID();
     }
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
-const METAL_ED25519_SHADER: &str = include_str!("metal_ed25519.metal");
-use crate::sha256_ref::sha256_compress_scalar_ref;
 use std::sync::{Mutex, MutexGuard};
+#[cfg(all(target_os = "macos", feature = "metal"))]
+use std::time::{Duration, Instant};
 /// Return true if the host CPU supports SIMD operations that the vector extension can leverage.
 /// This is a lightweight stand‑in for more elaborate feature detection used by a production
 /// implementation. Determine if SIMD vector operations are available on the current
@@ -44,12 +57,6 @@ use std::{
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
-#[cfg(all(target_os = "macos", feature = "metal"))]
-use std::{
-    mem::transmute,
-    sync::atomic::AtomicUsize,
-    time::{Duration, Instant},
-};
 /// The SIMD backend selected at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimdChoice {
@@ -59,6 +66,12 @@ pub enum SimdChoice {
     Sse2,
     Neon,
     Scalar,
+}
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+pub(crate) enum MetalMerkleWork {
+    Leaves,
+    Root,
 }
 static SIMD_CHOICE: OnceLock<SimdChoice> = OnceLock::new();
 static SIMD_POLICY_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -285,11 +298,15 @@ pub(crate) fn metal_policy_enabled() -> bool {
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_runtime_allowed() -> bool {
-    metal_policy_enabled() && !METAL_DISABLED.load(Ordering::SeqCst)
+    metal_policy_enabled()
+        && !METAL_DISABLED.load(Ordering::SeqCst)
+        && metal_buffers::physical_usable()
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub fn metal_disabled() -> bool {
-    !metal_policy_enabled() || METAL_DISABLED.load(Ordering::SeqCst)
+    !metal_policy_enabled()
+        || METAL_DISABLED.load(Ordering::SeqCst)
+        || !metal_buffers::physical_usable()
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
 pub fn metal_disabled() -> bool {
@@ -297,12 +314,12 @@ pub fn metal_disabled() -> bool {
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_parity_ok() -> bool {
-    !METAL_DISABLED.load(Ordering::SeqCst)
+    !METAL_DISABLED.load(Ordering::SeqCst) && metal_buffers::physical_usable()
 }
 /// Ensure Metal pipelines are compiled ahead of time to avoid first-use latency.
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub fn warm_up_metal() {
-    let _ = with_metal_state(|_| ());
+    let _ = metal_merkle_cost_profile();
 }
 /// Detect the best available SIMD option for the current platform.
 pub fn simd_choice() -> SimdChoice {
@@ -342,14 +359,11 @@ pub fn simd_backend() -> &'static str {
         SimdChoice::Scalar => "scalar",
     }
 }
-/// Return true if Apple Metal GPU acceleration can be used.
+/// Return true when the process-owned Metal backend passed startup qualification.
 pub fn metal_available() -> bool {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
-        if !metal_runtime_allowed() {
-            return false;
-        }
-        discover_metal_device().is_some()
+        with_metal_state(|_| ()).is_some()
     }
     #[cfg(not(all(target_os = "macos", feature = "metal")))]
     {
@@ -360,8 +374,6 @@ pub fn metal_available() -> bool {
 use objc2::rc::Retained;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2::runtime::ProtocolObject;
-#[cfg(all(target_os = "macos", feature = "metal"))]
-use std::cell::OnceCell;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn discover_metal_device() -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>> {
     // Debug knob: force enumeration even if system default device is available.
@@ -462,15 +474,25 @@ fn select_device_index(traits: &[DeviceTraits]) -> Option<usize> {
     first_non_headless.or(first_any)
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-static BIT_PIPE_COMPILES: AtomicUsize = AtomicUsize::new(0);
+const METAL_KERNELS: &[u8] = include_bytes!("../metal/v1/ivm_kernels.metallib");
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub fn bit_pipe_compile_count() -> usize {
-    BIT_PIPE_COMPILES.load(Ordering::SeqCst)
-}
-// Provide no-op fallbacks for Metal counters when Metal is not enabled.
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-pub fn bit_pipe_compile_count() -> usize {
-    0
+const METAL_KERNELS_SHA256: [u8; 32] = [
+    0xfe, 0x62, 0xa0, 0x35, 0xab, 0x74, 0x81, 0x64, 0x6e, 0x64, 0xc2, 0xf2, 0x72, 0xf3, 0x86, 0x69,
+    0xc3, 0x53, 0xb9, 0x5f, 0x5a, 0xb7, 0x9e, 0xc5, 0x87, 0x6d, 0x41, 0x2f, 0x88, 0x23, 0x71, 0x70,
+];
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn bundled_metal_library(
+    device: &ProtocolObject<dyn MTLDevice>,
+) -> Option<Retained<ProtocolObject<dyn MTLLibrary>>> {
+    use sha2::Digest as _;
+
+    if sha2::Sha256::digest(METAL_KERNELS).as_slice() != METAL_KERNELS_SHA256 {
+        record_metal_disable("embedded Metal library digest mismatch");
+        return None;
+    }
+    let data = dispatch2::DispatchData::from_static_bytes(METAL_KERNELS);
+    device.newLibraryWithData_error(&data).ok()
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 struct MetalState {
@@ -484,18 +506,21 @@ struct MetalState {
     sha256: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     sha256_leaves: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     sha256_pairs: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    // Ordinary single-round and permutation work stays on the CPU; the startup
+    // self-test and required hardware qualification execute these kernels.
+    #[cfg(all(test, feature = "metal-hardware-tests"))]
     keccak: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    #[cfg(all(test, feature = "metal-hardware-tests"))]
     aesenc: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    #[cfg(all(test, feature = "metal-hardware-tests"))]
     aesdec: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
-    #[cfg(test)]
     aesenc_batch: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
-    #[cfg(test)]
     aesdec_batch: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
-    #[cfg(test)]
     aesenc_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
-    #[cfg(test)]
     aesdec_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     ed25519_signature: Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
+    merkle_cost: Mutex<metal_cost::MetalMerkleCostCache>,
+    batch_cost: [Mutex<metal_cost::MetalBatchCostCache>; metal_cost::BATCH_FAMILIES],
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 trait MetalBufferElement: Copy {}
@@ -511,148 +536,106 @@ fn metal_input_buffer<T: MetalBufferElement>(
     device: &ProtocolObject<dyn MTLDevice>,
     values: &[T],
     byte_len: usize,
-) -> Option<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    use core::ptr::NonNull;
-
-    debug_assert!(byte_len <= core::mem::size_of_val(values));
-    // SAFETY: slices always have a non-null aligned pointer, and the private
-    // marker is implemented only for initialized, padding-free primitives.
-    unsafe {
-        device.newBufferWithBytes_length_options(
-            NonNull::new_unchecked(values.as_ptr() as *mut core::ffi::c_void),
-            byte_len,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        )
+) -> Option<MetalBuffer> {
+    if byte_len > core::mem::size_of_val(values) {
+        return None;
     }
+    let mut buffer = MetalBuffer::allocate(device, byte_len)?;
+    buffer.copy_input(values, byte_len)?;
+    Some(buffer)
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_output_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     byte_len: usize,
-) -> Option<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    device.newBufferWithLength_options(byte_len, MTLResourceOptions::StorageModeShared)
+) -> Option<MetalBuffer> {
+    MetalBuffer::allocate(device, byte_len)
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_dispatch(
     queue: &ProtocolObject<dyn MTLCommandQueue>,
     pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
-    buffers: &[&ProtocolObject<dyn MTLBuffer>],
+    buffers: &[&MetalBuffer],
     grid_width: NSUInteger,
     threadgroup_width: NSUInteger,
     context: &str,
+    receipt: Option<MetalKernel>,
 ) -> Option<()> {
-    let command_buffer = queue.commandBuffer()?;
-    let encoder = command_buffer.computeCommandEncoder()?;
-    encoder.setComputePipelineState(pipeline);
-    for (index, buffer) in buffers.iter().copied().enumerate() {
-        unsafe {
-            encoder.setBuffer_offset_atIndex(Some(buffer), 0, index);
-        }
+    // A different in-flight command may have quarantined the shared backend.
+    // No new work from this owner may begin after that failure.
+    if !metal_runtime_allowed() {
+        return None;
     }
-    encoder.dispatchThreads_threadsPerThreadgroup(
-        MTLSize {
-            width: grid_width,
-            height: 1,
-            depth: 1,
-        },
-        MTLSize {
-            width: threadgroup_width,
-            height: 1,
-            depth: 1,
-        },
-    );
-    encoder.endEncoding();
-    command_buffer.commit();
-    finalize_command_buffer(&command_buffer, context).then_some(())
+    let mut command = metal_buffers::Command::prepare(queue, buffers)?;
+    if !command.encode(pipeline, grid_width, threadgroup_width) {
+        record_metal_disable(format!("{context} could not encode qualified command"));
+        return None;
+    }
+    if !command.commit() {
+        return None;
+    }
+    let outcome = finalize_command_buffer(&mut command, context);
+    let completed = matches!(outcome, MetalCommandOutcome::Complete);
+    // A command can finish while another thread quarantines the process-owned
+    // device. Discard that result and let the caller recompute from its original
+    // input on CPU. Only accepted completions earn production receipts.
+    let accepted = metal_dispatch_result_allowed(completed, metal_runtime_allowed());
+    metal_receipts::record_completion(receipt, accepted);
+    accepted.then_some(())
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn metal_dispatch_result_allowed(completed: bool, backend_allowed: bool) -> bool {
+    completed && backend_allowed
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 impl MetalState {
     fn new() -> Option<Self> {
-        use objc2_foundation::{NSString, ns_string};
+        use objc2_foundation::ns_string;
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
-        let src = include_str!("assets/text_v1/metal_vadd64.metal");
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(src), None)
-            .ok()?;
+        let lib = bundled_metal_library(&device)?;
         let func = lib.newFunctionWithName(ns_string!("vadd64"))?;
         let vadd64 = device
             .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-        let src = include_str!("assets/text_v1/metal_vadd32.metal");
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
         let func = lib.newFunctionWithName(ns_string!("vadd32"))?;
         let vadd32 = device
             .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
-        fn compile_bit(
-            device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-            op: &str,
-            name: &str,
-        ) -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>> {
-            use objc2_foundation::NSString;
-            #[cfg(target_os = "macos")]
-            BIT_PIPE_COMPILES.fetch_add(1, Ordering::SeqCst);
-            let source = format!(
-                "#include <metal_stdlib>\nusing namespace metal;\nkernel void {name}(device const uint4* a [[buffer(0)]], device const uint4* b [[buffer(1)]], device uint4* out [[buffer(2)]], uint id [[thread_position_in_grid]]) {{ out[id] = a[id] {op} b[id]; }}",
-                name = name,
-                op = op,
-            );
-            let lib = device
-                .newLibraryWithSource_options_error(&NSString::from_str(&source), None)
-                .ok()?;
-            let func = lib.newFunctionWithName(&NSString::from_str(name))?;
-            let pipe = device
-                .newComputePipelineStateWithFunction_error(&func)
-                .ok()?;
-            Some(pipe)
-        }
-        let vand = compile_bit(&device, "&", "vand")?;
-        let vxor = compile_bit(&device, "^", "vxor")?;
-        let vor = compile_bit(&device, "|", "vor")?;
-        let src = include_str!("assets/text_v1/metal_sha256_compress.metal");
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(src), None)
+        let func = lib.newFunctionWithName(ns_string!("vand"))?;
+        let vand = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+        let func = lib.newFunctionWithName(ns_string!("vxor"))?;
+        let vxor = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+        let func = lib.newFunctionWithName(ns_string!("vor"))?;
+        let vor = device
+            .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
         let func = lib.newFunctionWithName(ns_string!("sha256_compress"))?;
         let sha256 = device
             .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
         // Batch SHA-256 leaves kernel: one 64-byte block per thread
-        let src = include_str!("assets/text_v1/metal_sha256_leaves.metal");
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(src), None)
-            .ok()?;
         let func = lib.newFunctionWithName(ns_string!("sha256_leaves"))?;
         let sha256_leaves = device
             .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
-        let src = include_str!("assets/text_v1/metal_sha256_pairs_reduce.metal");
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(src), None)
-            .ok()?;
         let func = lib.newFunctionWithName(ns_string!("sha256_pairs_reduce"))?;
         let sha256_pairs = device
             .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-        let src = include_str!("assets/text_v1/metal_keccak_f1600.metal");
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
         let func = lib.newFunctionWithName(ns_string!("keccak_f1600"))?;
         let keccak = device
             .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
         // AES round kernels (enc/dec)
-        let src = include_str!("assets/text_v1/metal_aes_rounds.metal");
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(src), None)
-            .ok()?;
         let func_e = lib.newFunctionWithName(ns_string!("aesenc_round"))?;
         let aesenc = device
             .newComputePipelineStateWithFunction_error(&func_e)
@@ -677,17 +660,9 @@ impl MetalState {
         let aesdec_rounds = device
             .newComputePipelineStateWithFunction_error(&func_dbr)
             .ok()?;
-        let mut ed25519_signature = {
-            match device
-                .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            {
-                Ok(lib) => match lib.newFunctionWithName(ns_string!("signature_kernel")) {
-                    Some(func) => device.newComputePipelineStateWithFunction_error(&func).ok(),
-                    None => None,
-                },
-                Err(_) => None,
-            }
-        };
+        let mut ed25519_signature = lib
+            .newFunctionWithName(ns_string!("signature_kernel"))
+            .and_then(|func| device.newComputePipelineStateWithFunction_error(&func).ok());
         // Startup self-tests prove parity for required Metal pipelines. Optional
         // pipelines, such as Ed25519 batch verification, can fail closed
         // individually while the rest of the backend remains available.
@@ -727,6 +702,7 @@ impl MetalState {
                     1,
                     1,
                     "metal self-test vadd32",
+                    None,
                 )?;
                 let ptr = buf_out.contents().as_ptr() as *const u32;
                 let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
@@ -757,6 +733,7 @@ impl MetalState {
                     1,
                     1,
                     "metal self-test vadd64",
+                    None,
                 )?;
                 let ptr = buf_out.contents().as_ptr() as *const u64;
                 let out_slice = unsafe { std::slice::from_raw_parts(ptr, 2) };
@@ -791,6 +768,7 @@ impl MetalState {
                         1,
                         1,
                         label,
+                        None,
                     )?;
                     let ptr = buf_out.contents().as_ptr() as *const u32;
                     let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
@@ -872,6 +850,7 @@ impl MetalState {
                     1,
                     1,
                     "metal self-test sha256",
+                    None,
                 )?;
                 let ptr = buf_state.contents().as_ptr() as *const u32;
                 let out_slice = unsafe { std::slice::from_raw_parts(ptr, 8) };
@@ -937,6 +916,7 @@ impl MetalState {
                     blocks.len() as NSUInteger,
                     1,
                     "metal self-test sha256 leaves",
+                    None,
                 )?;
                 let words = unsafe {
                     std::slice::from_raw_parts(
@@ -985,6 +965,7 @@ impl MetalState {
                     1,
                     1,
                     "metal self-test aesenc",
+                    None,
                 )?;
                 let mut enc_out = [0u8; 16];
                 unsafe {
@@ -1004,6 +985,7 @@ impl MetalState {
                         1,
                         1,
                         "metal self-test aesdec",
+                        None,
                     )?;
                     let mut dec_out = [0u8; 16];
                     unsafe {
@@ -1051,6 +1033,7 @@ impl MetalState {
                         states.len() as NSUInteger,
                         1,
                         label,
+                        None,
                     )?;
                     let ptr = buf_out.contents().as_ptr() as *const u8;
                     let out_slice = unsafe { std::slice::from_raw_parts(ptr, flat_states.len()) };
@@ -1124,6 +1107,7 @@ impl MetalState {
                     1,
                     1,
                     "metal self-test aesenc rounds",
+                    None,
                 )?;
                 let mut enc2 = [0u8; 16];
                 unsafe {
@@ -1134,33 +1118,17 @@ impl MetalState {
                     false
                 } else {
                     // DEC 2 rounds
-                    let cmd2 = queue.commandBuffer()?;
-                    let dec = cmd2.computeCommandEncoder()?;
-                    dec.setComputePipelineState(&aesdec_rounds);
                     let buf_states2 = metal_input_buffer(&device, &enc2[..], 16)?;
                     let buf_out2 = metal_output_buffer(&device, 16)?;
-                    unsafe {
-                        dec.setBuffer_offset_atIndex(Some(&buf_states2), 0, 0);
-                        dec.setBuffer_offset_atIndex(Some(&buf_rks), 0, 1);
-                        dec.setBuffer_offset_atIndex(Some(&buf_out2), 0, 2);
-                        dec.setBuffer_offset_atIndex(Some(&buf_n), 0, 3);
-                    }
-                    let grid = MTLSize {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    };
-                    let threads = MTLSize {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    };
-                    dec.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                    dec.endEncoding();
-                    cmd2.commit();
-                    if !finalize_command_buffer(&cmd2, "metal self-test aesdec rounds") {
-                        return None;
-                    }
+                    metal_dispatch(
+                        &queue,
+                        &aesdec_rounds,
+                        &[&buf_states2, &buf_rks, &buf_out2, &buf_n],
+                        1,
+                        1,
+                        "metal self-test aesdec rounds",
+                        None,
+                    )?;
                     let mut dec2 = [0u8; 16];
                     unsafe {
                         let ptr2 = buf_out2.contents().as_ptr() as *const u8;
@@ -1195,6 +1163,7 @@ impl MetalState {
                     1,
                     1,
                     "metal self-test keccak",
+                    None,
                 )?;
                 let ptr = buf_state.contents().as_ptr() as *const u64;
                 let out = unsafe { std::slice::from_raw_parts(ptr, 25) };
@@ -1277,6 +1246,7 @@ impl MetalState {
                             pairs as NSUInteger,
                             1,
                             "metal self-test sha256 pairs",
+                            None,
                         )?;
                         let words = unsafe {
                             std::slice::from_raw_parts(
@@ -1339,6 +1309,7 @@ impl MetalState {
                         sigs.len() as NSUInteger,
                         pipeline.threadExecutionWidth(),
                         "metal self-test ed25519 batch",
+                        None,
                     )?;
                     let out = unsafe {
                         std::slice::from_raw_parts(
@@ -1401,29 +1372,27 @@ impl MetalState {
             sha256,
             sha256_leaves,
             sha256_pairs,
+            #[cfg(all(test, feature = "metal-hardware-tests"))]
             aesenc,
+            #[cfg(all(test, feature = "metal-hardware-tests"))]
             aesdec,
-            #[cfg(test)]
             aesenc_batch,
-            #[cfg(test)]
             aesdec_batch,
-            #[cfg(test)]
             aesenc_rounds,
-            #[cfg(test)]
             aesdec_rounds,
+            #[cfg(all(test, feature = "metal-hardware-tests"))]
             keccak,
             ed25519_signature,
-            // Store fused pipelines in place of single-round ones for future extension if needed
-            // (keeping single-round as well)
+            merkle_cost: Mutex::new(metal_cost::MetalMerkleCostCache::default()),
+            batch_cost: std::array::from_fn(|_| {
+                Mutex::new(metal_cost::MetalBatchCostCache::default())
+            }),
         })
     }
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-thread_local! {
-    static METAL_STATE: std::cell::RefCell<OnceCell<MetalState>> = const {
-        std::cell::RefCell::new(OnceCell::new())
-    };
-}
+static METAL_STATE: metal_owner::ProcessOwner<MetalState> = metal_owner::ProcessOwner::new();
+
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn with_metal_state<F, R>(f: F) -> Option<R>
 where
@@ -1432,23 +1401,9 @@ where
     if !metal_runtime_allowed() {
         return None;
     }
-    METAL_STATE.with(|cell| {
-        // Fast path: already initialized
-        if let Some(state) = cell.borrow().get() {
-            return Some(f(state));
-        }
-        // Slow path: try to initialize
-        let state_new = MetalState::new()?;
-        {
-            let cell_mut = cell.borrow_mut();
-            // It's okay if another thread initialized while we computed
-            let _ = cell_mut.set(state_new);
-            if let Some(state) = cell_mut.get() {
-                return Some(f(state));
-            }
-        }
-        None
-    })
+    let state = METAL_STATE.acquire(MetalState::new)?;
+    // Never hold the owner lock while submitting or waiting for GPU work.
+    Some(f(&state))
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn with_metal_state_try<F, R>(f: F) -> Option<R>
@@ -1458,42 +1413,79 @@ where
     with_metal_state(|state| f(state)).and_then(|result| result)
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
+fn metal_merkle_cost_profile() -> Option<metal_cost::MetalMerkleCostProfile> {
+    with_metal_state(|state| {
+        // A concurrent calibration never stalls execution; that caller uses
+        // CPU and may try again after the bounded retry window.
+        let mut cache = state.merkle_cost.try_lock().ok()?;
+        cache.get_or_calibrate(Instant::now(), metal_cost::calibrate)
+    })
+    .flatten()
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) fn metal_merkle_prefer_gpu(work: MetalMerkleWork, leaves: usize) -> bool {
+    metal_merkle_cost_profile().is_some_and(|profile| profile.prefer_metal(work, leaves))
+}
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
+pub(crate) fn metal_merkle_prefer_gpu(_work: MetalMerkleWork, _leaves: usize) -> bool {
+    false
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) fn metal_batch_prefer_gpu(work: metal_cost::MetalBatchWork, items: usize) -> bool {
+    if !work.calibration_supported() || items < work.min_items() {
+        return false;
+    }
+    with_metal_state(|state| {
+        if matches!(work, metal_cost::MetalBatchWork::Ed25519) && state.ed25519_signature.is_none()
+        {
+            return false;
+        }
+        // Another calibration never holds up transaction execution.
+        let Some(mut cache) = state.batch_cost[work.family_index()].try_lock().ok() else {
+            return false;
+        };
+        cache
+            .get_or_calibrate(Instant::now(), work, || metal_cost::calibrate_batch(work))
+            .is_some_and(|profile| profile.prefer_metal(items))
+    })
+    .unwrap_or(false)
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) use metal_cost::MetalBatchWork;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+enum MetalCommandOutcome {
+    Complete,
+    Failed,
+    Uncertain,
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
 fn finalize_command_buffer(
-    cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+    command: &mut metal_buffers::Command<'_, '_>,
     context: &str,
-) -> bool {
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    const MTL_COMMAND_BUFFER_STATUS_COMPLETED: NSUInteger = 4;
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    const MTL_COMMAND_BUFFER_STATUS_ERROR: NSUInteger = 5;
-    #[cfg(all(target_os = "macos", feature = "metal"))]
+) -> MetalCommandOutcome {
     const METAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
     let started = Instant::now();
     loop {
-        let status_raw: NSUInteger = unsafe { transmute(cmd_buf.status()) };
-        if status_raw == MTL_COMMAND_BUFFER_STATUS_COMPLETED {
-            return true;
-        }
-        if status_raw == MTL_COMMAND_BUFFER_STATUS_ERROR {
-            record_metal_disable(format!(
-                "{context} command buffer exited with status {status_raw:?}"
-            ));
-            return false;
+        if let Some(success) = command.observe_completion() {
+            if success {
+                return MetalCommandOutcome::Complete;
+            }
+            record_metal_disable(format!("{context} command buffer failed"));
+            return MetalCommandOutcome::Failed;
         }
         if started.elapsed() >= METAL_COMMAND_TIMEOUT {
+            command.mark_uncertain();
             record_metal_disable(format!(
                 "{context} command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"
             ));
-            return false;
+            return MetalCommandOutcome::Uncertain;
         }
         std::thread::sleep(Duration::from_millis(1));
     }
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub fn release_metal_state() {
-    METAL_STATE.with(|cell| {
-        let _ = cell.borrow_mut().take();
-    });
+    METAL_STATE.release();
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
 pub fn release_metal_state() {}
@@ -1530,6 +1522,7 @@ fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
                 1,
                 1,
                 "metal vadd64",
+                Some(MetalKernel::Add64),
             )?;
             let ptr = buf_out.contents().as_ptr() as *const u64;
             let out_slice = unsafe { std::slice::from_raw_parts(ptr, 2) };
@@ -1568,6 +1561,7 @@ fn metal_vadd32(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
                 1,
                 1,
                 "metal vadd32",
+                Some(MetalKernel::Add32),
             )?;
             let ptr = buf_out.contents().as_ptr() as *const u32;
             let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
@@ -1584,6 +1578,7 @@ fn metal_vadd32(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
 fn metal_vbit_cached(
     a: [u32; 4],
     b: [u32; 4],
+    kernel: MetalKernel,
     select: fn(&MetalState) -> &ProtocolObject<dyn objc2_metal::MTLComputePipelineState>,
 ) -> Option<[u32; 4]> {
     if !metal_runtime_allowed() {
@@ -1605,6 +1600,7 @@ fn metal_vbit_cached(
                 1,
                 1,
                 "metal vector bit pipeline",
+                Some(kernel),
             )?;
             let ptr = buf_out.contents().as_ptr() as *const u32;
             let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
@@ -1615,17 +1611,17 @@ fn metal_vbit_cached(
 #[cfg(target_os = "macos")]
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_vand(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
-    metal_vbit_cached(a, b, |ctx| &ctx.vand)
+    metal_vbit_cached(a, b, MetalKernel::And, |ctx| &ctx.vand)
 }
 #[cfg(target_os = "macos")]
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_vxor(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
-    metal_vbit_cached(a, b, |ctx| &ctx.vxor)
+    metal_vbit_cached(a, b, MetalKernel::Xor, |ctx| &ctx.vxor)
 }
 #[cfg(target_os = "macos")]
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_vor(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
-    metal_vbit_cached(a, b, |ctx| &ctx.vor)
+    metal_vbit_cached(a, b, MetalKernel::Or, |ctx| &ctx.vor)
 }
 #[cfg(target_os = "macos")]
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -1653,6 +1649,7 @@ fn metal_sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
                 1,
                 1,
                 "metal sha256 compress",
+                Some(MetalKernel::Sha256),
             )
             .is_none()
             {
@@ -1672,6 +1669,13 @@ fn metal_sha256_compress(_state: &mut [u32; 8], _block: &[u8; 64]) -> bool {
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
+    metal_sha256_leaves_with_receipt(blocks, Some(MetalKernel::Sha256Leaves))
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn metal_sha256_leaves_with_receipt(
+    blocks: &[[u8; 64]],
+    receipt: Option<MetalKernel>,
+) -> Option<Vec<[u8; 32]>> {
     if !metal_runtime_allowed() {
         return None;
     }
@@ -1692,6 +1696,7 @@ pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> 
                 n as NSUInteger,
                 1,
                 "metal sha256 leaves",
+                receipt,
             )?;
             let ptr = buf_out.contents().as_ptr() as *const u32;
             let words = unsafe { std::slice::from_raw_parts(ptr, n * 8) };
@@ -1715,8 +1720,20 @@ pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> 
 pub(crate) fn metal_sha256_leaves(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
     None
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(test, target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
+    metal_sha256_pairs_reduce_with_receipt(digests, Some(MetalKernel::Sha256Pairs), false)
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) fn metal_merkle_root(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
+    metal_sha256_pairs_reduce_with_receipt(digests, Some(MetalKernel::Sha256Pairs), true)
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn metal_sha256_pairs_reduce_with_receipt(
+    digests: &[[u8; 32]],
+    receipt: Option<MetalKernel>,
+    canonical_merkle: bool,
+) -> Option<[u8; 32]> {
     if !metal_runtime_allowed() {
         return None;
     }
@@ -1725,13 +1742,25 @@ pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]
         return None;
     }
     if digests.len() == 1 {
-        return Some(digests[0]);
+        let mut root = digests[0];
+        if canonical_merkle {
+            root[31] |= 1;
+        }
+        return Some(root);
     }
     let mut cur: Vec<u8> = digests.iter().flat_map(|d| d.iter()).copied().collect();
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
             let mut count = cur.len() / 32;
             while count > 1 {
+                if canonical_merkle {
+                    // Hash::prehashed marks the low bit of every child before
+                    // canonical parent hashing. The raw SHA pair helper keeps
+                    // its original semantics for non-Merkle callers.
+                    for node in cur.chunks_exact_mut(32) {
+                        node[31] |= 1;
+                    }
+                }
                 let pairs = count / 2;
                 let has_leftover = (count & 1) != 0;
                 let mut next = vec![0u8; (pairs + if has_leftover { 1 } else { 0 }) * 32];
@@ -1747,6 +1776,7 @@ pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]
                         pairs as NSUInteger,
                         1,
                         "metal sha256 pairs reduce",
+                        receipt,
                     )?;
                     let words = unsafe {
                         std::slice::from_raw_parts(
@@ -1772,96 +1802,37 @@ pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]
             }
             let mut root = [0u8; 32];
             root.copy_from_slice(&cur[..32]);
+            if canonical_merkle {
+                root[31] |= 1;
+            }
             Some(root)
         })
     })
 }
 #[cfg(all(
+    test,
     not(all(target_os = "macos", feature = "metal")),
     any(target_os = "macos", test)
 ))]
 pub(crate) fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) fn metal_ed25519_verify_batch(
-    signatures: &[[u8; 64]],
-    public_keys: &[[u8; 32]],
-    hrams: &[[u8; 32]],
-) -> Option<Vec<bool>> {
-    if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
-        return None;
-    }
-    if signatures.is_empty() {
-        return Some(Vec::new());
-    }
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    let invalid_inputs = signatures
-        .iter()
-        .zip(public_keys)
-        .map(|(signature, public_key)| {
-            crate::signature::signature_bytes_are_all_zero(signature)
-                || crate::signature::signature_has_invalid_ed25519_r(signature)
-                || crate::signature::ed25519_public_key_bytes_are_invalid(public_key)
-        })
-        .collect::<Vec<_>>();
-    let valid_count = invalid_inputs
-        .iter()
-        .filter(|&&is_invalid| !is_invalid)
-        .count();
-    if valid_count == 0 {
-        return Some(vec![false; signatures.len()]);
-    }
-    use objc2::rc::autoreleasepool;
-    autoreleasepool(|_| {
-        with_metal_state_try(|ctx| {
-            let n = valid_count;
-            let mut valid_indices = Vec::with_capacity(valid_count);
-            let mut flat_sigs = Vec::with_capacity(valid_count * 64);
-            let mut flat_pks = Vec::with_capacity(valid_count * 32);
-            let mut flat_hrams = Vec::with_capacity(valid_count * 32);
-            for (index, ((signature, public_key), hram)) in
-                signatures.iter().zip(public_keys).zip(hrams).enumerate()
-            {
-                if invalid_inputs[index] {
-                    continue;
-                }
-                valid_indices.push(index);
-                flat_sigs.extend_from_slice(signature);
-                flat_pks.extend_from_slice(public_key);
-                flat_hrams.extend_from_slice(hram);
-            }
-            let count_buf = [n as u32];
-            let pipeline = ctx.ed25519_signature.as_ref()?;
-            let buf_sigs = metal_input_buffer(&ctx.device, &flat_sigs[..], flat_sigs.len())?;
-            let buf_pks = metal_input_buffer(&ctx.device, &flat_pks[..], flat_pks.len())?;
-            let buf_hrams = metal_input_buffer(&ctx.device, &flat_hrams[..], flat_hrams.len())?;
-            let buf_count =
-                metal_input_buffer(&ctx.device, &count_buf[..], core::mem::size_of::<u32>())?;
-            let buf_out = metal_output_buffer(&ctx.device, n)?;
-            metal_dispatch(
-                &ctx.queue,
-                pipeline,
-                &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
-                n as NSUInteger,
-                pipeline.threadExecutionWidth().max(1),
-                "metal ed25519 batch verify",
-            )?;
-            let out =
-                unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
-            let mut merged = vec![false; signatures.len()];
-            for (index, verified) in valid_indices
-                .into_iter()
-                .zip(out.iter().map(|byte| *byte != 0))
-            {
-                merged[index] = verified;
-            }
-            Some(merged)
-        })
-    })
+#[cfg(all(
+    not(all(target_os = "macos", feature = "metal")),
+    any(target_os = "macos", test)
+))]
+pub(crate) fn metal_merkle_root(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
+    None
 }
+#[cfg(all(target_os = "macos", feature = "metal"))]
+#[path = "vector/metal_signature.rs"]
+mod metal_signature;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) use metal_signature::metal_ed25519_items_into;
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+pub(crate) use metal_signature::metal_ed25519_verify_batch_into;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+use metal_signature::metal_ed25519_verify_batch_with_receipt_into;
 #[cfg(all(target_os = "macos", feature = "metal", test))]
 fn metal_ed25519_run_kernel_for_tests(
     function_name: &str,
@@ -1880,9 +1851,7 @@ fn metal_ed25519_run_kernel_for_tests(
     autoreleasepool(|_| {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            .ok()?;
+        let lib = bundled_metal_library(&device)?;
         let function_name = NSString::from_str(function_name);
         let func = lib.newFunctionWithName(&function_name)?;
         let pipeline = device
@@ -1905,6 +1874,7 @@ fn metal_ed25519_run_kernel_for_tests(
             n as NSUInteger,
             pipeline.threadExecutionWidth().max(1),
             "metal ed25519 batch verify direct",
+            None,
         )?;
         let out =
             unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
@@ -1946,9 +1916,7 @@ fn metal_ed25519_check_bytes_for_tests(
     autoreleasepool(|_| {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            .ok()?;
+        let lib = bundled_metal_library(&device)?;
         let function_name = NSString::from_str("signature_check_bytes_kernel");
         let func = lib.newFunctionWithName(&function_name)?;
         let pipeline = device
@@ -1983,6 +1951,7 @@ fn metal_ed25519_check_bytes_for_tests(
             n as NSUInteger,
             pipeline.threadExecutionWidth().max(1),
             "metal ed25519 check bytes direct",
+            None,
         )?;
         let out =
             unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
@@ -2007,9 +1976,7 @@ fn metal_ed25519_field_roundtrip_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[u
     autoreleasepool(|_| {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            .ok()?;
+        let lib = bundled_metal_library(&device)?;
         let function_name = NSString::from_str("field_roundtrip_kernel");
         let func = lib.newFunctionWithName(&function_name)?;
         let pipeline = device
@@ -2032,6 +1999,7 @@ fn metal_ed25519_field_roundtrip_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[u
             n as NSUInteger,
             pipeline.threadExecutionWidth().max(1),
             "metal ed25519 field roundtrip direct",
+            None,
         )?;
         let out =
             unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
@@ -2058,9 +2026,7 @@ fn metal_ed25519_point_decompress_for_tests(
     autoreleasepool(|_| {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            .ok()?;
+        let lib = bundled_metal_library(&device)?;
         let function_name = NSString::from_str("point_decompress_status_kernel");
         let func = lib.newFunctionWithName(&function_name)?;
         let pipeline = device
@@ -2084,6 +2050,7 @@ fn metal_ed25519_point_decompress_for_tests(
             n as NSUInteger,
             pipeline.threadExecutionWidth().max(1),
             "metal ed25519 point decompress direct",
+            None,
         )?;
         let statuses =
             unsafe { std::slice::from_raw_parts(buf_status.contents().as_ptr() as *const u8, n) };
@@ -2101,7 +2068,14 @@ fn metal_ed25519_point_decompress_for_tests(
         ))
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
+// Ordinary single-round work uses CPU AES; this entrypoint executes the
+// embedded kernel during required hardware qualification.
+#[cfg(all(
+    target_os = "macos",
+    feature = "metal",
+    test,
+    feature = "metal-hardware-tests"
+))]
 pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     if !metal_runtime_allowed() {
         return None;
@@ -2119,6 +2093,7 @@ pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
                 1,
                 1,
                 "metal aesenc round",
+                Some(MetalKernel::AesEnc),
             )?;
             let mut out = [0u8; 16];
             unsafe {
@@ -2129,7 +2104,12 @@ pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(
+    target_os = "macos",
+    feature = "metal",
+    test,
+    feature = "metal-hardware-tests"
+))]
 pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     if !metal_runtime_allowed() {
         return None;
@@ -2147,6 +2127,7 @@ pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
                 1,
                 1,
                 "metal aesdec round",
+                Some(MetalKernel::AesDec),
             )?;
             let mut out = [0u8; 16];
             unsafe {
@@ -2157,7 +2138,12 @@ pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(
+    target_os = "macos",
+    feature = "metal",
+    test,
+    feature = "metal-hardware-tests"
+))]
 pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
     if !metal_runtime_allowed() {
         return false;
@@ -2167,7 +2153,15 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
         with_metal_state_try(|ctx| {
             let buf =
                 metal_input_buffer(&ctx.device, &state[..], 25 * core::mem::size_of::<u64>())?;
-            metal_dispatch(&ctx.queue, &ctx.keccak, &[&buf], 1, 1, "metal keccak_f1600")?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.keccak,
+                &[&buf],
+                1,
+                1,
+                "metal keccak_f1600",
+                Some(MetalKernel::Keccak),
+            )?;
             let ptr = buf.contents().as_ptr() as *const u64;
             let out = unsafe { std::slice::from_raw_parts(ptr, 25) };
             state.copy_from_slice(out);
@@ -2176,181 +2170,41 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
     })
     .is_some()
 }
+#[cfg(all(target_os = "macos", feature = "metal"))]
+#[path = "vector/metal_aes.rs"]
+mod metal_aes;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) use metal_aes::metal_aes_batch_in_place;
 #[cfg(all(target_os = "macos", feature = "metal", test))]
-pub fn metal_aesenc_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    use objc2::rc::autoreleasepool;
-    if states.is_empty() {
-        return Some(Vec::new());
-    }
-    autoreleasepool(|_| {
-        with_metal_state_try(|ctx| {
-            let flat: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = metal_input_buffer(&ctx.device, &flat[..], flat.len())?;
-            let buf_rk = metal_input_buffer(&ctx.device, &rk[..], 16)?;
-            let mut out = vec![0u8; states.len() * 16];
-            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
-            metal_dispatch(
-                &ctx.queue,
-                &ctx.aesenc_batch,
-                &[&buf_states, &buf_rk, &buf_out],
-                states.len() as NSUInteger,
-                1,
-                "metal aesenc batch",
-            )?;
-            unsafe {
-                let ptr = buf_out.contents().as_ptr() as *const u8;
-                core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
-            }
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    })
+pub use metal_aes::{
+    metal_aesdec_batch_into, metal_aesdec_rounds_batch_into, metal_aesenc_batch_into,
+    metal_aesenc_rounds_batch_into,
+};
+// A fixed IVM vector instruction or one SHA-256 block cannot amortize even a
+// single GPU transfer and launch. The M1 Ultra local comparison measured
+// 100,000 four-lane additions at 930.5 us on CPU and 177.67 s via Metal.
+// Metal Merkle, AES batches and Ed25519 batches use separate qualified cost
+// profiles. This floor remains for fixed-size operations and provisional CUDA
+// batch selection until CUDA has independently qualified public cost profiles.
+const MIN_GPU_TRANSFER_BYTES: usize = 4 * 1024;
+#[cfg(any(test, target_os = "macos", feature = "cuda"))]
+const FIXED_VECTOR_TRANSFER_BYTES: usize = 3 * std::mem::size_of::<[u32; 4]>();
+const SHA256_BLOCK_TRANSFER_BYTES: usize =
+    2 * std::mem::size_of::<[u32; 8]>() + std::mem::size_of::<[u8; 64]>();
+
+pub(crate) fn gpu_launch_eligible(transfer_bytes: usize) -> bool {
+    transfer_bytes >= MIN_GPU_TRANSFER_BYTES
 }
-#[cfg(all(target_os = "macos", feature = "metal", test))]
-pub fn metal_aesdec_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    use objc2::rc::autoreleasepool;
-    if states.is_empty() {
-        return Some(Vec::new());
-    }
-    autoreleasepool(|_| {
-        with_metal_state_try(|ctx| {
-            let flat: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = metal_input_buffer(&ctx.device, &flat[..], flat.len())?;
-            let buf_rk = metal_input_buffer(&ctx.device, &rk[..], 16)?;
-            let mut out = vec![0u8; states.len() * 16];
-            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
-            metal_dispatch(
-                &ctx.queue,
-                &ctx.aesdec_batch,
-                &[&buf_states, &buf_rk, &buf_out],
-                states.len() as NSUInteger,
-                1,
-                "metal aesdec batch",
-            )?;
-            unsafe {
-                let ptr = buf_out.contents().as_ptr() as *const u8;
-                core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
-            }
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    })
-}
-#[cfg(all(target_os = "macos", feature = "metal", test))]
-pub fn metal_aesenc_rounds_batch(
-    states: &[[u8; 16]],
-    round_keys: &[[u8; 16]],
-) -> Option<Vec<[u8; 16]>> {
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    use objc2::rc::autoreleasepool;
-    if states.is_empty() {
-        return Some(Vec::new());
-    }
-    let nrounds = round_keys.len() as u32;
-    autoreleasepool(|_| {
-        with_metal_state_try(|ctx| {
-            let flat_states: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let flat_rks: Vec<u8> = round_keys.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = metal_input_buffer(&ctx.device, &flat_states[..], flat_states.len())?;
-            let buf_rks = metal_input_buffer(&ctx.device, &flat_rks[..], flat_rks.len())?;
-            let mut n_buf = [0u32; 1];
-            n_buf[0] = nrounds;
-            let buf_n = metal_input_buffer(&ctx.device, &n_buf[..], core::mem::size_of::<u32>())?;
-            let mut out = vec![0u8; states.len() * 16];
-            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
-            metal_dispatch(
-                &ctx.queue,
-                &ctx.aesenc_rounds,
-                &[&buf_states, &buf_rks, &buf_out, &buf_n],
-                states.len() as NSUInteger,
-                1,
-                "metal aesenc rounds batch",
-            )?;
-            unsafe {
-                let ptr = buf_out.contents().as_ptr() as *const u8;
-                core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
-            }
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    })
-}
-#[cfg(all(target_os = "macos", feature = "metal", test))]
-pub fn metal_aesdec_rounds_batch(
-    states: &[[u8; 16]],
-    round_keys: &[[u8; 16]],
-) -> Option<Vec<[u8; 16]>> {
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    use objc2::rc::autoreleasepool;
-    if states.is_empty() {
-        return Some(Vec::new());
-    }
-    let nrounds = round_keys.len() as u32;
-    autoreleasepool(|_| {
-        with_metal_state_try(|ctx| {
-            let flat_states: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let flat_rks: Vec<u8> = round_keys.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = metal_input_buffer(&ctx.device, &flat_states[..], flat_states.len())?;
-            let buf_rks = metal_input_buffer(&ctx.device, &flat_rks[..], flat_rks.len())?;
-            let mut n_buf = [0u32; 1];
-            n_buf[0] = nrounds;
-            let buf_n = metal_input_buffer(&ctx.device, &n_buf[..], core::mem::size_of::<u32>())?;
-            let mut out = vec![0u8; states.len() * 16];
-            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
-            metal_dispatch(
-                &ctx.queue,
-                &ctx.aesdec_rounds,
-                &[&buf_states, &buf_rks, &buf_out, &buf_n],
-                states.len() as NSUInteger,
-                1,
-                "metal aesdec rounds batch",
-            )?;
-            unsafe {
-                let ptr = buf_out.contents().as_ptr() as *const u8;
-                core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
-            }
-            let mut vec_out = Vec::with_capacity(states.len());
-            for i in 0..states.len() {
-                let mut block = [0u8; 16];
-                block.copy_from_slice(&out[i * 16..i * 16 + 16]);
-                vec_out.push(block);
-            }
-            Some(vec_out)
-        })
-    })
-}
+
 /// Perform one SHA-256 compression round on a 64 byte block.
 pub fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
-    if metal_sha256_compress(state, block) {
+    if gpu_launch_eligible(SHA256_BLOCK_TRANSFER_BYTES) && metal_sha256_compress(state, block) {
         return;
     }
     #[cfg(feature = "cuda")]
-    if crate::cuda::sha256_compress_cuda(state, block) {
+    if gpu_launch_eligible(SHA256_BLOCK_TRANSFER_BYTES)
+        && crate::cuda::sha256_compress_cuda(state, block)
+    {
         return;
     }
     #[cfg(target_arch = "aarch64")]
@@ -3086,111 +2940,92 @@ pub fn vadd64_slice(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i + 1] = (r >> 32) as u32;
     }
 }
-/// Dynamic lane version of [`vadd32`]. Returns a new vector of equal length.
-pub fn vadd32_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u32; a.len()];
-    vadd32_slice(a, b, &mut out);
-    out
+/// Construct requested logical lanes from the caller's original execution lease.
+/// Include `ExecutionMemoryPlan::array::<u32>(lanes)` in the complete
+/// parent plan before calling. The allocation keeps its charge until final drop.
+pub fn zero_vector(
+    lanes: usize,
+    lease: &mut crate::execution_memory::ExecutionMemoryLease,
+) -> Result<crate::execution_memory::ExecutionBuffer<u32>, mv::allocation::PrepaidBufferError> {
+    let mut output = crate::execution_memory::ExecutionBuffer::new(lanes, lease)?;
+    for _ in 0..lanes {
+        output.push_reserved(0);
+    }
+    Ok(output)
 }
-/// Dynamic lane version of [`vadd64`].
-pub fn vadd64_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u32; a.len()];
-    vadd64_slice(a, b, &mut out);
-    out
+/// Apply `vadd32` using the available SIMD path into initialized caller-owned storage.
+/// Dynamic callers may borrow their prepaid ExecutionBuffer's initialized slice.
+pub fn vadd32_auto_into(a: &[u32], b: &[u32], output: &mut [u32]) {
+    assert_eq!(a.len(), b.len());
+    assert_eq!(output.len(), a.len());
+
+    vadd32_slice(a, b, output);
 }
-/// Dynamic lane version of [`vand`].
-pub fn vand_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u32; a.len()];
-    vand_slice(a, b, &mut out);
-    out
+/// Apply `vadd64` using the available SIMD path into initialized caller-owned storage.
+/// Dynamic callers may borrow their prepaid ExecutionBuffer's initialized slice.
+pub fn vadd64_auto_into(a: &[u32], b: &[u32], output: &mut [u32]) {
+    assert_eq!(a.len(), b.len());
+    assert_eq!(output.len(), a.len());
+    assert!(a.len().is_multiple_of(2));
+    vadd64_slice(a, b, output);
 }
-/// Dynamic lane version of [`vxor`].
-pub fn vxor_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u32; a.len()];
-    vxor_slice(a, b, &mut out);
-    out
+/// Apply `vand` using the available SIMD path into initialized caller-owned storage.
+/// Dynamic callers may borrow their prepaid ExecutionBuffer's initialized slice.
+pub fn vand_auto_into(a: &[u32], b: &[u32], output: &mut [u32]) {
+    assert_eq!(a.len(), b.len());
+    assert_eq!(output.len(), a.len());
+
+    vand_slice(a, b, output);
 }
-/// Dynamic lane version of [`vor`].
-pub fn vor_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u32; a.len()];
-    vor_slice(a, b, &mut out);
-    out
+/// Apply `vxor` using the available SIMD path into initialized caller-owned storage.
+/// Dynamic callers may borrow their prepaid ExecutionBuffer's initialized slice.
+pub fn vxor_auto_into(a: &[u32], b: &[u32], output: &mut [u32]) {
+    assert_eq!(a.len(), b.len());
+    assert_eq!(output.len(), a.len());
+
+    vxor_slice(a, b, output);
 }
-/// Dynamic lane version of [`vrot32`].
-pub fn vrot32_dyn(a: &[u32], k: u32) -> Vec<u32> {
-    let mut out = vec![0u32; a.len()];
-    vrot32_slice(a, k, &mut out);
-    out
+/// Apply `vor` using the available SIMD path into initialized caller-owned storage.
+/// Dynamic callers may borrow their prepaid ExecutionBuffer's initialized slice.
+pub fn vor_auto_into(a: &[u32], b: &[u32], output: &mut [u32]) {
+    assert_eq!(a.len(), b.len());
+    assert_eq!(output.len(), a.len());
+
+    vor_slice(a, b, output);
 }
-/// Allocate a vector sized to the host's SIMD width and fill with zeros.
-pub fn zero_vector() -> Vec<u32> {
-    vec![0u32; simd_lanes()]
-}
-/// Lane-wise 32-bit addition using the host SIMD width.
-pub fn vadd32_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let lanes = simd_lanes();
-    assert_eq!(a.len(), lanes);
-    assert_eq!(b.len(), lanes);
-    vadd32_dyn(a, b)
-}
-/// Lane-wise 64-bit addition using the host SIMD width.
-pub fn vadd64_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let lanes = simd_lanes();
-    assert_eq!(a.len(), lanes);
-    assert_eq!(b.len(), lanes);
-    vadd64_dyn(a, b)
-}
-/// Bitwise AND using the host SIMD width.
-pub fn vand_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let lanes = simd_lanes();
-    assert_eq!(a.len(), lanes);
-    assert_eq!(b.len(), lanes);
-    vand_dyn(a, b)
-}
-/// Bitwise XOR using the host SIMD width.
-pub fn vxor_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let lanes = simd_lanes();
-    assert_eq!(a.len(), lanes);
-    assert_eq!(b.len(), lanes);
-    vxor_dyn(a, b)
-}
-/// Bitwise OR using the host SIMD width.
-pub fn vor_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let lanes = simd_lanes();
-    assert_eq!(a.len(), lanes);
-    assert_eq!(b.len(), lanes);
-    vor_dyn(a, b)
-}
-/// Rotate each 32-bit lane left using the host SIMD width.
-pub fn vrot32_auto(a: &[u32], k: u32) -> Vec<u32> {
-    let lanes = simd_lanes();
-    assert_eq!(a.len(), lanes);
-    vrot32_dyn(a, k)
+/// Rotate logical lanes using the available SIMD path into caller-owned storage.
+pub fn vrot32_auto_into(a: &[u32], k: u32, output: &mut [u32]) {
+    assert_eq!(output.len(), a.len());
+    vrot32_slice(a, k, output);
 }
 /// Lane-wise 32-bit addition of two vectors.
 pub fn vadd32(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     #[cfg(target_os = "macos")]
-    if let Some(res) = metal_vadd32(a, b) {
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && let Some(res) = metal_vadd32(a, b)
+    {
         return res;
     }
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vadd32_cuda(&a, &b)
-        && res.len() == 4
-    {
-        return [res[0], res[1], res[2], res[3]];
-    }
     let mut out = [0; 4];
+    #[cfg(feature = "cuda")]
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && crate::cuda::vadd32_cuda_into(&a, &b, &mut out)
+    {
+        return out;
+    }
     vadd32_slice(&a, &b, &mut out);
     out
 }
 /// Lane-wise 64-bit addition (two lanes).
 pub fn vadd64(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     #[cfg(target_os = "macos")]
-    if let Some(res) = metal_vadd64(a, b) {
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && let Some(res) = metal_vadd64(a, b)
+    {
         return res;
     }
     #[cfg(feature = "cuda")]
-    {
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES) {
         let a64 = [
             (a[0] as u64) | ((a[1] as u64) << 32),
             (a[2] as u64) | ((a[3] as u64) << 32),
@@ -3199,9 +3034,8 @@ pub fn vadd64(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
             (b[0] as u64) | ((b[1] as u64) << 32),
             (b[2] as u64) | ((b[3] as u64) << 32),
         ];
-        if let Some(res) = crate::cuda::vadd64_cuda(&a64, &b64)
-            && res.len() == 2
-        {
+        let mut res = [0; 2];
+        if crate::cuda::vadd64_cuda_into(&a64, &b64, &mut res) {
             let r0 = res[0];
             let r1 = res[1];
             return [
@@ -3219,48 +3053,54 @@ pub fn vadd64(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
 /// Bitwise AND of two vectors.
 pub fn vand(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some(res) = metal_vand(a, b) {
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && let Some(res) = metal_vand(a, b)
+    {
         return res;
     }
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vand_cuda(&a, &b)
-        && res.len() == 4
-    {
-        return [res[0], res[1], res[2], res[3]];
-    }
     let mut out = [0; 4];
+    #[cfg(feature = "cuda")]
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && crate::cuda::vand_cuda_into(&a, &b, &mut out)
+    {
+        return out;
+    }
     vand_slice(&a, &b, &mut out);
     out
 }
 /// Bitwise XOR of two vectors.
 pub fn vxor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some(res) = metal_vxor(a, b) {
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && let Some(res) = metal_vxor(a, b)
+    {
         return res;
     }
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vxor_cuda(&a, &b)
-        && res.len() == 4
-    {
-        return [res[0], res[1], res[2], res[3]];
-    }
     let mut out = [0; 4];
+    #[cfg(feature = "cuda")]
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && crate::cuda::vxor_cuda_into(&a, &b, &mut out)
+    {
+        return out;
+    }
     vxor_slice(&a, &b, &mut out);
     out
 }
 /// Bitwise OR of two vectors.
 pub fn vor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some(res) = metal_vor(a, b) {
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && let Some(res) = metal_vor(a, b)
+    {
         return res;
     }
-    #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vor_cuda(&a, &b)
-        && res.len() == 4
-    {
-        return [res[0], res[1], res[2], res[3]];
-    }
     let mut out = [0; 4];
+    #[cfg(feature = "cuda")]
+    if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)
+        && crate::cuda::vor_cuda_into(&a, &b, &mut out)
+    {
+        return out;
+    }
     vor_slice(&a, &b, &mut out);
     out
 }
@@ -3297,40 +3137,30 @@ pub fn reset_metal_backend_for_tests() {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
+    #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
-    fn metal_acceleration_speed() {
-        if !metal_available() {
-            return;
-        }
-        let a = [1u32, 2, 3, 4];
-        let b = [4u32, 3, 2, 1];
-        const ITER: usize = 100_000;
-        let mut out = [0u32; 4];
-        let start = Instant::now();
-        for _ in 0..ITER {
-            out[0] = std::hint::black_box(a[0].wrapping_add(b[0]));
-            out[1] = std::hint::black_box(a[1].wrapping_add(b[1]));
-            out[2] = std::hint::black_box(a[2].wrapping_add(b[2]));
-            out[3] = std::hint::black_box(a[3].wrapping_add(b[3]));
-            std::hint::black_box(out);
-        }
-        let cpu_time = start.elapsed();
-        let start = Instant::now();
-        for _ in 0..ITER {
-            std::hint::black_box(vadd32(a, b));
-        }
-        let metal_time = start.elapsed();
-        if metal_time >= cpu_time {
-            eprintln!(
-                "Metal path slower than CPU: cpu {cpu_time:?}, metal {metal_time:?}; skipping speed assertion",
-            );
-            return;
-        }
-        assert!(
-            metal_time.as_secs_f64() * 1.10 < cpu_time.as_secs_f64(),
-            "Metal path must be >10% faster: cpu {cpu_time:?}, metal {metal_time:?}"
-        );
+    fn completed_metal_work_is_rejected_after_owner_quarantine() {
+        assert!(metal_dispatch_result_allowed(true, true));
+        assert!(!metal_dispatch_result_allowed(false, true));
+        assert!(!metal_dispatch_result_allowed(true, false));
+        assert!(!metal_dispatch_result_allowed(false, false));
+    }
+
+    #[test]
+    fn fixed_width_operations_skip_gpu_launch() {
+        assert_eq!(FIXED_VECTOR_TRANSFER_BYTES, 48);
+        assert_eq!(SHA256_BLOCK_TRANSFER_BYTES, 128);
+        assert!(!gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES));
+        assert!(!gpu_launch_eligible(SHA256_BLOCK_TRANSFER_BYTES));
+        assert!(!gpu_launch_eligible(MIN_GPU_TRANSFER_BYTES - 1));
+        assert!(gpu_launch_eligible(MIN_GPU_TRANSFER_BYTES));
+
+        let a = [u32::MAX, 2, 3, 4];
+        let b = [1, 3, 5, 7];
+        assert_eq!(vadd32(a, b), [0, 5, 8, 11]);
+        assert_eq!(vand(a, b), [1, 2, 1, 4]);
+        assert_eq!(vxor(a, b), [u32::MAX - 1, 1, 6, 3]);
+        assert_eq!(vor(a, b), [u32::MAX, 3, 7, 7]);
     }
     #[cfg(not(all(target_os = "macos", feature = "metal")))]
     #[test]
@@ -3444,6 +3274,27 @@ mod tests {
         let first = cpu_pair(&digests[0], &digests[1]);
         let expected = cpu_pair(&first, &digests[2]);
         assert_eq!(metal_sha256_pairs_reduce(&digests), Some(expected));
+    }
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn metal_merkle_root_matches_canonical_hash_markers() {
+        use sha2::Digest as _;
+
+        if !metal_available() {
+            return;
+        }
+        let leaves: Vec<[u8; 32]> = (0..5u8)
+            .map(|value| sha2::Sha256::digest([value; 32]).into())
+            .collect();
+        for count in [1usize, 3, 4, 5] {
+            let expected = iroha_crypto::MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(
+                leaves[..count].iter().copied(),
+            );
+            assert_eq!(
+                metal_merkle_root(&leaves[..count]),
+                expected.root().map(|root| *root.as_ref()),
+            );
+        }
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
@@ -3621,10 +3472,18 @@ mod tests {
             with_metal_state_try(|ctx| Some(ctx.ed25519_signature.is_some())).unwrap_or(false),
             "Metal startup self-test should keep the ed25519 signature pipeline enabled",
         );
-        assert_eq!(
-            metal_ed25519_verify_batch(&sigs, &pks, &hrams),
-            Some(vec![true, false]),
-            "Metal ed25519 batch verification should stay on the accelerator after the self-test passes",
+        let mut output = [false; 2];
+        let before = metal_completed_dispatches(MetalKernel::Ed25519);
+        assert!(metal_ed25519_verify_batch_into(
+            &sigs,
+            &pks,
+            &hrams,
+            &mut output
+        ));
+        assert_eq!(output, [true, false]);
+        assert!(
+            metal_completed_dispatches(MetalKernel::Ed25519) > before,
+            "qualified Metal verification must execute its signature kernel"
         );
     }
     #[cfg(target_os = "macos")]
@@ -3755,8 +3614,11 @@ mod tests {
             .iter()
             .map(|&state| crate::aes::aesdec_impl(state, rk))
             .collect();
-        assert_eq!(metal_aesenc_batch(&states, rk), Some(expected_enc));
-        assert_eq!(metal_aesdec_batch(&states, rk), Some(expected_dec));
+        let mut output = vec![[0; 16]; states.len()];
+        assert!(metal_aesenc_batch_into(&states, rk, &mut output));
+        assert_eq!(output, expected_enc);
+        assert!(metal_aesdec_batch_into(&states, rk, &mut output));
+        assert_eq!(output, expected_dec);
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
@@ -3810,14 +3672,19 @@ mod tests {
                     .fold(state, crate::aes::aesdec_impl)
             })
             .collect();
-        assert_eq!(
-            metal_aesenc_rounds_batch(&states, &round_keys),
-            Some(expected_enc)
-        );
-        assert_eq!(
-            metal_aesdec_rounds_batch(&states, &round_keys),
-            Some(expected_dec)
-        );
+        let mut output = vec![[0; 16]; states.len()];
+        assert!(metal_aesenc_rounds_batch_into(
+            &states,
+            &round_keys,
+            &mut output
+        ));
+        assert_eq!(output, expected_enc);
+        assert!(metal_aesdec_rounds_batch_into(
+            &states,
+            &round_keys,
+            &mut output
+        ));
+        assert_eq!(output, expected_dec);
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
@@ -3877,10 +3744,7 @@ mod tests {
             return;
         }
         reset_metal_backend_for_tests();
-        let first = METAL_STATE.with(|cell| {
-            cell.borrow_mut().take();
-            with_metal_state(|state| objc2::rc::Retained::as_ptr(&state.queue) as usize)
-        });
+        let first = with_metal_state(|state| objc2::rc::Retained::as_ptr(&state.queue) as usize);
         let second = with_metal_state(|state| objc2::rc::Retained::as_ptr(&state.queue) as usize);
         match (first, second) {
             (Some(a), Some(b)) => assert_eq!(a, b, "warm_up_metal should reuse cached Metal state"),

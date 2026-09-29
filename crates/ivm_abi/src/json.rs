@@ -285,7 +285,6 @@ mod tests {
                     StateValueNodeV1::Leaf(StateValueKindV1::Int),
                 ],
             },
-            leaf(StateValueKindV1::AssetHandle),
         ] {
             assert!(!json_value_schema_is_supported(&rejected));
         }

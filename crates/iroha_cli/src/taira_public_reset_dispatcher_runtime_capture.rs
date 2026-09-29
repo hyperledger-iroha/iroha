@@ -3,6 +3,9 @@
 //! The selected configuration and the loaded unit are separate authorities: the
 //! selector identifies configuration, while the installed unit identifies the
 //! daemon actually selected by systemd. Neither is inferred from a prior plan.
+// The root transaction runs on Linux only; other platforms compile these items solely for their
+// unit tests, which do not reach every Linux entry point.
+#![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 use super::*;
 #[cfg(any(target_os = "linux", test))]
 use std::{

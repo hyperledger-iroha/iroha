@@ -338,9 +338,6 @@ fn nexus_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for SetLaneRelayEmergencyValidators {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = nexus_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let lane_id = super::decode_aos_canonical_field::<LaneId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -376,9 +373,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetLaneRelayEmergencyValidators {
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedLaneRelay {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = nexus_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let envelope = super::decode_aos_canonical_field::<LaneRelayEnvelope>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -415,9 +409,6 @@ macro_rules! impl_decode_fields {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = nexus_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(

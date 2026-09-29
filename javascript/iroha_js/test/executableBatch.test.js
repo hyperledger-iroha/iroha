@@ -95,7 +95,7 @@ test("browser executable batch preserves mixed order, tag, and copied bytes", ()
   const input = {
     networkId: NETWORK_ID,
     authority: AUTHORITY,
-    chainDiscriminant: 753,
+    networkPrefix: 753,
     entries: [
       { kind: "instruction", instruction },
       {
@@ -141,6 +141,7 @@ test("browser executable batch preserves mixed order, tag, and copied bytes", ()
   const hashHex = browserTransactionPayloadHashHex(payload, 753);
   const signable = validateBrowserExecutableBatchSignable({
     networkId: NETWORK_ID,
+    networkPrefix: 753,
     payloadBytes: payload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -165,7 +166,7 @@ test("canonical browser instruction transactions use native-instruction tag zero
   const payload = buildBrowserInstructionTransactionPayload({
     networkId: NETWORK_ID,
     authority: AUTHORITY,
-    chainDiscriminant: 753,
+    networkPrefix: 753,
     instructions: [instruction],
     feePayment: { payer: "authority", chargeLimits: [] },
     creationTimeMs: 123_456,
@@ -198,7 +199,7 @@ test("browser executable batch bytes match the native Rust builder", () => {
   const browser = buildBrowserExecutableBatchPayload({
     networkId: NETWORK_ID,
     authority: AUTHORITY,
-    chainDiscriminant: 753,
+    networkPrefix: 753,
     entries,
     feePayment,
     creationTimeMs: 123_456,
@@ -234,7 +235,7 @@ test("browser executable batch rejects invalid calls before encoding", () => {
   const base = {
     networkId: NETWORK_ID,
     authority: AUTHORITY,
-    chainDiscriminant: 753,
+    networkPrefix: 753,
     entries: [
       { kind: "instruction", instruction },
       {
@@ -309,7 +310,7 @@ test("external executable batch validation rejects a noncanonical address", () =
   const payload = buildBrowserExecutableBatchPayload({
     networkId: NETWORK_ID,
     authority: AUTHORITY,
-    chainDiscriminant: 753,
+    networkPrefix: 753,
     entries: [
       { kind: "instruction", instruction },
       {
@@ -334,6 +335,7 @@ test("external executable batch validation rejects a noncanonical address", () =
     () =>
       validateBrowserExecutableBatchSignable({
         networkId: NETWORK_ID,
+        networkPrefix: 753,
         payloadBytes: tampered,
         payloadHashHex: browserTransactionPayloadHashHex(tampered, 753),
         authority: AUTHORITY,

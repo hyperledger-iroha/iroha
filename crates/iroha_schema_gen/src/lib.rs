@@ -536,19 +536,48 @@ mod tests {
         use iroha_data_model::{
             sumeragi::SumeragiStatus,
             sumeragi_finality::{
-                FinalityValidator, SumeragiFinalityAttestation, SumeragiFinalityAttestationBody,
-                SumeragiFinalityBundle, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
+                FinalityValidator, ScheduleOutcome, ScheduledSlot, SumeragiFinalityAttestation,
+                SumeragiFinalityAttestationBody, SumeragiFinalityBundle,
+                SumeragiFinalityCheckpoint, SumeragiFinalityProof,
             },
         };
         let schemas = super::build_schemas();
         assert!(schemas.contains_key::<FinalityValidator>());
         assert!(schemas.contains_key::<SumeragiFinalityBundle>());
+        assert!(schemas.contains_key::<ScheduleOutcome>());
+        assert!(schemas.contains_key::<ScheduledSlot>());
+        let decision = schemas
+            .iter()
+            .find(|(_, entry)| entry.type_name == "CheckpointDecision")
+            .expect("checkpoint decision is recursively registered");
+        let Metadata::Struct(decision) = &decision.1.metadata else {
+            panic!("checkpoint decision must disclose its complete retained authority");
+        };
+        let fields = decision
+            .declarations
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(fields.contains(&"schedule"));
+        assert!(fields.contains(&"beacon"));
+        assert!(!fields.contains(&"next_committee_digest"));
         let Some(Metadata::Struct(checkpoint)) = schemas.get::<SumeragiFinalityCheckpoint>() else {
             panic!("current compact checkpoint is absent from the canonical schema");
         };
         assert_eq!(
-            checkpoint.declarations.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
-            ["network_id", "chain_id", "genesis_wire", "genesis_committee", "decisions", "tip"]
+            checkpoint
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "network_id",
+                "chain_id",
+                "genesis_wire",
+                "genesis_committee",
+                "decisions",
+                "tip"
+            ]
         );
         assert!(schemas.contains_key::<SumeragiStatus>());
         let Some(Metadata::Struct(proof)) = schemas.get::<SumeragiFinalityProof>() else {

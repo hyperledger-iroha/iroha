@@ -17,9 +17,9 @@ const row = (id = nftId, owned_by = owner, metadata = {}) => ({ id, owned_by, me
 const page = (items, next = null, limit = 2) => ({ items, pagination: { limit, has_more: next !== null, next_cursor: next } });
 
 test("owned NFT transfer uses canonical native bytes, pins source to signer, and checks signature/network", () => {
-  const input = { networkId, authority: owner, nftId, destinationAccountId: destination, feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", maxAmount: "0.1" }] }, creationTimeMs: 1, ttlMs: 100_000 };
+  const input = { networkId, networkPrefix: 753, authority: owner, nftId, destinationAccountId: destination, feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", maxAmount: "0.1" }] }, creationTimeMs: 1, ttlMs: 100_000 };
   const payloadBytes = buildBrowserOwnedNftTransferPayloadV1(input);
-  const signable = { networkId, authority: owner, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) };
+  const signable = { networkId, networkPrefix: 753, authority: owner, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) };
   validateBrowserExecutableBatchSignable(signable);
   const hash = Uint8Array.from(blake2b256(payloadBytes)); hash[31] |= 1;
   const signature = ed25519.sign(hash, key);
@@ -29,12 +29,12 @@ test("owned NFT transfer uses canonical native bytes, pins source to signer, and
   assert.throws(() => finalizeBrowserExecutableBatchTransaction(signable, new Uint8Array(64), publicKey), /signature/i);
   assert.throws(() => buildBrowserOwnedNftTransferPayloadV1({ ...input, ownerAccountId: destination }), /unsupported field/);
   assert.throws(() => buildBrowserOwnedNftTransferPayloadV1({ ...input, entries: [] }), /unsupported field/);
-  assert.throws(() => buildOwnedNftTransferInstructionV1({ ownerAccountId: owner, nftId: "skin$sora", destinationAccountId: destination }), /canonical/);
+  assert.throws(() => buildOwnedNftTransferInstructionV1({ ownerAccountId: owner, nftId: "skin$sora", destinationAccountId: destination, networkPrefix: 753 }), /canonical/);
 });
 
 test("owned inventory paginates with strict owner/domain checks and retains endpoint-reported status", async () => {
   const requests = [], pages = [page([row()], "YWJj"), page([row("sora_skin_02$sora_cars.universal")])];
-  const inventory = await readOwnedNftInventoryV1({ async listExplorerNfts(options) { requests.push(options); return pages.shift(); } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2 });
+  const inventory = await readOwnedNftInventoryV1({ async listExplorerNfts(options) { requests.push(options); return pages.shift(); } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2, networkPrefix: 753 });
   assert.equal(inventory.verification, "endpoint_reported");
   assert.equal(inventory.items.length, 2);
   assert.equal(requests[0].ownedBy, owner);
@@ -43,7 +43,7 @@ test("owned inventory paginates with strict owner/domain checks and retains endp
 });
 
 test("inventory refuses contradictory ownership, forged domain, duplicate items, stuck cursors and oversized metadata", async () => {
-  const read = (pages, extra = {}) => readOwnedNftInventoryV1({ async listExplorerNfts() { return pages.shift(); } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2, ...extra });
+  const read = (pages, extra = {}) => readOwnedNftInventoryV1({ async listExplorerNfts() { return pages.shift(); } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2, networkPrefix: 753, ...extra });
   await assert.rejects(read([page([row(nftId, destination)])]), /another owner's/);
   await assert.rejects(read([page([row("skin$forged.universal")])]), /another domain/);
   await assert.rejects(read([page([row()], "YWJj"), page([row()])]), /repeated an item/);
@@ -53,16 +53,16 @@ test("inventory refuses contradictory ownership, forged domain, duplicate items,
   await assert.rejects(read([page([row(nftId, owner, { huge: "x".repeat(16 * 1024) })])]), /byte bound/);
   await assert.rejects(read([{ ...page([]), extra: true }]), /unsupported field/);
   const cycle = {}; cycle.nested = cycle;
-  assert.throws(() => normalizeNftInventoryItemV1(row(nftId, owner, cycle)), /structural bounds/);
-  assert.throws(() => normalizeNftInventoryItemV1(row(nftId, owner, { absent: undefined })), /plain object/);
+  assert.throws(() => normalizeNftInventoryItemV1(row(nftId, owner, cycle), 753), /structural bounds/);
+  assert.throws(() => normalizeNftInventoryItemV1(row(nftId, owner, { absent: undefined }), 753), /plain object/);
 });
 
 test("inventory aborts before a query and never accepts options that alter the fixed owner filter", async () => {
   let calls = 0;
   const client = { async listExplorerNfts() { calls++; return page([]); } };
   const controller = new AbortController(); controller.abort();
-  await assert.rejects(readOwnedNftInventoryV1(client, { ownerAccountId: owner, signal: controller.signal }));
-  await assert.rejects(readOwnedNftInventoryV1(client, { ownerAccountId: owner, ownedBy: destination }), /unsupported field/);
+  await assert.rejects(readOwnedNftInventoryV1(client, { ownerAccountId: owner, signal: controller.signal, networkPrefix: 753 }));
+  await assert.rejects(readOwnedNftInventoryV1(client, { ownerAccountId: owner, ownedBy: destination, networkPrefix: 753 }), /unsupported field/);
   assert.equal(calls, 0);
 });
 
@@ -91,6 +91,6 @@ test("native NFT offer codecs bind all purchase terms and the exact metadata con
     const closed = { ...record, status, closed_at_height: "2" };
     assert.equal(normalizeNftSaleRecordV1(closed, networkId.toString()).status.kind, status.kind);
   }
-  const payloadBytes = buildBrowserInstructionTransactionPayload({ networkId, authority: destination, instructions: [buildNftMarketInstructionV1("BuyNftV1", { offer })], feePayment: { payer: "authority", chargeLimits: [] }, creationTimeMs: 1 });
-  validateBrowserInstructionTransactionSignable({ networkId, authority: destination, signingPublicKey: ed25519.getPublicKey(new Uint8Array(32).fill(9)), payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) });
+  const payloadBytes = buildBrowserInstructionTransactionPayload({ networkId, networkPrefix: 753, authority: destination, instructions: [buildNftMarketInstructionV1("BuyNftV1", { offer })], feePayment: { payer: "authority", chargeLimits: [] }, creationTimeMs: 1 });
+  validateBrowserInstructionTransactionSignable({ networkId, networkPrefix: 753, authority: destination, signingPublicKey: ed25519.getPublicKey(new Uint8Array(32).fill(9)), payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) });
 });

@@ -227,7 +227,7 @@ def test_runtime_callback_cannot_refresh_original_readiness_binding(ready_setup,
         if changed: return
         changed.append(True)
         if field == 'image': c.images[1].path = c.images[0].path
-        if field == 'anchors': c.inputs._anchors = replace(c.inputs._anchors, context_id=c.inputs.genesis_hash)
+        if field == 'anchors': c.inputs._anchors = replace(c.inputs._anchors, genesis_epoch_context_id=c.inputs.genesis_hash)
         if field == 'input': c.step._inputs = object()
     c.step._verify_runtime = retarget
     with pytest.raises(launcher.LauncherError): c.run.await_genesis_ready(c.step)

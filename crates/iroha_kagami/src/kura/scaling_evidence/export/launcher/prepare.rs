@@ -1,10 +1,10 @@
 //! Canonical preparation transport codec for independently supplied launch facts.
 //!
-//! This owner checks the original fact frame, signed schedule, finality chain and
-//! complete query-frame consistency, then encodes the existing request/bundle
-//! transports. It does not read Kura, authenticate the complete Native transcript,
-//! retain filesystem authority or publish anything. Only export/replay can prove
-//! the query proofs against the real Native carrier and complete context-write witness.
+//! This owner checks the original fact frame, signed schedule, carrier chain and
+//! complete native execution transcript, then encodes the request/bundle transports.
+//! The same native owner authenticates the original SignedBlockWire carriers, R context
+//! proofs and queried input/output inclusions. This codec does not read Kura, retain
+//! filesystem authority or publish anything; disk export rechecks the exact originals.
 //! The filesystem prepare-pair owner retains the original facts lease through
 //! both output publications and the final reply. These buffers alone are neither
 //! a prepare publication receipt nor canonical execution authority.
@@ -13,7 +13,7 @@ pub(in crate::kura::scaling_evidence::export) mod assemble;
 
 use super::{LimitsV1, PlanV1, RequestV1};
 use crate::kura::scaling_evidence::export::{
-    HeightInputBinding, admit, check_supplied,
+    HeightInputBinding, admit,
     filesystem::{SuppliedEvidenceBundleV1, SuppliedEvidenceHeightV1},
 };
 use crate::kura::scaling_evidence::*;
@@ -129,87 +129,16 @@ pub(in crate::kura::scaling_evidence::export) fn prepare(
     }
     .into_parts()?;
     let bindings = derive_bindings(&heights, &plan, limits)?;
-    let ScalingProofVerifier {
-        mut plan,
-        expected,
-        by_hash,
-        mut input_bytes,
-        ..
-    } = admit(plan, limits, &bindings)?;
-    let mut finality = iroha_data_model::bridge::BridgeFinalityVerifier::with_context(
-        plan.network_id,
-        plan.first_context,
-    );
-    let mut query_count = 0usize;
-    let mut seen = vec![false; expected.len()];
-    for (height, binding) in heights.iter().zip(&bindings) {
-        input_bytes = check_supplied(
-            height.height,
-            &height.finality,
-            &height.contexts,
-            &height.queries,
-            binding,
-            input_bytes,
-            limits,
-            &mut query_count,
-        )?;
-        let proof: BridgeFinalityProof = canonical(&height.finality)?;
-        ensure!(
-            proof.block_header.height().get() == height.height,
-            "prepare finality height mismatch"
-        );
-        finality.verify(&proof)?;
-        let _: iroha_core::state::NativeLaneContextsEvidenceV1 = canonical(&height.contexts)?;
-        let mut previous_output = None;
-        for (index, raw) in height.queries.iter().enumerate() {
-            let query: CommittedTransaction = canonical(raw)?;
-            let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
-                &query.output
-            else {
-                return Err(eyre!("prepare query is not a Network output"));
-            };
-            let output_index = query.output_proof.leaf_index();
-            ensure!(
-                query.block_hash == proof.block_header.hash()
-                    && query.entrypoint_hash == query.entrypoint.hash()
-                    && query.output_hash == HashOf::new(&query.output)
-                    && usize::try_from(query.entrypoint_proof.leaf_index())? == index
-                    && usize::try_from(output.input_index)? == index
-                    && previous_output.is_none_or(|previous| previous < output_index),
-                "prepare query carrier, identity, or ordered leaf mismatch"
-            );
-            previous_output = Some(output_index);
-            let slot = *by_hash
-                .get(&query.entrypoint_hash)
-                .ok_or_else(|| eyre!("prepare query is not a scheduled request"))?;
-            ensure!(!seen[slot], "prepare request appears more than once");
-            let TransactionEntrypoint::External(signed) = &query.entrypoint else {
-                return Err(eyre!("prepare query is not an external signed request"));
-            };
-            let original = &expected[slot];
-            let signed_count = norito::canonical_frame_len(signed)?;
-            ensure!(
-                signed_count == original.request.signed_transaction.len()
-                    && signed == &original.transaction
-                    && query.result().0.is_ok()
-                    && query.result().1.is_empty(),
-                "prepare signed request failed or changed"
-            );
-            let signed_bytes = norito::encode_canonical(signed)?;
-            ensure!(
-                signed_bytes.len() == signed_count
-                    && signed_bytes == original.request.signed_transaction,
-                "prepare original signed bytes changed"
-            );
-            seen[slot] = true;
-        }
+    // Preparation authenticates the same complete native execution as export.
+    // The completed owner returns the original moved launch plan; proof rows
+    // never reconstruct its signed requests, routes or trust roots.
+    let mut verifier = admit(plan, limits, &bindings)?;
+    for height in &heights {
+        let queries: Vec<_> = height.queries.iter().map(Vec::as_slice).collect();
+        verifier.push_height(&height.carrier, &height.lane_evidence, &queries)?;
     }
-    ensure!(
-        seen.iter().all(|found| *found),
-        "prepare queries omit scheduled requests"
-    );
-    // Restore the same moved requests; do not rebuild them from query evidence.
-    plan.scheduled = expected.into_iter().map(|entry| entry.request).collect();
+    let (completed, plan) = verifier.finish_with_plan()?;
+    drop(completed);
     let bundle = SuppliedEvidenceBundleV1 {
         version: 1,
         heights,
@@ -258,16 +187,16 @@ fn derive_bindings(
     let mut total = 0u64;
     let mut queries = 0usize;
     // Every count and inner byte bound is checked before allocating hash vectors
-    // or decoding any finality/query object.
+    // or decoding any carrier/query object.
     for (index, row) in heights.iter().enumerate() {
         ensure!(
             row.height == plan.first_height + u64::try_from(index)?,
             "prepare height order mismatch"
         );
-        bounded(&row.finality, MAX_FINALITY_BYTES)?;
-        total = charged(total, row.finality.len(), limits.input_bytes)?;
-        bounded(&row.contexts, MAX_FINALITY_BYTES)?;
-        total = charged(total, row.contexts.len(), limits.input_bytes)?;
+        bounded(&row.carrier, MAX_CARRIER_BYTES)?;
+        total = charged(total, row.carrier.len(), limits.input_bytes)?;
+        bounded(&row.lane_evidence, MAX_CONTEXT_BYTES)?;
+        total = charged(total, row.lane_evidence.len(), limits.input_bytes)?;
         queries = queries
             .checked_add(row.queries.len())
             .ok_or_else(|| eyre!("prepare query count overflow"))?;
@@ -284,8 +213,8 @@ fn derive_bindings(
         .iter()
         .map(|row| HeightInputBinding {
             height: row.height,
-            finality_hash: Hash::new(&row.finality),
-            contexts_hash: Hash::new(&row.contexts),
+            carrier_hash: Hash::new(&row.carrier),
+            lane_evidence_hash: Hash::new(&row.lane_evidence),
             query_hashes: row.queries.iter().map(Hash::new).collect(),
         })
         .collect())

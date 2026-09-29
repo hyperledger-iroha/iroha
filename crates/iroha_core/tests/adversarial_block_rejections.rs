@@ -79,7 +79,7 @@ fn setup_world() -> AdversarialSetup {
     let chain_id = ChainId::from("adversarial-block-rejections");
     let state = State::new_with_chain_for_testing(world, kura, query, chain_id);
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     AdversarialSetup {
@@ -177,17 +177,23 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         crypto.as_ref(),
     )
     .expect("admission should pass for valid transfer");
-    let (_, forged_result) = state_block.validate_transaction(forged_transfer, &mut ivm_cache);
+    let (_, forged_result) = state_block
+        .validate_transaction(forged_transfer, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         forged_result.is_err(),
         "transfer from missing asset should be rejected"
     );
-    let (_, burn_result) = state_block.validate_transaction(missing_burn, &mut ivm_cache);
+    let (_, burn_result) = state_block
+        .validate_transaction(missing_burn, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         burn_result.is_err(),
         "burn on missing asset should be rejected"
     );
-    let (_, valid_result) = state_block.validate_transaction(valid_transfer, &mut ivm_cache);
+    let (_, valid_result) = state_block
+        .validate_transaction(valid_transfer, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(valid_result.is_ok(), "well-formed transfer should succeed");
     state_block
         .commit_world_overlay_for_testing()

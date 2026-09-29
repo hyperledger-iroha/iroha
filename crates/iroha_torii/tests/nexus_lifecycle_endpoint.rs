@@ -16,10 +16,11 @@ use iroha_core::{
 };
 use iroha_data_model::nexus::LaneLifecycleStatusV1;
 use iroha_model_base::topology::LaneId;
-use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
 use std::{collections::BTreeSet, sync::Arc};
 #[path = "fixtures.rs"]
 mod fixtures;
+const NEXUS_LANE_LIFECYCLE: &str =
+    iroha_torii_shared::route_catalog::core::NEXUS_LIFECYCLE_GET.path();
 struct NexusHarness {
     app: iroha_torii::TestApiRouterRuntime,
     queue: Arc<Queue>,

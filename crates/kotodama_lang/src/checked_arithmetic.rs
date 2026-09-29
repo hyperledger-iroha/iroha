@@ -6,11 +6,13 @@
 //! width, sign, scale, normalization, or exact-division boundary.
 use crate::{
     ast::{BinaryOp, UnaryOp},
+    builtins::Builtin,
     semantic::{ExprKind, Type, TypedExpr},
 };
 use iroha_primitives::{
     bigint::{BigInt, BigIntError},
     numeric::{MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
+    numeric_int::{IntBinaryOperation, IntUnaryOperation},
 };
 /// One fully evaluated source numeric value.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +53,7 @@ impl ConstantNumericError {
             Self::Numeric(NumericOperationError::InexactConversion) => "E_INEXACT_CONVERSION",
             Self::Numeric(NumericOperationError::NegativeQuantity) => "E_NEGATIVE_QUANTITY",
             Self::Numeric(NumericOperationError::QuantityUnderflow) => "E_QUANTITY_UNDERFLOW",
+            Self::Numeric(NumericOperationError::NegativeSquareRoot) => "E_NEGATIVE_SQUARE_ROOT",
             Self::InvalidTypedOperation => "E_INTERNAL_NUMERIC_MATRIX",
         }
     }
@@ -121,6 +124,55 @@ pub(crate) fn evaluate(
             )?))),
             _ => Err(ConstantNumericError::InvalidTypedOperation),
         },
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
+            let unary = match Builtin::from_name(name) {
+                Some(Builtin::Isqrt) => Some(IntUnaryOperation::Isqrt),
+                Some(Builtin::Abs) => Some(IntUnaryOperation::Abs),
+                _ => None,
+            };
+            let binary = match Builtin::from_name(name) {
+                Some(Builtin::Min) => Some(IntBinaryOperation::Min),
+                Some(Builtin::Max) => Some(IntBinaryOperation::Max),
+                Some(Builtin::DivCeil) => Some(IntBinaryOperation::DivCeil),
+                Some(Builtin::Gcd) => Some(IntBinaryOperation::Gcd),
+                Some(Builtin::Mean) => Some(IntBinaryOperation::Mean),
+                _ => None,
+            };
+            if unary.is_none() && binary.is_none() {
+                return Ok(None);
+            }
+            let Some(first) = args.first() else {
+                return Err(ConstantNumericError::InvalidTypedOperation);
+            };
+            let Some(ConstantNumeric::Int(left)) = evaluate(first)? else {
+                return Ok(None);
+            };
+            let result = if let Some(operation) = unary {
+                if args.len() != 1 {
+                    return Err(ConstantNumericError::InvalidTypedOperation);
+                }
+                operation.evaluate(&left)
+            } else if let Some(operation) = binary {
+                if args.len() != 2 {
+                    return Err(ConstantNumericError::InvalidTypedOperation);
+                }
+                let Some(ConstantNumeric::Int(right)) = evaluate(&args[1])? else {
+                    return Ok(None);
+                };
+                operation.evaluate(&left, &right)
+            } else {
+                return Err(ConstantNumericError::InvalidTypedOperation);
+            };
+            result
+                .map(|value| Some(ConstantNumeric::Int(value)))
+                .map_err(|error| {
+                    if error == NumericOperationError::MantissaOverflow {
+                        ConstantNumericError::Int(BigIntError::Overflow)
+                    } else {
+                        ConstantNumericError::Numeric(error)
+                    }
+                })
+        }
         ExprKind::NumericCast { expr } => {
             let Some(value) = evaluate(expr)? else {
                 return Ok(None);
@@ -271,6 +323,70 @@ mod tests {
             },
             ty,
         }
+    }
+    #[test]
+    fn checked_helper_folding_uses_shared_full_width_operations() {
+        for (name, arguments, expected) in [
+            (
+                "isqrt",
+                vec![int(BigInt::from(17_u64))],
+                BigInt::from(4_u64),
+            ),
+            (
+                "abs",
+                vec![int(BigInt::from(-17_i64))],
+                BigInt::from(17_u64),
+            ),
+            (
+                "min",
+                vec![int(BigInt::from(-7_i64)), int(BigInt::from(2_u64))],
+                BigInt::from(-7_i64),
+            ),
+            (
+                "max",
+                vec![int(BigInt::from(-7_i64)), int(BigInt::from(2_u64))],
+                BigInt::from(2_u64),
+            ),
+            (
+                "div_ceil",
+                vec![int(BigInt::from(-7_i64)), int(BigInt::from(2_u64))],
+                BigInt::from(-3_i64),
+            ),
+            (
+                "gcd",
+                vec![int(BigInt::from(-12_i64)), int(BigInt::from(8_u64))],
+                BigInt::from(4_u64),
+            ),
+            (
+                "mean",
+                vec![int(BigInt::from(-7_i64)), int(BigInt::from(2_u64))],
+                BigInt::from(-2_i64),
+            ),
+        ] {
+            let expression = TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_owned(),
+                    args: arguments,
+                },
+                ty: Type::Int,
+            };
+            assert_eq!(
+                evaluate(&expression),
+                Ok(Some(ConstantNumeric::Int(expected))),
+                "{name}"
+            );
+        }
+        let negative = TypedExpr {
+            expr: ExprKind::Call {
+                name: "isqrt".to_owned(),
+                args: vec![int(BigInt::from(-1_i64))],
+            },
+            ty: Type::Int,
+        };
+        assert_eq!(
+            evaluate(&negative).unwrap_err().code(),
+            "E_NEGATIVE_SQUARE_ROOT"
+        );
     }
     #[test]
     fn integer_folding_uses_the_full_signed_domain() {

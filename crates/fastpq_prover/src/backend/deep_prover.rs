@@ -111,9 +111,7 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         let fri: [CoefficientReplayPlan; 5] = (0..5)
             .map(|round| CoefficientReplayPlan::fri(round, coefficient_limits))
             .collect::<Result<Vec<_>>>()?
-            .try_into()
-            .ok()
-            .expect("five fixed coefficient layers");
+            .try_into().expect("five fixed coefficient layers");
         let terminal = CoefficientReplayPlan::terminal(coefficient_limits)?;
         let stream = stream_limits(limits);
         let queries = maximal_queries();

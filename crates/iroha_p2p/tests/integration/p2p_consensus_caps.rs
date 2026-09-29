@@ -44,7 +44,7 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
         execution_policy_hash: [0xB4; 32],
         nexus_policy_digest: [0xA5; 32],
-        v2_config_fingerprint: [0xC3; 32],
+        native_config_fingerprint: [0xC3; 32],
         ivm_gas_schedule_hash: [0xE7; 32],
     }
 }
@@ -61,7 +61,7 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded, expected);
     assert_eq!(decoded.execution_policy_hash, [0xB4; 32]);
     assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
-    assert_eq!(decoded.v2_config_fingerprint, [0xC3; 32]);
+    assert_eq!(decoded.native_config_fingerprint, [0xC3; 32]);
     assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
 }
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
@@ -282,7 +282,7 @@ async fn consensus_config_caps_mismatch_rejected() {
     let addr2 = super::next_addr();
     let config_caps = sample_consensus_config_caps();
     let mut mismatched = config_caps.clone();
-    mismatched.v2_config_fingerprint = [0xD4; 32];
+    mismatched.native_config_fingerprint = [0xD4; 32];
     let caps_ok = ConsensusHandshakeCaps {
         mode: ConsensusMode::Permissioned,
         proto_version: 2,

@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import signal
+import socketserver
 import sys
 import threading
 import time
@@ -68,6 +69,12 @@ class _ToriiHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, RequestHandlerClass, state: "_MockState"):
         super().__init__(server_address, RequestHandlerClass)
         self.mock_state = state
+
+    def server_bind(self) -> None:
+        # The mock only serves a numeric loopback address. HTTPServer's default
+        # binding performs a reverse-DNS lookup that can stall isolated runners.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class _ToriiHandler(BaseHTTPRequestHandler):
@@ -1671,7 +1678,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         server.start()
         print(json.dumps({"base_url": server.base_url}), flush=True)
         try:
-            server.serve_forever()
+            # The background thread owns the server loop; running a second
+            # loop here can deadlock signal-driven shutdown on test teardown.
+            threading.Event().wait()
         except SystemExit:
             raise
         except Exception:  # pragma: no cover - unexpected runtime failure

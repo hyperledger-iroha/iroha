@@ -460,6 +460,31 @@ def test_manifest_allows_amount_as_struct_field_identifier() -> None:
     assert manifest.states[-1].type_name == "Transfer{amount: quantity}"
 
 
+@pytest.mark.parametrize("type_name", [
+    "Empty{}", "Other{}", "Transfer{}", "List<Empty{}, 2>", "List<List<Empty{}, 2>, 2>",
+    "Envelope{empty: Empty{}}", "StateMap<int, Empty{}>",
+    "std/math@1.0.0::Math::Empty{}",
+])
+def test_manifest_preserves_empty_named_state_products(type_name: str) -> None:
+    payload = _full_manifest_payload()
+    payload["states"].append({"name": "Stored", "type_name": type_name})
+    manifest = ContractManifest.from_payload(payload)
+    assert manifest.states[-1].type_name == type_name
+
+
+@pytest.mark.parametrize("type_name", [
+    "{}", "Empty{", "Empty{ }", "Empty{,}", "Empty{: int}",
+    "Empty{field: int, }", "Empty{}trailing", "List<Empty{},2>",
+    "List<Empty{}, 0>", "Envelope{empty: Empty{}, empty: Empty{}}",
+    "StatePage{}", "Option{}", "int{}",
+])
+def test_manifest_rejects_malformed_empty_state_products(type_name: str) -> None:
+    payload = _full_manifest_payload()
+    payload["states"].append({"name": "Stored", "type_name": type_name})
+    with pytest.raises(TypeError):
+        ContractManifest.from_payload(payload)
+
+
 def test_manifest_allows_amount_field_in_struct_nested_under_state_map() -> None:
     payload = _full_manifest_payload()
     payload["states"][0]["type_name"] = (
@@ -501,7 +526,7 @@ def test_manifest_does_not_exempt_retired_types_outside_struct_field_positions(
         "Transfer{amount:quantity}",
         "Transfer{amount: quantity, amount: quantity}",
         "Transfer{Amount: quantity}",
-        "Transfer{}",
+        "Transfer{ }",
         "List<quantity, 0>",
         "List<quantity, 65>",
         "StateMap<Json, quantity>",
@@ -1230,27 +1255,31 @@ def test_contract_manifest_rejects_invalid_v1_shapes(mutate: Any, message: str) 
 
 def test_contract_manifest_rejects_overwide_argument_record() -> None:
     payload = _full_manifest_payload()
+    payload["entrypoints"][0]["params"] = [
+        {"name": f"field_{index}", "type_name": "bool"}
+        for index in range(8193)
+    ]
     payload["entrypoints"][0]["argument_schema"]["fields"] = [
         {
             "name": f"field_{index}",
             "ty": {"nodes": [{"kind": "Leaf", "value": {"kind": "Bool", "value": None}}]},
         }
-        for index in range(14)
+        for index in range(8193)
     ]
 
     with pytest.raises(TypeError, match="canonical V1 bounds"):
         ContractManifest.from_payload(payload)
 
 
-def test_contract_manifest_rejects_overwide_return_record() -> None:
+def test_contract_manifest_rejects_return_schema_exceeding_node_bound() -> None:
     payload = _full_manifest_payload()
-    payload["entrypoints"][0]["return_type"] = "wide tuple"
+    payload["entrypoints"][0]["return_type"] = "(" + ", ".join(["bool"] * 256) + ")"
     payload["entrypoints"][0]["return_schema"] = {
         "nodes": [
-            {"kind": "Tuple", "value": 14},
-            *[{"kind": "Leaf", "value": {"kind": "Bool", "value": None}} for _ in range(14)],
+            {"kind": "Tuple", "value": 256},
+            *[{"kind": "Leaf", "value": {"kind": "Bool", "value": None}} for _ in range(256)],
         ]
     }
 
-    with pytest.raises(TypeError, match="canonical exact V1 interface"):
+    with pytest.raises(TypeError, match="canonical V1 schema"):
         ContractManifest.from_payload(payload)

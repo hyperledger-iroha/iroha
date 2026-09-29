@@ -803,8 +803,8 @@ fn export_with_hook(
             );
             supplied.push(SuppliedHeightEvidence {
                 height: height.height,
-                finality: height.finality,
-                contexts: height.contexts,
+                carrier: height.carrier,
+                lane_evidence: height.lane_evidence,
                 queries: height.queries,
             });
         }
@@ -1038,6 +1038,7 @@ mod tests;
 mod prepare_pair;
 #[cfg(test)]
 pub(crate) use prepare_pair::PreparedLaunch;
+pub(crate) use prepare_pair::collect_pair::{CollectedOutputPair, collect_bound};
 pub(crate) use prepare_pair::{PreparedOutputPair, prepare_bound};
 
 #[path = "facts.rs"]
@@ -1047,3 +1048,7 @@ pub(in crate::kura::scaling_evidence::export) use facts::produce_facts;
 #[path = "stopped_tip.rs"]
 mod stopped_tip;
 pub(crate) use stopped_tip::observe_stopped_tip;
+
+#[path = "lane_frames.rs"]
+mod lane_frames;
+pub(in crate::kura::scaling_evidence::export) use lane_frames::LaneFrameReader;

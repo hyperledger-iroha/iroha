@@ -189,6 +189,11 @@ python/iroha_python/src/iroha_python/*.so.*
 python/iroha_python/src/iroha_python/*.dylib
 python/iroha_python/src/iroha_python/*.pyd
 python/iroha_python/src/iroha_python/*.dll
+python/iroha_native/src/iroha_native/*.so
+python/iroha_native/src/iroha_native/*.so.*
+python/iroha_native/src/iroha_native/*.dylib
+python/iroha_native/src/iroha_native/*.pyd
+python/iroha_native/src/iroha_native/*.dll
 scripts/__pycache__/
 
 # Swift Package Manager scratch artefacts

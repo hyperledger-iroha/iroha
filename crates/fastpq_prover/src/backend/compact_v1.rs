@@ -249,15 +249,12 @@ impl norito::core::SerializePayload for BodyFields<'_> {
         // Use Norito's existing sequence owner for counts, element lengths and
         // checked emission. Both variants are stack arrays of borrowed views.
         match self {
-            Self::One(field) => norito::core::write_element_sequence::<ByteField<'_>, _>(
-                writer,
-                [ByteField(field)],
-                norito::core::max_archive_len(),
-            ),
+            Self::One(field) => {
+                norito::core::write_element_sequence::<ByteField<'_>, _>(writer, [ByteField(field)])
+            }
             Self::Two(first, second) => norito::core::write_element_sequence::<ByteField<'_>, _>(
                 writer,
                 [ByteField(first), ByteField(second)],
-                norito::core::max_archive_len(),
             ),
         }
     }
@@ -479,7 +476,7 @@ impl Context {
 
     #[cfg(test)]
     fn expand(&self, round: Round, body: &[u8], output: &mut [u8]) -> Result<()> {
-        if output.len() != round.tape_bytes() || output.len() % 48 != 0 {
+        if output.len() != round.tape_bytes() || !output.len().is_multiple_of(48) {
             return Err(CandidateError::TapeLength);
         }
         self.expand_blocks(round.0, body, output)
@@ -801,7 +798,7 @@ impl Transcript {
 
     /// Sample and decode the next whole tape, retaining all its raw bytes.
     pub(super) fn challenge(&mut self) -> Result<Message> {
-        self.challenge_with(|context, round, body, output| context.expand(round, body, output))
+        self.challenge_with(Context::expand)
     }
 
     fn challenge_with(

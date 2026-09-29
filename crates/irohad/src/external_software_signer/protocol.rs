@@ -137,6 +137,12 @@ impl SoftwareSignerPublicBindingV1 {
             || !self.role.allows_algorithm(self.key_algorithm)
             || public_key_digest(&self.public_key)? != self.public_key_digest
             || !valid_software_signer_handle(self.role, &self.handle)
+            || self.role == SignerRoleV1::MusubiProviderAttestation
+                && super::musubi_subject::validate_key_subject(
+                    &self.purpose_binding,
+                    &self.public_key,
+                )
+                .is_err()
         {
             return Err(());
         }
@@ -332,6 +338,7 @@ pub(super) fn valid_software_signer_handle(role: SignerRoleV1, value: &str) -> b
         SignerRoleV1::BillingStatement => ("billing", None),
         SignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
         SignerRoleV1::PopCredentials => ("pop-credentials", None),
+        SignerRoleV1::MusubiProviderAttestation => ("musubi-provider-attestation", None),
         // TODO: implement these roles' purpose-aware payload validation and their
         // dedicated receipt/state protocols before advertising them through this
         // generic service. This is a service capability boundary; their provider

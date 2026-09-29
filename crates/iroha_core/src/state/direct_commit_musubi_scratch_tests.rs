@@ -1,0 +1,687 @@
+//! Direct State commit preserves local Musubi scratch refusal and original retry custody.
+//!
+//! These controls reuse the real four-validator genesis fixture and the existing
+//! validated Musubi publication fixture. They exercise the consuming commit path;
+//! they do not fabricate a finality permit or replace consensus/DA validation.
+
+use super::fixture;
+use crate::state::{State, StateBlock, WorldBlock, deserialize, storage_transactions};
+use iroha_data_model::{block::BlockHeader, musubi::MusubiOrderedPackageEntryV1};
+use mv::{allocation::AllocationBudget, storage::StorageReadOnly};
+use std::{
+    collections::HashSet,
+    future::Future,
+    num::NonZeroUsize,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context, Poll, Wake, Waker},
+};
+
+#[derive(Default)]
+struct Wakes(AtomicUsize);
+
+impl Wake for Wakes {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn stage_musubi(world: &mut WorldBlock<'_>) {
+    let seeded = deserialize::seeded_musubi_publication_world_for_testing();
+    // Copy the existing fixture's complete populated registry, retaining the
+    // real State's genesis accounts, runtime catalog and other authority tables.
+    macro_rules! copy_rows {
+        ($($field:ident),+ $(,)?) => { $(
+            for (key, value) in seeded.$field.view().iter() {
+                world.$field.insert(key.clone(), value.clone());
+            }
+        )+ };
+    }
+    copy_rows!(
+        musubi_namespace_bindings,
+        musubi_package_members,
+        musubi_maintainer_directory,
+        musubi_package_metadata,
+        musubi_packages,
+        musubi_archives,
+        musubi_archive_availability,
+        musubi_archive_reverse_references,
+        musubi_releases,
+        musubi_resolver_index,
+        musubi_public_directory,
+    );
+    *world.musubi_resolver_index_revision.get_mut() =
+        *seeded.musubi_resolver_index_revision.view().get();
+    *world.musubi_replication_shortfall_releases.get_mut() =
+        *seeded.musubi_replication_shortfall_releases.view().get();
+}
+
+pub(super) fn staged_block(
+    state: &State,
+    header: BlockHeader,
+    replacement: bool,
+    populate: bool,
+) -> StateBlock<'_> {
+    let mut block = if replacement {
+        state.block_and_revert_with_pristine_stage(header, |_| Ok::<(), &'static str>(()))
+    } else {
+        state.block_with_pristine_stage(header, |_| Ok::<(), &'static str>(()))
+    }
+    .unwrap_or_else(|error| panic!("actual State block start: {error:?}"));
+    if populate {
+        stage_musubi(&mut block.world);
+    }
+    // The original direct-commit fixture stages these exact empty membership and
+    // header records. None of the production publication guards are bypassed.
+    block.finalize_axt_asset_incarnations().unwrap();
+    block.transactions.insert_block(
+        HashSet::new(),
+        NonZeroUsize::new(usize::try_from(header.height().get()).unwrap()).unwrap(),
+    );
+    block.transactions.validate_commit().unwrap();
+    block.block_hashes.push(header.hash());
+    block.verify_execution_output_publication().unwrap();
+    block.validate_canonical_runtime_projection().unwrap();
+    block.verify_sumeragi_lane_state_publication().unwrap();
+    block.validate_merge_carrier_entrypoint_binding().unwrap();
+    block
+}
+
+#[test]
+fn direct_state_musubi_scratch_refusal_preserves_world_metadata_and_original_retry_owner() {
+    check_direct_refusal(false);
+}
+
+#[test]
+fn replacement_state_musubi_scratch_refusal_preserves_published_predecessor_then_retries() {
+    check_direct_refusal(true);
+}
+
+fn check_direct_refusal(replacement: bool) {
+    let (state, proposal) = fixture();
+    let header = proposal.header();
+    if replacement {
+        // Establish a genuine published predecessor. The replacement takes the
+        // original journals' rollback path, rather than reverting an empty State.
+        staged_block(&state, header, false, false)
+            .commit()
+            .expect("original empty carrier publishes");
+    }
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let before_height = state.transactions.latest_height();
+    let before_hash = state.latest_block_hash_fast();
+    let before_committed_height = state.committed_height();
+    let before_kura_count = state.kura.blocks_count();
+    assert!(state.world.musubi_public_directory.view().is_empty());
+    let budget = state.ivm_execution_budget();
+    let before_reserved = budget.reserved_bytes();
+    let block = staged_block(&state, header, replacement, true);
+    let original_staged_bytes = budget.reserved_bytes() - before_reserved;
+    let successor_bytes = original_cell_successor_bytes(&state);
+    assert_eq!(
+        original_staged_bytes,
+        core::mem::size_of::<crate::state::WorldBlockFields<'_>>() + successor_bytes,
+        "the actual original World shell and complete Cell tokens are retained",
+    );
+    let requested_bytes = core::mem::size_of::<&MusubiOrderedPackageEntryV1>();
+    assert_eq!(block.world.musubi_public_directory.len(), 1);
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    assert!(occupied.belongs_to(&state.ivm_execution_budget()));
+    let expected = budget.try_reserve_bytes(requested_bytes).unwrap_err();
+    let result = block.commit();
+    let Err(storage_transactions::TransactionsBlockError::ExecutionDeferred(reason)) = result
+    else {
+        panic!("must reach direct State's local Musubi refusal, got {result:?}");
+    };
+    let actual = reason.allocation_refusal().expect("typed original refusal");
+    // Equality includes the actual release notification owner and generation,
+    // not just the numeric demand/limit diagnostics.
+    assert_eq!(actual, &expected);
+    let mv::allocation::AllocationRefusal::Capacity { release, .. } = actual else {
+        panic!("occupied original pool yields temporary capacity refusal");
+    };
+    assert_eq!(
+        budget.reserved_bytes(),
+        before_reserved + occupied.remaining_bytes(),
+        "consuming refusal destroys the original shell and all unpublished tokens",
+    );
+    assert_eq!(
+        budget.limit_bytes() - budget.reserved_bytes(),
+        original_staged_bytes,
+        "only the abandoned original execution allocation is refunded",
+    );
+    assert_eq!(state.transactions.latest_height(), before_height);
+    assert_eq!(state.latest_block_hash_fast(), before_hash);
+    assert_eq!(state.committed_height(), before_committed_height);
+    assert_eq!(state.kura.blocks_count(), before_kura_count);
+    assert!(state.world.musubi_public_directory.view().is_empty());
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    assert_eq!(state.state_view_generation() % 2, 0);
+    drop(
+        state
+            .state_commit_lock
+            .try_lock()
+            .expect("commit fence released"),
+    );
+    drop(
+        state
+            .state_write_lock
+            .try_lock()
+            .expect("write fence released"),
+    );
+
+    let wakes = Arc::new(Wakes::default());
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    let mut abandoned = release.clone().wait_for_release();
+    assert_eq!(
+        Pin::new(&mut abandoned).poll(&mut context),
+        Poll::Ready(()),
+        "consuming commit already returned the actual original allocation capacity",
+    );
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+    // The consumed owner no longer needs a retry. Probe capacity afresh while
+    // the independent occupied reservation still holds this SAME finite pool.
+    let fresh_request = budget.limit_bytes() - budget.reserved_bytes() + 1;
+    let fresh = budget.try_reserve_bytes(fresh_request).unwrap_err();
+    let mv::allocation::AllocationRefusal::Capacity {
+        release: fresh_release,
+        ..
+    } = fresh
+    else {
+        panic!("the still-occupied original pool refuses more than its free capacity");
+    };
+    assert_ne!(
+        &fresh_release, release,
+        "actual abandonment advanced the original source"
+    );
+    let mut released = fresh_release.wait_for_release();
+    assert_eq!(Pin::new(&mut released).poll(&mut context), Poll::Pending);
+    let unrelated = AllocationBudget::new(requested_bytes);
+    drop(unrelated.try_reserve_bytes(requested_bytes).unwrap());
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+    assert_eq!(Pin::new(&mut released).poll(&mut context), Poll::Pending);
+    drop(occupied);
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    assert_eq!(Pin::new(&mut released).poll(&mut context), Poll::Ready(()));
+    assert_eq!(budget.reserved_bytes(), before_reserved);
+
+    // A fresh attempt obtains the real original World/membership writers and
+    // completes every semantic/publication guard after the same owner releases.
+    staged_block(&state, header, replacement, true)
+        .commit()
+        .expect("retry publishes after original pool release");
+    assert_eq!(
+        state.transactions.latest_height(),
+        header.height().get() as usize
+    );
+    assert_eq!(state.latest_block_hash_fast(), Some(header.hash()));
+    assert_eq!(state.committed_height(), header.height().get() as usize);
+    assert_eq!(state.world.musubi_public_directory.view().len(), 1);
+    assert_eq!(state.world.musubi_resolver_index.view().len(), 1);
+    assert_ne!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    assert_eq!(
+        budget.reserved_bytes(),
+        before_reserved + if replacement { 0 } else { successor_bytes },
+        "successful publication retains the exact new Cell identities; replacement retires equally funded predecessors",
+    );
+}
+
+fn original_cell_successor_bytes(state: &State) -> usize {
+    use crate::state::world_acquisition::OriginalControlSource as _;
+
+    crate::state::world_acquisition::original_world_cell_control_bytes(&state.world)
+        + state.canonical_runtime.successor_layout().unwrap().size()
+        + state
+            .prev_commit_topology
+            .successor_layout()
+            .unwrap()
+            .size()
+        + state.commit_topology.successor_layout().unwrap().size()
+}
+
+#[test]
+fn retained_state_retries_actual_musubi_capacity_without_rebuilding_its_world_tail() {
+    use crate::state::StatePublicationOutcome;
+    let (state, proposal) = fixture();
+    let header = proposal.header();
+    let budget = state.ivm_execution_budget();
+    let mut block = Box::new(staged_block(&state, header, false, true));
+    let owner = std::ptr::from_ref(&*block);
+    let original_directory = block
+        .world
+        .musubi_public_directory
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<Vec<_>>();
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let mut prepared = None;
+    for _ in 0..3 {
+        let StatePublicationOutcome::Deferred(
+            storage_transactions::TransactionsBlockError::ExecutionDeferred(reason),
+        ) = block.try_publish()
+        else {
+            panic!("real occupied execution pool must defer the original World validator");
+        };
+        assert!(matches!(
+            reason.allocation_refusal(),
+            Some(mv::allocation::AllocationRefusal::Capacity { .. })
+        ));
+        assert_eq!(std::ptr::from_ref(&*block), owner);
+        let identity = block.publication_identity_for_test();
+        assert_ne!(
+            identity.0, 0,
+            "original World mutation effects retained before pure validation"
+        );
+        assert_eq!(
+            identity.1, 0,
+            "snapshot capture follows successful validation"
+        );
+        assert_eq!(*prepared.get_or_insert(identity), identity);
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        assert!(state.state_commit_lock.try_lock().is_some());
+        assert!(state.state_write_lock.try_lock().is_some());
+        assert_eq!(
+            block
+                .world
+                .musubi_public_directory
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<Vec<_>>(),
+            original_directory
+        );
+        assert!(state.world.musubi_public_directory.view().is_empty());
+    }
+    // The pending owner cannot admit post-capture writes, even after local deferral.
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = &mut block.world;
+        }))
+        .is_err()
+    );
+    drop(occupied);
+    assert!(matches!(
+        block.try_publish(),
+        StatePublicationOutcome::Published
+    ));
+    assert!(
+        matches!(block.try_publish(), StatePublicationOutcome::Published),
+        "completed owner is idempotent"
+    );
+    drop(block);
+    assert_eq!(
+        state.transactions.latest_height(),
+        header.height().get() as usize
+    );
+    assert_eq!(state.latest_block_hash_fast(), Some(header.hash()));
+    assert_eq!(state.world.musubi_public_directory.view().len(), 1);
+}
+
+#[test]
+fn retained_state_refuses_changed_publication_generation_without_rebase() {
+    use crate::state::StatePublicationOutcome;
+    let (state, proposal) = fixture();
+    let budget = state.ivm_execution_budget();
+    let mut block = Box::new(staged_block(&state, proposal.header(), false, true));
+    let original = std::ptr::from_ref(&*block);
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    assert!(matches!(
+        block.try_publish(),
+        StatePublicationOutcome::Deferred(_)
+    ));
+    // Complete an actual State visibility interval under its canonical writer.
+    // Its changed generation is not authority to rebase this captured original.
+    let mut notice = state.state_view_publication();
+    let writer = state.state_write_lock.lock();
+    drop(notice.begin());
+    drop(writer);
+    drop(notice);
+    drop(occupied);
+    assert!(matches!(
+        block.try_publish(),
+        StatePublicationOutcome::RecoveryRequired(
+            storage_transactions::TransactionsBlockError::SnapshotObservationChanged
+        )
+    ));
+    assert_eq!(std::ptr::from_ref(&*block), original);
+    assert!(matches!(
+        block.try_publish(),
+        StatePublicationOutcome::RecoveryRequired(
+            storage_transactions::TransactionsBlockError::PublicationRecoveryRequired
+        )
+    ));
+    drop(block);
+    assert!(state.world.musubi_public_directory.view().is_empty());
+}
+
+#[test]
+fn retained_state_deferred_releases_complete_inventory_while_frozen_reads_keep_originals() {
+    use crate::state::StatePublicationOutcome;
+    use std::{sync::mpsc, time::Duration};
+    for replacement in [false, true] {
+        let (state, proposal) = fixture();
+        let header = proposal.header();
+        if replacement {
+            staged_block(&state, header, false, false).commit().unwrap();
+        }
+        let budget = state.ivm_execution_budget();
+        let mut original = Some(Box::new(staged_block(&state, header, replacement, true)));
+        let owner = std::ptr::from_ref(&**original.as_ref().unwrap());
+        let world_owner =
+            std::ptr::from_ref(&**original.as_ref().unwrap().world.fields.as_ref().unwrap());
+        let directory = std::ptr::from_ref(
+            original
+                .as_ref()
+                .unwrap()
+                .world
+                .musubi_public_directory
+                .iter()
+                .next()
+                .unwrap()
+                .1,
+        );
+        let occupied = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        for _ in 0..3 {
+            assert!(matches!(
+                original.as_mut().unwrap().try_publish(),
+                StatePublicationOutcome::Deferred(_)
+            ));
+            // A separate thread acquires the complete real World inventory plus
+            // all runtime Cells and membership. A failed regression is unwound
+            // before join, so the assertion cannot strand a blocked writer.
+            std::thread::scope(|scope| {
+                let (ready, observed) = mpsc::channel();
+                let (release, wait) = mpsc::channel();
+                let state = &state;
+                let probe = scope.spawn(move || {
+                    let probe_budget = AllocationBudget::new(16 * 1024 * 1024);
+                    let world = state.world.try_block(&probe_budget).unwrap();
+                    let runtime = state.canonical_runtime.block();
+                    let previous = state.prev_commit_topology.block();
+                    let next = state.commit_topology.block();
+                    let membership = state.transactions.block();
+                    ready.send(()).unwrap();
+                    let _ = wait.recv();
+                    drop((world, runtime, previous, next, membership));
+                });
+                let free = observed.recv_timeout(Duration::from_secs(5)).is_ok();
+                if !free {
+                    drop(original.take());
+                }
+                let unchanged = original.as_ref().is_some_and(|block| {
+                    std::ptr::from_ref(&**block) == owner
+                        && std::ptr::from_ref(&**block.world.fields.as_ref().unwrap())
+                            == world_owner
+                        && std::ptr::from_ref(
+                            block.world.musubi_public_directory.iter().next().unwrap().1,
+                        ) == directory
+                        && block.world.musubi_public_directory.len() == 1
+                });
+                let _ = release.send(());
+                probe.join().unwrap();
+                assert!(
+                    free,
+                    "Deferred must free every original World/Trigger/runtime/membership writer"
+                );
+                assert!(
+                    unchanged,
+                    "frozen reads retain exact original storage while other writers are held"
+                );
+            });
+            assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        }
+        drop(occupied);
+        let block = original.as_mut().unwrap();
+        assert!(matches!(
+            block.try_publish(),
+            StatePublicationOutcome::Published
+        ));
+        assert!(matches!(
+            block.try_publish(),
+            StatePublicationOutcome::Published
+        ));
+        drop(original);
+        assert_eq!(state.world.musubi_public_directory.view().len(), 1);
+        assert_eq!(
+            state.transactions.latest_height(),
+            header.height().get() as usize
+        );
+    }
+}
+
+#[test]
+fn retained_state_late_world_busy_recovers_all_original_cursors_before_retry() {
+    use crate::state::StatePublicationOutcome;
+    let (state, proposal) = fixture();
+    let budget = state.ivm_execution_budget();
+    let mut original = Box::new(staged_block(&state, proposal.header(), false, true));
+    let owner = std::ptr::from_ref(&*original);
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    assert!(matches!(
+        original.try_publish(),
+        StatePublicationOutcome::Deferred(_)
+    ));
+    drop(occupied);
+    let blocker = state.world.merge_global_state_root.block();
+    for _ in 0..3 {
+        assert!(matches!(
+            original.try_publish(),
+            StatePublicationOutcome::Deferred(
+                storage_transactions::TransactionsBlockError::PublicationBusy(_)
+            )
+        ));
+        assert_eq!(std::ptr::from_ref(&*original), owner);
+        assert_eq!(original.world.musubi_public_directory.len(), 1);
+        // These actual acquisitions precede the held last World Cell in the
+        // publication inventory and must have been recovered after its refusal.
+        drop(state.world.parameters.block());
+        drop(state.canonical_runtime.block());
+        drop(state.transactions.block());
+        assert!(state.state_write_lock.try_lock().is_some());
+        assert!(state.state_commit_lock.try_lock().is_some());
+    }
+    drop(blocker);
+    assert!(matches!(
+        original.try_publish(),
+        StatePublicationOutcome::Published
+    ));
+    drop(original);
+    assert_eq!(state.world.musubi_public_directory.view().len(), 1);
+}
+
+#[test]
+fn retained_state_equal_value_component_advance_never_rebases_original_predecessor() {
+    use crate::state::StatePublicationOutcome;
+    let (state, proposal) = fixture();
+    let budget = state.ivm_execution_budget();
+    let mut original = Box::new(staged_block(&state, proposal.header(), false, true));
+    let owner = std::ptr::from_ref(&*original);
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    assert!(matches!(
+        original.try_publish(),
+        StatePublicationOutcome::Deferred(_)
+    ));
+    drop(occupied);
+    let generation = state.state_view_generation();
+    // A component-only test publication keeps its value and State scalar equal,
+    // but replaces the exact lower predecessor. Equal values grant no authority.
+    let other = state.world.parameters.block();
+    other.commit();
+    assert_eq!(state.state_view_generation(), generation);
+    assert!(matches!(
+        original.try_publish(),
+        StatePublicationOutcome::RecoveryRequired(
+            storage_transactions::TransactionsBlockError::SnapshotObservationChanged
+        )
+    ));
+    assert_eq!(std::ptr::from_ref(&*original), owner);
+    drop(original);
+    assert!(state.world.musubi_public_directory.view().is_empty());
+}
+
+#[test]
+fn retained_state_da_capacity_refusal_keeps_original_bundle_and_all_writers_free() {
+    use crate::state::{PendingDaCommitmentBundle, StatePublicationOutcome};
+    use iroha_data_model::{
+        da::{
+            commitment::{
+                DaCommitmentBundle, DaCommitmentKey, DaCommitmentRecord, DaProofScheme,
+                RetentionClass,
+            },
+            types::{BlobDigest, StorageTicketId},
+        },
+        sorafs::pin_registry::ManifestDigest,
+    };
+    use iroha_model_base::topology::LaneId;
+    let (state, proposal) = fixture();
+    let header = proposal.header();
+    let budget = state.ivm_execution_budget();
+    let mut original = Box::new(staged_block(&state, header, false, false));
+    // Component input for the publication owner: this is a real signature, but
+    // this resource test does not assert DA service authorization or block finality.
+    let key = iroha_crypto::KeyPair::from_seed(vec![31; 32], iroha_crypto::Algorithm::Ed25519);
+    let record = DaCommitmentRecord::new(
+        LaneId::SINGLE,
+        1,
+        0,
+        BlobDigest::new([3; 32]),
+        ManifestDigest::new([4; 32]),
+        DaProofScheme::MerkleSha256,
+        iroha_crypto::Hash::prehashed([5; 32]),
+        None,
+        RetentionClass::default(),
+        StorageTicketId::new([6; 32]),
+        iroha_crypto::Signature::new(key.private_key(), b"DA publication custody component"),
+    );
+    let bundle = DaCommitmentBundle::new(vec![record]);
+    let bundle_backing = bundle.commitments.as_ptr();
+    let signature_backing = bundle.commitments[0].acknowledgement_sig.payload().as_ptr();
+    original.pending_da_commitments = Some(PendingDaCommitmentBundle {
+        block_height: header.height().get(),
+        bundle,
+    });
+    let owner = std::ptr::from_ref(&*original);
+    let world_owner = std::ptr::from_ref(&**original.world.fields.as_ref().unwrap());
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let demand = 2
+        * (std::alloc::Layout::array::<DaCommitmentKey>(1)
+            .unwrap()
+            .size()
+            + std::alloc::Layout::array::<usize>(1).unwrap().size());
+    let mut prepared_identity = None;
+    for _ in 0..3 {
+        let StatePublicationOutcome::Deferred(
+            storage_transactions::TransactionsBlockError::ExecutionDeferred(reason),
+        ) = original.try_publish()
+        else {
+            panic!("the original DA projection must retain typed capacity refusal");
+        };
+        assert_eq!(
+            reason.allocation_refusal(),
+            Some(&budget.try_reserve_bytes(demand).unwrap_err())
+        );
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        assert_eq!(std::ptr::from_ref(&*original), owner);
+        assert_eq!(
+            std::ptr::from_ref(&**original.world.fields.as_ref().unwrap()),
+            world_owner
+        );
+        let pending = original.pending_da_commitments.as_ref().unwrap();
+        assert_eq!(pending.bundle.commitments.as_ptr(), bundle_backing);
+        assert_eq!(
+            pending.bundle.commitments[0]
+                .acknowledgement_sig
+                .payload()
+                .as_ptr(),
+            signature_backing
+        );
+        let identity = original.publication_identity_for_test();
+        assert!(
+            !identity.2,
+            "DA preparation must complete before effects capture is sealed"
+        );
+        assert_eq!(*prepared_identity.get_or_insert(identity), identity);
+        assert!(
+            state
+                .da_commitments
+                .read()
+                .bundle_at(header.height().get())
+                .is_none()
+        );
+        assert!(state.state_commit_lock.try_lock().is_some());
+        assert!(state.state_write_lock.try_lock().is_some());
+        // The other thread must acquire every real writer. A failing control
+        // drops the original before joining, so a regression cannot deadlock.
+        let mut retained = Some(original);
+        std::thread::scope(|scope| {
+            let (ready, observed) = std::sync::mpsc::channel();
+            let state = &state;
+            let probe = scope.spawn(move || {
+                let probe_budget = AllocationBudget::new(16 * 1024 * 1024);
+                let world = state.world.try_block(&probe_budget).unwrap();
+                let runtime = state.canonical_runtime.block();
+                let previous = state.prev_commit_topology.block();
+                let next = state.commit_topology.block();
+                let membership = state.transactions.block();
+                ready.send(()).unwrap();
+                drop((world, runtime, previous, next, membership));
+            });
+            let free = observed
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok();
+            if !free {
+                drop(retained.take());
+            }
+            probe.join().unwrap();
+            assert!(free, "DA capacity refusal must free every original writer");
+        });
+        original = retained.take().unwrap();
+    }
+    drop(occupied);
+    assert!(matches!(
+        original.try_publish(),
+        StatePublicationOutcome::Published
+    ));
+    assert!(matches!(
+        original.try_publish(),
+        StatePublicationOutcome::Published
+    ));
+    drop(original);
+    let commitments = state.da_commitments.read();
+    let published = commitments.bundle_at(header.height().get()).unwrap();
+    assert_eq!(published.commitments.as_ptr(), bundle_backing);
+    assert_eq!(
+        published.commitments[0]
+            .acknowledgement_sig
+            .payload()
+            .as_ptr(),
+        signature_backing
+    );
+    assert_eq!(
+        state.transactions.latest_height(),
+        header.height().get() as usize
+    );
+}

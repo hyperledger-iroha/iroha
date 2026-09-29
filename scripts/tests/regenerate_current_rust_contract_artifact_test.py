@@ -217,6 +217,43 @@ def test_write_mode_uses_an_explicit_portable_cache_root(
     assert "/Users/takemiyamakoto" not in MODULE_PATH.read_text(encoding="utf-8")
 
 
+def test_git_discovery_uses_copyable_developer_tools_binary_on_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real_git = tmp_path / "git"
+    real_git.write_bytes(b"test executable")
+    real_git.chmod(0o500)
+
+    def locate_git(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command == ["/usr/bin/xcrun", "--find", "git"]
+        assert kwargs["check"] is True
+        return subprocess.CompletedProcess(command, 0, stdout=f"{real_git}\n")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", locate_git)
+    selected = MODULE._default_git_path(platform="darwin")
+    assert selected == real_git
+    assert MODULE._resolve_input_file(selected, "Git", executable=True) == real_git
+
+    args = MODULE._parse_args(
+        ["--check", "--koto", "koto", "--cache-root", os.fspath(tmp_path.resolve())]
+    )
+    assert args.git is None
+
+
+def test_macos_git_discovery_rejects_uncopyable_system_shim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="/usr/bin/git\n"
+        ),
+    )
+    with pytest.raises(MODULE.FixtureError, match="real developer-tools Git"):
+        MODULE._default_git_path(platform="darwin")
+
+
 def test_retired_rustc_and_rlib_arguments_are_rejected(tmp_path: Path) -> None:
     common = [
         "--check",

@@ -30,9 +30,9 @@ use super::{
     secret_polynomial::SecretPolynomial,
 };
 #[cfg(test)]
-use crate::gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT};
-#[cfg(test)]
 use crate::field::GoldilocksFp4V1 as F;
+#[cfg(test)]
+use crate::gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT};
 use crate::{Error, Result};
 
 /// Fixed contiguous job count; admission and output order do not depend on pool size.
@@ -666,7 +666,7 @@ mod tests {
             let mut values = SecretPolynomial::zeroed(65).unwrap();
             let mut workspaces = [(); NUMERATOR_JOBS];
             let result = pool.install(|| {
-                evaluate_parallel_rows(&mut values, &mut workspaces, |index, _| {
+                evaluate_parallel_rows(&mut values, &mut workspaces, |index, ()| {
                     visited[index].store(true, Ordering::SeqCst);
                     if [3, 7, 11].contains(&index) {
                         return Err(Error::QueryIndexOutOfRange { index, len: 65 });
@@ -683,13 +683,13 @@ mod tests {
         }
         let mut output = [F::ONE];
         assert!(
-            evaluate_parallel_rows(&mut output, &mut [(); NUMERATOR_JOBS - 1], |_, _| panic!(
+            evaluate_parallel_rows(&mut output, &mut [(); NUMERATOR_JOBS - 1], |_, ()| panic!(
                 "invalid shape executed"
             ))
             .is_err()
         );
         assert!(
-            evaluate_parallel_rows(&mut [], &mut [(); NUMERATOR_JOBS], |_, _| panic!(
+            evaluate_parallel_rows(&mut [], &mut [(); NUMERATOR_JOBS], |_, ()| panic!(
                 "empty shape executed"
             ))
             .is_err()

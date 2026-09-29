@@ -154,10 +154,11 @@ impl<'a> ExpectedAxtContext<'a> {
                     .metadata
                     .committed_amount
                     .as_ref()
-                    .map(|v| v.as_slice()),
+                    .map(<[u8; 16]>::as_slice),
                 expiry_slot: &self.metadata.expiry_slot,
                 manifest_root: &self.metadata.manifest_root,
                 da_commitment: &self.metadata.da_commitment,
+                source_transfer_occurrences: &self.metadata.source_transfer_occurrences,
             },
             mirrors: AxtProofContextMirrors {
                 dsid: self.mirrors.dsid,

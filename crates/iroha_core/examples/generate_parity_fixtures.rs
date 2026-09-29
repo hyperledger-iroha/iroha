@@ -125,7 +125,7 @@ fn run_block_and_events(
         network_id,
     );
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let mut cfg = state.view().pipeline().clone();

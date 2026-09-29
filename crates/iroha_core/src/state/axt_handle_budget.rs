@@ -1,93 +1,82 @@
-// AXT handle-family budget and permanent-counter helpers live together so the
-// state root retains a compact, reviewable production surface.
-pub(crate) fn retain_until_slot_for_handle(
-    handle: &AxtHandleFragment,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    current_slot: u64,
-) -> u64 {
-    let expiry_slot = ivm::axt::expiry_slot_with_skew(
-        handle.handle.expiry_slot,
-        nexus.axt.slot_length_ms,
-        nexus.axt.max_clock_skew_ms,
-        handle.handle.max_clock_skew_ms,
-    );
-    let retention_cap = current_slot.saturating_add(nexus.axt.replay_retention_slots.get());
-    expiry_slot.max(retention_cap)
+// Permanent AXT counter and policy-boundary helpers.
+/// Failure to reserve both permanent replay identities for one verified spend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ThisError)]
+pub(crate) enum AxtSpendReplayReservationErrorV1 {
+    /// The signed issuer nonce identity is malformed.
+    #[error("AXT spend has an invalid issuer nonce replay identity")]
+    InvalidIssuerNonce,
+    /// The claimed finalized source coordinate is malformed.
+    #[error("AXT spend has an invalid source transfer replay identity")]
+    InvalidSourceTransfer,
+    /// A zero consensus slot cannot record application.
+    #[error("AXT spend replay reservation requires a positive consensus slot")]
+    ZeroSlot,
+    /// Issuer context and source coordinate refer to different networks or dataspaces.
+    #[error("AXT spend issuer and source replay identities disagree")]
+    IdentityMismatch,
+    /// This issuer nonce was already consumed by an earlier envelope.
+    #[error("AXT spend issuer nonce has already been consumed")]
+    IssuerNonceConsumed,
+    /// This physical source transfer was already consumed by an earlier envelope.
+    #[error("AXT source transfer has already been consumed")]
+    SourceTransferConsumed,
 }
 
-fn resolve_axt_handle_budget_amount(
-    record: &AxtEnvelopeRecord,
-    fragment: &AxtHandleFragment,
-) -> Result<Quantity, Error> {
-    let selected_proof = fragment.proof.as_ref().or_else(|| {
-        record
-            .proofs
-            .iter()
-            .find(|proof| proof.dsid == fragment.intent.asset_dsid)
-            .map(|proof| &proof.proof)
-    });
-    let resolved = ivm::axt::resolve_handle_amount_components(
-        fragment.intent.asset_dsid,
-        fragment.intent.op.amount.as_ref(),
-        selected_proof.map(|proof| proof.payload.as_slice()),
-    )
-    .map_err(|error| {
-        Error::InvariantViolation(
-            format!("committed AXT handle amount cannot be resolved: {error:?}").into(),
-        )
-    })?;
-    let fragment_amount_matches = fragment.intent.op.amount.as_ref().map_or_else(
-        || fragment.amount.is_none(),
-        |amount| fragment.amount.as_ref() == Some(amount),
-    );
-    if !fragment_amount_matches || fragment.amount_commitment != resolved.amount_commitment {
-        return Err(Error::InvariantViolation(
-            "committed AXT handle amount fields do not match the selected proof statement".into(),
-        ));
-    }
-    Ok(resolved.amount)
-}
-
-fn advance_axt_policy_for_handle(
-    mut policy: AxtPolicyEntry,
-    handle: &AxtHandleFragment,
-    current_slot: u64,
-) -> Result<AxtPolicyEntry, Error> {
-    let dsid = handle.intent.asset_dsid;
-    if handle.handle.manifest_view_root != policy.manifest_root {
-        return Err(Error::InvariantViolation(
-            format!(
-                "AXT handle for dataspace {} does not match the committed manifest root",
-                dsid.as_u64()
-            )
-            .into(),
-        ));
-    }
-    if handle.handle.target_lane != policy.target_lane {
-        return Err(Error::InvariantViolation(
-            format!(
-                "AXT handle for dataspace {} targets lane {}, expected {}",
-                dsid.as_u64(),
-                handle.handle.target_lane,
-                policy.target_lane
-            )
-            .into(),
-        ));
-    }
-    policy.next_handle_counter =
-        iroha_data_model::nexus::next_axt_handle_sub_nonce(&policy, &handle.handle).map_err(
-            |error| {
-                Error::InvariantViolation(
-                    format!(
-                        "AXT handle for dataspace {} violates the committed sequence: {error}",
-                        dsid.as_u64()
-                    )
-                    .into(),
-                )
+#[allow(single_use_lifetimes)]
+impl<'block, 'world> WorldTransaction<'block, 'world> {
+    /// Reserve one issuer nonce and one physical source transfer in the same transaction.
+    ///
+    /// The caller must first verify finalized State, successful source execution,
+    /// the exact transfer, current issuer authority, and the signed spend. This
+    /// ledger operation itself does not grant remote-spend admission.
+    ///
+    /// # Errors
+    /// Rejects malformed identities, mismatched source/issuer scope, a zero slot,
+    /// or reuse of either permanent replay identity.
+    // TODO: Connect only after the complete finalized-State source resolver and
+    // issuer authorization gate exist; remote spends remain fail-closed.
+    #[allow(dead_code)]
+    pub(crate) fn reserve_verified_axt_spend_replay(
+        &mut self,
+        issuer_nonce: AxtAnchoredSpendReplayKeyV1,
+        source_transfer: AxtSourceTransferReplayKeyV1,
+        consumed_slot: u64,
+    ) -> Result<(), AxtSpendReplayReservationErrorV1> {
+        issuer_nonce
+            .validate()
+            .map_err(|_| AxtSpendReplayReservationErrorV1::InvalidIssuerNonce)?;
+        source_transfer
+            .validate()
+            .map_err(|_| AxtSpendReplayReservationErrorV1::InvalidSourceTransfer)?;
+        if consumed_slot == 0 {
+            return Err(AxtSpendReplayReservationErrorV1::ZeroSlot);
+        }
+        if source_transfer.network_id != issuer_nonce.issuer_context.network_id
+            || source_transfer.dataspace_id != issuer_nonce.issuer_context.asset_dsid
+        {
+            return Err(AxtSpendReplayReservationErrorV1::IdentityMismatch);
+        }
+        if self.axt_spend_nonce_ledger.get(&issuer_nonce).is_some() {
+            return Err(AxtSpendReplayReservationErrorV1::IssuerNonceConsumed);
+        }
+        if self
+            .axt_source_transfer_replay_ledger
+            .get(&source_transfer)
+            .is_some()
+        {
+            return Err(AxtSpendReplayReservationErrorV1::SourceTransferConsumed);
+        }
+        self.axt_spend_nonce_ledger
+            .insert(issuer_nonce, consumed_slot);
+        self.axt_source_transfer_replay_ledger.insert(
+            source_transfer,
+            AxtSourceTransferReplayRecordV1 {
+                issuer_nonce,
+                consumed_slot,
             },
-        )?;
-    policy.current_slot = current_slot;
-    Ok(policy)
+        );
+        Ok(())
+    }
 }
 
 fn axt_policy_identity_matches(left: &AxtPolicyEntry, right: &AxtPolicyEntry) -> bool {

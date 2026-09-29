@@ -108,7 +108,6 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("halo2/ipa")]
     [InlineData("halo2/pasta/kaigi-authorization-v1")]
     [InlineData("halo2/pasta/kaigi-usage-v1")]
-    [InlineData("halo2/pasta/ivm-replay-binding-v1")]
     [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
@@ -147,6 +146,7 @@ public sealed class VerifyingKeyBackendTagTests
         string?[] labels =
         [
             null,
+            "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "",

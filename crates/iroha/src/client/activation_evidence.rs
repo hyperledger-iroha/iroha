@@ -298,8 +298,9 @@ impl Client {
         execution_commitment: &iroha_data_model::block::consensus_v2::ExecutionCommitment,
     ) -> Result<Vec<u8>> {
         self.ensure_data_model_compatibility()?;
-        let path =
-            torii_uri::LEDGER_EXECUTED_BLOCK_WIRE.replace("{height}", &height.get().to_string());
+        let path = iroha_torii_shared::route_catalog::core::LEDGER_EXECUTED_BLOCK_WIRE
+            .path()
+            .replace("{height}", &height.get().to_string());
         let response = self.send_activation_evidence_read(
             &path,
             AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,

@@ -1177,14 +1177,9 @@ mod tests {
         let wire = block.encode_wire().expect("fixture wire");
         let (len, hash) = (wire.len() as u64, Hash::new(&wire));
         // A node-local commit certificate does not change the committed identity.
-        let stored =
-            block
-                .clone()
-                .with_commit_certificate(Some(crate::block::CommitCertificate::new(
-                    vec![1],
-                    vec![2],
-                    vec![3],
-                )));
+        let stored = block.clone().with_commit_certificate(Some(
+            crate::block::CommitCertificate::from_untrusted_parts(vec![1], vec![2], vec![3]),
+        ));
         for candidate in [&block, &stored] {
             let anchor = TrustedBlockProofAnchor::from_committed_execution(
                 candidate,

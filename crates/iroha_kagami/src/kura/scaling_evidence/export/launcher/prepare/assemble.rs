@@ -11,26 +11,19 @@ use crate::kura::scaling_evidence::export::{
 };
 use iroha_config::base::toml::TomlSource;
 use iroha_config::parameters::actual;
-use iroha_core::{
-    kura::{CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceLimits},
-    queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
-    state::FinalizedNativeContextV1,
-    sumeragi::GenesisMergeAuthority,
-};
+use iroha_core::kura::{CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceLimits};
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
-    block::consensus_v2::{ConsensusMode, HeightContext},
     isi::RegisterBox,
-    nexus::{LaneStorageProfile, LaneVisibility},
-    parameter::system::SumeragiConsensusMode,
+    parameter::system::{ConsensusMode, SumeragiConsensusMode},
+    sumeragi::epoch::ValidatorEpochContextV1,
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_model_base::{chain::ChainId, peer::PeerId};
 use std::{
     cell::Cell,
     path::{Component, Path},
-    time::Duration,
 };
 
 /// One exact original, with its independent raw identity and admission reservation.
@@ -48,7 +41,7 @@ pub(in crate::kura::scaling_evidence::export) struct FactsOriginals<'a> {
     pub(in crate::kura::scaling_evidence::export) peer_configs: [OriginalFact<'a>; 4],
     pub(in crate::kura::scaling_evidence::export) context: OriginalFact<'a>,
     pub(in crate::kura::scaling_evidence::export) journal: OriginalFact<'a>,
-    pub(in crate::kura::scaling_evidence::export) finality: OriginalFact<'a>,
+    pub(in crate::kura::scaling_evidence::export) carrier: OriginalFact<'a>,
     pub(in crate::kura::scaling_evidence::export) queries: OriginalFact<'a>,
 }
 /// Independent public launch identities. Neither proofs nor child statistics supply them.
@@ -88,7 +81,7 @@ struct DecodedRequest {
     signed: SignedTransaction,
 }
 struct StagedFactsAuthority {
-    genesis: GenesisMergeAuthority,
+    genesis: crate::genesis::StagedNativeGenesis,
     routes: Vec<RequestRoute>,
 }
 struct GenesisAdmission {
@@ -138,7 +131,7 @@ impl FactsOriginals<'_> {
             self.peer_configs[3],
             self.context,
             self.journal,
-            self.finality,
+            self.carrier,
             self.queries,
         ]
     }
@@ -264,44 +257,43 @@ pub(in crate::kura::scaling_evidence::export) fn assemble(
             check_projected_routes(&authority.routes, &scheduled)?;
         }
         drop(requests);
-        let context: HeightContext = canonical(originals.context.bytes)?;
+        let context: ValidatorEpochContextV1 = canonical(originals.context.bytes)?;
         ensure!(
-            &context == authorities[0].genesis.context(),
+            &context == authorities[0].genesis.epoch(),
             "original context differs from actual staged genesis"
         );
-        let catalog_bytes = catalog_copy_bytes(
-            authorities[0].genesis.active_lanes().len(),
-            authorities[0].genesis.lane_authority_catalog(),
-        )?;
+        let policy = authorities[0]
+            .genesis
+            .lane_policy()
+            .ok_or_else(|| eyre!("original signed genesis has no lane policy"))?;
+        let policy_bytes = policy_copy_bytes(policy)?;
         ensure!(
-            u64::try_from(catalog_bytes)? <= caps.decode_bytes,
-            "facts catalog copy exceeds work allocation"
+            u64::try_from(policy_bytes)? <= caps.decode_bytes,
+            "facts lane policy exceeds work allocation"
         );
-        norito::core::reserve_decode_allocation(catalog_bytes)?;
+        norito::core::reserve_decode_allocation(policy_bytes)?;
+        let active_lanes = std::iter::once(NativeWorkloadLane {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        })
+        .chain(policy.fixed.iter().map(|lane| NativeWorkloadLane {
+            lane_id: lane.lane,
+            dataspace_id: lane.dataspace,
+        }))
+        .collect();
         let plan = TrustedRunPlan {
+            chain_id: genesis.chain_id.clone(),
             network_id: genesis.network_id,
-            first_context: context.id(),
+            genesis_epoch_context_id: context.context_id().map_err(|error| eyre!(error))?,
             first_height: 1,
             last_height: reader.last_height,
-            nexus_amx_context_hash: context.nexus_amx_context_hash,
-            execution_policy_hash: context.execution_policy_hash,
-            active_lanes: authorities[0]
-                .genesis
-                .active_lanes()
-                .iter()
-                .map(|lane| NativeWorkloadLane {
-                    lane_id: lane.lane_id,
-                    dataspace_id: lane.dataspace_id,
-                    incarnation: lane.incarnation,
-                    activation_height: lane.activation_height,
-                })
-                .collect(),
-            lane_authorities: authorities[0].genesis.lane_authority_catalog().clone(),
+            lane_policy: policy.clone(),
+            active_lanes,
             scheduled,
         };
-        let finality: Vec<FinalizedNativeContextV1> = canonical(originals.finality.bytes)?;
+        let carrier: Vec<NativeHeightEvidenceV1> = canonical(originals.carrier.bytes)?;
         let queries: Vec<CommittedTransaction> = canonical(originals.queries.bytes)?;
-        let heights = group_supplied(finality, queries, reader.last_height, verification)?;
+        let heights = group_supplied(carrier, queries, reader.last_height, verification)?;
         let bindings = super::derive_bindings(&heights, &plan, verification)?;
         let (verify_plan, supplied) = verification_copy(&plan, &heights, caps)?;
         let verified = export_from_kura(
@@ -386,14 +378,37 @@ fn project_request_routes(
     // These four vectors were charged together before staging; no decoding happens on this thread.
     routes.try_reserve_exact(requests.len())?;
     for request in requests {
-        let route = evaluate_policy_plan_with_nexus_and_world_at_block_height(
-            &staged.nexus,
-            request.signed.payload(),
-            staged.world(),
+        let policy = iroha_core::sumeragi::lanes::lane_policy(staged.world())
+            .ok_or_else(|| eyre!("staged native lane policy is missing"))?;
+        let lanes = staged.world().sumeragi_lanes();
+        let inputs = iroha_core::sumeragi::lanes::routing::RoutingInputs {
+            policy: Some(&policy),
+            lanes,
+            dataspaces: &staged.nexus.dataspace_catalog,
+            world: staged.world(),
             ledger_time_ms,
-            header.height().get(),
+        };
+        // A fixed lane created by genesis first admits at H3, and is first merged at H4.
+        let lane = inputs.route(
+            request.signed.payload(),
+            header
+                .height()
+                .get()
+                .checked_add(3)
+                .ok_or_else(|| eyre!("staged routing height overflow"))?,
+        );
+        let dataspace = if lane == LaneId::SINGLE {
+            DataSpaceId::UNIVERSAL
+        } else {
+            lanes
+                .lane(lane)
+                .ok_or_else(|| eyre!("planned native lane has no staged record"))?
+                .dataspace
+        };
+        check_route(
+            RoutingPlan::single(RoutingDecision::new(lane, dataspace)),
+            request.identity.route,
         )?;
-        check_route(route, request.identity.route)?;
         routes.push(request.identity);
     }
     Ok(routes)
@@ -593,16 +608,7 @@ fn admit_genesis(
         validators.windows(2).all(|w| w[0] < w[1]),
         "facts validators must be four distinct original identities"
     );
-    let cadence = Duration::from_millis(
-        manifest
-            .effective_parameters()?
-            .sumeragi()
-            .block_cadence_ms()
-            .get(),
-    );
-    let shared = configs[0]
-        .sumeragi
-        .v2_config(cadence, ConsensusMode::Npos)?;
+    let shared = configs[0].sumeragi.local;
     let registered: BTreeSet<_> = manifest
         .instructions()
         .filter_map(|instruction| {
@@ -638,50 +644,20 @@ fn admit_genesis(
             "facts peer launch identity mismatch"
         );
         ensure!(
-            config.sumeragi.role == actual::NodeRole::Validator
-                && config.sumeragi.v2_config(cadence, ConsensusMode::Npos)? == shared,
-            "facts peers do not share the exact Sumeragi v2 configuration"
+            config.sumeragi.role == actual::NodeRole::Validator && config.sumeragi.local == shared,
+            "facts peers do not share the exact native local configuration"
         );
-        let nexus = &config.nexus;
         ensure!(
-            !nexus.autoscale.enabled
-                && nexus.lane_catalog == nexus.configured_lane_catalog
-                && nexus.lane_catalog.lanes().len() == lane_count
-                && nexus.dataspace_catalog.entries().len() == 1,
-            "facts require a fixed one/four-lane catalog"
+            config.nexus.dataspace_catalog.entries().len() == 1
+                && config.nexus.dataspace_catalog.entries()[0].id == DataSpaceId::UNIVERSAL
+                && config.nexus.lane_catalog.lanes().len() == 1
+                && config.nexus.lane_catalog.lanes()[0].id == LaneId::SINGLE,
+            "facts workload requires one universal World"
         );
-        let ds = &nexus.dataspace_catalog.entries()[0];
         ensure!(
-            ds.id == DataSpaceId::UNIVERSAL && ds.alias == "universal" && ds.fault_tolerance == 1,
-            "facts require universal dataspace with fault tolerance one"
+            config.nexus.routing_policy.rules.is_empty() && !config.nexus.autoscale.enabled,
+            "facts scheduling must use only original signed native lane policy"
         );
-        for (slot, lane) in nexus.lane_catalog.lanes().iter().enumerate() {
-            ensure!(
-                lane.id == LaneId::new(u32::try_from(slot)?)
-                    && lane.dataspace_id == DataSpaceId::UNIVERSAL
-                    && lane.visibility == LaneVisibility::Public
-                    && lane.storage == LaneStorageProfile::FullReplica,
-                "facts lane geometry mismatch"
-            );
-        }
-        let policy = &nexus.routing_policy;
-        ensure!(
-            policy.default_lane == LaneId::SINGLE
-                && policy.default_dataspace == DataSpaceId::UNIVERSAL
-                && policy.rules.len() == journal.accounts.len(),
-            "facts require the exact account-only routing policy"
-        );
-        for (rule, account) in policy.rules.iter().zip(&journal.accounts) {
-            ensure!(
-                rule.lane == account.route.lane_id
-                    && rule.dataspace == Some(account.route.dataspace_id)
-                    && rule.matcher.account.as_deref()
-                        == Some(account.authority.to_string().as_str())
-                    && rule.matcher.instruction.is_none()
-                    && rule.matcher.description.is_none(),
-                "facts routing rule differs from independent account order"
-            );
-        }
     }
     Ok(GenesisAdmission {
         validators,
@@ -702,37 +678,52 @@ fn authenticate_genesis(
     } = admission;
     let mut authorities = Vec::with_capacity(4);
     for config in configs {
-        let (authority, routes) = crate::genesis::staged_signed_genesis_with_projection(
+        let (authority, routes) = crate::genesis::staged_signed_native_genesis_with_projection(
             manifest,
             signed,
             config,
             |genesis, staged| project_request_routes(genesis, staged, requests),
         )?;
         ensure!(
-            authority.context().network_id == expected.network_id
-                && authority.context().height == 1
-                && authority.context().mode == ConsensusMode::Npos
+            authority.epoch().network_id == expected.network_id
+                && authority.genesis().header().height().get() == 1
+                && authority.epoch().mode == ConsensusMode::Npos
                 && authority
-                    .context()
-                    .roster
+                    .epoch()
+                    .committee
                     .iter()
                     .map(|v| v.validator.clone())
                     .collect::<Vec<_>>()
                     == validators
-                && authority.proofs_of_possession().len() == 4
-                && authority.active_lanes().len() == lane_count,
+                && authority.epoch().committee.len() == 4
+                && authority.lanes().lanes.len() + 1 == lane_count,
             "facts staged genesis roster or geometry mismatch"
         );
-        for (slot, binding) in authority.active_lanes().iter().enumerate() {
+        let policy = authority
+            .lane_policy()
+            .ok_or_else(|| eyre!("signed genesis does not configure native lanes"))?;
+        policy.validate()?;
+        ensure!(
+            policy.autoscale.is_none() && policy.fixed.len() + 1 == lane_count,
+            "fixed qualification has another lane policy geometry"
+        );
+        for (slot, record) in authority.lanes().lanes.iter().enumerate() {
+            let fixed = &policy.fixed[slot];
             ensure!(
-                binding.lane_id == LaneId::new(u32::try_from(slot)?)
-                    && binding.dataspace_id == DataSpaceId::UNIVERSAL
-                    && binding.activation_height == 1
-                    && authority
-                        .lane_authority_catalog()
-                        .roster_for_lane(slot)
-                        .is_ok_and(|roster| roster.validators == validators),
-                "facts staged lane does not retain the exact four-validator authority"
+                record.lane == LaneId::new(u32::try_from(slot + 1)?)
+                    && record.dataspace == DataSpaceId::UNIVERSAL
+                    && record.created_at == 1
+                    && record.active_from == 3
+                    && record
+                        .committee
+                        .iter()
+                        .map(|member| member.peer.clone())
+                        .collect::<Vec<_>>()
+                        == validators
+                    && fixed.lane == record.lane
+                    && fixed.dataspace == record.dataspace
+                    && fixed.committee == record.committee,
+                "staged native incarnation differs from signed four-validator policy"
             );
         }
         if let Some(first) = authorities.first() {
@@ -743,11 +734,10 @@ fn authenticate_genesis(
             );
             let first = &first.genesis;
             ensure!(
-                authority.context() == first.context()
-                    && authority.proofs_of_possession() == first.proofs_of_possession()
-                    && authority.catalog_hash() == first.catalog_hash()
-                    && authority.active_lanes() == first.active_lanes()
-                    && authority.lane_authority_catalog() == first.lane_authority_catalog(),
+                authority.epoch() == first.epoch()
+                    && authority.genesis() == first.genesis()
+                    && authority.lanes() == first.lanes()
+                    && authority.lane_policy() == first.lane_policy(),
                 "facts staged peer projections differ"
             );
         }
@@ -776,54 +766,59 @@ fn bounded_frame<T: norito::NoritoSerialize>(value: &T, cap: usize) -> Result<Ve
     Ok(bytes)
 }
 fn group_supplied(
-    finality: Vec<FinalizedNativeContextV1>,
+    carrier: Vec<NativeHeightEvidenceV1>,
     queries: Vec<CommittedTransaction>,
     last: u64,
     limits: VerificationLimits,
 ) -> Result<Vec<SuppliedEvidenceHeightV1>> {
     ensure!(
-        u64::try_from(finality.len())? == last
+        u64::try_from(carrier.len())? == last
             && last <= limits.heights
             && queries.len() <= limits.requests,
         "facts vectors do not cover the independently required interval or work bound"
     );
     let mut query = queries.into_iter();
     let mut rows = Vec::new();
-    let slots = finality
+    let slots = carrier
         .len()
         .checked_mul(std::mem::size_of::<SuppliedEvidenceHeightV1>())
         .and_then(|n| n.checked_add(query.len().checked_mul(std::mem::size_of::<Vec<u8>>())?))
         .ok_or_else(|| eyre!("facts supplied slot reservation overflow"))?;
     let mut charged_bytes = charged(0, slots, limits.input_bytes)?;
-    rows.try_reserve_exact(finality.len())?;
-    for (index, original) in finality.into_iter().enumerate() {
-        let FinalizedNativeContextV1 {
-            finality: proof,
-            contexts,
+    rows.try_reserve_exact(carrier.len())?;
+    for (index, original) in carrier.into_iter().enumerate() {
+        let NativeHeightEvidenceV1 {
+            carrier,
+            lane_evidence,
         } = original;
+        bounded(&carrier, MAX_CARRIER_BYTES)?;
+        let block = norito::with_decode_limits_scope(decode_limits(carrier.len()), || {
+            decode_versioned_signed_block(&carrier)
+        })?;
+        ensure!(
+            block.encode_wire()? == carrier,
+            "facts carrier is not canonical SignedBlockWire"
+        );
         let height = u64::try_from(index)?
             .checked_add(1)
             .ok_or_else(|| eyre!("facts height overflow"))?;
         ensure!(
-            proof.block_header.height().get() == height,
-            "facts finality vector is not contiguous in original order"
+            block.header().height().get() == height,
+            "facts carrier vector is not contiguous in original order"
         );
         let mut row = SuppliedEvidenceHeightV1 {
             height,
-            finality: bounded_frame(
-                &proof,
-                MAX_FINALITY_BYTES.min(usize::try_from(limits.input_bytes - charged_bytes)?),
-            )?,
-            contexts: Vec::new(),
+            carrier,
+            lane_evidence: Vec::new(),
             queries: Vec::new(),
         };
-        charged_bytes = charged(charged_bytes, row.finality.len(), limits.input_bytes)?;
-        row.contexts = bounded_frame(
-            &contexts,
-            MAX_FINALITY_BYTES.min(usize::try_from(limits.input_bytes - charged_bytes)?),
+        charged_bytes = charged(charged_bytes, row.carrier.len(), limits.input_bytes)?;
+        row.lane_evidence = bounded_frame(
+            &lane_evidence,
+            MAX_CONTEXT_BYTES.min(usize::try_from(limits.input_bytes - charged_bytes)?),
         )?;
-        charged_bytes = charged(charged_bytes, row.contexts.len(), limits.input_bytes)?;
-        let carrier_hash = proof.block_header.hash();
+        charged_bytes = charged(charged_bytes, row.lane_evidence.len(), limits.input_bytes)?;
+        let carrier_hash = block.hash();
         let cohort = query
             .as_slice()
             .iter()
@@ -866,26 +861,12 @@ fn group_supplied(
     );
     Ok(rows)
 }
-fn catalog_copy_bytes(active_count: usize, catalog: &MergeLaneAuthorityCatalogV1) -> Result<usize> {
-    // Validated fixed geometry has at most four BLS rosters with four keys apiece. The 1 KiB
-    // key allowance covers each owned public identity; this is a conservative work reservation.
-    active_count
-        .checked_mul(std::mem::size_of::<NativeWorkloadLane>())
-        .and_then(|n| {
-            n.checked_add(
-                catalog
-                    .lane_roster_indices
-                    .len()
-                    .checked_mul(std::mem::size_of::<u16>())?,
-            )
-        })
-        .and_then(|n| {
-            n.checked_add(catalog.rosters.len().checked_mul(
-                std::mem::size_of::<iroha_data_model::merge::MergeLaneCommitteeRosterV1>()
-                    + 4 * 1024,
-            )?)
-        })
-        .ok_or_else(|| eyre!("facts catalog copy reservation overflow"))
+fn policy_copy_bytes(policy: &SumeragiLanePolicy) -> Result<usize> {
+    // Frame size bounds every owned byte and a separate slot allowance covers each member.
+    norito::canonical_frame_len(policy)?
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(policy.fixed.len().checked_mul(1024)?))
+        .ok_or_else(|| eyre!("facts lane policy copy reservation overflow"))
 }
 fn verification_copy(
     plan: &TrustedRunPlan,
@@ -894,11 +875,7 @@ fn verification_copy(
 ) -> Result<(TrustedRunPlan, Vec<SuppliedHeightEvidence>)> {
     // Charge the complete additional ordinary-data copy to the same cumulative work
     // allowance before cloning. The output facts cap remains solely a canonical byte bound.
-    let mut bytes = charged(
-        0,
-        catalog_copy_bytes(plan.active_lanes.len(), &plan.lane_authorities)?,
-        caps.decode_bytes,
-    )?;
+    let mut bytes = charged(0, policy_copy_bytes(&plan.lane_policy)?, caps.decode_bytes)?;
     for request in &plan.scheduled {
         for length in [
             std::mem::size_of::<ScheduledRequest>(),
@@ -914,8 +891,8 @@ fn verification_copy(
             std::mem::size_of::<SuppliedHeightEvidence>(),
             caps.decode_bytes,
         )?;
-        bytes = charged(bytes, height.finality.len(), caps.decode_bytes)?;
-        bytes = charged(bytes, height.contexts.len(), caps.decode_bytes)?;
+        bytes = charged(bytes, height.carrier.len(), caps.decode_bytes)?;
+        bytes = charged(bytes, height.lane_evidence.len(), caps.decode_bytes)?;
         for query in &height.queries {
             bytes = charged(bytes, std::mem::size_of::<Vec<u8>>(), caps.decode_bytes)?;
             bytes = charged(bytes, query.len(), caps.decode_bytes)?;
@@ -937,21 +914,20 @@ fn verification_copy(
     for h in heights {
         supplied.push(SuppliedHeightEvidence {
             height: h.height,
-            finality: h.finality.clone(),
-            contexts: h.contexts.clone(),
+            carrier: h.carrier.clone(),
+            lane_evidence: h.lane_evidence.clone(),
             queries: h.queries.clone(),
         });
     }
     Ok((
         TrustedRunPlan {
+            chain_id: plan.chain_id.clone(),
             network_id: plan.network_id,
-            first_context: plan.first_context,
+            genesis_epoch_context_id: plan.genesis_epoch_context_id,
             first_height: plan.first_height,
             last_height: plan.last_height,
-            nexus_amx_context_hash: plan.nexus_amx_context_hash,
-            execution_policy_hash: plan.execution_policy_hash,
+            lane_policy: plan.lane_policy.clone(),
             active_lanes: plan.active_lanes.clone(),
-            lane_authorities: plan.lane_authorities.clone(),
             scheduled,
         },
         supplied,

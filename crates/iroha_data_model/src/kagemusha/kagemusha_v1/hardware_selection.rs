@@ -1221,7 +1221,7 @@ mod tests {
             let difference =
                 i16::from(P256_ORDER[index]) - i16::from(high_raw[32 + index]) - borrow;
             high_raw[32 + index] = (difference & 0xff) as u8;
-            borrow = if difference < 0 { 1 } else { 0 };
+            borrow = i16::from(difference < 0);
         }
         assert_eq!(borrow, 0);
         let high_der = P256Signature::from_slice(&high_raw).unwrap().to_der();

@@ -418,12 +418,11 @@ impl ResolverDaemon {
                                 )
                             })
                             .ok_or_else(|| eyre::eyre!("RAD sync accounting overflow"))?;
-                        let prior_bytes =
-                            adverts
-                                .get(&resolver_key)
-                                .map(|prior| {
-                                    rad_retained_bytes(prior).map(|bytes| {
-                                        bytes
+                        let prior_bytes = adverts
+                            .get(&resolver_key)
+                            .map(|prior| {
+                                rad_retained_bytes(prior).map(|bytes| {
+                                    bytes
                                             .saturating_add(resolver_key.capacity())
                                             .saturating_add(
                                                 std::mem::size_of::<(
@@ -433,10 +432,10 @@ impl ResolverDaemon {
                                                 )
                                                 .saturating_mul(2),
                                             )
-                                    })
                                 })
-                                .transpose()?
-                                .unwrap_or(0);
+                            })
+                            .transpose()?
+                            .unwrap_or(0);
                         let next_retained = replace_retained_bytes(
                             retained_bytes,
                             prior_bytes,

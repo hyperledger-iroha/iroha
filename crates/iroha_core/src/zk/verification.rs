@@ -17,15 +17,13 @@ use super::ZkVerifyGuardrails;
 /// Exact statement established by one compiled generic verifier.
 ///
 /// This describes the relation, not production qualification or authorization.
-/// There is deliberately no execution-correctness variant: the current IVM
-/// circuit requires deterministic VM replay by its consuming host.
+/// The complete IVM execution relation is not yet admitted; no binding-only
+/// substitute can select an IVM relation through this API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProofRelation {
     /// Native STARK binding of public bytes to a deterministic public trace.
     /// This supplies no application-specific private-witness relation.
     PublicInputBinding,
-    /// Binding of code, overlay, event and gas commitments; full IVM replay is mandatory.
-    IvmReplayBinding,
     /// Ownership, membership, range and conservation for a confidential transfer.
     /// Consumed and created note commitments remain public and linkable.
     ConfidentialTransfer,
@@ -205,9 +203,6 @@ pub fn verify_for_relation(
 fn compiled_relation(backend: &str, circuit: &str) -> Option<ProofRelation> {
     if super::halo2_open_verify_circuit_id_matches_backend(backend, circuit) {
         return match super::canonical_halo2_ipa_circuit_id(circuit)?.as_str() {
-            super::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID => {
-                Some(ProofRelation::IvmReplayBinding)
-            }
             "halo2/pasta/ipa/kaigi-authorization-v1" => Some(ProofRelation::KaigiAuthorization),
             "halo2/pasta/ipa/kaigi-usage-v1" => Some(ProofRelation::KaigiUsage),
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3" => {
@@ -231,13 +226,7 @@ fn compiled_relation(backend: &str, circuit: &str) -> Option<ProofRelation> {
     {
         return None;
     }
-    if super::canonical_ivm_replay_binding_stark_circuit_id_for_backend(backend).as_deref()
-        == Some(circuit)
-    {
-        Some(ProofRelation::IvmReplayBinding)
-    } else {
-        Some(ProofRelation::PublicInputBinding)
-    }
+    Some(ProofRelation::PublicInputBinding)
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@
 //! Native source fixture and public BlockStore framing; it does not claim runtime autonomous execution.
 
 use super::*;
+use crate::kura::scaling_evidence::fixture;
 use crate::{
     RunArgs as _,
     kura::scaling_evidence::export::filesystem::{FactsInputBindings, ProofInputBinding},
@@ -16,9 +17,6 @@ use std::{
     path::PathBuf,
 };
 use zeroize::Zeroizing;
-#[path = "../../../../fixture.rs"]
-#[allow(dead_code, reason = "fixture is shared by focused test suites")]
-mod transcript;
 
 /// Run a full generated-genesis facts fixture on the bounded stack already used by
 /// Kagami genesis staging. Keep every fixture owner and assertion on that worker;
@@ -108,7 +106,7 @@ pub(in crate::kura::scaling_evidence::export) struct Fixture {
     validators: [PublicKey; 4],
     accounts: Vec<AccountId>,
     lanes: usize,
-    transcript: transcript::Fixture,
+    transcript: fixture::Fixture,
 }
 #[cfg(all(
     unix,
@@ -187,12 +185,9 @@ impl Fixture {
         let network_id = NetworkId::from_genesis_hash(configs[0].genesis.expected_hash);
         let validators: [PublicKey; 4] =
             std::array::from_fn(|index| configs[index].common.key_pair.public_key().clone());
-        let authority = crate::genesis::staged_signed_genesis_merge_authority(
-            &manifest,
-            &first_bytes[1],
-            &configs[0],
-        )
-        .unwrap();
+        let authority =
+            crate::genesis::staged_signed_native_genesis(&manifest, &first_bytes[1], &configs[0])
+                .unwrap();
         let validated = iroha_genesis::validate_prepared_genesis_bundle(
             &first_bytes[1],
             &manifest,
@@ -240,14 +235,41 @@ impl Fixture {
         )
         .unwrap()
         .into_parts();
-        let transcript = transcript::Fixture::from_generated_genesis(
-            keys,
-            validated.block().clone(),
-            &authority,
-            &scheduled,
-        );
-        let context = norito::encode_canonical(authority.context()).unwrap();
-        let finality = norito::encode_canonical(&finalized_contexts(&transcript)).unwrap();
+        let mut custody = keys
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| {
+                let bytes = Zeroizing::new(
+                    fs::read(
+                        generated.join(format!("runtime/mint-finality-signers/peer{index}.seed",)),
+                    )
+                    .unwrap(),
+                );
+                let seed: [u8; 32] = bytes
+                    .as_slice()
+                    .try_into()
+                    .expect("exact original private seed");
+                (key, Zeroizing::new(seed))
+            })
+            .collect::<Vec<_>>();
+        custody
+            .sort_by_key(|(key, _)| iroha_model_base::peer::PeerId::new(key.public_key().clone()));
+        let (keys, pasta_seeds): (Vec<_>, Vec<_>) = custody.into_iter().unzip();
+        let deferred = std::sync::Arc::new(fixture::producer::Deferred::default());
+        let chain = crate::genesis::prepared_native_test_chain(
+            validated,
+            &manifest,
+            &configs[0],
+            keys.clone(),
+            pasta_seeds,
+            account_keys[0].clone(),
+            deferred.clone(),
+        )
+        .unwrap();
+        let transcript =
+            fixture::Fixture::from_generated_genesis(chain, deferred, keys, &authority, &scheduled);
+        let context = norito::encode_canonical(authority.epoch()).unwrap();
+        let carrier = norito::encode_canonical(&finalized_contexts(&transcript)).unwrap();
         let queries = transcript
             .heights
             .iter()
@@ -299,13 +321,13 @@ impl Fixture {
             "peer3.toml",
             "context.nrt",
             "journal.jsonl",
-            "finality.nrt",
+            "carrier.nrt",
             "queries.nrt",
         ];
         let paths = std::array::from_fn(|index| input.join(names[index]));
         let mut originals = first_bytes;
         originals.extend(
-            [context, journal, finality, queries]
+            [context, journal, carrier, queries]
                 .into_iter()
                 .map(Zeroizing::new),
         );
@@ -368,7 +390,7 @@ impl Fixture {
             peer_configs: std::array::from_fn(|i| binding(i + 2)),
             context: binding(6),
             journal: binding(7),
-            finality: binding(8),
+            carrier: binding(8),
             queries: binding(9),
         }
     }
@@ -448,7 +470,7 @@ impl Fixture {
             peer_configs: std::array::from_fn(|i| fact(i + 2)),
             context: fact(6),
             journal: fact(7),
-            finality: fact(8),
+            carrier: fact(8),
             queries: fact(9),
         }
     }
@@ -512,7 +534,7 @@ fn fixed_original_admission_checks_every_raw_pin_path_and_reservation_before_par
             peer_configs: std::array::from_fn(|i| f(i + 2)),
             context: f(6),
             journal: f(7),
-            finality: f(8),
+            carrier: f(8),
             queries: f(9),
         }
     };
@@ -531,7 +553,7 @@ fn fixed_original_admission_checks_every_raw_pin_path_and_reservation_before_par
             2..=5 => &mut originals.peer_configs[index - 2],
             6 => &mut originals.context,
             7 => &mut originals.journal,
-            8 => &mut originals.finality,
+            8 => &mut originals.carrier,
             _ => &mut originals.queries,
         };
         field.expected_raw_sha256[0] ^= 1;
@@ -680,21 +702,21 @@ fn routing_decode_rejects_finite_work_before_any_signed_frame_decode() {
     assert!(decode_requests(&scheduled, 1).is_err());
 }
 
-fn finalized_contexts(fixture: &transcript::Fixture) -> Vec<FinalizedNativeContextV1> {
+fn finalized_contexts(fixture: &fixture::Fixture) -> Vec<NativeHeightEvidenceV1> {
     fixture
         .heights
         .iter()
-        .map(|height| FinalizedNativeContextV1 {
-            finality: height.proof.clone(),
-            contexts: canonical(&height.evidence).unwrap(),
+        .map(|height| NativeHeightEvidenceV1 {
+            carrier: height.block.encode_wire().unwrap(),
+            lane_evidence: canonical(&height.evidence).unwrap(),
         })
         .collect()
 }
 
 #[test]
 fn five_query_group_reserves_exact_slots_and_frames_before_allocation() {
-    let fixture = transcript::Fixture::new(4);
-    let finality = finalized_contexts(&fixture);
+    let fixture = fixture::Fixture::new(4);
+    let carrier = finalized_contexts(&fixture);
     let queries = fixture
         .heights
         .iter()
@@ -702,43 +724,42 @@ fn five_query_group_reserves_exact_slots_and_frames_before_allocation() {
         .take(5)
         .map(|raw| canonical::<CommittedTransaction>(&raw).unwrap())
         .collect::<Vec<_>>();
-    let count = finality
+    let count = carrier
         .iter()
         .map(|value| {
-            norito::canonical_frame_len(&value.finality).unwrap()
-                + norito::canonical_frame_len(&value.contexts).unwrap()
+            value.carrier.len() + norito::canonical_frame_len(&value.lane_evidence).unwrap()
         })
         .sum::<usize>()
         + queries
             .iter()
             .map(|value| norito::canonical_frame_len(value).unwrap())
             .sum::<usize>()
-        + finality.len() * std::mem::size_of::<SuppliedEvidenceHeightV1>()
+        + carrier.len() * std::mem::size_of::<SuppliedEvidenceHeightV1>()
         + 5 * std::mem::size_of::<Vec<u8>>();
-    let last = finality.len() as u64;
-    let mut limits = transcript::limits();
+    let last = carrier.len() as u64;
+    let mut limits = fixture::limits();
     limits.input_bytes = count as u64;
-    let rows = group_supplied(finality.clone(), queries.clone(), last, limits).unwrap();
-    assert_eq!(rows.len(), finality.len());
+    let rows = group_supplied(carrier.clone(), queries.clone(), last, limits).unwrap();
+    assert_eq!(rows.len(), carrier.len());
     assert_eq!(rows[0].queries.len(), 0);
     assert_eq!(rows[1].queries.len(), 4);
     assert_eq!(rows[2].queries.len(), 1);
     for (raw, original) in rows.iter().flat_map(|row| &row.queries).zip(&queries) {
         assert_eq!(raw, &norito::encode_canonical(original).unwrap());
     }
-    for (row, original) in rows.iter().zip(&finality) {
+    for (row, original) in rows.iter().zip(&carrier) {
         assert_eq!(
-            row.contexts,
-            norito::encode_canonical(&original.contexts).unwrap()
+            row.lane_evidence,
+            norito::encode_canonical(&original.lane_evidence).unwrap()
         );
     }
     limits.input_bytes -= 1;
-    assert!(group_supplied(finality, queries, last, limits).is_err());
+    assert!(group_supplied(carrier, queries, last, limits).is_err());
 }
 
 #[test]
 fn query_grouping_preserves_all_rows_and_rejects_height_carrier_or_leaf_reordering() {
-    let fixture = transcript::Fixture::new(4);
+    let fixture = fixture::Fixture::new(4);
     let proofs = finalized_contexts(&fixture);
     let queries = fixture
         .heights
@@ -747,24 +768,24 @@ fn query_grouping_preserves_all_rows_and_rejects_height_carrier_or_leaf_reorderi
         .map(|raw| canonical::<CommittedTransaction>(&raw).unwrap())
         .collect::<Vec<_>>();
     let last = proofs.len() as u64;
-    let rows = group_supplied(proofs.clone(), queries.clone(), last, transcript::limits()).unwrap();
+    let rows = group_supplied(proofs.clone(), queries.clone(), last, fixture::limits()).unwrap();
     assert_eq!(
         rows.iter().map(|row| row.queries.len()).sum::<usize>(),
         queries.len()
     );
     let mut reversed = proofs.clone();
     reversed.reverse();
-    assert!(group_supplied(reversed, queries.clone(), last, transcript::limits()).is_err());
+    assert!(group_supplied(reversed, queries.clone(), last, fixture::limits()).is_err());
     let mut wrong_leaf = queries.clone();
     wrong_leaf.swap(0, 1);
-    assert!(group_supplied(proofs.clone(), wrong_leaf, last, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), wrong_leaf, last, fixture::limits()).is_err());
     let mut unknown = queries.clone();
     unknown[0].block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong carrier"));
-    assert!(group_supplied(proofs.clone(), unknown, last, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), unknown, last, fixture::limits()).is_err());
     let mut extra = queries.clone();
     extra.push(queries[0].clone());
-    assert!(group_supplied(proofs.clone(), extra, last, transcript::limits()).is_err());
-    assert!(group_supplied(vec![proofs[0].clone()], queries, last, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), extra, last, fixture::limits()).is_err());
+    assert!(group_supplied(vec![proofs[0].clone()], queries, last, fixture::limits()).is_err());
 }
 
 #[cfg(all(
@@ -823,7 +844,7 @@ mod generated {
                 .into_parts()
                 .unwrap();
                 for authority in &facts._authorities {
-                    assert_eq!(authority.genesis.context().network_id, fixture.network_id);
+                    assert_eq!(authority.genesis.epoch().network_id, fixture.network_id);
                     check_projected_routes(&authority.routes, &projected_plan.scheduled).unwrap();
                     let mut changed = authority.routes.clone();
                     changed.swap(0, 1);
@@ -908,7 +929,7 @@ mod generated {
                 decode_requests(&scheduled, fixture.verification_limits().requests).unwrap();
             requests[0].identity.route =
                 RoutingDecision::new(LaneId::new(9), DataSpaceId::UNIVERSAL);
-            let result = crate::genesis::staged_signed_genesis_with_projection(
+            let result = crate::genesis::staged_signed_native_genesis_with_projection(
                 &manifest,
                 &fixture.originals[1],
                 &configs[0],
@@ -930,37 +951,35 @@ mod generated {
                 admit_genesis(&manifest, configs, &expected, &journal)
             };
             let mut configs = fixture.parse_configs();
-            configs[3].sumeragi.block.max_transactions =
-                std::num::NonZeroUsize::new(configs[3].sumeragi.block.max_transactions.get() + 1)
-                    .unwrap();
+            configs[3].sumeragi.local.sync_batch = Some(7);
             failure(
                 check(&configs, fixture.genesis(), fixture.journal()),
-                "Sumeragi v2 configuration",
+                "native local configuration",
             );
             let mut configs = fixture.parse_configs();
-            configs[3].sumeragi.queues.commands =
-                std::num::NonZeroUsize::new(configs[3].sumeragi.queues.commands.get() + 1).unwrap();
+            configs[3].sumeragi.local.sync_max_bytes = Some(8192);
             failure(
                 check(&configs, fixture.genesis(), fixture.journal()),
-                "Sumeragi v2 configuration",
+                "native local configuration",
             );
             let mut configs = fixture.parse_configs();
             configs[3].sumeragi.role = actual::NodeRole::Observer;
             failure(
                 check(&configs, fixture.genesis(), fixture.journal()),
-                "Sumeragi v2 configuration",
+                "native local configuration",
             );
-            let mut configs = fixture.parse_configs();
-            configs[3].nexus.routing_policy.rules[0].lane = LaneId::new(3);
+            let configs = fixture.parse_configs();
+            let mut journal = fixture.journal();
+            journal.accounts[0].route.lane_id = LaneId::new(3);
             failure(
-                check(&configs, fixture.genesis(), fixture.journal()),
-                "routing rule",
+                check(&configs, fixture.genesis(), journal),
+                "independent fixed route",
             );
             let mut configs = fixture.parse_configs();
             configs[3].nexus.autoscale.enabled = true;
             failure(
                 check(&configs, fixture.genesis(), fixture.journal()),
-                "fixed one/four",
+                "original signed native lane policy",
             );
             let configs = fixture.parse_configs();
             let mut expected = fixture.genesis();
@@ -986,8 +1005,15 @@ mod generated {
             // matching peer counts and internally consistent catalogs cannot
             // replace the fixed 0..3 lane identity required in every trial.
             let mut configs = fixture.parse_configs();
-            let mut lanes = configs[0].nexus.lane_catalog.lanes().to_vec();
-            lanes[3].id = LaneId::new(4);
+            let lanes = [0, 1, 2, 4]
+                .into_iter()
+                .map(|id| {
+                    let mut lane = configs[0].nexus.lane_catalog.lanes()[0].clone();
+                    lane.id = LaneId::new(id);
+                    lane.alias = format!("substitute-{id}");
+                    lane
+                })
+                .collect();
             let changed = iroha_data_model::nexus::LaneCatalog::new(
                 std::num::NonZeroU32::new(5).unwrap(),
                 lanes,
@@ -1032,7 +1058,7 @@ mod generated {
     }
     #[test]
     fn direct_work_bounds_reject_zero_unbounded_or_excess_reader_before_genesis() {
-        let limits = transcript::limits();
+        let limits = fixture::limits();
         let reader = CanonicalKuraEvidenceLimits {
             first_height: 1,
             last_height: 2,

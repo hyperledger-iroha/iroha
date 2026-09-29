@@ -259,7 +259,44 @@ fn sample_anchored_spend_draft(
     handle: AssetHandle,
     anchor: &AxtFinalizedSpendAnchorV1,
 ) -> AxtAnchoredSpendDraftV1 {
-    let binding = sample_fastpq_binding(anchor.dataspace_id);
+    let intent = RemoteSpendIntent {
+        asset_dsid: anchor.dataspace_id,
+        op: SpendOp {
+            asset_definition_id: handle.asset_definition_id.clone(),
+            kind: "transfer".to_owned(),
+            from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
+            amount: Some(Quantity::from(5_u64)),
+        },
+    };
+    let remote_spend_claim_commitment = compute_remote_spend_intent_commitment_v1(
+        AxtHandleReplayKey::from_handle(anchor.dataspace_id, &handle),
+        &intent.op.asset_definition_id,
+        &intent.op.kind,
+        &intent.op.from,
+        &intent.op.to,
+        intent.op.amount.as_ref().expect("clear fixture amount"),
+    );
+    let mut binding = sample_fastpq_binding(anchor.dataspace_id);
+    binding.claim_type = "tx_predicate".to_owned();
+    binding.remote_spend_intent_commitments = vec![remote_spend_claim_commitment];
+    let source_receipt = AxtSourceSuccessReceiptV1 {
+        finalized_anchor_digest: anchor.digest_v1(),
+        source_tx_commitment: [0xAA; 32],
+        source_tx_index: 1,
+        post_transaction_state_root: [0xBB; 32],
+        effect_set_digest: [0xCC; 32],
+    };
+    let source_occurrence = AxtSourceTransferOccurrenceV1 {
+        source_tx_commitment: source_receipt.source_tx_commitment,
+        source_success_receipt_digest: source_receipt.digest_v1(),
+        source_tx_index: source_receipt.source_tx_index,
+        transcript_index: 0,
+        delta_index: 0,
+        pair_ordinal: 0,
+        transfer_digest: [0xDD; 32],
+        remote_spend_claim_commitment,
+    };
     let envelope = AxtProofEnvelope {
         dsid: anchor.dataspace_id,
         manifest_root: handle.manifest_view_root,
@@ -270,16 +307,7 @@ fn sample_anchored_spend_draft(
         amount_commitment: None,
     };
     AxtAnchoredSpendDraftV1 {
-        intent: RemoteSpendIntent {
-            asset_dsid: anchor.dataspace_id,
-            op: SpendOp {
-                asset_definition_id: handle.asset_definition_id.clone(),
-                kind: "transfer".to_owned(),
-                from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        },
+        intent,
         handle,
         proof: Some(ProofBlob {
             payload: norito::to_bytes(&envelope).expect("encode anchored-spend proof"),
@@ -287,8 +315,252 @@ fn sample_anchored_spend_draft(
         }),
         amount: Some(Quantity::from(5_u64)),
         amount_commitment: None,
+        source_receipt,
+        source_occurrence,
     }
 }
+
+#[test]
+fn source_success_receipt_and_ordered_transfer_occurrence_commit_every_field() {
+    let receipt = AxtSourceSuccessReceiptV1 {
+        finalized_anchor_digest: [1; 32],
+        source_tx_commitment: [2; 32],
+        source_tx_index: 3,
+        post_transaction_state_root: [4; 32],
+        effect_set_digest: [5; 32],
+    };
+    let receipt_digest = receipt.digest_v1();
+    assert_ne!(receipt_digest, [0; 32]);
+    let receipt_wire = to_bytes(&receipt).expect("canonical receipt frame");
+    assert_eq!(
+        decode_from_bytes::<AxtSourceSuccessReceiptV1>(&receipt_wire).unwrap(),
+        receipt
+    );
+    let receipt_json = norito::json::to_json(&receipt).expect("receipt JSON");
+    assert!(
+        receipt_json.contains("\"finalized_anchor_digest\":["),
+        "V1 JSON represents fixed digests as byte arrays"
+    );
+    assert_eq!(
+        norito::json::from_str::<AxtSourceSuccessReceiptV1>(&receipt_json).unwrap(),
+        receipt
+    );
+    for changed in [
+        AxtSourceSuccessReceiptV1 {
+            finalized_anchor_digest: [9; 32],
+            ..receipt
+        },
+        AxtSourceSuccessReceiptV1 {
+            source_tx_commitment: [9; 32],
+            ..receipt
+        },
+        AxtSourceSuccessReceiptV1 {
+            source_tx_index: 9,
+            ..receipt
+        },
+        AxtSourceSuccessReceiptV1 {
+            post_transaction_state_root: [9; 32],
+            ..receipt
+        },
+        AxtSourceSuccessReceiptV1 {
+            effect_set_digest: [9; 32],
+            ..receipt
+        },
+    ] {
+        assert_ne!(changed.digest_v1(), receipt_digest);
+    }
+    let occurrence = AxtSourceTransferOccurrenceV1 {
+        source_tx_commitment: receipt.source_tx_commitment,
+        source_success_receipt_digest: receipt_digest,
+        source_tx_index: receipt.source_tx_index,
+        transcript_index: 4,
+        delta_index: 5,
+        pair_ordinal: 6,
+        transfer_digest: [7; 32],
+        remote_spend_claim_commitment: [8; 32],
+    };
+    occurrence
+        .validate()
+        .expect("all occurrence digests present");
+    AxtSourceTransferOccurrenceV1 {
+        source_tx_index: (MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1) as u32,
+        transcript_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
+        delta_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
+        pair_ordinal: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
+        ..occurrence
+    }
+    .validate()
+    .expect("the last V1 positions remain valid");
+    let digest = occurrence.digest_v1();
+    for changed in [
+        AxtSourceTransferOccurrenceV1 {
+            source_tx_commitment: [9; 32],
+            ..occurrence
+        },
+        AxtSourceTransferOccurrenceV1 {
+            source_success_receipt_digest: [9; 32],
+            ..occurrence
+        },
+        AxtSourceTransferOccurrenceV1 {
+            source_tx_index: 9,
+            ..occurrence
+        },
+        AxtSourceTransferOccurrenceV1 {
+            transcript_index: 9,
+            ..occurrence
+        },
+        AxtSourceTransferOccurrenceV1 {
+            delta_index: 9,
+            ..occurrence
+        },
+        AxtSourceTransferOccurrenceV1 {
+            pair_ordinal: 9,
+            ..occurrence
+        },
+        AxtSourceTransferOccurrenceV1 {
+            transfer_digest: [9; 32],
+            ..occurrence
+        },
+        AxtSourceTransferOccurrenceV1 {
+            remote_spend_claim_commitment: [9; 32],
+            ..occurrence
+        },
+    ] {
+        assert_ne!(changed.digest_v1(), digest);
+    }
+    for (missing, field) in [
+        (
+            AxtSourceTransferOccurrenceV1 {
+                source_tx_commitment: [0; 32],
+                ..occurrence
+            },
+            AxtSourceTransferOccurrenceFieldV1::SourceExecution,
+        ),
+        (
+            AxtSourceTransferOccurrenceV1 {
+                source_success_receipt_digest: [0; 32],
+                ..occurrence
+            },
+            AxtSourceTransferOccurrenceFieldV1::SuccessReceipt,
+        ),
+        (
+            AxtSourceTransferOccurrenceV1 {
+                transfer_digest: [0; 32],
+                ..occurrence
+            },
+            AxtSourceTransferOccurrenceFieldV1::Transfer,
+        ),
+        (
+            AxtSourceTransferOccurrenceV1 {
+                remote_spend_claim_commitment: [0; 32],
+                ..occurrence
+            },
+            AxtSourceTransferOccurrenceFieldV1::RemoteClaim,
+        ),
+    ] {
+        assert_eq!(
+            missing.validate(),
+            Err(AxtSourceTransferOccurrenceErrorV1::MissingDigest(field))
+        );
+    }
+    for (out_of_range, field) in [
+        (
+            AxtSourceTransferOccurrenceV1 {
+                source_tx_index: MAX_AXT_FINALIZED_TRANSACTIONS_V1 as u32,
+                ..occurrence
+            },
+            AxtSourceTransferCoordinateFieldV1::SourceTransaction,
+        ),
+        (
+            AxtSourceTransferOccurrenceV1 {
+                transcript_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+                ..occurrence
+            },
+            AxtSourceTransferCoordinateFieldV1::Transcript,
+        ),
+        (
+            AxtSourceTransferOccurrenceV1 {
+                delta_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+                ..occurrence
+            },
+            AxtSourceTransferCoordinateFieldV1::Delta,
+        ),
+        (
+            AxtSourceTransferOccurrenceV1 {
+                pair_ordinal: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+                ..occurrence
+            },
+            AxtSourceTransferCoordinateFieldV1::PairOrdinal,
+        ),
+    ] {
+        assert_eq!(
+            out_of_range.validate(),
+            Err(AxtSourceTransferOccurrenceErrorV1::CoordinateOutOfRange(
+                field
+            ))
+        );
+    }
+    let wire = to_bytes(&occurrence).expect("canonical occurrence frame");
+    assert_eq!(
+        decode_from_bytes::<AxtSourceTransferOccurrenceV1>(&wire).unwrap(),
+        occurrence
+    );
+    let occurrence_json = norito::json::to_json(&occurrence).expect("occurrence JSON");
+    assert!(
+        occurrence_json.contains("\"transfer_digest\":["),
+        "V1 JSON represents fixed digests as byte arrays"
+    );
+    assert_eq!(
+        norito::json::from_str::<AxtSourceTransferOccurrenceV1>(&occurrence_json).unwrap(),
+        occurrence
+    );
+}
+
+#[test]
+fn source_transfer_digest_covers_balances_and_exact_public_identities() {
+    let source = KeyPair::from_seed(vec![101; 32], Algorithm::Ed25519);
+    let destination = KeyPair::from_seed(vec![102; 32], Algorithm::Ed25519);
+    let delta = crate::fastpq::FastpqPublicTransferDeltaV1 {
+        from_account: crate::account::AccountId::new(source.public_key().clone()),
+        to_account: crate::account::AccountId::new(destination.public_key().clone()),
+        asset_definition: sample_asset_handle().asset_definition_id,
+        amount: Quantity::from(5_u64),
+        from_balance_before: Quantity::from(10_u64),
+        from_balance_after: Quantity::from(5_u64),
+        to_balance_before: Quantity::from(20_u64),
+        to_balance_after: Quantity::from(25_u64),
+    };
+    let digest = axt_source_transfer_digest_v1(&delta);
+    assert_ne!(digest, [0; 32]);
+    let mut changed = delta.clone();
+    changed.from_balance_before = Quantity::from(11_u64);
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+    changed = delta.clone();
+    changed.amount = Quantity::from(6_u64);
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+    changed = delta.clone();
+    changed.from_account = delta.to_account.clone();
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+    changed = delta.clone();
+    changed.to_account = delta.from_account.clone();
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+    changed = delta.clone();
+    changed.asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("axt", "universal").unwrap(),
+        "other".parse().unwrap(),
+    );
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+    changed = delta.clone();
+    changed.from_balance_after = Quantity::from(4_u64);
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+    changed = delta.clone();
+    changed.to_balance_before = Quantity::from(21_u64);
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+    changed = delta;
+    changed.to_balance_after = Quantity::from(26_u64);
+    assert_ne!(axt_source_transfer_digest_v1(&changed), digest);
+}
+
 fn budget_key_for_replay_key(key: &AxtHandleReplayKey) -> AxtHandleBudgetKey {
     let mut handle = sample_asset_handle();
     handle.issuer_context.asset_dsid = key.asset_dsid;
@@ -468,7 +740,7 @@ fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
     changed_intent.draft.intent.op.to.push_str("-substitution");
     assert_eq!(
         changed_intent.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        Err(AxtAnchoredSpendValidationErrorV1::SourceClaim)
     );
     let mut changed_proof = signed.clone();
     let proof = changed_proof
@@ -488,18 +760,23 @@ fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
     changed_amount.draft.amount = Some(Quantity::from(6_u64));
     assert_eq!(
         changed_amount.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::Amount)
+        Err(AxtAnchoredSpendValidationErrorV1::AmountMirror)
     );
     let mut changed_commitment = signed.clone();
     changed_commitment.draft.amount_commitment = Some([0x44; 32]);
     assert_eq!(
         changed_commitment.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment)
+        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitmentMirror)
     );
     let mut changed_anchor = signed.clone();
     changed_anchor.authorization.anchor.committee_digest =
         Hash::new(b"substituted finalized committee");
     let substituted_anchor = changed_anchor.authorization.anchor;
+    changed_anchor.draft.source_receipt.finalized_anchor_digest = substituted_anchor.digest_v1();
+    changed_anchor
+        .draft
+        .source_occurrence
+        .source_success_receipt_digest = changed_anchor.draft.source_receipt.digest_v1();
     assert_eq!(
         changed_anchor.verify_issuer_signatures_v1(
             context,
@@ -530,7 +807,7 @@ fn anchored_spend_rejects_clear_and_hidden_amount_mirror_drift_before_signing() 
     wrong_clear_mirror.amount = Some(Quantity::from(6_u64));
     assert_eq!(
         wrong_clear_mirror.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::Amount)
+        Err(AxtAnchoredSpendValidationErrorV1::AmountMirror)
     );
 
     let mut wrong_clear_proof = draft.clone();
@@ -567,7 +844,7 @@ fn anchored_spend_rejects_clear_and_hidden_amount_mirror_drift_before_signing() 
     revealed_mirror.amount = Some(Quantity::from(5_u64));
     assert_eq!(
         revealed_mirror.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::Amount)
+        Err(AxtAnchoredSpendValidationErrorV1::AmountMirror)
     );
     let mut disclosed_proof_amount = hidden.clone();
     let proof = disclosed_proof_amount.proof.as_mut().expect("proof");
@@ -583,7 +860,7 @@ fn anchored_spend_rejects_clear_and_hidden_amount_mirror_drift_before_signing() 
     wrong_commitment.amount_commitment = Some([0x56; 32]);
     assert_eq!(
         wrong_commitment.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment)
+        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitmentMirror)
     );
     let mut missing_commitment = hidden;
     let proof = missing_commitment.proof.as_mut().expect("proof");
@@ -595,6 +872,382 @@ fn anchored_spend_rejects_clear_and_hidden_amount_mirror_drift_before_signing() 
     assert_eq!(
         missing_commitment.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
         Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment)
+    );
+}
+
+#[test]
+fn anchored_spend_replay_key_rejects_invalid_persisted_identity() {
+    let mut key = AxtAnchoredSpendReplayKeyV1 {
+        issuer_context: issuer_context(test_network_id(b"spend-replay"), DataSpaceId::new(7)),
+        nonce: AxtSpendNonceV1::try_new([0x7A; 32]).expect("nonzero nonce"),
+    };
+    assert_eq!(key.validate(), Ok(()));
+    let decoded: AxtAnchoredSpendReplayKeyV1 =
+        norito::decode_from_bytes(&norito::to_bytes(&key).expect("encode replay key"))
+            .expect("decode replay key");
+    assert_eq!(decoded, key);
+    let mut json_key = String::new();
+    key.encode_json_key(&mut json_key);
+    let mut parser = norito::json::Parser::new(&json_key);
+    let raw_key = parser.parse_string().expect("parse nested JSON key");
+    assert_eq!(
+        AxtAnchoredSpendReplayKeyV1::decode_json_key(&raw_key)
+            .expect("decode canonical spend nonce key"),
+        key
+    );
+    assert!(AxtAnchoredSpendReplayKeyV1::decode_json_key(&(raw_key + " ")).is_err());
+
+    key.nonce = AxtSpendNonceV1([0; 32]);
+    assert!(matches!(
+        key.validate(),
+        Err(AxtAnchoredSpendReplayKeyValidationErrorV1::Nonce(
+            AxtSpendNonceValidationErrorV1::Zero
+        ))
+    ));
+    let mut invalid_json_key = String::new();
+    key.encode_json_key(&mut invalid_json_key);
+    let mut parser = norito::json::Parser::new(&invalid_json_key);
+    let raw_invalid = parser.parse_string().expect("parse invalid nested key");
+    assert!(AxtAnchoredSpendReplayKeyV1::decode_json_key(&raw_invalid).is_err());
+    key.nonce = AxtSpendNonceV1::try_new([0x7A; 32]).expect("nonzero nonce");
+    key.issuer_context.asset_definition_incarnation =
+        AxtAssetIncarnationV1(Hash::prehashed([0; 32]));
+    assert!(matches!(
+        key.validate(),
+        Err(AxtAnchoredSpendReplayKeyValidationErrorV1::IssuerContext(_))
+    ));
+}
+
+#[test]
+fn source_transfer_replay_key_uses_physical_coordinate_independent_of_issuer_nonce() {
+    let issuer = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+    let context = issuer_context(test_network_id(b"sequence-network"), DataSpaceId::new(7));
+    let anchor =
+        sample_finalized_spend_anchor(context.network_id, context.asset_dsid, LaneId::new(2));
+    let draft = sample_anchored_spend_draft(sample_asset_handle(), &anchor);
+    let first = draft
+        .clone()
+        .sign_by_issuer_v1(
+            anchor,
+            100,
+            AxtSpendNonceV1::try_new([0x31; 32]).expect("nonce"),
+            issuer.private_key(),
+        )
+        .expect("first spend");
+    let second = draft
+        .sign_by_issuer_v1(
+            anchor,
+            100,
+            AxtSpendNonceV1::try_new([0x32; 32]).expect("nonce"),
+            issuer.private_key(),
+        )
+        .expect("second spend");
+    assert_ne!(first.replay_key_v1(), second.replay_key_v1());
+    let key = AxtSourceTransferReplayKeyV1::from_spend_v1(&first).expect("source coordinate");
+    assert_eq!(
+        AxtSourceTransferReplayKeyV1::from_spend_v1(&second).expect("same source coordinate"),
+        key
+    );
+    key.validate().expect("valid physical coordinate");
+    assert_eq!(
+        norito::decode_from_bytes::<AxtSourceTransferReplayKeyV1>(
+            &norito::to_bytes(&key).expect("encode source coordinate")
+        )
+        .expect("decode source coordinate"),
+        key
+    );
+    let mut json_key = String::new();
+    key.encode_json_key(&mut json_key);
+    let mut parser = norito::json::Parser::new(&json_key);
+    let raw_key = parser
+        .parse_string()
+        .expect("parse source coordinate JSON key");
+    assert_eq!(
+        AxtSourceTransferReplayKeyV1::decode_json_key(&raw_key)
+            .expect("decode canonical source coordinate JSON key"),
+        key
+    );
+    assert!(AxtSourceTransferReplayKeyV1::decode_json_key(&(raw_key + " ")).is_err());
+
+    for altered in [
+        AxtSourceTransferReplayKeyV1 {
+            network_id: test_network_id(b"other-network"),
+            ..key
+        },
+        AxtSourceTransferReplayKeyV1 {
+            dataspace_id: DataSpaceId::new(8),
+            ..key
+        },
+        AxtSourceTransferReplayKeyV1 {
+            lane_id: LaneId::new(3),
+            ..key
+        },
+        AxtSourceTransferReplayKeyV1 {
+            block_header_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"other block",
+            )),
+            ..key
+        },
+        AxtSourceTransferReplayKeyV1 {
+            source_tx_index: 2,
+            ..key
+        },
+        AxtSourceTransferReplayKeyV1 {
+            transcript_index: 1,
+            ..key
+        },
+        AxtSourceTransferReplayKeyV1 {
+            delta_index: 1,
+            ..key
+        },
+    ] {
+        assert_ne!(altered, key);
+    }
+    assert_eq!(
+        AxtSourceTransferReplayKeyV1 {
+            source_tx_index: MAX_AXT_FINALIZED_TRANSACTIONS_V1 as u32,
+            ..key
+        }
+        .validate(),
+        Err(AxtSourceTransferReplayKeyValidationErrorV1::TransactionIndex)
+    );
+    AxtSourceTransferReplayKeyV1 {
+        source_tx_index: (MAX_AXT_FINALIZED_TRANSACTIONS_V1 - 1) as u32,
+        transcript_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
+        delta_index: (MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 - 1) as u32,
+        ..key
+    }
+    .validate()
+    .expect("the last V1 replay coordinates remain valid");
+    assert_eq!(
+        AxtSourceTransferReplayKeyV1 {
+            transcript_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+            ..key
+        }
+        .validate(),
+        Err(AxtSourceTransferReplayKeyValidationErrorV1::TranscriptIndex)
+    );
+    assert_eq!(
+        AxtSourceTransferReplayKeyV1 {
+            delta_index: MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 as u32,
+            ..key
+        }
+        .validate(),
+        Err(AxtSourceTransferReplayKeyValidationErrorV1::DeltaIndex)
+    );
+    assert_eq!(
+        AxtSourceTransferReplayKeyV1 {
+            block_header_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0; 32]
+            )),
+            ..key
+        }
+        .validate(),
+        Err(AxtSourceTransferReplayKeyValidationErrorV1::BlockHeader)
+    );
+}
+
+#[test]
+fn anchored_spend_requires_issuer_signed_transfer_scope_and_source_subject() {
+    let issuer = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+    let context = issuer_context(test_network_id(b"sequence-network"), DataSpaceId::new(7));
+    let nonce = AxtSpendNonceV1::try_new([0x77; 32]).expect("non-zero nonce");
+    let check = |handle_draft: AssetHandleDraft, expected| {
+        let handle = handle_draft
+            .sign_by_issuer_v1(context, issuer.private_key())
+            .expect("sign altered reusable handle");
+        let anchor = sample_finalized_spend_anchor(
+            context.network_id,
+            context.asset_dsid,
+            handle.target_lane,
+        );
+        let draft = sample_anchored_spend_draft(handle, &anchor);
+        assert_eq!(
+            draft.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+            Err(expected)
+        );
+    };
+
+    let mut wrong_scope = sample_asset_handle_draft();
+    wrong_scope.scope = vec!["mint".to_owned()];
+    check(wrong_scope, AxtAnchoredSpendValidationErrorV1::Scope);
+
+    let mut wrong_subject = sample_asset_handle_draft();
+    wrong_subject.subject.account =
+        "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned();
+    check(wrong_subject, AxtAnchoredSpendValidationErrorV1::Subject);
+
+    let mut wrong_origin = sample_asset_handle_draft();
+    wrong_origin.subject.origin_dsid = Some(DataSpaceId::new(8));
+    check(
+        wrong_origin,
+        AxtAnchoredSpendValidationErrorV1::OriginDataspace,
+    );
+}
+
+#[test]
+fn anchored_spend_signed_wire_binds_success_receipt_and_exact_transfer_occurrence() {
+    let issuer = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+    let context = issuer_context(test_network_id(b"sequence-network"), DataSpaceId::new(7));
+    let handle = sample_asset_handle_draft()
+        .sign_by_issuer_v1(context, issuer.private_key())
+        .expect("sign reusable handle");
+    let anchor =
+        sample_finalized_spend_anchor(context.network_id, context.asset_dsid, handle.target_lane);
+    let nonce = AxtSpendNonceV1::try_new([0x77; 32]).expect("non-zero nonce");
+    let signed = sample_anchored_spend_draft(handle, &anchor)
+        .sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key())
+        .expect("sign exact source occurrence");
+    let issuer_payload = signed.issuer_payload_v1().expect("signed payload");
+    assert_eq!(
+        issuer_payload.source_success_receipt_digest,
+        signed.draft.source_receipt.digest_v1()
+    );
+    assert_eq!(
+        issuer_payload.source_occurrence,
+        signed.draft.source_occurrence
+    );
+    let wire = to_bytes(&signed).expect("signed spend wire");
+    assert_eq!(
+        decode_from_bytes::<AxtAnchoredSpendV1>(&wire).unwrap(),
+        signed
+    );
+    let json = norito::json::to_json(&signed).expect("signed spend JSON");
+    assert!(json.contains("\"source_success_receipt_digest\":["));
+    assert_eq!(
+        norito::json::from_str::<AxtAnchoredSpendV1>(&json).unwrap(),
+        signed
+    );
+
+    let mut changed_receipt = signed.clone();
+    changed_receipt.draft.source_receipt.effect_set_digest = [0xEE; 32];
+    assert_eq!(
+        changed_receipt.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SourceReceipt)
+    );
+    changed_receipt
+        .draft
+        .source_occurrence
+        .source_success_receipt_digest = changed_receipt.draft.source_receipt.digest_v1();
+    assert_eq!(
+        changed_receipt.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+    );
+    let mut changed_ordinal = signed.clone();
+    changed_ordinal.draft.source_occurrence.pair_ordinal += 1;
+    assert_eq!(
+        changed_ordinal.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+    );
+    let mut changed_transfer = signed.clone();
+    changed_transfer.draft.source_occurrence.transfer_digest = [0xEF; 32];
+    assert_eq!(
+        changed_transfer.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+    );
+    let mut changed_claim = signed.clone();
+    changed_claim
+        .draft
+        .source_occurrence
+        .remote_spend_claim_commitment = [0xF0; 32];
+    assert_eq!(
+        changed_claim.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SourceClaim)
+    );
+    let mut changed_kind = signed.clone();
+    changed_kind.draft.intent.op.kind = "mint".to_owned();
+    assert_eq!(
+        changed_kind.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SourceClaim)
+    );
+    let mut changed_source_index = signed.clone();
+    changed_source_index.draft.source_occurrence.source_tx_index += 1;
+    assert_eq!(
+        changed_source_index.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SourceReceipt)
+    );
+    let mut changed_proof_claims = signed.clone();
+    let proof = changed_proof_claims.draft.proof.as_mut().expect("proof");
+    let mut envelope: AxtProofEnvelope = norito::decode_canonical(&proof.payload).unwrap();
+    envelope
+        .fastpq_binding
+        .as_mut()
+        .expect("binding")
+        .remote_spend_intent_commitments = vec![[0xF1; 32]];
+    proof.payload = norito::to_bytes(&envelope).unwrap();
+    assert_eq!(
+        changed_proof_claims.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SourceClaim)
+    );
+}
+
+#[test]
+fn anchored_spend_rejects_amount_commitment_not_carried_by_proof_envelope() {
+    let issuer = KeyPair::from_seed(vec![0x36; 32], Algorithm::Ed25519);
+    let context = issuer_context(
+        test_network_id(b"amount-commitment-network"),
+        DataSpaceId::new(7),
+    );
+    let handle = sample_asset_handle_draft()
+        .sign_by_issuer_v1(context, issuer.private_key())
+        .expect("sign reusable handle");
+    let anchor =
+        sample_finalized_spend_anchor(context.network_id, context.asset_dsid, handle.target_lane);
+    let nonce = AxtSpendNonceV1::try_new([0x7A; 32]).expect("non-zero nonce");
+    let mut draft = sample_anchored_spend_draft(handle, &anchor);
+    draft.amount_commitment = Some([0x44; 32]);
+    assert_eq!(
+        draft
+            .clone()
+            .sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitmentMirror)
+    );
+
+    draft.amount_commitment = None;
+    let proof = draft.proof.as_mut().expect("proof");
+    let mut envelope: AxtProofEnvelope =
+        norito::decode_canonical(&proof.payload).expect("decode proof envelope");
+    envelope.amount_commitment = Some([0x44; 32]);
+    proof.payload = norito::to_bytes(&envelope).expect("encode changed proof envelope");
+    assert_eq!(
+        draft.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitmentMirror)
+    );
+}
+
+#[test]
+fn anchored_spend_rejects_inconsistent_clear_and_hidden_amount_mirrors() {
+    let issuer = KeyPair::from_seed(vec![0x35; 32], Algorithm::Ed25519);
+    let context = issuer_context(
+        test_network_id(b"amount-mirror-network"),
+        DataSpaceId::new(7),
+    );
+    let handle = sample_asset_handle_draft()
+        .sign_by_issuer_v1(context, issuer.private_key())
+        .expect("sign reusable handle");
+    let anchor =
+        sample_finalized_spend_anchor(context.network_id, context.asset_dsid, handle.target_lane);
+    let nonce = AxtSpendNonceV1::try_new([0x79; 32]).expect("non-zero nonce");
+    let mut draft = sample_anchored_spend_draft(handle, &anchor);
+    draft.amount = Some(Quantity::from(6_u64));
+    assert_eq!(
+        draft
+            .clone()
+            .sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::AmountMirror)
+    );
+    draft.amount = None;
+    assert_eq!(
+        draft
+            .clone()
+            .sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::AmountMirror)
+    );
+    draft.intent.op.amount = None;
+    draft.amount = Some(Quantity::from(5_u64));
+    assert_eq!(
+        draft.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::AmountMirror)
     );
 }
 
@@ -1158,15 +1811,19 @@ fn handle_budget_record_enforces_limits_atomically_and_roundtrips() {
         .expect("first consumption");
     record
         .try_consume(&key, &Quantity::from(4_u64), 10)
-        .expect("exact per-use aggregate cap");
+        .expect("second spend within its per-use cap");
     record
         .validate_for_key(&key)
         .expect("valid persisted record");
     assert_eq!(record.consumed(), &Quantity::from(10_u64));
     assert_eq!(record.retain_until_slot(), 20, "retention is monotonic");
+    record
+        .try_consume(&key, &Quantity::from(10_u64), 30)
+        .expect("the per-use cap does not cap the cumulative budget");
+    assert_eq!(record.consumed(), &Quantity::from(20_u64));
     let at_limit = record.clone();
     assert_eq!(
-        record.try_consume(&key, &Quantity::from(1_u64), 30),
+        record.try_consume(&key, &Quantity::from(11_u64), 40),
         Err(AxtHandleBudgetConsumeError::PerUseExceeded)
     );
     assert_eq!(
@@ -1239,10 +1896,9 @@ fn handle_budget_record_enforces_limits_atomically_and_roundtrips() {
         consumed: Quantity::from(11_u64),
         retain_until_slot: 90,
     };
-    assert_eq!(
-        over_per_use.validate_for_key(&key),
-        Err(AxtHandleBudgetConsumeError::PerUseExceeded)
-    );
+    over_per_use
+        .validate_for_key(&key)
+        .expect("a restored cumulative record can exceed a per-use cap");
 
     let key_bytes = to_bytes(&key).expect("encode budget key");
     assert_eq!(
@@ -1250,10 +1906,12 @@ fn handle_budget_record_enforces_limits_atomically_and_roundtrips() {
         key
     );
     let record_bytes = to_bytes(&record).expect("encode budget record");
-    assert_eq!(
-        decode_from_bytes::<AxtHandleBudgetRecord>(&record_bytes).expect("decode budget record"),
-        record
-    );
+    let restored =
+        decode_from_bytes::<AxtHandleBudgetRecord>(&record_bytes).expect("decode budget record");
+    assert_eq!(restored, record);
+    restored
+        .validate_for_key(&key)
+        .expect("restored cumulative usage must retain the signed remaining budget");
 }
 #[test]
 #[expect(
@@ -1802,10 +2460,10 @@ fn axt_v1_json_requires_handle_and_envelope_collections() {
         descriptor: sample_descriptor(dsid),
         touches: Vec::new(),
         proofs: Vec::new(),
-        handles: Vec::new(),
+        spends: Vec::new(),
         commit_height: 1,
     };
-    for field in ["touches", "proofs", "handles"] {
+    for field in ["touches", "proofs", "spends"] {
         let mut value = norito::json::to_value(&record).expect("serialize AXT envelope");
         value
             .as_object_mut()
@@ -1944,20 +2602,24 @@ fn axt_v1_json_requires_every_nested_nullable_slot() {
         AxtReplayRecord,
         ["budget_key"]
     );
-    let fragment = AxtHandleFragment {
-        handle: sample_asset_handle(),
-        intent: RemoteSpendIntent {
-            asset_dsid: DataSpaceId::new(7),
-            op,
-        },
-        proof: None,
-        amount: None,
-        amount_commitment: None,
-    };
+    let handle = sample_asset_handle();
+    let anchor = sample_finalized_spend_anchor(
+        handle.issuer_context.network_id,
+        DataSpaceId::new(7),
+        handle.target_lane,
+    );
+    let mut draft = sample_anchored_spend_draft(handle, &anchor);
+    draft.intent.op = op;
     assert_required_json_fields!(
-        fragment,
-        AxtHandleFragment,
-        ["proof", "amount", "amount_commitment"]
+        draft,
+        AxtAnchoredSpendDraftV1,
+        [
+            "proof",
+            "amount",
+            "amount_commitment",
+            "source_receipt",
+            "source_occurrence"
+        ]
     );
 
     let reject = AxtRejectContext {
@@ -2395,23 +3057,11 @@ fn envelope_roundtrips_through_norito() {
         descriptor: AxtDescriptor,
         touches: Vec<AxtTouchFragment>,
         proofs: Vec<AxtProofFragment>,
-        handles: Vec<AxtHandleFragment>,
+        spends: Vec<AxtAnchoredSpendV1>,
     }
     let dsid = DataSpaceId::new(11);
     let descriptor = sample_descriptor(dsid);
     let binding = AxtBinding::new([0xAB; 32]);
-    let alice_account = crate::account::AccountId::new(
-        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-            .parse()
-            .expect("public key"),
-    )
-    .to_string();
-    let merchant_account = crate::account::AccountId::new(
-        "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
-            .parse()
-            .expect("public key"),
-    )
-    .to_string();
     let envelope = AxtEnvelopeRecord {
         binding,
         lane: LaneId::new(1),
@@ -2430,66 +3080,7 @@ fn envelope_roundtrips_through_norito() {
                 expiry_slot: None,
             },
         }],
-        handles: vec![AxtHandleFragment {
-            handle: AssetHandle {
-                asset_definition_id: test_asset_definition_id(),
-                scope: vec!["transfer".into()],
-                subject: HandleSubject {
-                    account: alice_account.clone(),
-                    origin_dsid: Some(dsid),
-                },
-                budget: HandleBudget {
-                    remaining: Quantity::from(500_u64),
-                    per_use: Some(Quantity::from(300_u64)),
-                },
-                handle_era: 1,
-                sub_nonce: 42,
-                group_binding: GroupBinding {
-                    composability_group_id: vec![0u8; 32],
-                    epoch_id: 1,
-                },
-                target_lane: LaneId::new(0),
-                axt_binding: binding,
-                manifest_view_root: [1u8; 32],
-                expiry_slot: 10,
-                max_clock_skew_ms: Some(0),
-                issuer_context: AxtHandleIssuerContextV1 {
-                    network_id: test_network_id(b"envelope-roundtrip-network"),
-                    asset_dsid: dsid,
-                    asset_definition_incarnation: AxtAssetIncarnationV1::derive(
-                        &test_network_id(b"envelope-roundtrip-network"),
-                        &test_asset_definition_id(),
-                        &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                            b"envelope-roundtrip-asset-registration-header",
-                        )),
-                        &Hash::new(b"envelope-roundtrip-asset-registration-execution"),
-                        0,
-                    ),
-                    issuer: UniversalAccountId::from_hash(Hash::new(b"envelope-roundtrip-issuer")),
-                    issuer_manifest_root: [1u8; 32],
-                    code_root: Hash::new(b"envelope-roundtrip-code").into(),
-                    abi_version: 1,
-                    abi_hash: ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1),
-                },
-                issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-            },
-            intent: RemoteSpendIntent {
-                asset_dsid: dsid,
-                op: SpendOp {
-                    asset_definition_id: test_asset_definition_id(),
-                    kind: "transfer".into(),
-                    from: alice_account,
-                    to: merchant_account,
-                    amount: Some(Quantity::from(200_u64)),
-                },
-            },
-            proof: Some(ProofBlob {
-                payload: vec![0xCC],
-                expiry_slot: None,
-            }),
-            amount: Some(Quantity::from(200_u64)),
-            amount_commitment: None,
-        }],
+        spends: Vec::new(),
         commit_height: 5,
     };
     let bytes = to_bytes(&envelope).expect("encode envelope");
@@ -2503,7 +3094,7 @@ fn envelope_roundtrips_through_norito() {
         descriptor: envelope.descriptor.clone(),
         touches: envelope.touches.clone(),
         proofs: envelope.proofs.clone(),
-        handles: envelope.handles.clone(),
+        spends: envelope.spends.clone(),
     };
     let missing_commit_height_bytes =
         to_bytes(&missing_commit_height).expect("encode omitted-height fixture");

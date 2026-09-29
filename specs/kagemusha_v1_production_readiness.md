@@ -102,6 +102,59 @@ exchange bytes. Device gates retain 128 MiB process RSS, 10 s proving p95,
 1 s verification p95, and 30 s handoff p95. These are required acceptance limits,
 not current achieved measurements or a claim of optimality.
 
+## Finalized verifier authority substrate — 2026-09-23
+
+The first-release World snapshot now requires a typed
+`KagemushaGovernedVerifierRegistryV1` cell. It records the trusted threshold
+signer policy, exact path-free release identities, and active, standby or
+verification-only status. Decode validates the current value and actual MV
+predecessor; installation compares every authenticated local verifier digest and
+its lifecycle with the persisted registry, refusing a mismatch before replacing
+the fail-closed runtime. Local proof-release files remain operational inputs.
+
+Ordinary State commit compares the final staged registry with its block-held
+runtime verifier before publication. The initial signer-policy install is an
+exact empty-registry compare-and-set with a canonically bounded 512 KiB signer
+policy, proposed by a bonded citizen and enacted
+only by an exact-due Parliament certificate. Its reducer issues a single-use
+transaction authorization, which moves through block apply and is checked with
+the enacted proposal, retained certificate, attempt, network, and predecessor
+at State publication. The next permissioned transition accepts a complete
+threshold-authenticated release manifest, internal qualification receipt, and
+release attestation against that finalized policy. It binds the full registry
+predecessor, exact network, proposer, and Parliament subject head, then adds
+one path-free standby row at the certificate's due height. State recomputes
+the exact successor when consuming the move-only authorization; snapshots
+validate the current and MV predecessor registry. An inactive standby release
+does not select a local runtime verifier or open issuance. A separate bonded
+citizen proposal can first activate the sole installed standby release only at its
+exact certificate due height against the complete inactive governed predecessor.
+The State authorization recomputes that sole active successor. Subsequent
+rotation and other semantic registry changes remain refused. A refused commit
+leaves the live State cut unchanged. This does not turn a local release file
+into finalized authority.
+
+Activation is a finalized authority transition, not automatic local verifier
+availability. Consensus replay and startup retain the built-in reject-all
+verifier when exact local artifacts are absent; that verifier never authorizes
+monetary operations. An authenticated local verifier must still match every
+governed release identity and status before replacing reject-all. Standby
+retirement has no permissioned finalized transition. The daemon's configured file
+loader accepts one release. An inactive pre-replay head defers file I/O; after
+Kura replay the daemon loads against the final active head before opening the
+writer. It captures an opaque State-owned reload head before reading those
+files and replaces the runtime only if the NetworkId,
+finalized block tip, State publication generation, and complete governed
+registry still equal that head and
+the authenticated release semantics match the registry. A stale head or
+missing/mismatched local release leaves the runtime unchanged, including after
+snapshot restoration. The daemon still loads only one release; multi-release
+reload coordinated with a finalized lifecycle transition remains outstanding.
+The runtime verifier therefore remains
+`Schema::Required` in the complete-State inventory until those transitions,
+multi-release recovery checks, and complete-root publication are integrated and
+qualified.
+
 ## Active implementation — 2026-09-22
 
 Work remains confined to `/Users/takemiyamakoto/dev/iroha`, branch

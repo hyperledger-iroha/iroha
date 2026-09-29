@@ -1034,47 +1034,15 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         distid: None,
     })
 }
-fn algorithm_alias_key(value: &str) -> Option<String> {
-    (!value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
-    .then(|| {
-        value
-            .bytes()
-            .filter(|byte| !matches!(*byte, b'-' | b'_'))
-            .map(|byte| char::from(byte.to_ascii_lowercase()))
-            .collect()
-    })
-}
+/// Parse an exact canonical `iroha_crypto` algorithm label; `None` selects Ed25519.
 fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
-    let value = value.unwrap_or("ed25519");
-    let key = algorithm_alias_key(value).ok_or_else(|| {
+    let value = value.unwrap_or(iroha_crypto::ED_25519);
+    value.parse::<Algorithm>().map_err(|_| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported crypto algorithm: {value}"),
         )
-    })?;
-    let algorithm = match key.as_str() {
-        "ed25519" | "ed" | "eddsa" => Algorithm::Ed25519,
-        "secp256k1" | "secp" | "secpk1" => Algorithm::Secp256k1,
-        "mldsa" | "mldsa65" => Algorithm::MlDsa,
-        "blsnormal" | "bls12381g1" => Algorithm::BlsNormal,
-        "blssmall" | "bls12381g2" => Algorithm::BlsSmall,
-        "gost256a" | "gost34102012256paramseta" => Algorithm::Gost3410_2012_256ParamSetA,
-        "gost256b" | "gost34102012256paramsetb" => Algorithm::Gost3410_2012_256ParamSetB,
-        "gost256c" | "gost34102012256paramsetc" => Algorithm::Gost3410_2012_256ParamSetC,
-        "gost512a" | "gost34102012512paramseta" => Algorithm::Gost3410_2012_512ParamSetA,
-        "gost512b" | "gost34102012512paramsetb" => Algorithm::Gost3410_2012_512ParamSetB,
-        "sm2" => Algorithm::Sm2,
-        _ => {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("unsupported crypto algorithm: {value}"),
-            ));
-        }
-    };
-    Ok(algorithm)
+    })
 }
 fn checked_public_key_payload(public_key: &PublicKey) -> napi::Result<&[u8]> {
     public_key
@@ -1100,14 +1068,6 @@ pub fn supported_crypto_algorithms_js() -> Vec<String> {
         .iter()
         .map(|algorithm| algorithm.as_static_str().to_owned())
         .collect()
-}
-/// Normalize a user-facing algorithm label to the canonical Rust `iroha_crypto` label.
-#[napi(js_name = "normalizeCryptoAlgorithm")]
-#[allow(clippy::needless_pass_by_value)]
-pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<String> {
-    Ok(parse_crypto_algorithm(algorithm.as_deref())?
-        .as_static_str()
-        .to_owned())
 }
 /// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
 ///
@@ -7943,65 +7903,48 @@ mod tests {
         assert!(error.reason.contains("not a Hijiri quote response"));
     }
     #[test]
-    fn crypto_algorithm_parser_accepts_supported_aliases() {
+    fn crypto_algorithm_parser_accepts_exact_canonical_labels() {
         assert_eq!(
             parse_crypto_algorithm(None).expect("default crypto algorithm"),
             Algorithm::Ed25519
         );
-        for (label, expected) in [
-            ("ed25519", Algorithm::Ed25519),
-            ("ed-25519", Algorithm::Ed25519),
-            ("SECP_256K1", Algorithm::Secp256k1),
-            ("mldsa", Algorithm::MlDsa),
-            ("ML-DSA-65", Algorithm::MlDsa),
-            ("ML_DSA_65", Algorithm::MlDsa),
-            ("ML_DSA-65", Algorithm::MlDsa),
-            ("BLS-NORMAL", Algorithm::BlsNormal),
-            ("BLS_SMALL", Algorithm::BlsSmall),
-            (
-                "GOST-3410-2012-256-PARAMSETA",
-                Algorithm::Gost3410_2012_256ParamSetA,
-            ),
-            (
-                "GOST_3410_2012_512_PARAMSETB",
-                Algorithm::Gost3410_2012_512ParamSetB,
-            ),
-            ("sm2", Algorithm::Sm2),
-        ] {
+        for expected in SUPPORTED_CRYPTO_ALGORITHMS {
+            let label = expected.as_static_str();
             assert_eq!(
-                parse_crypto_algorithm(Some(label)).expect("supported crypto algorithm alias"),
-                expected,
+                parse_crypto_algorithm(Some(label)).expect("canonical crypto algorithm label"),
+                *expected,
                 "{label}"
             );
         }
     }
     #[test]
-    fn crypto_algorithm_parser_rejects_invalid_alias_characters_and_suites() {
+    fn crypto_algorithm_parser_rejects_aliases_and_noncanonical_spellings() {
         for label in [
             "",
-            " mldsa",
-            "mldsa ",
-            "ML DSA 65",
-            "\tML-DSA-65",
-            "ML-DSA-65\n",
-            "ML.DSA.65",
-            "ML/DSA/65",
-            "ML@DSA@65",
-            "ML#DSA#65",
-            "MLKDSA65",
-            "ed－25519",
-            "MLDSA44",
-            "MLDSA87",
+            "ed",
+            "eddsa",
+            "ed-25519",
+            "ED25519",
+            "secp",
+            "SECP_256K1",
+            "mldsa",
+            "ML-DSA",
+            "ML-DSA-65",
+            "mldsa65",
+            " ml-dsa",
+            "ml-dsa ",
+            "BLS-NORMAL",
+            "bls12381g1",
+            "blssmall",
+            "gost256a",
+            "GOST-3410-2012-256-PARAMSETA",
+            "SM2",
             "ML-DSA-44",
-            "ML_DSA_87",
-            "ML-DSA-4-4",
-            "ML-DSA-４４",
-            "ML-DSA-８７",
-            "ML－DSA-65",
+            "ml\u{ff0d}dsa",
         ] {
             assert!(
                 parse_crypto_algorithm(Some(label)).is_err(),
-                "invalid crypto algorithm alias {label:?} must fail"
+                "noncanonical crypto algorithm label {label:?} must fail"
             );
         }
     }

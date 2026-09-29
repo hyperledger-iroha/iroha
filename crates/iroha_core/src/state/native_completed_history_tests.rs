@@ -95,6 +95,9 @@ fn cold_restore_completed_native_history_for_test(
     .expect("reopen genuine native history without a warm Kura cache");
     let mut restored = deserialize::KuraSeed {
         operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        execution_budget: mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         kura: cold_kura,
         lane_manifests: state.lane_manifests.read().clone(),
         query_handle: LiveQueryStore::start_test(),

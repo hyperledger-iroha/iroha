@@ -261,7 +261,7 @@ Notes
   type.
 - Return conventions are syscall-specific. Mutating ISI syscalls queue
   instructions or return a VM error; query/helper syscalls return scalars,
-  pointer TLVs, status vectors, or nested contract return registers as
+  pointer TLVs, status vectors, or schema-bound nested contract return records as
   documented in `crates/ivm/docs/syscalls.md`.
 
 ---

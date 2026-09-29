@@ -1658,6 +1658,9 @@ fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
         .expect("open the exact configured startup baseline");
     let store_root = kura.store_root().to_path_buf();
     let mut state = State::try_new_with_chain(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -2096,7 +2099,8 @@ fn bounded_kura_sidecar_decode_preserves_valid_finality_and_retained_records() {
     kura.store_block(Arc::clone(&block))
         .expect("store canonical block");
     let artifact = v2_finality_artifact_for_block(&block);
-    kura.store_v2_finality_artifact(&artifact)
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("store finality sidecars");
 
     let finality_path = kura.v2_finality_artifact_path(1);

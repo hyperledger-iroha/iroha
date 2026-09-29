@@ -1,11 +1,15 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
 
+const CASES: &[crate::captured_schema_tests::Case] =
+    &[crate::captured_schema_tests::Case::bidirectional::<
+        super::Node,
+    >("iroha_data_model::query::tx_predicate::wire::Node")];
+
 #[test]
 fn captured_codec_schema_identities() {
-    crate::captured_schema_tests::Case::bidirectional::<super::Node>(
-        "iroha_data_model::query::tx_predicate::wire::Node",
-    )
-    .check();
+    for case in CASES {
+        case.check();
+    }
 }
 
 pub(in crate::query::tx_predicate) fn generic_membership_identity_records()
@@ -82,3 +86,5 @@ fn membership_identity_uses_marker_identity_without_a_payload_codec() {
         "iroha_data_model::query::tx_predicate::wire::MembershipValues<query_fixture::MarkerA>"
     );
 }
+
+crate::captured_schema_tests::native_capture::owner_printer!(CASES);

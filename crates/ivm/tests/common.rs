@@ -79,13 +79,21 @@ pub fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
         .try_to_i64()
         .unwrap_or_else(|| panic!("int pointer 0x{pointer:08x} does not fit i64"))
 }
-/// Decode one pointer-backed Kotodama `int` return register.
-pub fn decode_int_register(vm: &IVM, register: usize) -> BigInt {
-    decode_int_word(vm, vm.register(register))
+/// Decode one pointer-backed Kotodama `int` return table word.
+pub fn decode_int_return_word(vm: &IVM, index: usize) -> BigInt {
+    decode_int_word(
+        vm,
+        vm.public_call_result_word(index)
+            .expect("completed int word"),
+    )
 }
 /// Decode one pointer-backed Kotodama `int` return known to fit an `i64`.
-pub fn decode_i64_register(vm: &IVM, register: usize) -> i64 {
-    decode_i64_word(vm, vm.register(register))
+pub fn decode_i64_return_word(vm: &IVM, index: usize) -> i64 {
+    decode_i64_word(
+        vm,
+        vm.public_call_result_word(index)
+            .expect("completed int word"),
+    )
 }
 /// Encode raw bytes as a schema-bound Kotodama V1 `Bytes` state record.
 pub fn encode_bytes_state_value(value: &[u8]) -> Vec<u8> {
@@ -98,6 +106,12 @@ pub fn decode_bytes_state_value(payload: &[u8]) -> Vec<u8> {
         .expect("bytes state record must contain a valid pointer envelope");
     assert_eq!(tlv.type_id, PointerType::Blob);
     tlv.payload.to_vec()
+}
+/// Decode one non-negative pointer-backed Kotodama `int` return as `u64`.
+pub fn decode_u64_return_word(vm: &IVM, index: usize) -> u64 {
+    decode_int_return_word(vm, index)
+        .try_to_u64()
+        .unwrap_or_else(|| panic!("int return word {index} does not fit u64"))
 }
 /// Encode one pointer-backed value using the schema-bound Kotodama V1 record.
 pub fn encode_pointer_state_value(
@@ -146,12 +160,31 @@ pub fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec
     };
     envelope.clone()
 }
-fn assemble_contract_syscalls_with_states(
-    numbers: &[u8],
+/// Canonical zero-argument, Unit-result table signature for a fixture function.
+pub fn unit_callable(entry_pc: u64) -> ivm_abi::call::EmbeddedCallableV1 {
+    ivm_abi::call::EmbeddedCallableV1 {
+        entry_pc,
+        frame_bytes: 0,
+        argument_words: Vec::new(),
+        result_words: vec![ivm_abi::call::CallWordV1::Unit],
+    }
+}
+/// Complete frameless Unit return through the caller-owned result table.
+pub fn unit_return_words() -> [u32; 4] {
+    use instruction::wide;
+    [
+        encoding::wide::encode_store(wide::memory::STORE64, 12, 0, 0),
+        encoding::wide::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
+        encoding::wide::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
+        encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
+    ]
+}
+fn assemble_schema_contract_with_states(
     states: Vec<EmbeddedStateDescriptor>,
     write_keys: Vec<String>,
 ) -> Vec<u8> {
     let interface = EmbeddedContractInterfaceV1 {
+        callables: vec![unit_callable(0)],
         seiyaku_name: "SyscallFixture".to_owned(),
         compiler_fingerprint: "ivm-integration-tests".to_owned(),
         abi_hash: syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -180,16 +213,13 @@ fn assemble_contract_syscalls_with_states(
     };
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&interface.encode_section());
-    for &number in numbers {
-        program.extend_from_slice(
-            &encoding::wide::encode_sys(instruction::wide::system::SCALL, number).to_le_bytes(),
-        );
+    for word in unit_return_words() {
+        program.extend_from_slice(&word.to_le_bytes());
     }
-    program.extend_from_slice(&HALT);
     program
 }
 /// Assemble an admitted contract fixture over declared `Bytes` durable state.
-pub fn assemble_bytes_state_contract_syscalls(numbers: &[u8], state_names: &[&str]) -> Vec<u8> {
+pub fn assemble_bytes_state_schema_contract(state_names: &[&str]) -> Vec<u8> {
     let states = state_names
         .iter()
         .map(|name| EmbeddedStateDescriptor {
@@ -201,7 +231,7 @@ pub fn assemble_bytes_state_contract_syscalls(numbers: &[u8], state_names: &[&st
         .iter()
         .map(|name| format!("state:{name}"))
         .collect();
-    assemble_contract_syscalls_with_states(numbers, states, write_keys)
+    assemble_schema_contract_with_states(states, write_keys)
 }
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len() * 4);

@@ -844,7 +844,10 @@ fn rekey_account_id(
         // Rekey has its own verified authority, but its quantity-source owner is
         // not part of the complete effect relation yet. Preserve the mutation
         // and poison only the rollback-local candidate instead of omitting it.
-        state_transaction.world.quantity_mutation_observation.changed();
+        state_transaction
+            .world
+            .quantity_mutation_observation
+            .changed();
         let new_asset_id = iroha_data_model::asset::AssetId::with_scope(
             asset_id.definition().clone(),
             new_account.clone(),

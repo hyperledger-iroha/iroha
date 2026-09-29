@@ -138,7 +138,7 @@ final class NumericV1Tests: XCTestCase {
 
         var unassigned = try KotodamaNumericV1Codec.encodeIntEnvelope(KotodamaInt("1"))
         unassigned[0] = 0
-        unassigned[1] = 0x13
+        unassigned[1] = 0x0C
         unassigned[2] = 2
         assertCode(.unknownType) {
             _ = try KotodamaNumericV1Codec.decodeIntEnvelope(unassigned)

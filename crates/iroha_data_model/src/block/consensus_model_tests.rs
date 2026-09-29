@@ -263,9 +263,6 @@ struct ForgedNposGenesisParams {
     max_validators: u32,
     min_self_bond: Numeric,
     min_nomination_bond: Numeric,
-    max_nominator_concentration_pct: u8,
-    seat_band_pct: u8,
-    max_entity_correlation_pct: u8,
     finality_margin_blocks: u64,
     evidence_horizon_blocks: u64,
     activation_lag_blocks: u64,
@@ -469,9 +466,6 @@ fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
         max_validators: 4,
         min_self_bond: Numeric::new(-1_i32, 0),
         min_nomination_bond: Numeric::one(),
-        max_nominator_concentration_pct: 100,
-        seat_band_pct: 10,
-        max_entity_correlation_pct: 100,
         finality_margin_blocks: 1,
         evidence_horizon_blocks: 10,
         activation_lag_blocks: 1,
@@ -1562,6 +1556,3 @@ fn lane_payload_ownership_status_roundtrip_codec() {
 }
 include!("consensus/runtime_diagnostics_tests.rs");
 include!("consensus/npos_diagnostics_tests.rs");
-
-#[path = "native_amx_settlement_tests.rs"]
-mod native_amx;

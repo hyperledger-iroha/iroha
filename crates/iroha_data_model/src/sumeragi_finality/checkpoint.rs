@@ -18,7 +18,8 @@ struct CheckpointDecision {
     core_hash: [u8; 32],
     result: [u8; 32],
     committee_digest: [u8; 32],
-    next_committee_digest: [u8; 32],
+    schedule: ScheduleOutcome,
+    beacon: Option<crate::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
     executed_hash: Hash,
     executed_len: u64,
 }
@@ -30,7 +31,8 @@ impl CheckpointDecision {
             core_hash: value.core_hash.0,
             result: value.result.0,
             committee_digest: value.committee_digest,
-            next_committee_digest: value.next_committee_digest,
+            schedule: value.schedule.clone(),
+            beacon: value.beacon.clone(),
             executed_hash: value.executed_hash,
             executed_len: value.executed_len,
         }
@@ -41,7 +43,8 @@ impl CheckpointDecision {
             core_hash: Hash32(self.core_hash),
             result: Hash32(self.result),
             committee_digest: self.committee_digest,
-            next_committee_digest: self.next_committee_digest,
+            schedule: self.schedule.clone(),
+            beacon: self.beacon.clone(),
             executed_hash: self.executed_hash,
             executed_len: self.executed_len,
         }
@@ -50,7 +53,7 @@ impl CheckpointDecision {
 
 /// Canonical compact checkpoint exported from an authenticated prefix.
 ///
-/// It retains the tip and at most two predecessor decisions needed for exact-tip and lag-2
+/// It retains the tip and at most two predecessor decisions needed for exact-tip and epoch-bound
 /// successor verification. Private fields prevent accidental construction from an unverified
 /// proof; decoding still yields an untrusted DTO. Independent local selection authenticates its
 /// genesis, chain label and retained schedule commitments before `from_trusted_checkpoint`.
@@ -150,7 +153,8 @@ impl SumeragiFinalityCheckpoint {
                     && decision.core_hash != [0; 32]
                     && decision.result != [0; 32]
                     && decision.committee_digest != [0; 32]
-                    && decision.next_committee_digest != [0; 32]
+                    && decision.schedule.height == decision.height
+                    && decision.schedule.validate().is_ok()
                     && decision.executed_len > 0
                     && decision.executed_len <= MAX_FINALITY_BLOCK_BYTES as u64,
                 "checkpoint commitments are malformed or discontinuous",
@@ -251,7 +255,8 @@ impl SumeragiFinalityVerifier {
             if decision.height == 1 {
                 need(
                     decision.block_hash == genesis.hash()
-                        && decision.core_hash == *genesis.hash().as_ref(),
+                        && decision.core_hash == *genesis.hash().as_ref()
+                        && decision.schedule.current == verifier.genesis_epoch,
                     "checkpoint genesis commitment differs from selected signed root",
                 )?;
             }

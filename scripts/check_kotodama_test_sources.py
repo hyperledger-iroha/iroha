@@ -28,7 +28,6 @@ EXPECTED_SOURCES = (
 )
 EXPECTED_TEST_INCLUDES = {
     "crates/kotodama_lang/src/compiler.rs": (
-        "compiler/tests/axt_remote_spend_access_tests.rs",
         "compiler/tests/staged_mint_access_hints.rs",
     ),
     "crates/kotodama_lang/src/semantic.rs": (

@@ -189,7 +189,7 @@ fn replay_reuses_one_stripe_and_respects_its_exact_payload_and_work_plan() {
         let mut visits = 0;
         replay
             .replay_all(|stripe| {
-                assert_eq!(stripe.values.len() * size_of::<u64>(), plan.stripe_bytes);
+                assert_eq!(std::mem::size_of_val(stripe.values), plan.stripe_bytes);
                 assert_eq!(
                     plan.coefficient_bytes + plan.stripe_bytes,
                     plan.peak_trace_bytes

@@ -70,10 +70,30 @@ impl Inst {
 
     /// The height configuration of `height`.
     pub fn config(&self, height: u64) -> HeightConfig {
+        let index = self
+            .schedule
+            .iter()
+            .rposition(|(from, _)| *from <= height)
+            .unwrap_or(0);
+        let first = self.schedule[index].0;
+        let last = self
+            .schedule
+            .get(index + 1)
+            .map_or(u64::MAX, |(from, _)| from - 1);
         HeightConfig {
+            epoch: Box::new(crate::testing::scheduled_epoch(index as u64, first, last)),
             committee: self.committee(height).clone(),
             params: self.params,
         }
+    }
+    /// Exact atomic original-application schedule outcome.
+    pub fn applied_config(&self, height: u64) -> crate::types::AppliedConfig {
+        crate::testing::applied_config(
+            height,
+            &self.config(height),
+            self.config(height + 1),
+            self.config(height + 2),
+        )
     }
 }
 
@@ -201,6 +221,7 @@ enum Ev {
         op: u64,
         bh: Hash32,
         height: u64,
+        scheduling_epoch: crate::types::EpochId,
         outcome: ExecOutcome,
     },
     NicFree {
@@ -358,9 +379,21 @@ pub fn preview(sc: &Scenario, height: u64) -> (crate::topology::Topology, Vec<us
         .map(|k| keyed.iter().find(|(x, _)| x == k).map_or(0, |(_, m)| *m))
         .collect();
     let id = derive_hash(b"sim-instance", key_seed, 0);
+    let epoch_index = sc
+        .committees
+        .iter()
+        .rposition(|(from, _)| *from <= height)
+        .unwrap_or(0);
+    let first = sc.committees[epoch_index].0;
+    let last = sc
+        .committees
+        .get(epoch_index + 1)
+        .map_or(u64::MAX, |(from, _)| from - 1);
+    let epoch = crate::testing::scheduled_epoch(epoch_index as u64, first, last);
     let topo = crate::topology::Topology::compute(
         &SimCrypto::new(),
         &id,
+        &epoch,
         &committee,
         height,
         0,
@@ -703,6 +736,7 @@ impl World {
                 op,
                 bh,
                 height,
+                scheduling_epoch,
                 outcome,
             } => {
                 if self.alive(r, epoch) {
@@ -710,7 +744,8 @@ impl World {
                         let instance = self.instances[self.replicas[r].inst].id;
                         let exec = &mut self.replicas[r].exec;
                         exec.cache.insert(bh, (height, *res));
-                        exec.executed.record(&instance, height, &bh, res);
+                        exec.executed
+                            .record(&instance, &scheduling_epoch, height, &bh, res);
                     }
                     let outcome = Some(outcome);
                     self.complete_host(r, Done::Executed { op, outcome });
@@ -981,6 +1016,20 @@ impl World {
                     );
                 }
             }
+            Action::BuildControlWitness { req, context } => self.schedule(
+                at,
+                Ev::Local {
+                    r,
+                    epoch,
+                    event: Box::new(Event::ControlWitnessBuilt {
+                        req,
+                        context,
+                        witness: crate::types::ControlWitness::empty(),
+                        attest: false,
+                    }),
+                },
+            ),
+            Action::DriveApplicationControl { .. } | Action::ReceiveApplicationControl { .. } => {}
             Action::BuildPayload {
                 req,
                 max_bytes,
@@ -1130,7 +1179,9 @@ impl World {
         let mut out = Vec::new();
         let mut bytes = 0u64;
         for (block, qc) in rep.store.iter().skip(start).take(usize::from(max_count)) {
-            let size = u64::try_from(block.payload.len()).unwrap_or(u64::MAX) + 512;
+            let size = u64::try_from(block.payload.len()).unwrap_or(u64::MAX)
+                + 512
+                + crate::types::MAX_CONTROL_WITNESS_BYTES as u64;
             if !out.is_empty() && bytes + size > u64::from(max_bytes) {
                 break;
             }
@@ -1409,7 +1460,11 @@ impl World {
             let outcome = if profile.divergent && !block.payload.is_empty() {
                 divergent_exec(&tip_result, &block.payload, &bh)
             } else {
-                block_exec(&tip_result, block)
+                block_exec(
+                    &tip_result,
+                    block,
+                    &self.instances[inst].config(height).epoch,
+                )
             };
             match outcome {
                 ExecOutcome::Valid(res) => Some(res),
@@ -1440,7 +1495,7 @@ impl World {
         for (id, _) in decode_txs(&block.payload) {
             rep.txs.remove(&id);
         }
-        let config = self.instances[inst].config(height + 2);
+        let config = self.instances[inst].applied_config(height);
         self.schedule(
             at,
             Ev::Local {
@@ -1450,7 +1505,7 @@ impl World {
                     height,
                     block_hash: bh,
                     header: Box::new(block.header.clone()),
-                    config_after_next: config,
+                    config,
                 }),
             },
         );
@@ -1509,7 +1564,13 @@ impl World {
         } else if profile.divergent && !block.payload.is_empty() {
             divergent_exec(parent, &block.payload, bh)
         } else {
-            block_exec(parent, block)
+            block_exec(
+                parent,
+                block,
+                &self.instances[self.replicas[r].inst]
+                    .config(block.header.height)
+                    .epoch,
+            )
         };
         (outcome, self.exec_latency(m, block))
     }
@@ -1554,7 +1615,9 @@ impl World {
         if let ExecOutcome::Valid(res) = &outcome {
             let height = job.block.header.height;
             rep.exec.cache.insert(job.bh, (height, *res));
-            rep.exec.executed.record(&instance, height, &job.bh, res);
+            rep.exec
+                .executed
+                .record(&instance, &job.block.header.epoch, height, &job.bh, res);
         }
         rep.host.deliver(Event::Executed {
             block_hash: job.bh,
@@ -1844,6 +1907,7 @@ impl World {
                         op,
                         bh,
                         height,
+                        scheduling_epoch: block.header.epoch,
                         outcome,
                     },
                 );
@@ -1876,7 +1940,11 @@ impl World {
                     let outcome = if profile.divergent && !block.payload.is_empty() {
                         divergent_exec(&tip_result, &block.payload, &qc.block_hash)
                     } else {
-                        block_exec(&tip_result, &block)
+                        block_exec(
+                            &tip_result,
+                            &block,
+                            &self.instances[self.replicas[r].inst].config(height).epoch,
+                        )
                     };
                     let result = match outcome {
                         ExecOutcome::Valid(res) => Some(res),
@@ -1903,16 +1971,9 @@ impl World {
                 for (id, _) in decode_txs(&block.payload) {
                     rep.txs.remove(&id);
                 }
-                let config_after_next = self.instances[inst].config(height + 2);
+                let config = self.instances[inst].applied_config(height);
                 let when = at + self.machines[m].profile.apply_ms;
-                done(
-                    self,
-                    when,
-                    Done::Committed {
-                        op,
-                        config_after_next,
-                    },
-                );
+                done(self, when, Done::Committed { op, config });
             }
             Op::Build {
                 req,
@@ -2143,7 +2204,13 @@ impl World {
                 let exists = self.replicas[r].records.contains_key(&key);
                 let id = fresh_id(&mut self.rng);
                 if keystore.install_instance(&mut store_id, &instance, &key, exists, false, id) {
-                    let record = SafetyRecord::fresh(instance, key.clone(), 0, None);
+                    let record = SafetyRecord::fresh(
+                        instance,
+                        self.instances[inst].config(0).epoch.id,
+                        key.clone(),
+                        0,
+                        None,
+                    );
                     let bytes = record
                         .encode(&self.hasher)
                         .expect("encode an initial record");
@@ -2194,9 +2261,16 @@ impl World {
             },
         };
         let t = tip.height;
-        let mut configs = vec![(t + 1, inst.config(t + 1)), (t + 2, inst.config(t + 2))];
+        let active = inst.config(t + 1);
+        let mut configs = vec![
+            (t + 1, crate::types::ConfigSlot::Ready(active.clone())),
+            (
+                t + 2,
+                crate::testing::window_slot(&active, t + 2, inst.config(t + 2)),
+            ),
+        ];
         if t > 0 {
-            configs.push((t, inst.config(t)));
+            configs.push((t, crate::types::ConfigSlot::Ready(inst.config(t))));
         }
         let window = usize::try_from(inst.window + 2).unwrap_or(usize::MAX);
         let skip = rep.store.len().saturating_sub(window);
@@ -2390,6 +2464,7 @@ impl World {
         crate::topology::Topology::compute(
             &self.hasher,
             &instance.id,
+            &instance.config(h).epoch,
             instance.committee(h),
             h,
             0,
@@ -2438,11 +2513,20 @@ fn describe_event(event: &Event) -> String {
         } => {
             format!("PayloadBuilt req{req} {}B attest={attest}", payload.len())
         }
+        Event::ControlWitnessBuilt { req, context, .. } => {
+            format!("ControlWitnessBuilt req{req} h{}", context.height)
+        }
+        Event::ApplicationControlBuilt { message } => {
+            format!("ApplicationControlBuilt h{}", message.context.height)
+        }
         Event::PayloadReady { req } => format!("PayloadReady req{req}"),
         Event::Executed { req, outcome, .. } => format!("Executed req{req} {outcome:?}"),
         Event::BodyAvailable { block } => format!("BodyAvailable h{}", block.header.height),
         Event::BlockApplied { height, .. } => format!("BlockApplied h{height}"),
         Event::ApplyDiverged { height, .. } => format!("ApplyDiverged h{height}"),
+        Event::PublicationRecoveryRequired { height } => {
+            format!("PublicationRecoveryRequired h{height}")
+        }
     }
 }
 
@@ -2470,6 +2554,16 @@ fn summarize(actions: &[Action]) -> String {
                     to.len(),
                     describe_msg(msg).trim_start_matches("<- ")
                 )
+            }
+            Action::BuildControlWitness { req, context } => format!(
+                "build_control(req{req} h{} v{})",
+                context.height, context.view
+            ),
+            Action::DriveApplicationControl { context } => {
+                format!("drive_control(h{})", context.height)
+            }
+            Action::ReceiveApplicationControl { message, .. } => {
+                format!("receive_control(h{})", message.context.height)
             }
             Action::BuildPayload {
                 req, height, view, ..
@@ -2532,6 +2626,9 @@ pub fn describe_msg(msg: &WireMessage) -> String {
         WireMessage::SyncResponse(q) => format!("<- SyncResponse {} blocks", q.blocks.len()),
         WireMessage::BlockRequest(q) => format!("<- BlockRequest h{}", q.height),
         WireMessage::BlockResponse(q) => format!("<- BlockResponse h{}", q.block.header.height),
+        WireMessage::ApplicationControl(message) => {
+            format!("<- ApplicationControl h{}", message.context.height)
+        }
     }
 }
 

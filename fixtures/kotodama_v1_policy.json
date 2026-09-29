@@ -98,7 +98,7 @@
   ],
   "declaration_reserved_extras": [
     "AxtDescriptor",
-    "AssetHandle",
+    "AxtAnchoredSpendV1",
     "ProofBlob",
     "SoracloudRequest",
     "SoracloudResponse",
@@ -218,9 +218,10 @@
   ],
   "pointer_policy": {
     "first_known": "0x0001",
-    "last_assigned": "0x0012",
+    "last_assigned": "0x0013",
     "unassigned": [
-      "0x0013"
+      "0x000c",
+      "0x0014"
     ]
   }
 }

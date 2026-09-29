@@ -3766,7 +3766,7 @@ sign|submit` and `bridge-key register` commands. None may be added.
   visitors. `CanProposeSccpRouteGovernance` is kept, and its grant and revoke
   rule, which today requires `CanManageSccpGovernance`, becomes genesis-only
   in Core (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
-  `crates/iroha_core/src/executor_initial_permission_authority.rs`). The executor-level
+  `crates/iroha_core/src/executor.rs`). The executor-level
   `SetParameter` deny for the old SCCP registry parameter is replaced by a
   core rule that no `SetParameter` touches SCCP state.
 - **`iroha` client and `iroha_cli`:** the proof-request and submit methods;

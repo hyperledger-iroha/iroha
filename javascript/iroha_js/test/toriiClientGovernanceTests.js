@@ -411,7 +411,7 @@ export function registerToriiClientGovernanceTests({
   const governanceProposalFixture = (kind, payload) => ({
     found: true,
     proposal: {
-      proposer: FIXTURE_ALICE_ID,
+      proposer: payload.proposal_operator ?? FIXTURE_ALICE_ID,
       kind: { kind, payload },
       created_height: 42,
       status: "Enacted",
@@ -478,7 +478,7 @@ export function registerToriiClientGovernanceTests({
     assert.deepEqual(missingTyped, { found: false, proposal: null });
   });
 
-  test("getGovernanceProposalTyped closes over all ten V1 proposal kinds", async () => {
+  test("getGovernanceProposalTyped closes over all eleven V1 proposal kinds", async () => {
     const contractAddress =
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     const payoutBinding = {
@@ -642,6 +642,40 @@ export function registerToriiClientGovernanceTests({
           action: { action: "grant", value: null },
         },
         "global_data_trigger_permission_governance",
+      ],
+      [
+        "KagemushaVerifierPolicyInstall",
+        {
+          proposal_operator: FIXTURE_ALICE_ID,
+          network_id: GOVERNANCE_NETWORK_ID.toString(),
+          expected_predecessor: {
+            version: 1,
+            authority_policy: null,
+            active_release_id: null,
+            releases: [],
+          },
+          authority_policy: {
+            version: 1,
+            authority_set_id: Array(32).fill(0x40),
+            threshold: 1,
+            authorized_signers: [`ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX.toUpperCase()}`],
+          },
+        },
+        "kagemusha_verifier_policy_install",
+      ],
+      [
+        "KagemushaVerifierReleaseInstall",
+        JSON.parse(readFileSync(new URL(
+          "../../../fixtures/governance/kagemusha_verifier_release_install_v1.json", import.meta.url,
+        ), "utf8")).payload,
+        "kagemusha_verifier_release_install",
+      ],
+      [
+        "KagemushaVerifierReleaseActivate",
+        JSON.parse(readFileSync(new URL(
+          "../../../fixtures/governance/kagemusha_verifier_release_activate_v1.json", import.meta.url,
+        ), "utf8")).payload,
+        "kagemusha_verifier_release_activate",
       ],
     ];
     for (const [variant, payload, resultField] of variants) {
@@ -1619,6 +1653,9 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       "ContractLifecycleGovernance",
       "ContractEmergencyHold",
       "GlobalDataTriggerPermissionGovernance",
+      "KagemushaVerifierPolicyInstall",
+      "KagemushaVerifierReleaseInstall",
+      "KagemushaVerifierReleaseActivate",
     ]) {
       assert.match(proposalKind[1], new RegExp(`variant: "${variant}"`, "u"));
     }

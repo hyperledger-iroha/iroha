@@ -257,6 +257,8 @@ class ContractManifestRecord(
 
 /** Strict parser for the full Rust `ContractManifest` JSON shape. */
 object ContractManifestJsonParser {
+    private const val CALL_TABLE_WORD_LIMIT_V1 = 8_192
+
     private val maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     // BEGIN GENERATED: kotodama-v1-validator-policy
     private val reservedIdentifiers = setOf(
@@ -323,7 +325,7 @@ object ContractManifestJsonParser {
         "NftView",
         "QueryPage",
         "AxtDescriptor",
-        "AssetHandle",
+        "AxtAnchoredSpendV1",
         "ProofBlob",
         "SoracloudRequest",
         "SoracloudResponse",
@@ -655,7 +657,7 @@ object ContractManifestJsonParser {
                     name != "hajimari" && name != "始まり" && name != "kaizen" && name != "改善")
         ) { "entrypoint descriptor kind does not match its branded selector" }
         val parameters = objectList(root["params"] ?: emptyList<Any?>(), "entrypoint descriptor.params", ::parseParameter)
-        check(parameters.size <= 13) { "entrypoint descriptor.params exceeds the V1 argument limit" }
+        check(parameters.size <= CALL_TABLE_WORD_LIMIT_V1) { "entrypoint descriptor.params exceeds the V1 argument limit" }
         requireUnique(parameters.map { it.name }, "entrypoint descriptor.params")
         val argumentSchema = optionalObject(root, "argument_schema", "entrypoint descriptor.argument_schema")
             ?.let(::parseArgumentSchema)
@@ -675,7 +677,7 @@ object ContractManifestJsonParser {
         check(returnType != null && returnSchema != null) {
             "entrypoint descriptor must declare return_type and return_schema, including Unit"
         }
-        check(returnSchema.wordCount <= 13 && returnSchema.canonicalTypeName == returnType) {
+        check(returnSchema.wordCount <= CALL_TABLE_WORD_LIMIT_V1 && returnSchema.canonicalTypeName == returnType) {
             "entrypoint descriptor return schema does not exactly match return_type"
         }
         val permission = optionalExactString(root, "permission", "entrypoint descriptor.permission")
@@ -742,12 +744,12 @@ object ContractManifestJsonParser {
     private fun parseArgumentSchema(root: Map<String, Any?>): EntrypointArgumentSchemaV1 {
         exactKeys(root, setOf("fields"), "entrypoint argument schema")
         val fields = objectList(required(root, "fields", "entrypoint argument schema"), "entrypoint argument schema.fields", ::parseArgumentField)
-        check(fields.isNotEmpty() && fields.size <= 13) {
-            "entrypoint argument schema must contain 1..13 fields"
+        check(fields.isNotEmpty() && fields.size <= CALL_TABLE_WORD_LIMIT_V1) {
+            "entrypoint argument schema must contain 1..8192 fields"
         }
         requireUnique(fields.map { it.name }, "entrypoint argument schema.fields")
         val words = fields.fold(0) { total, field -> total + field.valueType.wordCount }
-        check(words <= 13) { "entrypoint argument schema exceeds the V1 register window" }
+        check(words <= CALL_TABLE_WORD_LIMIT_V1) { "entrypoint argument schema exceeds the V1 call table" }
         return EntrypointArgumentSchemaV1(fields, words)
     }
 
@@ -832,7 +834,6 @@ object ContractManifestJsonParser {
                     name == "QueryPage" || name == "StatePage" ||
                     isCoreQueryViewName(name)
             ) &&
-                fields.isNotEmpty() &&
                 fields.all(::canonicalSourceIdentifier),
         ) {
             "entrypoint struct node must use canonical Kotodama identifiers"
@@ -905,7 +906,7 @@ object ContractManifestJsonParser {
             val handle = node.kind == EntrypointValueTypeNodeKindV1.OPTION ||
                 node.kind == EntrypointValueTypeNodeKindV1.RESULT ||
                 node.kind == EntrypointValueTypeNodeKindV1.LIST
-            if (!suppressWords && (handle || node.kind in setOf(EntrypointValueTypeNodeKindV1.LEAF, EntrypointValueTypeNodeKindV1.UNIT, EntrypointValueTypeNodeKindV1.ERROR, EntrypointValueTypeNodeKindV1.STATE_CURSOR))) {
+            if (!suppressWords && (handle || nodeChildCount(node) == 0)) {
                 words += 1
             }
             val children = nodeChildCount(node)
@@ -1503,6 +1504,8 @@ object ContractManifestJsonParser {
                 return if (consume(key) && consume(">>}")) aggregateType else null
             }
             if (!canonicalUserStructIdentifier(name) || !consume("{")) return null
+            // Empty products retain their validated nominal name and have no fields.
+            if (consume("}")) return aggregateType
             val fields = HashSet<String>()
             while (true) {
                 val field = identifier()

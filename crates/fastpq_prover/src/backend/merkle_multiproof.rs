@@ -716,7 +716,7 @@ mod tests {
             assert_eq!(work, plan.work());
             assert_eq!(positions.len(), work.parent_hashes);
             for altered in [&wrong_context, &context] {
-                let role = if std::ptr::eq(altered, &context) {
+                let role = if std::ptr::eq(altered, &raw const context) {
                     Oracle::Fri(round - 1)
                 } else {
                     oracle
@@ -730,7 +730,7 @@ mod tests {
                     .is_err()
                 );
             }
-            for bad in 0..selected.len() + siblings.len() + 1 {
+            for bad in 0..=(selected.len() + siblings.len()) {
                 let mut selected = selected.clone();
                 let mut siblings = siblings.clone();
                 let mut root = root;

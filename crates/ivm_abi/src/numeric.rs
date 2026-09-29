@@ -30,6 +30,8 @@ pub enum NumericFaultV1 {
     InvalidFailureMode = 11,
     /// A register required to be zero by the syscall contract was nonzero.
     ReservedRegisterNonZero = 12,
+    /// Integer square root received a negative operand.
+    NegativeSquareRoot = 13,
 }
 impl NumericFaultV1 {
     /// Decode a stable ABI tag.
@@ -48,6 +50,7 @@ impl NumericFaultV1 {
             10 => Self::InvalidRoundingMode,
             11 => Self::InvalidFailureMode,
             12 => Self::ReservedRegisterNonZero,
+            13 => Self::NegativeSquareRoot,
             _ => return None,
         })
     }
@@ -168,14 +171,14 @@ mod tests {
     use super::{NumericFaultV1, PointerAbiFaultV1, RoundingModeV1};
     #[test]
     fn numeric_fault_tags_are_complete_and_stable() {
-        for tag in 1..=12 {
+        for tag in 1..=13 {
             assert_eq!(
                 NumericFaultV1::from_tag(tag).map(NumericFaultV1::tag),
                 Some(tag)
             );
         }
         assert_eq!(NumericFaultV1::from_tag(0), None);
-        assert_eq!(NumericFaultV1::from_tag(13), None);
+        assert_eq!(NumericFaultV1::from_tag(14), None);
     }
     #[test]
     fn rounding_tags_are_complete_and_stable() {

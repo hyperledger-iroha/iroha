@@ -140,12 +140,12 @@ pub(crate) fn hash_last_fields(
     ] {
         validate_metal_pooled_word_len(&context.device, words)?;
     }
-    let mut pools = stage_sensitive_jobs(jobs, &layout)?;
+    let pools = stage_sensitive_jobs(jobs, &layout)?;
     let mut buffers = Vec::new();
     buffers.try_reserve_exact(4).map_err(|_| {
         GpuError::InvalidInput("Digest384 continuation buffer descriptors allocation failed")
     })?;
-    for mut pool in pools.drain(..) {
+    for mut pool in pools {
         let buffer = shared_pooled_buffer(&context.device, &mut pool)?;
         buffers.push((pool, buffer));
     }

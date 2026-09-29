@@ -3,19 +3,19 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::gadgets::transfer::decode_transcripts;
 use fastpq_prover::{
-    AXT_DEFAULT_PARAMETER, OperationKind, Prover, PublicInputs, StateTransition,
-    TransitionBatch, axt_proof_blob_from_bound_batch,
-    batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch_with_proof_metadata,
-    canonicalize_binding, set_axt_remote_spend_claims, transition_batch_from_model,
-    verify_axt_bound_batch,
+    AXT_DEFAULT_PARAMETER, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
+    axt_proof_blob_from_bound_batch, batch_manifest_sha256 as axt_batch_manifest_sha256,
+    bind_axt_batch_with_proof_metadata, canonicalize_binding, set_axt_remote_spend_claims,
+    set_axt_source_transfer_occurrences, transition_batch_from_model, verify_axt_bound_batch,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
     fastpq::{FastpqTransitionBatch, normalized_numeric_to_u64},
     nexus::{
-        AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtRemoteSpendClaimV1, AxtTouchSpec,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
-        TouchManifest, compute_remote_spend_claim_commitment_v1, lane_relay_fastpq_claim_digest,
+        AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtRemoteSpendClaimV1,
+        AxtSourceTransferOccurrenceV1, AxtTouchSpec, LANE_RELAY_FASTPQ_EFFECT_TYPE,
+        LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob, TouchManifest,
+        compute_remote_spend_claim_commitment_v1, lane_relay_fastpq_claim_digest,
     },
 };
 use iroha_model_base::topology::DataSpaceId;
@@ -91,7 +91,7 @@ struct BenchmarkResult {
     verifier_id: String,
     verifier_version: String,
 }
-#[derive(Debug, Clone, JsonDeserialize)]
+#[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 struct ProofRequest {
     #[norito(default)]
     parameter: String,
@@ -129,6 +129,15 @@ struct ProofRequest {
     /// unlinked commitment-only authorization set.
     #[norito(default)]
     remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
+    /// Exact source transfer occurrences in canonical claim-commitment order.
+    ///
+    /// Every remote-spend claim requires one occurrence. Missing or extra rows
+    /// fail before the captured batch is sealed; no transaction-inclusion-only
+    /// proof request is accepted for a remote spend.
+    /// TODO: Production admission must independently resolve the claimed
+    /// receipt and transaction index from State-owned finalized source data.
+    #[norito(default)]
+    source_transfer_occurrences: Vec<AxtSourceTransferOccurrenceV1>,
     /// Norito-encoded lane envelope carrying a compact global-finality reference.
     #[norito(default)]
     finalized_relay_envelope_hex: String,
@@ -489,9 +498,7 @@ fn trimmed_filter(value: Option<String>) -> Option<String> {
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
 }
-fn prove_request(
-    request: &ProofRequest,
-) -> Result<(Vec<u8>, Duration, Duration, String), String> {
+fn prove_request(request: &ProofRequest) -> Result<(Vec<u8>, Duration, Duration, String), String> {
     let binding = request_to_binding(request)?;
     let batch = build_batch_from_request(request)?;
     let prover = Prover::canonical(&request.parameter)
@@ -531,6 +538,16 @@ fn build_batch_from_request(request: &ProofRequest) -> Result<TransitionBatch, S
     let claims = canonical_remote_spend_claims(request);
     set_axt_remote_spend_claims(&mut batch, &binding, &claims)
         .map_err(|err| format!("failed to bind remote-spend claims to FASTPQ batch: {err}"))?;
+    if !claims.is_empty() || !request.source_transfer_occurrences.is_empty() {
+        set_axt_source_transfer_occurrences(
+            &mut batch,
+            &binding,
+            &request.source_transfer_occurrences,
+        )
+        .map_err(|err| {
+            format!("failed to bind source transfer occurrences to FASTPQ batch: {err}")
+        })?;
+    }
     bind_axt_batch_with_proof_metadata(
         &mut batch,
         &binding,
@@ -933,7 +950,14 @@ fn duration_ms(duration: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{AxtHandleIssuerContextV1, AxtHandleReplayKey};
+    use iroha_data_model::{
+        account::AccountId,
+        fastpq::{
+            FastpqPublicTransferDeltaV1, TRANSFER_TRANSCRIPTS_METADATA_KEY,
+            TransferDeltaTranscript, TransferSmtWitness, TransferTranscript, transfer_balance_key,
+        },
+        nexus::{AxtHandleIssuerContextV1, AxtHandleReplayKey, axt_source_transfer_digest_v1},
+    };
     use iroha_model_base::topology::LaneId;
     use iroha_primitives::Quantity;
     fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
@@ -957,6 +981,7 @@ mod tests {
             batch_base64: batch_base64.into(),
             effect_binding: None,
             remote_spend_claims: Vec::new(),
+            source_transfer_occurrences: Vec::new(),
             finalized_relay_envelope_hex: String::new(),
             relay_parent_state_root: String::new(),
             relay_post_state_root: String::new(),
@@ -998,6 +1023,124 @@ mod tests {
             "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
             Quantity::from(5_u64),
         )
+    }
+    fn captured_remote_transfer_request() -> (ProofRequest, AxtSourceTransferOccurrenceV1) {
+        let claim = remote_spend_claim(1);
+        let from = AccountId::parse_encoded(&claim.from).expect("canonical source account");
+        let to = AccountId::parse_encoded(&claim.to).expect("canonical destination account");
+        let asset = claim.asset_definition_id.clone();
+        let source_execution = [0x11; 32];
+        let batch_hash = Hash::prehashed(source_execution);
+        let delta = TransferDeltaTranscript {
+            from_account: from.clone(),
+            to_account: to.clone(),
+            asset_definition: asset.clone(),
+            amount: Quantity::from(5_u64),
+            from_balance_before: Quantity::from(100_u64),
+            from_balance_after: Quantity::from(95_u64),
+            to_balance_before: Quantity::from(20_u64),
+            to_balance_after: Quantity::from(25_u64),
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
+        };
+        let poseidon_digest =
+            fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
+        let mut transcripts = vec![TransferTranscript {
+            batch_hash,
+            deltas: vec![delta],
+            authority_digest: Hash::new(b"fastpq-json-remote-transfer-authority"),
+            poseidon_preimage_digest: Some(poseidon_digest),
+        }];
+        let (old_root, new_root) =
+            fastpq_prover::gadgets::transfer::attach_transfer_smt_witnesses(&mut transcripts)
+                .expect("attach source transfer witnesses");
+        let mut batch = TransitionBatch::new(
+            AXT_DEFAULT_PARAMETER.to_string(),
+            PublicInputs {
+                dsid: dsid_bytes(12),
+                slot: 1,
+                old_root,
+                new_root,
+                perm_root: [3; 32],
+                tx_set_hash: [4; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            transfer_balance_key(&asset, &from).expect("sender balance key"),
+            100_u64.to_le_bytes().to_vec(),
+            95_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
+            transfer_balance_key(&asset, &to).expect("receiver balance key"),
+            20_u64.to_le_bytes().to_vec(),
+            25_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        batch.sort();
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
+            norito::to_bytes(&transcripts).expect("encode source transfer transcripts"),
+        );
+        batch
+            .metadata
+            .insert("entry_hash".to_owned(), source_execution.to_vec());
+        let mut request = proof_request(
+            BASE64_STANDARD.encode(
+                encode_canonical(&fastpq_prover::transition_batch_to_model(&batch))
+                    .expect("encode execution-captured transfer batch"),
+            ),
+        );
+        request.effect_binding = Some(EffectBindingRequest {
+            destination_domain: None,
+            destination_account_id: None,
+            vault_account_id: None,
+            issuance_account_id: None,
+            source_asset_definition_id: Some(asset.to_string()),
+            destination_asset_definition_id: None,
+            source_amount_i64: None,
+            destination_amount_i64: None,
+        });
+        request.remote_spend_claims = vec![claim.clone()];
+        let occurrence = AxtSourceTransferOccurrenceV1 {
+            source_tx_commitment: source_execution,
+            source_success_receipt_digest: [0x77; 32],
+            source_tx_index: 0,
+            transcript_index: 0,
+            delta_index: 0,
+            pair_ordinal: 0,
+            transfer_digest: axt_source_transfer_digest_v1(&FastpqPublicTransferDeltaV1::from(
+                &transcripts[0].deltas[0],
+            )),
+            remote_spend_claim_commitment: compute_remote_spend_claim_commitment_v1(&claim),
+        };
+        (request, occurrence)
+    }
+    #[test]
+    fn proof_request_requires_exact_typed_source_transfer_occurrences() {
+        let (mut request, occurrence) = captured_remote_transfer_request();
+        let missing = build_batch_from_request(&request)
+            .expect_err("remote claim without exact source occurrence must fail");
+        assert!(
+            missing.contains("source transfer occurrences must cover every remote-spend claim")
+        );
+
+        request.source_transfer_occurrences = vec![occurrence.clone(), occurrence.clone()];
+        let extra = build_batch_from_request(&request)
+            .expect_err("extra source occurrence must fail before batch sealing");
+        assert!(extra.contains("source transfer occurrences must cover every remote-spend claim"));
+
+        request.source_transfer_occurrences = vec![occurrence];
+        let wire = json::to_string(&request).expect("encode typed V1 proof request JSON");
+        let decoded: ProofRequest =
+            json::from_str(&wire).expect("decode typed V1 proof request JSON");
+        let batch = build_batch_from_request(&decoded)
+            .expect("exact source occurrence must bind to captured transfer batch");
+        assert!(
+            batch
+                .metadata
+                .contains_key(fastpq_prover::AXT_FASTPQ_SOURCE_TRANSFER_OCCURRENCES_METADATA_KEY)
+        );
     }
     #[test]
     fn proof_request_derives_canonical_commitments_from_claim_preimages() {
@@ -1127,12 +1270,17 @@ mod tests {
         request.target_dsids = vec![12];
         request.claim_type = "authorization".to_owned();
         request.verified_effect_type = "fixture_effect".to_owned();
-        let error = prove_request(&request).expect_err("metadata-only effects have no transfer relation");
+        let error =
+            prove_request(&request).expect_err("metadata-only effects have no transfer relation");
         assert!(error.contains("axt_opaque_effect"), "{error}");
         let bytes = vec![0; 40];
-        assert!(handle_verify(VerifyInput {
-            request: request.clone(), proof_bytes_base64: BASE64_STANDARD.encode(&bytes),
-        }).is_err());
+        assert!(
+            handle_verify(VerifyInput {
+                request: request.clone(),
+                proof_bytes_base64: BASE64_STANDARD.encode(&bytes),
+            })
+            .is_err()
+        );
         assert!(build_axt_materials(&request, &bytes).is_err());
     }
 }

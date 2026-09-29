@@ -18,7 +18,7 @@ fn text(value: &Value) -> String {
 fn record() -> VerifyingKeyRecord {
     let mut record = VerifyingKeyRecord::new(
         7,
-        "ivm-replay-binding-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1:projection-fixture",
         BackendTag::Stark,
         "goldilocks",
         [0x11; 32],

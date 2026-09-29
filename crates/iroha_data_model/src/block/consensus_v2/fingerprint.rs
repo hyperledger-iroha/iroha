@@ -30,9 +30,6 @@ struct NposGenesisFingerprintInput {
     max_validators: u32,
     min_self_bond: Quantity,
     min_nomination_bond: Quantity,
-    max_nominator_concentration_pct: u8,
-    seat_band_pct: u8,
-    max_entity_correlation_pct: u8,
     finality_margin_blocks: u64,
     evidence_horizon_blocks: u64,
     activation_lag_blocks: u64,
@@ -67,9 +64,6 @@ pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
                 max_validators: npos.max_validators,
                 min_self_bond: npos.min_self_bond.clone(),
                 min_nomination_bond: npos.min_nomination_bond.clone(),
-                max_nominator_concentration_pct: npos.max_nominator_concentration_pct,
-                seat_band_pct: npos.seat_band_pct,
-                max_entity_correlation_pct: npos.max_entity_correlation_pct,
                 finality_margin_blocks: npos.finality_margin_blocks,
                 evidence_horizon_blocks: npos.evidence_horizon_blocks,
                 activation_lag_blocks: npos.activation_lag_blocks,
@@ -102,7 +96,7 @@ mod tests {
             block_cadence_ms: core::num::NonZeroU64::new(1_000).unwrap(),
             block_max_transactions: core::num::NonZeroU64::new(512).unwrap(),
             mode: ConsensusGenesisModeParams::Permissioned,
-            protocol_version: u32::from(super::super::PROTOCOL_VERSION),
+            protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             v2_context: super::super::test_genesis_context_parameters(),
         }
     }
@@ -115,9 +109,6 @@ mod tests {
                 max_validators: 31,
                 min_self_bond: 1_000_u64.into(),
                 min_nomination_bond: 1_u64.into(),
-                max_nominator_concentration_pct: 25,
-                seat_band_pct: 5,
-                max_entity_correlation_pct: 25,
                 finality_margin_blocks: 8,
                 evidence_horizon_blocks: 7_200,
                 activation_lag_blocks: 1,
@@ -187,15 +178,15 @@ mod tests {
         assert!(error.contains("invalid Sumeragi v2 genesis context"));
     }
     #[test]
-    fn npos_percentage_above_one_hundred_is_rejected_before_hashing() {
+    fn npos_invalid_committee_geometry_is_rejected_before_hashing() {
         let mut params = npos_params();
         let ConsensusGenesisModeParams::Npos(npos) = &mut params.mode else {
             unreachable!()
         };
-        npos.max_entity_correlation_pct = 101;
+        npos.max_validators = 5;
         let error =
-            compute(&params).expect_err("invalid signed election percentages must fail closed");
-        assert!(error.contains("percentages"));
+            compute(&params).expect_err("invalid signed committee geometry must fail closed");
+        assert!(error.contains("3f + 1"));
     }
     #[test]
     fn genesis_embedded_fingerprint_is_deterministic_without_genesis_hash_input() {

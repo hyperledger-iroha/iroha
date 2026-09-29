@@ -79,6 +79,8 @@ use crate::{
     },
 };
 
+use super::rns_native_bulletproof_common as bulletproof_common;
+
 const VERSION_V1: u8 = 1;
 const FLAGS_V1: u8 = 0;
 const MAGIC_V1: [u8; 4] = *b"ZSPO";
@@ -1630,11 +1632,7 @@ fn proof_digest_v1(
 }
 
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(CODEC_DOMAIN_V1);
-    hash.update(&[VERSION_V1]);
-    hash.update(bytes);
-    hash.finalize()
+    bulletproof_common::codec_digest_v1(CODEC_DOMAIN_V1, VERSION_V1, bytes)
 }
 
 fn encode_frame_v1(

@@ -381,9 +381,9 @@ def _receipt(value, run, trial, images):
         and type(value['original_deadline_ns']) is int and value['original_deadline_ns'] == run.original_deadline_ns)
     bindings = {item.role: item for item in run.files}
     _require(value['raw_run_sha256'] == bindings['raw_run'].binding.sha256)
-    generation = _object(value['generation'], ('network_id', 'genesis_hash', 'context_id', 'genesis_public_key',
+    generation = _object(value['generation'], ('network_id', 'genesis_hash', 'genesis_epoch_context_id', 'genesis_public_key',
         'chain_discriminant', 'anchors_sha256', 'generator_sha256', 'process', 'accounts'))
-    for name in ('network_id', 'genesis_hash', 'context_id'): _identity_hash(generation[name])
+    for name in ('network_id', 'genesis_hash', 'genesis_epoch_context_id'): _identity_hash(generation[name])
     for name in ('anchors_sha256', 'generator_sha256'): _digest(generation[name])
     _require(generation['network_id'] == generation['genesis_hash']
         and type(generation['genesis_public_key']) is str and _ED25519.fullmatch(generation['genesis_public_key']))

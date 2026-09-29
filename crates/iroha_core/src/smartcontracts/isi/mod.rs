@@ -408,6 +408,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiArchiveV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1>,
     dispatch_instruction::<
         iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1,
     >,
@@ -607,6 +608,11 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
     >,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1
+    >,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
@@ -1322,10 +1328,16 @@ mod tests {
             version_minor: 1,
             mode: 0,
             vector_length: 0,
-            max_cycles: 1,
+            max_cycles: 4,
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm::call::CallWordV1::Unit],
+            }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "isi-mod-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -1353,7 +1365,14 @@ mod tests {
             states: Vec::new(),
         };
         let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        for instruction in [
+            ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+            ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ] {
+            code.extend_from_slice(&instruction.to_le_bytes());
+        }
         let mut artifact = meta.encode();
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&code);

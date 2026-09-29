@@ -1,0 +1,576 @@
+//! Original complete native context values, durably retained under their exact carrier.
+//!
+//! Records are untrusted projections. Only the native certificate and its mandatory R proof
+//! authenticate them. The writer borrows the original sealed overlay, streams one prepaid
+//! record, and retains that exact allocation through publication retries. Readers never
+//! substitute current State or reconstruct missing historical values from a root.
+
+use crate::{
+    kura::Kura,
+    state::{NativeLaneStateProjectionV1, StateBlock, StateReadOnly, WorldReadOnly},
+};
+use iroha_crypto::HashOf;
+use iroha_data_model::{
+    block::{BlockHeader, SignedBlock},
+    sumeragi_finality::ExecutionResultCommitment,
+    sumeragi_lanes::SumeragiLaneState,
+};
+use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
+use std::{
+    fs::File,
+    io::{self, Read, Seek, Write},
+    num::NonZeroUsize,
+    path::Path,
+};
+
+/// Context projection capture, source custody or durable storage failure.
+#[derive(Debug, thiserror::Error)]
+pub enum NativeContextArchiveError {
+    /// The proposed record is not the original sealed execution source.
+    #[error("native context archive source: {0}")]
+    Source(&'static str),
+    /// The full canonical projection exceeds its independently configured finite limit.
+    #[error("native context archive record exceeds {maximum} bytes (got {actual})")]
+    Limit {
+        /// Independently configured byte maximum.
+        maximum: usize,
+        /// Original canonical byte length.
+        actual: usize,
+    },
+    /// Preserve the original pool's exact capacity or allocator refusal.
+    #[error(transparent)]
+    Allocation(#[from] ChargedBufferError),
+    /// Canonical framing failed before any record could be published.
+    #[error(transparent)]
+    Codec(#[from] norito::Error),
+    /// Durable publication or exact read failed.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+impl NativeContextArchiveError {
+    /// Whether the original pool or physical allocator may admit the unchanged retry.
+    /// Permanent layout/limit failures and source mismatches require recovery.
+    pub fn is_local_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::Allocation(
+                ChargedBufferError::Admission(mv::allocation::AllocationRefusal::Capacity { .. })
+                    | ChargedBufferError::Allocator { .. }
+            )
+        )
+    }
+}
+
+#[derive(norito::Encode)]
+struct Projection<'a> {
+    carrier_height: u64,
+    carrier_hash: HashOf<BlockHeader>,
+    lanes: &'a SumeragiLaneState,
+}
+impl norito::NoritoSchema for Projection<'_> {
+    fn nominal_name() -> String {
+        <NativeLaneStateProjectionV1 as norito::NoritoSchema>::nominal_name()
+    }
+    fn static_frame_name() -> Option<&'static str> {
+        <NativeLaneStateProjectionV1 as norito::NoritoSchema>::static_frame_name()
+    }
+}
+
+/// One immutable record from the original overlay and retained native R.
+/// No public constructor can assert this original-source relationship.
+pub struct PreparedNativeContext {
+    height: u64,
+    carrier_hash: HashOf<BlockHeader>,
+    bytes: ChargedBuffer<u8>,
+}
+impl PreparedNativeContext {
+    /// Exact original canonical projection; exposure grants no finality.
+    pub fn canonical_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+    /// Height of the exact result-bearing carrier.
+    pub const fn height(&self) -> u64 {
+        self.height
+    }
+    /// Carrier identity which remains fixed across durable retries.
+    pub const fn carrier_hash(&self) -> HashOf<BlockHeader> {
+        self.carrier_hash
+    }
+}
+
+/// Mandatory per-Kura context projection archive. It is not finality authority.
+pub struct NativeContextArchive {
+    root: File,
+    directory: File,
+    budget: AllocationBudget,
+    maximum: NonZeroUsize,
+    writable: bool,
+}
+impl NativeContextArchive {
+    /// Open the exact canonical Kura namespace using the original execution pool and finite limit.
+    ///
+    /// # Errors
+    /// Directory identity/type, descriptor-relative filesystem support or I/O failures.
+    pub fn open(
+        kura: &Kura,
+        budget: AllocationBudget,
+        maximum: NonZeroUsize,
+    ) -> Result<Self, NativeContextArchiveError> {
+        let root = kura.native_context_archive_root()?;
+        let directory = open_archive_directory(&root, true)?;
+        Ok(Self {
+            root,
+            directory,
+            budget,
+            maximum,
+            writable: true,
+        })
+    }
+
+    /// Read an existing archive through the original Kura directory descriptor.
+    /// Missing archives are errors: observation cannot create evidence or authorize writes.
+    ///
+    /// # Errors
+    /// Missing, substituted or invalid directory, or unsupported descriptor-relative access.
+    pub(crate) fn open_existing(
+        kura: &Kura,
+        budget: AllocationBudget,
+        maximum: NonZeroUsize,
+    ) -> Result<Self, NativeContextArchiveError> {
+        let root = kura.native_context_archive_root()?;
+        let directory = open_archive_directory(&root, false)?;
+        Ok(Self {
+            root,
+            directory,
+            budget,
+            maximum,
+            writable: false,
+        })
+    }
+
+    /// Open an existing archive under an independently retained original Kura root.
+    /// This does not create directories or authorize publication. The returned record bytes
+    /// still require complete native carrier and context-proof authentication by the caller.
+    ///
+    /// # Errors
+    /// Missing or substituted directory, unsupported descriptor-relative access or I/O failure.
+    pub fn open_read_only(
+        store_root: &Path,
+        budget: AllocationBudget,
+        maximum: NonZeroUsize,
+    ) -> Result<Self, NativeContextArchiveError> {
+        let (root, directory) = open_directory(store_root, false)?;
+        Ok(Self {
+            root,
+            directory,
+            budget,
+            maximum,
+            writable: false,
+        })
+    }
+
+    /// Recheck that the original root still names this retained archive directory.
+    /// Already acquired bytes remain separate untrusted values until certified proof checking;
+    /// this method makes no claim that historical pathnames cannot subsequently be replaced.
+    ///
+    /// # Errors
+    /// The archive namespace was removed or substituted after acquisition.
+    pub fn recheck_namespace(&self) -> Result<(), NativeContextArchiveError> {
+        verify_named_file(&self.root, "native-contexts", &self.directory)?;
+        Ok(())
+    }
+
+    /// Freeze complete values while their original execution overlay and retained R are owned.
+    /// No decoded archive, current-head view or unverified root can provide this source.
+    ///
+    /// # Errors
+    /// Foreign pool/source, proof mismatch, finite admission refusal or canonical codec failure.
+    pub(crate) fn prepare(
+        &self,
+        overlay: &StateBlock<'_>,
+        executed: &SignedBlock,
+        result: &RetainedPayload<ExecutionResultCommitment>,
+    ) -> Result<PreparedNativeContext, NativeContextArchiveError> {
+        self.recheck_namespace()?;
+        if !self.writable
+            || !result.belongs_to(&self.budget)
+            || executed.header() != overlay._curr_block
+            || result.get().height != executed.header().height().get()
+            || result.get().schedule.current.network_id != *overlay.network_id()
+        {
+            return Err(NativeContextArchiveError::Source(
+                "foreign original execution or pool",
+            ));
+        }
+        if !result.get().native_lanes.verify(
+            *overlay.network_id(),
+            result.get().height,
+            result.get().execution.ordinary_writes_root,
+        ) {
+            return Err(NativeContextArchiveError::Source(
+                "lane-state path differs from original execution root",
+            ));
+        }
+        let lanes = overlay.world().sumeragi_lanes();
+        if !result
+            .get()
+            .native_lanes
+            .matches_state_encoding(*overlay.network_id(), result.get().height, lanes)
+            .map_err(|_| NativeContextArchiveError::Source("invalid complete native lane state"))?
+        {
+            return Err(NativeContextArchiveError::Source(
+                "complete values differ from original R proof",
+            ));
+        }
+        let projection = Projection {
+            carrier_height: result.get().height,
+            carrier_hash: executed.hash(),
+            lanes,
+        };
+        self.encode_projection(&projection)
+    }
+
+    fn encode_projection(
+        &self,
+        projection: &Projection<'_>,
+    ) -> Result<PreparedNativeContext, NativeContextArchiveError> {
+        let length = norito::canonical_frame_len(projection)?;
+        if length > self.maximum.get() {
+            return Err(NativeContextArchiveError::Limit {
+                maximum: self.maximum.get(),
+                actual: length,
+            });
+        }
+        let mut bytes = ChargedBuffer::new(length, &self.budget)?;
+        norito::core::write_canonical_to_writer(projection, &mut BufferWriter(&mut bytes))?;
+        if bytes.as_slice().len() != length {
+            return Err(norito::Error::LengthMismatch.into());
+        }
+        Ok(PreparedNativeContext {
+            height: projection.carrier_height,
+            carrier_hash: projection.carrier_hash,
+            bytes,
+        })
+    }
+
+    /// Durably publish or recheck the exact retained record. A failure leaves `original` intact.
+    /// The caller must keep it in PendingCommit until publication and remaining notifications finish.
+    ///
+    /// # Errors
+    /// Foreign backing, changed canonical record, or a write/link/directory-sync failure.
+    pub fn publish(
+        &self,
+        original: &PreparedNativeContext,
+    ) -> Result<(), NativeContextArchiveError> {
+        self.recheck_namespace()?;
+        if !self.writable || !original.bytes.belongs_to(&self.budget) {
+            return Err(NativeContextArchiveError::Source(
+                "foreign archive backing pool",
+            ));
+        }
+        publish_record(
+            &self.directory,
+            original.height,
+            original.carrier_hash,
+            original.bytes.as_slice(),
+        )?;
+        self.recheck_namespace()?;
+        Ok(())
+    }
+
+    /// Read exact original canonical bytes for a separately selected carrier identity.
+    /// The returned bytes are untrusted until NativeExecutionEvidenceVerifier consumes the
+    /// full canonical carrier and checks R.native_lanes. A missing record fails closed.
+    ///
+    /// # Errors
+    /// Missing/substituted record, finite byte limit, original-pool refusal or an incomplete read.
+    pub fn read_exact(
+        &self,
+        height: u64,
+        carrier_hash: HashOf<BlockHeader>,
+    ) -> Result<ChargedBuffer<u8>, NativeContextArchiveError> {
+        self.recheck_namespace()?;
+        let mut file = open_record(&self.directory, height, carrier_hash)?;
+        let length = usize::try_from(file.metadata()?.len()).map_err(|_| {
+            NativeContextArchiveError::Source("record length exceeds address space")
+        })?;
+        if length == 0 || length > self.maximum.get() {
+            return Err(NativeContextArchiveError::Limit {
+                maximum: self.maximum.get(),
+                actual: length,
+            });
+        }
+        let mut bytes = ChargedBuffer::new(length, &self.budget)?;
+        let mut scratch = [0; 4096];
+        while bytes.as_slice().len() < length {
+            let count = (length - bytes.as_slice().len()).min(scratch.len());
+            file.read_exact(&mut scratch[..count])?;
+            bytes.append(&scratch[..count])?;
+        }
+        if file.read(&mut scratch[..1])? != 0 || file.metadata()?.len() != length as u64 {
+            return Err(NativeContextArchiveError::Source(
+                "record changed during exact read",
+            ));
+        }
+        self.recheck_namespace()?;
+        Ok(bytes)
+    }
+}
+
+struct BufferWriter<'a>(&'a mut ChargedBuffer<u8>);
+impl Write for BufferWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.append(bytes)?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+// Fixed filenames avoid a per-record String/Path allocation while retaining exact identity.
+struct RecordName {
+    bytes: [u8; 90],
+    len: usize,
+}
+impl RecordName {
+    fn new(height: u64, hash: HashOf<BlockHeader>, staged: bool) -> Self {
+        let mut out = Self {
+            bytes: [0; 90],
+            len: 0,
+        };
+        if staged {
+            out.bytes[0] = b'.';
+            out.len = 1;
+        }
+        let start = out.len;
+        let mut remaining = height;
+        for offset in (0..20).rev() {
+            out.bytes[start + offset] = b'0' + (remaining % 10) as u8;
+            remaining /= 10;
+        }
+        out.len += 20;
+        out.bytes[out.len] = b'-';
+        out.len += 1;
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in hash.as_ref() {
+            out.bytes[out.len] = HEX[usize::from(byte >> 4)];
+            out.bytes[out.len + 1] = HEX[usize::from(byte & 15)];
+            out.len += 2;
+        }
+        out.bytes[out.len..out.len + 4].copy_from_slice(b".nrt");
+        out.len += 4;
+        out
+    }
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len]).expect("fixed ASCII record identity")
+    }
+}
+
+#[cfg(unix)]
+fn open_directory(store_root: &Path, create: bool) -> io::Result<(File, File)> {
+    use rustix::fs::{Mode, OFlags};
+    let root = File::from(rustix::fs::open(
+        store_root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
+    let directory = open_archive_directory(&root, create)?;
+    Ok((root, directory))
+}
+#[cfg(unix)]
+fn open_archive_directory(root: &File, create: bool) -> io::Result<File> {
+    use rustix::fs::{AtFlags, Mode, OFlags};
+    if create {
+        match rustix::fs::mkdirat(
+            &root,
+            "native-contexts",
+            Mode::RUSR | Mode::WUSR | Mode::XUSR,
+        ) {
+            Ok(()) => root.sync_all()?,
+            Err(rustix::io::Errno::EXIST) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let directory = File::from(rustix::fs::openat(
+        &root,
+        "native-contexts",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
+    let entry = rustix::fs::statat(&root, "native-contexts", AtFlags::SYMLINK_NOFOLLOW)?;
+    use std::os::unix::fs::MetadataExt as _;
+    let actual = directory.metadata()?;
+    if !actual.is_dir()
+        || entry.st_dev as u64 != actual.dev()
+        || entry.st_ino as u64 != actual.ino()
+    {
+        return Err(io::Error::other(
+            "native context directory identity changed",
+        ));
+    }
+    Ok(directory)
+}
+#[cfg(unix)]
+fn open_record(directory: &File, height: u64, hash: HashOf<BlockHeader>) -> io::Result<File> {
+    let name = RecordName::new(height, hash, false);
+    let file = File::from(rustix::fs::openat(
+        directory,
+        name.as_str(),
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?);
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("native context record is not a file"));
+    }
+    Ok(file)
+}
+fn verify_bytes(mut file: File, expected: &[u8]) -> io::Result<()> {
+    if !file.metadata()?.is_file() || file.metadata()?.len() != expected.len() as u64 {
+        return Err(io::Error::other(
+            "native context record length or type differs",
+        ));
+    }
+    let mut scratch = [0; 4096];
+    let mut offset = 0;
+    while offset < expected.len() {
+        let count = (expected.len() - offset).min(scratch.len());
+        file.read_exact(&mut scratch[..count])?;
+        if scratch[..count] != expected[offset..offset + count] {
+            return Err(io::Error::other("native context canonical record differs"));
+        }
+        offset += count;
+    }
+    if file.read(&mut scratch[..1])? != 0 {
+        return Err(io::Error::other("native context canonical record grew"));
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn publish_record(
+    directory: &File,
+    height: u64,
+    hash: HashOf<BlockHeader>,
+    bytes: &[u8],
+) -> io::Result<()> {
+    use rustix::fs::{AtFlags, Mode, OFlags};
+    use std::os::unix::fs::MetadataExt as _;
+    let target = RecordName::new(height, hash, false);
+    let staged = RecordName::new(height, hash, true);
+    match open_record(directory, height, hash) {
+        Ok(file) => {
+            verify_bytes(file, bytes)?;
+            directory.sync_all()?;
+            remove_matching_stage(directory, staged.as_str(), bytes)?;
+            return Ok(());
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut file = File::from(rustix::fs::openat(
+        directory,
+        staged.as_str(),
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )?);
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(io::Error::other("native context stage has foreign links"));
+    }
+    // Only this unlinked stage may be rewritten after interruption. Its authoritative
+    // original bytes remain held by PendingCommit or exact certified execution replay.
+    file.set_len(0)?;
+    file.rewind()?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    // The path must still name the original open descriptor before publication.
+    verify_named_file(directory, staged.as_str(), &file)?;
+    match rustix::fs::linkat(
+        directory,
+        staged.as_str(),
+        directory,
+        target.as_str(),
+        AtFlags::empty(),
+    ) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::EXIST) => {
+            verify_bytes(open_record(directory, height, hash)?, bytes)?
+        }
+        Err(error) => return Err(error.into()),
+    }
+    verify_bytes(open_record(directory, height, hash)?, bytes)?;
+    directory.sync_all()?;
+    remove_matching_stage(directory, staged.as_str(), bytes)
+}
+#[cfg(unix)]
+fn verify_named_file(directory: &File, name: &str, file: &File) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let named = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+    let opened = file.metadata()?;
+    if named.st_dev as u64 != opened.dev() || named.st_ino as u64 != opened.ino() {
+        return Err(io::Error::other("native context record identity changed"));
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn remove_matching_stage(directory: &File, name: &str, bytes: &[u8]) -> io::Result<()> {
+    use rustix::fs::{AtFlags, Mode, OFlags};
+    let file = match rustix::fs::openat(
+        directory,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(file) => File::from(file),
+        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    verify_bytes(file.try_clone()?, bytes)?;
+    verify_named_file(directory, name, &file)?;
+    rustix::fs::unlinkat(directory, name, AtFlags::empty())?;
+    directory.sync_all()
+}
+#[cfg(not(unix))]
+fn open_directory(_store_root: &Path, _create: bool) -> io::Result<(File, File)> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative native context archive is required",
+    ))
+}
+#[cfg(not(unix))]
+fn open_archive_directory(_root: &File, _create: bool) -> io::Result<File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative native context archive is required",
+    ))
+}
+#[cfg(not(unix))]
+fn verify_named_file(_directory: &File, _name: &str, _file: &File) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative native context archive is required",
+    ))
+}
+#[cfg(not(unix))]
+fn open_record(_directory: &File, _height: u64, _hash: HashOf<BlockHeader>) -> io::Result<File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative native context archive is required",
+    ))
+}
+#[cfg(not(unix))]
+fn publish_record(
+    _directory: &File,
+    _height: u64,
+    _hash: HashOf<BlockHeader>,
+    _bytes: &[u8],
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative native context archive is required",
+    ))
+}
+
+#[cfg(test)]
+mod tests;

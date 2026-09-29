@@ -19,13 +19,13 @@ from pathlib import Path
 CATALOG = Path("crates/iroha_telemetry/src/metrics/catalog_v2.tsv")
 SOURCE = Path("crates/iroha_telemetry/src/metrics.rs")
 HEADER = "# iroha-telemetry-metric-catalog-v2"
-CATALOG_BYTES = 100_865
-CATALOG_SHA256 = "8ea72f45e6ffa8750296e516d717a1b37a88797f2b9bccde08e7ab361917d629"
-CATALOG_BLAKE3 = "b13a790c3cf529faef56087ac0358384c0aa7a938eda8219e61103126374f3ae"
-ROWS = 742
-REGISTERED = 699
-LEDGER_BYTES = 219_628
-LEDGER_SHA256 = "e01958b79aca050e6aed19b933417b60a8013dc00411c6edceceae272902065a"
+CATALOG_BYTES = 102_432
+CATALOG_SHA256 = "cf635fa5691d2dae24721a1402da5038c5b41131660c9cf9cff8075ad65bb922"
+CATALOG_BLAKE3 = "5ddc0bdeb43f80735d2b26f46b4a05353b2dc7a78032f9f45d2e8a6de1fce520"
+ROWS = 752
+REGISTERED = 709
+LEDGER_BYTES = 222_608
+LEDGER_SHA256 = "ab843b51572eeeb017e1f2230fcea296c58b9bdfa8c6b41458fdda337eb9c3c3"
 DSL_MACROS_TOKENS_SHA256 = "879271505b3c3259b930122d4e79f6b8e9eb4b725a1cc267d6397a116ab84fb9"
 FACTORY_TOKENS_SHA256 = "41a07ee3fc3e40d3c0d18b7dd9200f5a11d75f1e3fe1bf074fe36b380be8c19f"
 SUFFIX_TOKENS_SHA256 = "f4f80f55c7d9abcfec0cfe322525122e1d21e580bb6277b78f8b105a562998a0"
@@ -33,7 +33,7 @@ METHOD_COUNTS = {
     "float_counter_vec": 6,
     "float_gauge": 11,
     "float_gauge_vec": 32,
-    "gauge": 241,
+    "gauge": 251,
     "gauge_vec": 82,
     "histogram_vec": 2,
     "histogram_vec_with_buckets": 48,
@@ -67,7 +67,16 @@ RETIRED_LEGACY_DA_GATE_METRICS = (
     "sumeragi_da_votes_ingested_total",
 )
 
-RETIRED_METRICS = RETIRED_CONSENSUS_VRF_METRICS + RETIRED_LEGACY_DA_GATE_METRICS
+RETIRED_IVM_BINDING_PROVER_METRICS = (
+    "torii_zk_ivm_prove_inflight",
+    "torii_zk_ivm_prove_queued",
+)
+
+RETIRED_METRICS = (
+    RETIRED_CONSENSUS_VRF_METRICS
+    + RETIRED_LEGACY_DA_GATE_METRICS
+    + RETIRED_IVM_BINDING_PROVER_METRICS
+)
 
 DSL_MACROS_START = "macro_rules! metric_field_type {"
 DSL_MACROS_END = "define_metrics! {"
@@ -584,9 +593,9 @@ def check_contents(catalog_raw: bytes, source: str) -> list[str]:
     if "catalog_v1.tsv" in source:
         findings.append("obsolete catalog_v1 consumer remains")
     expected_literals = (
-        "const METRIC_CATALOG_V2_ROWS: usize = 742;",
-        "const METRIC_CATALOG_V2_REGISTERED: usize = 699;",
-        "const METRIC_CATALOG_V2_BYTES: usize = 100_865;",
+        "const METRIC_CATALOG_V2_ROWS: usize = 752;",
+        "const METRIC_CATALOG_V2_REGISTERED: usize = 709;",
+        "const METRIC_CATALOG_V2_BYTES: usize = 102_432;",
         CATALOG_BLAKE3,
     )
     for literal in expected_literals:

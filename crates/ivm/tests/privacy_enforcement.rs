@@ -630,7 +630,7 @@ fn valcom_declassifies_matching_private_operands() {
     vm.set_host(int_private_host(&[7, 11]));
     vm.load_program(&program).unwrap();
     vm.run().expect("private commitment should run");
-    let commitment = common::decode_int_register(&vm, 10);
+    let commitment = common::decode_int_word(&vm, vm.register(10));
     assert!(
         commitment.bit_len() > 64,
         "commitment must not be truncated"
@@ -667,7 +667,7 @@ fn compiled_secret_commitment_executes_end_to_end() {
     common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
     vm.run().expect("execute approved commitment");
     assert!(
-        common::decode_int_register(&vm, 10).bit_len() > 64,
+        common::decode_int_word(&vm, vm.register(10)).bit_len() > 64,
         "source commitment must retain the complete compressed point"
     );
     assert!(
@@ -729,7 +729,7 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
         common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
         vm.run()
             .unwrap_or_else(|error| panic!("execute Secret<{kind}> commitment: {error}"));
-        let commitment = common::decode_int_register(&vm, 10);
+        let commitment = common::decode_int_word(&vm, vm.register(10));
         assert!(
             commitment.bit_len() > 64,
             "Secret<{kind}> commitment was truncated"
@@ -1143,12 +1143,18 @@ fn disabling_zk_mode_discards_private_trace_and_write_history() {
             *value == PRIVATE_VALUE
         }
     }));
-    assert!(vm.memory.write_log().iter().any(|entry| {
-        entry
-            .bytes
-            .windows(8)
-            .any(|bytes| bytes == PRIVATE_VALUE.to_le_bytes().as_slice())
-    }));
+    assert!(
+        vm.memory
+            .try_write_log_snapshot()
+            .expect("allocate write-log snapshot")
+            .iter()
+            .any(|entry| {
+                entry
+                    .bytes()
+                    .windows(8)
+                    .any(|bytes| bytes == PRIVATE_VALUE.to_le_bytes().as_slice())
+            })
+    );
 
     vm.set_zk_mode(false);
 
@@ -1157,7 +1163,12 @@ fn disabling_zk_mode_discards_private_trace_and_write_history() {
     assert!(vm.memory_log().is_empty());
     assert!(vm.delta_register_trace().is_empty());
     assert!(vm.step_log().is_empty());
-    assert!(vm.memory.write_log().is_empty());
+    assert!(
+        vm.memory
+            .try_write_log_snapshot()
+            .expect("allocate write-log snapshot")
+            .is_empty()
+    );
 }
 #[test]
 fn raw_code_load_scrubs_private_registers_and_preserves_public_arguments() {
@@ -1206,7 +1217,9 @@ fn non_zk_run_rejects_injected_private_register_state() {
 #[test]
 fn runtime_template_restores_private_stack_tags_with_their_bytes() {
     let mut vm = vm_with_private_stack_word();
-    let template = vm.runtime_template();
+    let template = vm
+        .try_runtime_template()
+        .expect("runtime template allocation fits test host");
     vm.set_zk_mode(false);
     assert!(!vm.zk_mode_enabled());
     vm.reset_from_runtime_template(&template)

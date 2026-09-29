@@ -77,7 +77,7 @@ fn record_bounds(id: &VerifyingKeyId, record: &VerifyingKeyRecord) -> CodecResul
     Ok(())
 }
 
-pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
     let Value::Object(outer) = value else {
         return None;
     };
@@ -129,7 +129,7 @@ pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
     })())
 }
 
-pub(super) fn is_verifying_key_instruction(instruction: &InstructionBox) -> bool {
+pub fn is_verifying_key_instruction(instruction: &InstructionBox) -> bool {
     let instruction: &dyn Instruction = &**instruction;
     instruction.as_any().is::<RegisterVerifyingKey>()
         || instruction.as_any().is::<UpdateVerifyingKey>()
@@ -146,7 +146,7 @@ fn emit(name: &str, id: &VerifyingKeyId, record: &VerifyingKeyRecord) -> CodecRe
     )]))
 }
 
-pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
     let instruction: &dyn Instruction = &**instruction;
     if let Some(value) = instruction.as_any().downcast_ref::<RegisterVerifyingKey>() {
         return Some(emit("RegisterVerifyingKey", &value.id, &value.record));

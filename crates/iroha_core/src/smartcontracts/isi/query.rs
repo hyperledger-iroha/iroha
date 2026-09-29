@@ -3230,7 +3230,7 @@ pub(crate) trait IvmQueryValidator {
         &mut self,
         authority: &AccountId,
         query: &QueryRequest,
-    ) -> Result<(), ValidationFail>;
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>>;
 }
 include!("query/valid_query_request.rs");
 #[cfg(test)]
@@ -4990,7 +4990,8 @@ mod tests {
                 &mut self,
                 authority: &AccountId,
                 _query: &QueryRequest,
-            ) -> Result<(), ValidationFail> {
+            ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>>
+            {
                 assert_eq!(authority, &self.authority);
                 self.validated = true;
                 Ok(())
@@ -5019,7 +5020,8 @@ mod tests {
                 &mut self,
                 _authority: &AccountId,
                 _query: &QueryRequest,
-            ) -> Result<(), ValidationFail> {
+            ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>>
+            {
                 Ok(())
             }
         }
@@ -5040,7 +5042,9 @@ mod tests {
             Ok(_) => panic!("IVM must reject query continuations"),
             Err(err) => err,
         };
-        assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("Continue")));
+        assert!(
+            matches!(err, crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(msg)) if msg.contains("Continue"))
+        );
     }
     fn world_with_test_domains() -> World {
         let domain_id = DomainId::try_new("wonderland", "universal").expect("Valid");

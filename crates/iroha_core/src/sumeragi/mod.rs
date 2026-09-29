@@ -95,8 +95,8 @@ pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode
     let height = u64::try_from(view.height()).unwrap_or(0);
     effective_consensus_mode_for_height(view, height, frozen_mode)
 }
-/// Current parent-bound threshold beacon production and authenticated partial transport.
-pub mod beacon;
+/// Native source-complete Pasta Commit attestations.
+pub mod attestation;
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
 pub mod block_store;
 /// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).
@@ -113,6 +113,10 @@ pub mod crypto;
 /// The node driver of the sans-IO Sumeragi core (`iroha_sumeragi`), not yet started by the
 /// node (the v2 runtime still runs until the cutover).
 pub mod driver;
+/// The lag-2 height-configuration schedule and the genesis committee (`specs/sumeragi.md` §10).
+pub(crate) mod epoch;
+pub(crate) mod epoch_beacon;
+pub(crate) mod epoch_election;
 pub(crate) mod exec;
 /// The node's executor: executes, applies and builds blocks on the committed State.
 pub mod executor;
@@ -124,6 +128,8 @@ pub(crate) mod lane_planner;
 /// Lanes of the global chain: identity, pinned configuration, batches and admission.
 pub mod lanes;
 pub mod message;
+/// Bounded canonical native journals for offline operators and qualification.
+pub mod native_journal;
 /// The Sumeragi driver's P2P transport: the frame envelope, traffic classes, egress and
 /// ingress.
 pub mod net;
@@ -137,7 +143,6 @@ pub(crate) mod penalties;
 /// File-backed safety records, store id and installation log of the Sumeragi driver (§7.4).
 pub mod records;
 pub(crate) mod safety_wal;
-/// The lag-2 height-configuration schedule and the genesis committee (`specs/sumeragi.md` §10).
 pub mod schedule;
 /// Startup: genesis apply and replay, and the core's `Init`.
 pub mod startup;
@@ -163,21 +168,24 @@ pub(crate) mod v2_candidate;
 pub(crate) mod v2_evidence;
 pub mod v2_status;
 // Certified-Serve durability belongs to the production lifecycle coordinator and ledger.
+mod genesis_merge;
 pub(crate) mod v2_certified_serve_payload_store;
 pub(crate) mod v2_chunks;
 pub(crate) mod v2_context;
 pub(crate) mod v2_context_store;
 pub(crate) mod v2_core;
+pub use genesis_merge::{
+    GenesisMergeAuthority, GenesisMergeAuthorityError, freeze_genesis_merge_authority,
+};
 pub use v2_context::{
-    GenesisMergeAuthority, GenesisMergeAuthorityError, GenesisV2Bootstrap, V2GenesisBootstrapError,
-    freeze_genesis_merge_authority, freeze_staged_genesis_v2, validate_signed_genesis_v2_authority,
+    GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
+    validate_signed_genesis_v2_authority,
 };
 pub use v2_core::{
     CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,
     check_production_two_stage_relay_retry_transition,
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
 };
-pub(crate) mod v2_beacon;
 pub(crate) mod v2_effects;
 pub(crate) mod v2_first_release_recovery;
 // TODO: native wire evidence becomes live only through the shared lane reducer driver.
@@ -2002,6 +2010,7 @@ impl FairV2IngressOwnershipEvidence {
         self.validate_exact() && &self.first.semantic_origin == origin
     }
     /// Whether this Native occurrence still names its original charged transport hop.
+    #[cfg(test)]
     pub(crate) fn matches_native_authenticated_hop(&self, via: &PeerId) -> bool {
         self.validate_exact()
             && &self.first.authenticated_via == via

@@ -329,6 +329,8 @@ fn execute_fixture_genesis(
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -347,6 +349,9 @@ fn execute_fixture_genesis(
     )
     .expect("initialize authenticated temporary Kura for native genesis");
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        iroha_core::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         world,
         kura,
         LiveQueryStore::start_test(),
@@ -364,7 +369,7 @@ fn execute_fixture_genesis(
     manifests
         .validate_active_coverage_for_catalog(&nexus.lane_catalog)
         .unwrap();
-    state.install_lane_manifests(&std::sync::Arc::new(manifests));
+    state.install_lane_manifests_for_testing(&std::sync::Arc::new(manifests));
     let mut pipeline = actual::Pipeline::default();
     pipeline.workers = 1;
     pipeline.gas.tech_account_id = reprofile(&pipeline.gas.tech_account_id);

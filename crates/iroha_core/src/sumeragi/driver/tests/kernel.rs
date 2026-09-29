@@ -32,10 +32,17 @@ pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
     let vals = FakeValidators::new(4, 7, None);
     let me = vals.key(0);
     let crypto = vals.crypto.clone();
-    let record = SafetyRecord::fresh(INSTANCE, me.clone(), 0, None)
-        .encode(&crypto)
-        .unwrap();
+    let record = SafetyRecord::fresh(
+        INSTANCE,
+        iroha_sumeragi::testing::TEST_EPOCH.id,
+        me.clone(),
+        0,
+        None,
+    )
+    .encode(&crypto)
+    .unwrap();
     let config = HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
         committee: vals.committee.clone(),
         params: ChainParams::default(),
     };
@@ -52,7 +59,10 @@ pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
             header: None,
             commit_qc: None,
         },
-        configs: vec![(1, config.clone()), (2, config)],
+        configs: vec![
+            (1, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+            (2, iroha_sumeragi::types::ConfigSlot::Ready(config)),
+        ],
         recent_headers: Vec::new(),
     };
     let start = KernelStart {
@@ -128,13 +138,25 @@ fn own_and_foreign_messages_are_dropped() {
 }
 
 fn record(height: u64, vals: &FakeValidators) -> Box<SafetyRecord> {
-    Box::new(SafetyRecord::fresh(INSTANCE, vals.key(0), height, None))
+    Box::new(SafetyRecord::fresh(
+        INSTANCE,
+        iroha_sumeragi::testing::TEST_EPOCH.id,
+        vals.key(0),
+        height,
+        None,
+    ))
 }
 
 /// Complete an executor operation the way an executor without post-states would (builds are
 /// `EMPTY`, executions lack their parent).
 fn complete_exec(kernel: &mut Kernel, now: Millis, op: &ExecOp) {
     let done = match op {
+        ExecOp::BuildControlWitness { .. } => ExecDone::ControlWitnessBuilt(Ok((
+            iroha_sumeragi::types::ControlWitness::empty(),
+            false,
+        ))),
+        ExecOp::DriveApplicationControl(_) => ExecDone::ApplicationControlDriven(Ok(None)),
+        ExecOp::ReceiveApplicationControl { .. } => ExecDone::ApplicationControlReceived(Ok(())),
         ExecOp::Build { .. } => ExecDone::Built {
             payload: Vec::new(),
             attest: false,
@@ -506,4 +528,162 @@ fn failing_disk_bounds_the_queues_and_releases_in_batches() {
     }
     assert!(released >= held, "released {released} of {held}");
     assert!(batches > 1 && ticks_between > 0, "{batches} batches");
+}
+
+/// Recovery is synchronous: queued consensus effects never escape, but O2 writes and serving do.
+#[test]
+fn publication_recovery_halts_before_poll_and_preserves_safety_persistence() {
+    use super::super::traits::PublicationError;
+    use iroha_sumeragi::api::HaltReason;
+
+    let (mut kernel, vals) = start_kernel(0);
+    settle(&mut kernel);
+    let block = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), Vec::new());
+    let result = Hash32([0x31; 32]);
+    kernel.route(vec![Action::CommitBlock {
+        commit_qc: commit_qc(&block, result),
+        block: block.clone(),
+    }]);
+    assert!(
+        kernel
+            .poll(0)
+            .iter()
+            .any(|op| matches!(op, Op::Exec(ExecOp::Prepare(_))))
+    );
+    kernel.complete(0, Completion::Exec(ExecDone::Prepared(Ok(Some(result)))));
+    assert!(
+        kernel
+            .poll(0)
+            .iter()
+            .any(|op| matches!(op, Op::Exec(ExecOp::Append(_))))
+    );
+    kernel.complete(0, Completion::Exec(ExecDone::Appended(true)));
+    assert!(
+        kernel
+            .poll(0)
+            .iter()
+            .any(|op| matches!(op, Op::Exec(ExecOp::Commit(_))))
+    );
+    kernel.route(vec![
+        Action::Broadcast {
+            to: vec![vals.key(1)],
+            msg: request(1),
+        },
+        Action::PersistSafety(record(2, &vals)),
+        Action::Broadcast {
+            to: vec![vals.key(1)],
+            msg: request(2),
+        },
+        Action::Execute { block, req: 444 },
+        Action::BuildPayload {
+            req: 445,
+            height: 1,
+            view: 0,
+            max_bytes: 1024,
+            exec_budget_ms: 10,
+        },
+    ]);
+    kernel.complete(
+        0,
+        Completion::Exec(ExecDone::Committed(Err(
+            PublicationError::RecoveryRequired("consuming state failure".into()),
+        ))),
+    );
+    let halt = HaltReason::PublicationRecoveryRequired { height: 1 };
+    assert_eq!(
+        kernel.core().status().halted,
+        Some(halt),
+        "no Tick or poll precedes the halt"
+    );
+    assert_eq!(kernel.exec().applied(), 0);
+    let ops = kernel.poll(0);
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Op::Send { .. } | Op::Exec(_)))
+    );
+    let seq = ops
+        .iter()
+        .find_map(|op| match op {
+            Op::Persist {
+                seq,
+                write: Write::Record(_),
+            } => Some(*seq),
+            _ => None,
+        })
+        .expect("pending safety record remains ordered");
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Op::Report(Report::Halt(_)))),
+        "halt report preserves O2"
+    );
+    kernel.complete(
+        0,
+        Completion::Persisted {
+            seq,
+            result: Ok(()),
+        },
+    );
+    let ops = kernel.poll(0);
+    assert_eq!(
+        ops.iter()
+            .filter(|op| matches!(op, Op::Report(Report::Halt(reason)) if *reason == halt))
+            .count(),
+        1
+    );
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Op::Send { .. } | Op::Exec(_))),
+        "durability cannot release stale signing or apply work"
+    );
+    kernel.handle(10_000, Event::Tick);
+    kernel.transactions_available();
+    kernel.handle(
+        10_000,
+        Event::Message {
+            from: vals.key(1),
+            msg: sync_request(1),
+        },
+    );
+    let ops = kernel.poll(10_000);
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Op::Serve(ServeRequest::Blocks { .. })))
+    );
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Op::Send { .. } | Op::Exec(_)))
+    );
+    assert_eq!(kernel.core().status().halted, Some(halt));
+}
+
+#[test]
+fn frame_limits_cover_both_atomic_boundary_configs_without_pending_fallback() {
+    use iroha_sumeragi::types::{AppliedConfig, ConfigSlot};
+    let (_, vals) = start_kernel(0);
+    let mut next = HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
+        committee: vals.committee,
+        params: ChainParams::default(),
+    };
+    next.params.max_block_bytes = 1_000;
+    let mut after_next = next.clone();
+    after_next.params.max_block_bytes = 2_000;
+    let output = AppliedConfig::Boundary { next, after_next };
+    let found = super::super::applied_frame_limits(1, 3, &output);
+    assert_eq!(found[0].as_ref().unwrap().height, 4);
+    assert_eq!(found[1].as_ref().unwrap().height, 5);
+    assert_eq!(
+        found[1].as_ref().unwrap().needed - found[0].as_ref().unwrap().needed,
+        1_000
+    );
+    let pending = AppliedConfig::Continuation {
+        after_next: ConfigSlot::PendingBoundary {
+            boundary_height: 4,
+            predecessor: iroha_sumeragi::testing::TEST_EPOCH.id,
+        },
+    };
+    assert_eq!(
+        super::super::applied_frame_limits(1, 3, &pending),
+        [None, None]
+    );
 }

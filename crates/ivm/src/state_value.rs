@@ -144,10 +144,6 @@ fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<()
             let value: crate::axt::AxtDescriptor = decode_canonical_norito(payload)?;
             crate::axt::validate_descriptor(&value).map_err(|_| VMError::DecodeError)?;
         }
-        StateValueKindV1::AssetHandle => {
-            let value: crate::axt::AssetHandle = decode_canonical_norito(payload)?;
-            crate::axt::validate_asset_handle(&value).map_err(|_| VMError::DecodeError)?;
-        }
         StateValueKindV1::ProofBlob => {
             let value: crate::axt::ProofBlob = decode_canonical_norito(payload)?;
             crate::axt::validate_proof_blob(&value).map_err(|_| VMError::DecodeError)?;
@@ -227,6 +223,9 @@ fn state_node_word_count(
         *node_index = node_index.checked_add(1).ok_or(VMError::DecodeError)?;
         match node {
             StateValueNodeV1::Struct { fields, .. } => {
+                words = words
+                    .checked_add(usize::from(fields.is_empty()))
+                    .ok_or(VMError::DecodeError)?;
                 pending = pending
                     .checked_add(fields.len())
                     .ok_or(VMError::DecodeError)?;
@@ -651,6 +650,15 @@ fn encode_state_node(
                     .ok_or(VMError::DecodeError)?;
                 match node {
                     StateValueNodeV1::Struct { fields, .. } => {
+                        if fields.is_empty() {
+                            if cursor.words.as_slice().get(cursor.word_index) != Some(&0) {
+                                return Err(VMError::DecodeError);
+                            }
+                            cursor.word_index = cursor
+                                .word_index
+                                .checked_add(1)
+                                .ok_or(VMError::DecodeError)?;
+                        }
                         work.extend(
                             std::iter::repeat_with(|| Work::Encode(cursor_id)).take(fields.len()),
                         );
@@ -1183,6 +1191,14 @@ fn plan_state_atoms(
                     .ok_or(VMError::DecodeError)?;
                 match node {
                     StateValueNodeV1::Struct { fields, .. } => {
+                        if fields.is_empty() {
+                            push_planned(
+                                &mut values,
+                                &mut outputs,
+                                cursor_output,
+                                PlannedStateWord::Scalar(0),
+                            )?;
+                        }
                         work.extend(
                             std::iter::repeat_with(|| Work::Plan(cursor_id)).take(fields.len()),
                         );
@@ -1567,7 +1583,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::{bigint::BigInt, numeric::Quantity};
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
@@ -1828,10 +1844,7 @@ mod tests {
     }
     #[test]
     fn capability_payload_validation_is_canonical_and_uses_decode_errors() {
-        use crate::axt::{
-            AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
-            ProofBlob,
-        };
+        use crate::axt::{AxtDescriptor, AxtTouchSpec, ProofBlob};
         let dsid = DataSpaceId::new(7);
         let descriptor = AxtDescriptor {
             dsids: vec![dsid],
@@ -1865,41 +1878,6 @@ mod tests {
             validate_pointer_payload(
                 StateValueKindV1::AxtDescriptor,
                 &encode_canonical_norito(&invalid_descriptor).expect("encode invalid descriptor"),
-            ),
-            Err(VMError::DecodeError)
-        );
-        let invalid_handle = AssetHandle {
-            asset_definition_id: AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-            ])
-            .expect("valid AXT fixture asset id"),
-            scope: vec!["transfer".to_owned()],
-            subject: HandleSubject {
-                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: "1".parse().expect("quantity"),
-                per_use: Some(Quantity::zero()),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![1],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(0),
-            axt_binding: vec![1; 32],
-            manifest_view_root: vec![2; 32],
-            expiry_slot: 1,
-            max_clock_skew_ms: None,
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        assert_eq!(
-            validate_pointer_payload(
-                StateValueKindV1::AssetHandle,
-                &encode_canonical_norito(&invalid_handle).expect("encode invalid handle"),
             ),
             Err(VMError::DecodeError)
         );
@@ -2030,6 +2008,70 @@ mod tests {
         vm.set_register(11, table);
         vm.set_register(12, 1);
         assert!(encode_state_value(&mut vm, identity_address).is_err());
+    }
+    #[test]
+    fn empty_nominal_state_products_use_unit_slots_and_empty_atom_tapes() {
+        let empty = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Struct {
+                name: "Empty".into(),
+                fields: Vec::new(),
+            }],
+        };
+        let schema = StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Tuple { arity: 2 },
+                empty.nodes[0].clone(),
+                StateValueNodeV1::List {
+                    element: Box::new(empty),
+                    capacity: 2,
+                },
+            ],
+        };
+        assert_eq!(schema.word_count(), Some(2));
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let list = crate::list::allocate_words(
+            &mut vm,
+            ListLayoutV1::try_new(2, 1).unwrap(),
+            &[vec![0], vec![0]],
+        )
+        .unwrap();
+        let table = vm.alloc_heap(16).unwrap();
+        vm.store_u64(table, 0).unwrap();
+        vm.store_u64(table + 8, list).unwrap();
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 2);
+        encode_state_value(&mut vm, identity_address).unwrap();
+        let record_pointer = vm.register(10);
+        let record: StateValueRecordV1 =
+            decode_from_bytes(vm.validate_tlv(record_pointer).unwrap().payload).unwrap();
+        assert_eq!(
+            record.atoms,
+            vec![StateValueAtomV1::List(vec![vec![], vec![]])]
+        );
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, record_pointer);
+        decode_state_value(&mut vm, identity_address).unwrap();
+        let decoded = vm.validate_tlv(vm.register(10)).unwrap();
+        assert_eq!(
+            u64::from_le_bytes(decoded.payload[1..9].try_into().unwrap()),
+            0
+        );
+        let copied_list = u64::from_le_bytes(decoded.payload[9..17].try_into().unwrap());
+        assert_eq!(
+            crate::list::read_words(&vm, copied_list, ListLayoutV1::try_new(2, 1).unwrap())
+                .unwrap(),
+            vec![vec![0], vec![0]]
+        );
+        vm.store_u64(table, 1).unwrap();
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 2);
+        assert_eq!(
+            encode_state_value(&mut vm, identity_address),
+            Err(VMError::DecodeError)
+        );
     }
     #[test]
     fn unit_and_nominal_error_state_roundtrip_rejects_invalid_words() {

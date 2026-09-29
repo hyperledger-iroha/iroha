@@ -256,13 +256,17 @@ fn anchoring_is_checked_when_the_next_configuration_is_known() {
     h.start(vec![(key, RecordState::Absent)]);
     for o in h.others(3, &[]) {
         let k = h.key_at(o);
-        let sig = h
-            .signer_of(&k)
-            .sign(&crate::preimage::echo_preimage(&I, h.nonce, 3));
+        let sig = h.signer_of(&k).sign(&crate::preimage::echo_preimage(
+            &I,
+            &crate::testing::TEST_EPOCH.id,
+            h.nonce,
+            3,
+        ));
         let msg = WireMessage::Status(Box::new(Status {
             instance: I,
             height: 3,
             echo: Some(Echo {
+                epoch: crate::testing::TEST_EPOCH.id,
                 nonce: h.nonce,
                 key: k,
                 sig,

@@ -34,7 +34,7 @@ async fn configuration_endpoint_includes_transport_summary() {
     let mut req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(iroha_torii_shared::route_catalog::core::CONFIGURATION_GET.path())
             .body(axum::body::Body::empty())
             .unwrap(),
         &[],
@@ -62,7 +62,7 @@ async fn configuration_endpoint_includes_transport_summary() {
     };
     assert_eq!(
         dto.consensus.protocol_version,
-        u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+        u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         "the fixed first-release consensus protocol should be surfaced"
     );
     assert_eq!(
@@ -79,7 +79,7 @@ async fn configuration_endpoint_rejects_runtime_mutation() {
         &harness.cfg.common.key_pair,
         Request::builder()
             .method(http::Method::POST)
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(iroha_torii_shared::route_catalog::core::CONFIGURATION_GET.path())
             .body(axum::body::Body::empty())
             .unwrap(),
         &[],

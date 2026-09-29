@@ -700,7 +700,8 @@ fn read_runtime_file_bounded_with_custody(
         .metadata()
         .wrap_err_with(|| format!("reinspect prepared {label} {}", path.display()))?;
     ensure!(
-        crate::secure_fs::same_file_snapshot(&before, &after) && u64::try_from(raw.len()).ok() == Some(before.len()),
+        crate::secure_fs::same_file_snapshot(&before, &after)
+            && u64::try_from(raw.len()).ok() == Some(before.len()),
         "prepared {label} {} changed while being read",
         path.display()
     );
@@ -1267,7 +1268,8 @@ fn validate_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Res
         .metadata()
         .wrap_err_with(|| format!("reinspect prepared runtime projection {}", path.display()))?;
     ensure!(
-        existing.as_slice() == content && crate::secure_fs::same_file_snapshot(&before, &after_read),
+        existing.as_slice() == content
+            && crate::secure_fs::same_file_snapshot(&before, &after_read),
         "content-addressed prepared runtime projection {} changed or has different bytes",
         path.display()
     );

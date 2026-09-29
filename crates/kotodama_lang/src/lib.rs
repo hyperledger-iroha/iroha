@@ -13,6 +13,7 @@
 mod abi_schema;
 pub mod ast;
 pub mod builtins;
+mod call_abi;
 mod checked_arithmetic;
 pub mod compiler;
 pub mod diagnostic;

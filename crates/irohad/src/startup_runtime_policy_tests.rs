@@ -30,6 +30,9 @@ fn policy_startup_state(
     // Use the production constructor: the generic testing constructor publishes default
     // geometry, whose incarnation is different from this governed configured baseline.
     let state = State::try_new_with_chain_and_network_id(
+        iroha_core::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::new(),
         kura,
         LiveQueryStore::start_test(),
