@@ -11,8 +11,8 @@ mod closed_state;
 use iroha_core::{
     smartcontracts::Execute,
     state::{StandaloneBallotCorpusEntryV1, WorldReadOnly},
-    zk::ZK_BACKEND_HALO2_IPA,
 };
+use iroha_core_zk::ZK_BACKEND_HALO2_IPA;
 use iroha_data_model::{
     block::BlockHeader,
     isi::{error::InstructionExecutionError, zk::FinalizeElection},

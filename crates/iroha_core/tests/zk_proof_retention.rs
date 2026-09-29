@@ -26,7 +26,7 @@ fn halo2_ipa_vk_record(
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pallas",
         iroha_crypto::Hash::new(public_inputs).into(),
-        iroha_core::zk::hash_vk(&vk_box),
+        iroha_core_zk::hash_vk(&vk_box),
     );
     record.vk_len = vk_box.bytes.len() as u32;
     record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -43,7 +43,7 @@ fn rejected_halo2_ipa_proof(
     let envelope = iroha_data_model::zk::OpenVerifyEnvelope::new(
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         circuit_id,
-        iroha_core::zk::hash_vk(vk_box),
+        iroha_core_zk::hash_vk(vk_box),
         public_inputs,
         vec![seed],
     );

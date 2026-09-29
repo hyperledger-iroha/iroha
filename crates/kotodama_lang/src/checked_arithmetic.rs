@@ -6,7 +6,6 @@
 //! width, sign, scale, normalization, or exact-division boundary.
 use crate::{
     ast::{BinaryOp, UnaryOp},
-    builtins::Builtin,
     semantic::{ExprKind, Type, TypedExpr},
 };
 use iroha_primitives::{
@@ -14,6 +13,7 @@ use iroha_primitives::{
     numeric::{MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
     numeric_int::{IntBinaryOperation, IntUnaryOperation},
 };
+use kotodama_surface::builtins::Builtin;
 /// One fully evaluated source numeric value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ConstantNumeric {

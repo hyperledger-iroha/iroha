@@ -1,9 +1,7 @@
 //! Unqualified key and retained-election adversaries for the closed registry.
 //! No fixture represents an admitted election or a valid proof.
-use iroha_core::{
-    state::ElectionState,
-    zk::{ZK_BACKEND_HALO2_IPA, hash_vk},
-};
+use iroha_core::state::ElectionState;
+use iroha_core_zk::{ZK_BACKEND_HALO2_IPA, hash_vk};
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},

@@ -25,7 +25,7 @@ TEST_FUNCTION = (
     "real_mint_authority_bootstrap_and_positive_finalized_mint_use_reusable_keys"
 )
 TEST_NAME = (
-    "zk::kagemusha_v1_recursion::real_handoff_qualification_tests::"
+    "kagemusha_v1_recursion::real_handoff_qualification_tests::"
     f"real_payment_corridor::{TEST_FUNCTION}"
 )
 PROOF_BINARY = "kagemusha_real_proof"
@@ -375,7 +375,7 @@ def proof_command(target_dir: Path) -> list[str]:
         "run",
         "--locked",
         "-p",
-        "iroha_core",
+        "iroha_core_zk",
         "--bin",
         PROOF_BINARY,
         "--features",

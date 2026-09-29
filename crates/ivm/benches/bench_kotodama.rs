@@ -7,13 +7,9 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity, RoundingMode},
     numeric_abi::IntValueV1,
 };
-use ivm::{
-    IVM, ProgramMetadata, encoding,
-    host::DefaultHost,
-    kotodama::compiler::{Compiler, benchmark::SourcePhase, encode_add},
-    kotodama::{parser, semantic::SemanticContext},
-    pointer_abi::PointerType,
-};
+use ivm::{IVM, ProgramMetadata, encoding, host::DefaultHost, pointer_abi::PointerType};
+use kotodama_lang::compiler::{Compiler, benchmark::SourcePhase, encode_add};
+use kotodama_lang::{parser, semantic::SemanticContext};
 use std::{collections::BTreeMap, sync::Arc};
 const LITERAL_BENCH_SIZE: usize = 512;
 fn kotodama_program() -> Vec<u8> {
@@ -47,7 +43,10 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 fn int_result_i64(vm: &IVM) -> i64 {
     let tlv = vm
-        .validate_tlv(vm.register(10))
+        .validate_tlv(
+            vm.public_call_result_word(0)
+                .expect("benchmark completed with an int result"),
+        )
         .expect("benchmark returned an int TLV");
     assert_eq!(tlv.type_id, PointerType::Int);
     IntValueV1::decode_frame(tlv.payload)
@@ -172,6 +171,8 @@ fn bench_kotodama(c: &mut Criterion) {
     c.bench_function("kotodama_runtime_phase_dirty_reset", |b| {
         b.iter_batched(
             || {
+                // A template restores only the VM whose memory baseline it
+                // captured, so each dirty runtime carries its own template.
                 let mut dirty = IVM::new(u64::MAX);
                 dirty
                     .load_prepared(&prepared)
@@ -179,11 +180,14 @@ fn bench_kotodama(c: &mut Criterion) {
                 dirty
                     .set_program_counter(pc)
                     .expect("select dirty-reset benchmark entrypoint");
+                let dirty_template = dirty
+                    .try_runtime_template()
+                    .expect("dirty-reset template allocation fits test host");
                 dirty.set_host(host.clone());
                 dirty.run().expect("dirty benchmark runtime state");
-                dirty
+                (dirty, dirty_template)
             },
-            |mut dirty| {
+            |(mut dirty, template)| {
                 dirty
                     .reset_from_runtime_template(&template)
                     .expect("dirty-reset benchmark geometry must match");
@@ -438,7 +442,8 @@ fn bounded_list_runtime_source(manual: bool) -> String {
         "var List<int, 64> mapped = []; \
          for index in range(64) { \
              let value = match source.get(index) { Option::some(value) => value, Option::none => 0 }; \
-             if !mapped.try_push(value + 1) { return -1; } \
+             let pushed = match mapped.try_push(value + 1) { Result::ok(_) => true, Result::err(_) => false }; \
+             if !pushed { return -1; } \
          }"
     } else {
         "let List<int, 64> mapped = [value + 1 for value in source];"

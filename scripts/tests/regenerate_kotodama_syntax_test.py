@@ -209,7 +209,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
     grammar = MODULE.load_lexical_grammar(root, policy)
     semantic_policy = MODULE.render_semantic_policy(policy)
     assert "V1_DECLARATION_RESERVED_EXTRA_NAMES" in semantic_policy
-    assert "pub(crate) const V1_FORBIDDEN_SOURCE_IDENTIFIERS" in semantic_policy
+    assert "pub const V1_FORBIDDEN_SOURCE_IDENTIFIERS" in semantic_policy
     assert "pub use" not in semantic_policy
     data_model_policy = MODULE.render_data_model_identifier_policy(policy)
     assert "const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS" in data_model_policy

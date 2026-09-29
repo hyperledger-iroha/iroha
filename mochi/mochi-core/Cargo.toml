@@ -18,7 +18,7 @@ iroha_model_base = { workspace = true }
 iroha_config.workspace = true
 iroha = { workspace = true }
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
-iroha_core = { workspace = true, default-features = false }
+iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_executor_data_model = { workspace = true }
 iroha_genesis = { workspace = true }

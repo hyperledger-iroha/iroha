@@ -1,0 +1,10833 @@
+//! Iroha Core zero-knowledge verification: compiled proof relations, guarded
+//! verification and batch de-duplication.
+//!
+//! This crate was extracted from `iroha_core` (formerly `iroha_core::zk` and
+//! `iroha_core::zk_stark`) so the proof stack compiles as its own unit. The
+//! `norito_schema` names inside it (for example `iroha_core::zk_stark::StarkProofV1`)
+//! are unchanged protocol declarations, not Rust paths. Log targets now start with
+//! `iroha_core_zk`, which `iroha_core=…` `EnvFilter` directives still match by prefix.
+//!
+//! This crate provides:
+//! - [`verify_for_relation`], which requires the application to name the exact
+//!   [`ProofRelation`] it needs and returns actionable verification errors.
+//! - Stable proof/verifying-key hash helpers (`hash_proof`, `hash_vk`).
+//! - Batch-local de-duplication cache (`DedupCache`) and a light pre-verifier.
+//! - Closed dispatch for supported Halo2 IPA and STARK relations. A backend
+//!   label is not a privacy or execution-correctness guarantee. Incomplete IVM
+//!   execution relations are not admitted through generic verification.
+//! - A unified ZK envelope (`ZK1 | TLV*`) reader/writer helpers for tests and
+//!   clients.
+//!
+//! Storage/WSV integration is intentionally limited to proof records and
+//! verifying-key registry ISIs; consensus-critical state and policies live in
+//! `iroha_core`'s `smartcontracts::isi` and related modules.
+#![allow(clippy::many_single_char_names)]
+#![allow(unexpected_cfgs)]
+// Nested `if` blocks remain intentional for readability/instrumentation; Clippy's
+// `collapsible_if` lint would force let-chains that obscure the control flow.
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::all)]
+#![allow(clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(
+    clippy::cast_lossless,
+    clippy::cloned_instead_of_copied,
+    clippy::clone_on_copy,
+    clippy::collapsible_else_if,
+    clippy::doc_markdown,
+    clippy::explicit_iter_loop,
+    clippy::identity_op,
+    clippy::if_not_else,
+    clippy::if_same_then_else,
+    clippy::ignored_unit_patterns,
+    clippy::iter_overeager_cloned,
+    clippy::iter_with_drain,
+    clippy::large_enum_variant,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::missing_const_for_thread_local,
+    clippy::needless_borrows_for_generic_args,
+    clippy::needless_continue,
+    clippy::needless_pass_by_value,
+    clippy::needless_return,
+    clippy::option_if_let_else,
+    clippy::ptr_arg,
+    clippy::question_mark,
+    clippy::redundant_closure_for_method_calls,
+    clippy::redundant_pub_crate,
+    clippy::result_large_err,
+    clippy::return_self_not_must_use,
+    clippy::single_match_else,
+    clippy::struct_excessive_bools,
+    clippy::struct_field_names,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::type_complexity,
+    clippy::unnecessary_wraps,
+    clippy::unused_self,
+    clippy::useless_conversion,
+    clippy::useless_let_if_seq
+)]
+#![cfg_attr(test, allow(clippy::large_stack_arrays))]
+#[cfg(not(feature = "zk-halo2"))]
+compile_error!(
+    "Halo2 backends are mandatory; enable `zk-halo2` (default) when building iroha_core_zk"
+);
+#[cfg(not(feature = "zk-halo2-ipa"))]
+compile_error!(
+    "Halo2 IPA backends are mandatory; enable `zk-halo2-ipa` (default) when building iroha_core_zk"
+);
+#[cfg(not(feature = "zk-ipa-native"))]
+compile_error!(
+    "Native IPA helpers must remain enabled; `zk-ipa-native` is required for all builds"
+);
+/// Qualified-provider encryption for Kagemusha V1 credit openings.
+#[cfg(test)]
+mod kagemusha_v1_crypto;
+/// Deterministic Kagemusha V1 fixtures shared by Core and Sumeragi tests.
+#[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+#[doc(hidden)]
+pub mod kagemusha_v1_test_fixtures;
+/// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
+#[cfg(feature = "zk-stark")]
+pub mod stark;
+//
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use std::collections::BTreeMap;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use std::collections::btree_map::Entry;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use std::sync::Arc;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use std::sync::Mutex;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use std::sync::MutexGuard;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use std::sync::OnceLock;
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
+/// Wallet-facing confidential proving with canonical relation and key selection.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub mod confidential;
+/// Shared confidential note, tree, and verifier-key primitives.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub mod confidential_v2;
+mod verification;
+pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, verify_for_relation};
+/// Frame-identity path mapping for the relocated nominal schema names.
+#[cfg(test)]
+pub(crate) mod frame_test_support;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod halo2_backend;
+/// P-256-specific nonnative curve primitives for hardware-selection circuit construction.
+///
+/// Only the closed App-Attest staged monetary fold consumes these gadgets, and that fold is
+/// exercised by unit tests alone.
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+pub(crate) mod kagemusha_p256_curve_gadget;
+/// Core-owned confidential polynomial storage foundation for the consuming prover.
+#[cfg(feature = "zk-halo2-ipa")]
+pub mod kagemusha_polynomial_store_v1;
+/// Shared paired field-native Poseidon relations for Kagemusha V1.
+pub(crate) mod kagemusha_v1_poseidon;
+/// Fixed-profile paired-Pasta recursion and native accumulator decisions for Kagemusha V1.
+pub mod kagemusha_v1_recursion;
+/// Aggregate, hardware-guarded Kagemusha V1 host state machine.
+pub mod kagemusha_v1_state;
+/// Fixed opposite-field Pasta instructions used by paired Pasta recursion.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_cycle_loader;
+/// Dense normalized-GLV MSM used by paired Pasta recursion.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_dense_msm;
+/// Test accounting for direct-instance Pasta IPA recursive proofs.
+#[cfg(test)]
+pub(crate) mod pasta_ipa_recursion;
+/// Dedicated exact native Poseidon permutations for the paired Claim fold.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_native_poseidon;
+/// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_sha256;
+/// Base-only SHA-256 compression candidate for resource-qualified internal hash proofs.
+pub(crate) mod pasta_sha256_table8;
+// TODO: Qualify the complete private RAM-LFE relation before admitting a circuit.
+// These internal experiments have no production verifier entry point.
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_byte;
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_poseidon;
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_word;
+/// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
+pub mod rns_native_source_v1;
+#[cfg(feature = "zk-stark")]
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub(crate) use halo2_backend::{
+    PastaParams, assign_advice_vendored, params_fingerprint, params_new as pasta_params_new,
+    read_verifying_key,
+};
+#[cfg(all(
+    test,
+    feature = "zk-halo2-ipa",
+    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
+))]
+use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
+use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
+#[cfg(feature = "zk-stark")]
+use iroha_data_model::zk::StarkFriOpenProofV1;
+#[cfg(all(test, feature = "zk-halo2"))]
+use kaigi_zk::usage_v1::KAIGI_USAGE_CIRCUIT_ID_V1;
+#[cfg(feature = "zk-halo2")]
+use kaigi_zk::{
+    authorization_v1::{
+        KAIGI_AUTHORIZATION_BACKEND_V1, KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
+        KAIGI_AUTHORIZATION_CIRCUIT_K_V1, KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1,
+        KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1, KaigiAuthorizationCircuitV1,
+    },
+    usage_v1::{
+        KAIGI_USAGE_BACKEND_V1, KAIGI_USAGE_CIRCUIT_K_V1, KAIGI_USAGE_INSTANCE_ROWS_V1,
+        KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1, KaigiUsageCircuitV1,
+    },
+};
+use sha2::{Digest, Sha256};
+/// Hard caps for TLV sections to preserve bounded parsing and determinism.
+/// These are generous relative to current tests and examples.
+const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
+/// Maximum accepted bytes for one first-release Halo2 IPA verifying-key container.
+///
+/// The strict key envelope contains only bounded `CID1`, `IPAK`, and `H2VK`
+/// sections. Keeping the whole container under the same 8 MiB ceiling as an
+/// individual backend payload ensures state hydration rejects oversized keys
+/// before any Halo2 decoder or parameter construction is reached.
+pub const HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES: usize =
+    iroha_data_model::proof::VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1;
+/// Maximum canonical encoding accepted for a STARK/FRI V1 verifying key.
+///
+/// The payload contains one bounded circuit identifier and a fixed set of
+/// scalar parameters, so 4 KiB leaves ample format headroom without allowing
+/// registry input to inherit a caller-sized decode budget.
+pub const STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES: usize = 4 * 1024;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+/// Upper bound for parsed public instance columns, covering admitted proof
+/// layouts while keeping malformed envelopes bounded.
+const MAX_INST_COLS: usize = 65;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+const MAX_INST_ROWS: usize = 8192;
+/// Canonical backend identifier for Halo2 IPA verification.
+pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
+/// Sole canonical native STARK/FRI verifier profile for the first release.
+pub const ZK_BACKEND_STARK_FRI_V1: &str = iroha_data_model::zk::ZK_BACKEND_STARK_FRI_V1;
+/// Reserved suffix for the unavailable complete native IVM execution relation.
+///
+/// TODO: Admit this identifier only after the full STARK execution relation and
+/// finalized State-owned anchor verification are implemented.
+pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
+/// Canonical semantic role reserved for governance ballot proofs.
+#[doc(hidden)]
+pub const GOVERNANCE_BALLOT_CIRCUIT_ID_V1: &str = "vote-ballot";
+/// Canonical semantic role reserved for governance tally proofs.
+#[doc(hidden)]
+pub const GOVERNANCE_TALLY_CIRCUIT_ID_V1: &str = "vote-tally";
+/// Canonical Halo2 IPA circuit identifiers admitted by generic OpenVerify v1.
+///
+/// The list contains only semantic production circuits. Tiny arithmetic,
+/// anonymous-transfer, vote-bool, historical IVM overlay-binding, and retired
+/// recursive-spend circuits intentionally have no entry.
+const HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1: &[&str] = &[
+    "halo2/pasta/ipa/kaigi-authorization-v1",
+    "halo2/pasta/ipa/kaigi-usage-v1",
+    "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+];
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+const HALO2_IPA_MAX_K_V1: u32 = confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn halo2_ipa_canonical_k_v1(circuit_id: &str) -> Option<u32> {
+    match canonical_halo2_ipa_circuit_id(circuit_id)?.as_str() {
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_AUTHORIZATION_CIRCUIT_ID_V1 => Some(KAIGI_AUTHORIZATION_CIRCUIT_K_V1),
+        #[cfg(feature = "zk-halo2")]
+        "halo2/pasta/ipa/kaigi-usage-v1" => Some(KAIGI_USAGE_CIRCUIT_K_V1),
+        confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K)
+        }
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V2_IPA_K)
+        }
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V3_IPA_K)
+        }
+        _ => None,
+    }
+}
+fn hash_domain_separated_payload(domain: &[u8], backend: &str, bytes: &[u8]) -> [u8; 32] {
+    let backend_len = u64::try_from(backend.len()).expect("backend length must fit into u64");
+    let bytes_len = u64::try_from(bytes.len()).expect("payload length must fit into u64");
+    let mut h = Sha256::new();
+    h.update(domain);
+    h.update(backend_len.to_be_bytes());
+    h.update(backend.as_bytes());
+    h.update(bytes_len.to_be_bytes());
+    h.update(bytes);
+    h.finalize().into()
+}
+/// Compute a stable, domain-separated 32-byte hash of the proof payload.
+#[inline]
+pub fn hash_proof(proof: &ProofBox) -> [u8; 32] {
+    hash_domain_separated_payload(b"iroha:zk:v1:proof", &proof.backend, &proof.bytes)
+}
+/// Compute a stable, domain-separated 32-byte hash of the verifying key payload.
+#[inline]
+pub fn hash_vk(vk: &VerifyingKeyBox) -> [u8; 32] {
+    hash_vk_bytes(&vk.backend, &vk.bytes)
+}
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+fn relabel_halo2_ipa_open_verify_fixture(
+    proof: &ProofBox,
+    vk: &VerifyingKeyBox,
+    exact_backend: &str,
+) -> (ProofBox, VerifyingKeyBox) {
+    assert_eq!(proof.backend.as_str(), ZK_BACKEND_HALO2_IPA);
+    assert_eq!(vk.backend.as_str(), ZK_BACKEND_HALO2_IPA);
+    assert_eq!(
+        production_verify_backend_tag(exact_backend),
+        Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    );
+    assert_ne!(exact_backend, ZK_BACKEND_HALO2_IPA);
+
+    let exact_vk = VerifyingKeyBox::new(exact_backend.to_owned(), vk.bytes.clone());
+    let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_canonical(&proof.bytes).expect("canonical Halo2 OpenVerifyEnvelope");
+    envelope.circuit_id = halo2_ipa_circuit_for_backend_v1(exact_backend)
+        .expect("exact Halo2 backend has one canonical circuit identifier");
+    envelope.vk_hash = hash_vk(&exact_vk);
+    let exact_proof = ProofBox::new(
+        exact_backend.to_owned(),
+        norito::encode_canonical(&envelope).expect("encode exact Halo2 OpenVerifyEnvelope"),
+    );
+    (exact_proof, exact_vk)
+}
+#[doc(hidden)]
+pub fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
+    hash_domain_separated_payload(b"iroha:zk:v1:vk", backend, bytes)
+}
+/// Returns `true` when `backend` denotes an explicitly admitted native
+/// STARK/FRI verifier profile.
+#[inline]
+#[doc(hidden)]
+pub fn is_stark_fri_v1_backend(backend: &str) -> bool {
+    iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
+}
+/// Returns `true` for backend labels that require a trusted setup and are not
+/// admitted into the native verifier registry.
+#[inline]
+#[must_use]
+pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
+    let backend = backend.to_ascii_lowercase();
+    let backend = backend.as_str();
+    has_trusted_setup_backend_segment(backend)
+        || has_trusted_setup_backend_compact_label(backend)
+        || backend == "groth16"
+        || backend.starts_with("groth16/")
+        || backend == "kzg"
+        || backend.starts_with("kzg/")
+        || backend == "bn254"
+        || backend == "bn256"
+        || backend == "bls12_381"
+        || backend == "bls12-381"
+        || backend == "halo2/bn254"
+        || backend.starts_with("halo2/bn254/")
+        || backend.contains("/bn254")
+        || backend.contains(":bn254")
+        || backend.contains("/bn256")
+        || backend.contains(":bn256")
+        || backend.contains("/bls12")
+        || backend.contains(":bls12")
+        || backend == "halo2/kzg"
+        || backend.starts_with("halo2/kzg/")
+        || backend.contains("/kzg")
+        || backend.contains(":kzg")
+}
+fn has_trusted_setup_backend_segment(backend: &str) -> bool {
+    const TRUSTED_SETUP_SEGMENTS: &[&str] = &[
+        "groth16",
+        "kzg",
+        "bn254",
+        "bn256",
+        "bls12",
+        "srs",
+        "crs",
+        "ptau",
+        "ceremony",
+        "powersoftau",
+    ];
+    backend
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|segment| TRUSTED_SETUP_SEGMENTS.contains(&segment))
+}
+fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
+    let compact = backend
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    [
+        "groth16",
+        "kzg",
+        "bn254",
+        "bn256",
+        "bls12381",
+        "bls12",
+        "srs",
+        "crs",
+        "ptau",
+        "ceremony",
+        "trustedsetup",
+        "structuredreferencestring",
+        "universalsrs",
+        "powersoftau",
+    ]
+    .iter()
+    .any(|token| compact.contains(token))
+}
+const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &[
+    "debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace",
+];
+const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] = &[
+    "test",
+    "dummy",
+    "fake",
+    "stub",
+    "sample",
+    "placeholder",
+    "todo",
+    "draft",
+];
+const DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS: &[&str] = &[
+    "notforproduction",
+    "notproduction",
+    "notproductionready",
+    "notready",
+    "replacebeforeproduction",
+    "replacebeforemainnet",
+    "draftonly",
+];
+const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
+    "productionready",
+    "productionhardened",
+    "productionenabled",
+    "productionapproved",
+    "productioncertified",
+    "productionclaim",
+    "claimedproduction",
+    "mainnetready",
+    "mainnetcomplete",
+    "mainnetclaim",
+    "claimedmainnet",
+    "mainnetcertified",
+    "mainnetapproved",
+    "mainnetrelease",
+    "auditedproduction",
+    "externallyaudited",
+    "thirdpartyaudited",
+    "boiaudited",
+    "auditedmainnet",
+    "externalaudit",
+    "auditpassed",
+    "auditapproved",
+    "auditsignoff",
+    "auditclaim",
+    "claimedaudit",
+    "securityreviewpassed",
+    "securityauditpassed",
+    "securityaudited",
+    "externalsecurityreview",
+    "certifiedproduction",
+    "certifiedmainnet",
+    "releaseready",
+    "releaseapproved",
+    "releasecertified",
+];
+fn compact_ascii_lowercase_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+#[inline]
+fn is_developer_only_direct_backend_token(token: &str) -> bool {
+    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
+        .iter()
+        .any(|reserved| token.contains(reserved))
+        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&token)
+}
+#[inline]
+fn is_developer_only_compact_backend_run(run: &str) -> bool {
+    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
+        .iter()
+        .any(|reserved| run.contains(reserved))
+        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&run)
+}
+/// Returns `true` for developer-only backend labels that must not enter
+/// proof admission, preverification, or native verifier dispatch.
+#[inline]
+#[must_use]
+pub fn is_developer_only_backend_label(backend: &str) -> bool {
+    let backend = backend.to_ascii_lowercase();
+    let compact = compact_ascii_lowercase_label(&backend);
+    if DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS
+        .iter()
+        .any(|fragment| compact.contains(fragment))
+    {
+        return true;
+    }
+    let mut letter_run = String::new();
+    for token in backend
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+    {
+        if is_developer_only_direct_backend_token(token) {
+            return true;
+        }
+        if token.len() == 1 {
+            letter_run.push_str(token);
+        } else {
+            if is_developer_only_compact_backend_run(&letter_run) {
+                return true;
+            }
+            letter_run.clear();
+        }
+    }
+    is_developer_only_compact_backend_run(&letter_run)
+}
+/// Returns `true` for verifier backend labels that claim production, mainnet,
+/// or audit approval instead of matching an explicitly admitted verifier id.
+#[inline]
+#[must_use]
+pub fn is_production_claim_backend_label(backend: &str) -> bool {
+    let compact = compact_ascii_lowercase_label(backend);
+    PRODUCTION_CLAIM_BACKEND_FRAGMENTS
+        .iter()
+        .any(|fragment| compact.contains(fragment))
+}
+/// Return the expected OpenVerify backend tag for labels admitted by native
+/// verifier dispatch.
+#[inline]
+#[must_use]
+pub fn verifier_backend_registry_tag_v1(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
+    iroha_data_model::zk::verifier_backend_registry_tag_v1(backend)
+}
+/// Returns `true` when `backend` names a verifier family that can reach native
+/// verifier dispatch.
+#[inline]
+#[must_use]
+pub fn is_verifier_backend_registry_label_v1(backend: &str) -> bool {
+    verifier_backend_registry_tag_v1(backend).is_some()
+}
+fn production_verify_backend_label_is_portable(backend: &str) -> bool {
+    if backend.is_empty() || backend.trim() != backend {
+        return false;
+    }
+    let is_lower_ascii_alphanumeric =
+        |byte: u8| byte.is_ascii_alphanumeric() && matches!(byte, b'a'..=b'z' | b'0'..=b'9');
+    let bytes = backend.as_bytes();
+    if !is_lower_ascii_alphanumeric(bytes[0])
+        || !is_lower_ascii_alphanumeric(bytes[bytes.len() - 1])
+        || !bytes.iter().copied().all(|byte| {
+            is_lower_ascii_alphanumeric(byte) || matches!(byte, b'/' | b':' | b'.' | b'_' | b'-')
+        })
+    {
+        return false;
+    }
+    !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]
+        .iter()
+        .any(|separator| backend.contains(separator))
+}
+/// Return the low-level proof engine for an exact production verifier label.
+///
+/// Textual readiness claims, trusted-setup families, developer-only labels,
+/// non-portable spellings, and labels outside the closed registry all fail
+/// closed.
+#[must_use]
+pub fn production_verify_backend_tag(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
+    if !production_verify_backend_label_is_portable(backend)
+        || is_production_claim_backend_label(backend)
+        || is_trusted_setup_backend_label(backend)
+        || is_developer_only_backend_label(backend)
+    {
+        return None;
+    }
+    match verifier_backend_registry_tag_v1(backend) {
+        Some(iroha_data_model::zk::BackendTag::Stark) => {
+            Some(iroha_data_model::zk::BackendTag::Stark)
+        }
+        Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
+            Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+        }
+        None => None,
+    }
+}
+/// Returns `true` only for an exact production verifier label.
+#[inline]
+#[must_use]
+pub fn is_production_verify_backend_label(backend: &str) -> bool {
+    production_verify_backend_tag(backend).is_some()
+}
+/// Check the exact first-release Halo2 circuit identity against its registry backend.
+///
+/// Envelopes and registry records carry the full canonical circuit ID. Short
+/// dispatcher names and backend labels are never alternative wire encodings.
+#[must_use]
+pub fn halo2_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
+    if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
+            circuit_id,
+        )
+        || production_verify_backend_tag(backend)
+            != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    {
+        return false;
+    }
+    let Some(canonical) = canonical_halo2_ipa_circuit_id(circuit_id) else {
+        return false;
+    };
+    // Final envelopes and registry records carry one full canonical CID.
+    // Internal dispatcher keys are a different field, never a second wire form.
+    if circuit_id != canonical.as_str() {
+        return false;
+    }
+    if !HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&canonical.as_str()) {
+        return false;
+    }
+    backend == ZK_BACKEND_HALO2_IPA || halo2_ipa_circuit_for_backend_v1(backend) == Some(canonical)
+}
+#[cfg(test)]
+fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
+    canonical_halo2_ipa_circuit_id(circuit_id).is_some_and(|normalized| {
+        HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&normalized.as_str())
+    })
+}
+/// Return the one canonical outer-envelope schema for a production Halo2 circuit.
+///
+/// Halo2 authenticates the instance columns inside the backend proof, but it
+/// does not see the surrounding [`iroha_data_model::zk::OpenVerifyEnvelope`].
+/// Keeping this mapping closed prevents valid proofs from being relabelled with
+/// arbitrary non-empty schema bytes.
+fn halo2_ipa_public_inputs_schema_v1(circuit_id: &str) -> Option<&'static [u8]> {
+    let canonical = canonical_halo2_ipa_circuit_id(circuit_id)?;
+    match canonical.as_str() {
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
+        }
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1)
+        }
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1)
+        }
+        #[cfg(feature = "zk-halo2")]
+        "halo2/pasta/ipa/kaigi-authorization-v1" => {
+            Some(KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1)
+        }
+        #[cfg(feature = "zk-halo2")]
+        "halo2/pasta/ipa/kaigi-usage-v1" => Some(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1),
+        _ => None,
+    }
+}
+
+fn halo2_ipa_public_inputs_schema_hash_v1(circuit_id: &str) -> Option<[u8; 32]> {
+    halo2_ipa_public_inputs_schema_v1(circuit_id)
+        .map(|schema| iroha_crypto::Hash::new(schema).into())
+}
+/// Backend material prepared by the strict first-release verifying-key validator.
+///
+/// This contains only bounded, already-validated parameters. Callers retain the
+/// canonical key bytes separately for the native verifier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum PreparedVerifyingKeyMaterialV1 {
+    /// Transparent Halo2 IPA material over Pasta.
+    Halo2IpaPasta {
+        /// Fixed circuit-domain exponent authenticated by both `IPAK` and `H2VK`.
+        ipa_k: u32,
+    },
+    /// Native STARK/FRI material pinned by the canonical registry payload.
+    #[cfg_attr(not(feature = "zk-stark"), allow(dead_code))]
+    StarkFri {
+        /// Canonical circuit identifier embedded in the key payload.
+        circuit_id: String,
+        /// Evaluation-domain exponent.
+        n_log2: u8,
+        /// FRI blow-up exponent.
+        blowup_log2: u8,
+        /// FRI folding arity.
+        fold_arity: u8,
+        /// Number of verifier queries.
+        queries: u16,
+        /// Merkle-tree arity.
+        merkle_arity: u8,
+    },
+}
+impl PreparedVerifyingKeyMaterialV1 {
+    /// Return the authenticated Halo2 IPA domain exponent, when applicable.
+    #[inline]
+    #[must_use]
+    #[doc(hidden)]
+    pub const fn ipa_k(&self) -> Option<u32> {
+        match self {
+            Self::Halo2IpaPasta { ipa_k } => Some(*ipa_k),
+            Self::StarkFri { .. } => None,
+        }
+    }
+}
+/// Validate and prepare exact inline verifier material under backend-specific
+/// resource limits.
+///
+/// This is the single material gate shared by registry mutation, state
+/// hydration, and native proof dispatch. It rejects a backend/circuit mismatch,
+/// oversized or malformed containers, non-canonical STARK encodings, weak
+/// STARK parameters, and Halo2 keys that differ from the deterministically
+/// compiled circuit key.
+pub(crate) fn validate_and_prepare_verifying_key_material_v1(
+    backend: &str,
+    circuit_id: &str,
+    backend_tag: iroha_data_model::zk::BackendTag,
+    vk: &VerifyingKeyBox,
+) -> Result<PreparedVerifyingKeyMaterialV1, String> {
+    if vk.backend.as_str() != backend {
+        return Err("verifying-key payload backend does not match registry backend".to_owned());
+    }
+    if production_verify_backend_tag(backend) != Some(backend_tag) {
+        return Err("verifying-key backend is not an exact production backend".to_owned());
+    }
+    match backend_tag {
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta => {
+            #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+            {
+                let _ = (circuit_id, vk);
+                Err("verifying-key backend Halo2 IPA is not enabled".to_owned())
+            }
+            #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+            {
+                if vk.bytes.len() > HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES {
+                    return Err(format!(
+                        "Halo2 IPA verifying-key container exceeds the {}-byte limit",
+                        HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
+                    ));
+                }
+                validate_builtin_halo2_ipa_verifying_key_v1(backend, circuit_id, vk)?;
+                let canonical_circuit_id = canonical_halo2_ipa_circuit_id(circuit_id)
+                    .ok_or_else(|| "invalid Halo2 IPA circuit id".to_owned())?;
+                let ipa_k = zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
+                    vk.bytes.as_slice(),
+                    &canonical_circuit_id,
+                )?;
+                Ok(PreparedVerifyingKeyMaterialV1::Halo2IpaPasta { ipa_k })
+            }
+        }
+        iroha_data_model::zk::BackendTag::Stark => {
+            #[cfg(not(feature = "zk-stark"))]
+            {
+                let _ = (circuit_id, vk);
+                Err("verifying-key backend Stark is not enabled".to_owned())
+            }
+            #[cfg(feature = "zk-stark")]
+            {
+                // The decoder performs the whole-container check and bounded
+                // canonical Norito decode before materializing the typed key.
+                let payload =
+                    validate_stark_fri_verifying_key_v1(backend, circuit_id, vk.bytes.as_slice())?;
+                Ok(PreparedVerifyingKeyMaterialV1::StarkFri {
+                    circuit_id: payload.circuit_id,
+                    n_log2: payload.n_log2,
+                    blowup_log2: payload.blowup_log2,
+                    fold_arity: payload.fold_arity,
+                    queries: payload.queries,
+                    merkle_arity: payload.merkle_arity,
+                })
+            }
+        }
+    }
+}
+/// Validate one verifier registry record and prepare any inline key material.
+///
+/// Commitment, declared length, registry backend, curve, circuit, and inline
+/// key bytes are checked together so mutation and state rehydration cannot
+/// disagree about the record that proof dispatch later consumes. Records that
+/// publish only an off-ledger commitment have no prepared inline material and
+/// remain unusable by native proof dispatch until a validated inline key is
+/// installed.
+#[doc(hidden)]
+pub fn validate_and_prepare_verifying_key_record_v1(
+    id: &VerifyingKeyId,
+    record: &VerifyingKeyRecord,
+) -> Result<Option<PreparedVerifyingKeyMaterialV1>, String> {
+    if !id.is_portable_registry_id() {
+        return Err("verifying-key registry id is not bounded and portable".to_owned());
+    }
+    if record.commitment == [0_u8; 32] {
+        return Err("verifying-key commitment must be non-zero".to_owned());
+    }
+    if record.public_inputs_schema_hash == [0_u8; 32] {
+        return Err("verifying-key public-input schema hash must be non-zero".to_owned());
+    }
+    let backend = id.backend.as_str();
+    if production_verify_backend_tag(backend) != Some(record.backend) {
+        return Err(
+            "verifying-key record backend does not match the production registry backend"
+                .to_owned(),
+        );
+    }
+    match record.backend {
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta => {
+            if record.curve != "pallas" {
+                return Err("Halo2 IPA verifying-key curve must be pallas".to_owned());
+            }
+            if !halo2_open_verify_circuit_id_matches_backend(backend, &record.circuit_id) {
+                return Err(
+                    "Halo2 IPA verifying-key circuit is not admitted for the registry backend"
+                        .to_owned(),
+                );
+            }
+            let expected_schema_hash = halo2_ipa_public_inputs_schema_hash_v1(&record.circuit_id)
+                .ok_or_else(|| {
+                "Halo2 IPA circuit has no canonical public-input schema".to_owned()
+            })?;
+            if record.public_inputs_schema_hash != expected_schema_hash {
+                return Err(
+                    "Halo2 IPA verifying-key public-input schema hash is not canonical".to_owned(),
+                );
+            }
+        }
+        iroha_data_model::zk::BackendTag::Stark => {
+            if record.curve != "goldilocks" {
+                return Err("STARK/FRI verifying-key curve must be goldilocks".to_owned());
+            }
+            if !stark_registry_circuit_id_matches_backend(backend, &record.circuit_id) {
+                return Err(
+                    "STARK/FRI verifying-key circuit is not admitted for the registry backend"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    let max_payload_bytes = match record.backend {
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta => HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES,
+        iroha_data_model::zk::BackendTag::Stark => STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES,
+    };
+    if u64::from(record.vk_len) > max_payload_bytes as u64 {
+        return Err(format!(
+            "declared verifying-key length exceeds the {max_payload_bytes}-byte backend limit"
+        ));
+    }
+    validate_verifying_key_record_metadata_v1(record)?;
+    let Some(vk) = record.key.as_ref() else {
+        return Ok(None);
+    };
+    if vk.bytes.len() > max_payload_bytes {
+        return Err(format!(
+            "inline verifying-key container exceeds the {max_payload_bytes}-byte backend limit"
+        ));
+    }
+    if vk.backend != id.backend {
+        return Err("verifying-key payload backend does not match registry id".to_owned());
+    }
+    let vk_len = u32::try_from(vk.bytes.len())
+        .map_err(|_| "inline verifying-key length exceeds u32".to_owned())?;
+    if record.vk_len != vk_len {
+        return Err("verifying-key vk_len does not match inline bytes".to_owned());
+    }
+    if hash_vk(vk) != record.commitment {
+        return Err("verifying-key commitment does not match inline bytes".to_owned());
+    }
+    validate_and_prepare_verifying_key_material_v1(backend, &record.circuit_id, record.backend, vk)
+        .map(Some)
+}
+
+fn validate_verifying_key_record_metadata_v1(record: &VerifyingKeyRecord) -> Result<(), String> {
+    if !iroha_data_model::proof::verifying_key_id_field_is_portable(&record.namespace) {
+        return Err("verifying-key namespace is not bounded and portable".to_owned());
+    }
+    if record
+        .owner_manifest_id
+        .as_ref()
+        .is_some_and(|owner| !iroha_data_model::proof::verifying_key_id_field_is_portable(owner))
+    {
+        return Err("verifying-key owner manifest id is not bounded and portable".to_owned());
+    }
+    let Some(gas_schedule_id) = record.gas_schedule_id.as_deref() else {
+        return Err("verifying-key gas schedule id is required".to_owned());
+    };
+    if !iroha_data_model::proof::verifying_key_id_field_is_portable(gas_schedule_id) {
+        return Err("verifying-key gas schedule id is not bounded and portable".to_owned());
+    }
+    if record
+        .metadata_uri_cid
+        .as_deref()
+        .is_some_and(|uri| !verifying_key_content_uri_is_portable_v1(uri))
+    {
+        return Err("verifying-key metadata URI is not bounded and portable".to_owned());
+    }
+    if record
+        .vk_bytes_cid
+        .as_deref()
+        .is_some_and(|uri| !verifying_key_content_uri_is_portable_v1(uri))
+    {
+        return Err("verifying-key bytes URI is not bounded and portable".to_owned());
+    }
+    if matches!(
+        (record.activation_height, record.withdraw_height),
+        (Some(activation), Some(withdraw)) if withdraw <= activation
+    ) {
+        return Err(
+            "verifying-key withdraw height must be greater than activation height".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn verifying_key_content_uri_is_portable_v1(uri: &str) -> bool {
+    const MAX_URI_BYTES: usize = 512;
+    if uri.is_empty()
+        || uri.len() > MAX_URI_BYTES
+        || uri.trim() != uri
+        || uri
+            .as_bytes()
+            .iter()
+            .any(|byte| !byte.is_ascii_graphic() || matches!(*byte, b'\\' | b'?' | b'#' | b'@'))
+    {
+        return false;
+    }
+    let body = uri
+        .strip_prefix("ipfs://")
+        .or_else(|| uri.strip_prefix("cid:"))
+        .unwrap_or(uri);
+    if body.is_empty()
+        || body.starts_with('/')
+        || body.ends_with('/')
+        || body.contains("..")
+        || body.contains("//")
+    {
+        return false;
+    }
+    body.split('/').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .as_bytes()
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'))
+    })
+}
+include!("strict_verifying_key_preparation_tests.rs");
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod vk_cache_observer_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    static HITS: AtomicUsize = AtomicUsize::new(0);
+    static MISSES: AtomicUsize = AtomicUsize::new(0);
+
+    fn count_vk_cache_event(cache: &'static str, event: &'static str) {
+        match (cache, event) {
+            ("vk", "hit") => HITS.fetch_add(1, Ordering::SeqCst),
+            ("vk", "miss") => MISSES.fetch_add(1, Ordering::SeqCst),
+            _ => 0,
+        };
+    }
+
+    #[test]
+    fn installed_observer_sees_vk_cache_hit_and_miss() {
+        assert!(install_vk_cache_event_observer(count_vk_cache_event));
+        assert!(
+            !install_vk_cache_event_observer(count_vk_cache_event),
+            "only the first observer installation wins"
+        );
+        let params: PastaParams = pasta_params_new(5);
+        let backend = "halo2/pasta/observer-test";
+        let circuit = pasta_tiny::Add;
+        let canonical = halo2_backend::keygen_vk(&params, &circuit).expect("canonical vk");
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, 5);
+        zk1::wrap_append_vk_pasta(&mut bytes, &canonical);
+        let supplied = VerifyingKeyBox::new(backend.to_owned(), bytes);
+        let (hits, misses) = (HITS.load(Ordering::SeqCst), MISSES.load(Ordering::SeqCst));
+        for _ in 0..2 {
+            resolve_vk_cached(backend, &params, &supplied, &circuit, || {
+                halo2_backend::keygen_vk(&params, &circuit)
+            })
+            .expect("canonical key resolves");
+        }
+        // Other tests share the process-wide cache, so counters only grow.
+        assert!(MISSES.load(Ordering::SeqCst) > misses);
+        assert!(HITS.load(Ordering::SeqCst) > hits);
+    }
+}
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn verify_halo2_ipa_payload_no_instances(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+) -> bool {
+    halo2_backend::verify_ipa_proof_no_instances(params, vk, proof_payload).is_ok()
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_columns_result(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> Result<(), halo2_backend::Error> {
+    halo2_backend::verify_ipa_proof_with_columns(params, vk, proof_payload, col_refs)
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_columns(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> bool {
+    verify_halo2_ipa_payload_columns_result(params, vk, proof_payload, col_refs).is_ok()
+}
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn verify_halo2_ipa_payload_optional_columns(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> bool {
+    if col_refs.is_empty() {
+        verify_halo2_ipa_payload_no_instances(params, vk, proof_payload)
+    } else {
+        verify_halo2_ipa_payload_columns(params, vk, proof_payload, col_refs)
+    }
+}
+/// Borrow the exact profile-qualified generic OpenVerify circuit identifier.
+/// Bare native-protocol identifiers have their own typed consumer and are not
+/// alternate spellings of a generic OpenVerify circuit.
+pub(crate) fn canonical_stark_fri_circuit_id_for_backend<'a>(
+    backend: &str,
+    circuit_id: &'a str,
+) -> Option<&'a str> {
+    if !is_stark_fri_v1_backend(backend)
+        || circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+    {
+        return None;
+    }
+    let relation = circuit_id.strip_prefix(backend)?.strip_prefix(':')?;
+    iroha_data_model::zk::open_verify_circuit_id_is_portable(relation).then_some(circuit_id)
+}
+
+// Registry admission for these exact bare native identities retains their own
+// typed VK/AIR contract. This list grants no generic OpenVerify dispatch and no
+// BFV parameter/security qualification.
+fn is_typed_native_stark_circuit_id(circuit_id: &str) -> bool {
+    [
+        iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+    ]
+    .contains(&circuit_id)
+}
+
+fn stark_registry_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
+    if !is_stark_fri_v1_backend(backend) {
+        return false;
+    }
+    if is_typed_native_stark_circuit_id(circuit_id) {
+        return true;
+    }
+    let Some(exact) = canonical_stark_fri_circuit_id_for_backend(backend, circuit_id) else {
+        return false;
+    };
+    let relation = &exact[backend.len() + 1..];
+    // Typed keys have one bare registry identity. A matched prefixed record and
+    // payload must not preserve an unused second spelling in the registry.
+    relation != IVM_EXECUTION_V1_CIRCUIT_ID
+        && !is_typed_native_stark_circuit_id(relation)
+        && stark_open_verify_circuit_id_matches_backend(backend, exact)
+}
+
+/// Check canonical native-STARK identity and reject unavailable IVM relations.
+#[must_use]
+pub fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
+    canonical_stark_fri_circuit_id_for_backend(backend, circuit_id)
+        .and_then(|canonical| canonical.strip_prefix(backend))
+        .and_then(|suffix| suffix.strip_prefix(':'))
+        .is_some_and(|relation| relation != IVM_EXECUTION_V1_CIRCUIT_ID)
+        && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
+            circuit_id,
+        )
+        && !stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id)
+}
+#[cfg(feature = "zk-stark")]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+struct StarkVerifyingKeyCacheKeyV1 {
+    backend: String,
+    circuit_id: String,
+    vk_hash: [u8; 32],
+}
+#[cfg(feature = "zk-stark")]
+type StarkVerifyingKeyCacheMapV1 =
+    std::collections::BTreeMap<StarkVerifyingKeyCacheKeyV1, crate::stark::StarkFriVerifyingKeyV1>;
+#[cfg(feature = "zk-stark")]
+type StarkVerifyingKeyCacheV1 = std::sync::Mutex<StarkVerifyingKeyCacheMapV1>;
+#[cfg(feature = "zk-stark")]
+const STARK_VERIFYING_KEY_CACHE_CAPACITY_V1: usize = 512;
+#[cfg(feature = "zk-stark")]
+static STARK_VERIFYING_KEY_CACHE_V1: std::sync::OnceLock<StarkVerifyingKeyCacheV1> =
+    std::sync::OnceLock::new();
+#[cfg(feature = "zk-stark")]
+fn insert_stark_verifying_key_cache_v1(
+    cache: &mut StarkVerifyingKeyCacheMapV1,
+    key: StarkVerifyingKeyCacheKeyV1,
+    payload: crate::stark::StarkFriVerifyingKeyV1,
+) -> crate::stark::StarkFriVerifyingKeyV1 {
+    if let Some(cached) = cache.get(&key) {
+        return cached.clone();
+    }
+    // Validation can run inside a transaction that later rolls back. Bound the
+    // process-local accelerator so rejected callbacks cannot grow it without limit.
+    while cache.len() >= STARK_VERIFYING_KEY_CACHE_CAPACITY_V1 {
+        let Some(evicted) = cache.keys().next().cloned() else {
+            break;
+        };
+        cache.remove(&evicted);
+    }
+    cache.insert(key, payload.clone());
+    payload
+}
+#[cfg(all(test, feature = "zk-stark"))]
+mod stark_verifying_key_cache_tests {
+    use super::*;
+
+    fn payload(circuit_id: String) -> crate::stark::StarkFriVerifyingKeyV1 {
+        crate::stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id,
+            n_log2: crate::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+        }
+    }
+
+    #[test]
+    fn rejected_transaction_cache_warming_is_bounded() {
+        let mut cache = StarkVerifyingKeyCacheMapV1::new();
+        for index in 0..=STARK_VERIFYING_KEY_CACHE_CAPACITY_V1 {
+            let circuit_id = format!("circuit-{index:04}");
+            let key = StarkVerifyingKeyCacheKeyV1 {
+                backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1".to_owned(),
+                circuit_id: circuit_id.clone(),
+                vk_hash: [u8::try_from(index % 256).expect("bounded byte"); 32],
+            };
+            insert_stark_verifying_key_cache_v1(&mut cache, key, payload(circuit_id));
+        }
+
+        assert_eq!(cache.len(), STARK_VERIFYING_KEY_CACHE_CAPACITY_V1);
+        assert!(
+            cache.keys().all(|key| key.circuit_id != "circuit-0000"),
+            "deterministic eviction must remove the lowest cache key"
+        );
+        assert!(
+            cache.keys().any(|key| key.circuit_id
+                == format!("circuit-{STARK_VERIFYING_KEY_CACHE_CAPACITY_V1:04}")),
+            "the newest validated key must be cached"
+        );
+    }
+}
+#[cfg(all(test, feature = "zk-stark"))]
+std::thread_local! {
+    // Observe entry, including cache hits, without sharing counters between
+    // concurrently executing native tests. No production admission state.
+    #[cfg(test)]
+    static STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+/// Decode and validate a canonical STARK/FRI V1 verifier key for one registry binding.
+///
+/// The returned value is the typed, bounded material that proof verification
+/// consumes. Validation binds its circuit and the sole six-lane commitment profile to the exact
+/// production backend before a registry record can retain the original bytes.
+#[cfg(feature = "zk-stark")]
+#[doc(hidden)]
+pub fn validate_stark_fri_verifying_key_v1(
+    backend: &str,
+    circuit_id: &str,
+    bytes: &[u8],
+) -> Result<crate::stark::StarkFriVerifyingKeyV1, String> {
+    #[cfg(test)]
+    STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| entries.set(entries.get() + 1));
+    if !stark_registry_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("STARK/FRI circuit id does not match the production backend".to_owned());
+    }
+    if bytes.len() > crate::stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES {
+        return Err(format!(
+            "STARK/FRI verifier key exceeds the {}-byte limit",
+            crate::stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
+        ));
+    }
+    let cache_key = StarkVerifyingKeyCacheKeyV1 {
+        backend: backend.to_owned(),
+        circuit_id: circuit_id.to_owned(),
+        vk_hash: hash_vk_bytes(backend, bytes),
+    };
+    let cache = STARK_VERIFYING_KEY_CACHE_V1
+        .get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+    if let Some(cached) = cache
+        .lock()
+        .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?
+        .get(&cache_key)
+        .cloned()
+    {
+        return Ok(cached);
+    }
+    let payload = crate::stark::decode_stark_fri_verifying_key_v1(bytes)?;
+    crate::stark::validate_stark_fri_canonical_verifying_key_payload(
+        &payload, circuit_id, "registry",
+    )?;
+    let mut guard = cache
+        .lock()
+        .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?;
+    Ok(insert_stark_verifying_key_cache_v1(
+        &mut guard, cache_key, payload,
+    ))
+}
+fn stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> bool {
+    let trimmed = circuit_id.trim();
+    if stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(trimmed) {
+        return true;
+    }
+    let Some(stark_suffix) = trimmed
+        .strip_prefix("stark/fri:")
+        .or_else(|| trimmed.strip_prefix("stark/fri/"))
+    else {
+        return false;
+    };
+    let circuit_fragment = stark_suffix
+        .split_once(':')
+        .or_else(|| stark_suffix.split_once('/'))
+        .map_or(stark_suffix, |(_, fragment)| fragment);
+    stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(circuit_fragment)
+}
+fn stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(fragment: &str) -> bool {
+    let lower = fragment.to_ascii_lowercase();
+    lower == "halo2"
+        || lower.starts_with("ivm-")
+        || lower
+            .strip_prefix("halo2")
+            .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
+        || is_trusted_setup_backend_label(&lower)
+}
+/// Return whether a canonical generic-STARK circuit id enters the ZK-ACE namespace.
+///
+/// The complete namespace is reserved from generic `OpenVerify`; ZK-ACE must
+/// use typed privacy verification. Deliberately reserving the namespace avoids
+/// retaining a dispatch table of retired aliases while making every old
+/// spelling fail closed.
+fn canonical_circuit_is_zk_ace_relation_for_backend(
+    backend: &str,
+    canonical_circuit_id: &str,
+) -> bool {
+    let Some(relation) = canonical_circuit_id
+        .strip_prefix(backend)
+        .and_then(|suffix| suffix.strip_prefix(':'))
+    else {
+        return false;
+    };
+    relation == iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID
+        || relation.starts_with("zk_ace_")
+        || relation.starts_with("zk-ace-")
+}
+fn canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
+    is_stark_fri_v1_backend(backend).then(|| {
+        format!(
+            "{backend}:{}",
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+        )
+    })
+}
+fn canonical_ivm_execution_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
+    is_stark_fri_v1_backend(backend).then(|| format!("{backend}:{IVM_EXECUTION_V1_CIRCUIT_ID}"))
+}
+fn canonical_circuit_is_governance_vote_relation_for_backend(
+    backend: &str,
+    canonical_circuit_id: &str,
+) -> bool {
+    [
+        GOVERNANCE_BALLOT_CIRCUIT_ID_V1,
+        GOVERNANCE_TALLY_CIRCUIT_ID_V1,
+    ]
+    .into_iter()
+    .map(|circuit_id| format!("{backend}:{circuit_id}"))
+    .any(|circuit_id| circuit_id == canonical_circuit_id)
+}
+/// Return whether a canonical circuit id names a typed Soracloud FHE relation.
+///
+/// These circuit ids must never fall back to the generic binding AIR: that AIR
+/// only authenticates public metadata and does not prove any of the private FHE
+/// witness relations advertised by the typed Soracloud protocols.
+fn canonical_circuit_is_soracloud_fhe_relation_for_backend(
+    backend: &str,
+    canonical_circuit_id: &str,
+) -> bool {
+    [
+        iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+    ]
+    .into_iter()
+    .map(|circuit_id| format!("{backend}:{circuit_id}"))
+    .any(|circuit_id| circuit_id == canonical_circuit_id)
+}
+#[cfg(feature = "zk-stark")]
+#[doc(hidden)]
+pub fn stark_open_verify_domain_tag_current(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> String {
+    let preimage = stark_binding_air_preimage(
+        backend,
+        circuit_id,
+        vk_hash,
+        env_public_inputs,
+        public_inputs,
+    );
+    let digest = crate::stark::stark_open_verify_domain_digest_v1(&preimage)
+        .expect("bounded OpenVerify binding preimage hashes into six Goldilocks lanes");
+    URL_SAFE_NO_PAD.encode(digest.to_le_bytes())
+}
+#[cfg(feature = "zk-stark")]
+const STARK_BINDING_AIR_CONSTANT: u64 = 17;
+#[cfg(feature = "zk-stark")]
+const STARK_BINDING_AIR_Z_COEFF: u64 = 19;
+#[cfg(feature = "zk-stark")]
+const STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
+#[cfg(feature = "zk-stark")]
+#[doc(hidden)]
+pub const STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1: &str = "IROHA-STARK-AIR-V1";
+#[cfg(feature = "zk-stark")]
+fn stark_binding_air_preimage(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Vec<u8> {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"iroha:zk:stark-binding-air:v1");
+    preimage.extend_from_slice(&(backend.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(backend.as_bytes());
+    preimage.extend_from_slice(&(circuit_id.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(circuit_id.as_bytes());
+    preimage.extend_from_slice(&vk_hash);
+    preimage.extend_from_slice(&(env_public_inputs.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(env_public_inputs);
+    preimage.extend_from_slice(&(public_inputs.len() as u64).to_le_bytes());
+    let mut cell_count = 0u64;
+    for column in public_inputs {
+        preimage.extend_from_slice(&(column.len() as u64).to_le_bytes());
+        cell_count = cell_count.saturating_add(column.len() as u64);
+        for value in column {
+            preimage.extend_from_slice(value);
+        }
+    }
+    preimage.extend_from_slice(&cell_count.to_le_bytes());
+    preimage
+}
+#[cfg(feature = "zk-stark")]
+fn stark_binding_air_terms(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Vec<crate::stark::StarkCompositionTermV1> {
+    let preimage = stark_binding_air_preimage(
+        backend,
+        circuit_id,
+        vk_hash,
+        env_public_inputs,
+        public_inputs,
+    );
+    let digest = crate::stark::stark_open_verify_air_terms_digest_v1(&preimage)
+        .expect("bounded OpenVerify binding preimage hashes into six Goldilocks lanes");
+    let mut terms = Vec::with_capacity(8);
+    for (idx, value) in digest.words().into_iter().enumerate() {
+        let coeff = (idx as u64) + 3;
+        terms.push(crate::stark::StarkCompositionTermV1 {
+            wire_index: idx as u32,
+            value,
+            coeff,
+        });
+    }
+    terms.push(crate::stark::StarkCompositionTermV1 {
+        wire_index: 6,
+        value: (public_inputs.len() as u128 % STARK_GOLDILOCKS_MODULUS) as u64,
+        coeff: 11,
+    });
+    let cell_count = public_inputs
+        .iter()
+        .map(Vec::len)
+        .fold(0usize, usize::saturating_add);
+    terms.push(crate::stark::StarkCompositionTermV1 {
+        wire_index: 7,
+        value: (cell_count as u128 % STARK_GOLDILOCKS_MODULUS) as u64,
+        coeff: 13,
+    });
+    terms
+}
+#[cfg(feature = "zk-stark")]
+#[doc(hidden)]
+pub fn stark_open_verify_air_public_digest_current(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Result<iroha_data_model::privacy::GoldilocksDigest384V1, String> {
+    let terms = stark_binding_air_terms(
+        backend,
+        circuit_id,
+        vk_hash,
+        env_public_inputs,
+        public_inputs,
+    );
+    crate::stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &terms,
+    )
+}
+#[cfg(any(test, feature = "test-utils"))]
+/// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
+///
+/// The first-release native V1 circuit carries an explicit AIR section whose
+/// public statement digest is reconstructed from the outer envelope metadata,
+/// verifying-key hash, schema descriptor, and public input columns.
+#[cfg(feature = "zk-stark")]
+pub fn prove_stark_fri_open_verify_envelope(
+    backend: &str,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    schema_descriptor: &[u8],
+    public_inputs: Vec<Vec<[u8; 32]>>,
+) -> Result<ProofBox, String> {
+    prove_stark_fri_open_verify_envelope_inner(
+        backend,
+        circuit_id,
+        vk_box,
+        schema_descriptor,
+        public_inputs,
+    )
+}
+#[cfg(all(feature = "zk-stark", any(test, feature = "test-utils")))]
+fn prove_stark_fri_open_verify_envelope_inner(
+    backend: &str,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    schema_descriptor: &[u8],
+    public_inputs: Vec<Vec<[u8; 32]>>,
+) -> Result<ProofBox, String> {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    if !is_stark_fri_v1_backend(backend) {
+        return Err("backend is not a STARK/FRI V1 backend".to_owned());
+    }
+    if vk_box.backend != backend {
+        return Err("STARK verifying key backend mismatch".to_owned());
+    }
+    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("STARK circuit_id does not match backend family".to_owned());
+    }
+    let env_circuit_id = canonical_stark_fri_circuit_id_for_backend(backend, circuit_id)
+        .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
+    let is_ivm_execution_circuit = canonical_ivm_execution_stark_circuit_id_for_backend(backend)
+        .as_deref()
+        == Some(env_circuit_id);
+    if is_ivm_execution_circuit {
+        return Err(
+            "IVM execution proof production requires the complete native STARK execution relation"
+                .to_owned(),
+        );
+    }
+    if canonical_circuit_is_zk_ace_relation_for_backend(backend, env_circuit_id) {
+        return Err(
+            "generic STARK OpenVerify proof cannot target a ZK-ACE relation; use SubmitPrivacyProofV1"
+                .to_owned(),
+        );
+    }
+    if canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(backend).as_deref()
+        == Some(env_circuit_id)
+    {
+        return Err(
+            "generic STARK OpenVerify proof cannot target the BFV full-bootstrap circuit; use the BFV full-bootstrap STARK prover"
+                .to_owned(),
+        );
+    }
+    if canonical_circuit_is_governance_vote_relation_for_backend(backend, env_circuit_id) {
+        return Err(
+            "generic STARK OpenVerify proof cannot target a governance vote role; a dedicated semantic governance circuit is required"
+                .to_owned(),
+        );
+    }
+    if canonical_circuit_is_soracloud_fhe_relation_for_backend(backend, env_circuit_id) {
+        return Err(
+            "generic STARK OpenVerify proof cannot target a Soracloud FHE relation; a dedicated typed Soracloud verifier is required"
+                .to_owned(),
+        );
+    }
+    let vk_payload =
+        validate_stark_fri_verifying_key_v1(backend, circuit_id, vk_box.bytes.as_slice())
+            .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
+    let vk_circuit_id = canonical_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
+        .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
+    if env_circuit_id != vk_circuit_id {
+        return Err("STARK verifying key circuit_id mismatch".to_owned());
+    }
+    let vk_hash = hash_vk(vk_box);
+    let domain_tag = stark_open_verify_domain_tag_current(
+        backend,
+        circuit_id,
+        vk_hash,
+        schema_descriptor,
+        &public_inputs,
+    );
+    let params = crate::stark::StarkFriParamsV1 {
+        version: 1,
+        n_log2: vk_payload.n_log2,
+        blowup_log2: vk_payload.blowup_log2,
+        fold_arity: vk_payload.fold_arity,
+        queries: vk_payload.queries,
+        merkle_arity: vk_payload.merkle_arity,
+        domain_tag,
+    };
+    let terms = stark_binding_air_terms(
+        backend,
+        circuit_id,
+        vk_hash,
+        schema_descriptor,
+        &public_inputs,
+    );
+    let public_digest = crate::stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &terms,
+    )?;
+    let envelope_bytes = crate::stark::prove_stark_fri_air_envelope_bytes(
+        params,
+        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
+        env_circuit_id.to_owned(),
+        public_digest,
+    )?;
+    let open = StarkFriOpenProofV1 {
+        version: 1,
+        public_inputs,
+        envelope_bytes,
+    };
+    let env = OpenVerifyEnvelope {
+        backend: BackendTag::Stark,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash,
+        public_inputs: schema_descriptor.to_vec(),
+        proof_bytes: norito::encode_canonical(&open)
+            .map_err(|err| format!("failed to encode STARK wrapper payload: {err}"))?,
+        aux: Vec::new(),
+    };
+    let bytes = norito::encode_canonical(&env)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new(backend.to_owned(), bytes))
+}
+#[cfg(any(test, feature = "test-utils"))]
+/// Test fixtures and helpers for constructing deterministic `OpenVerifyEnvelope` payloads.
+pub mod test_utils {
+    #[allow(unused_imports)]
+    use super::*;
+    use iroha_crypto::Hash as CryptoHash;
+    use iroha_data_model::{
+        proof::{ProofBox, VerifyingKeyBox},
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+    const HALO2_PROOF_BYTES_LEN: usize = 64;
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    use rand_core_06::{CryptoRng, Error as RandError, RngCore};
+    /// Deterministic proof envelope fixture used across unit and integration tests.
+    #[derive(Clone, Debug)]
+    pub struct FixtureEnvelope {
+        /// Norito-encoded `OpenVerifyEnvelope` bytes suitable for `ProofBox`.
+        pub proof_bytes: Vec<u8>,
+        /// Canonical public inputs serialized in the envelope.
+        pub public_inputs: Vec<u8>,
+        /// Blake2b-32 hash of `public_inputs`, matching verifier registry expectations.
+        pub schema_hash: [u8; 32],
+        /// Optional backend-specific verifying-key bytes for the fixture circuit.
+        pub vk_bytes: Option<Vec<u8>>,
+    }
+    impl FixtureEnvelope {
+        /// Create a `ProofBox` tagged with the provided backend identifier.
+        #[must_use]
+        pub fn proof_box(&self, backend: impl Into<String>) -> ProofBox {
+            ProofBox::new(backend.into(), self.proof_bytes.clone())
+        }
+        /// Create a verifying-key box for the fixture circuit, if available.
+        #[must_use]
+        pub fn vk_box(&self, backend: impl Into<String>) -> Option<VerifyingKeyBox> {
+            self.vk_bytes
+                .as_ref()
+                .map(|bytes| VerifyingKeyBox::new(backend.into(), bytes.clone()))
+        }
+        /// Compute the verifying-key hash for this fixture and backend, if available.
+        #[must_use]
+        pub fn vk_hash(&self, backend: impl Into<String>) -> Option<[u8; 32]> {
+            self.vk_box(backend).map(|vk| super::hash_vk(&vk))
+        }
+    }
+    /// Build a native public-input binding proof for relation-confusion tests.
+    #[cfg(feature = "zk-stark")]
+    #[must_use]
+    pub fn stark_public_binding_fixture_envelope() -> FixtureEnvelope {
+        use crate::stark::{
+            STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            STARK_FRI_CONSENSUS_MIN_QUERIES, StarkFriVerifyingKeyV1,
+        };
+
+        static FIXTURE: std::sync::OnceLock<FixtureEnvelope> = std::sync::OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                let backend = super::ZK_BACKEND_STARK_FRI_V1;
+                let circuit_id = format!("{backend}:public-binding-demo");
+                let vk = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    merkle_arity: 2,
+                };
+                let vk_bytes = norito::encode_canonical(&vk).expect("canonical fixture key");
+                let key = VerifyingKeyBox::new(backend.to_owned(), vk_bytes.clone());
+                let public_inputs = b"public-binding-demo:schema:v1".to_vec();
+                let proof = super::prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &key,
+                    &public_inputs,
+                    vec![vec![[0x11; 32]]],
+                )
+                .expect("native public binding proof");
+                FixtureEnvelope {
+                    proof_bytes: proof.bytes,
+                    schema_hash: CryptoHash::new(&public_inputs).into(),
+                    public_inputs,
+                    vk_bytes: Some(vk_bytes),
+                }
+            })
+            .clone()
+    }
+    /// Build a deterministic Halo2 IPA envelope fixture for the provided circuit identifier.
+    ///
+    /// When the circuit identifier resolves to a supported fixture circuit (currently
+    /// `tiny-add`, `tiny-add-public`, `tiny-add-2rows`), the returned
+    /// [`FixtureEnvelope`] embeds a real Halo2 proof and VK bytes.
+    /// Otherwise, it falls back to a deterministic placeholder payload for negative tests.
+    /// The public input bytes and their Blake2b hash are returned so tests can reuse the hash when
+    /// registering verifying keys to satisfy `public_inputs_schema_hash` requirements.
+    #[must_use]
+    pub fn halo2_fixture_envelope(
+        circuit_id: impl Into<String>,
+        vk_hash: [u8; 32],
+    ) -> FixtureEnvelope {
+        let circuit_id = circuit_id.into();
+        let mut vk_bytes = None;
+        let (proof_payload, public_inputs) = fixture_circuit_from_id(circuit_id.as_str())
+            .map_or_else(
+                || {
+                    let public_inputs = fixture_public_inputs_bytes();
+                    let proof_payload = halo2_proof_payload(&public_inputs);
+                    (proof_payload, public_inputs)
+                },
+                |fixture| {
+                    let (proof_payload, public_inputs, vk) = fixture();
+                    vk_bytes = Some(vk);
+                    (proof_payload, public_inputs)
+                },
+            );
+        let schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id,
+            vk_hash,
+            public_inputs: public_inputs.clone(),
+            proof_bytes: proof_payload,
+            aux: Vec::new(),
+        };
+        let proof_bytes = norito::encode_canonical(&envelope)
+            .expect("OpenVerifyEnvelope Norito serialization must work");
+        FixtureEnvelope {
+            proof_bytes,
+            public_inputs,
+            schema_hash,
+            vk_bytes,
+        }
+    }
+    type FixtureBundle = fn() -> (Vec<u8>, Vec<u8>, Vec<u8>);
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn fixture_circuit_from_id(circuit_id: &str) -> Option<FixtureBundle> {
+        let name = circuit_id
+            .strip_prefix("halo2/pasta/ipa/")
+            .unwrap_or(circuit_id);
+        match name {
+            "tiny-add" => Some(tiny_add_bundle),
+            "tiny-add-public" => Some(tiny_add_public_bundle),
+            "tiny-add2inst-public" => Some(tiny_add2inst_public_bundle),
+            "tiny-add-2rows" => Some(tiny_add_2rows_bundle),
+            _ => None,
+        }
+    }
+    #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    fn fixture_circuit_from_id(_circuit_id: &str) -> Option<FixtureBundle> {
+        None
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    struct FixtureRng(u64);
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    impl FixtureRng {
+        const fn new(seed: u64) -> Self {
+            Self(seed)
+        }
+        fn next_word(&mut self) -> u64 {
+            // Simple LCG for deterministic, fast test entropy.
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0
+        }
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    impl RngCore for FixtureRng {
+        fn next_u32(&mut self) -> u32 {
+            let word = self.next_word();
+            u32::try_from(word & u64::from(u32::MAX)).expect("word masked to u32")
+        }
+        fn next_u64(&mut self) -> u64 {
+            self.next_word()
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            let mut offset = 0;
+            while offset < dest.len() {
+                let chunk = self.next_u64().to_le_bytes();
+                let remaining = dest.len() - offset;
+                let take = remaining.min(chunk.len());
+                dest[offset..offset + take].copy_from_slice(&chunk[..take]);
+                offset += take;
+            }
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), RandError> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    impl CryptoRng for FixtureRng {}
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn fixture_rng(seed: u64) -> FixtureRng {
+        FixtureRng::new(seed)
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn tiny_add_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        use halo2_proofs::{
+            halo2curves::pasta::EqAffine as Curve,
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+        static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                // Proof generation is expensive; cache the fixture and use a deterministic RNG.
+                let k = 5u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::Add;
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+                let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+                let mut rng = fixture_rng(0x5EED_F1C7_1234_5678);
+                create_proof::<
+                    IPACommitmentScheme<Curve>,
+                    ProverIPA<'_, Curve>,
+                    Challenge255<Curve>,
+                    _,
+                    _,
+                    _,
+                >(
+                    &params,
+                    &pk,
+                    &[circuit],
+                    &[&[][..]],
+                    &mut rng,
+                    &mut transcript,
+                )
+                .expect("create proof");
+                let proof_raw = transcript.finalize();
+                let mut proof_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+                let public_inputs = Vec::new();
+                (proof_bytes, public_inputs, vk_bytes)
+            })
+            .clone()
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn tiny_add_public_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        use ff::PrimeField as _;
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+        static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                // Proof generation is expensive; cache the fixture and use a deterministic RNG.
+                let k = 5u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::AddPublic;
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+                let inst_col = vec![Scalar::from(4u64)];
+                let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
+                let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+                let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+                let mut rng = fixture_rng(0x5EED_F1C7_1234_5679);
+                create_proof::<
+                    IPACommitmentScheme<Curve>,
+                    ProverIPA<'_, Curve>,
+                    Challenge255<Curve>,
+                    _,
+                    _,
+                    _,
+                >(
+                    &params,
+                    &pk,
+                    &[circuit],
+                    &inst_refs,
+                    &mut rng,
+                    &mut transcript,
+                )
+                .expect("create proof");
+                let proof_raw = transcript.finalize();
+                let mut proof_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+                super::zk1::wrap_append_instances_pasta_fp_cols(&inst_cols, &mut proof_bytes);
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+                let mut public_inputs = Vec::with_capacity(inst_col.len() * 32);
+                for value in inst_col {
+                    public_inputs.extend_from_slice(value.to_repr().as_ref());
+                }
+                (proof_bytes, public_inputs, vk_bytes)
+            })
+            .clone()
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn tiny_add2inst_public_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        use ff::PrimeField as _;
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+        static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                let k = 6u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::AddTwoInstPublic;
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+                let inst0 = vec![Scalar::from(5u64)];
+                let inst1 = vec![Scalar::from(8u64)];
+                let inst_cols: Vec<&[Scalar]> = vec![inst0.as_slice(), inst1.as_slice()];
+                let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+                let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+                let mut rng = fixture_rng(0x5EED_F1C7_1234_5681);
+                create_proof::<
+                    IPACommitmentScheme<Curve>,
+                    ProverIPA<'_, Curve>,
+                    Challenge255<Curve>,
+                    _,
+                    _,
+                    _,
+                >(
+                    &params,
+                    &pk,
+                    &[circuit],
+                    &inst_refs,
+                    &mut rng,
+                    &mut transcript,
+                )
+                .expect("create proof");
+                let proof_raw = transcript.finalize();
+                let mut proof_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+                super::zk1::wrap_append_instances_pasta_fp_cols(&inst_cols, &mut proof_bytes);
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+                let mut public_inputs = Vec::with_capacity(inst_cols.len() * 32);
+                for value in inst0.iter().chain(inst1.iter()) {
+                    public_inputs.extend_from_slice(value.to_repr().as_ref());
+                }
+                (proof_bytes, public_inputs, vk_bytes)
+            })
+            .clone()
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn tiny_add_2rows_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        use halo2_proofs::{
+            halo2curves::pasta::EqAffine as Curve,
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+        static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                // Proof generation is expensive; cache the fixture and use a deterministic RNG.
+                let k = 5u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::AddTwoRows;
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+                let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+                let mut rng = fixture_rng(0x5EED_F1C7_1234_5680);
+                create_proof::<
+                    IPACommitmentScheme<Curve>,
+                    ProverIPA<'_, Curve>,
+                    Challenge255<Curve>,
+                    _,
+                    _,
+                    _,
+                >(
+                    &params,
+                    &pk,
+                    &[circuit],
+                    &[&[][..]],
+                    &mut rng,
+                    &mut transcript,
+                )
+                .expect("create proof");
+                let proof_raw = transcript.finalize();
+                let mut proof_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+                let public_inputs = Vec::new();
+                (proof_bytes, public_inputs, vk_bytes)
+            })
+            .clone()
+    }
+    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[test]
+    fn halo2_fixture_envelope_is_stable_for_tiny_add() {
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
+        assert_eq!(first.proof_bytes, second.proof_bytes);
+        assert_eq!(first.vk_bytes, second.vk_bytes);
+        assert!(!first.proof_bytes.is_empty());
+        assert!(first.vk_bytes.is_some());
+    }
+    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[test]
+    fn halo2_fixture_envelope_is_stable_for_tiny_add_public() {
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-public", [0u8; 32]);
+        assert_eq!(first.proof_bytes, second.proof_bytes);
+        assert_eq!(first.vk_bytes, second.vk_bytes);
+        assert!(!first.proof_bytes.is_empty());
+        assert!(first.vk_bytes.is_some());
+        assert!(!first.public_inputs.is_empty());
+    }
+    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[test]
+    fn halo2_fixture_envelope_is_stable_for_tiny_add2inst_public() {
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add2inst-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add2inst-public", [0u8; 32]);
+        assert_eq!(first.proof_bytes, second.proof_bytes);
+        assert_eq!(first.vk_bytes, second.vk_bytes);
+        assert!(!first.proof_bytes.is_empty());
+        assert!(first.vk_bytes.is_some());
+        assert_eq!(first.public_inputs.len(), 64);
+    }
+    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[test]
+    fn halo2_fixture_envelope_is_stable_for_tiny_add_2rows() {
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-2rows", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-2rows", [0u8; 32]);
+        assert_eq!(first.proof_bytes, second.proof_bytes);
+        assert_eq!(first.vk_bytes, second.vk_bytes);
+        assert!(!first.proof_bytes.is_empty());
+        assert!(first.vk_bytes.is_some());
+    }
+    fn fixture_public_inputs_bytes() -> Vec<u8> {
+        const STRIDE: usize = 32;
+        // anchor root + 1 nullifier + 1 commitment + asset id + policy digest = 5 entries
+        const COUNT: usize = 5;
+        let mut bytes = vec![0u8; STRIDE * COUNT];
+        for (idx, chunk) in bytes.chunks_mut(STRIDE).enumerate() {
+            let idx = u8::try_from(idx).expect("fixture chunk index fits in a u8");
+            chunk[0] = idx;
+        }
+        bytes
+    }
+    fn halo2_proof_payload(_public_inputs: &[u8]) -> Vec<u8> {
+        vec![0xAB; HALO2_PROOF_BYTES_LEN]
+    }
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+struct VkCacheKey {
+    backend: String,
+    circuit_type: &'static str,
+    params_fingerprint: [u8; 32],
+    vk_hash: [u8; 32],
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+type CachedVk = Arc<halo2_backend::VerifyingKey>;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
+/// Process-wide observer for verifier-key cache events (`cache`, `event` labels).
+static VK_CACHE_EVENT_OBSERVER: std::sync::OnceLock<fn(&'static str, &'static str)> =
+    std::sync::OnceLock::new();
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[inline]
+fn record_vk_cache_event(cache: &'static str, event: &'static str) {
+    if let Some(observer) = VK_CACHE_EVENT_OBSERVER.get() {
+        observer(cache, event);
+    }
+}
+/// Install the process-wide observer for verifier-key cache hits and misses.
+///
+/// The node daemon installs a callback that feeds
+/// `zk_verifier_cache_events_total`; the verifier itself stays independent of
+/// the telemetry registry. Only the first installation wins.
+///
+/// Returns `true` when `observer` was installed and `false` when an observer
+/// was already present.
+pub fn install_vk_cache_event_observer(observer: fn(&'static str, &'static str)) -> bool {
+    VK_CACHE_EVENT_OBSERVER.set(observer).is_ok()
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn lock_cache<T>(cache: &Mutex<T>) -> Result<MutexGuard<'_, T>, halo2_backend::Error> {
+    cache
+        .lock()
+        .map_err(|_| halo2_backend::constraint_system_failure())
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn resolve_vk_cached_for_type<C, F>(
+    backend: &str,
+    params: &PastaParams,
+    vk_box: &VerifyingKeyBox,
+    builder: F,
+) -> Result<CachedVk, halo2_backend::Error>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+    F: FnOnce() -> Result<halo2_backend::VerifyingKey, halo2_backend::Error>,
+{
+    let cache = VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let params_fp = params_fingerprint(params);
+    let vk_hash = hash_vk(vk_box);
+    let key = VkCacheKey {
+        backend: backend.to_string(),
+        circuit_type: core::any::type_name::<C>(),
+        params_fingerprint: params_fp,
+        vk_hash,
+    };
+    // Fast path: existing cache entry whose hash matches.
+    {
+        let guard = lock_cache(cache)?;
+        if let Some(entry) = guard.get(&key).cloned() {
+            record_vk_cache_event("vk", "hit");
+            return Ok(entry);
+        }
+    }
+    record_vk_cache_event("vk", "miss");
+    // A registry circuit identifier is a semantic security boundary, not a
+    // caller-supplied label for an arbitrary Halo2 constraint system. Build the
+    // canonical key for the selected circuit and compare the packaged H2VK
+    // bytes before invoking any Halo2 reader on attacker-controlled counts.
+    let built = builder()?;
+    let packaged = zk1::h2vk_payload(vk_box.bytes.as_slice())
+        .map_err(|_| halo2_backend::constraint_system_failure())?;
+    let canonical = halo2_backend::verifying_key_to_processed_bytes(&built);
+    if packaged != canonical.as_slice() {
+        return Err(halo2_backend::constraint_system_failure());
+    }
+    let arc = Arc::new(built);
+    let mut guard = lock_cache(cache)?;
+    let entry = match guard.entry(key) {
+        Entry::Occupied(existing) => existing.get().clone(),
+        Entry::Vacant(slot) => Arc::clone(slot.insert(Arc::clone(&arc))),
+    };
+    Ok(entry)
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn resolve_vk_cached<C, F>(
+    backend: &str,
+    params: &PastaParams,
+    vk_box: &VerifyingKeyBox,
+    _circuit: &C,
+    builder: F,
+) -> Result<CachedVk, halo2_backend::Error>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+    F: FnOnce() -> Result<halo2_backend::VerifyingKey, halo2_backend::Error>,
+{
+    resolve_vk_cached_for_type::<C, F>(backend, params, vk_box, builder)
+}
+#[cfg(all(
+    test,
+    feature = "halo2-dev-tests",
+    feature = "zk-halo2",
+    feature = "zk-halo2-ipa"
+))]
+/// Resolve a packaged verifier key without falling back to runtime keygen.
+fn resolve_packaged_vk_cached<C>(
+    backend: &str,
+    params: &PastaParams,
+    vk_box: &VerifyingKeyBox,
+    _circuit: &C,
+) -> Result<CachedVk, halo2_backend::Error>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+    C::Params: Default,
+{
+    let cache = VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let params_fp = params_fingerprint(params);
+    let vk_hash = hash_vk(vk_box);
+    let key = VkCacheKey {
+        backend: backend.to_string(),
+        circuit_type: core::any::type_name::<C>(),
+        params_fingerprint: params_fp,
+        vk_hash,
+    };
+    {
+        let guard = lock_cache(cache)?;
+        if let Some(entry) = guard.get(&key).cloned() {
+            record_vk_cache_event("vk", "hit");
+            return Ok(entry);
+        }
+    }
+    record_vk_cache_event("vk", "miss");
+    let parsed = zkparse::vk_from_bytes::<C>(vk_box.bytes.as_slice(), params)
+        .ok_or_else(halo2_backend::constraint_system_failure)?;
+    let arc = Arc::new(parsed);
+    let mut guard = lock_cache(cache)?;
+    let entry = match guard.entry(key) {
+        Entry::Occupied(existing) => existing.get().clone(),
+        Entry::Vacant(slot) => Arc::clone(slot.insert(Arc::clone(&arc))),
+    };
+    Ok(entry)
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+macro_rules! cached_vk_for {
+    ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
+        let params_ref = $params;
+        let vk_ref = $vk_box;
+        let circuit = $circuit;
+        match resolve_vk_cached($backend, params_ref, vk_ref, &circuit, || {
+            halo2_backend::keygen_vk(params_ref, &circuit)
+        }) {
+            Ok(arc) => {
+                let $vk = arc.as_ref();
+                $body
+            }
+            Err(_) => false,
+        }
+    }};
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn validate_canonical_halo2_ipa_circuit_key<C>(
+    backend: &str,
+    params: &PastaParams,
+    vk_box: &VerifyingKeyBox,
+    circuit: C,
+) -> Result<(), String>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+{
+    resolve_vk_cached_for_type::<C, _>(backend, params, vk_box, || {
+        halo2_backend::keygen_vk(params, &circuit)
+    })
+    .map(|_| ())
+    .map_err(|_| {
+        "Halo2 IPA verifier key does not match the canonical compiled circuit key".to_owned()
+    })
+}
+/// Validate the exact compiled verifier key for a built-in Halo2 IPA V1 circuit.
+///
+/// Fixed circuit metadata is checked before deterministic parameter
+/// construction. The processed `H2VK` bytes are then compared with the key
+/// generated from the same concrete circuit type used by proof verification,
+/// before attacker-controlled key bytes reach the Halo2 reader.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
+    backend: &str,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.bytes.len() > HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES {
+        return Err(format!(
+            "Halo2 IPA verifying-key container exceeds the {}-byte limit",
+            HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
+        ));
+    }
+    if vk_box.backend != backend {
+        return Err("Halo2 IPA verifier-key backend does not match registry id".to_owned());
+    }
+    if !halo2_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("Halo2 IPA circuit id is not admitted for the registry backend".to_owned());
+    }
+    let params = zkparse::params_for_circuit_v1(&vk_box.bytes, circuit_id)
+        .ok_or_else(|| "invalid fixed Halo2 IPA verifier-key metadata".to_owned())?;
+    let canonical_circuit_id = canonical_halo2_ipa_circuit_id(circuit_id)
+        .ok_or_else(|| "invalid Halo2 IPA circuit id".to_owned())?;
+    if confidential_v2::is_confidential_transfer_v2_circuit_id(&canonical_circuit_id) {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v2_circuit_id(&canonical_circuit_id) {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldFullCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v3_circuit_id(&canonical_circuit_id) {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldChangeCircuitV4::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+        );
+    }
+    let verifier_backend = canonical_circuit_id.replace("/ipa/", "/");
+    #[cfg(feature = "zk-halo2")]
+    {
+        if verifier_backend == KAIGI_AUTHORIZATION_BACKEND_V1 {
+            return validate_canonical_halo2_ipa_circuit_key(
+                backend,
+                &params,
+                vk_box,
+                KaigiAuthorizationCircuitV1::default(),
+            );
+        }
+        if verifier_backend == KAIGI_USAGE_BACKEND_V1 {
+            return validate_canonical_halo2_ipa_circuit_key(
+                backend,
+                &params,
+                vk_box,
+                KaigiUsageCircuitV1::default(),
+            );
+        }
+    }
+    Err("Halo2 IPA circuit has no compiled V1 verifier-key validator".to_owned())
+}
+/// Reject built-in Halo2 IPA verifier-key registration when the verifier
+/// backend is not compiled into this binary.
+#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
+    _backend: &str,
+    _circuit_id: &str,
+    _vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    Err("Halo2 IPA verifier-key validation requires the Halo2 backend".to_owned())
+}
+#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[allow(unused_macros)]
+macro_rules! cached_vk_for {
+    ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
+        let _ = ($params, $backend, $vk_box, $circuit);
+        false
+    }};
+}
+// Parsed verifying keys are cached above and keyed by backend, parameter fingerprint, and
+// verifying-key hash so repeated proofs avoid repeated strict parsing.
+/// Unified ZK envelope helpers (`ZK1 | TLV*`).
+///
+/// The envelope is a linear sequence:
+///  - Magic: `b"ZK1\0"` (4 bytes)
+///  - Zero or more TLVs, each: `tag[4] || len[u32 LE] || payload[len]`.
+///
+/// Recognized tags:
+///  - `b"PROF"`: raw proof transcript bytes (opaque to this module).
+///  - `b"IPAK"`: Halo2 IPA params, payload is `u32 k` (little-endian).
+///  - `b"CID1"`: circuit-family identifier bytes for commitment domain separation.
+///  - `b"I10P"`: Instance columns over Pasta Fp (cols[u32], rows[u32], rows*cols scalars).
+///
+/// Notes:
+///  - Backends remain identified outside of the envelope via `ProofBox.backend`.
+mod zk1 {
+    use super::*;
+    use std::io::{Cursor, Read};
+    const MAGIC: &[u8; 4] = b"ZK1\0";
+    const HALO2_PASTA_PROCESSED_VK_HEADER_LEN: usize = 10;
+    const HALO2_PASTA_PROCESSED_POINT_LEN: usize = 32;
+    #[allow(dead_code)]
+    fn read_u32(r: &mut Cursor<&[u8]>) -> Option<u32> {
+        let mut le = [0u8; 4];
+        r.read_exact(&mut le).ok()?;
+        Some(u32::from_le_bytes(le))
+    }
+    #[allow(dead_code)]
+    fn read_tlv<'a>(r: &mut Cursor<&'a [u8]>) -> Option<([u8; 4], &'a [u8])> {
+        let mut tag = [0u8; 4];
+        r.read_exact(&mut tag).ok()?;
+        let len = usize::try_from(read_u32(r)?).ok()?;
+        if len > MAX_PROOF_LEN {
+            return None;
+        }
+        let pos = usize::try_from(r.position()).ok()?;
+        let end = pos.checked_add(len)?;
+        if end > r.get_ref().len() {
+            return None;
+        }
+        r.set_position(u64::try_from(end).ok()?);
+        let bytes = r.get_ref();
+        Some((tag, &bytes[pos..end]))
+    }
+    #[allow(dead_code)]
+    /// Append a TLV entry to the envelope buffer. This helper is used by
+    /// zk-specific tests and feature-gated code paths that manufacture
+    /// synthetic transcripts for validation.
+    fn write_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
+        buf.extend_from_slice(&tag);
+        let len = u32::try_from(payload.len()).expect("ZK1 TLV payload length must fit into a u32");
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(payload);
+    }
+    #[allow(dead_code)]
+    pub fn is_envelope(bytes: &[u8]) -> bool {
+        bytes.len() >= 4 && &bytes[..4] == MAGIC
+    }
+    #[allow(dead_code)]
+    pub fn wrap_start() -> Vec<u8> {
+        MAGIC.to_vec()
+    }
+    /// Append a `PROF` TLV (raw transcript bytes) to an envelope buffer.
+    #[allow(dead_code)]
+    pub fn wrap_append_proof(buf: &mut Vec<u8>, transcript_bytes: &[u8]) {
+        write_tlv(buf, *b"PROF", transcript_bytes);
+    }
+    /// Append an `IPAK` TLV (u32 k) to an envelope buffer.
+    #[allow(dead_code)]
+    pub fn wrap_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
+        let mut tmp = Vec::with_capacity(4);
+        tmp.extend_from_slice(&k.to_le_bytes());
+        write_tlv(buf, *b"IPAK", &tmp);
+    }
+    /// Append a circuit identifier (`CID1`) for verifier-key commitment domain separation.
+    #[allow(dead_code)]
+    pub fn wrap_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
+        write_tlv(buf, *b"CID1", circuit_id.as_bytes());
+    }
+    /// Parse the one canonical Halo2 IPA verifier-key carrier.
+    fn parse_halo2_ipa_vk_envelope(bytes: &[u8]) -> Result<(&str, u32, &[u8]), String> {
+        if !is_envelope(bytes) || bytes.len() < 4 {
+            return Err("invalid CID1/Halo2 IPA verifier-key envelope".to_owned());
+        }
+        let mut cursor = Cursor::new(&bytes[4..]);
+        let mut circuit_id = None;
+        let mut ipa_k = None;
+        let mut h2vk = None;
+        let mut position = 0_u8;
+        while usize::try_from(cursor.position())
+            .map_err(|_| "invalid CID1/Halo2 IPA verifier-key envelope".to_owned())?
+            < cursor.get_ref().len()
+        {
+            let Some((tag, payload)) = read_tlv(&mut cursor) else {
+                return Err("invalid CID1/Halo2 IPA verifier-key envelope".to_owned());
+            };
+            match (position, &tag) {
+                (0, b"IPAK") => {
+                    if payload.len() != 4 {
+                        return Err("invalid IPAK payload".to_owned());
+                    }
+                    ipa_k = Some(u32::from_le_bytes([
+                        payload[0], payload[1], payload[2], payload[3],
+                    ]));
+                }
+                (1, b"CID1") => {
+                    let value = std::str::from_utf8(payload)
+                        .map_err(|_| "invalid CID1 payload".to_owned())?;
+                    if !iroha_data_model::zk::open_verify_circuit_id_is_portable(value)
+                        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(value)
+                    {
+                        return Err("invalid CID1 payload".to_owned());
+                    }
+                    circuit_id = Some(value);
+                }
+                (2, b"H2VK") => {
+                    if payload.is_empty() {
+                        return Err("empty H2VK payload".to_owned());
+                    }
+                    h2vk = Some(payload);
+                }
+                _ => return Err("verifier-key TLVs are not in canonical order".to_owned()),
+            }
+            position = position.saturating_add(1);
+        }
+        if position != 3 {
+            return Err("verifier-key envelope must contain IPAK, CID1, H2VK".to_owned());
+        }
+        let circuit_id = circuit_id.ok_or_else(|| "CID1 is missing".to_owned())?;
+        let ipa_k = ipa_k.ok_or_else(|| "IPAK is missing".to_owned())?;
+        let h2vk = h2vk.ok_or_else(|| "H2VK is missing".to_owned())?;
+        Ok((circuit_id, ipa_k, h2vk))
+    }
+    /// Require a strict Halo2 IPA verifier-key envelope and return its `IPAK`.
+    ///
+    /// The accepted verifier-key container is exactly `IPAK`, `CID1`, `H2VK`
+    /// in that order. This keeps reserved circuit profiles from accepting
+    /// arbitrary key bytes or alternate encodings under a matching commitment.
+    pub fn ensure_halo2_ipa_vk_envelope_shape_any_k(
+        bytes: &[u8],
+        expected_circuit_id: &str,
+    ) -> Result<u32, String> {
+        let (circuit_id, ipa_k, _) = parse_halo2_ipa_vk_envelope(bytes)?;
+        if circuit_id != expected_circuit_id {
+            return Err(format!(
+                "CID1 `{circuit_id}` is not `{expected_circuit_id}`"
+            ));
+        }
+        Ok(ipa_k)
+    }
+    /// Return the unique Halo2 verifier-key payload from a bounded ZK1 envelope.
+    /// Production callers first enforce the strict carrier shape above; the
+    /// looser extraction remains available only to in-crate tiny-circuit tests.
+    pub fn h2vk_payload(bytes: &[u8]) -> Result<&[u8], String> {
+        if !is_envelope(bytes) || bytes.len() < 4 {
+            return Err("invalid Halo2 IPA verifier-key envelope".to_owned());
+        }
+        let mut cursor = Cursor::new(&bytes[4..]);
+        let mut h2vk = None;
+        while usize::try_from(cursor.position())
+            .map_err(|_| "invalid Halo2 IPA verifier-key envelope".to_owned())?
+            < cursor.get_ref().len()
+        {
+            let Some((tag, payload)) = read_tlv(&mut cursor) else {
+                return Err("invalid Halo2 IPA verifier-key envelope".to_owned());
+            };
+            if &tag == b"H2VK" {
+                if h2vk.is_some() {
+                    return Err("duplicate H2VK payload".to_owned());
+                }
+                if payload.is_empty() {
+                    return Err("empty H2VK payload".to_owned());
+                }
+                h2vk = Some(payload);
+            }
+        }
+        h2vk.ok_or_else(|| "H2VK is missing".to_owned())
+    }
+    /// Parse the cheap header carried by Halo2/Axiom processed verifier keys.
+    pub fn halo2_pasta_vk_header(payload: &[u8]) -> Result<(u32, bool, u32), String> {
+        if payload.len() < HALO2_PASTA_PROCESSED_VK_HEADER_LEN {
+            return Err("H2VK payload is too short".to_owned());
+        }
+        if payload[0] != 0x02 {
+            return Err("H2VK payload has unexpected version byte".to_owned());
+        }
+        let k = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+        let compress_selectors = match payload[5] {
+            0 => false,
+            1 => true,
+            _ => return Err("H2VK payload has non-boolean selector compression flag".to_owned()),
+        };
+        let fixed_columns = u32::from_le_bytes([payload[6], payload[7], payload[8], payload[9]]);
+        if fixed_columns == 0 {
+            return Err("H2VK payload has no fixed-column commitments".to_owned());
+        }
+        let fixed_column_commitments_len = usize::try_from(fixed_columns)
+            .ok()
+            .and_then(|count| count.checked_mul(HALO2_PASTA_PROCESSED_POINT_LEN))
+            .ok_or_else(|| "H2VK payload fixed-column commitment length overflow".to_owned())?;
+        let min_payload_len = HALO2_PASTA_PROCESSED_VK_HEADER_LEN
+            .checked_add(fixed_column_commitments_len)
+            .ok_or_else(|| "H2VK payload fixed-column commitment length overflow".to_owned())?;
+        if payload.len() < min_payload_len {
+            return Err("H2VK payload is truncated before fixed-column commitments".to_owned());
+        }
+        Ok((k, compress_selectors, fixed_columns))
+    }
+    /// Append a Halo2 verifying key (`H2VK`) for Pasta/IPA circuits.
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[allow(dead_code)]
+    pub fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &super::halo2_backend::VerifyingKey) {
+        let bytes = super::halo2_backend::verifying_key_to_processed_bytes(vk);
+        write_tlv(buf, *b"H2VK", &bytes);
+    }
+    #[cfg(any(test, feature = "test-utils"))]
+    /// Append an `I10P` TLV (Pasta Fp instances) to an envelope buffer.
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    pub fn wrap_append_instances_pasta_fp(
+        instances: &[halo2_proofs::halo2curves::pasta::Fp],
+        buf: &mut Vec<u8>,
+    ) {
+        use ff::PrimeField as _;
+        let cols: u32 = 1;
+        let rows: u32 =
+            u32::try_from(instances.len()).expect("instance row count must fit into a u32");
+        let mut payload = Vec::with_capacity(8 + instances.len() * 32);
+        payload.extend_from_slice(&cols.to_le_bytes());
+        payload.extend_from_slice(&rows.to_le_bytes());
+        for s in instances {
+            payload.extend_from_slice(s.to_repr().as_ref());
+        }
+        write_tlv(buf, *b"I10P", &payload);
+    }
+    /// Append a multi-column `I10P` TLV (Pasta Fp instances) to an envelope buffer.
+    ///
+    /// The layout matches the reader in `extract_proof_pasta` and
+    /// `zkparse::strict_proof_and_instances`:
+    ///  - `u32 cols`, `u32 rows`, followed by `rows * cols` canonical 32-byte scalars in
+    ///    row-major order (i.e., all column 0 row 0..rows-1, then column 1, etc.).
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[allow(dead_code)]
+    pub fn wrap_append_instances_pasta_fp_cols(
+        columns: &[&[halo2_proofs::halo2curves::pasta::Fp]],
+        buf: &mut Vec<u8>,
+    ) {
+        use ff::PrimeField as _;
+        if columns.is_empty() {
+            return;
+        }
+        let cols: u32 =
+            u32::try_from(columns.len()).expect("instance column count must fit into a u32");
+        let rows: u32 =
+            u32::try_from(columns[0].len()).expect("instance row count must fit into a u32");
+        // Require equal row counts across all columns; if not, do nothing (caller error).
+        if columns
+            .iter()
+            .any(|c| u32::try_from(c.len()).ok() != Some(rows))
+        {
+            return;
+        }
+        let row_count = usize::try_from(rows).expect("instance row count must fit into usize");
+        let col_count = usize::try_from(cols).expect("instance column count must fit into usize");
+        let mut payload = Vec::with_capacity(8 + row_count * col_count * 32);
+        payload.extend_from_slice(&cols.to_le_bytes());
+        payload.extend_from_slice(&rows.to_le_bytes());
+        for r in 0..row_count {
+            for column in columns.iter().take(col_count) {
+                payload.extend_from_slice(column[r].to_repr().as_ref());
+            }
+        }
+        write_tlv(buf, *b"I10P", &payload);
+    }
+}
+#[cfg(any(test, feature = "test-utils"))]
+/// Test-only helpers for constructing canonical and retired proof carriers.
+#[doc(hidden)]
+pub mod zk1_test_helpers;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+macro_rules! advice {
+    (@call $region:ident, $annotation:expr, $column:expr, $offset:expr, $value:expr) => {
+        crate::assign_advice_vendored(
+            &mut $region,
+            $annotation,
+            $column,
+            $offset,
+            $value,
+        )
+    };
+    ($region:ident, $label:literal, $column:expr => $value:expr) => {
+        advice!(
+            @call $region,
+            || $label,
+            $column,
+            0,
+            || halo2_proofs::circuit::Value::known($value)
+        )
+    };
+    ($region:ident, move $label:literal, $column:expr => $value:expr) => {
+        advice!(
+            @call $region,
+            move || format!($label),
+            $column,
+            0,
+            || halo2_proofs::circuit::Value::known($value)
+        )
+    };
+}
+// Generic, fixed-depth variants consolidated here to enable easy parameterization
+// of the canonical constrained test relations.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+/// Depth-parameterized example circuits over Halo2 (Pasta).
+///
+/// These tiny circuits exist solely for internal tests and pre-verifier smoke
+/// checks. They are not consensus-critical and are compiled only when Halo2
+/// backends are enabled.
+pub mod depth {
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
+    /// Vote-bool commit with a toy Merkle membership chain of fixed depth.
+    #[derive(Clone, Default)]
+    pub struct VoteBoolCommitMerkle<const DEPTH: usize>;
+    impl<const DEPTH: usize> Circuit<Scalar> for VoteBoolCommitMerkle<DEPTH> {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sibs
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w nodes
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        fn configure(
+            meta: &mut ConstraintSystem<Scalar>,
+        ) -> <VoteBoolCommitMerkle<DEPTH> as Circuit<Scalar>>::Config {
+            meta.set_minimum_degree(6);
+            let v = meta.advice_column();
+            let rho = meta.advice_column();
+            let sibs = std::array::from_fn(|_| meta.advice_column());
+            let ws = std::array::from_fn(|_| meta.advice_column());
+            let inst_cm = meta.instance_column();
+            let inst_root = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("vote_commit_merkle_depth", |meta| {
+                let s = meta.query_selector(s);
+                let vq = meta.query_advice(v, Rotation::cur());
+                let rhoq = meta.query_advice(rho, Rotation::cur());
+                let cmq = meta.query_instance(inst_cm, Rotation::cur());
+                let rootq = meta.query_instance(inst_root, Rotation::cur());
+                let constant =
+                    |value: u64| halo2_proofs::plonk::Expression::Constant(Scalar::from(value));
+                let shift = |expr: halo2_proofs::plonk::Expression<Scalar>, offset: u64| {
+                    expr + constant(offset)
+                };
+                let pow5 = |expr: halo2_proofs::plonk::Expression<Scalar>| {
+                    let squared = expr.clone() * expr.clone();
+                    let fourth = squared.clone() * squared.clone();
+                    fourth * expr
+                };
+                let pedersen_like =
+                    |lhs: halo2_proofs::plonk::Expression<Scalar>,
+                     rhs: halo2_proofs::plonk::Expression<Scalar>| {
+                        constant(2) * pow5(lhs) + constant(3) * pow5(rhs)
+                    };
+                let boolc = vq.clone() * (vq.clone() - constant(1));
+                let commit_hash = pedersen_like(shift(vq.clone(), 7), shift(rhoq.clone(), 13));
+                let commit_diff = commit_hash.clone() - cmq.clone();
+                let mut cons = vec![s.clone() * boolc, s.clone() * commit_diff];
+                let mut prev = commit_hash;
+                for i in 0..DEPTH {
+                    let sibling = meta.query_advice(sibs[i], Rotation::cur());
+                    let witness = meta.query_advice(ws[i], Rotation::cur());
+                    let branch_hash =
+                        pedersen_like(shift(prev.clone(), 7), shift(sibling.clone(), 13));
+                    cons.push(s.clone() * (witness.clone() - branch_hash));
+                    prev = witness;
+                }
+                cons.push(s * (prev - rootq));
+                cons
+            });
+            (v, rho, sibs, ws, inst_cm, inst_root, s)
+        }
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        fn synthesize(
+            &self,
+            (v, rho, sibs, ws, _inst_cm, _inst_root, s): <VoteBoolCommitMerkle<DEPTH> as Circuit<
+                Scalar,
+            >>::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let compress = |left: Scalar, right: Scalar| {
+                let rc0 = Scalar::from(7);
+                let rc1 = Scalar::from(13);
+                let two = Scalar::from(2);
+                let three = Scalar::from(3);
+                let a = left + rc0;
+                let b = right + rc1;
+                let a2 = a * a;
+                let a4 = a2 * a2;
+                let a5 = a4 * a;
+                let b2 = b * b;
+                let b4 = b2 * b2;
+                let b5 = b4 * b;
+                two * a5 + three * b5
+            };
+            layouter.assign_region(
+                || "vote_commit_merkle_depth",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "v", v => Scalar::from(1))?;
+                    advice!(region, "rho", rho => Scalar::from(12345))?;
+                    for (i, col) in sibs.iter().enumerate() {
+                        advice!(region, move "sib{i}", *col => Scalar::from(20 + i as u64))?;
+                    }
+                    let mut acc = compress(Scalar::one(), Scalar::from(12345));
+                    for (i, col) in ws.iter().enumerate() {
+                        let sibling = Scalar::from(20 + i as u64);
+                        acc = compress(acc, sibling);
+                        #[cfg(debug_assertions)]
+                        {
+                            println!("vote_merkle witness w{i} = {acc:?}");
+                        }
+                        advice!(region, move "w{i}", *col => acc)?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+    /// Anonymous transfer (2 inputs, 2 outputs) with commit + Merkle membership.
+    #[derive(Clone, Default)]
+    pub struct AnonTransfer2x2CommitMerkle<const DEPTH: usize>;
+    impl<const DEPTH: usize> Circuit<Scalar> for AnonTransfer2x2CommitMerkle<DEPTH> {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sk
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // serial
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sib_a
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dir_a
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w_a
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sib_b
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dir_b
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w_b
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 5], // cm_in0..cm_out1, nf
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        #[allow(clippy::too_many_lines)]
+        fn configure(
+            meta: &mut ConstraintSystem<Scalar>,
+        ) -> <AnonTransfer2x2CommitMerkle<DEPTH> as Circuit<Scalar>>::Config {
+            let in0 = meta.advice_column();
+            let in1 = meta.advice_column();
+            let out0 = meta.advice_column();
+            let out1 = meta.advice_column();
+            let r0 = meta.advice_column();
+            let r1 = meta.advice_column();
+            let r2 = meta.advice_column();
+            let r3 = meta.advice_column();
+            let sk = meta.advice_column();
+            let serial = meta.advice_column();
+            let sib_a = std::array::from_fn(|_| meta.advice_column());
+            let dir_a = std::array::from_fn(|_| meta.advice_column());
+            let w_a = std::array::from_fn(|_| meta.advice_column());
+            let sib_b = std::array::from_fn(|_| meta.advice_column());
+            let dir_b = std::array::from_fn(|_| meta.advice_column());
+            let w_b = std::array::from_fn(|_| meta.advice_column());
+            let cm_cols = [
+                meta.instance_column(),
+                meta.instance_column(),
+                meta.instance_column(),
+                meta.instance_column(),
+                meta.instance_column(),
+            ];
+            let root = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("anon_transfer_commit_merkle_depth", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(in0, Rotation::cur());
+                let b = meta.query_advice(in1, Rotation::cur());
+                let c = meta.query_advice(out0, Rotation::cur());
+                let d = meta.query_advice(out1, Rotation::cur());
+                let r0q = meta.query_advice(r0, Rotation::cur());
+                let r1q = meta.query_advice(r1, Rotation::cur());
+                let r2q = meta.query_advice(r2, Rotation::cur());
+                let r3q = meta.query_advice(r3, Rotation::cur());
+                let skq = meta.query_advice(sk, Rotation::cur());
+                let serq = meta.query_advice(serial, Rotation::cur());
+                let cm_in0 = meta.query_instance(cm_cols[0], Rotation::cur());
+                let cm_in1 = meta.query_instance(cm_cols[1], Rotation::cur());
+                let cm_out0 = meta.query_instance(cm_cols[2], Rotation::cur());
+                let cm_out1 = meta.query_instance(cm_cols[3], Rotation::cur());
+                let nf = meta.query_instance(cm_cols[4], Rotation::cur());
+                let rootq = meta.query_instance(root, Rotation::cur());
+                let h = |x: halo2_proofs::plonk::Expression<Scalar>,
+                         r: halo2_proofs::plonk::Expression<Scalar>| {
+                    let x2 = x.clone() * x.clone();
+                    let x4 = x2.clone() * x2.clone();
+                    let x5 = x4 * x.clone();
+                    let r2 = r.clone() * r.clone();
+                    let r4 = r2.clone() * r2.clone();
+                    let r5 = r4 * r.clone();
+                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * x5
+                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
+                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
+                };
+                // cm constraints and conservation
+                let cm0 = h(a.clone(), r0q.clone());
+                let cm1 = h(b.clone(), r1q.clone());
+                let cm2 = h(c.clone(), r2q.clone());
+                let cm3 = h(d.clone(), r3q.clone());
+                let nf_exp = h(skq.clone(), serq.clone());
+                let mut cons = vec![
+                    s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
+                    s.clone() * (cm0.clone() - cm_in0),
+                    s.clone() * (cm1.clone() - cm_in1),
+                    s.clone() * (cm2 - cm_out0),
+                    s.clone() * (cm3 - cm_out1),
+                    s.clone() * (nf_exp - nf),
+                ];
+                let constant =
+                    |value: u64| halo2_proofs::plonk::Expression::Constant(Scalar::from(value));
+                let shift = |expr: halo2_proofs::plonk::Expression<Scalar>, offset: u64| {
+                    expr + constant(offset)
+                };
+                let pow5 = |expr: halo2_proofs::plonk::Expression<Scalar>| {
+                    let squared = expr.clone() * expr.clone();
+                    let fourth = squared.clone() * squared.clone();
+                    fourth * expr
+                };
+                let pedersen_pair =
+                    |lhs: halo2_proofs::plonk::Expression<Scalar>,
+                     rhs: halo2_proofs::plonk::Expression<Scalar>| {
+                        constant(2) * pow5(lhs) + constant(3) * pow5(rhs)
+                    };
+                let one = constant(1);
+                // membership for cm0
+                let mut prev = cm0;
+                for i in 0..DEPTH {
+                    let sibling = meta.query_advice(sib_a[i], Rotation::cur());
+                    let direction_bit = meta.query_advice(dir_a[i], Rotation::cur());
+                    let witness = meta.query_advice(w_a[i], Rotation::cur());
+                    cons.push(
+                        s.clone() * (direction_bit.clone() * (direction_bit.clone() - one.clone())),
+                    );
+                    let left_branch =
+                        pedersen_pair(shift(prev.clone(), 7), shift(sibling.clone(), 13));
+                    let right_branch =
+                        pedersen_pair(shift(sibling.clone(), 7), shift(prev.clone(), 13));
+                    let expected_branch = (one.clone() - direction_bit.clone())
+                        * left_branch.clone()
+                        + direction_bit.clone() * right_branch;
+                    cons.push(s.clone() * (witness.clone() - expected_branch));
+                    prev = witness;
+                }
+                // membership for cm1
+                let mut prev_b = cm1;
+                for i in 0..DEPTH {
+                    let sibling = meta.query_advice(sib_b[i], Rotation::cur());
+                    let direction_bit = meta.query_advice(dir_b[i], Rotation::cur());
+                    let witness = meta.query_advice(w_b[i], Rotation::cur());
+                    cons.push(
+                        s.clone() * (direction_bit.clone() * (direction_bit.clone() - one.clone())),
+                    );
+                    let left_branch =
+                        pedersen_pair(shift(prev_b.clone(), 7), shift(sibling.clone(), 13));
+                    let right_branch =
+                        pedersen_pair(shift(sibling.clone(), 7), shift(prev_b.clone(), 13));
+                    let expected_branch = (one.clone() - direction_bit.clone())
+                        * left_branch.clone()
+                        + direction_bit.clone() * right_branch;
+                    cons.push(s.clone() * (witness.clone() - expected_branch));
+                    prev_b = witness;
+                }
+                cons.push(s.clone() * (prev - rootq.clone()));
+                cons.push(s * (prev_b - rootq));
+                cons
+            });
+            (
+                in0, in1, out0, out1, r0, r1, r2, r3, sk, serial, sib_a, dir_a, w_a, sib_b, dir_b,
+                w_b, cm_cols, root, s,
+            )
+        }
+        #[allow(clippy::too_many_lines)]
+        fn synthesize(
+            &self,
+            cfg: <AnonTransfer2x2CommitMerkle<DEPTH> as Circuit<Scalar>>::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let (
+                in0,
+                in1,
+                out0,
+                out1,
+                r0,
+                r1,
+                r2,
+                r3,
+                sk,
+                serial,
+                sib_a,
+                dir_a,
+                w_a,
+                sib_b,
+                dir_b,
+                w_b,
+                _cm_cols,
+                _root,
+                s,
+            ) = cfg;
+            layouter.assign_region(
+                || "anon_transfer_commit_merkle_depth",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r0", r0 => Scalar::from(11))?;
+                    advice!(region, "r1", r1 => Scalar::from(13))?;
+                    advice!(region, "r2", r2 => Scalar::from(17))?;
+                    advice!(region, "r3", r3 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
+                    for (i, col) in sib_a.iter().enumerate() {
+                        advice!(region, move "sib_a{i}", *col => Scalar::from(20 + i as u64))?;
+                    }
+                    for (i, col) in dir_a.iter().enumerate() {
+                        advice!(region, move "dir_a{i}", *col => Scalar::from(0))?;
+                    }
+                    let mut acc = Scalar::from(0);
+                    for (i, col) in w_a.iter().enumerate() {
+                        acc += Scalar::from(20 + i as u64);
+                        advice!(region, move "w_a{i}", *col => acc)?;
+                    }
+                    for (i, col) in sib_b.iter().enumerate() {
+                        advice!(region, move "sib_b{i}", *col => Scalar::from(30 + i as u64))?;
+                    }
+                    for (i, col) in dir_b.iter().enumerate() {
+                        advice!(region, move "dir_b{i}", *col => Scalar::from(0))?;
+                    }
+                    let mut acc_b = Scalar::from(0);
+                    for (i, col) in w_b.iter().enumerate() {
+                        acc_b += Scalar::from(30 + i as u64);
+                        advice!(region, move "w_b{i}", *col => acc_b)?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+}
+// Constrained Pow5 depth-parameterized test circuits.
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+/// Constrained Pow5 depth-parameterized circuits (Pow5 S-box) for internal tests.
+///
+/// These circuits exercise one explicit quintic compression relation with small, fixed
+/// round parameters and are used to exercise backends that implement
+/// transparent hashing (e.g., IPA over Pasta) in our verifier dispatch.
+mod pow5_depth {
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
+    // The native and expression helpers below define the same explicit test relation.
+    #[inline]
+    fn sbox5(
+        x: halo2_proofs::plonk::Expression<Scalar>,
+    ) -> halo2_proofs::plonk::Expression<Scalar> {
+        let x2 = x.clone() * x.clone();
+        let x4 = x2.clone() * x2;
+        x4 * x
+    }
+    fn h2(
+        a: halo2_proofs::plonk::Expression<Scalar>,
+        b: halo2_proofs::plonk::Expression<Scalar>,
+    ) -> halo2_proofs::plonk::Expression<Scalar> {
+        // Round constants rc0=7, rc1=13; MDS [[2,3],[3,5]] with full S-box (Pow5)
+        let a = a + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+        let b = b + halo2_proofs::plonk::Expression::Constant(Scalar::from(13u64));
+        let a5 = sbox5(a);
+        let b5 = sbox5(b);
+        halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64)) * a5
+            + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64)) * b5
+    }
+    fn h2_native(a: Scalar, b: Scalar) -> Scalar {
+        let pow5 = |value: Scalar| {
+            let square = value * value;
+            square * square * value
+        };
+        Scalar::from(2u64) * pow5(a + Scalar::from(7u64))
+            + Scalar::from(3u64) * pow5(b + Scalar::from(13u64))
+    }
+    /// Vote-bool commit with constrained Pow5 hashing and fixed-depth membership.
+    #[derive(Clone, Default)]
+    pub struct VoteBoolCommitMerklePow5<const DEPTH: usize>;
+    impl<const DEPTH: usize> Circuit<Scalar> for VoteBoolCommitMerklePow5<DEPTH> {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sibs
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dirs
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w nodes
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let v = meta.advice_column();
+            let rho = meta.advice_column();
+            let sibs = std::array::from_fn(|_| meta.advice_column());
+            let dirs = std::array::from_fn(|_| meta.advice_column());
+            let ws = std::array::from_fn(|_| meta.advice_column());
+            let inst_cm = meta.instance_column();
+            let inst_root = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("vote_commit_merkle_pow5_depth", |meta| {
+                let s = meta.query_selector(s);
+                let vq = meta.query_advice(v, Rotation::cur());
+                let rhoq = meta.query_advice(rho, Rotation::cur());
+                let cmq = meta.query_instance(inst_cm, Rotation::cur());
+                let rootq = meta.query_instance(inst_root, Rotation::cur());
+                let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1u64));
+                let boolc = vq.clone() * (vq.clone() - one.clone());
+                // commit = Pow5 hash of (v,rho)
+                let commit = h2(vq, rhoq);
+                let mut cons = vec![s.clone() * boolc, s.clone() * (commit.clone() - cmq)];
+                // Chain membership with dir-bit mux
+                let mut prev = commit;
+                for i in 0..DEPTH {
+                    let si = meta.query_advice(sibs[i], Rotation::cur());
+                    let di = meta.query_advice(dirs[i], Rotation::cur());
+                    let wi = meta.query_advice(ws[i], Rotation::cur());
+                    cons.push(s.clone() * (di.clone() * (di.clone() - one.clone())));
+                    // left = h(prev, sib), right = h(sib, prev)
+                    let h_l = h2(prev.clone(), si.clone());
+                    let h_r = h2(si, prev.clone());
+                    let wi_exp = (one.clone() - di.clone()) * h_l + di * h_r;
+                    cons.push(s.clone() * (wi.clone() - wi_exp));
+                    prev = wi;
+                }
+                cons.push(s * (prev - rootq));
+                cons
+            });
+            (v, rho, sibs, dirs, ws, inst_cm, inst_root, s)
+        }
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        fn synthesize(
+            &self,
+            (v, rho, sibs, dirs, ws, _inst_cm, _inst_root, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "vote_commit_merkle_pow5",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    let v_value = Scalar::from(1u64);
+                    let rho_value = Scalar::from(12_345u64);
+                    advice!(region, "v", v => v_value)?;
+                    advice!(region, "rho", rho => rho_value)?;
+                    for (i, col) in sibs.iter().enumerate() {
+                        advice!(region, move "sib{i}", *col => Scalar::from(20 + i as u64))?;
+                    }
+                    for (i, col) in dirs.iter().enumerate() {
+                        advice!(region, move "dir{i}", *col => Scalar::from(0))?;
+                    }
+                    let mut previous = h2_native(v_value, rho_value);
+                    for (i, col) in ws.iter().enumerate() {
+                        previous = h2_native(previous, Scalar::from(20 + i as u64));
+                        advice!(region, move "w{i}", *col => previous)?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+    /// Anonymous transfer (2x2) with constrained Pow5 commit + membership chain.
+    #[derive(Clone, Default)]
+    pub struct AnonTransfer2x2CommitMerklePow5<const DEPTH: usize>;
+    impl<const DEPTH: usize> Circuit<Scalar> for AnonTransfer2x2CommitMerklePow5<DEPTH> {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sk
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // serial
+            // membership A
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sib_a
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dir_a
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w_a
+            // membership B
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sib_b
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dir_b
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w_b
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 5], // cm_in0..cm_out1, nf
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,      // root
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        #[allow(clippy::too_many_lines)]
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let in0 = meta.advice_column();
+            let in1 = meta.advice_column();
+            let out0 = meta.advice_column();
+            let out1 = meta.advice_column();
+            let r0 = meta.advice_column();
+            let r1 = meta.advice_column();
+            let r2 = meta.advice_column();
+            let r3 = meta.advice_column();
+            let sk = meta.advice_column();
+            let serial = meta.advice_column();
+            let sib_a = std::array::from_fn(|_| meta.advice_column());
+            let dir_a = std::array::from_fn(|_| meta.advice_column());
+            let w_a = std::array::from_fn(|_| meta.advice_column());
+            let sib_b = std::array::from_fn(|_| meta.advice_column());
+            let dir_b = std::array::from_fn(|_| meta.advice_column());
+            let w_b = std::array::from_fn(|_| meta.advice_column());
+            let cm_cols = [
+                meta.instance_column(),
+                meta.instance_column(),
+                meta.instance_column(),
+                meta.instance_column(),
+                meta.instance_column(),
+            ];
+            let root = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("anon_transfer_commit_merkle_pow5_depth", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(in0, Rotation::cur());
+                let b = meta.query_advice(in1, Rotation::cur());
+                let c = meta.query_advice(out0, Rotation::cur());
+                let d = meta.query_advice(out1, Rotation::cur());
+                let r0q = meta.query_advice(r0, Rotation::cur());
+                let r1q = meta.query_advice(r1, Rotation::cur());
+                let r2q = meta.query_advice(r2, Rotation::cur());
+                let r3q = meta.query_advice(r3, Rotation::cur());
+                let skq = meta.query_advice(sk, Rotation::cur());
+                let serq = meta.query_advice(serial, Rotation::cur());
+                let cm_in0 = meta.query_instance(cm_cols[0], Rotation::cur());
+                let cm_in1 = meta.query_instance(cm_cols[1], Rotation::cur());
+                let cm_out0 = meta.query_instance(cm_cols[2], Rotation::cur());
+                let cm_out1 = meta.query_instance(cm_cols[3], Rotation::cur());
+                let nf = meta.query_instance(cm_cols[4], Rotation::cur());
+                let rootq = meta.query_instance(root, Rotation::cur());
+                // commit-like h2(x, r)
+                let cm0 = h2(a.clone(), r0q.clone())
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+                let cm1 = h2(b.clone(), r1q.clone())
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+                let cm2 = h2(c.clone(), r2q.clone())
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+                let cm3 = h2(d.clone(), r3q.clone())
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+                let nf_exp = h2(skq.clone(), serq.clone())
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+                let mut cons = vec![
+                    s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
+                    s.clone() * (cm0.clone() - cm_in0),
+                    s.clone() * (cm1.clone() - cm_in1),
+                    s.clone() * (cm2 - cm_out0),
+                    s.clone() * (cm3 - cm_out1),
+                    s.clone() * (nf_exp - nf),
+                ];
+                let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1));
+                // membership A for cm0
+                let mut prev = cm0;
+                for i in 0..DEPTH {
+                    let si = meta.query_advice(sib_a[i], Rotation::cur());
+                    let di = meta.query_advice(dir_a[i], Rotation::cur());
+                    let wi = meta.query_advice(w_a[i], Rotation::cur());
+                    cons.push(s.clone() * (di.clone() * (di.clone() - one.clone())));
+                    let h_l = h2(prev.clone(), si.clone());
+                    let h_r = h2(si.clone(), prev.clone());
+                    let wi_exp = (one.clone() - di.clone()) * h_l + di.clone() * h_r;
+                    cons.push(s.clone() * (wi.clone() - wi_exp));
+                    prev = wi;
+                }
+                // membership B for cm1
+                let mut prev_b = cm1;
+                for i in 0..DEPTH {
+                    let si = meta.query_advice(sib_b[i], Rotation::cur());
+                    let di = meta.query_advice(dir_b[i], Rotation::cur());
+                    let wi = meta.query_advice(w_b[i], Rotation::cur());
+                    cons.push(s.clone() * (di.clone() * (di.clone() - one.clone())));
+                    let h_l = h2(prev_b.clone(), si.clone());
+                    let h_r = h2(si.clone(), prev_b.clone());
+                    let wi_exp = (one.clone() - di.clone()) * h_l + di.clone() * h_r;
+                    cons.push(s.clone() * (wi.clone() - wi_exp));
+                    prev_b = wi;
+                }
+                cons.push(s.clone() * (prev - rootq.clone()));
+                cons.push(s * (prev_b - rootq));
+                cons
+            });
+            (
+                in0, in1, out0, out1, r0, r1, r2, r3, sk, serial, sib_a, dir_a, w_a, sib_b, dir_b,
+                w_b, cm_cols, root, s,
+            )
+        }
+        #[allow(clippy::too_many_lines)]
+        #[allow(clippy::too_many_lines)]
+        fn synthesize(
+            &self,
+            cfg: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let (
+                in0,
+                in1,
+                out0,
+                out1,
+                r0,
+                r1,
+                r2,
+                r3,
+                sk,
+                serial,
+                sib_a,
+                dir_a,
+                w_a,
+                sib_b,
+                dir_b,
+                w_b,
+                _cm_cols,
+                _root,
+                s,
+            ) = cfg;
+            layouter.assign_region(
+                || "anon_transfer_commit_merkle_pow5",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    let cm0 = h2_native(Scalar::from(7), Scalar::from(11)) + Scalar::from(7);
+                    let cm1 = h2_native(Scalar::from(5), Scalar::from(13)) + Scalar::from(7);
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r0", r0 => Scalar::from(11))?;
+                    advice!(region, "r1", r1 => Scalar::from(13))?;
+                    advice!(region, "r2", r2 => Scalar::from(17))?;
+                    advice!(region, "r3", r3 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
+                    for (i, col) in sib_a.iter().enumerate() {
+                        let sibling = if i == 0 {
+                            cm1
+                        } else {
+                            Scalar::from(20 + i as u64)
+                        };
+                        advice!(region, move "sib_a{i}", *col => sibling)?;
+                    }
+                    for (i, col) in dir_a.iter().enumerate() {
+                        advice!(region, move "dir_a{i}", *col => Scalar::from(0))?;
+                    }
+                    let mut previous_a = cm0;
+                    for (i, col) in w_a.iter().enumerate() {
+                        let sibling = if i == 0 {
+                            cm1
+                        } else {
+                            Scalar::from(20 + i as u64)
+                        };
+                        previous_a = h2_native(previous_a, sibling);
+                        advice!(region, move "w_a{i}", *col => previous_a)?;
+                    }
+                    for (i, col) in sib_b.iter().enumerate() {
+                        let sibling = if i == 0 {
+                            cm0
+                        } else {
+                            Scalar::from(20 + i as u64)
+                        };
+                        advice!(region, move "sib_b{i}", *col => sibling)?;
+                    }
+                    for (i, col) in dir_b.iter().enumerate() {
+                        let direction = if i == 0 {
+                            Scalar::from(1)
+                        } else {
+                            Scalar::from(0)
+                        };
+                        advice!(region, move "dir_b{i}", *col => direction)?;
+                    }
+                    let mut previous_b = cm1;
+                    for (i, col) in w_b.iter().enumerate() {
+                        if i == 0 {
+                            previous_b = h2_native(cm0, previous_b);
+                        } else {
+                            previous_b = h2_native(previous_b, Scalar::from(20 + i as u64));
+                        }
+                        advice!(region, move "w_b{i}", *col => previous_b)?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+}
+/// Batch-local deduplication cache keyed by proof hash.
+#[derive(Clone, Default)]
+pub struct DedupCache {
+    seen: BTreeSet<[u8; 32]>,
+}
+impl DedupCache {
+    /// Create a new empty cache.
+    pub fn new() -> Self {
+        Self {
+            seen: BTreeSet::new(),
+        }
+    }
+}
+#[cfg(all(test, feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+use halo2_proofs::transcript::TranscriptWriterBuffer;
+#[cfg(all(test, feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+use rand_core_06::OsRng;
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+#[test]
+fn halo2_verify_with_instance_noncanonical_ipa() {
+    // Generate a valid proof, then wrap a non-canonical instance scalar in ZK1.
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{
+            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        },
+        poly::Rotation,
+        transcript::{Blake2bWrite, Challenge255},
+    };
+    #[derive(Clone, Default)]
+    struct TinyAddPublic;
+    impl Circuit<Scalar> for TinyAddPublic {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
+            halo2_proofs::plonk::Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        #[allow(clippy::too_many_lines)]
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let c = meta.advice_column();
+            let inst = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("add_pub", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                let pubv = meta.query_instance(inst, Rotation::cur());
+                vec![s.clone() * (a + b - c.clone()), s * (c - pubv)]
+            });
+            (a, b, c, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, c, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_pub",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a", a => Scalar::from(2))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "c", c => Scalar::from(4))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    let k = 5u32;
+    let params: PastaParams = pasta_params_new(k);
+    let vk_h2: VerifyingKey<Curve> = keygen_vk(&params, &TinyAddPublic::default()).expect("vk");
+    let pk = keygen_pk(&params, vk_h2.clone(), &TinyAddPublic::default()).expect("pk");
+    let inst_col = vec![Scalar::from(4u64)];
+    let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
+    let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &pk,
+        &[TinyAddPublic::default()],
+        &inst_proofs,
+        OsRng,
+        &mut transcript,
+    )
+    .expect("proof created");
+    let proof_bytes = transcript.finalize();
+    let mut vk_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_ipa_k(&mut vk_env, k);
+    crate::zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+    let mut prf_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
+    let mut payload = Vec::with_capacity(8 + 32);
+    payload.extend_from_slice(&1u32.to_le_bytes());
+    payload.extend_from_slice(&1u32.to_le_bytes());
+    payload.extend_from_slice(&[0xFFu8; 32]);
+    prf_env.extend_from_slice(b"I10P");
+    prf_env.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    prf_env.extend_from_slice(&payload);
+    let backend = "halo2/pasta/ipa/tiny-add-public";
+    let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+    let prf_box = ProofBox::new(backend.into(), prf_env);
+    assert!(!verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
+}
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+#[test]
+fn ipa_vote_bool_commit_zk1() {
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{VerifyingKey, keygen_pk, keygen_vk},
+        transcript::{Blake2bWrite, Challenge255},
+    };
+    // Build circuit and params
+    let k = 5u32;
+    let params: PastaParams = pasta_params_new(k);
+    let vk_h2: VerifyingKey<Curve> =
+        keygen_vk(&params, &pasta_tiny::VoteBoolCommit::default()).expect("vk");
+    let pk = keygen_pk(
+        &params,
+        vk_h2.clone(),
+        &pasta_tiny::VoteBoolCommit::default(),
+    )
+    .expect("pk");
+    // Compute expected commit (same toy hash as in circuit)
+    let v = Scalar::from(1u64);
+    let rho = Scalar::from(12345u64);
+    let commit = {
+        let v2 = v * v;
+        let v4 = v2 * v2;
+        let v5 = v4 * v;
+        let r2 = rho * rho;
+        let r4 = r2 * r2;
+        let r5 = r4 * rho;
+        let t0 = Scalar::from(2) * v5 + Scalar::from(3) * r5 + Scalar::from(7);
+        let t1 = v + Scalar::from(13);
+        let t12 = t1 * t1;
+        let t14 = t12 * t12;
+        let t15 = t14 * t1; // t1^5
+        Scalar::from(3) * t0 + Scalar::from(5) * t15 + Scalar::from(11)
+    };
+    // Create proof with public instance [commit]
+    let inst_col = vec![commit];
+    let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
+    let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &pk,
+        &[pasta_tiny::VoteBoolCommit::default()],
+        &inst_proofs,
+        OsRng,
+        &mut transcript,
+    )
+    .expect("proof created");
+    let proof_bytes = transcript.finalize();
+    // Build ZK1 envelopes and verify via backend
+    let mut vk_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_ipa_k(&mut vk_env, k);
+    crate::zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+    let mut prf_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
+    crate::zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut prf_env);
+    let backend = "halo2/pasta/ipa/vote-bool-commit";
+    let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+    let prf_box = ProofBox::new(backend.into(), prf_env);
+    assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
+}
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+#[test]
+fn halo2_verify_rejects_vk_without_bytes() {
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{VerifyingKey, keygen_pk, keygen_vk},
+        transcript::{Blake2bWrite, Challenge255},
+    };
+    let k = 5u32;
+    let params: PastaParams = pasta_params_new(k);
+    let vk_h2: VerifyingKey<Curve> =
+        keygen_vk(&params, &pasta_tiny::VoteBoolCommit::default()).expect("vk");
+    let pk = keygen_pk(
+        &params,
+        vk_h2.clone(),
+        &pasta_tiny::VoteBoolCommit::default(),
+    )
+    .expect("pk");
+    // Build deterministic commit identical to circuit synthesize logic
+    let v = Scalar::from(1u64);
+    let rho = Scalar::from(12345u64);
+    let commit = {
+        let v2 = v * v;
+        let v4 = v2 * v2;
+        let v5 = v4 * v;
+        let r2 = rho * rho;
+        let r4 = r2 * r2;
+        let r5 = r4 * rho;
+        let t0 = Scalar::from(2) * v5 + Scalar::from(3) * r5 + Scalar::from(7);
+        let t1 = v + Scalar::from(13);
+        let t12 = t1 * t1;
+        let t14 = t12 * t12;
+        let t15 = t14 * t1;
+        Scalar::from(3) * t0 + Scalar::from(5) * t15 + Scalar::from(11)
+    };
+    let inst_col = vec![commit];
+    let inst_cols: Vec<&[Scalar]> = vec![inst_col.as_slice()];
+    let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &pk,
+        &[pasta_tiny::VoteBoolCommit::default()],
+        &inst_proofs,
+        OsRng,
+        &mut transcript,
+    )
+    .expect("proof created");
+    let proof_bytes = transcript.finalize();
+    let backend = "halo2/pasta/ipa/vote-bool-commit";
+    let mut vk_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_ipa_k(&mut vk_env, k);
+    crate::zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+    let mut prf_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
+    crate::zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut prf_env);
+    let vk_box_good = VerifyingKeyBox::new(backend.into(), vk_env.clone());
+    let prf_box = ProofBox::new(backend.into(), prf_env.clone());
+    assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box_good)));
+    // Create VK envelope lacking the H2VK TLV — verification must fail.
+    let mut vk_env_missing = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_ipa_k(&mut vk_env_missing, k);
+    let vk_box_missing = VerifyingKeyBox::new(backend.into(), vk_env_missing);
+    assert!(!verify_halo2_ipa(backend, &prf_box, Some(&vk_box_missing)));
+    // Tamper with the VK bytes while keeping the TLV present → hash mismatch → reject.
+    let mut vk_tampered = vk_env;
+    if let Some(last) = vk_tampered.last_mut() {
+        *last ^= 0xAA;
+    }
+    let vk_box_tampered = VerifyingKeyBox::new(backend.into(), vk_tampered);
+    assert!(!verify_halo2_ipa(backend, &prf_box, Some(&vk_box_tampered)));
+}
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+#[test]
+fn ipa_anon_transfer_commit_zk1() {
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{VerifyingKey, keygen_pk, keygen_vk},
+        transcript::{Blake2bWrite, Challenge255},
+    };
+    let k = 5u32;
+    let params: PastaParams = pasta_params_new(k);
+    let vk_h2: VerifyingKey<Curve> =
+        keygen_vk(&params, &pasta_tiny::AnonTransfer2x2Commit::default()).expect("vk");
+    let pk = keygen_pk(
+        &params,
+        vk_h2.clone(),
+        &pasta_tiny::AnonTransfer2x2Commit::default(),
+    )
+    .expect("pk");
+    // Compute commitments externally using the same Pow5 pair hash as the circuit.
+    let in0 = Scalar::from(7u64);
+    let rin0 = Scalar::from(11u64);
+    let in1 = Scalar::from(5u64);
+    let rin1 = Scalar::from(13u64);
+    let out0 = Scalar::from(6u64);
+    let rout0 = Scalar::from(17u64);
+    let out1 = Scalar::from(6u64);
+    let rout1 = Scalar::from(19u64);
+    let sk = Scalar::from(1_234_567u64);
+    let serial = Scalar::from(42u64);
+    let h = |a: Scalar, r: Scalar| {
+        let a = a + Scalar::from(7u64);
+        let r = r + Scalar::from(13u64);
+        let a2 = a * a;
+        let a4 = a2 * a2;
+        let a5 = a4 * a;
+        let r2 = r * r;
+        let r4 = r2 * r2;
+        let r5 = r4 * r;
+        Scalar::from(2) * a5 + Scalar::from(3) * r5
+    };
+    let cm_in0 = h(in0, rin0);
+    let cm_in1 = h(in1, rin1);
+    let cm_out0 = h(out0, rout0);
+    let cm_out1 = h(out1, rout1);
+    let nullifier = h(sk, serial);
+    let col0 = vec![cm_in0];
+    let col1 = vec![cm_in1];
+    let col2 = vec![cm_out0];
+    let col3 = vec![cm_out1];
+    let col4 = vec![nullifier];
+    let inst_cols: Vec<&[Scalar]> = vec![&col0, &col1, &col2, &col3, &col4];
+    let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &pk,
+        &[pasta_tiny::AnonTransfer2x2Commit::default()],
+        &inst_proofs,
+        OsRng,
+        &mut transcript,
+    )
+    .expect("proof created");
+    let proof_bytes = transcript.finalize();
+    let mut vk_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_ipa_k(&mut vk_env, k);
+    crate::zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+    let mut prf_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
+    // Pack instances as a single I10P with 5 columns * 1 row in ZK1
+    let cols: [&[Scalar]; 5] = [
+        col0.as_slice(),
+        col1.as_slice(),
+        col2.as_slice(),
+        col3.as_slice(),
+        col4.as_slice(),
+    ];
+    crate::zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut prf_env);
+    let backend = "halo2/pasta/ipa/anon-transfer-2x2";
+    let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+    let prf_box = ProofBox::new(backend.into(), prf_env);
+    assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
+}
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+#[test]
+fn ipa_vote_bool_commit_merkle2_zk1() {
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{VerifyingKey, keygen_pk, keygen_vk},
+        transcript::{Blake2bWrite, Challenge255},
+    };
+    let k = 6u32;
+    let params: PastaParams = pasta_params_new(k);
+    let vk_h2: VerifyingKey<Curve> =
+        keygen_vk(&params, &pasta_tiny::VoteBoolCommitMerkle2::default()).expect("vk");
+    let pk = keygen_pk(
+        &params,
+        vk_h2.clone(),
+        &pasta_tiny::VoteBoolCommitMerkle2::default(),
+    )
+    .expect("pk");
+    // Compute commit and Merkle root using the circuit's constrained Pow5 pair relation.
+    let v = Scalar::from(1u64);
+    let rho = Scalar::from(12345u64);
+    let commit = pasta_tiny::constrained_pow5_pair(v, rho);
+    let sib0 = Scalar::from(5u64);
+    let sib1 = Scalar::from(7u64);
+    // w0 = h(commit, sib0), w1 = h(w0, sib1)
+    let w0 = pasta_tiny::constrained_pow5_pair(commit, sib0);
+    let root = pasta_tiny::constrained_pow5_pair(w0, sib1);
+    let col0 = vec![commit];
+    let col1 = vec![root];
+    let inst_cols: Vec<&[Scalar]> = vec![col0.as_slice(), col1.as_slice()];
+    let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+    // Make proof with public instance columns [commit], [root].
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    halo2_proofs::plonk::create_proof::<
+        IPACommitmentScheme<Curve>,
+        ProverIPA<'_, Curve>,
+        Challenge255<Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &pk,
+        &[pasta_tiny::VoteBoolCommitMerkle2::default()],
+        &inst_proofs,
+        OsRng,
+        &mut transcript,
+    )
+    .expect("proof created");
+    let proof_bytes = transcript.finalize();
+    // Wrap as ZK1: IPAK + PROF + I10P(2 cols, 1 row)
+    let mut vk_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_ipa_k(&mut vk_env, k);
+    crate::zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+    let mut prf_env = crate::zk1::wrap_start();
+    crate::zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
+    let cols: [&[Scalar]; 2] = [col0.as_slice(), col1.as_slice()];
+    crate::zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut prf_env);
+    let backend = "halo2/pasta/ipa/vote-bool-commit-merkle2";
+    let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+    let prf_box = ProofBox::new(backend.into(), prf_env);
+    assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
+}
+impl DedupCache {
+    #[cfg(any(test, feature = "test-utils"))]
+    /// Return true if this proof is new to the cache and insert it; false if duplicate.
+    pub fn check_and_insert(&mut self, proof: &ProofBox) -> bool {
+        self.seen.insert(hash_proof(proof))
+    }
+    /// Compute and insert a combined dedup key from the proof and optional vk commitment.
+    /// Returns true if not seen before.
+    pub fn check_and_insert_with_commitment(
+        &mut self,
+        proof: &ProofBox,
+        vk_commitment: Option<[u8; 32]>,
+    ) -> bool {
+        let mut h = Sha256::new();
+        h.update(b"iroha:zk:v1:preverify-dedup");
+        h.update(hash_proof(proof));
+        if let Some(c) = vk_commitment {
+            h.update(c);
+        }
+        let key: [u8; 32] = h.finalize().into();
+        self.seen.insert(key)
+    }
+}
+fn expected_preverify_envelope_backend_tag(
+    backend: &str,
+) -> Option<iroha_data_model::zk::BackendTag> {
+    production_verify_backend_tag(backend)
+}
+fn preverify_open_verify_envelope_metadata(
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    vk_commitment: Option<[u8; 32]>,
+    expected_vk_commitment: Option<[u8; 32]>,
+) -> Result<(), PreverifyResult> {
+    let Some(expected_tag) = expected_preverify_envelope_backend_tag(proof.backend.as_str()) else {
+        return Ok(());
+    };
+    let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_canonical(&proof.bytes).map_err(|_| PreverifyResult::MalformedProof)?;
+    envelope.validate_for_admission().map_err(|err| {
+        if err == iroha_data_model::zk::OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash {
+            PreverifyResult::VerifyingKeyMismatch
+        } else {
+            PreverifyResult::MalformedProof
+        }
+    })?;
+    if envelope.backend != expected_tag {
+        return Err(PreverifyResult::MalformedProof);
+    }
+    if expected_tag == iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        && !halo2_open_verify_circuit_id_matches_backend(&proof.backend, &envelope.circuit_id)
+    {
+        return Err(PreverifyResult::MalformedProof);
+    }
+    if expected_tag == iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+        let Some(expected_schema) = halo2_ipa_public_inputs_schema_v1(&envelope.circuit_id) else {
+            return Err(PreverifyResult::MalformedProof);
+        };
+        if envelope.public_inputs.as_slice() != expected_schema {
+            return Err(PreverifyResult::MalformedProof);
+        }
+    }
+    if expected_tag == iroha_data_model::zk::BackendTag::Stark {
+        if !stark_open_verify_circuit_id_matches_backend(&proof.backend, &envelope.circuit_id) {
+            return Err(PreverifyResult::MalformedProof);
+        }
+        let Some(env_circuit_id) =
+            canonical_stark_fri_circuit_id_for_backend(&proof.backend, &envelope.circuit_id)
+        else {
+            return Err(PreverifyResult::MalformedProof);
+        };
+        if canonical_circuit_is_zk_ace_relation_for_backend(&proof.backend, env_circuit_id) {
+            return Err(PreverifyResult::MalformedProof);
+        }
+        if canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(&proof.backend).as_deref()
+            == Some(env_circuit_id)
+        {
+            return Err(PreverifyResult::MalformedProof);
+        }
+        if canonical_circuit_is_governance_vote_relation_for_backend(&proof.backend, env_circuit_id)
+        {
+            return Err(PreverifyResult::MalformedProof);
+        }
+        if canonical_circuit_is_soracloud_fhe_relation_for_backend(&proof.backend, env_circuit_id) {
+            return Err(PreverifyResult::MalformedProof);
+        }
+        if canonical_ivm_execution_stark_circuit_id_for_backend(&proof.backend).as_deref()
+            == Some(env_circuit_id)
+        {
+            return Err(PreverifyResult::MalformedProof);
+        }
+    }
+    if let Some(vk_box) = vk
+        && hash_vk(vk_box) != envelope.vk_hash
+    {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    if let Some(commitment) = vk_commitment
+        && commitment != envelope.vk_hash
+    {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    if let Some(expected) = expected_vk_commitment
+        && expected != envelope.vk_hash
+    {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    Ok(())
+}
+fn preverify_bound_vk_commitment(
+    vk_commitment: Option<[u8; 32]>,
+    expected_vk_commitment: Option<[u8; 32]>,
+) -> Result<[u8; 32], PreverifyResult> {
+    let Some(expected) = expected_vk_commitment else {
+        return Err(PreverifyResult::VerifyingKeyMissing);
+    };
+    if expected == [0u8; 32] {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    let Some(commitment) = vk_commitment else {
+        return Ok(expected);
+    };
+    if commitment == [0u8; 32] || commitment != expected {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    Ok(commitment)
+}
+/// Result of a pre-verification step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreverifyResult {
+    /// Proof accepted by lightweight pre-verification and not seen before in this batch.
+    Accepted,
+    /// Duplicate proof encountered within the same batch.
+    Duplicate,
+    /// Backend tag is empty or not recognized by the pre-verifier.
+    UnsupportedBackend,
+    /// Backend curve is not allowed by node configuration/policy.
+    CurveNotAllowed,
+    /// Proof payload exceeds the locally accepted maximum size for pre-verify.
+    ProofTooBig,
+    /// Malformed proof payload (e.g., empty bytes or structurally invalid header for the backend).
+    MalformedProof,
+    /// Pre-verification exceeded the provided cost budget.
+    PreverifyBudgetExceeded,
+    /// Proof references a verifying key that is missing or inactive.
+    VerifyingKeyMissing,
+    /// Proof references a verifying key whose commitment/schema do not match the envelope.
+    VerifyingKeyMismatch,
+    /// Proof references a verifying key bound to another namespace/manifest.
+    NamespaceMismatch,
+    /// Proof references a verifying key that is inactive or withdrawn.
+    VerifyingKeyInactive,
+}
+/// Pre-verify a proof under a simple cost budget and deduplication cache.
+///
+/// This lightweight stage performs backend/tag admission, verifier-key binding
+/// checks, bounded envelope parsing where applicable, and batch deduplication.
+/// Full cryptographic verification is deferred to lane/overlay execution.
+pub fn preverify_with_budget(
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    dedup: &mut DedupCache,
+    budget: u64,
+    vk_commitment: Option<[u8; 32]>,
+    expected_vk_commitment: Option<[u8; 32]>,
+    vk_active: bool,
+) -> PreverifyResult {
+    // Basic sanity: require non-empty backend tag
+    if proof.backend.is_empty() {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if is_production_claim_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if is_trusted_setup_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if is_developer_only_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if expected_preverify_envelope_backend_tag(proof.backend.as_str()).is_none() {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if !vk_active {
+        return PreverifyResult::VerifyingKeyInactive;
+    }
+    // Extremely lightweight budget model: count raw bytes processed.
+    // When budget is 0, treat as unlimited.
+    if budget > 0 {
+        let limit = usize::try_from(budget).unwrap_or(usize::MAX);
+        if limit < proof.bytes.len() {
+            return PreverifyResult::PreverifyBudgetExceeded;
+        }
+    }
+    let bound_vk_commitment =
+        match preverify_bound_vk_commitment(vk_commitment, expected_vk_commitment) {
+            Ok(commitment) => commitment,
+            Err(err) => return err,
+        };
+    if let Some(vk_box) = vk
+        && vk_box.backend != proof.backend
+    {
+        return PreverifyResult::VerifyingKeyMismatch;
+    }
+    // If we have both VK bytes and expected commitment, enforce the match early.
+    if let (Some(expected), Some(vk_box)) = (expected_vk_commitment, vk) {
+        let actual = crate::hash_vk(vk_box);
+        if actual != expected {
+            return PreverifyResult::VerifyingKeyMismatch;
+        }
+    }
+    if let (Some(expected), Some(commit)) = (expected_vk_commitment, vk_commitment) {
+        if expected != commit {
+            return PreverifyResult::VerifyingKeyMismatch;
+        }
+    }
+    if let Err(err) = preverify_open_verify_envelope_metadata(
+        proof,
+        vk,
+        Some(bound_vk_commitment),
+        expected_vk_commitment,
+    ) {
+        return err;
+    }
+    if !dedup.check_and_insert_with_commitment(proof, Some(bound_vk_commitment)) {
+        return PreverifyResult::Duplicate;
+    }
+    PreverifyResult::Accepted
+}
+/// Validate one exact portable, non-reserved Halo2 IPA circuit identifier.
+///
+/// The first release has one full circuit spelling. Backend labels and internal
+/// dispatcher names are distinct typed roles and cannot be used as circuit IDs.
+#[doc(hidden)]
+pub fn canonical_halo2_ipa_circuit_id(circuit_id: &str) -> Option<String> {
+    if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
+            circuit_id,
+        )
+    {
+        return None;
+    }
+    let name = circuit_id.strip_prefix("halo2/pasta/ipa/")?;
+    (!name.is_empty() && !name.contains(['/', ':'])).then(|| circuit_id.to_owned())
+}
+
+/// Resolve an exact concrete registry backend to its distinct canonical circuit ID.
+fn halo2_ipa_circuit_for_backend_v1(backend: &str) -> Option<String> {
+    if verifier_backend_registry_tag_v1(backend)
+        != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    {
+        return None;
+    }
+    let name = backend.strip_prefix("halo2/pasta/")?;
+    let circuit_id = format!("halo2/pasta/ipa/{name}");
+    HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1
+        .contains(&circuit_id.as_str())
+        .then_some(circuit_id)
+}
+#[cfg(feature = "zk-halo2-ipa")]
+fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    let Some(vk_box) = vk else {
+        return false;
+    };
+    let env: OpenVerifyEnvelope = match norito::decode_canonical(&proof.bytes) {
+        Ok(env) => env,
+        Err(_) => return false,
+    };
+    if env.backend != BackendTag::Halo2IpaPasta {
+        return false;
+    }
+    if env.validate_for_admission().is_err() {
+        return false;
+    }
+    if !halo2_open_verify_circuit_id_matches_backend(proof.backend.as_str(), &env.circuit_id) {
+        return false;
+    }
+    let Some(expected_schema) = halo2_ipa_public_inputs_schema_v1(&env.circuit_id) else {
+        return false;
+    };
+    if env.public_inputs.as_slice() != expected_schema {
+        return false;
+    }
+    let expected_vk_hash = hash_vk(vk_box);
+    if env.vk_hash != expected_vk_hash {
+        return false;
+    }
+    if !matches!(
+        validate_and_prepare_verifying_key_material_v1(
+            proof.backend.as_str(),
+            &env.circuit_id,
+            BackendTag::Halo2IpaPasta,
+            vk_box,
+        ),
+        Ok(PreparedVerifyingKeyMaterialV1::Halo2IpaPasta { .. })
+    ) {
+        return false;
+    }
+    let backend = match canonical_halo2_ipa_circuit_id(&env.circuit_id) {
+        Some(tag) => tag,
+        None => return false,
+    };
+    let proof_box = ProofBox::new(proof.backend.clone(), env.proof_bytes);
+    verify_halo2_ipa(&backend, &proof_box, Some(vk_box))
+}
+#[cfg(feature = "zk-stark")]
+fn verify_stark_fri_open_verify_envelope(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+) -> bool {
+    verify_stark_fri_open_verify_envelope_with_limits(
+        backend,
+        proof,
+        vk,
+        &crate::stark::StarkVerifierLimits::default(),
+    )
+}
+#[cfg(feature = "zk-stark")]
+fn verify_stark_fri_open_verify_envelope_with_limits(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    limits: &crate::stark::StarkVerifierLimits,
+) -> bool {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    let reject = |reason: &'static str| {
+        tracing::debug!(
+            backend,
+            reason,
+            "stark/fri proof rejected (metadata/integrity check failed)"
+        );
+        false
+    };
+    let env: OpenVerifyEnvelope = match norito::decode_canonical(&proof.bytes) {
+        Ok(env) => env,
+        Err(_) => return reject("invalid OpenVerifyEnvelope payload"),
+    };
+    if env.backend != BackendTag::Stark {
+        return reject("unexpected OpenVerifyEnvelope backend tag");
+    }
+    if env.validate_for_admission().is_err() {
+        return reject("invalid OpenVerifyEnvelope shape");
+    }
+    if !stark_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
+        return reject("STARK OpenVerifyEnvelope circuit_id does not match backend family");
+    }
+    // Refuse dedicated semantic roles before preparing or caching any supplied
+    // key. Direct verifier calls have the same early boundary as preverify and
+    // the generic prover; a valid key cannot grant generic role authority.
+    let env_circuit_id = match canonical_stark_fri_circuit_id_for_backend(backend, &env.circuit_id)
+    {
+        Some(id) => id,
+        None => return reject("invalid STARK envelope circuit_id"),
+    };
+    if canonical_circuit_is_zk_ace_relation_for_backend(backend, env_circuit_id) {
+        return reject("generic ZK-ACE relation requires typed privacy verification");
+    }
+    if canonical_circuit_is_governance_vote_relation_for_backend(backend, env_circuit_id) {
+        return reject("governance vote roles require dedicated semantic verification");
+    }
+    if canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(backend).as_deref()
+        == Some(env_circuit_id)
+    {
+        return reject("BFV full-bootstrap STARK circuit requires BFV-specific verification");
+    }
+    if canonical_circuit_is_soracloud_fhe_relation_for_backend(backend, env_circuit_id) {
+        return reject("Soracloud FHE relation requires dedicated typed Soracloud verification");
+    }
+    let is_ivm_execution_circuit = canonical_ivm_execution_stark_circuit_id_for_backend(backend)
+        .as_deref()
+        == Some(env_circuit_id);
+    if is_ivm_execution_circuit {
+        return reject("IVM execution proof requires the complete native STARK execution relation");
+    }
+    let Some(vk_box) = vk else {
+        return reject("missing verifying key");
+    };
+    if vk_box.backend != backend {
+        return reject("STARK verifying key backend mismatch");
+    }
+    let expected_vk_hash = hash_vk(vk_box);
+    if env.vk_hash != expected_vk_hash {
+        return reject("verifying key commitment mismatch");
+    }
+    // Reuse the registry/state-hydration material gate at proof dispatch. This
+    // pins the parameters before any proof-controlled STARK payload is decoded.
+    let (vk_circuit_id_raw, vk_n_log2, vk_blowup_log2, vk_fold_arity, vk_queries, vk_merkle_arity) =
+        match validate_and_prepare_verifying_key_material_v1(
+            backend,
+            &env.circuit_id,
+            iroha_data_model::zk::BackendTag::Stark,
+            vk_box,
+        ) {
+            Ok(PreparedVerifyingKeyMaterialV1::StarkFri {
+                circuit_id,
+                n_log2,
+                blowup_log2,
+                fold_arity,
+                queries,
+                merkle_arity,
+            }) => (
+                circuit_id,
+                n_log2,
+                blowup_log2,
+                fold_arity,
+                queries,
+                merkle_arity,
+            ),
+            Ok(PreparedVerifyingKeyMaterialV1::Halo2IpaPasta { .. }) => {
+                return reject("STARK registry key prepared as Halo2");
+            }
+            Err(_) => return reject("invalid STARK verifying key payload"),
+        };
+    let vk_circuit_id =
+        match canonical_stark_fri_circuit_id_for_backend(backend, &vk_circuit_id_raw) {
+            Some(id) => id,
+            None => return reject("invalid STARK verifying key circuit_id"),
+        };
+    if env_circuit_id != vk_circuit_id {
+        return reject("STARK verifying key circuit_id mismatch");
+    }
+    // Decode the STARK wrapper payload.
+    let open: StarkFriOpenProofV1 = match norito::decode_canonical(&env.proof_bytes) {
+        Ok(open) => open,
+        Err(_) => return reject("invalid STARK wrapper payload"),
+    };
+    if open.version != 1 {
+        return reject("unsupported STARK wrapper version");
+    }
+    if open.envelope_bytes.len() > limits.max_envelope_bytes {
+        return reject("inner STARK envelope exceeds verifier limits");
+    }
+    // Bind the inner STARK envelope to the outer OpenVerifyEnvelope metadata and public inputs by
+    // requiring `params.domain_tag` to equal the URL-safe encoding of the typed six-lane digest of
+    // `backend || circuit_id || vk_hash || schema/aux public_inputs || wrapper public inputs`.
+    //
+    // This prevents re-wrapping a valid STARK envelope under a different circuit/vk/public-inputs
+    // header without detection.
+    let expected_domain_tag = stark_open_verify_domain_tag_current(
+        backend,
+        &env.circuit_id,
+        env.vk_hash,
+        &env.public_inputs,
+        &open.public_inputs,
+    );
+    let inner: crate::stark::StarkVerifyEnvelopeV1 =
+        match norito::decode_canonical(&open.envelope_bytes) {
+            Ok(inner) => inner,
+            Err(_) => return reject("invalid inner STARK envelope payload"),
+        };
+    if inner.transcript_label != STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1 {
+        return reject("STARK OpenVerifyEnvelope transcript label mismatch");
+    }
+    if inner.proof.commits.comp_root.is_some() || inner.proof.comp_values.is_some() {
+        return reject(
+            "STARK OpenVerifyEnvelope inner proof carries auxiliary composition commitments",
+        );
+    }
+    // Verify that the prover is using the parameters pinned by the verifying key.
+    if inner.params.n_log2 != vk_n_log2
+        || inner.params.blowup_log2 != vk_blowup_log2
+        || inner.params.fold_arity != vk_fold_arity
+        || inner.params.queries != vk_queries
+        || inner.params.merkle_arity != vk_merkle_arity
+    {
+        return reject("STARK proof parameters do not match verifying key");
+    }
+    if inner.params.domain_tag != expected_domain_tag {
+        return reject("domain tag integrity mismatch");
+    }
+    let expected_terms = stark_binding_air_terms(
+        backend,
+        &env.circuit_id,
+        env.vk_hash,
+        &env.public_inputs,
+        &open.public_inputs,
+    );
+    let expected_public_digest = match crate::stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &expected_terms,
+    ) {
+        Ok(digest) => digest,
+        Err(_) => return reject("STARK AIR public digest reconstruction failed"),
+    };
+    let Some(air) = inner.proof.air.as_ref() else {
+        return reject("missing STARK AIR section");
+    };
+    let air_circuit_id = match canonical_stark_fri_circuit_id_for_backend(backend, &air.circuit_id)
+    {
+        Some(id) => id,
+        None => return reject("invalid STARK AIR circuit_id"),
+    };
+    if air_circuit_id != env_circuit_id {
+        return reject("STARK AIR circuit_id mismatch");
+    }
+    if air.public_digest != expected_public_digest {
+        return reject("STARK AIR public digest mismatch");
+    }
+    let stark_ok =
+        crate::stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits);
+    if !stark_ok {
+        return reject("inner STARK/FRI verifier rejected proof");
+    }
+    true
+}
+/// Check the compiled proof relation and envelope integrity for a backend.
+///
+/// A successful binding proof does not establish execution, witness privacy,
+/// ledger authority, or current registry activation. Application callers should
+/// use [`verify_for_relation`] to require the exact relation they intend to verify.
+pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
+    if proof.backend.as_str() != backend {
+        return false;
+    }
+    if !is_production_verify_backend_label(backend) {
+        return false;
+    }
+    // All production Halo2 labels share one authenticated outer-envelope boundary.
+    if production_verify_backend_tag(backend)
+        == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    {
+        #[cfg(feature = "zk-halo2-ipa")]
+        {
+            return verify_halo2_ipa_envelope(proof, vk);
+        }
+        #[cfg(not(feature = "zk-halo2-ipa"))]
+        {
+            return false;
+        }
+    }
+    // STARK/FRI family: native multi-fold verifier
+    if is_stark_fri_v1_backend(backend) {
+        #[cfg(feature = "zk-stark")]
+        {
+            // STARK proofs must use `OpenVerifyEnvelope` so the verifier can bind the
+            // backend/circuit metadata and verifying-key hash into the inner STARK envelope.
+            return verify_stark_fri_open_verify_envelope(backend, proof, vk);
+        }
+        #[cfg(not(feature = "zk-stark"))]
+        {
+            tracing::debug!(
+                backend,
+                "stark/fri backend requested but binary was built without `zk-stark`"
+            );
+            return false;
+        }
+    }
+    // Groth16 family: unsupported in the first release.
+    if backend.starts_with("groth16/") {
+        return false;
+    }
+    // Unknown backend tag
+    false
+}
+#[cfg(test)]
+mod debug_backend_tests {
+    use super::*;
+    #[test]
+    fn developer_only_backends_are_unsupported() {
+        for backend in [
+            "debug/ok",
+            "debug/reject",
+            "debug/sleep",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/todo",
+            "stark/fri/t-o-d-o",
+            "stark/fri/draft-only",
+            "stark/fri/d-r-a-f-t",
+            "stark/fri/pending-audit",
+            "stark/fri/replace-before-mainnet",
+            "stark/fri/not-production-ready",
+            "stark/fri/placeholder",
+            "miden-stark:dev-fixture",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:dev",
+            "halo2/ipa:todo-proof",
+            "halo2/ipa:t-o-d-o-proof",
+            "halo2/ipa:draft-proof",
+            "halo2/ipa:d-r-a-f-t-proof",
+            "halo2/ipa:pending-audit",
+            "halo2/ipa:replace-before-production",
+            "halo2/ipa:not-for-production",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![0x01]);
+            let vk = VerifyingKeyBox::new(backend.into(), vec![0x02]);
+            assert!(!verify_backend(backend, &proof, Some(&vk)));
+        }
+    }
+}
+#[cfg(test)]
+mod stark_backend_tag_tests {
+    use super::{
+        ZK_BACKEND_HALO2_IPA, ZK_BACKEND_STARK_FRI_V1,
+        halo2_open_verify_circuit_id_is_production_v1,
+        halo2_open_verify_circuit_id_matches_backend, is_developer_only_backend_label,
+        is_production_claim_backend_label, is_production_verify_backend_label,
+        is_stark_fri_v1_backend, is_trusted_setup_backend_label, production_verify_backend_tag,
+        stark_open_verify_circuit_id_matches_backend, verify_backend,
+    };
+    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
+    use iroha_data_model::zk::BackendTag;
+    #[test]
+    fn detects_only_the_canonical_stark_backend() {
+        assert!(is_stark_fri_v1_backend(
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1"
+        ));
+        assert!(!is_stark_fri_v1_backend("stark/fri"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/latest"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/attestation"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/contest"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/random-profile"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/sha512-goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/audit-proof-v1"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/ "));
+        assert!(!is_stark_fri_v1_backend("stark/fri/\t\n"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/ sha256-goldilocks"));
+        assert!(!is_stark_fri_v1_backend(
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1 "
+        ));
+        assert!(!is_stark_fri_v1_backend("stark/fri/sha256 goldilocks"));
+        assert!(!is_stark_fri_v1_backend(
+            "stark\u{FF0F}fri/sha256-goldilocks"
+        ));
+        assert!(!is_stark_fri_v1_backend(
+            "stark/fri/\u{200B}sha256-goldilocks"
+        ));
+        assert!(!is_stark_fri_v1_backend(
+            "st\u{0430}rk/fri/sha256-goldilocks"
+        ));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod;foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod,foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod+foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod/foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod(foo)"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/Δ"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/KZG"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/ KZG"));
+        assert!(!is_stark_fri_v1_backend("stark/fri:kzg"));
+        assert!(!is_stark_fri_v1_backend("stark/fri: KZG"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-bn-254"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-groth-16"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-k-z-g"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/bls12_381"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-b.l.s.12.381"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-srs"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-s-r-s"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod.crs"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-ptau"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-powers-of-tau"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-ceremony"));
+        assert!(!is_stark_fri_v1_backend(
+            "stark/fri/structured-reference-string"
+        ));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/Debug"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/d-e-b-u-g"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/Mock"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/m-o-c-k"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/dev-fixture"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/d-e-v-f-i-x-t-u-r-e"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/dev"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/d-e-v"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/test"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/t-e-s-t"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/placeholder"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/miden"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/pq-masp-stark-fri"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/post-quantum-masp"));
+        assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
+        assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
+    }
+    #[test]
+    fn production_claim_classifier_catches_readiness_and_audit_labels() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:mainnet-complete",
+            "halo2/ipa:production-certified",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:release-approved",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "halo2/ipa/orchard:production-ready",
+            "orchard:mainnet-ready",
+            "penumbra-masp:external-security-review",
+            "jindo-lattice-pcs-zk:release-ready",
+            "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+        ] {
+            assert!(
+                is_production_claim_backend_label(backend),
+                "production-claim backend {backend} must be classified before allowlists"
+            );
+            assert!(
+                !is_stark_fri_v1_backend(backend),
+                "production-claim backend {backend} must not match the STARK family allowlist"
+            );
+            assert_eq!(
+                production_verify_backend_tag(backend),
+                None,
+                "production-claim backend {backend} must not map to an OpenVerify tag"
+            );
+            assert!(
+                !is_production_verify_backend_label(backend),
+                "production-claim backend {backend} must stay fail-closed"
+            );
+        }
+        for backend in [
+            "halo2/ipa",
+            "halo2/ipa:ivm-replay-binding-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/audit-proof-v1",
+        ] {
+            assert!(
+                !is_production_claim_backend_label(backend),
+                "backend {backend} must not be rejected by production-claim text alone"
+            );
+        }
+    }
+    #[test]
+    fn production_verify_backend_allowlist_is_explicit() {
+        for (backend, expected_tag) in [
+            ("halo2/ipa", BackendTag::Halo2IpaPasta),
+            (
+                "halo2/pasta/kaigi-authorization-v1",
+                BackendTag::Halo2IpaPasta,
+            ),
+            ("halo2/pasta/kaigi-usage-v1", BackendTag::Halo2IpaPasta),
+            (
+                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                BackendTag::Stark,
+            ),
+        ] {
+            assert_eq!(
+                production_verify_backend_tag(backend),
+                Some(expected_tag),
+                "production label {backend} must map to its OpenVerify tag"
+            );
+            assert!(
+                is_production_verify_backend_label(backend),
+                "production label {backend} must be admitted"
+            );
+        }
+        for backend in [
+            "unknown/privacy/backend",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/ipa/kaigi-roster-v1",
+            "halo2/unknown-native-v1",
+            "halo2/ipa:unknown-native-v1",
+            "halo2/pasta/ivm-overlay-bind",
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "halo2/ipa:ivm-replay-binding-v1",
+            "HALO2/IPA",
+            "stark/FRI",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2/ipa\0",
+            "halo2\u{FF0F}ipa",
+            "halo2/\u{200B}ipa",
+            "h\u{0430}lo2/ipa",
+            "../halo2/ipa",
+            "halo2/ipa/../tiny-add",
+            "halo2/ipa::ivm-replay-binding-v1",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa.",
+            "halo2/ipa/.ivm-replay-binding-v1",
+            "halo2/ipa:ivm..execution-v1",
+            "stark//fri/sha256-goldilocks",
+            "stark/fri//sha256-goldilocks",
+            "stark/fri/sha256..goldilocks",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1.",
+            "halo2/ipa:ivm-replay-binding-v1 ",
+            "halo2/ipa/orchard",
+            "halo2/ipa/penumbra",
+            "halo2/ipa/masp",
+            "halo2/ipa/monero",
+            "halo2/ipa/curve-tree",
+            "halo2/pasta/tiny-add",
+            "halo2/ipa/tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/tiny-anon-transfer-2x2",
+            "halo2/pasta/tiny-commit-open",
+            "halo2/pasta/anon-transfer-2x2",
+            "halo2/ipa/anon-transfer-2x2",
+            "halo2/ipa:anon-transfer-2x2",
+            "halo2/pasta/anon-transfer-2x2-merkle2",
+            "halo2/ipa/anon-transfer-2x2-merkle8",
+            "halo2/ipa:anon-transfer-2x2-merkle16",
+            "halo2/pasta/vote-bool-commit",
+            "halo2/ipa/vote-bool-commit",
+            "halo2/ipa:vote-bool-commit",
+            "halo2/pasta/vote-bool-commit-merkle2",
+            "halo2/ipa/vote-bool-commit-merkle8",
+            "halo2/ipa:vote-bool-commit-merkle16",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:production-certified",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "stark/fri/miden",
+            "stark/fri/latest",
+            "stark/fri/attestation",
+            "stark/fri/contest",
+            "stark/fri/random-profile",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/audit-proof-v1",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1\0",
+            "stark\u{FF0F}fri/sha256-goldilocks",
+            "stark/fri/\u{200B}sha256-goldilocks",
+            "st\u{0430}rk/fri/sha256-goldilocks",
+            "../stark/fri",
+            "stark/fri/../sha256-goldilocks",
+            "halo2/kzg",
+            "halo2/mock",
+        ] {
+            assert_eq!(
+                production_verify_backend_tag(backend),
+                None,
+                "unsupported backend {backend} must not map to an OpenVerify tag"
+            );
+            assert!(
+                !is_production_verify_backend_label(backend),
+                "unsupported backend {backend} must stay fail-closed"
+            );
+        }
+    }
+    #[test]
+    fn verify_backend_rejects_protocol_names_before_dispatch() {
+        for backend in [
+            "halo2/ipa/orchard",
+            "halo2/ipa/penumbra",
+            "halo2/ipa/masp",
+            "halo2/ipa/monero",
+            "halo2/ipa/curve-tree",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+        ] {
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![5, 6, 7, 8]);
+            assert!(
+                !verify_backend(backend, &proof, Some(&vk)),
+                "protocol name {backend} must not reach a native verifier"
+            );
+        }
+    }
+    #[test]
+    fn verify_backend_rejects_production_claim_labels_before_dispatch() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+        ] {
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![5, 6, 7, 8]);
+            assert!(
+                !verify_backend(backend, &proof, Some(&vk)),
+                "production-claim backend {backend} must not reach a native verifier"
+            );
+        }
+    }
+    #[test]
+    fn trusted_setup_classifier_catches_standalone_and_profile_labels() {
+        for backend in [
+            "kzg",
+            "KZG",
+            " kzg ",
+            "kzg/ceremony-v1",
+            "KZG/ceremony-v1",
+            "bn254",
+            "BN254",
+            "\tBN254\n",
+            "bn256",
+            "bls12_381",
+            "BLS12_381",
+            "bls12-381",
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
+            "Halo2/IPA:KZG",
+            "halo2/pasta/ipa:kzg",
+            "stark/fri:kzg",
+            "stark/fri:KZG",
+            "stark/fri: KZG",
+            "stark/fri/prod;kzg",
+            "stark/fri/prod,kzg",
+            "stark/fri/prod+kzg",
+            "stark/fri/prod.kzg",
+            "stark/fri/prod-k-z-g",
+            "stark/fri/prod(kzg)",
+            "halo2/ipa:bn254",
+            "halo2/ipa:BN254",
+            "halo2/ipa: BN254",
+            "stark/fri/prod;bn254",
+            "stark/fri/prod-bn-254",
+            "stark/fri/prod+bn256",
+            "stark/fri/prod-bn-256",
+            "stark/fri:bls12_381",
+            "stark/fri/prod-bls12-381",
+            "stark/fri/prod.bls12_381",
+            "stark/fri/prod-b.l.s.12.381",
+            "srs",
+            "SRS",
+            "crs",
+            "ptau",
+            "powersoftau",
+            "powers-of-tau",
+            "trusted-setup",
+            "structured-reference-string",
+            "universal-srs",
+            "halo2/ipa:universal-srs",
+            "stark/fri/prod-srs",
+            "stark/fri/prod-s-r-s",
+            "stark/fri/prod.crs",
+            "stark/fri/prod-ptau",
+            "stark/fri/prod-powers-of-tau",
+            "stark/fri/prod-ceremony",
+            "stark/fri/structured-reference-string",
+            "halo2/ipa;groth16",
+            "halo2/ipa:groth-16",
+            "halo2/ipa/orchard:kzg",
+            "orchard:universal-srs",
+            "penumbra-masp:kzg",
+            "jindo-lattice-pcs-zk:trusted-setup",
+            "miden-stark:ptau",
+            "sis-with-hints:groth16",
+            "pq-masp-stark-fri:kzg",
+        ] {
+            assert!(
+                is_trusted_setup_backend_label(backend),
+                "trusted-setup backend {backend} must be classified before allowlist checks"
+            );
+        }
+        for backend in [
+            "halo2/ipa",
+            "halo2/pasta/ipa/tiny-add",
+            "stark/fri",
+            "stark/fri/poseidon2-goldilocks",
+        ] {
+            assert!(
+                !is_trusted_setup_backend_label(backend),
+                "transparent backend {backend} must not be classified as trusted setup"
+            );
+        }
+    }
+    #[test]
+    fn stark_open_verify_circuit_ids_are_bound_to_the_sole_production_profile() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        for circuit_id in [format!("{backend}:binding-air")] {
+            assert!(stark_open_verify_circuit_id_matches_backend(
+                backend,
+                &circuit_id
+            ));
+        }
+        for circuit_id in [
+            "stark/fri".to_owned(),
+            "stark/fri:binding-air".to_owned(),
+            "stark/fri/poseidon2-goldilocks:binding-air".to_owned(),
+            backend.to_owned(),
+            format!("{backend}:"),
+            format!("{backend}-other:binding-air"),
+        ] {
+            assert!(
+                !stark_open_verify_circuit_id_matches_backend(backend, &circuit_id),
+                "circuit `{circuit_id}` must not inherit the canonical backend profile"
+            );
+        }
+    }
+    #[test]
+    fn stark_open_verify_circuit_id_rejects_trusted_setup_family_aliases() {
+        assert!(stark_open_verify_circuit_id_matches_backend(
+            ZK_BACKEND_STARK_FRI_V1,
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:generic-binding-air"
+        ));
+        assert!(stark_open_verify_circuit_id_matches_backend(
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:binding-air"
+        ));
+        for (backend, circuit_id) in [
+            (ZK_BACKEND_STARK_FRI_V1, "bn254"),
+            (ZK_BACKEND_STARK_FRI_V1, "BN254"),
+            (ZK_BACKEND_STARK_FRI_V1, "b-n-254"),
+            (ZK_BACKEND_STARK_FRI_V1, "bls12_381"),
+            (ZK_BACKEND_STARK_FRI_V1, "universal-srs"),
+            (ZK_BACKEND_STARK_FRI_V1, "structured-reference-string"),
+            (ZK_BACKEND_STARK_FRI_V1, "stark/fri:bn254"),
+            (ZK_BACKEND_STARK_FRI_V1, "stark/fri/prod-b.l.s.12.381"),
+            (
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:universal-srs",
+            ),
+            ("stark/fri/poseidon-x7-goldilocks-6x64-v1", "bn254"),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri:bn254",
+            ),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:bn254",
+            ),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1/srs",
+            ),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:structured-reference-string",
+            ),
+        ] {
+            assert!(
+                !stark_open_verify_circuit_id_matches_backend(backend, circuit_id),
+                "backend {backend} must reject trusted-setup circuit alias {circuit_id}"
+            );
+        }
+    }
+    #[test]
+    fn generic_open_verify_matchers_reserve_all_privacy_protocol_labels() {
+        fn assert_reserved(label: &str) {
+            for circuit_id in [
+                label.to_owned(),
+                format!("halo2/ipa::{label}"),
+                format!("halo2/pasta/{label}"),
+                format!("stark/fri:{label}"),
+                format!("stark/fri/poseidon-x7-goldilocks-6x64-v1:{label}"),
+                format!("generic/namespace/{label}"),
+            ] {
+                assert!(
+                    !halo2_open_verify_circuit_id_is_production_v1(&circuit_id),
+                    "Halo2 generic admission must reject privacy circuit id {circuit_id:?}"
+                );
+                assert!(
+                    !halo2_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_HALO2_IPA,
+                        &circuit_id,
+                    ),
+                    "Halo2 backend matching must reject privacy circuit id {circuit_id:?}"
+                );
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &circuit_id,
+                    ),
+                    "base STARK generic admission must reject privacy circuit id {circuit_id:?}"
+                );
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                        &circuit_id,
+                    ),
+                    "profile STARK admission must reject privacy circuit id {circuit_id:?}"
+                );
+            }
+            for malformed_alias in [
+                format!(" {label}"),
+                format!("{label} "),
+                label.to_ascii_uppercase(),
+            ] {
+                assert!(
+                    !halo2_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_HALO2_IPA,
+                        &malformed_alias,
+                    ),
+                    "non-portable Halo2 alias {malformed_alias:?} must fail closed"
+                );
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &malformed_alias,
+                    ),
+                    "non-portable STARK alias {malformed_alias:?} must fail closed"
+                );
+            }
+            for near_miss in [
+                format!("halo2/pasta/ipa/generic-{label}"),
+                format!("halo2/pasta/ipa/{label}-generic"),
+            ] {
+                assert!(
+                    !halo2_open_verify_circuit_id_is_production_v1(&near_miss),
+                    "unregistered Halo2 near miss {near_miss:?} must fail closed"
+                );
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &near_miss,
+                    ),
+                    "unqualified STARK circuit {near_miss:?} must fail closed"
+                );
+                let circuit_id = format!("{ZK_BACKEND_STARK_FRI_V1}:{near_miss}");
+                assert!(
+                    stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &circuit_id,
+                    ),
+                    "canonical STARK near miss {circuit_id:?} must remain available"
+                );
+            }
+        }
+        for protocol in PrivacyProtocolIdV1::ALL {
+            assert_reserved(protocol.canonical_label());
+        }
+    }
+    #[test]
+    fn developer_only_classifier_is_ascii_case_insensitive() {
+        for backend in [
+            "debug",
+            "Debug",
+            "DEBUG",
+            "mock",
+            "Mock",
+            "MOCK",
+            "halo2/ipa:Debug-Proof",
+            "halo2/ipa:D-e-b-u-g-Proof",
+            "halo2/ipa:Mock-Proof",
+            "halo2/ipa:M-o-c-k-Proof",
+            "stark/fri/Debug",
+            "stark/fri/D-e-b-u-g",
+            "stark/fri/Mock",
+            "stark/fri/M-o-c-k",
+            "stark/fri/dev-fixture",
+            "stark/fri/D-e-v-F-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/D-e-v",
+            "stark/fri/Test",
+            "stark/fri/T-e-s-t",
+            "stark/fri/Placeholder",
+            "miden-stark:DevFixture",
+            "halo2/ipa:DevFixture",
+            "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:Dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:Dummy",
+            "halo2/ipa:F-a-k-e",
+            "halo2/ipa:Stub",
+            "halo2/ipa:S-a-m-p-l-e",
+        ] {
+            assert!(
+                is_developer_only_backend_label(backend),
+                "developer-only backend {backend} must be classified before allowlist checks"
+            );
+        }
+    }
+    #[test]
+    fn developer_only_classifier_does_not_reject_embedded_text_fragments() {
+        for backend in [
+            "stark/fri/latest",
+            "stark/fri/attestation",
+            "stark/fri/contest",
+            "halo2/ipa:attestation",
+        ] {
+            assert!(
+                !is_developer_only_backend_label(backend),
+                "backend {backend} must not be rejected because a normal word contains `test`"
+            );
+        }
+    }
+}
+#[cfg(all(test, feature = "zk-stark"))]
+macro_rules! consensus_stark_vk {
+    ($circuit_id:expr $(,)?) => {
+        $crate::stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: $circuit_id,
+            n_log2: $crate::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: $crate::stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: $crate::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+        }
+    };
+}
+#[cfg(all(test, feature = "zk-stark"))]
+mod stark_prover_tests {
+    use super::{
+        STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
+        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1,
+        canonical_stark_fri_circuit_id_for_backend, prove_stark_fri_open_verify_envelope,
+        stark_binding_air_terms, stark_open_verify_air_public_digest_current,
+        stark_open_verify_domain_tag_current, verify_backend_with_timing,
+    };
+    use crate::stark::{
+        STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        STARK_FRI_CONSENSUS_MIN_QUERIES, StarkCompositionValueV1, StarkFriParamsV1,
+        StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1,
+    };
+    use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+    #[test]
+    fn stark_exact_circuit_grammar_rejects_retired_wire_spellings() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let exact = format!("{backend}:binding-air");
+        let borrowed = canonical_stark_fri_circuit_id_for_backend(backend, &exact).unwrap();
+        assert!(core::ptr::eq(borrowed.as_ptr(), exact.as_ptr()));
+        for other in [
+            "binding-air".to_owned(),
+            format!("{backend}/binding-air"),
+            format!(" {exact}"),
+            format!("{exact} "),
+            format!("{backend}::binding-air"),
+            format!("{backend}:"),
+            "stark/fri/poseidon2-goldilocks:binding-air".to_owned(),
+            format!(
+                "{backend}:{}",
+                "x".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES)
+            ),
+        ] {
+            assert!(
+                canonical_stark_fri_circuit_id_for_backend(backend, &other).is_none(),
+                "{other}"
+            );
+        }
+        assert!(canonical_stark_fri_circuit_id_for_backend("stark/fri", &exact).is_none());
+    }
+
+    #[test]
+    fn stark_exact_registry_material_and_cache_do_not_adopt_aliases() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let exact = format!("{backend}:exact-registry-test");
+        let payload = consensus_stark_vk!(exact.clone());
+        let bytes = norito::encode_canonical(&payload).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                super::validate_stark_fri_verifying_key_v1(backend, &exact, &bytes)
+                    .unwrap()
+                    .circuit_id,
+                exact
+            );
+        }
+        for alias in [
+            "exact-registry-test".to_owned(),
+            format!("{backend}/exact-registry-test"),
+            format!(" {exact} "),
+        ] {
+            assert!(super::validate_stark_fri_verifying_key_v1(backend, &alias, &bytes).is_err());
+            let changed = consensus_stark_vk!(alias.clone());
+            let changed_bytes = norito::encode_canonical(&changed).unwrap();
+            assert!(
+                super::validate_stark_fri_verifying_key_v1(backend, &exact, &changed_bytes)
+                    .is_err()
+            );
+            assert!(
+                super::validate_stark_fri_verifying_key_v1(backend, &alias, &changed_bytes)
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            super::validate_stark_fri_verifying_key_v1(backend, &exact, &bytes)
+                .unwrap()
+                .circuit_id,
+            exact
+        );
+    }
+
+    #[test]
+    fn stark_exact_native_key_contract_does_not_grant_generic_dispatch() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        for bare in [
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        ] {
+            assert!(super::is_typed_native_stark_circuit_id(bare));
+            assert!(super::stark_registry_circuit_id_matches_backend(
+                backend, bare
+            ));
+            assert!(!super::stark_open_verify_circuit_id_matches_backend(
+                backend, bare
+            ));
+            let payload = consensus_stark_vk!(bare.to_owned());
+            let bytes = norito::encode_canonical(&payload).unwrap();
+            assert_eq!(
+                super::validate_stark_fri_verifying_key_v1(backend, bare, &bytes)
+                    .unwrap()
+                    .circuit_id,
+                bare
+            );
+            for alias in [
+                format!("{backend}:{bare}"),
+                format!("{backend}/{bare}"),
+                format!(" {bare} "),
+            ] {
+                assert!(!super::is_typed_native_stark_circuit_id(&alias));
+                assert!(!super::stark_registry_circuit_id_matches_backend(
+                    backend, &alias
+                ));
+                assert!(
+                    super::validate_stark_fri_verifying_key_v1(backend, &alias, &bytes).is_err()
+                );
+                let altered = consensus_stark_vk!(alias.clone());
+                assert!(
+                    super::validate_stark_fri_verifying_key_v1(
+                        backend,
+                        &alias,
+                        &norito::encode_canonical(&altered).unwrap()
+                    )
+                    .is_err()
+                );
+                assert!(
+                    super::validate_stark_fri_verifying_key_v1(
+                        backend,
+                        bare,
+                        &norito::encode_canonical(&altered).unwrap()
+                    )
+                    .is_err()
+                );
+            }
+            assert!(!super::stark_registry_circuit_id_matches_backend(
+                "stark/fri",
+                bare
+            ));
+        }
+    }
+
+    #[test]
+    fn stark_exact_envelope_and_air_reject_aliases_of_a_real_proof() {
+        let (backend, exact, vk_box, proof) = sample_stark_open_verify_proof();
+        assert!(verify_backend_with_timing(backend, &proof, Some(&vk_box)).ok);
+        let outer: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).unwrap();
+        let open: StarkFriOpenProofV1 = norito::decode_canonical(&outer.proof_bytes).unwrap();
+        let native: StarkVerifyEnvelopeV1 = norito::decode_canonical(&open.envelope_bytes).unwrap();
+        for alias in [
+            "tiny-open".to_owned(),
+            format!("{backend}/tiny-open"),
+            format!(" {exact} "),
+        ] {
+            let mut altered = outer.clone();
+            altered.circuit_id = alias.clone();
+            let wire = ProofBox::new(
+                backend.to_owned(),
+                norito::encode_canonical(&altered).unwrap(),
+            );
+            assert!(!verify_backend_with_timing(backend, &wire, Some(&vk_box)).ok);
+            let mut changed_native = native.clone();
+            changed_native.proof.air.as_mut().unwrap().circuit_id = alias;
+            let mut changed_open = open.clone();
+            changed_open.envelope_bytes = norito::encode_canonical(&changed_native).unwrap();
+            let mut changed_outer = outer.clone();
+            changed_outer.proof_bytes = norito::encode_canonical(&changed_open).unwrap();
+            let wire = ProofBox::new(
+                backend.to_owned(),
+                norito::encode_canonical(&changed_outer).unwrap(),
+            );
+            assert!(!verify_backend_with_timing(backend, &wire, Some(&vk_box)).ok);
+        }
+    }
+    #[test]
+    fn stark_exact_reserved_roles_refuse_before_direct_key_preparation() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        for role in [
+            super::GOVERNANCE_BALLOT_CIRCUIT_ID_V1,
+            super::GOVERNANCE_TALLY_CIRCUIT_ID_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        ] {
+            let circuit_id = format!("{backend}:{role}");
+            assert!(super::stark_open_verify_circuit_id_matches_backend(
+                backend,
+                &circuit_id
+            ));
+            let payload = consensus_stark_vk!(circuit_id.clone());
+            // A canonical payload and a malformed payload both have authentic
+            // outer key hashes. Refusal must precede even the preparation entry,
+            // rather than depend on registry grammar, payload decode, or cache.
+            for bytes in [norito::encode_canonical(&payload).unwrap(), vec![0x5a]] {
+                let vk = VerifyingKeyBox::new(backend.to_owned(), bytes);
+                let outer = OpenVerifyEnvelope {
+                    backend: BackendTag::Stark,
+                    circuit_id: circuit_id.clone(),
+                    vk_hash: super::hash_vk(&vk),
+                    public_inputs: b"reserved-role:preparation-order:v1".to_vec(),
+                    proof_bytes: vec![0x7d],
+                    aux: Vec::new(),
+                };
+                outer.validate_for_admission().unwrap();
+                let proof = ProofBox::new(
+                    backend.to_owned(),
+                    norito::encode_canonical(&outer).unwrap(),
+                );
+                super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| entries.set(0));
+                assert!(!super::verify_backend(backend, &proof, Some(&vk)), "{role}");
+                super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| {
+                    assert_eq!(entries.get(), 0, "reserved role prepared a key: {role}");
+                });
+            }
+        }
+        // Exercise an actual generic positive proof twice: the observer sees
+        // each native verifier preparation entry even when the key is cached.
+        let (backend, _, vk, proof) = sample_stark_open_verify_proof();
+        for _ in 0..2 {
+            super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| entries.set(0));
+            assert!(super::verify_backend(backend, &proof, Some(&vk)));
+            super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| {
+                assert_eq!(
+                    entries.get(),
+                    1,
+                    "generic verifier preparation observer is live"
+                );
+            });
+        }
+    }
+    fn sample_stark_open_verify_proof() -> (&'static str, String, VerifyingKeyBox, ProofBox) {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:tiny-open");
+        let vk_payload = consensus_stark_vk!(circuit_id.clone());
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"tiny:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("binding AIR STARK proof");
+        (backend, circuit_id, vk_box, proof)
+    }
+    fn weak_stark_vk_payload(circuit_id: String) -> StarkFriVerifyingKeyV1 {
+        StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+        }
+    }
+    fn weak_stark_open_verify_proof(
+        backend: &str,
+        circuit_id: &str,
+        vk_box: &VerifyingKeyBox,
+        schema_descriptor: Vec<u8>,
+        public_inputs: Vec<Vec<[u8; 32]>>,
+    ) -> ProofBox {
+        stark_open_verify_proof_with_transcript_label(
+            backend,
+            circuit_id,
+            vk_box,
+            schema_descriptor,
+            public_inputs,
+            STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1,
+        )
+    }
+    fn stark_open_verify_proof_with_transcript_label(
+        backend: &str,
+        circuit_id: &str,
+        vk_box: &VerifyingKeyBox,
+        schema_descriptor: Vec<u8>,
+        public_inputs: Vec<Vec<[u8; 32]>>,
+        transcript_label: &str,
+    ) -> ProofBox {
+        let vk_payload: StarkFriVerifyingKeyV1 =
+            norito::decode_from_bytes(&vk_box.bytes).expect("decode weak STARK VK payload");
+        let vk_hash = super::hash_vk(vk_box);
+        let domain_tag = stark_open_verify_domain_tag_current(
+            backend,
+            circuit_id,
+            vk_hash,
+            &schema_descriptor,
+            &public_inputs,
+        );
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: vk_payload.n_log2,
+            blowup_log2: vk_payload.blowup_log2,
+            fold_arity: vk_payload.fold_arity,
+            queries: vk_payload.queries,
+            merkle_arity: vk_payload.merkle_arity,
+            domain_tag,
+        };
+        let env_circuit_id = if let Some(relation) = circuit_id
+            .strip_prefix(backend)
+            .and_then(|suffix| suffix.strip_prefix('/'))
+        {
+            format!("{backend}:{relation}")
+        } else if circuit_id.starts_with(&format!("{backend}:")) {
+            circuit_id.to_owned()
+        } else {
+            format!("{backend}:{circuit_id}")
+        };
+        let public_digest = stark_open_verify_air_public_digest_current(
+            backend,
+            circuit_id,
+            vk_hash,
+            &schema_descriptor,
+            &public_inputs,
+        )
+        .expect("derive weak STARK AIR public digest");
+        let envelope_bytes = match crate::stark::prove_stark_fri_air_envelope_bytes(
+            params.clone(),
+            transcript_label.to_owned(),
+            env_circuit_id.to_owned(),
+            public_digest,
+        ) {
+            Ok(envelope_bytes) => envelope_bytes,
+            Err(err)
+                if err.contains("BFV full-bootstrap")
+                    || err.contains("ZK-ACE")
+                    || err.contains("IVM execution")
+                    || err.contains("Soracloud") =>
+            {
+                let fixture_air_circuit_id = format!("{env_circuit_id}:generic-binding-fixture");
+                let envelope_bytes = crate::stark::prove_stark_fri_air_envelope_bytes(
+                    params,
+                    transcript_label.to_owned(),
+                    fixture_air_circuit_id,
+                    public_digest,
+                )
+                .expect("build weak STARK AIR proof with fixture circuit id");
+                let mut inner: StarkVerifyEnvelopeV1 = norito::decode_from_bytes(&envelope_bytes)
+                    .expect("decode weak STARK AIR proof");
+                inner
+                    .proof
+                    .air
+                    .as_mut()
+                    .expect("weak STARK AIR proof carries AIR section")
+                    .circuit_id = env_circuit_id;
+                norito::to_bytes(&inner).expect("encode retargeted weak STARK AIR proof")
+            }
+            Err(err) => panic!("build weak STARK AIR proof: {err}"),
+        };
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs,
+            envelope_bytes,
+        };
+        let outer = OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: circuit_id.to_owned(),
+            vk_hash,
+            public_inputs: schema_descriptor,
+            proof_bytes: norito::to_bytes(&open).expect("encode weak STARK open proof"),
+            aux: Vec::new(),
+        };
+        ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode weak STARK OpenVerifyEnvelope"),
+        )
+    }
+    fn mutate_outer_stark_open_verify_proof(
+        backend: &str,
+        proof: &ProofBox,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) -> ProofBox {
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        mutate(&mut outer);
+        ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        )
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_below_floor_verifying_key_payload() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:weak-open");
+        let vk_payload = weak_stark_vk_payload(circuit_id.clone());
+        let vk_box = VerifyingKeyBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&vk_payload).expect("encode weak STARK VK payload"),
+        );
+        let err = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"weak:schema:v1",
+            vec![vec![[0x11; 32]]],
+        )
+        .expect_err("generic STARK builder must reject below-floor VK payloads");
+        assert!(
+            err.contains("below consensus floor"),
+            "unexpected below-floor VK rejection: {err}"
+        );
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_below_floor_verifying_key_payload() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:weak-open");
+        let vk_payload = weak_stark_vk_payload(circuit_id.clone());
+        let vk_box = VerifyingKeyBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&vk_payload).expect("encode weak STARK VK payload"),
+        );
+        let proof = weak_stark_open_verify_proof(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"weak:schema:v1".to_vec(),
+            vec![vec![[0x11; 32]]],
+        );
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(
+            !report.ok,
+            "generic STARK verifier must reject below-floor VK payloads"
+        );
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_verifying_key_backend_mismatch() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:backend-mismatch");
+        let vk_payload = consensus_stark_vk!(circuit_id.clone());
+        let vk_box = VerifyingKeyBox::new(
+            "stark/fri".to_owned(),
+            norito::to_bytes(&vk_payload).expect("encode backend-mismatched STARK VK payload"),
+        );
+        let err = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"backend-mismatch:schema:v1",
+            vec![vec![[0x11; 32]]],
+        )
+        .expect_err("generic STARK builder must reject verifier-key backend mismatch");
+        assert!(
+            err.contains("backend mismatch"),
+            "unexpected VK backend mismatch rejection: {err}"
+        );
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_verifying_key_backend_mismatch() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:backend-mismatch");
+        let vk_payload = consensus_stark_vk!(circuit_id.clone());
+        let vk_box = VerifyingKeyBox::new(
+            "stark/fri".to_owned(),
+            norito::to_bytes(&vk_payload).expect("encode backend-mismatched STARK VK payload"),
+        );
+        let proof = weak_stark_open_verify_proof(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"backend-mismatch:schema:v1".to_vec(),
+            vec![vec![[0x11; 32]]],
+        );
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(
+            !report.ok,
+            "generic STARK verifier must reject a verifier key tagged for another backend"
+        );
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_circuit_family_mismatch() {
+        for (case, backend, circuit_id) in [
+            (
+                "profile backend with sibling STARK profile",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon2-goldilocks:family-spoof",
+            ),
+            (
+                "profile backend with generic STARK prefix",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri:family-spoof",
+            ),
+            (
+                "profile backend with bare generic STARK family",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri",
+            ),
+            (
+                "generic STARK backend with halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2/ipa:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form kzg circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "kzg:trusted-setup-spoof",
+            ),
+            (
+                "generic STARK backend with bare trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "bn254",
+            ),
+            (
+                "generic STARK backend with separated trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "b.l.s.12.381",
+            ),
+            (
+                "generic STARK backend with STARK-prefixed trusted-setup circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile backend with bare trusted-setup circuit",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "bn254",
+            ),
+            (
+                "profile backend with profile-prefixed trusted-setup circuit",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:structured-reference-string",
+            ),
+        ] {
+            let vk_payload = consensus_stark_vk!(circuit_id.to_owned());
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload)
+                    .expect("encode circuit-family-mismatched STARK VK payload"),
+            );
+            let err = prove_stark_fri_open_verify_envelope(
+                backend,
+                circuit_id,
+                &vk_box,
+                b"family-mismatch:schema:v1",
+                vec![vec![[0x11; 32]]],
+            )
+            .expect_err("generic STARK prover must reject circuit ids from another family/profile");
+            assert!(
+                err.contains("backend family"),
+                "unexpected circuit family rejection for {case}: {err}"
+            );
+        }
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_circuit_family_mismatch() {
+        for (case, backend, circuit_id) in [
+            (
+                "profile backend with sibling STARK profile",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon2-goldilocks:family-spoof",
+            ),
+            (
+                "profile backend with generic STARK prefix",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri:family-spoof",
+            ),
+            (
+                "profile backend with bare generic STARK family",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri",
+            ),
+            (
+                "generic STARK backend with halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2/ipa:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form kzg circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "kzg:trusted-setup-spoof",
+            ),
+            (
+                "generic STARK backend with bare trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "bn254",
+            ),
+            (
+                "generic STARK backend with separated trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "b.l.s.12.381",
+            ),
+            (
+                "generic STARK backend with STARK-prefixed trusted-setup circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile backend with bare trusted-setup circuit",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "bn254",
+            ),
+            (
+                "profile backend with profile-prefixed trusted-setup circuit",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:structured-reference-string",
+            ),
+        ] {
+            let vk_payload = consensus_stark_vk!(circuit_id.to_owned());
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload)
+                    .expect("encode circuit-family-mismatched STARK VK payload"),
+            );
+            let proof = weak_stark_open_verify_proof(
+                backend,
+                circuit_id,
+                &vk_box,
+                b"family-mismatch:schema:v1".to_vec(),
+                vec![vec![[0x11; 32]]],
+            );
+            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+            assert!(
+                !report.ok,
+                "generic STARK verifier must reject circuit id family/profile mismatch for {case}"
+            );
+        }
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_zk_ace_circuit_aliases() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let canonical = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID;
+        let prefixed_alias = format!("{backend}:{canonical}");
+        let slash_alias = format!("{backend}/{canonical}");
+        for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+            let vk_payload = consensus_stark_vk!(circuit_id.clone());
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload).expect("encode ZK-ACE alias STARK VK payload"),
+            );
+            let err = prove_stark_fri_open_verify_envelope(
+                backend,
+                &circuit_id,
+                &vk_box,
+                b"zk-ace:generic-schema:v1",
+                vec![vec![[0x33; 32]]],
+            )
+            .expect_err("generic STARK prover must not target ZK-ACE circuit aliases");
+            assert_eq!(
+                err, "STARK circuit_id does not match backend family",
+                "reserved privacy namespaces must reject before verifier-key decoding: {circuit_id}"
+            );
+        }
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_zk_ace_alias_generic_binding_air() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let canonical = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID;
+        let prefixed_alias = format!("{backend}:{canonical}");
+        let slash_alias = format!("{backend}/{canonical}");
+        for circuit_id in [prefixed_alias, slash_alias] {
+            let vk_payload = consensus_stark_vk!(circuit_id.clone());
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload).expect("encode ZK-ACE alias STARK VK payload"),
+            );
+            let proof = weak_stark_open_verify_proof(
+                backend,
+                &circuit_id,
+                &vk_box,
+                b"zk-ace:forged-generic-schema:v1".to_vec(),
+                vec![vec![[0x44; 32]]],
+            );
+            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+            assert!(
+                !report.ok,
+                "ZK-ACE circuit alias {circuit_id} must not verify as generic binding AIR"
+            );
+        }
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_ivm_execution_circuit_aliases() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let canonical = super::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let prefixed_alias = format!("{backend}:{canonical}");
+        let slash_alias = format!("{backend}/{canonical}");
+        for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+            let vk_payload = consensus_stark_vk!(circuit_id.clone());
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload).expect("encode IVM alias STARK VK payload"),
+            );
+            let err = prove_stark_fri_open_verify_envelope(
+                backend,
+                &circuit_id,
+                &vk_box,
+                b"ivm:generic-schema:v1",
+                vec![vec![[0x66; 32]]],
+            )
+            .expect_err("generic STARK prover must not target IVM execution circuit aliases");
+            assert_eq!(
+                err, "STARK circuit_id does not match backend family",
+                "unexpected IVM alias rejection for {circuit_id}"
+            );
+        }
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_ivm_alias_generic_binding_air() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let canonical = super::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let prefixed_alias = format!("{backend}:{canonical}");
+        let slash_alias = format!("{backend}/{canonical}");
+        for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+            let vk_payload = consensus_stark_vk!(circuit_id.clone());
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload).expect("encode IVM alias STARK VK payload"),
+            );
+            let proof = weak_stark_open_verify_proof(
+                backend,
+                &circuit_id,
+                &vk_box,
+                b"ivm:forged-generic-schema:v1".to_vec(),
+                vec![vec![[0x77; 32]]],
+            );
+            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+            assert!(
+                !report.ok,
+                "IVM execution circuit alias {circuit_id} must not verify with generic schema"
+            );
+        }
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_namespaced_reserved_aliases() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        for canonical in [
+            super::IVM_EXECUTION_V1_CIRCUIT_ID,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID,
+        ] {
+            for circuit_id in [
+                format!("tenant:{canonical}"),
+                format!("{backend}:tenant:{canonical}"),
+            ] {
+                let vk_payload = consensus_stark_vk!(circuit_id.clone());
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload)
+                        .expect("encode namespaced reserved STARK VK payload"),
+                );
+                let proof = weak_stark_open_verify_proof(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"reserved:forged-generic-schema:v1".to_vec(),
+                    vec![vec![[0x79; 32]]],
+                );
+                let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+                assert!(
+                    !report.ok,
+                    "reserved circuit alias {circuit_id} must not verify as generic binding AIR"
+                );
+            }
+        }
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_bfv_full_bootstrap_circuit_aliases() {
+        let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
+        for backend in [
+            ZK_BACKEND_STARK_FRI_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+        ] {
+            let prefixed_alias = format!("{backend}:{canonical}");
+            let slash_alias = format!("{backend}/{canonical}");
+            for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+                let vk_payload = consensus_stark_vk!(circuit_id.clone());
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
+                );
+                let err = prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"bfv:generic-schema:v1",
+                    vec![vec![[0x55; 32]]],
+                )
+                .expect_err("generic STARK prover must not target BFV full-bootstrap aliases");
+                assert!(
+                    if circuit_id.starts_with(&format!("{backend}:")) {
+                        err.contains("BFV full-bootstrap")
+                    } else {
+                        err == "STARK circuit_id does not match backend family"
+                    },
+                    "unexpected BFV alias rejection for {backend} / {circuit_id}: {err}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_bfv_full_bootstrap_alias_generic_binding_air() {
+        let canonical = iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
+        for backend in [
+            ZK_BACKEND_STARK_FRI_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+            "stark/fri/poseidon2-goldilocks",
+        ] {
+            let prefixed_alias = format!("{backend}:{canonical}");
+            let slash_alias = format!("{backend}/{canonical}");
+            for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
+                let vk_payload = consensus_stark_vk!(circuit_id.clone());
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
+                );
+                let proof = weak_stark_open_verify_proof(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    b"bfv:forged-generic-schema:v1".to_vec(),
+                    vec![vec![[0x66; 32]]],
+                );
+                let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+                assert!(
+                    !report.ok,
+                    "BFV full-bootstrap alias {backend} / {circuit_id} must not verify as generic binding AIR"
+                );
+            }
+        }
+    }
+    fn soracloud_fhe_proof_relations() -> [(&'static str, &'static [u8]); 4] {
+        use iroha_data_model::soracloud::{
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        };
+        [
+            (
+                SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+        ]
+    }
+    #[test]
+    fn generic_stark_prover_rejects_every_soracloud_fhe_relation_alias() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        for (canonical, schema) in soracloud_fhe_proof_relations() {
+            for circuit_id in [
+                canonical.to_owned(),
+                format!("{backend}:{canonical}"),
+                format!("{backend}/{canonical}"),
+            ] {
+                let vk_payload = consensus_stark_vk!(circuit_id.clone());
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode Soracloud STARK VK payload"),
+                );
+                let err = prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    schema,
+                    vec![vec![[0xA7; 32]]],
+                )
+                .expect_err("generic STARK prover must not target a Soracloud FHE relation");
+                assert!(
+                    err.contains("Soracloud")
+                        || if circuit_id.starts_with(&format!("{backend}:")) {
+                            err.contains("BFV full-bootstrap")
+                        } else {
+                            err == "STARK circuit_id does not match backend family"
+                        },
+                    "unexpected Soracloud relation rejection for {circuit_id}: {err}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn generic_stark_verifier_rejects_public_metadata_only_soracloud_fhe_proofs() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        for (circuit_id, schema) in soracloud_fhe_proof_relations() {
+            let vk_payload = consensus_stark_vk!(circuit_id.to_owned());
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload).expect("encode Soracloud STARK VK payload"),
+            );
+            // This is exactly the vacuous construction under regression: it
+            // carries a claimed public statement hash and the public schema,
+            // but no ciphertext, key, refresh, material, or execution witness.
+            let proof = weak_stark_open_verify_proof(
+                backend,
+                circuit_id,
+                &vk_box,
+                schema.to_vec(),
+                vec![vec![[0xA7; 32]]],
+            );
+            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+            assert!(
+                !report.ok,
+                "public metadata alone must not prove Soracloud FHE relation {circuit_id}"
+            );
+        }
+    }
+    fn stark_field_add_for_test(a: u64, b: u64) -> u64 {
+        (((a as u128) + (b as u128)) % STARK_GOLDILOCKS_MODULUS) as u64
+    }
+    fn stark_field_mul_for_test(a: u64, b: u64) -> u64 {
+        (((a as u128) * (b as u128)) % STARK_GOLDILOCKS_MODULUS) as u64
+    }
+    fn attach_valid_auxiliary_composition_to_open_verify_proof(
+        backend: &str,
+        outer: &mut OpenVerifyEnvelope,
+    ) {
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        let mut inner: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&open.envelope_bytes).expect("decode inner STARK envelope");
+        let terms = stark_binding_air_terms(
+            backend,
+            &outer.circuit_id,
+            outer.vk_hash,
+            &outer.public_inputs,
+            &open.public_inputs,
+        );
+        let z_final = inner
+            .proof
+            .queries
+            .first()
+            .and_then(|chain| chain.last())
+            .map(|decommit| decommit.z)
+            .expect("generated STARK proof carries a final fold value");
+        assert_eq!(
+            z_final.coefficients(),
+            [0; 4],
+            "the V1 terminal Fp4 polynomial must open to zero"
+        );
+        let mut leaf = stark_field_add_for_test(
+            STARK_BINDING_AIR_CONSTANT,
+            stark_field_mul_for_test(STARK_BINDING_AIR_Z_COEFF, 0),
+        );
+        for term in &terms {
+            leaf = stark_field_add_for_test(leaf, stark_field_mul_for_test(term.coeff, term.value));
+        }
+        let (comp_root, path) = crate::stark::stark_merkle_root_and_path_from_field_values_v1(
+            &inner.params,
+            &[leaf],
+            0,
+        )
+        .expect("derive auxiliary composition commitment");
+        let comp_value = StarkCompositionValueV1 {
+            leaf,
+            constant: STARK_BINDING_AIR_CONSTANT,
+            z_coeff: STARK_BINDING_AIR_Z_COEFF,
+            aux_terms: terms,
+            path,
+        };
+        inner.proof.commits.comp_root = Some(comp_root);
+        inner.proof.comp_values = Some(vec![comp_value; inner.proof.queries.len()]);
+        open.envelope_bytes =
+            norito::to_bytes(&inner).expect("encode auxiliary inner STARK envelope");
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode auxiliary STARK open proof");
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_emits_binding_air_proof() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(report.ok);
+    }
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_alternate_layout_verifying_key() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:alternate-layout-vk");
+        let vk_payload = consensus_stark_vk!(circuit_id.clone());
+        let canonical_vk =
+            norito::encode_canonical(&vk_payload).expect("encode canonical STARK VK");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_vk = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&vk_payload).expect("encode alternate-layout STARK VK")
+        };
+        assert_ne!(alternate_vk, canonical_vk);
+        norito::decode_from_bytes::<StarkFriVerifyingKeyV1>(&alternate_vk)
+            .expect("ordinary Norito accepts the advertised layout");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), alternate_vk);
+        let err = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"alternate-layout-vk:schema:v1",
+            vec![vec![[0x11; 32]]],
+        )
+        .expect_err("alternate-layout STARK VK must be rejected before proving");
+        assert!(
+            err.contains("invalid STARK verifying key payload"),
+            "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_alternate_layout_outer() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let outer: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("decode canonical outer");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_outer = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&outer).expect("encode alternate-layout outer envelope")
+        };
+        assert_ne!(alternate_outer, proof.bytes);
+        norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate_outer)
+            .expect("ordinary Norito accepts the advertised layout");
+        let alternate_proof = ProofBox::new(backend.to_owned(), alternate_outer);
+        assert!(
+            !verify_backend_with_timing(backend, &alternate_proof, Some(&vk_box)).ok,
+            "alternate-layout outer envelope must be rejected"
+        );
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_alternate_layout_wrapper() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("decode canonical outer");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_canonical(&outer.proof_bytes).expect("decode canonical STARK wrapper");
+        let canonical_wrapper = outer.proof_bytes.clone();
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_wrapper = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&open).expect("encode alternate-layout STARK wrapper")
+        };
+        assert_ne!(alternate_wrapper, canonical_wrapper);
+        assert_eq!(
+            norito::decode_from_bytes::<StarkFriOpenProofV1>(&alternate_wrapper)
+                .expect("ordinary Norito accepts the advertised layout"),
+            open
+        );
+        outer.proof_bytes = alternate_wrapper;
+        let alternate_proof = ProofBox::new(
+            backend.to_owned(),
+            norito::encode_canonical(&outer)
+                .expect("encode canonical outer around alternate wrapper"),
+        );
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert!(
+            verify_backend_with_timing(backend, &proof, Some(&vk_box)).ok,
+            "canonical STARK proof must verify independently of ambient layout"
+        );
+        assert!(
+            !verify_backend_with_timing(backend, &alternate_proof, Some(&vk_box)).ok,
+            "alternate-layout STARK wrapper must be rejected inside a canonical outer envelope"
+        );
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_bound_public_input_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        open.public_inputs[0][0][0] ^= 0x01;
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_bound_schema_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        outer.public_inputs.push(0xAA);
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_noncanonical_binding_air_transcript_label() {
+        let (backend, circuit_id, vk_box, _proof) = sample_stark_open_verify_proof();
+        let proof = stark_open_verify_proof_with_transcript_label(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"tiny:schema:v1".to_vec(),
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+            "IROHA-STARK-AIR-V1-ALT",
+        );
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(
+            !report.ok,
+            "generic STARK OpenVerify wrappers must use the canonical binding AIR transcript label"
+        );
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_vk_hash_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        outer.vk_hash[0] ^= 0x01;
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_noncanonical_outer_shape() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 7] = [
+            ("backend tag", |outer| {
+                outer.backend = BackendTag::Halo2IpaPasta
+            }),
+            ("empty circuit id", |outer| outer.circuit_id.clear()),
+            ("zero verifier-key hash", |outer| outer.vk_hash = [0u8; 32]),
+            ("empty public inputs", |outer| outer.public_inputs.clear()),
+            ("empty proof bytes", |outer| outer.proof_bytes.clear()),
+            ("all-zero proof bytes", |outer| {
+                outer.proof_bytes = vec![0u8; 16]
+            }),
+            ("auxiliary bytes", |outer| {
+                outer.aux = b"side-channel".to_vec()
+            }),
+        ];
+        for (case, mutate) in cases {
+            let tampered = mutate_outer_stark_open_verify_proof(backend, &proof, mutate);
+            let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+            assert!(!report.ok, "case {case}");
+        }
+        let tampered = mutate_outer_stark_open_verify_proof(backend, &proof, |outer| {
+            outer.public_inputs =
+                vec![0xA5; iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1];
+        });
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok, "oversized public inputs");
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_missing_vk() {
+        let (backend, _circuit_id, _vk_box, proof) = sample_stark_open_verify_proof();
+        let report = verify_backend_with_timing(backend, &proof, None);
+        assert!(!report.ok);
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        let mut inner: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&open.envelope_bytes).expect("decode inner STARK envelope");
+        inner
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .circuit_id
+            .push_str(":tampered");
+        open.envelope_bytes = norito::to_bytes(&inner).expect("encode tampered inner STARK proof");
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_inner_parameter_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        let mut inner: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&open.envelope_bytes).expect("decode inner STARK envelope");
+        inner.params.queries = inner.params.queries.saturating_add(1);
+        open.envelope_bytes = norito::to_bytes(&inner).expect("encode tampered inner STARK proof");
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_inner_auxiliary_composition_commitments() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        attach_valid_auxiliary_composition_to_open_verify_proof(backend, &mut outer);
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode auxiliary outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_malformed_payload_without_panic() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: format!("{backend}:tiny-open"),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let malformed = ProofBox::new(backend.to_owned(), vec![0xAA, 0xBB, 0xCC]);
+        let report = verify_backend_with_timing(backend, &malformed, Some(&vk_box));
+        assert!(!report.ok);
+    }
+}
+/// Result produced by [`verify_backend_with_timing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyReport {
+    /// Outcome of the backend verification.
+    pub ok: bool,
+    /// Time spent verifying.
+    pub elapsed: Duration,
+}
+const REJECTED_VERIFY_REPORT: VerifyReport = VerifyReport {
+    ok: false,
+    elapsed: Duration::ZERO,
+};
+/// Configuration guardrails for proof verification (enabled flags + payload size caps).
+///
+/// This struct is intentionally scalar-only so it can be sourced both from node configuration
+/// (`zk_guardrails::guardrails_from_config` in `iroha_core`) and from host-local verification caps
+/// (e.g. IVM host).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZkVerifyGuardrails {
+    /// Whether halo2 verification is enabled.
+    pub halo2_enabled: bool,
+    /// Maximum accepted halo2 envelope payload size (bytes).
+    pub halo2_max_envelope_bytes: usize,
+    /// Maximum accepted halo2 proof payload size (bytes).
+    pub halo2_max_proof_bytes: usize,
+    /// Whether STARK verification is enabled.
+    pub stark_enabled: bool,
+    /// Maximum accepted outer STARK OpenVerifyEnvelope size (bytes).
+    pub stark_max_envelope_bytes: usize,
+    /// Maximum accepted backend-native STARK proof payload size (bytes).
+    pub stark_max_proof_bytes: usize,
+}
+/// Verify a backend and report the elapsed time.
+pub fn verify_backend_with_timing(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+) -> VerifyReport {
+    let started = Instant::now();
+    let ok = verify_backend(backend, proof, vk);
+    VerifyReport {
+        ok,
+        elapsed: started.elapsed(),
+    }
+}
+/// Verify a backend under explicit configuration guardrails (enabled flags + payload size caps).
+///
+/// This helper exists to prevent accidentally accepting proofs for a backend that is
+/// compiled in but disabled at runtime.
+pub fn verify_backend_with_timing_guardrails(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    guardrails: ZkVerifyGuardrails,
+) -> VerifyReport {
+    if is_production_claim_backend_label(backend) {
+        tracing::debug!(
+            backend,
+            "production-claim proof backends are not admitted by node verifier guardrails"
+        );
+        return REJECTED_VERIFY_REPORT;
+    }
+    if is_trusted_setup_backend_label(backend) {
+        tracing::debug!(
+            backend,
+            "trusted-setup proof backends are not admitted by node verifier guardrails"
+        );
+        return REJECTED_VERIFY_REPORT;
+    }
+    if is_developer_only_backend_label(backend) {
+        tracing::debug!(
+            backend,
+            "developer-only proof backends are not admitted by node verifier guardrails"
+        );
+        return REJECTED_VERIFY_REPORT;
+    }
+    if !is_production_verify_backend_label(backend) {
+        tracing::debug!(
+            backend,
+            "unsupported proof backends are not admitted by node verifier guardrails"
+        );
+        return REJECTED_VERIFY_REPORT;
+    }
+    if proof.backend.as_str() != backend {
+        tracing::debug!(
+            backend,
+            proof_backend = proof.backend.as_str(),
+            "proof backend label does not match requested verifier backend"
+        );
+        return REJECTED_VERIFY_REPORT;
+    }
+    if let Some(vk_box) = vk
+        && vk_box.backend.as_str() != backend
+    {
+        tracing::debug!(
+            backend,
+            vk_backend = vk_box.backend.as_str(),
+            "verifying key backend label does not match requested verifier backend"
+        );
+        return REJECTED_VERIFY_REPORT;
+    }
+    if production_verify_backend_tag(backend)
+        == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    {
+        if !guardrails.halo2_enabled {
+            tracing::debug!(
+                backend,
+                "halo2 verification is disabled in node configuration"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if proof.bytes.len() > guardrails.halo2_max_envelope_bytes {
+            tracing::debug!(
+                backend,
+                "halo2 payload exceeds node-configured max_envelope_bytes"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        // V1 Halo2 proof inputs are always canonical `OpenVerifyEnvelope` frames.
+        // Raw backend-native payloads are accepted only after this boundary has
+        // decoded and authenticated the outer envelope.
+        let env = match norito::decode_canonical::<iroha_data_model::zk::OpenVerifyEnvelope>(
+            &proof.bytes,
+        ) {
+            Ok(env) => env,
+            Err(err) => {
+                tracing::debug!(
+                    backend,
+                    error = %err,
+                    "halo2 proof payload is not a canonical OpenVerifyEnvelope"
+                );
+                return REJECTED_VERIFY_REPORT;
+            }
+        };
+        if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+            tracing::debug!(
+                backend,
+                "halo2 OpenVerifyEnvelope backend tag does not match verifier backend"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if let Err(err) = env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
+            max_proof_bytes: guardrails.halo2_max_proof_bytes,
+            ..iroha_data_model::zk::OpenVerifyEnvelopeBounds::default()
+        }) {
+            tracing::debug!(
+                backend,
+                error = %err,
+                "halo2 OpenVerifyEnvelope failed guardrail validation"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if !halo2_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
+            tracing::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "halo2 OpenVerifyEnvelope circuit id does not match verifier backend"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        let Some(expected_schema) = halo2_ipa_public_inputs_schema_v1(&env.circuit_id) else {
+            tracing::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "halo2 circuit has no canonical outer public-input schema"
+            );
+            return REJECTED_VERIFY_REPORT;
+        };
+        if env.public_inputs.as_slice() != expected_schema {
+            tracing::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "halo2 OpenVerifyEnvelope public-input schema is not canonical"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+    }
+    if is_stark_fri_v1_backend(backend) {
+        if !guardrails.stark_enabled {
+            tracing::debug!(
+                backend,
+                "stark verification is disabled in node configuration"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if proof.bytes.len() > guardrails.stark_max_envelope_bytes {
+            tracing::debug!(
+                backend,
+                "stark payload exceeds node-configured max_envelope_bytes"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        let env = match norito::decode_canonical::<iroha_data_model::zk::OpenVerifyEnvelope>(
+            &proof.bytes,
+        ) {
+            Ok(env) => env,
+            Err(err) => {
+                tracing::debug!(
+                    backend,
+                    error = %err,
+                    "stark proof payload is not an OpenVerifyEnvelope"
+                );
+                return REJECTED_VERIFY_REPORT;
+            }
+        };
+        if env.backend != iroha_data_model::zk::BackendTag::Stark {
+            tracing::debug!(
+                backend,
+                "stark OpenVerifyEnvelope backend tag does not match verifier backend"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if let Err(err) = env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
+            max_proof_bytes: guardrails.stark_max_envelope_bytes,
+            ..iroha_data_model::zk::OpenVerifyEnvelopeBounds::default()
+        }) {
+            tracing::debug!(
+                backend,
+                error = %err,
+                "stark OpenVerifyEnvelope failed guardrail validation"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if !stark_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
+            tracing::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "stark OpenVerifyEnvelope circuit id does not match verifier backend"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        let open = match norito::decode_canonical::<iroha_data_model::zk::StarkFriOpenProofV1>(
+            &env.proof_bytes,
+        ) {
+            Ok(open) => open,
+            Err(err) => {
+                tracing::debug!(
+                    backend,
+                    error = %err,
+                    "stark OpenVerifyEnvelope wrapper payload is malformed"
+                );
+                return REJECTED_VERIFY_REPORT;
+            }
+        };
+        if open.version != 1 {
+            tracing::debug!(
+                backend,
+                version = open.version,
+                "stark OpenVerifyEnvelope wrapper version is unsupported"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if open.envelope_bytes.is_empty() {
+            tracing::debug!(
+                backend,
+                "stark OpenVerifyEnvelope wrapper has empty native proof bytes"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        if open.envelope_bytes.len() > guardrails.stark_max_proof_bytes {
+            tracing::debug!(
+                backend,
+                "stark envelope proof bytes exceed node-configured max_proof_bytes"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+        #[cfg(feature = "zk-stark")]
+        {
+            let started = Instant::now();
+            let mut limits = crate::stark::StarkVerifierLimits::default();
+            limits.max_envelope_bytes = guardrails.stark_max_proof_bytes;
+            let ok = verify_stark_fri_open_verify_envelope_with_limits(backend, proof, vk, &limits);
+            return VerifyReport {
+                ok,
+                elapsed: started.elapsed(),
+            };
+        }
+        #[cfg(not(feature = "zk-stark"))]
+        {
+            tracing::debug!(
+                backend,
+                "stark/fri backend requested but binary was built without `zk-stark`"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
+    }
+    verify_backend_with_timing(backend, proof, vk)
+}
+#[cfg(test)]
+mod guardrails_tests {
+    use super::*;
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+    const ENABLED_GUARDRAILS: ZkVerifyGuardrails = ZkVerifyGuardrails {
+        halo2_enabled: true,
+        halo2_max_envelope_bytes: 1024,
+        halo2_max_proof_bytes: 1024,
+        stark_enabled: true,
+        stark_max_envelope_bytes: 1024,
+        stark_max_proof_bytes: 1024,
+    };
+    macro_rules! assert_guardrails_reject {
+        ($backend:expr, $proof:expr, $vk:expr, $guardrails:expr $(, $message:literal)? $(,)?) => {{
+            let report =
+                verify_backend_with_timing_guardrails($backend, $proof, $vk, $guardrails);
+            assert!(!report.ok $(, $message)?);
+            assert_eq!(report.elapsed, Duration::ZERO $(, $message)?);
+        }};
+    }
+    fn halo2_guardrail_envelope() -> OpenVerifyEnvelope {
+        OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".to_owned(),
+            vk_hash: [0x11; 32],
+            public_inputs: b"guardrails:test-schema:v1".to_vec(),
+            proof_bytes: vec![0xBB; 10],
+            aux: Vec::new(),
+        }
+    }
+    #[test]
+    fn guardrails_disable_halo2_returns_zero_duration() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![0xAA; 8]);
+        assert_guardrails_reject!(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: false,
+                ..ENABLED_GUARDRAILS
+            },
+        );
+    }
+    #[test]
+    fn guardrails_reject_trusted_setup_backends_before_dispatch() {
+        for backend in [
+            "kzg",
+            "KZG",
+            " kzg ",
+            "bn254",
+            "BN254",
+            "bls12_381",
+            "halo2/kzg",
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
+            "stark/fri/prod;kzg",
+            "stark/fri/prod,kzg",
+            "stark/fri/prod+kzg",
+            "stark/fri/prod.kzg",
+            "stark/fri/prod-k-z-g",
+            "stark/fri/prod(kzg)",
+            "stark/fri/prod;bn254",
+            "stark/fri/prod-bn-254",
+            "stark/fri/prod+bn256",
+            "stark/fri/prod-bn-256",
+            "stark/fri/prod-bls12-381",
+            "stark/fri/prod-b.l.s.12.381",
+            "srs",
+            "SRS",
+            "crs",
+            "ptau",
+            "powersoftau",
+            "powers-of-tau",
+            "trusted-setup",
+            "structured-reference-string",
+            "universal-srs",
+            "halo2/ipa:universal-srs",
+            "stark/fri/prod-srs",
+            "stark/fri/prod-s-r-s",
+            "stark/fri/prod.crs",
+            "stark/fri/prod-ptau",
+            "stark/fri/prod-powers-of-tau",
+            "stark/fri/prod-ceremony",
+            "stark/fri/structured-reference-string",
+            "halo2/ipa;groth16",
+            "halo2/ipa:groth-16",
+            "halo2/ipa/orchard:kzg",
+            "orchard:universal-srs",
+            "penumbra-masp:kzg",
+            "jindo-lattice-pcs-zk:trusted-setup",
+            "miden-stark:ptau",
+            "sis-with-hints:groth16",
+            "pq-masp-stark-fri:kzg",
+            "halo2/bn254",
+            "groth16/bn254",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
+        }
+    }
+    #[test]
+    fn guardrails_reject_developer_only_backends_before_dispatch() {
+        for backend in [
+            "debug",
+            "debug-proof",
+            "Debug-Proof",
+            "debug/ok",
+            "halo2/debug",
+            "halo2/ipa:debug-proof",
+            "halo2/ipa:DEBUG-Proof",
+            "halo2/ipa:d-e-b-u-g-proof",
+            "stark/fri/debug",
+            "stark/fri/Debug",
+            "stark/fri/d-e-b-u-g",
+            "mock",
+            "mock-proof",
+            "Mock-Proof",
+            "halo2/mock",
+            "halo2/ipa:mock-proof",
+            "halo2/ipa:Mock-Proof",
+            "halo2/ipa:m-o-c-k-proof",
+            "stark/fri/m-o-c-k",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+            "zk-trace/mock-proof",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
+        }
+    }
+    #[test]
+    fn guardrails_reject_protocol_names_before_dispatch() {
+        for backend in [
+            "halo2/ipa/orchard",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+            "groth16/bls12-377",
+            "anonymous-pgc",
+            "verange",
+            "zk-ams-recursive-admission-v0",
+            "zk-x509-onchain-identity-v0",
+            "sis-hints-anoncred-pq-v0",
+            "sis-with-hints",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
+        }
+    }
+    #[test]
+    fn guardrails_reject_production_claim_backends_before_dispatch() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:mainnet-complete",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:release-approved",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
+        }
+    }
+    #[test]
+    fn guardrails_reject_unsupported_backends_before_dispatch() {
+        for backend in [
+            "unknown/privacy/backend",
+            "halo2/unknown-native-v1",
+            "halo2/ipa:unknown-native-v1",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-replay-binding-v1",
+            "halo2//ipa",
+            "halo2/ipa.",
+            "stark//fri/sha256-goldilocks",
+            "stark/fri/sha256..goldilocks",
+            "h\u{0430}lo2/ipa",
+            "halo2/pasta/tiny-add",
+            "halo2/ipa/tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/tiny-commit-open",
+            "zk/open-verify-unregistered",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
+        }
+    }
+    #[test]
+    fn guardrails_reject_proof_and_vk_backend_mismatch_before_dispatch() {
+        let envelope_bytes =
+            norito::to_bytes(&halo2_guardrail_envelope()).expect("encode halo2 envelope");
+        let wrong_proof_backend =
+            ProofBox::new("halo2/ipa:ivm-replay-binding-v1".into(), envelope_bytes);
+        assert_guardrails_reject!("halo2/ipa", &wrong_proof_backend, None, ENABLED_GUARDRAILS,);
+        let proof = ProofBox::new(
+            "halo2/ipa".into(),
+            norito::to_bytes(&halo2_guardrail_envelope()).expect("encode halo2 envelope"),
+        );
+        let wrong_vk_backend =
+            VerifyingKeyBox::new("halo2/ipa:ivm-replay-binding-v1".into(), vec![0x55]);
+        assert_guardrails_reject!(
+            "halo2/ipa",
+            &proof,
+            Some(&wrong_vk_backend),
+            ENABLED_GUARDRAILS,
+        );
+    }
+    #[test]
+    fn guardrails_reject_halo2_open_verify_circuit_mismatch_before_dispatch() {
+        for (case, backend, circuit_id) in [
+            (
+                "concrete backend with sibling circuit",
+                "halo2/pasta/ivm-replay-binding-v1",
+                "halo2/pasta/tiny-add-public",
+            ),
+            (
+                "concrete backend with aliased sibling circuit",
+                "halo2/ipa:ivm-replay-binding-v1",
+                "halo2/ipa:tiny-add-public",
+            ),
+            (
+                "generic halo2 backend with cross-family circuit",
+                "halo2/ipa",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:spoof",
+            ),
+            (
+                "generic halo2 backend with tiny demo circuit",
+                "halo2/ipa",
+                "halo2/ipa:tiny-add",
+            ),
+            (
+                "generic halo2 backend with anonymous-transfer demo circuit",
+                "halo2/ipa",
+                "halo2/pasta/anon-transfer-2x2",
+            ),
+            (
+                "generic halo2 backend with retired vote circuit",
+                "halo2/ipa",
+                "halo2/ipa:vote-bool-commit-merkle8",
+            ),
+            (
+                "generic halo2 backend with historical IVM overlay circuit",
+                "halo2/ipa",
+                "halo2/ipa:ivm-overlay-bind",
+            ),
+            (
+                "generic halo2 backend with bare trusted-setup circuit",
+                "halo2/ipa",
+                "kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed trusted-setup circuit",
+                "halo2/ipa",
+                "halo2/ipa:kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed STARK circuit",
+                "halo2/ipa",
+                "halo2/ipa:stark/fri",
+            ),
+        ] {
+            let mut env = halo2_guardrail_envelope();
+            env.circuit_id = circuit_id.to_owned();
+            let proof = ProofBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&env).expect("encode halo2 envelope"),
+            );
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {case}",);
+        }
+    }
+    #[test]
+    fn guardrails_enforce_halo2_max_envelope_bytes() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![0xAA; 9]);
+        assert_guardrails_reject!(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_max_envelope_bytes: 8,
+                ..ENABLED_GUARDRAILS
+            },
+        );
+    }
+    #[test]
+    fn guardrails_enforce_halo2_max_proof_bytes_for_open_verify_envelopes() {
+        let env = halo2_guardrail_envelope();
+        let bytes = norito::to_bytes(&env).expect("encode envelope");
+        let proof = ProofBox::new("halo2/ipa".into(), bytes);
+        assert_guardrails_reject!(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_max_proof_bytes: 5,
+                ..ENABLED_GUARDRAILS
+            },
+        );
+    }
+    #[test]
+    fn guardrails_reject_open_verify_shape_failures_before_dispatch() {
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+            ("empty circuit id", |env| env.circuit_id.clear()),
+            ("zero verifier-key hash", |env| env.vk_hash = [0u8; 32]),
+            ("empty public inputs", |env| env.public_inputs.clear()),
+            ("wrong nonzero public-input schema", |env| {
+                env.public_inputs = b"noncanonical-but-nonzero-schema".to_vec()
+            }),
+            ("empty proof bytes", |env| env.proof_bytes.clear()),
+            ("auxiliary bytes", |env| env.aux = b"ignored-hint".to_vec()),
+        ];
+        for (label, mutate) in cases {
+            let mut env = halo2_guardrail_envelope();
+            mutate(&mut env);
+            let proof = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&env).expect("encode envelope"),
+            );
+            assert_guardrails_reject!(
+                "halo2/ipa",
+                &proof,
+                None,
+                ENABLED_GUARDRAILS,
+                "case {label}",
+            );
+        }
+        let mut env = halo2_guardrail_envelope();
+        env.public_inputs =
+            vec![0xA5; iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1];
+        let proof = ProofBox::new(
+            "halo2/ipa".into(),
+            norito::to_bytes(&env).expect("encode envelope"),
+        );
+        assert_guardrails_reject!(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_max_envelope_bytes: usize::MAX,
+                halo2_max_proof_bytes: usize::MAX,
+                stark_max_envelope_bytes: usize::MAX,
+                stark_max_proof_bytes: usize::MAX,
+                ..ENABLED_GUARDRAILS
+            },
+            "oversized public inputs",
+        );
+    }
+    #[test]
+    fn guardrails_reject_open_verify_backend_tag_mismatch_before_dispatch() {
+        let mut halo2_env = halo2_guardrail_envelope();
+        halo2_env.backend = BackendTag::Stark;
+        let halo2_proof = ProofBox::new(
+            "halo2/ipa".into(),
+            norito::to_bytes(&halo2_env).expect("encode mismatched halo2 envelope"),
+        );
+        assert_guardrails_reject!("halo2/ipa", &halo2_proof, None, ENABLED_GUARDRAILS,);
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: Vec::new(),
+            envelope_bytes: vec![0xCC; 10],
+        };
+        let stark_env = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:dummy".to_owned(),
+            vk_hash: [0x11; 32],
+            public_inputs: vec![0xAA; 32],
+            proof_bytes: norito::to_bytes(&open).expect("encode stark wrapper"),
+            aux: Vec::new(),
+        };
+        let stark_proof = ProofBox::new(
+            ZK_BACKEND_STARK_FRI_V1.into(),
+            norito::to_bytes(&stark_env).expect("encode mismatched stark envelope"),
+        );
+        assert_guardrails_reject!(
+            ZK_BACKEND_STARK_FRI_V1,
+            &stark_proof,
+            None,
+            ENABLED_GUARDRAILS,
+        );
+    }
+    #[test]
+    fn guardrails_disable_stark_returns_zero_duration() {
+        let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 8]);
+        assert_guardrails_reject!(
+            ZK_BACKEND_STARK_FRI_V1,
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                stark_enabled: false,
+                ..ENABLED_GUARDRAILS
+            },
+        );
+    }
+    #[test]
+    fn guardrails_enforce_stark_max_envelope_bytes() {
+        let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 9]);
+        assert_guardrails_reject!(
+            ZK_BACKEND_STARK_FRI_V1,
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                stark_max_envelope_bytes: 8,
+                ..ENABLED_GUARDRAILS
+            },
+        );
+    }
+    #[test]
+    fn guardrails_reject_malformed_stark_outer_envelope_before_dispatch() {
+        let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA, 0xBB, 0xCC]);
+        assert_guardrails_reject!(ZK_BACKEND_STARK_FRI_V1, &proof, None, ENABLED_GUARDRAILS,);
+    }
+    #[test]
+    fn guardrails_enforce_stark_max_proof_bytes_inside_open_verify_envelope() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: Vec::new(),
+            envelope_bytes: vec![0xCC; 10],
+        };
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:dummy".to_owned(),
+            vk_hash: [0x11; 32],
+            public_inputs: vec![0xAA; 32],
+            proof_bytes: norito::to_bytes(&open).expect("encode stark wrapper"),
+            aux: Vec::new(),
+        };
+        let proof = ProofBox::new(
+            ZK_BACKEND_STARK_FRI_V1.into(),
+            norito::to_bytes(&env).expect("encode envelope"),
+        );
+        assert_guardrails_reject!(
+            ZK_BACKEND_STARK_FRI_V1,
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                stark_max_proof_bytes: 8,
+                ..ENABLED_GUARDRAILS
+            },
+        );
+    }
+    #[test]
+    fn guardrails_reject_malformed_stark_wrapper_before_dispatch() {
+        let cases = [
+            ("malformed wrapper bytes", vec![0xAA, 0xBB, 0xCC]),
+            (
+                "unsupported wrapper version",
+                norito::to_bytes(&StarkFriOpenProofV1 {
+                    version: 2,
+                    public_inputs: Vec::new(),
+                    envelope_bytes: vec![0xCC; 10],
+                })
+                .expect("encode unsupported STARK wrapper"),
+            ),
+            (
+                "empty native proof bytes",
+                norito::to_bytes(&StarkFriOpenProofV1 {
+                    version: 1,
+                    public_inputs: Vec::new(),
+                    envelope_bytes: Vec::new(),
+                })
+                .expect("encode empty STARK wrapper"),
+            ),
+        ];
+        for (case, proof_bytes) in cases {
+            let env = OpenVerifyEnvelope {
+                backend: BackendTag::Stark,
+                circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:dummy".to_owned(),
+                vk_hash: [0x11; 32],
+                public_inputs: vec![0xAA; 32],
+                proof_bytes,
+                aux: Vec::new(),
+            };
+            let proof = ProofBox::new(
+                ZK_BACKEND_STARK_FRI_V1.into(),
+                norito::to_bytes(&env).expect("encode envelope"),
+            );
+            assert_guardrails_reject!(
+                ZK_BACKEND_STARK_FRI_V1,
+                &proof,
+                None,
+                ENABLED_GUARDRAILS,
+                "case {case}",
+            );
+        }
+    }
+    #[test]
+    fn guardrails_reject_stark_open_verify_circuit_mismatch_before_dispatch() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: Vec::new(),
+            envelope_bytes: vec![0xCC; 10],
+        };
+        for (case, backend, circuit_id) in [
+            (
+                "profile backend with sibling STARK profile",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon2-goldilocks:dummy",
+            ),
+            (
+                "profile backend with generic STARK prefix",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri:dummy",
+            ),
+            (
+                "generic STARK backend with halo2 circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "halo2/ipa:ivm-replay-binding-v1",
+            ),
+            (
+                "generic STARK backend with colon-form halo2 circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "halo2:ivm-replay-binding-v1",
+            ),
+            (
+                "generic STARK backend with colon-form kzg circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "kzg:trusted-setup-spoof",
+            ),
+            (
+                "generic STARK backend with bare trusted-setup curve circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "bn254",
+            ),
+            (
+                "generic STARK backend with STARK-prefixed trusted-setup circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile backend with profile-prefixed trusted-setup circuit",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:structured-reference-string",
+            ),
+        ] {
+            let env = OpenVerifyEnvelope {
+                backend: BackendTag::Stark,
+                circuit_id: circuit_id.to_owned(),
+                vk_hash: [0x11; 32],
+                public_inputs: vec![0xAA; 32],
+                proof_bytes: norito::to_bytes(&open).expect("encode stark wrapper"),
+                aux: Vec::new(),
+            };
+            let proof = ProofBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&env).expect("encode envelope"),
+            );
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {case}",);
+        }
+    }
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn guardrails_stark_proof_limit_applies_to_inner_envelope_not_outer_wrapper() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:guardrail-split");
+        let vk_payload = consensus_stark_vk!(circuit_id.clone());
+        let vk_box = VerifyingKeyBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&vk_payload).expect("encode STARK verifying key"),
+        );
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"guardrail:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("STARK OpenVerify proof");
+        let outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        assert!(
+            proof.bytes.len() > open.envelope_bytes.len(),
+            "outer wrapper should be larger than the native STARK proof bytes"
+        );
+        let report = verify_backend_with_timing_guardrails(
+            backend,
+            &proof,
+            Some(&vk_box),
+            ZkVerifyGuardrails {
+                stark_max_envelope_bytes: proof.bytes.len(),
+                stark_max_proof_bytes: open.envelope_bytes.len(),
+                ..ENABLED_GUARDRAILS
+            },
+        );
+        assert!(report.ok);
+    }
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn guardrails_reject_stark_proof_backend_alias_mismatch_before_dispatch() {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:guardrail-backend-mismatch");
+        let vk_payload = consensus_stark_vk!(circuit_id.clone());
+        let vk_box = VerifyingKeyBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&vk_payload).expect("encode STARK verifying key"),
+        );
+        let mut proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"guardrail:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("STARK OpenVerify proof");
+        let outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        proof.backend = "stark/fri".into();
+        assert_guardrails_reject!(
+            backend,
+            &proof,
+            Some(&vk_box),
+            ZkVerifyGuardrails {
+                stark_max_envelope_bytes: proof.bytes.len(),
+                stark_max_proof_bytes: open.envelope_bytes.len(),
+                ..ENABLED_GUARDRAILS
+            },
+        );
+    }
+}
+#[cfg(test)]
+mod halo2_ipa_alias_tests {
+    use super::*;
+    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    #[test]
+    fn halo2_ipa_circuit_ids_require_one_exact_full_spelling() {
+        assert_eq!(
+            canonical_halo2_ipa_circuit_id("halo2/pasta/ipa/tiny-add").as_deref(),
+            Some("halo2/pasta/ipa/tiny-add")
+        );
+        for alias in [
+            "tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/ipa::tiny-add",
+            "halo2/pasta/tiny-add",
+            "halo2/pasta/ipa-v1/tiny-add",
+            " halo2/pasta/ipa/tiny-add",
+            "halo2/pasta/ipa/tiny-add/extra",
+            "",
+            "halo2/ipa",
+            "halo2/pasta",
+            "halo2/pasta/ipa",
+        ] {
+            assert!(
+                canonical_halo2_ipa_circuit_id(alias).is_none(),
+                "accepted {alias}"
+            );
+        }
+        assert!(
+            canonical_halo2_ipa_circuit_id(
+                &"a".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1)
+            )
+            .is_none()
+        );
+    }
+    #[test]
+    fn halo2_backend_mapping_rejects_every_reserved_privacy_label() {
+        let assert_reserved = |label: &str| {
+            for circuit_id in [
+                label.to_owned(),
+                format!("halo2/ipa::{label}"),
+                format!("halo2/pasta/{label}"),
+                format!("generic/namespace/{label}"),
+            ] {
+                assert!(
+                    canonical_halo2_ipa_circuit_id(&circuit_id).is_none(),
+                    "reserved privacy circuit id {circuit_id:?} must not map to Halo2"
+                );
+            }
+            for near_miss in [
+                format!("halo2/pasta/ipa/generic-{label}"),
+                format!("halo2/pasta/ipa/{label}-generic"),
+            ] {
+                assert!(
+                    canonical_halo2_ipa_circuit_id(&near_miss).is_some(),
+                    "portable near miss {near_miss:?} must remain mappable"
+                );
+            }
+        };
+        for protocol in PrivacyProtocolIdV1::ALL {
+            assert_reserved(protocol.canonical_label());
+        }
+    }
+    #[test]
+    fn halo2_open_verify_circuit_id_uses_closed_production_registry() {
+        for circuit_id in [
+            "halo2/pasta/ipa/kaigi-authorization-v1",
+            "halo2/pasta/ipa/kaigi-usage-v1",
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+        ] {
+            assert!(
+                halo2_open_verify_circuit_id_is_production_v1(circuit_id),
+                "production circuit id {circuit_id} must be admitted"
+            );
+        }
+        for circuit_id in [
+            "tiny-add",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/ipa/kaigi-roster-v1",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/anon-transfer-2x2",
+            "halo2/ipa:vote-bool-commit-merkle8",
+            "halo2/ipa:ivm-overlay-bind",
+            "kzg",
+            "k-z-g",
+            "groth16",
+            "bn254",
+            "halo2/ipa:kzg",
+            "halo2/ipa:groth16",
+            "halo2/ipa:stark/fri",
+            "halo2/pasta/kzg",
+            "stark",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        ] {
+            assert!(
+                !halo2_open_verify_circuit_id_is_production_v1(circuit_id),
+                "unregistered circuit id {circuit_id} must not be admitted as Halo2"
+            );
+        }
+    }
+    #[test]
+    fn halo2_open_verify_circuit_registry_covers_each_exact_halo2_backend() {
+        for backend in iroha_data_model::zk::ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1
+            .iter()
+            .copied()
+            .filter(|backend| {
+                *backend != ZK_BACKEND_HALO2_IPA
+                    && verifier_backend_registry_tag_v1(backend)
+                        == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+            })
+        {
+            let canonical =
+                halo2_ipa_circuit_for_backend_v1(backend).expect("listed circuit family");
+            assert!(
+                halo2_open_verify_circuit_id_matches_backend(ZK_BACKEND_HALO2_IPA, &canonical),
+                "generic Halo2 entry point must admit exact production circuit {backend}"
+            );
+            assert!(
+                halo2_open_verify_circuit_id_matches_backend(backend, &canonical),
+                "concrete Halo2 backend must admit only its own production circuit {backend}"
+            );
+        }
+    }
+    #[test]
+    fn final_halo2_outer_circuit_ids_have_no_short_or_dispatcher_alias() {
+        for canonical_id in HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1 {
+            let name = canonical_id.strip_prefix("halo2/pasta/ipa/").unwrap();
+            let exact_backend = format!("halo2/pasta/{name}");
+            let canonical = format!("halo2/pasta/ipa/{name}");
+            for backend in [ZK_BACKEND_HALO2_IPA, exact_backend.as_str()] {
+                assert!(halo2_open_verify_circuit_id_matches_backend(
+                    backend, &canonical
+                ));
+                for alias in [
+                    name.to_owned(),
+                    exact_backend.clone(),
+                    format!("halo2/ipa:{name}"),
+                ] {
+                    assert!(
+                        !halo2_open_verify_circuit_id_matches_backend(backend, &alias),
+                        "{backend} accepted {alias}"
+                    );
+                }
+            }
+        }
+    }
+    #[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn every_production_halo2_circuit_has_one_canonical_outer_schema() {
+        for circuit_id in HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1 {
+            let schema = halo2_ipa_public_inputs_schema_v1(circuit_id)
+                .unwrap_or_else(|| panic!("missing canonical schema for {circuit_id}"));
+            assert!(
+                !schema.is_empty(),
+                "empty canonical schema for {circuit_id}"
+            );
+        }
+        for backend in iroha_data_model::zk::ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1
+            .iter()
+            .copied()
+            .filter(|backend| {
+                verifier_backend_registry_tag_v1(backend)
+                    == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+                    && *backend != ZK_BACKEND_HALO2_IPA
+            })
+        {
+            let canonical = halo2_ipa_circuit_for_backend_v1(backend)
+                .unwrap_or_else(|| panic!("failed to map exact Halo2 backend {backend}"));
+            assert!(halo2_ipa_public_inputs_schema_v1(&canonical).is_some());
+            assert_eq!(
+                halo2_ipa_public_inputs_schema_v1(backend),
+                None,
+                "a backend label is not a canonical circuit ID"
+            );
+        }
+        for alias in [
+            IVM_EXECUTION_V1_CIRCUIT_ID,
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/ipa/ivm-execution-v1",
+        ] {
+            assert_eq!(
+                halo2_ipa_public_inputs_schema_v1(alias),
+                None,
+                "retired IVM binding circuit must not have an admitted Halo2 schema: {alias}"
+            );
+        }
+    }
+    #[test]
+    fn halo2_ipa_rejects_missing_vk() {
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".into(),
+            vk_hash: [0u8; 32],
+            public_inputs: Vec::new(),
+            proof_bytes: vec![0xAA, 0xBB],
+            aux: Vec::new(),
+        };
+        let proof_bytes = norito::to_bytes(&env).expect("encode envelope");
+        let proof = ProofBox::new("halo2/ipa".into(), proof_bytes);
+        assert!(!verify_backend("halo2/ipa", &proof, None));
+    }
+    #[test]
+    fn verifier_rejects_proof_backend_mismatch_before_dispatch() {
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".into(),
+            vk_hash: [0x42; 32],
+            public_inputs: Vec::new(),
+            proof_bytes: vec![0xAA, 0xBB],
+            aux: Vec::new(),
+        };
+        let proof_bytes = norito::to_bytes(&env).expect("encode envelope");
+        let proof = ProofBox::new("halo2/ipa/other".into(), proof_bytes);
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xCC, 0xDD]);
+        assert!(!verify_backend("halo2/ipa", &proof, Some(&vk)));
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn halo2_ipa_rejects_noncanonical_outer_shape_before_backend_verify() {
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xCC, 0xDD]);
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
+            ("backend tag", |env| env.backend = BackendTag::Stark),
+            ("empty circuit id", |env| env.circuit_id.clear()),
+            ("zero verifier-key hash", |env| env.vk_hash = [0u8; 32]),
+            ("empty public inputs", |env| env.public_inputs.clear()),
+            ("empty proof bytes", |env| env.proof_bytes.clear()),
+            ("auxiliary bytes", |env| env.aux = b"side-channel".to_vec()),
+        ];
+        for (case, mutate) in cases {
+            let mut env = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".into(),
+                vk_hash: hash_vk(&vk),
+                public_inputs: vec![0xA5],
+                proof_bytes: vec![0xAA, 0xBB],
+                aux: Vec::new(),
+            };
+            mutate(&mut env);
+            let proof = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&env).expect("encode envelope"),
+            );
+            assert!(
+                !verify_backend("halo2/ipa", &proof, Some(&vk)),
+                "case {case}"
+            );
+        }
+        let oversized = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".into(),
+            vk_hash: hash_vk(&vk),
+            public_inputs: vec![
+                0xA5;
+                iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1
+            ],
+            proof_bytes: vec![0xAA, 0xBB],
+            aux: Vec::new(),
+        };
+        let proof = ProofBox::new(
+            "halo2/ipa".into(),
+            norito::to_bytes(&oversized).expect("encode envelope"),
+        );
+        assert!(
+            !verify_backend("halo2/ipa", &proof, Some(&vk)),
+            "oversized public inputs"
+        );
+    }
+}
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod halo2_ipa_parameter_source_tests {
+    use super::*;
+    use halo2_proofs::poly::commitment::Params as _;
+    fn append_raw_tlv(bytes: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
+        bytes.extend_from_slice(&tag);
+        bytes.extend_from_slice(
+            &u32::try_from(payload.len())
+                .expect("test TLV length fits u32")
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(payload);
+    }
+    fn transfer_vk_metadata(ipa_k: u32, h2vk_k: u32) -> Vec<u8> {
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, ipa_k);
+        zk1::wrap_append_circuit_id(
+            &mut bytes,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        );
+        let mut h2vk = vec![0u8; 10 + 32];
+        h2vk[0] = 0x02;
+        h2vk[1..5].copy_from_slice(&h2vk_k.to_le_bytes());
+        h2vk[5] = 0;
+        h2vk[6..10].copy_from_slice(&1u32.to_le_bytes());
+        append_raw_tlv(&mut bytes, *b"H2VK", &h2vk);
+        bytes
+    }
+    #[test]
+    fn production_parameter_source_rejects_unbounded_k_before_construction() {
+        let oversized = transfer_vk_metadata(u32::MAX, u32::MAX);
+        let result = std::panic::catch_unwind(|| {
+            zkparse::params_for_circuit_v1(
+                &oversized,
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            )
+        })
+        .expect("invalid IPAK must be rejected without entering ParamsIPA::new");
+        assert!(result.is_none());
+    }
+    #[test]
+    fn production_parameter_source_rejects_duplicate_and_mismatched_metadata() {
+        let valid = transfer_vk_metadata(
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+        );
+        let warm = zkparse::params_for_circuit_v1(
+            &valid,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        )
+        .expect("valid fixed metadata warms the production parameter cache");
+        assert_eq!(warm.k(), confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K);
+        // A warm parameter entry is not authorization for another key envelope.
+        assert!(zkparse::params_for_circuit_v1(&valid, "unregistered-circuit").is_none());
+        let mut duplicate = transfer_vk_metadata(
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+        );
+        zk1::wrap_append_ipa_k(
+            &mut duplicate,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+        );
+        assert!(
+            zkparse::params_for_circuit_v1(
+                &duplicate,
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
+            )
+            .is_none()
+        );
+        let mismatched_header = transfer_vk_metadata(
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K + 1,
+        );
+        assert!(
+            zkparse::params_for_circuit_v1(
+                &mismatched_header,
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            )
+            .is_none()
+        );
+        let mut malformed = transfer_vk_metadata(
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+        );
+        malformed.push(0);
+        assert!(
+            zkparse::params_for_circuit_v1(
+                &malformed,
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
+            )
+            .is_none()
+        );
+    }
+    #[cfg(feature = "zk-halo2")]
+    #[test]
+    fn production_parameter_map_matches_kaigi_circuit_constants() {
+        assert_eq!(
+            halo2_ipa_canonical_k_v1(KAIGI_AUTHORIZATION_CIRCUIT_ID_V1),
+            Some(KAIGI_AUTHORIZATION_CIRCUIT_K_V1)
+        );
+        assert_eq!(KAIGI_AUTHORIZATION_CIRCUIT_K_V1, 13);
+        assert_eq!(KAIGI_USAGE_CIRCUIT_K_V1, 12);
+        assert_eq!(
+            halo2_ipa_canonical_k_v1(KAIGI_USAGE_CIRCUIT_ID_V1),
+            Some(KAIGI_USAGE_CIRCUIT_K_V1)
+        );
+        assert_eq!(
+            halo2_ipa_canonical_k_v1("halo2/pasta/ipa/kaigi-roster-v1"),
+            None
+        );
+    }
+}
+#[cfg(all(test, feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod kaigi_authorization_v1_tests;
+#[cfg(all(test, feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod kaigi_usage_v1_tests;
+
+/// Halo2 envelope parsing helpers.
+///
+/// These routines keep proof/VK payload handling deterministic and bounded while
+/// delegating cryptographic verification to the concrete Halo2 backends.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod zkparse {
+    use super::{PastaParams, pasta_params_new};
+    use halo2_proofs::poly::commitment::Params as _;
+    use std::{
+        convert::TryFrom,
+        io::{Cursor, Read},
+    };
+    /// Only fixed production domains may retain deterministic public parameters.
+    /// Each slot is initialized once per process; callers receive independent owned clones.
+    struct ProductionParamsCache {
+        slots: [std::sync::OnceLock<PastaParams>; 2],
+        #[cfg(test)]
+        constructions: [std::sync::atomic::AtomicUsize; 2],
+    }
+    impl ProductionParamsCache {
+        const DOMAINS: [u32; 2] = [12, 13];
+
+        const fn new() -> Self {
+            Self {
+                slots: [const { std::sync::OnceLock::new() }; 2],
+                #[cfg(test)]
+                constructions: [const { std::sync::atomic::AtomicUsize::new(0) }; 2],
+            }
+        }
+
+        fn get(&self, k: u32) -> Option<&PastaParams> {
+            let index = Self::DOMAINS.iter().position(|domain| *domain == k)?;
+            Some(self.slots[index].get_or_init(|| {
+                #[cfg(test)]
+                self.constructions[index].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                pasta_params_new(k)
+            }))
+        }
+    }
+    static PRODUCTION_PARAMS: ProductionParamsCache = ProductionParamsCache::new();
+
+    fn envelope_cursor(bytes: &[u8]) -> Option<Cursor<&[u8]>> {
+        if !super::zk1::is_envelope(bytes) || bytes.len() < 4 {
+            return None;
+        }
+        Some(Cursor::new(&bytes[4..]))
+    }
+    fn read_u32(cursor: &mut Cursor<&[u8]>) -> Option<u32> {
+        let mut le = [0u8; 4];
+        cursor.read_exact(&mut le).ok()?;
+        Some(u32::from_le_bytes(le))
+    }
+    fn read_tlv<'a>(cursor: &mut Cursor<&'a [u8]>) -> Option<([u8; 4], &'a [u8])> {
+        let mut tag = [0u8; 4];
+        cursor.read_exact(&mut tag).ok()?;
+        let len = read_u32(cursor)? as usize;
+        if len > super::MAX_PROOF_LEN {
+            return None;
+        }
+        let start = usize::try_from(cursor.position()).ok()?;
+        let end = start.checked_add(len)?;
+        if end > cursor.get_ref().len() {
+            return None;
+        }
+        cursor.set_position(u64::try_from(end).ok()?);
+        let bytes = cursor.get_ref();
+        Some((tag, &bytes[start..end]))
+    }
+    /// Parse a Halo2 `VerifyingKey` (Pasta) from a ZK1 envelope embedding an `H2VK` TLV.
+    /// Returns `None` if parsing fails.
+    pub fn vk_from_bytes<C>(
+        vk_bytes: &[u8],
+        params: &PastaParams,
+    ) -> Option<super::halo2_backend::VerifyingKey>
+    where
+        C: halo2_proofs::plonk::Circuit<super::halo2_backend::Scalar>,
+        C::Params: Default,
+    {
+        let mut cursor = envelope_cursor(vk_bytes)?;
+        while let Some((tag, payload)) = read_tlv(&mut cursor) {
+            if &tag == b"H2VK" {
+                let mut payload_cursor = Cursor::new(payload);
+                let vk = super::read_verifying_key::<C, _>(&mut payload_cursor).ok()?;
+                if usize::try_from(payload_cursor.position()).ok()? != payload.len() {
+                    return None;
+                }
+                if vk.get_domain().k() != params.k() {
+                    return None;
+                }
+                return Some(vk);
+            }
+        }
+        None
+    }
+    /// Validate a production V1 verifier-key envelope before deriving transparent parameters.
+    ///
+    /// The circuit identifier selects one fixed `k`. Both `IPAK` and the
+    /// processed `H2VK` header must repeat that value in a strict
+    /// `IPAK`/`CID1`/`H2VK` envelope. Generator construction happens only
+    /// after these cheap checks, so key metadata cannot select an unbounded
+    /// domain.
+    pub fn params_for_circuit_v1(vk_bytes: &[u8], circuit_id: &str) -> Option<PastaParams> {
+        let canonical_circuit_id = super::canonical_halo2_ipa_circuit_id(circuit_id)?;
+        let expected_k = super::halo2_ipa_canonical_k_v1(&canonical_circuit_id)?;
+        let ipa_k =
+            super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(vk_bytes, &canonical_circuit_id)
+                .ok()?;
+        if ipa_k != expected_k {
+            return None;
+        }
+        let h2vk = super::zk1::h2vk_payload(vk_bytes).ok()?;
+        let (h2vk_k, _compress_selectors, _fixed_columns) =
+            super::zk1::halo2_pasta_vk_header(h2vk).ok()?;
+        if h2vk_k != expected_k {
+            return None;
+        }
+        // Metadata is checked on every call, including a warm cache. The cache
+        // owns only deterministic public parameters, never a key or genesis verdict.
+        Some(PRODUCTION_PARAMS.get(expected_k)?.clone())
+    }
+    #[cfg(test)]
+    mod production_parameter_cache_tests {
+        use super::*;
+        use std::sync::{Barrier, atomic::Ordering};
+        const TEST_K: u32 = 12;
+
+        #[test]
+        fn finite_production_cache_initializes_once_across_threads() {
+            // A fresh instance exercises concurrent cold initialization without
+            // resetting process-global state used by other parallel tests.
+            let cache = ProductionParamsCache::new();
+            let start = Barrier::new(8);
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            cache.get(TEST_K).unwrap()
+                        })
+                    })
+                    .collect();
+                let values: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+                assert!(values.iter().all(|value| std::ptr::eq(*value, values[0])));
+                assert_eq!(values[0].k(), TEST_K);
+            });
+            assert_eq!(cache.constructions[0].load(Ordering::SeqCst), 1);
+            assert_eq!(cache.constructions[1].load(Ordering::SeqCst), 0);
+            // The real process owner also returns one immutable object across threads.
+            let first = PRODUCTION_PARAMS.get(TEST_K).unwrap();
+            std::thread::scope(|scope| {
+                let other = scope.spawn(|| PRODUCTION_PARAMS.get(TEST_K).unwrap());
+                assert!(std::ptr::eq(first, other.join().unwrap()));
+            });
+        }
+
+        #[test]
+        fn finite_production_cache_matches_native_parameter_bytes_and_fingerprint() {
+            let cache = ProductionParamsCache::new();
+            for k in ProductionParamsCache::DOMAINS {
+                let shared = cache.get(k).unwrap();
+                let direct = pasta_params_new(k);
+                let mut actual = Vec::new();
+                let mut expected = Vec::new();
+                shared.write(&mut actual).unwrap();
+                direct.write(&mut expected).unwrap();
+                assert_eq!(actual, expected, "canonical parameter bytes at k={k}");
+                assert_eq!(
+                    super::super::params_fingerprint(shared),
+                    super::super::params_fingerprint(&direct)
+                );
+                // Existing API users own their copy; mutation cannot change the cached source.
+                let mut owned = shared.clone();
+                owned.downsize(k - 1);
+                assert_eq!(shared.k(), k);
+                assert_eq!(cache.get(k).unwrap().k(), k);
+                assert_eq!(owned.k(), k - 1);
+            }
+        }
+
+        #[test]
+        fn finite_production_cache_rejects_unadmitted_domains_without_construction() {
+            let cache = ProductionParamsCache::new();
+            for k in [0, 6, 8, 11, 14, 31, 32, u32::MAX] {
+                assert!(cache.get(k).is_none());
+            }
+            assert!(
+                cache
+                    .constructions
+                    .iter()
+                    .all(|n| n.load(Ordering::SeqCst) == 0)
+            );
+            for circuit in super::super::HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1 {
+                if let Some(k) = super::super::halo2_ipa_canonical_k_v1(circuit) {
+                    assert!(ProductionParamsCache::DOMAINS.contains(&k), "{circuit}");
+                }
+            }
+        }
+    }
+
+    /// Parse bounded Params from a developer/test VK container carrying an `IPAK` TLV.
+    ///
+    /// Production circuits use [`params_for_circuit_v1`]. This fallback is
+    /// retained for in-crate tiny-circuit tests and still rejects duplicate,
+    /// malformed, unknown, and above-production-limit metadata before
+    /// generator construction.
+    #[cfg(test)]
+    pub fn params_any(vk_bytes: &[u8]) -> Option<PastaParams> {
+        let mut cursor = envelope_cursor(vk_bytes)?;
+        let mut ipa_k: Option<u32> = None;
+        while usize::try_from(cursor.position()).ok()? < cursor.get_ref().len() {
+            let (tag, payload) = read_tlv(&mut cursor)?;
+            match &tag {
+                b"IPAK" => {
+                    if ipa_k.is_some() || payload.len() != 4 {
+                        return None;
+                    }
+                    ipa_k = Some(u32::from_le_bytes(payload.try_into().ok()?));
+                }
+                b"CID1" | b"H2VK" => {}
+                _ => return None,
+            }
+        }
+        let ipa_k = ipa_k?;
+        if ipa_k > super::HALO2_IPA_MAX_K_V1 {
+            return None;
+        }
+        Some(pasta_params_new(ipa_k))
+    }
+    /// Parse a canonical proof envelope containing `PROF` followed by an
+    /// optional `I10P`, with no unrecognized metadata.
+    ///
+    /// Circuits with no public instances omit `I10P`; circuits with instances
+    /// must carry one non-empty, exactly consumed payload. The verifier still
+    /// enforces the circuit-specific column shape.
+    pub fn strict_proof_and_instances(
+        bytes: &[u8],
+    ) -> Result<(Vec<u8>, Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>), &'static str> {
+        let mut cursor = envelope_cursor(bytes).ok_or("invalid ZK1 proof envelope")?;
+        let mut proof_payload: Option<Vec<u8>> = None;
+        let mut inst_cols: Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> = None;
+        let mut position = 0_u8;
+        while (cursor.position() as usize) < cursor.get_ref().len() {
+            let Some((tag, payload)) = read_tlv(&mut cursor) else {
+                return Err("malformed ZK1 TLV");
+            };
+            match (position, &tag) {
+                (0, b"PROF") => {
+                    if payload.is_empty() {
+                        return Err("empty PROF TLV");
+                    }
+                    proof_payload = Some(payload.to_vec());
+                }
+                (1, b"I10P") => {
+                    let mut inner = Cursor::new(payload);
+                    let cols = read_u32(&mut inner).ok_or("malformed I10P TLV")? as usize;
+                    let rows = read_u32(&mut inner).ok_or("malformed I10P TLV")? as usize;
+                    if cols == 0 || rows == 0 {
+                        return Err("empty I10P TLV");
+                    }
+                    if cols > super::MAX_INST_COLS || rows > super::MAX_INST_ROWS {
+                        return Err("oversized I10P TLV");
+                    }
+                    let mut columns = vec![Vec::with_capacity(rows); cols];
+                    for _ in 0..rows {
+                        for column in &mut columns {
+                            let mut b32 = [0u8; 32];
+                            inner
+                                .read_exact(&mut b32)
+                                .map_err(|_| "truncated I10P TLV")?;
+                            let mut repr =
+                                <halo2_proofs::halo2curves::pasta::Fp as ff::PrimeField>::Repr::default();
+                            repr.as_mut().copy_from_slice(&b32);
+                            let val = Option::from(
+                                <halo2_proofs::halo2curves::pasta::Fp as ff::PrimeField>::from_repr(
+                                    repr,
+                                ),
+                            )
+                            .ok_or("non-canonical I10P scalar")?;
+                            column.push(val);
+                        }
+                    }
+                    if inner.position() as usize != payload.len() {
+                        return Err("trailing I10P bytes");
+                    }
+                    inst_cols = Some(columns);
+                }
+                _ => return Err("proof TLVs are not in canonical order"),
+            }
+            position = position.saturating_add(1);
+        }
+        let payload = proof_payload.ok_or("missing PROF TLV")?;
+        let inst_cols = inst_cols.unwrap_or_default();
+        Ok((payload, inst_cols))
+    }
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn halo2_params_for_verifier_v1(vk_bytes: &[u8], circuit_id: &str) -> Option<PastaParams> {
+    if halo2_ipa_canonical_k_v1(circuit_id).is_some() {
+        return zkparse::params_for_circuit_v1(vk_bytes, circuit_id);
+    }
+    #[cfg(test)]
+    {
+        zkparse::params_any(vk_bytes)
+    }
+    #[cfg(not(test))]
+    {
+        None
+    }
+}
+#[allow(dead_code)]
+#[doc(hidden)]
+pub fn extract_pasta_fp_instances(
+    proof_bytes: &[u8],
+) -> Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> {
+    extract_pasta_fp_instances_impl(proof_bytes)
+}
+/// Extract instance columns as raw 32-byte little-endian field elements.
+#[doc(hidden)]
+pub fn extract_pasta_instance_columns_bytes(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        use halo2_proofs::halo2curves::ff::PrimeField as _;
+        if let Ok((_, cols)) = zkparse::strict_proof_and_instances(proof_bytes) {
+            let mut columns = Vec::with_capacity(cols.len());
+            for col in cols {
+                let mut out_col = Vec::with_capacity(col.len());
+                for value in col {
+                    let mut buf = [0u8; 32];
+                    buf.copy_from_slice(value.to_repr().as_ref());
+                    out_col.push(buf);
+                }
+                columns.push(out_col);
+            }
+            return Some(columns);
+        }
+    }
+    None
+}
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn extract_pasta_fp_instances_impl(
+    proof_bytes: &[u8],
+) -> Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> {
+    zkparse::strict_proof_and_instances(proof_bytes)
+        .ok()
+        .map(|(_, cols)| cols)
+}
+#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn extract_pasta_fp_instances_impl(
+    _proof_bytes: &[u8],
+) -> Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> {
+    None
+}
+// Tiny pasta circuits used for dispatch verification across transparent IPA paths.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod pasta_tiny {
+    #[cfg(any(test, feature = "test-utils"))]
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
+    #[cfg(any(test, feature = "test-utils"))]
+    #[derive(Clone, Default)]
+    pub struct Add;
+    #[cfg(any(test, feature = "test-utils"))]
+    impl Circuit<Scalar> for Add {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let c = meta.advice_column();
+            let s = meta.selector();
+            meta.create_gate("add", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                vec![s * (a + b - c)]
+            });
+            (a, b, c, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, c, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_add",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a", a => Scalar::from(2))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "c", c => Scalar::from(4))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct Mul;
+    #[cfg(test)]
+    impl Circuit<Scalar> for Mul {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let c = meta.advice_column();
+            let s = meta.selector();
+            meta.create_gate("mul", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                vec![s * (a * b - c)]
+            });
+            (a, b, c, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, c, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_mul",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a", a => Scalar::from(3))?;
+                    advice!(region, "b", b => Scalar::from(3))?;
+                    advice!(region, "c", c => Scalar::from(9))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(any(test, feature = "test-utils"))]
+    #[derive(Clone, Default)]
+    pub struct AddPublic;
+    #[cfg(any(test, feature = "test-utils"))]
+    impl Circuit<Scalar> for AddPublic {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let c = meta.advice_column();
+            let inst = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("add_pub", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                let pubv = meta.query_instance(inst, Rotation::cur());
+                vec![s.clone() * (a + b - c.clone()), s * (c - pubv)]
+            });
+            (a, b, c, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, c, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_add_pub",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a", a => Scalar::from(2))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "c", c => Scalar::from(4))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct MulPublic;
+    #[cfg(test)]
+    impl Circuit<Scalar> for MulPublic {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let c = meta.advice_column();
+            let inst = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("mul_pub", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                let pubv = meta.query_instance(inst, Rotation::cur());
+                vec![s.clone() * (a * b - c.clone()), s * (c - pubv)]
+            });
+            (a, b, c, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, c, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_mul_pub",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a", a => Scalar::from(3))?;
+                    advice!(region, "b", b => Scalar::from(3))?;
+                    advice!(region, "c", c => Scalar::from(9))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct IdPublic;
+    #[cfg(test)]
+    impl Circuit<Scalar> for IdPublic {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let c = meta.advice_column();
+            let inst = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("id_pub", |meta| {
+                let s = meta.query_selector(s);
+                let c = meta.query_advice(c, Rotation::cur());
+                let pubv = meta.query_instance(inst, Rotation::cur());
+                vec![s * (c - pubv)]
+            });
+            (c, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (c, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "id_pub",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "c", c => Scalar::from(7))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(any(test, feature = "test-utils"))]
+    #[derive(Clone, Default)]
+    pub struct AddTwoRows;
+    #[cfg(any(test, feature = "test-utils"))]
+    impl Circuit<Scalar> for AddTwoRows {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let c = meta.advice_column();
+            let s = meta.selector();
+            meta.create_gate("add_2rows", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                vec![s * (a + b - c)]
+            });
+            (a, b, c, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, c, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_add_2rows",
+                |mut region| {
+                    // Row 0: 2 + 2 = 4
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a0", a => Scalar::from(2))?;
+                    advice!(region, "b0", b => Scalar::from(2))?;
+                    advice!(region, "c0", c => Scalar::from(4))?;
+                    // Row 1: 5 + 7 = 12
+                    s.enable(&mut region, 1)?;
+                    advice!(
+                        @call region,
+                        || "a1",
+                        a,
+                        1,
+                        || halo2_proofs::circuit::Value::known(Scalar::from(5))
+                    )?;
+                    advice!(
+                        @call region,
+                        || "b1",
+                        b,
+                        1,
+                        || halo2_proofs::circuit::Value::known(Scalar::from(7))
+                    )?;
+                    advice!(
+                        @call region,
+                        || "c1",
+                        c,
+                        1,
+                        || halo2_proofs::circuit::Value::known(Scalar::from(12))
+                    )?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct AddThree;
+    #[cfg(test)]
+    impl Circuit<Scalar> for AddThree {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let d = meta.advice_column();
+            let c = meta.advice_column();
+            let s = meta.selector();
+            meta.create_gate("add3", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let d = meta.query_advice(d, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                vec![s * (a + b + d - c)]
+            });
+            (a, b, d, c, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, d, c, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_add3",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a", a => Scalar::from(1))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "d", d => Scalar::from(3))?;
+                    advice!(region, "c", c => Scalar::from(6))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(any(test, feature = "test-utils"))]
+    #[derive(Clone, Default)]
+    pub struct AddTwoInstPublic;
+    #[cfg(any(test, feature = "test-utils"))]
+    impl Circuit<Scalar> for AddTwoInstPublic {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let a = meta.advice_column();
+            let b = meta.advice_column();
+            let c = meta.advice_column();
+            let inst0 = meta.instance_column();
+            let inst1 = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("add2inst_pub", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                let c = meta.query_advice(c, Rotation::cur());
+                let i0 = meta.query_instance(inst0, Rotation::cur());
+                let i1 = meta.query_instance(inst1, Rotation::cur());
+                // Enforce: c = a + b, and i0 = a, i1 = b
+                vec![
+                    s.clone() * (a.clone() + b.clone() - c),
+                    s.clone() * (a - i0),
+                    s * (b - i1),
+                ]
+            });
+            (a, b, c, inst0, inst1, s)
+        }
+        fn synthesize(
+            &self,
+            (a, b, c, _i0, _i1, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "tiny_add2inst_pub",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "a", a => Scalar::from(5))?;
+                    advice!(region, "b", b => Scalar::from(8))?;
+                    advice!(region, "c", c => Scalar::from(13))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    pub struct AnonTransfer2x2;
+    #[cfg(test)]
+    impl Circuit<Scalar> for AnonTransfer2x2 {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let in0 = meta.advice_column();
+            let in1 = meta.advice_column();
+            let out0 = meta.advice_column();
+            let out1 = meta.advice_column();
+            let s = meta.selector();
+            meta.create_gate("anon_transfer_2x2_conserve", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(in0, Rotation::cur());
+                let b = meta.query_advice(in1, Rotation::cur());
+                let c = meta.query_advice(out0, Rotation::cur());
+                let d = meta.query_advice(out1, Rotation::cur());
+                vec![s * (a + b - (c + d))]
+            });
+            (in0, in1, out0, out1, s)
+        }
+        fn synthesize(
+            &self,
+            (in0, in1, out0, out1, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "anon_transfer_2x2",
+                |mut region| {
+                    // Example transfer: 7 + 5 = 6 + 6
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct VoteBool;
+    #[cfg(test)]
+    impl Circuit<Scalar> for VoteBool {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let v = meta.advice_column();
+            let s = meta.selector();
+            meta.create_gate("vote_bool", |meta| {
+                let s = meta.query_selector(s);
+                let v = meta.query_advice(v, Rotation::cur());
+                // Enforce v in {0,1}: v * (v - 1) = 0
+                let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1u64));
+                vec![s * (v.clone() * (v - one))]
+            });
+            (v, s)
+        }
+        fn synthesize(
+            &self,
+            (v, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "vote_bool",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    // Example vote: 1 (YES)
+                    advice!(region, "v", v => Scalar::from(1u64))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct CommitOpen; // algebraic test relation; not a cryptographic commitment
+    #[cfg(test)]
+    impl Circuit<Scalar> for CommitOpen {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // m
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit (public)
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let m = meta.advice_column();
+            let r = meta.advice_column();
+            let inst = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("commit_open", |meta| {
+                let s = meta.query_selector(s);
+                let m = meta.query_advice(m, Rotation::cur());
+                let r = meta.query_advice(r, Rotation::cur());
+                let c = meta.query_instance(inst, Rotation::cur());
+                vec![s * (constrained_pow5_pair_expr(m, r) - c)]
+            });
+            (m, r, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (m, r, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "commit_open",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "m", m => Scalar::from(11))?;
+                    advice!(region, "r", r => Scalar::from(31))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct Merkle2; // algebraic test tree; not a collision-resistant Merkle tree
+    #[cfg(test)]
+    impl Circuit<Scalar> for Merkle2 {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // leaf
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // w0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // w1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root (public)
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let leaf = meta.advice_column();
+            let sib0 = meta.advice_column();
+            let sib1 = meta.advice_column();
+            let w0 = meta.advice_column();
+            let w1 = meta.advice_column();
+            let root = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("merkle2", |meta| {
+                let s = meta.query_selector(s);
+                let leaf = meta.query_advice(leaf, Rotation::cur());
+                let sib0 = meta.query_advice(sib0, Rotation::cur());
+                let sib1 = meta.query_advice(sib1, Rotation::cur());
+                let w0 = meta.query_advice(w0, Rotation::cur());
+                let w1 = meta.query_advice(w1, Rotation::cur());
+                let root = meta.query_instance(root, Rotation::cur());
+                vec![
+                    s.clone() * (w0.clone() - constrained_pow5_pair_expr(leaf, sib0)),
+                    s.clone() * (w1.clone() - constrained_pow5_pair_expr(w0, sib1)),
+                    s * (root - w1),
+                ]
+            });
+            (leaf, sib0, sib1, w0, w1, root, s)
+        }
+        fn synthesize(
+            &self,
+            (leaf, sib0, sib1, w0, w1, _root, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "merkle2",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    let l = Scalar::from(9);
+                    let s0 = Scalar::from(5);
+                    let s1 = Scalar::from(7);
+                    let w0v = constrained_pow5_pair(l, s0);
+                    let w1v = constrained_pow5_pair(w0v, s1);
+                    advice!(region, "leaf", leaf => l)?;
+                    advice!(region, "sib0", sib0 => s0)?;
+                    advice!(region, "sib1", sib1 => s1)?;
+                    advice!(region, "w0", w0 => w0v)?;
+                    advice!(region, "w1", w1 => w1v)?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct VoteBoolCommit; // dev-test quintic relation; not a cryptographic commitment
+    #[cfg(test)]
+    impl Circuit<Scalar> for VoteBoolCommit {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit (public)
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let v = meta.advice_column();
+            let rho = meta.advice_column();
+            let inst = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("vote_bool_commit", |meta| {
+                let s = meta.query_selector(s);
+                let vq = meta.query_advice(v, Rotation::cur());
+                let rhoq = meta.query_advice(rho, Rotation::cur());
+                let cq = meta.query_instance(inst, Rotation::cur());
+                let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1u64));
+                // v*(v-1)=0 plus a dev-test quintic expression; this is not Poseidon.
+                // Recompute limited Pow5 terms inline
+                let v2 = vq.clone() * vq.clone();
+                let v4 = v2.clone() * v2.clone();
+                let v5 = v4.clone() * vq.clone();
+                let r2 = rhoq.clone() * rhoq.clone();
+                let r4 = r2.clone() * r2.clone();
+                let r5 = r4 * rhoq.clone();
+                let t0 = halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * v5
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7));
+                let t1 = vq.clone() + halo2_proofs::plonk::Expression::Constant(Scalar::from(13));
+                let t12 = t1.clone() * t1.clone();
+                let t14 = t12.clone() * t12;
+                let t15 = t14 * t1;
+                let s_hash = halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * t0
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(5)) * t15
+                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(11));
+                vec![s.clone() * (vq.clone() * (vq - one)), s * (s_hash - cq)]
+            });
+            (v, rho, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (v, rho, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "vote_bool_commit",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "v", v => Scalar::from(1))?;
+                    advice!(region, "rho", rho => Scalar::from(12345))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct AnonTransfer2x2Commit; // commit(in/out) and sum conservation
+    #[cfg(test)]
+    impl Circuit<Scalar> for AnonTransfer2x2Commit {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sk (for nf)
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // serial
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // nullifier
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        #[allow(clippy::too_many_lines)]
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let in0 = meta.advice_column();
+            let in1 = meta.advice_column();
+            let out0 = meta.advice_column();
+            let out1 = meta.advice_column();
+            let r_in0 = meta.advice_column();
+            let r_in1 = meta.advice_column();
+            let r_out0 = meta.advice_column();
+            let r_out1 = meta.advice_column();
+            let sk = meta.advice_column();
+            let serial = meta.advice_column();
+            let cm_in0 = meta.instance_column();
+            let cm_in1 = meta.instance_column();
+            let cm_out0 = meta.instance_column();
+            let cm_out1 = meta.instance_column();
+            let nf = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("conserve_and_commit", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(in0, Rotation::cur());
+                let b = meta.query_advice(in1, Rotation::cur());
+                let c = meta.query_advice(out0, Rotation::cur());
+                let d = meta.query_advice(out1, Rotation::cur());
+                let r0 = meta.query_advice(r_in0, Rotation::cur());
+                let r1 = meta.query_advice(r_in1, Rotation::cur());
+                let r2 = meta.query_advice(r_out0, Rotation::cur());
+                let r3 = meta.query_advice(r_out1, Rotation::cur());
+                let skq = meta.query_advice(sk, Rotation::cur());
+                let serq = meta.query_advice(serial, Rotation::cur());
+                let input_commitment_slot0 = meta.query_instance(cm_in0, Rotation::cur());
+                let input_commitment_slot1 = meta.query_instance(cm_in1, Rotation::cur());
+                let output_commitment_slot0 = meta.query_instance(cm_out0, Rotation::cur());
+                let output_commitment_slot1 = meta.query_instance(cm_out1, Rotation::cur());
+                let nullifier_instance = meta.query_instance(nf, Rotation::cur());
+                // cm_in0 = H(a, r0); cm_in1 = H(b, r1); cm_out0 = H(c, r2); cm_out1 = H(d, r3)
+                let h_in0 = constrained_pow5_pair_expr(a.clone(), r0);
+                let h_in1 = constrained_pow5_pair_expr(b.clone(), r1);
+                let h_out0 = constrained_pow5_pair_expr(c.clone(), r2);
+                let h_out1 = constrained_pow5_pair_expr(d.clone(), r3);
+                let h_nf = constrained_pow5_pair_expr(skq.clone(), serq.clone());
+                vec![
+                    s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
+                    s.clone() * (h_in0 - input_commitment_slot0),
+                    s.clone() * (h_in1 - input_commitment_slot1),
+                    s.clone() * (h_out0 - output_commitment_slot0),
+                    s.clone() * (h_out1 - output_commitment_slot1),
+                    s * (h_nf - nullifier_instance),
+                ]
+            });
+            (
+                in0, in1, out0, out1, r_in0, r_in1, r_out0, r_out1, sk, serial, cm_in0, cm_in1,
+                cm_out0, cm_out1, nf, s,
+            )
+        }
+        fn synthesize(
+            &self,
+            cfg: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let (
+                in0,
+                in1,
+                out0,
+                out1,
+                r_in0,
+                r_in1,
+                r_out0,
+                r_out1,
+                sk,
+                serial,
+                _cm0,
+                _cm1,
+                _cmo0,
+                _cmo1,
+                _nf,
+                s,
+            ) = cfg;
+            layouter.assign_region(
+                || "anon_transfer_commit",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r_in0", r_in0 => Scalar::from(11))?;
+                    advice!(region, "r_in1", r_in1 => Scalar::from(13))?;
+                    advice!(region, "r_out0", r_out0 => Scalar::from(17))?;
+                    advice!(region, "r_out1", r_out1 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct VoteBoolCommitMerkle2; // constrained Pow5 commit and two-level test tree
+    #[cfg(test)]
+    impl Circuit<Scalar> for VoteBoolCommitMerkle2 {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // w0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // w1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit (public)
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root (public)
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let v = meta.advice_column();
+            let rho = meta.advice_column();
+            let sib0 = meta.advice_column();
+            let sib1 = meta.advice_column();
+            let w0 = meta.advice_column();
+            let w1 = meta.advice_column();
+            let cm = meta.instance_column();
+            let root = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("vote_commit_merkle2", |meta| {
+                let s = meta.query_selector(s);
+                let vq = meta.query_advice(v, Rotation::cur());
+                let rhoq = meta.query_advice(rho, Rotation::cur());
+                let sib0q = meta.query_advice(sib0, Rotation::cur());
+                let sib1q = meta.query_advice(sib1, Rotation::cur());
+                let w0q = meta.query_advice(w0, Rotation::cur());
+                let w1q = meta.query_advice(w1, Rotation::cur());
+                let cmq = meta.query_instance(cm, Rotation::cur());
+                let rootq = meta.query_instance(root, Rotation::cur());
+                let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1u64));
+                // Boolean v
+                let boolc = vq.clone() * (vq.clone() - one);
+                // commit = H(v,rho)
+                let h = constrained_pow5_pair_expr(vq, rhoq);
+                let commitment_delta = h.clone() - cmq.clone();
+                // merkle2: w0 = H(cm, sib0); w1 = H(w0, sib1) = root
+                let expected_first_hash = constrained_pow5_pair_expr(h, sib0q);
+                let expected_second_hash = constrained_pow5_pair_expr(w0q.clone(), sib1q);
+                vec![
+                    s.clone() * boolc,
+                    s.clone() * commitment_delta,
+                    s.clone() * (w0q - expected_first_hash),
+                    s.clone() * (w1q.clone() - expected_second_hash),
+                    s * (w1q - rootq),
+                ]
+            });
+            (v, rho, sib0, sib1, w0, w1, cm, root, s)
+        }
+        fn synthesize(
+            &self,
+            (v, rho, sib0, sib1, w0, w1, _cm, _root, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "vote_commit_merkle2",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    let v_v = Scalar::from(1);
+                    let rho_v = Scalar::from(12345);
+                    let sib0_v = Scalar::from(5);
+                    let sib1_v = Scalar::from(7);
+                    let commit_v = constrained_pow5_pair(v_v, rho_v);
+                    let w0_v = constrained_pow5_pair(commit_v, sib0_v);
+                    let w1_v = constrained_pow5_pair(w0_v, sib1_v);
+                    advice!(region, "v", v => v_v)?;
+                    advice!(region, "rho", rho => rho_v)?;
+                    advice!(region, "sib0", sib0 => sib0_v)?;
+                    advice!(region, "sib1", sib1 => sib1_v)?;
+                    advice!(region, "w0", w0 => w0_v)?;
+                    advice!(region, "w1", w1 => w1_v)?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    #[derive(Clone, Default)]
+    pub struct AnonTransfer2x2CommitMerkle2;
+    #[cfg(test)]
+    impl Circuit<Scalar> for AnonTransfer2x2CommitMerkle2 {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sk
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // serial
+            // siblings for two-level proofs for in0 and in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib0_0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib0_1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib1_0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sib1_1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_in0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_in1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_out0
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // cm_out1
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // nullifier
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let in0 = meta.advice_column();
+            let in1 = meta.advice_column();
+            let out0 = meta.advice_column();
+            let out1 = meta.advice_column();
+            let r_in0 = meta.advice_column();
+            let r_in1 = meta.advice_column();
+            let r_out0 = meta.advice_column();
+            let r_out1 = meta.advice_column();
+            let sk = meta.advice_column();
+            let serial = meta.advice_column();
+            let sib0_0 = meta.advice_column();
+            let sib0_1 = meta.advice_column();
+            let sib1_0 = meta.advice_column();
+            let sib1_1 = meta.advice_column();
+            let cm_in0 = meta.instance_column();
+            let cm_in1 = meta.instance_column();
+            let cm_out0 = meta.instance_column();
+            let cm_out1 = meta.instance_column();
+            let nf = meta.instance_column();
+            let root = meta.instance_column();
+            let s = meta.selector();
+            meta.create_gate("anon_transfer_commit_merkle2", |meta| {
+                let s = meta.query_selector(s);
+                let a = meta.query_advice(in0, Rotation::cur());
+                let b = meta.query_advice(in1, Rotation::cur());
+                let c = meta.query_advice(out0, Rotation::cur());
+                let d = meta.query_advice(out1, Rotation::cur());
+                let r0 = meta.query_advice(r_in0, Rotation::cur());
+                let r1 = meta.query_advice(r_in1, Rotation::cur());
+                let r2 = meta.query_advice(r_out0, Rotation::cur());
+                let r3 = meta.query_advice(r_out1, Rotation::cur());
+                let skq = meta.query_advice(sk, Rotation::cur());
+                let serq = meta.query_advice(serial, Rotation::cur());
+                let s0_0 = meta.query_advice(sib0_0, Rotation::cur());
+                let s0_1 = meta.query_advice(sib0_1, Rotation::cur());
+                let _s1_0 = meta.query_advice(sib1_0, Rotation::cur());
+                let _s1_1 = meta.query_advice(sib1_1, Rotation::cur());
+                let input_commitment_slot0 = meta.query_instance(cm_in0, Rotation::cur());
+                let input_commitment_slot1 = meta.query_instance(cm_in1, Rotation::cur());
+                let output_commitment_slot0 = meta.query_instance(cm_out0, Rotation::cur());
+                let output_commitment_slot1 = meta.query_instance(cm_out1, Rotation::cur());
+                let nullifier_instance = meta.query_instance(nf, Rotation::cur());
+                let rootq = meta.query_instance(root, Rotation::cur());
+                let computed_cm0 = constrained_pow5_pair_expr(a.clone(), r0.clone());
+                let computed_cm1 = constrained_pow5_pair_expr(b.clone(), r1.clone());
+                let computed_cm2 = constrained_pow5_pair_expr(c.clone(), r2.clone());
+                let computed_cm3 = constrained_pow5_pair_expr(d.clone(), r3.clone());
+                let cm0_root = constrained_pow5_pair_expr(
+                    constrained_pow5_pair_expr(computed_cm0.clone(), s0_0),
+                    s0_1,
+                );
+                let nf_exp = constrained_pow5_pair_expr(skq.clone(), serq.clone());
+                vec![
+                    s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
+                    s.clone() * (computed_cm0 - input_commitment_slot0),
+                    s.clone() * (computed_cm1 - input_commitment_slot1),
+                    s.clone() * (computed_cm2 - output_commitment_slot0),
+                    s.clone() * (computed_cm3 - output_commitment_slot1),
+                    s.clone() * (nf_exp - nullifier_instance),
+                    s * (cm0_root - rootq),
+                ]
+            });
+            (
+                in0, in1, out0, out1, r_in0, r_in1, r_out0, r_out1, sk, serial, sib0_0, sib0_1,
+                sib1_0, sib1_1, cm_in0, cm_in1, cm_out0, cm_out1, nf, root, s,
+            )
+        }
+        #[allow(clippy::too_many_lines)]
+        fn synthesize(
+            &self,
+            cfg: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let (
+                in0,
+                in1,
+                out0,
+                out1,
+                r_in0,
+                r_in1,
+                r_out0,
+                r_out1,
+                sk,
+                serial,
+                sib0_0,
+                sib0_1,
+                sib1_0,
+                sib1_1,
+                _cm_in0,
+                _cm_in1,
+                _cm_out0,
+                _cm_out1,
+                _nf,
+                _root,
+                s,
+            ) = cfg;
+            layouter.assign_region(
+                || "anon_transfer_commit_merkle2",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r_in0", r_in0 => Scalar::from(11))?;
+                    advice!(region, "r_in1", r_in1 => Scalar::from(13))?;
+                    advice!(region, "r_out0", r_out0 => Scalar::from(17))?;
+                    advice!(region, "r_out1", r_out1 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
+                    advice!(region, "sib0_0", sib0_0 => Scalar::from(23))?;
+                    advice!(region, "sib0_1", sib0_1 => Scalar::from(29))?;
+                    advice!(region, "sib1_0", sib1_0 => Scalar::from(31))?;
+                    advice!(region, "sib1_1", sib1_1 => Scalar::from(37))?;
+                    Ok(())
+                },
+            )
+        }
+    }
+    // Depth-8 membership variants using the sole constrained Pow5 test relation.
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    #[derive(Clone, Default)]
+    pub struct VoteBoolCommitMerkle8; // instances: [commit, root]
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_V: u64 = 1;
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_RHO: u64 = 12_345;
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_SIBS: [u64; 8] = [10, 11, 12, 13, 14, 15, 16, 17];
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_DIRS: [u64; 8] = [0; 8];
+    #[cfg(test)]
+    fn pow5(x: Scalar) -> Scalar {
+        let x2 = x * x;
+        let x4 = x2 * x2;
+        x4 * x
+    }
+    #[cfg(test)]
+    pub(super) fn constrained_pow5_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
+        let lhs = lhs + Scalar::from(7u64);
+        let rhs = rhs + Scalar::from(13u64);
+        Scalar::from(2u64) * pow5(lhs) + Scalar::from(3u64) * pow5(rhs)
+    }
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    pub(super) fn merkle2_sample_root() -> Scalar {
+        constrained_pow5_pair(
+            constrained_pow5_pair(Scalar::from(9u64), Scalar::from(5u64)),
+            Scalar::from(7u64),
+        )
+    }
+    #[cfg(test)]
+    fn pow5_expr(
+        expr: halo2_proofs::plonk::Expression<Scalar>,
+    ) -> halo2_proofs::plonk::Expression<Scalar> {
+        let squared = expr.clone() * expr.clone();
+        let fourth = squared.clone() * squared;
+        fourth * expr
+    }
+    #[cfg(test)]
+    fn constrained_pow5_pair_expr(
+        lhs: halo2_proofs::plonk::Expression<Scalar>,
+        rhs: halo2_proofs::plonk::Expression<Scalar>,
+    ) -> halo2_proofs::plonk::Expression<Scalar> {
+        let lhs = lhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+        let rhs = rhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(13u64));
+        halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64)) * pow5_expr(lhs)
+            + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64)) * pow5_expr(rhs)
+    }
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    pub(super) fn vote_bool_commit_merkle8_witnesses(
+        v: Scalar,
+        rho: Scalar,
+        siblings: [Scalar; 8],
+        dirs: [Scalar; 8],
+    ) -> (Scalar, [Scalar; 8], Scalar) {
+        let one = Scalar::from(1u64);
+        let commit = constrained_pow5_pair(v, rho);
+        let mut prev = commit;
+        let mut witnesses = [Scalar::from(0u64); 8];
+        for i in 0..8 {
+            let sib = siblings[i];
+            let dir = dirs[i];
+            let forward = constrained_pow5_pair(prev, sib);
+            let reverse = constrained_pow5_pair(sib, prev);
+            let witness = (one - dir) * forward + dir * reverse;
+            witnesses[i] = witness;
+            prev = witness;
+        }
+        (commit, witnesses, prev)
+    }
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    pub(super) fn vote_bool_commit_merkle8_sample_inputs()
+    -> (Scalar, Scalar, [Scalar; 8], [Scalar; 8]) {
+        (
+            Scalar::from(VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_V),
+            Scalar::from(VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_RHO),
+            VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_SIBS.map(Scalar::from),
+            VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_DIRS.map(Scalar::from),
+        )
+    }
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    impl Circuit<Scalar> for VoteBoolCommitMerkle8 {
+        type Config = (
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
+            // 8 siblings
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
+            // 8 direction bits
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
+            // 8 intermediate nodes
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let v = meta.advice_column();
+            let rho = meta.advice_column();
+            let mut sibs = [v; 8];
+            let mut dirs = [rho; 8];
+            let mut ws = [rho; 8];
+            for column in &mut sibs {
+                *column = meta.advice_column();
+            }
+            for column in &mut dirs {
+                *column = meta.advice_column();
+            }
+            for column in &mut ws {
+                *column = meta.advice_column();
+            }
+            let inst_cm = meta.instance_column();
+            let inst_root = meta.instance_column();
+            let s = meta.selector();
+            // Inline Pow5 constraints define the sole test relation for this circuit.
+            meta.create_gate("vote_commit_merkle8", |meta| {
+                let s = meta.query_selector(s);
+                let vq = meta.query_advice(v, Rotation::cur());
+                let rhoq = meta.query_advice(rho, Rotation::cur());
+                let cmq = meta.query_instance(inst_cm, Rotation::cur());
+                let rootq = meta.query_instance(inst_root, Rotation::cur());
+                let constant =
+                    |value: u64| halo2_proofs::plonk::Expression::Constant(Scalar::from(value));
+                let shift = |expr: halo2_proofs::plonk::Expression<Scalar>, offset: u64| {
+                    expr + constant(offset)
+                };
+                let pow5 = |expr: halo2_proofs::plonk::Expression<Scalar>| {
+                    let squared = expr.clone() * expr.clone();
+                    let fourth = squared.clone() * squared.clone();
+                    fourth * expr
+                };
+                let pedersen_pair =
+                    |lhs: halo2_proofs::plonk::Expression<Scalar>,
+                     rhs: halo2_proofs::plonk::Expression<Scalar>| {
+                        constant(2) * pow5(lhs) + constant(3) * pow5(rhs)
+                    };
+                let one = constant(1);
+                let boolc = vq.clone() * (vq.clone() - one.clone());
+                let commit_hash = pedersen_pair(shift(vq.clone(), 7), shift(rhoq.clone(), 13));
+                let commitment_delta = commit_hash.clone() - cmq.clone();
+                // chain 8 levels: w0 = H(cm, sib0); w7 == root
+                let mut cons = vec![s.clone() * boolc, s.clone() * commitment_delta];
+                let mut prev = commit_hash;
+                for i in 0..8 {
+                    let sibling = meta.query_advice(sibs[i], Rotation::cur());
+                    let direction_bit = meta.query_advice(dirs[i], Rotation::cur());
+                    let witness = meta.query_advice(ws[i], Rotation::cur());
+                    // boolean direction bit
+                    cons.push(
+                        s.clone() * (direction_bit.clone() * (direction_bit.clone() - one.clone())),
+                    );
+                    let forward_hash =
+                        pedersen_pair(shift(prev.clone(), 7), shift(sibling.clone(), 13));
+                    let reverse_hash =
+                        pedersen_pair(shift(sibling.clone(), 7), shift(prev.clone(), 13));
+                    let expected_branch = (one.clone() - direction_bit.clone())
+                        * forward_hash.clone()
+                        + direction_bit.clone() * reverse_hash;
+                    cons.push(s.clone() * (witness.clone() - expected_branch));
+                    prev = witness;
+                }
+                cons.push(s * (prev - rootq));
+                cons
+            });
+            (v, rho, sibs, dirs, ws, inst_cm, inst_root, s)
+        }
+        fn synthesize(
+            &self,
+            (v, rho, sibs, dirs, ws, _cm, _root, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "vote_commit_merkle8",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    let (v_val, rho_val, sibling_vals, dir_vals) =
+                        vote_bool_commit_merkle8_sample_inputs();
+                    let (_commit, witness_vals, _root) =
+                        vote_bool_commit_merkle8_witnesses(v_val, rho_val, sibling_vals, dir_vals);
+                    advice!(region, "v", v => v_val)?;
+                    advice!(region, "rho", rho => rho_val)?;
+                    for (i, col) in sibs.iter().enumerate() {
+                        let sib_val = sibling_vals[i];
+                        advice!(region, move "sib{i}", *col => sib_val)?;
+                    }
+                    for (i, col) in dirs.iter().enumerate() {
+                        let dir_val = dir_vals[i];
+                        advice!(region, move "dir{i}", *col => dir_val)?;
+                    }
+                    for (i, col) in ws.iter().enumerate() {
+                        let w_val = witness_vals[i];
+                        advice!(region, move "w{i}", *col => w_val)?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+}
+#[cfg(all(
+    test,
+    feature = "zk-tests",
+    feature = "halo2-dev-tests",
+    feature = "zk-halo2"
+))]
+#[allow(clippy::too_many_lines)]
+fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
+    use halo2_backend::Scalar;
+    let Some(vk_box) = vk else { return false };
+    // Sanity: backends must match
+    // Note: caller already checked `proof.backend == attachment.backend` in ISI and executor
+    // paths, but double-check here for robustness.
+    // Also require non-empty payloads.
+    if vk_box.backend != proof.backend || proof.bytes.is_empty() || vk_box.bytes.is_empty() {
+        return false;
+    }
+    // Parse params and proof/instances using shared helpers
+    let params = match halo2_params_for_verifier_v1(vk_box.bytes.as_slice(), backend) {
+        Some(p) => p,
+        None => return false,
+    };
+    let (proof_payload, inst_cols) =
+        match zkparse::strict_proof_and_instances(proof.bytes.as_slice()) {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+    let col_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
+    let normalized = backend.replace("/ipa/", "/");
+    match normalized.as_str() {
+        #[cfg(test)]
+        "halo2/pasta/tiny-add" => {
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::Add,
+                |vk| {
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-mul" => {
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::Mul,
+                |vk| {
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add-2rows" => {
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AddTwoRows,
+                |vk| {
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add-public" => {
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AddPublic,
+                |vk| {
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-mul-public" => {
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::MulPublic,
+                |vk| {
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-id-public" => {
+            if col_refs.is_empty() {
+                // requires a public instance
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::IdPublic,
+                |vk| {
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add3" => {
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AddThree,
+                |vk| {
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add2inst-public" => {
+            if col_refs.len() < 2 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AddTwoInstPublic,
+                |vk| {
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-anon-transfer-2x2" => {
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AnonTransfer2x2,
+                |vk| {
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
+                }
+            )
+        }
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_AUTHORIZATION_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                KaigiAuthorizationCircuitV1::default(),
+                |vk| {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            tracing::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 Kaigi authorization V1 proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
+                }
+            )
+        }
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_USAGE_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                KaigiUsageCircuitV1::default(),
+                |vk| {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            tracing::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 kaigi usage proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-vote-bool" => {
+            let circuit = pasta_tiny::VoteBool;
+            let vk_h2 =
+                match resolve_vk_cached(normalized.as_str(), &params, vk_box, &circuit, || {
+                    halo2_backend::keygen_vk(&params, &circuit)
+                }) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
+        }
+        _ => false,
+    }
+}
+/// Transparent Halo2 IPA over Pasta (no trusted setup).
+///
+/// Accepts a ZK1 envelope containing an `IPAK` TLV to derive Params.
+#[cfg(feature = "zk-halo2-ipa")]
+#[allow(clippy::too_many_lines)]
+fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
+    let reject = |reason: &'static str| {
+        tracing::debug!(backend, reason, "halo2 ipa proof rejected");
+        false
+    };
+    let Some(vk_box) = vk else {
+        return reject("missing verifying key");
+    };
+    if vk_box.backend != proof.backend {
+        return reject("verifying key backend mismatch");
+    }
+    if proof.bytes.is_empty() {
+        return reject("empty proof bytes");
+    }
+    if vk_box.bytes.is_empty() {
+        return reject("empty verifying key bytes");
+    }
+    let params: PastaParams = match halo2_params_for_verifier_v1(vk_box.bytes.as_slice(), backend) {
+        Some(p) => p,
+        None => return reject("missing/invalid IPAK parameters in verifying key envelope"),
+    };
+    // Production proofs use one strict ZK1 carrier. The older binary envelope
+    // has caller-controlled `n_in`, `n_out`, and `flags` header fields that are
+    // not absorbed by Halo2's transcript, so accepting it would leave multiple
+    // unauthenticated encodings for the same proof and instance columns.
+    let (proof_payload, inst_cols) =
+        match zkparse::strict_proof_and_instances(proof.bytes.as_slice()) {
+            Ok(x) => x,
+            Err(_) => return reject("invalid ZK1 proof envelope payload"),
+        };
+    let col_refs: Vec<&[halo2_backend::Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
+    // These canonical identifiers already carry the `/ipa/` component.
+    // Dispatch them before the legacy built-in normalization below removes
+    // that component; otherwise exact circuit predicates can never match and
+    // a proof that passed raw IPA verification is rejected at the envelope
+    // boundary.
+    if confidential_v2::is_confidential_transfer_v2_circuit_id(backend) {
+        if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
+            return false;
+        }
+        return cached_vk_for!(
+            &params,
+            backend,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+            |vk| {
+                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
+            }
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v2_circuit_id(backend) {
+        if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
+            return false;
+        }
+        return cached_vk_for!(
+            &params,
+            backend,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldFullCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+            |vk| {
+                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
+            }
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v3_circuit_id(backend) {
+        if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
+            return false;
+        }
+        return cached_vk_for!(
+            &params,
+            backend,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldChangeCircuitV4::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+            |vk| {
+                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
+            }
+        );
+    }
+    // For IPA, we normalize backend tag to reuse circuit mapping
+    let normalized = backend.replace("/ipa/", "/");
+    #[cfg(test)]
+    macro_rules! verify_test_circuit {
+        ($circuit:expr, $mode:ident $(, $reject:expr)?) => {{
+            let circuit = $circuit;
+            let vk_h2 = match resolve_vk_cached(normalized.as_str(), &params, vk_box, &circuit, || {
+                halo2_backend::keygen_vk(&params, &circuit)
+            }) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            $(if $reject {
+                return false;
+            })?
+            verify_test_circuit!(@verify $mode, vk_h2.as_ref())
+        }};
+        (using $circuit:ident, $mode:ident $(, $reject:expr)?) => {{
+            let vk_h2 = match resolve_vk_cached(normalized.as_str(), &params, vk_box, &$circuit, || {
+                halo2_backend::keygen_vk(&params, &$circuit)
+            }) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            $(if $reject {
+                return false;
+            })?
+            verify_test_circuit!(@verify $mode, vk_h2.as_ref())
+        }};
+        (@verify no_instances, $vk:expr) => {
+            verify_halo2_ipa_payload_no_instances(&params, $vk, proof_payload.as_slice())
+        };
+        (@verify optional_columns, $vk:expr) => {
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                $vk,
+                proof_payload.as_slice(),
+                &col_refs,
+            )
+        };
+        (@verify columns, $vk:expr) => {
+            verify_halo2_ipa_payload_columns(
+                &params,
+                $vk,
+                proof_payload.as_slice(),
+                &col_refs,
+            )
+        };
+    }
+    let circuit_label = normalized.strip_suffix("-pow5").unwrap_or(&normalized);
+    match circuit_label {
+        #[cfg(test)]
+        "halo2/pasta/tiny-add" => {
+            verify_test_circuit!(pasta_tiny::Add, no_instances)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-mul" => {
+            verify_test_circuit!(pasta_tiny::Mul, optional_columns)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add-2rows" => {
+            verify_test_circuit!(pasta_tiny::AddTwoRows, no_instances)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add-public" => {
+            verify_test_circuit!(pasta_tiny::AddPublic, optional_columns)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-mul-public" => {
+            verify_test_circuit!(pasta_tiny::MulPublic, optional_columns)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-id-public" => {
+            verify_test_circuit!(pasta_tiny::IdPublic, columns, col_refs.is_empty())
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add3" => {
+            verify_test_circuit!(pasta_tiny::AddThree, no_instances)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-add2inst-public" => {
+            verify_test_circuit!(pasta_tiny::AddTwoInstPublic, columns, col_refs.len() < 2)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-anon-transfer-2x2" => {
+            verify_test_circuit!(pasta_tiny::AnonTransfer2x2, no_instances)
+        }
+        #[cfg(test)]
+        "halo2/pasta/anon-transfer-2x2" => {
+            // Instances: 5 columns [cm_in0, cm_in1, cm_out0, cm_out1, nf], 1 row
+            if col_refs.len() < 5 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AnonTransfer2x2Commit,
+                |vk| {
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/anon-transfer-2x2-merkle2" => {
+            // Instances: 6 columns [cm_in0, cm_in1, cm_out0, cm_out1, nf, root], 1 row
+            if col_refs.len() < 6 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AnonTransfer2x2CommitMerkle2,
+                |vk| {
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/anon-transfer-2x2-merkle8" => {
+            // Use the explicitly tagged constrained-Pow5 circuit when requested.
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
+                verify_test_circuit!(
+                    pow5_depth::AnonTransfer2x2CommitMerklePow5::<8>,
+                    columns,
+                    col_refs.len() < 6
+                )
+            } else {
+                verify_test_circuit!(
+                    depth::AnonTransfer2x2CommitMerkle::<8>,
+                    columns,
+                    col_refs.len() < 6
+                )
+            }
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-vote-bool" => {
+            verify_test_circuit!(pasta_tiny::VoteBool, no_instances)
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-commit-open" => {
+            let circuit = pasta_tiny::CommitOpen;
+            verify_test_circuit!(using circuit, columns, col_refs.is_empty())
+        }
+        #[cfg(test)]
+        "halo2/pasta/tiny-merkle2" => {
+            let circuit = pasta_tiny::Merkle2;
+            verify_test_circuit!(using circuit, columns, col_refs.is_empty())
+        }
+        #[cfg(test)]
+        "halo2/pasta/vote-bool-commit" => {
+            // Instances: [commit], 1 row
+            verify_test_circuit!(pasta_tiny::VoteBoolCommit, columns, col_refs.is_empty())
+        }
+        #[cfg(test)]
+        "halo2/pasta/vote-bool-commit-merkle2" => {
+            // Instances: [commit, root], 1 row
+            verify_test_circuit!(
+                pasta_tiny::VoteBoolCommitMerkle2,
+                columns,
+                col_refs.len() < 2
+            )
+        }
+        #[cfg(test)]
+        "halo2/pasta/vote-bool-commit-merkle8" => {
+            // Use the explicitly tagged constrained-Pow5 circuit when requested.
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
+                verify_test_circuit!(
+                    pow5_depth::VoteBoolCommitMerklePow5::<8>,
+                    columns,
+                    col_refs.len() < 2
+                )
+            } else {
+                verify_test_circuit!(
+                    depth::VoteBoolCommitMerkle::<8>,
+                    columns,
+                    col_refs.len() < 2
+                )
+            }
+        }
+        // Depth-16 variants
+        #[cfg(test)]
+        "halo2/pasta/anon-transfer-2x2-merkle16" => {
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
+                verify_test_circuit!(
+                    pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>,
+                    columns,
+                    col_refs.len() < 6
+                )
+            } else {
+                verify_test_circuit!(
+                    depth::AnonTransfer2x2CommitMerkle::<16>,
+                    columns,
+                    col_refs.len() < 6
+                )
+            }
+        }
+        #[cfg(test)]
+        "halo2/pasta/vote-bool-commit-merkle16" => {
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
+                verify_test_circuit!(
+                    pow5_depth::VoteBoolCommitMerklePow5::<16>,
+                    columns,
+                    col_refs.len() < 2
+                )
+            } else {
+                verify_test_circuit!(
+                    depth::VoteBoolCommitMerkle::<16>,
+                    columns,
+                    col_refs.len() < 2
+                )
+            }
+        }
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_AUTHORIZATION_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                &vk_box.backend,
+                vk_box,
+                KaigiAuthorizationCircuitV1::default(),
+                |vk| {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            tracing::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 Kaigi authorization V1 proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
+                }
+            )
+        }
+        #[cfg(feature = "zk-halo2")]
+        KAIGI_USAGE_BACKEND_V1 => {
+            if col_refs.len() != 1 || col_refs[0].len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                &vk_box.backend,
+                vk_box,
+                KaigiUsageCircuitV1::default(),
+                |vk| {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            tracing::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 kaigi usage proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
+                }
+            )
+        }
+        _ => false,
+    }
+}
+#[cfg(all(
+    test,
+    feature = "zk-tests",
+    feature = "halo2-dev-tests",
+    not(feature = "zk-halo2")
+))]
+fn verify_halo2(_backend: &str, _proof: &ProofBox, _vk: Option<&VerifyingKeyBox>) -> bool {
+    // Feature disabled: refuse Halo2 proofs to avoid silent acceptance of forged transcripts.
+    false
+}
+#[cfg(test)]
+mod preverify_tests {
+    use super::*;
+    use PreverifyResult::*;
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    macro_rules! assert_preverify {
+        (
+            $proof:ident,
+            $vk:ident,
+            $dedup:ident,
+            $vk_hash:ident,
+            $result:expr
+            $(, $message:expr)?
+        ) => {
+            assert_eq!(
+                preverify_with_budget(
+                    &$proof,
+                    Some(&$vk),
+                    &mut $dedup,
+                    0,
+                    Some($vk_hash),
+                    Some($vk_hash),
+                    true,
+                ),
+                $result
+                $(, $message)?
+            )
+        };
+        (
+            $proof:ident,
+            $vk:ident,
+            $dedup:ident,
+            $budget:expr,
+            $resolved:expr,
+            $expected:expr,
+            $active:expr,
+            $result:expr
+            $(, $message:expr)?
+        ) => {
+            assert_eq!(
+                preverify_with_budget(
+                    &$proof,
+                    Some(&$vk),
+                    &mut $dedup,
+                    $budget,
+                    $resolved,
+                    $expected,
+                    $active,
+                ),
+                $result
+                $(, $message)?
+            )
+        };
+    }
+    fn preverify_enveloped_proof(vk_hash: [u8; 32]) -> ProofBox {
+        preverify_enveloped_proof_for_backend(
+            ZK_BACKEND_HALO2_IPA,
+            BackendTag::Halo2IpaPasta,
+            "halo2/pasta/ipa/kaigi-usage-v1",
+            vk_hash,
+        )
+    }
+    fn preverify_enveloped_proof_for_backend(
+        backend: &str,
+        envelope_backend: BackendTag,
+        circuit_id: &str,
+        vk_hash: [u8; 32],
+    ) -> ProofBox {
+        let public_inputs = if envelope_backend == BackendTag::Halo2IpaPasta {
+            halo2_ipa_public_inputs_schema_v1(circuit_id)
+                .map_or_else(|| vec![0x55; 32], |schema| schema.to_vec())
+        } else {
+            vec![0x55; 32]
+        };
+        let envelope = OpenVerifyEnvelope {
+            backend: envelope_backend,
+            circuit_id: circuit_id.to_owned(),
+            vk_hash,
+            public_inputs,
+            proof_bytes: vec![0xAA, 0xBB, 0xCC],
+            aux: Vec::new(),
+        };
+        ProofBox::new(
+            backend.to_owned(),
+            norito::encode_canonical(&envelope).expect("encode OpenVerifyEnvelope"),
+        )
+    }
+    fn mutate_preverify_envelope(
+        mut proof: ProofBox,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) -> ProofBox {
+        let mut envelope: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("decode OpenVerifyEnvelope");
+        mutate(&mut envelope);
+        proof.bytes = norito::encode_canonical(&envelope).expect("encode OpenVerifyEnvelope");
+        proof
+    }
+    #[test]
+    fn proof_hash_length_prefixes_backend_and_payload() {
+        let proof_a = ProofBox::new("ab".into(), b"cdef".to_vec());
+        let proof_b = ProofBox::new("abc".into(), b"def".to_vec());
+        assert_ne!(hash_proof(&proof_a), hash_proof(&proof_b));
+    }
+    #[test]
+    fn verifying_key_hash_length_prefixes_backend_and_payload() {
+        let vk_a = VerifyingKeyBox::new("ab".into(), b"cdef".to_vec());
+        let vk_b = VerifyingKeyBox::new("abc".into(), b"def".to_vec());
+        assert_ne!(hash_vk(&vk_a), hash_vk(&vk_b));
+    }
+    #[test]
+    fn preverify_dedup_key_length_prefixes_backend_and_payload() {
+        let mut dedup = DedupCache::new();
+        let proof_a = ProofBox::new("ab".into(), b"cdef".to_vec());
+        let proof_b = ProofBox::new("abc".into(), b"def".to_vec());
+        let commitment = Some([0x42; 32]);
+        assert!(dedup.check_and_insert_with_commitment(&proof_a, commitment));
+        assert!(
+            dedup.check_and_insert_with_commitment(&proof_b, commitment),
+            "distinct backend/payload boundaries must not collide in preverify dedup"
+        );
+    }
+    #[test]
+    fn preverify_dedup_key_separates_absent_and_present_commitment() {
+        let mut dedup = DedupCache::new();
+        let proof = ProofBox::new("halo2/ipa".into(), b"same-proof".to_vec());
+        assert!(dedup.check_and_insert_with_commitment(&proof, None));
+        assert!(
+            dedup.check_and_insert_with_commitment(&proof, Some([0u8; 32])),
+            "missing commitment and all-zero commitment must use distinct preverify dedup keys"
+        );
+    }
+    #[test]
+    fn failed_preverify_attempts_do_not_poison_dedup_cache() {
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 6, 7, 8]);
+        let expected = hash_vk(&vk);
+        let proof = preverify_enveloped_proof(expected);
+        let mut budget_dedup = DedupCache::new();
+        assert_preverify!(
+            proof,
+            vk,
+            budget_dedup,
+            1,
+            Some(expected),
+            Some(expected),
+            true,
+            PreverifyBudgetExceeded
+        );
+        assert_preverify!(proof, vk, budget_dedup, expected, Accepted);
+        let mut resolved_commitment_dedup = DedupCache::new();
+        assert_preverify!(
+            proof,
+            vk,
+            resolved_commitment_dedup,
+            0,
+            None,
+            Some(expected),
+            true,
+            Accepted
+        );
+        assert_preverify!(proof, vk, resolved_commitment_dedup, expected, Duplicate);
+        let mut missing_expected_dedup = DedupCache::new();
+        assert_preverify!(
+            proof,
+            vk,
+            missing_expected_dedup,
+            0,
+            None,
+            None,
+            true,
+            VerifyingKeyMissing
+        );
+        assert_preverify!(
+            proof,
+            vk,
+            missing_expected_dedup,
+            0,
+            Some(expected),
+            None,
+            true,
+            VerifyingKeyMissing
+        );
+        assert_preverify!(proof, vk, missing_expected_dedup, expected, Accepted);
+        let mut zero_commitment_dedup = DedupCache::new();
+        assert_preverify!(
+            proof,
+            vk,
+            zero_commitment_dedup,
+            0,
+            Some([0u8; 32]),
+            Some(expected),
+            true,
+            VerifyingKeyMismatch
+        );
+        assert_preverify!(
+            proof,
+            vk,
+            zero_commitment_dedup,
+            0,
+            Some(expected),
+            Some([0u8; 32]),
+            true,
+            VerifyingKeyMismatch
+        );
+        assert_preverify!(proof, vk, zero_commitment_dedup, expected, Accepted);
+        let mut wrong_backend_dedup = DedupCache::new();
+        let wrong_backend_vk = VerifyingKeyBox::new("stark/fri".into(), vk.bytes.clone());
+        let wrong_backend_expected = hash_vk(&wrong_backend_vk);
+        let wrong_backend_proof = preverify_enveloped_proof(wrong_backend_expected);
+        assert_preverify!(
+            wrong_backend_proof,
+            wrong_backend_vk,
+            wrong_backend_dedup,
+            wrong_backend_expected,
+            VerifyingKeyMismatch
+        );
+        assert_preverify!(proof, vk, wrong_backend_dedup, expected, Accepted);
+        let mut mismatch_dedup = DedupCache::new();
+        let mut wrong = expected;
+        wrong[0] ^= 0x80;
+        assert_preverify!(
+            proof,
+            vk,
+            mismatch_dedup,
+            0,
+            Some(wrong),
+            Some(expected),
+            true,
+            VerifyingKeyMismatch
+        );
+        assert_preverify!(proof, vk, mismatch_dedup, expected, Accepted);
+        let mut wrong_vk_dedup = DedupCache::new();
+        let wrong_vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 7, 6, 5]);
+        assert_preverify!(
+            proof,
+            wrong_vk,
+            wrong_vk_dedup,
+            expected,
+            VerifyingKeyMismatch
+        );
+        assert_preverify!(proof, vk, wrong_vk_dedup, expected, Accepted);
+        let mut inactive_dedup = DedupCache::new();
+        assert_preverify!(
+            proof,
+            vk,
+            inactive_dedup,
+            0,
+            Some(expected),
+            Some(expected),
+            false,
+            VerifyingKeyInactive
+        );
+        assert_preverify!(proof, vk, inactive_dedup, expected, Accepted);
+    }
+    #[test]
+    fn preverify_rejects_noncanonical_envelope_metadata_before_dedup() {
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA5, 0x5A]);
+        let expected = hash_vk(&vk);
+        let proof = preverify_enveloped_proof(expected);
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("decode canonical Halo2 envelope");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_layout_proof = {
+            let alternate_bytes = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&envelope).expect("encode alternate-layout Halo2 envelope")
+            };
+            assert_ne!(alternate_bytes, proof.bytes);
+            norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate_bytes)
+                .expect("ordinary Norito accepts the advertised layout");
+            ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), alternate_bytes)
+        };
+        for (case, tampered, expected_result) in [
+            (
+                "raw_payload",
+                ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "alternate_layout",
+                alternate_layout_proof,
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "backend_tag",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.backend = BackendTag::Stark;
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "aux",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.aux = b"side-channel".to_vec();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "empty_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "invalid_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id = "halo2/ipa:::preverify-test".to_owned();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "oversized_circuit_id",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.circuit_id = "a"
+                        .repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "empty_public_inputs",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "all_zero_public_inputs",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs = vec![0; 4];
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "wrong_nonzero_public_input_schema",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs = b"noncanonical-but-nonzero-schema".to_vec();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "oversized_public_inputs",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs = vec![
+                        0xA5;
+                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                            + 1
+                    ];
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "empty_proof_bytes",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.proof_bytes.clear();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "all_zero_proof_bytes",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.proof_bytes = vec![0; 16];
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "zero_vk_hash",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.vk_hash = [0u8; 32];
+                }),
+                PreverifyResult::VerifyingKeyMismatch,
+            ),
+            (
+                "wrong_vk_hash",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.vk_hash[0] ^= 0x80;
+                }),
+                PreverifyResult::VerifyingKeyMismatch,
+            ),
+        ] {
+            let mut dedup = DedupCache::new();
+            assert_preverify!(
+                tampered,
+                vk,
+                dedup,
+                expected,
+                expected_result,
+                "case {case}"
+            );
+            assert_preverify!(
+                proof,
+                vk,
+                dedup,
+                expected,
+                Accepted,
+                "case {case} should not poison dedup cache"
+            );
+        }
+    }
+    #[test]
+    fn preverify_rejects_reserved_bfv_stark_open_verify_circuit_before_dedup() {
+        let backend = iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1;
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+        let expected = hash_vk(&vk);
+        let canonical = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            expected,
+        );
+        let prefixed_circuit_id = format!(
+            "{}:{}",
+            backend,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+        );
+        let prefixed = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            &prefixed_circuit_id,
+            expected,
+        );
+        let slash_circuit_id = format!(
+            "{}/{}",
+            backend,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+        );
+        let slash = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            &slash_circuit_id,
+            expected,
+        );
+        let accepted = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            &format!("{backend}:preverify-test"),
+            expected,
+        );
+        for (case, proof) in [
+            ("canonical BFV circuit id", canonical),
+            ("backend-prefixed BFV circuit id", prefixed),
+            ("slash-form BFV circuit id", slash),
+        ] {
+            let mut dedup = DedupCache::new();
+            assert_preverify!(proof, vk, dedup, expected, MalformedProof, "case {case}");
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
+                "case {case} must not poison dedup"
+            );
+        }
+    }
+    #[test]
+    fn preverify_rejects_every_generic_soracloud_fhe_relation_alias_before_dedup() {
+        use iroha_data_model::soracloud::{
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        };
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0x3C, 0xA5, 0x5A]);
+        let expected = hash_vk(&vk);
+        let accepted = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            &format!("{backend}:soracloud-near-miss"),
+            expected,
+        );
+        for canonical in [
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        ] {
+            for circuit_id in [
+                canonical.to_owned(),
+                format!("{backend}:{canonical}"),
+                format!("{backend}/{canonical}"),
+            ] {
+                let proof = preverify_enveloped_proof_for_backend(
+                    backend,
+                    BackendTag::Stark,
+                    &circuit_id,
+                    expected,
+                );
+                let mut dedup = DedupCache::new();
+                assert_preverify!(
+                    proof,
+                    vk,
+                    dedup,
+                    expected,
+                    MalformedProof,
+                    "generic Soracloud relation alias {circuit_id}"
+                );
+                assert_preverify!(
+                    accepted,
+                    vk,
+                    dedup,
+                    expected,
+                    Accepted,
+                    "rejected alias {circuit_id} must not poison dedup"
+                );
+            }
+        }
+    }
+    #[test]
+    fn preverify_rejects_entire_generic_zk_ace_namespace_before_dedup() {
+        let backend = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_BACKEND;
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0x5A, 0xC3, 0xA5]);
+        let expected = hash_vk(&vk);
+        let accepted = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            &format!("{backend}:generic_zk_binding_near_miss"),
+            expected,
+        );
+        for (spelling, relation) in [
+            (
+                "typed v1",
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID,
+            ),
+            ("legacy v0", "zk_ace_pq_authorization_v0"),
+        ] {
+            for (case, circuit_id) in [
+                ("bare", relation.to_owned()),
+                ("backend-prefixed", format!("{backend}:{relation}")),
+                ("slash-prefixed", format!("{backend}/{relation}")),
+            ] {
+                let proof = preverify_enveloped_proof_for_backend(
+                    backend,
+                    BackendTag::Stark,
+                    &circuit_id,
+                    expected,
+                );
+                let mut dedup = DedupCache::new();
+                assert_preverify!(
+                    proof,
+                    vk,
+                    dedup,
+                    expected,
+                    MalformedProof,
+                    "{spelling} {case}"
+                );
+                assert_preverify!(
+                    accepted,
+                    vk,
+                    dedup,
+                    expected,
+                    Accepted,
+                    "{spelling} {case} must not poison dedup"
+                );
+            }
+        }
+    }
+    #[test]
+    fn preverify_rejects_retired_ivm_stark_relation_before_dedup() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xC3, 0xA5, 0x5A]);
+        let expected = hash_vk(&vk);
+        let accepted = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            &format!("{backend}:preverify-test"),
+            expected,
+        );
+        for circuit_id in [
+            IVM_EXECUTION_V1_CIRCUIT_ID.to_owned(),
+            format!("{backend}:{IVM_EXECUTION_V1_CIRCUIT_ID}"),
+            format!("{backend}/{IVM_EXECUTION_V1_CIRCUIT_ID}"),
+        ] {
+            let retired = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Stark,
+                &circuit_id,
+                expected,
+            );
+            let mut dedup = DedupCache::new();
+            assert_preverify!(retired, vk, dedup, expected, MalformedProof);
+            assert_preverify!(accepted, vk, dedup, expected, Accepted);
+        }
+    }
+    #[test]
+    fn preverify_rejects_halo2_open_verify_circuit_mismatch_before_dedup() {
+        for (case, backend, accepted_circuit_id, mismatched_circuit_id) in [
+            (
+                "concrete backend with sibling circuit",
+                "halo2/pasta/kaigi-usage-v1",
+                "halo2/pasta/ipa/kaigi-usage-v1",
+                "halo2/pasta/tiny-add-public",
+            ),
+            (
+                "generic halo2 backend with cross-family circuit",
+                ZK_BACKEND_HALO2_IPA,
+                "halo2/pasta/ipa/kaigi-usage-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:spoof",
+            ),
+            (
+                "generic halo2 backend with bare trusted-setup circuit",
+                ZK_BACKEND_HALO2_IPA,
+                "halo2/pasta/ipa/kaigi-usage-v1",
+                "kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed trusted-setup circuit",
+                ZK_BACKEND_HALO2_IPA,
+                "halo2/pasta/ipa/kaigi-usage-v1",
+                "halo2/ipa:kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed STARK circuit",
+                ZK_BACKEND_HALO2_IPA,
+                "halo2/pasta/ipa/kaigi-usage-v1",
+                "halo2/ipa:stark/fri",
+            ),
+        ] {
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+            let expected = hash_vk(&vk);
+            let accepted = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Halo2IpaPasta,
+                accepted_circuit_id,
+                expected,
+            );
+            let mismatched = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Halo2IpaPasta,
+                mismatched_circuit_id,
+                expected,
+            );
+            let mut dedup = DedupCache::new();
+            assert_preverify!(
+                mismatched,
+                vk,
+                dedup,
+                expected,
+                MalformedProof,
+                "case {case}"
+            );
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
+                "case {case} must not poison dedup"
+            );
+        }
+    }
+    #[test]
+    fn preverify_rejects_stark_open_verify_circuit_mismatch_before_dedup() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let accepted_circuit_id = format!("{backend}:preverify-test");
+        for (case, mismatched_circuit_id) in [
+            (
+                "sibling STARK profile",
+                "stark/fri/poseidon2-goldilocks:preverify-test",
+            ),
+            ("retired generic STARK prefix", "stark/fri:preverify-test"),
+            ("bare generic STARK family", "stark/fri"),
+            ("halo2 circuit", "halo2/ipa:preverify-test"),
+            ("colon-form halo2 circuit", "halo2:preverify-test"),
+            ("colon-form kzg circuit", "kzg:trusted-setup-spoof"),
+            ("bare trusted-setup curve circuit", "bn254"),
+            (
+                "STARK-prefixed trusted-setup circuit",
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile-prefixed trusted-setup circuit",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:structured-reference-string",
+            ),
+        ] {
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+            let expected = hash_vk(&vk);
+            let accepted = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Stark,
+                &accepted_circuit_id,
+                expected,
+            );
+            let mismatched = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Stark,
+                mismatched_circuit_id,
+                expected,
+            );
+            let mut dedup = DedupCache::new();
+            assert_preverify!(
+                mismatched,
+                vk,
+                dedup,
+                expected,
+                MalformedProof,
+                "case {case}"
+            );
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
+                "case {case} must not poison dedup"
+            );
+        }
+    }
+    #[test]
+    fn preverify_binds_open_verify_metadata_for_all_production_labels() {
+        for (backend, envelope_backend, circuit_id) in [
+            (
+                ZK_BACKEND_HALO2_IPA,
+                BackendTag::Halo2IpaPasta,
+                "halo2/pasta/ipa/kaigi-usage-v1",
+            ),
+            (
+                "halo2/pasta/kaigi-usage-v1",
+                BackendTag::Halo2IpaPasta,
+                "halo2/pasta/ipa/kaigi-usage-v1",
+            ),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                BackendTag::Stark,
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
+            ),
+        ] {
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+            let expected = hash_vk(&vk);
+            let proof = preverify_enveloped_proof_for_backend(
+                backend,
+                envelope_backend,
+                circuit_id,
+                expected,
+            );
+            let mut dedup = DedupCache::new();
+            assert_preverify!(
+                proof,
+                vk,
+                dedup,
+                expected,
+                Accepted,
+                "registry backend {backend} should preverify with a matching envelope"
+            );
+            let mut raw_dedup = DedupCache::new();
+            let raw = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_preverify!(
+                raw,
+                vk,
+                raw_dedup,
+                expected,
+                MalformedProof,
+                "registry backend {backend} must require OpenVerifyEnvelope metadata"
+            );
+            let wrong_envelope_backend = match envelope_backend {
+                BackendTag::Halo2IpaPasta => BackendTag::Stark,
+                BackendTag::Stark => BackendTag::Halo2IpaPasta,
+            };
+            let wrong_backend_proof = mutate_preverify_envelope(proof.clone(), |envelope| {
+                envelope.backend = wrong_envelope_backend;
+            });
+            let mut wrong_backend_dedup = DedupCache::new();
+            assert_preverify!(
+                wrong_backend_proof,
+                vk,
+                wrong_backend_dedup,
+                expected,
+                MalformedProof,
+                "registry backend {backend} must reject mismatched envelope backend tags"
+            );
+            assert_preverify!(
+                proof,
+                vk,
+                wrong_backend_dedup,
+                expected,
+                Accepted,
+                "mismatched envelope backend for {backend} must not poison dedup"
+            );
+        }
+    }
+    #[test]
+    fn preverify_rejects_trusted_setup_backends_before_dedup() {
+        for backend in [
+            "kzg",
+            "KZG",
+            " kzg ",
+            "kzg/ceremony-v1",
+            "KZG/ceremony-v1",
+            "bn254",
+            "BN254",
+            "\tBN254\n",
+            "bn256",
+            "bls12_381",
+            "halo2/bn254",
+            "halo2/bn254/vote",
+            "halo2/kzg",
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
+            "stark/fri/prod;kzg",
+            "stark/fri/prod,kzg",
+            "stark/fri/prod+kzg",
+            "stark/fri/prod.kzg",
+            "stark/fri/prod(kzg)",
+            "stark/fri/prod;bn254",
+            "stark/fri/prod+bn256",
+            "stark/fri/prod-bls12-381",
+            "halo2/ipa;groth16",
+            "halo2/ipa/orchard:kzg",
+            "orchard:universal-srs",
+            "penumbra-masp:kzg",
+            "jindo-lattice-pcs-zk:trusted-setup",
+            "miden-stark:ptau",
+            "sis-with-hints:groth16",
+            "pq-masp-stark-fri:kzg",
+            "groth16/bn254",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
+    }
+    #[test]
+    fn preverify_rejects_developer_only_backends_before_dedup() {
+        for backend in [
+            "debug",
+            "debug-proof",
+            "Debug-Proof",
+            "debug/ok",
+            "halo2/debug",
+            "halo2/ipa:debug-proof",
+            "halo2/ipa:DEBUG-Proof",
+            "halo2/ipa:d-e-b-u-g-proof",
+            "stark/fri/debug",
+            "stark/fri/Debug",
+            "stark/fri/d-e-b-u-g",
+            "mock",
+            "mock-proof",
+            "Mock-Proof",
+            "halo2/mock",
+            "halo2/ipa:mock-proof",
+            "halo2/ipa:Mock-Proof",
+            "halo2/ipa:m-o-c-k-proof",
+            "stark/fri/m-o-c-k",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+            "zk-trace/mock-proof",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
+    }
+    #[test]
+    fn preverify_rejects_production_claim_backends_before_dedup() {
+        for backend in [
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:mainnet-complete",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:release-approved",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
+    }
+    #[test]
+    fn preverify_rejects_unknown_and_protocol_names_before_dedup() {
+        for backend in [
+            "not-a-production-backend",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2/ipa\0",
+            "halo2\u{FF0F}ipa",
+            "halo2/\u{200B}ipa",
+            "h\u{0430}lo2/ipa",
+            "../halo2/ipa",
+            "halo2/ipa/../tiny-add",
+            "halo2/ipa:ivm-replay-binding-v1 ",
+            " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1\0",
+            "stark\u{FF0F}fri/sha256-goldilocks",
+            "stark/fri/\u{200B}sha256-goldilocks",
+            "st\u{0430}rk/fri/sha256-goldilocks",
+            "../stark/fri",
+            "stark/fri/../sha256-goldilocks",
+            "stark/fri/random-profile",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/audit-proof-v1",
+            "halo2-ipa-orchard",
+            "halo2/ipa/orchard",
+            "orchard",
+            "groth16-bls12-377",
+            "groth16/bls12-377",
+            "penumbra-masp",
+            "monero-fcmp++",
+            "fcmp++",
+            "fcmp-plus-plus-curve-tree",
+            "lattice-pcs-sis",
+            "sis-hints-anoncred-pq-v0",
+            "sis-with-hints",
+            "miden-stark",
+            "stark/fri/miden",
+            "aztec-plonkish-private-kernel",
+            "pq-masp-stark-fri",
+            "stark/fri/pq-masp-stark-fri",
+            "post-quantum-masp",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
+    }
+    #[test]
+    fn unsupported_backend_preverify_attempts_do_not_poison_dedup_cache() {
+        let mut dedup = DedupCache::new();
+        let proof = ProofBox::new(String::new(), vec![1, 2, 3, 4]);
+        assert_eq!(
+            preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+            PreverifyResult::UnsupportedBackend
+        );
+        assert_eq!(
+            preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+            PreverifyResult::UnsupportedBackend,
+            "unsupported proofs should keep failing as unsupported, not become dedup duplicates"
+        );
+    }
+}
+#[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+include!("halo2_backend_tests.rs");

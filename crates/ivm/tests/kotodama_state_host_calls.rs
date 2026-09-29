@@ -1,5 +1,6 @@
 //! Kotodama calls to durable state helpers through the public `state` namespace.
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::{CoreHost, IVM};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 fn encoded_state_path(name: &str, key: i64) -> String {
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(

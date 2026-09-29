@@ -17,7 +17,8 @@ use iroha_config::{
     base::toml::TomlSource,
     parameters::{actual, defaults::taira as taira_defaults},
 };
-use iroha_core::{state::derive_committee_key_id, zk::confidential_v2};
+use iroha_core::state::derive_committee_key_id;
+use iroha_core_zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
 use iroha_data_model::isi::UnregisterBox;
@@ -1441,7 +1442,8 @@ fn generate_localnet_inner<T: Write>(
     )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
-    let alias_setup_intent_path = write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
+    let alias_setup_intent_path =
+        write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
     let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
@@ -3316,7 +3318,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     let validators = peers
         .into_iter()
         .map(|peer| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &peer.mint_finality_seed,
                 0,
                 PeerId::new(peer.public_key.clone()),
@@ -3334,7 +3336,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     parameters
         .validate()
         .map_err(|error| eyre!("invalid localnet KAGEMUSHA mint-finality roster: {error}"))?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )
     .map_err(|error| eyre!("invalid localnet KAGEMUSHA curve keys: {error}"))?;

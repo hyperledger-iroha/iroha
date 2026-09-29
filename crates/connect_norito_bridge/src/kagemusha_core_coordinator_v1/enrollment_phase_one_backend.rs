@@ -518,7 +518,7 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
         handle: u64,
         operation_id: [u8; 32],
     ) -> Result<
-        iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
+        iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
         KagemushaCoreCoordinatorBackendErrorV1,
     > {
         let owner = self

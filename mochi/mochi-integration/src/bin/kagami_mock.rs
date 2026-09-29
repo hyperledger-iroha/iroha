@@ -399,7 +399,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, validator)| {
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0xA0_u8.wrapping_add(u8::try_from(index).expect("test index fits u8")); 32],
                     0,
                     validator,

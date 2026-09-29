@@ -64,7 +64,7 @@ fn validate_consensus_manifest(manifest: &RawGenesisTransaction) -> color_eyre::
         .map(|entry| entry.peer.clone())
         .collect::<Vec<_>>();
     if topology.is_empty() {
-        iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+        iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
             manifest.kagemusha_mint_finality_genesis_parameters(),
         )
         .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality public parameters: {error}"))?;

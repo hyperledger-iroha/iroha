@@ -1,5 +1,5 @@
 //! Compile-fail coverage for removed first-class durable-state parameters.
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn assert_state_parameter_rejected(source: &str) {
     let error = KotodamaCompiler::new()
         .compile_source(source)

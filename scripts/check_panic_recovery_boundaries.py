@@ -144,10 +144,10 @@ REQUIRED_SNIPPETS = {
     "crates/iroha_core/src/executor.rs": (
         "iroha_panic_hook::catch_unwind_suppressed",
     ),
-    "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": (
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/accumulation.rs": (
         "iroha_panic_hook::catch_unwind_suppressed",
     ),
-    "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": (
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs": (
         "iroha_panic_hook::catch_unwind_suppressed",
     ),
 }
@@ -156,10 +156,10 @@ FORBIDDEN_RECOVERY_SNIPPETS = {
     "crates/iroha_core/src/executor.rs": (
         "std::panic::catch_unwind",
     ),
-    "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": (
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/accumulation.rs": (
         "std::panic::catch_unwind",
     ),
-    "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": (
+    "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs": (
         "std::panic::catch_unwind",
     ),
     "crates/iroha_torii/src/privacy_issuance_api.rs": (
@@ -175,9 +175,9 @@ REVIEWED_TORII_BOUNDARY_INVENTORY = Path(
 )
 CORE_RECOVERY_SOURCE_PATHS = (
     Path("crates/iroha_core/src/executor.rs"),
-    Path("crates/iroha_core/src/zk.rs"),
-    Path("crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs"),
-    Path("crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs"),
+    Path("crates/iroha_core_zk/src/lib.rs"),
+    Path("crates/iroha_core_zk/src/kagemusha_v1_recursion/accumulation.rs"),
+    Path("crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs"),
 )
 CORE_RECOVERY_SUPPORT_PATHS = tuple(
     Path("crates/iroha_core/src") / name
@@ -200,6 +200,12 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_sorafs_market_tests.rs",
         "executor_sorafs_provider_governance_tests.rs",
         "executor_sorafs_pop_registry_tests.rs",
+        "executor_stream_token_direct_source_tests.rs",
+        "executor_contract_owner_permission_tests.rs",
+        "executor/resource_return_tests.rs",
+        "executor_fastpq_rejection_tail.rs",
+        "executor_fastpq_rejection_tail/tests.rs",
+        "executor_fastpq_rejection_tail/sponsored_alias_tests.rs",
     )
 )
 AUDITED_SOURCE_PATHS = (
@@ -207,7 +213,7 @@ AUDITED_SOURCE_PATHS = (
     Path("crates/build-support"),
     Path("crates/irohad"),
     Path("crates/iroha_panic_hook/src"),
-    Path("crates/iroha_core/src/zk"),
+    Path("crates/iroha_core_zk/src"),
     Path("crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture_support.rs"),
     Path("crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture.message"),
     *CORE_RECOVERY_SOURCE_PATHS,
@@ -1581,9 +1587,9 @@ def main() -> int:
 
     reviewed_raw_catch_counts = {
         "crates/iroha_core/src/executor.rs": 0,
-        "crates/iroha_core/src/zk.rs": 1,
-        "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": 0,
-        "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": 0,
+        "crates/iroha_core_zk/src/lib.rs": 1,
+        "crates/iroha_core_zk/src/kagemusha_v1_recursion/accumulation.rs": 0,
+        "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs": 0,
     }
     for relative, expected_count in reviewed_raw_catch_counts.items():
         source = (ROOT / relative).read_text(encoding="utf-8")
@@ -1594,14 +1600,14 @@ def main() -> int:
                 f"{relative}: raw catch_unwind call count drifted "
                 f"(expected {expected_count}, found {len(lines)} at {rendered})"
             )
-    zk_source = (ROOT / "crates/iroha_core/src/zk.rs").read_text(encoding="utf-8")
+    zk_source = (ROOT / "crates/iroha_core_zk/src/lib.rs").read_text(encoding="utf-8")
     reviewed_test_call = (
         "#[cfg(all(test, any(feature = \"zk-halo2\", feature = \"zk-halo2-ipa\")))]\n"
         "mod halo2_ipa_parameter_source_tests"
     )
     if reviewed_test_call not in zk_source:
         failures.append(
-            "crates/iroha_core/src/zk.rs: reviewed raw catch_unwind is no longer "
+            "crates/iroha_core_zk/src/lib.rs: reviewed raw catch_unwind is no longer "
             "inside the cfg(test) Halo2 parameter-source test module"
         )
 

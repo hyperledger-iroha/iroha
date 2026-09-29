@@ -1,8 +1,8 @@
 //! Kotodama ZK-related builtin tests for the namespaced, typed V1 surface.
 #[test]
 fn raw_norito_and_opaque_submission_are_not_source_apis() {
-    let diagnostics = ivm::kotodama::session::CompilerSession::default()
-        .build(ivm::kotodama::session::CompileRequest {
+    let diagnostics = kotodama_lang::session::CompilerSession::default()
+        .build(kotodama_lang::session::CompileRequest {
             source: r#"
 seiyaku RawSubmission {
   kotoage fn submit() authorize("Submit") {

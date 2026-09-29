@@ -43,7 +43,7 @@ fn vk_register_update_emit_events() {
     // Prepare a VK record and Register
     let id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_test");
     let vk_box = iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-    let commitment = iroha_core::zk::hash_vk(&vk_box);
+    let commitment = iroha_core_zk::hash_vk(&vk_box);
     let mut rec = iroha_data_model::proof::VerifyingKeyRecord::new(
         1,
         "vk_test",

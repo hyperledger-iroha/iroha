@@ -383,7 +383,7 @@ mod tests {
         }
     }
     use crate::test_runner::WorkspaceTestTargetReportV1;
-    use ivm::koto_test_driver::{KotoTestCaseOutcomeV1, KotoTestRunReportV1};
+    use kotodama_toolchain::koto_test_driver::{KotoTestCaseOutcomeV1, KotoTestRunReportV1};
 
     #[test]
     fn all_named_test_failures_retain_source_line_and_vm_reason() {

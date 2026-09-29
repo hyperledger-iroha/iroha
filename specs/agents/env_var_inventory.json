@@ -1,9 +1,9 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "generated_at": "2026-09-28T18:05:53Z",
+  "generated_at": "2026-09-29T20:16:56Z",
   "root": "iroha",
-  "total_refs": 877,
-  "unique_vars": 214,
+  "total_refs": 875,
+  "unique_vars": 215,
   "variables": {
     "CARGO": {
       "counts": {
@@ -199,26 +199,26 @@
       "paths": [
         {
           "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
-          "line": 5,
-          "path": "crates/ivm/tests/cli_smoke.rs",
+          "line": 18,
+          "path": "crates/kotodama_toolchain/tests/cli_smoke.rs",
           "scope": "test"
         },
         {
           "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
-          "line": 54,
-          "path": "crates/ivm/tests/cli_smoke.rs",
+          "line": 61,
+          "path": "crates/kotodama_toolchain/tests/cli_smoke.rs",
           "scope": "test"
         },
         {
           "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
-          "line": 87,
-          "path": "crates/ivm/tests/cli_smoke.rs",
+          "line": 86,
+          "path": "crates/kotodama_toolchain/tests/cli_smoke.rs",
           "scope": "test"
         },
         {
           "context": "let bin = env!(\"CARGO_BIN_EXE_koto\");",
-          "line": 123,
-          "path": "crates/ivm/tests/cli_smoke.rs",
+          "line": 114,
+          "path": "crates/kotodama_toolchain/tests/cli_smoke.rs",
           "scope": "test"
         }
       ]
@@ -499,7 +499,7 @@
         "debug": 1,
         "example": 1,
         "prod": 42,
-        "test": 391,
+        "test": 388,
         "tool": 6
       },
       "paths": [
@@ -1242,48 +1242,6 @@
           "scope": "test"
         },
         {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 10,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_recursion/frame_identity_tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 710,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store_tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 720,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store_tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 10,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/outgoing_frame_identity_tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 10,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/state_frame_identity_tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 19,
-          "path": "crates/iroha_core/src/zk_stark/bfv_full_bootstrap_tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 11,
-          "path": "crates/iroha_core/src/zk_stark/frame_identity_tests.rs",
-          "scope": "test"
-        },
-        {
           "context": "let crates_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
           "line": 32,
           "path": "crates/iroha_core/tests/default_domain_independence.rs",
@@ -1311,6 +1269,48 @@
           "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
           "line": 87,
           "path": "crates/iroha_core/tests/sumeragi_doc_sync.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 10,
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_recursion/frame_identity_tests.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 708,
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store_tests.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 718,
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store_tests.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 10,
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/outgoing_frame_identity_tests.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 10,
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/state_frame_identity_tests.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 19,
+          "path": "crates/iroha_core_zk/src/stark/bfv_full_bootstrap_tests.rs",
+          "scope": "test"
+        },
+        {
+          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
+          "line": 11,
+          "path": "crates/iroha_core_zk/src/stark/frame_identity_tests.rs",
           "scope": "test"
         },
         {
@@ -2400,30 +2400,6 @@
           "scope": "test"
         },
         {
-          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
-          "line": 6,
-          "path": "crates/ivm/tests/cli_smoke.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
-          "line": 55,
-          "path": "crates/ivm/tests/cli_smoke.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");",
-          "line": 88,
-          "path": "crates/ivm/tests/cli_smoke.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let manifest_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));",
-          "line": 124,
-          "path": "crates/ivm/tests/cli_smoke.rs",
-          "scope": "test"
-        },
-        {
           "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"docs/syscalls.md\");",
           "line": 3,
           "path": "crates/ivm/tests/docs_consistency.rs",
@@ -2529,6 +2505,12 @@
           "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
           "line": 10,
           "path": "crates/kotodama_lang/tests/documentation_fences.rs",
+          "scope": "test"
+        },
+        {
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 6,
+          "path": "crates/kotodama_toolchain/tests/cli_smoke.rs",
           "scope": "test"
         },
         {
@@ -3436,6 +3418,19 @@
         }
       ]
     },
+    "CARGO_TARGET_TMPDIR": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "PathBuf::from(env!(\"CARGO_TARGET_TMPDIR\"))",
+          "line": 13,
+          "path": "crates/kotodama_toolchain/tests/cli_smoke.rs",
+          "scope": "test"
+        }
+      ]
+    },
     "CREDENTIALS_DIRECTORY": {
       "counts": {
         "prod": 2
@@ -4225,7 +4220,7 @@
         {
           "context": "let mode = std::env::var(\"IROHA_HISTORY_TEST_MODE\").unwrap();",
           "line": 461,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/disk_history_store_tests.rs",
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/disk_history_store_tests.rs",
           "scope": "test"
         }
       ]
@@ -4238,7 +4233,7 @@
         {
           "context": "let Some(path) = std::env::var_os(\"IROHA_HISTORY_TEST_PATH\") else {",
           "line": 457,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/disk_history_store_tests.rs",
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/disk_history_store_tests.rs",
           "scope": "test"
         }
       ]
@@ -4284,19 +4279,19 @@
         {
           "context": "if std::env::var_os(\"IROHA_KAGEMUSHA_PROFILE_CELLS\").is_some() {",
           "line": 126,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_recursion/mint_hash_claim_fold.rs",
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_recursion/mint_hash_claim_fold.rs",
           "scope": "test"
         },
         {
           "context": "if std::env::var_os(\"IROHA_KAGEMUSHA_PROFILE_CELLS\").is_some() {",
           "line": 3490,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_recursion/mint_hash_claim_fold.rs",
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_recursion/mint_hash_claim_fold.rs",
           "scope": "test"
         },
         {
           "context": "if std::env::var_os(\"IROHA_KAGEMUSHA_PROFILE_CELLS\").is_some() {",
           "line": 3504,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_recursion/mint_hash_claim_fold.rs",
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_recursion/mint_hash_claim_fold.rs",
           "scope": "test"
         }
       ]
@@ -5363,8 +5358,8 @@
       "paths": [
         {
           "context": "if std::env::var_os(\"KAGEMUSHA_OPERATION_STORE_TEST_LOST_REPLY\").is_some() {",
-          "line": 1027,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store_tests.rs",
+          "line": 1025,
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store_tests.rs",
           "scope": "test"
         }
       ]
@@ -5376,8 +5371,8 @@
       "paths": [
         {
           "context": "let Some(path) = std::env::var_os(\"KAGEMUSHA_OPERATION_STORE_TEST_PATH\") else {",
-          "line": 1018,
-          "path": "crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store_tests.rs",
+          "line": 1016,
+          "path": "crates/iroha_core_zk/src/kagemusha_v1_state/coordinator_operation_store_tests.rs",
           "scope": "test"
         }
       ]
@@ -5864,7 +5859,7 @@
         },
         {
           "context": "include!(concat!(env!(\"OUT_DIR\"), \"/syscall_signatures.rs\"));",
-          "line": 229,
+          "line": 144,
           "path": "crates/ivm/src/ivm.rs",
           "scope": "prod"
         },

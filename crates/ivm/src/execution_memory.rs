@@ -190,6 +190,11 @@ impl<T> ExecutionBuffer<T> {
     pub(crate) fn mark_unmeasured(&mut self) {
         self.retention.mark_unmeasured();
     }
+
+    /// Restore the exact measure of this fixed backing after active work.
+    pub(crate) fn remeasure_fixed(&mut self) {
+        self.retention.remeasure_fixed();
+    }
 }
 
 impl ExecutionBuffer<u8> {

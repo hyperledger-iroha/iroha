@@ -1,6 +1,14 @@
 //! Schema-bound ownership transfer from a nested Kotodama test VM.
-use super::*;
-use crate::{VMError, list::ListLayoutV1, sum::SumLayoutV1};
+//!
+//! The Kotodama test harness (`kotodama_toolchain`) runs `test::invoke_kotoage_as` calls in a
+//! nested VM and copies the typed public call result into the caller's result table. The copy
+//! needs VM-private memory state (call frames, HEAP ownership), so it lives here.
+use crate::{
+    AccountId, AssetDefinitionId, IVM, PointerType, VMError, list::ListLayoutV1, sum::SumLayoutV1,
+};
+use iroha_data_model::asset::AssetId;
+use iroha_model_base::{domain::DomainId, name::Name, topology::DataSpaceId};
+use iroha_primitives::{json::Json, numeric_abi::DecimalValueV1};
 use ivm_abi::entrypoint::{
     EntrypointValueKindV1 as Kind, EntrypointValueTypeNodeV1 as Node, EntrypointValueTypeV1,
     MAX_ENTRYPOINT_RETURN_RECORD_BYTES, entrypoint_value_subtree_range_v1,
@@ -106,7 +114,16 @@ fn charge(used: &mut usize, bytes: usize) -> Result<(), VMError> {
     Ok(())
 }
 
-pub(super) fn transfer_return(
+/// Copy the schema-typed public call result of a completed `source` VM into `destination`.
+///
+/// Values are revalidated against `schema`, TLVs and HEAP handles are preflighted before any
+/// allocation, and the result table address plus arity are published in `x10`/`x11`.
+///
+/// # Errors
+///
+/// Returns [`VMError`] when the schema, arity or result table is invalid, a value does not match
+/// its schema, or `destination` lacks the INPUT/HEAP capacity for the copied values.
+pub fn transfer_return(
     source: &IVM,
     destination: &mut IVM,
     schema: &EntrypointValueTypeV1,
@@ -368,6 +385,17 @@ mod tests {
     use super::*;
     use iroha_primitives::numeric_abi::IntValueV1;
     use ivm_abi::entrypoint::EntrypointListTypeNodeV1;
+
+    fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
+        out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+        out.push(1);
+        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(payload);
+        let hash: [u8; 32] = iroha_crypto::Hash::new(payload).into();
+        out.extend_from_slice(&hash);
+        out
+    }
 
     #[test]
     fn nested_sum_list_returns_own_all_handles_and_tlvs() {

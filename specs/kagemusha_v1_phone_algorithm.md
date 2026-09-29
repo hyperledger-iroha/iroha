@@ -916,7 +916,7 @@ binding, then demonstrate them in genuine linked proofs.
   HCE and nearby transport choice.
 - `formal/kagemusha_v1/KagemushaV1.tla`: ExactNextNonForking and crash/rotation
   model; the mutation harness produces a counterexample for a second successor.
-- `crates/iroha_core/src/zk/kagemusha_v1_state/mod.rs`: hardware epoch and
+- `crates/iroha_core_zk/src/kagemusha_v1_state/mod.rs`: hardware epoch and
   exact-next transition statement.
 - [Apple CardSession](https://developer.apple.com/documentation/corenfc/cardsession)
   and [NFC & SE platform](https://developer.apple.com/support/nfc-se-platform/).

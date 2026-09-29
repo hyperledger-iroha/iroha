@@ -2,7 +2,7 @@
 //! Fixed test keys model the applet; these tests do not certify physical device behavior.
 
 use super::*;
-use iroha_core::zk::{kagemusha_v1_recursion::*, kagemusha_v1_state::*};
+use iroha_core_zk::{kagemusha_v1_recursion::*, kagemusha_v1_state::*};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{result::Result, sync::Mutex};

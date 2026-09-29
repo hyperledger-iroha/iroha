@@ -1,8 +1,6 @@
 //! End-to-end canonical entity registration calls through the pointer ABI.
-use ivm::{
-    IVM, MockWorldStateView, PermissionToken, kotodama::compiler::Compiler as KotodamaCompiler,
-    mock_wsv::WsvHost,
-};
+use ivm::{IVM, MockWorldStateView, PermissionToken, mock_wsv::WsvHost};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 #[test]
 fn kotodama_register_account_and_unregister_asset() {

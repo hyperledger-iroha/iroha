@@ -31,7 +31,7 @@ use iroha_config::parameters::{
         },
     },
 };
-use iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
+use iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
 use iroha_crypto::KeyPair;
 use iroha_data_model::{NetworkId, isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1};
 use iroha_model_base::peer::PeerId;
@@ -1211,7 +1211,7 @@ mod tests {
                     iroha_crypto::Hash::new(b"Taira mint seed admission fixture"))),
             generation: 0,
             validators: peers.into_iter().enumerate().map(|(index, validator)| {
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0x70 + u8::try_from(index).expect("four validators"); 32], 0, validator)
                     .expect("derive private seed fixture public keys")
             }).collect(),

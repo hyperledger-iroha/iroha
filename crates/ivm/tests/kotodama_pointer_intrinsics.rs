@@ -1,5 +1,5 @@
 //! Kotodama pointer-ABI intrinsic compilation coverage.
-use ivm::kotodama::compiler::Compiler;
+use kotodama_lang::compiler::Compiler;
 #[test]
 fn raw_axt_pointer_constructors_are_rejected() {
     let src = r#"

@@ -1,8 +1,5 @@
 //! Type checking, nominal value resolution, and deterministic effect analysis.
 use super::ast::*;
-use crate::builtins::{
-    Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface, PointerConstructor,
-};
 use crate::source::{MAX_NESTING_DEPTH, MAX_TOKENS};
 use indexmap::{IndexMap, IndexSet};
 use iroha_data_model::events::data::prelude::{
@@ -42,6 +39,13 @@ use iroha_primitives::{
     json::Json,
     numeric::{MAX_MANTISSA_BYTES, Numeric, NumericError, RoundingMode},
 };
+use kotodama_surface::builtins::{
+    Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface, PointerConstructor,
+};
+use kotodama_surface::source_policy::{
+    V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_STATE_MAP_KEY_TYPE_NAMES,
+    is_reserved_source_declaration, is_reserved_source_type_declaration,
+};
 use norito::json::{self, native::Number as JsonNumber};
 use std::{
     cell::{Cell, RefCell},
@@ -69,165 +73,6 @@ pub(crate) use value_traits::type_name;
 
 /// Canonical nominal name for the structurally-specialized V1 query page.
 const QUERY_PAGE_TYPE_NAME: &str = "QueryPage";
-// BEGIN GENERATED: kotodama-v1-semantic-policy
-/// Canonical source-level type spellings offered by language tooling.
-pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
-    "int",
-    "decimal",
-    "quantity",
-    "bool",
-    "string",
-    "bytes",
-    "Json",
-    "AccountId",
-    "AssetDefinitionId",
-    "AssetId",
-    "DomainId",
-    "Name",
-    "NftId",
-    "DataSpaceId",
-    "Option",
-    "Result",
-    "List",
-    "ListError",
-    "NumericError",
-    "StateMap",
-    "StateCursor",
-    "StatePage",
-    "Secret",
-    "AccountView",
-    "AssetView",
-    "AssetDefinitionView",
-    "DomainView",
-    "NftView",
-    "QueryPage",
-];
-/// Compiler-owned non-keyword names forbidden for source declarations.
-pub const V1_DECLARATION_RESERVED_EXTRA_NAMES: &[&str] = &[
-    "AxtDescriptor",
-    "AxtAnchoredSpendV1",
-    "ProofBlob",
-    "SoracloudRequest",
-    "SoracloudResponse",
-    "state_map_get",
-    "__kotodama_state_page",
-    "__kotodama_state_take",
-    "__kotodama_list_len",
-    "__kotodama_list_get",
-    "__kotodama_list_set",
-    "__kotodama_list_push",
-    "__kotodama_list_try_set",
-    "__kotodama_list_try_push",
-    "__kotodama_list_pop",
-    "__kotodama_list_contains",
-    "__kotodama_list_take",
-    "__kotodama_list_enumerate",
-    "__kotodama_decimal_div_round",
-    "__kotodama_decimal_mul_div_round",
-    "__kotodama_quantity_mul_div_round",
-    "__kotodama_quantity_div_round",
-    "__kotodama_quantity_ratio_round",
-    "__kotodama_decimal_to_int_trunc",
-    "__kotodama_decimal_to_int_round",
-    "is_some",
-    "is_none",
-    "is_ok",
-    "is_err",
-    "unwrap_or",
-    "unwrap_err_or",
-];
-/// Exact identifier spellings forbidden in every source position.
-pub(crate) const V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];
-/// Exact canonical scalar types permitted as durable StateMap keys.
-pub const V1_STATE_MAP_KEY_TYPE_NAMES: &[&str] = &[
-    "int",
-    "decimal",
-    "quantity",
-    "bool",
-    "string",
-    "bytes",
-    "DataSpaceId",
-    "AccountId",
-    "AssetDefinitionId",
-    "AssetId",
-    "NftId",
-    "DomainId",
-    "Name",
-];
-/// Canonical bounded StateMap scan provenance in manifest order.
-pub const V1_DYNAMIC_ACCESS_BOUND_KINDS: &[&str] = &["page", "take"];
-/// Maximum keys advertised by one bounded dynamic-access hint.
-pub const V1_DYNAMIC_ACCESS_MAX_KEYS: u32 = 64;
-/// Canonical prefix for a direct durable StateMap hint base.
-pub const V1_DYNAMIC_ACCESS_BASE_PREFIX: &str = "state:";
-/// Canonical validation policy for the StateMap base identifier.
-pub const V1_DYNAMIC_ACCESS_BASE_IDENTIFIER_POLICY: &str = "state_declaration_identifier";
-/// Dynamic hints may refer only to a directly declared top-level StateMap.
-pub const V1_DYNAMIC_ACCESS_REQUIRES_DECLARED_STATE_MAP: bool = true;
-/// Dynamic hints are advisory and never scheduler-authoritative in V1.
-pub const V1_DYNAMIC_ACCESS_SCHEDULER_AUTHORITATIVE: bool = false;
-/// Retired pre-release numeric type spellings that remain reserved in V1.
-///
-/// Keeping these names unavailable to source-unit identities and declared
-/// types prevents authenticated metadata from reinterpreting a known retired
-/// type spelling. Except for exact spellings in
-/// `V1_FORBIDDEN_SOURCE_IDENTIFIERS`, they remain ordinary names in value and
-/// function namespaces, including entrypoints.
-pub const V1_RETIRED_NUMERIC_TYPE_NAMES: &[&str] = &[
-    "i8",
-    "i16",
-    "i32",
-    "i64",
-    "i128",
-    "isize",
-    "u8",
-    "u16",
-    "u32",
-    "u64",
-    "u128",
-    "usize",
-    "num",
-    "Int",
-    "Integer",
-    "float",
-    "f32",
-    "f64",
-    "Decimal",
-    "Fixed",
-    "FixedPoint",
-    "Amount",
-    "amount",
-    "money",
-    "Quantity",
-    "number",
-];
-/// Canonical active-only sum constructor and pattern paths.
-pub const V1_SUM_PATHS: &[&str] = &["Option::some", "Option::none", "Result::ok", "Result::err"];
-/// Canonical explicit exact-decimal rounding modes.
-pub const V1_ROUNDING_PATHS: &[&str] = &[
-    "Rounding::toward_zero",
-    "Rounding::away_from_zero",
-    "Rounding::floor",
-    "Rounding::ceil",
-    "Rounding::nearest_even",
-    "Rounding::nearest_away",
-    "Rounding::nearest_toward_zero",
-];
-/// Canonical bounded-list member API.
-pub const V1_LIST_MEMBER_NAMES: &[&str] = &[
-    "len",
-    "get",
-    "set",
-    "push",
-    "try_set",
-    "try_push",
-    "pop",
-    "contains",
-    "take",
-    "enumerate",
-];
-// END GENERATED: kotodama-v1-semantic-policy
-const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 const AGGREGATE_CAPTURE_PREFIX: &str = "\0aggregate_capture#";
 /// Identify only unspellable capture and projection names emitted by this module.
 /// A source name beginning with `__kotodama_` is still an ordinary user binding.
@@ -331,24 +176,6 @@ fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
         return Some(CompilerIntrinsicKind::Sum);
     }
     None
-}
-/// Return whether a source declaration collides with compiler-owned names.
-pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
-    name.starts_with(LINKED_SYMBOL_PREFIX)
-        || V1_SOURCE_TYPE_NAMES.contains(&name)
-        || V1_DECLARATION_RESERVED_EXTRA_NAMES.contains(&name)
-        || V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&name)
-        || (is_function
-            && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
-}
-/// Return whether a declared source type collides with an active or retired
-/// compiler-owned type spelling.
-///
-/// Retired scalar spellings remain forbidden in type position. Except for the
-/// exact globally forbidden source identifiers, names such as `amount`, `money`,
-/// and `number` remain ordinary parameters, locals, functions, and entrypoints.
-pub fn is_reserved_source_type_declaration(name: &str) -> bool {
-    is_reserved_source_declaration(name, false) || V1_RETIRED_NUMERIC_TYPE_NAMES.contains(&name)
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FunctionEffects {
@@ -2831,8 +2658,7 @@ fn validate_production_projection_expr(
         ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             if let Some(builtin) = Builtin::from_name(name) {
                 match builtin.mode() {
-                    crate::builtins::BuiltinMode::TestOnly
-                    | crate::builtins::BuiltinMode::TestFunctionOnly => {
+                    BuiltinMode::TestOnly | BuiltinMode::TestFunctionOnly => {
                         return Err(SemanticError {
                             code: "E_TEST_ONLY_PRODUCTION",
                             message: format!(
@@ -2841,7 +2667,7 @@ fn validate_production_projection_expr(
                             ),
                         });
                     }
-                    crate::builtins::BuiltinMode::ZkOnly if !zk_enabled => {
+                    BuiltinMode::ZkOnly if !zk_enabled => {
                         return Err(SemanticError {
                             code: "E_ZK_MODE_REQUIRED",
                             message: format!(
@@ -12979,6 +12805,10 @@ fn enforce_permission_requirements(
     Ok(())
 }
 
+#[cfg(test)]
+use kotodama_surface::source_policy::{
+    V1_FORBIDDEN_SOURCE_IDENTIFIERS, V1_RETIRED_NUMERIC_TYPE_NAMES,
+};
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -67,10 +67,10 @@ Audited code evidence:
 - [../crates/iroha_data_model/src/proof.rs](../crates/iroha_data_model/src/proof.rs):
   `ProofBox`, `ProofAttachment`, `VerifyingKeyBox`, `VerifyingKeyRecord`, key status,
   and backend/commitment serialization policy.
-- [../crates/iroha_core/src/zk.rs](../crates/iroha_core/src/zk.rs): verifier
+- [../crates/iroha_core_zk/src/lib.rs](../crates/iroha_core_zk/src/lib.rs): verifier
   dispatch, preverify/dedup, backend-label guardrails, envelope metadata checks,
   STARK/Halo2 entry points, and timing/size guardrails.
-- [../crates/iroha_core/src/zk_stark.rs](../crates/iroha_core/src/zk_stark.rs):
+- [../crates/iroha_core_zk/src/stark.rs](../crates/iroha_core_zk/src/stark.rs):
   generic native Goldilocks STARK/FRI verifier and AIR bindings; the generic
   boundary explicitly rejects the retired ZK-ACE relation.
 - [../crates/iroha_core/src/privacy_engines/zk_ace.rs](../crates/iroha_core/src/privacy_engines/zk_ace.rs)
@@ -1197,9 +1197,9 @@ counterexamples.
 ```bash
 scripts/formal/zk_tlc.sh fast
 scripts/formal/zk_tlc.sh mutations
-cargo test -p iroha_core --features zk-stark --lib zk_stark::tests::
+cargo test -p iroha_core_zk --lib stark::tests::
 cargo test -p iroha_core --features zk-stark --lib zk_ace
-cargo test -p iroha_core --features zk-halo2-ipa --lib zk::
+cargo test -p iroha_core_zk --lib
 cargo test -p iroha_zkp_halo2
 cargo test -p fastpq_prover
 ```

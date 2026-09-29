@@ -13,7 +13,7 @@ use std::{collections::BTreeMap, time::Duration};
 use super::initial_enrollment::FreshIssuerAdmissionV1;
 use super::native_deadline::NativeDeadlineV1;
 
-use iroha_core::zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
+use iroha_core_zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1,
     KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1, KagemushaEnabledProfileV1,

@@ -23,7 +23,7 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>>,
     kagemusha_mint_finality_authority: Option<
         Arc<
-            iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+            iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
         >,
     >,
     parliament_tle_partial_release_signer:
@@ -504,7 +504,7 @@ impl IrohaRuntimeDeps {
         /// V1 top-up finality. The seed remains inside this runtime-owned object.
         with_kagemusha_mint_finality_authority(
             authority: Arc<
-                iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+                iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
             >,
         ) => kagemusha_mint_finality_authority;
         /// Attach the runtime-only adaptive Parliament TLE signing-share owner.

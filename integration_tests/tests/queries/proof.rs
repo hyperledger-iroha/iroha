@@ -13,7 +13,7 @@ use iroha::data_model::{
     },
     zk::BackendTag,
 };
-use iroha_core::zk::hash_vk;
+use iroha_core_zk::hash_vk;
 #[path = "../proof_fixtures.rs"]
 mod proof_fixtures;
 use iroha_data_model::zk::OpenVerifyEnvelope;
@@ -59,12 +59,12 @@ fn halo2_attachment_and_registration(
 fn rejected_stark_attachment_and_registration(
     label: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    use iroha_core::zk_stark::{
+    use iroha_core_zk::stark::{
         STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
         STARK_FRI_CONSENSUS_MIN_QUERIES, StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1,
     };
     use iroha_data_model::zk::StarkFriOpenProofV1;
-    let backend = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1;
+    let backend = iroha_core_zk::ZK_BACKEND_STARK_FRI_V1;
     let circuit_id = format!("{backend}:query-binding");
     let schema = b"integration:query-binding:v1";
     let vk_payload = StarkFriVerifyingKeyV1 {
@@ -80,7 +80,7 @@ fn rejected_stark_attachment_and_registration(
         backend.into(),
         norito::encode_canonical(&vk_payload).expect("canonical STARK verifying key"),
     );
-    let mut proof_box = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+    let mut proof_box = iroha_core_zk::prove_stark_fri_open_verify_envelope(
         backend,
         &circuit_id,
         &vk_box,
@@ -88,7 +88,7 @@ fn rejected_stark_attachment_and_registration(
         vec![vec![[0x11; 32]], vec![[0x22; 32]]],
     )
     .expect("genuine Binding AIR proof at current consensus floors");
-    assert!(iroha_core::zk::verify_backend(
+    assert!(iroha_core_zk::verify_backend(
         backend,
         &proof_box,
         Some(&vk_box)
@@ -102,7 +102,7 @@ fn rejected_stark_attachment_and_registration(
     open.envelope_bytes = norito::encode_canonical(&inner).unwrap();
     outer.proof_bytes = norito::encode_canonical(&open).unwrap();
     proof_box.bytes = norito::encode_canonical(&outer).unwrap();
-    assert!(!iroha_core::zk::verify_backend(
+    assert!(!iroha_core_zk::verify_backend(
         backend,
         &proof_box,
         Some(&vk_box)
@@ -329,7 +329,7 @@ fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> V
 }
 #[test]
 fn halo2_attachment_statement_changes_proof_hash() {
-    use iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1;
+    use iroha_core_zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1;
 
     let a = halo2_attachment("statement-a");
     let b = halo2_attachment("statement-b");
@@ -373,8 +373,8 @@ fn halo2_attachment_statement_changes_proof_hash() {
             assert_eq!(inputs_a[column], inputs_b[column], "{name} must stay fixed");
         }
     }
-    let hash_a = iroha_core::zk::hash_proof(&a.proof);
-    let hash_b = iroha_core::zk::hash_proof(&b.proof);
+    let hash_a = iroha_core_zk::hash_proof(&a.proof);
+    let hash_b = iroha_core_zk::hash_proof(&b.proof);
     assert_ne!(
         hash_a, hash_b,
         "bound public statement should change proof hash"
@@ -388,18 +388,18 @@ fn halo2_attachment_circuit_changes_proof_hash() {
     let mut envelope: OpenVerifyEnvelope =
         norito::decode_canonical(&attachment.proof.bytes).expect("canonical confidential envelope");
     envelope.circuit_id =
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.into();
+        iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.into();
     let relabelled = iroha::data_model::proof::ProofBox::new(
         attachment.proof.backend.clone(),
         norito::encode_canonical(&envelope).expect("canonical relabelled envelope"),
     );
     assert_ne!(
-        iroha_core::zk::hash_proof(&attachment.proof),
-        iroha_core::zk::hash_proof(&relabelled),
+        iroha_core_zk::hash_proof(&attachment.proof),
+        iroha_core_zk::hash_proof(&relabelled),
         "circuit identity must participate in the proof hash"
     );
     assert!(
-        !iroha_core::zk::verify_backend(
+        !iroha_core_zk::verify_backend(
             &relabelled.backend,
             &relabelled,
             registration.record.key.as_ref(),

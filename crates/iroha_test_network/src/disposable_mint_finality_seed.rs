@@ -227,7 +227,7 @@ impl NetworkPeer {
         let held = self.held_disposable_mint_finality_seed()?;
         let seed = held.seed()?;
         Ok(
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &*seed, generation, self.id(),
             )?,
         )
@@ -247,10 +247,10 @@ impl NetworkPeer {
     )> {
         let held = self.held_disposable_mint_finality_seed()?;
         let seed = held.seed()?;
-        let keys = iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+        let keys = iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
             &*seed, generation, self.id(),
         )?;
-        let proof = iroha_core::zk::kagemusha_v1_recursion::prove_kagemusha_mint_finality_candidate_possession_v1(
+        let proof = iroha_core_zk::kagemusha_v1_recursion::prove_kagemusha_mint_finality_candidate_possession_v1(
             &*seed, network_id, generation, &keys,
         )?;
         Ok((keys, proof))
@@ -268,7 +268,7 @@ impl NetworkPeer {
         let held = self.held_disposable_mint_finality_seed()?;
         let seed = held.seed()?;
         Ok(
-            iroha_core::zk::kagemusha_v1_recursion::prove_kagemusha_mint_finality_seat_readiness_v1(
+            iroha_core_zk::kagemusha_v1_recursion::prove_kagemusha_mint_finality_seat_readiness_v1(
                 &*seed, authority, context,
             )?,
         )

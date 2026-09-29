@@ -969,3 +969,25 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
     drop(vm);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+#[test]
+fn executed_runtime_is_retainable_after_template_reset() {
+    set_banner_enabled(false);
+    let program = program_with_imm(7);
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&program).expect("program loads");
+    let template = vm
+        .try_runtime_template()
+        .expect("runtime template allocation fits test host");
+    vm.memory.store_u64(Memory::STACK_START, 0x5678).unwrap();
+    vm.run().expect("program runs to halt");
+    vm.reset_from_runtime_template(&template)
+        .expect("warm VM retains its runtime-template geometry");
+    // Execution marks the fixed memory image unmeasured; the reset runtime
+    // must still be admissible to an idle runtime pool.
+    assert!(template.try_retain_cache_allocations());
+    assert!(vm.try_retain_cache_allocations());
+    vm.activate_cached_runtime();
+    vm.run().expect("reactivated runtime runs again");
+    vm.reset_from_runtime_template(&template).unwrap();
+    assert!(vm.try_retain_cache_allocations());
+}

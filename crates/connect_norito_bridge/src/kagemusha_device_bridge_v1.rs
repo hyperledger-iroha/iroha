@@ -425,7 +425,7 @@ pub(crate) fn validate_coordinator_reservation_binding_v1(
         return false;
     }
     if operation == KagemushaDeviceLifecycleOperationV1::PrepareExactNextTransition {
-        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
         let maximum = MAX_COMMAND_PAYLOAD_BYTES_V1;
         let Ok(inputs) = norito::decode_canonical_with_limits::<KagemushaOutgoingPublicInputsV1>(
             binding,

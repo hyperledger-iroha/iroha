@@ -1,7 +1,7 @@
 //! Call-table return bounds, including products beyond the retired register allocation limit.
 #[test]
 fn compile_function_returning_fourteen_values_succeeds() {
-    use ivm::kotodama::compiler::Compiler;
+    use kotodama_lang::compiler::Compiler;
     // Every product word is returned through the same table convention.
     let src = r#"
         seiyaku TooManyReturns {
@@ -18,7 +18,7 @@ fn compile_function_returning_fourteen_values_succeeds() {
 #[test]
 fn callmulti_rejects_one_word_beyond_the_table_bound() {
     // Hit the CallMulti codegen guard via test helper without compiling a callee.
-    let err = ivm::kotodama::compiler::test_helpers::try_emit_callmulti_guard_only(
+    let err = kotodama_lang::compiler::test_helpers::try_emit_callmulti_guard_only(
         ivm_abi::call::MAX_CALL_WORDS_V1 + 1,
     )
     .expect_err("expected CallMulti guard error");
@@ -29,7 +29,7 @@ fn callmulti_rejects_one_word_beyond_the_table_bound() {
 }
 #[test]
 fn compile_function_returning_thirteen_values_succeeds() {
-    use ivm::kotodama::compiler::Compiler;
+    use kotodama_lang::compiler::Compiler;
     let src = r#"
         seiyaku MaximumReturns {
             view fn h(int a,int b,int c,int d,int e,int f,int g,int eighth,int i,int j,int k,int l,int m)
@@ -44,7 +44,7 @@ fn compile_function_returning_thirteen_values_succeeds() {
 }
 #[test]
 fn callmulti_accepts_the_inclusive_table_word_bound() {
-    ivm::kotodama::compiler::test_helpers::try_emit_callmulti_guard_only(
+    kotodama_lang::compiler::test_helpers::try_emit_callmulti_guard_only(
         ivm_abi::call::MAX_CALL_WORDS_V1,
     )
     .expect("exact table word bound must pass guard");

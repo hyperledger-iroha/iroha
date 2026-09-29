@@ -20,7 +20,7 @@ from zk_source_tokens import token_hash
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_PATH = ROOT / "crates/iroha_core/src/zk/halo2_backend_02_tests.rs"
+SOURCE_PATH = ROOT / "crates/iroha_core_zk/src/halo2_backend_02_tests.rs"
 
 PREIMAGE_BLOB = "24d6dcc6c3d5aa718563bc05f872e5034f9108a9"
 PREIMAGE_SHA256 = "2038f9e73c032bf40e6de658ed934946c515f1fd15484c382bc7174614c47c99"

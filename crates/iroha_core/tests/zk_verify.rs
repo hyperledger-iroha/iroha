@@ -4,6 +4,7 @@
 //! ZK attachment pre-verify wiring tests (dedup and basic sanity).
 #![cfg(feature = "zk-preverify")]
 use iroha_core::{
+    execution_attempt::ExecutionAttemptError,
     executor::Executor,
     kura::Kura,
     query::store::LiveQueryStore,
@@ -20,6 +21,16 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+
+/// Unwrap a deterministic rejection; a local retry deferral is a test failure.
+fn rejected(err: ExecutionAttemptError<ValidationFail>) -> ValidationFail {
+    match err {
+        ExecutionAttemptError::Rejected(err) => err,
+        ExecutionAttemptError::Deferred(deferred) => {
+            panic!("expected a deterministic rejection, got a local deferral: {deferred:?}")
+        }
+    }
+}
 #[path = "common/world_fixture.rs"]
 mod test_world;
 const TINY_ADD_CIRCUIT_ID: &str = "halo2/ipa:tiny-add-public";
@@ -174,9 +185,10 @@ fn duplicate_proof_in_same_block_is_rejected() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx2 = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx2, &authority, tx2, &mut ivm_cache)
-        .expect_err("duplicate proof should be rejected");
+    let err = rejected(
+        exec.execute_transaction(&mut stx2, &authority, tx2, &mut ivm_cache)
+            .expect_err("duplicate proof should be rejected"),
+    );
     match err {
         ValidationFail::NotPermitted(msg) => {
             assert!(msg.contains("duplicate proof"));
@@ -355,9 +367,10 @@ fn preverify_rejects_missing_vk_reference() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-        .expect_err("missing vk_ref should be rejected");
+    let err = rejected(
+        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
+            .expect_err("missing vk_ref should be rejected"),
+    );
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("verifying key")));
 }
 #[test]
@@ -380,9 +393,10 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-        .expect_err("proof backend mismatch should be rejected before registry lookup");
+    let err = rejected(
+        exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            .expect_err("proof backend mismatch should be rejected before registry lookup"),
+    );
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg == "malformed proof attachment: proof.backend must match attachment backend")
     );
@@ -408,9 +422,10 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-        .expect_err("vk_ref backend mismatch should be rejected before registry lookup");
+    let err = rejected(
+        exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            .expect_err("vk_ref backend mismatch should be rejected before registry lookup"),
+    );
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg == "malformed proof attachment: vk_ref.backend must match attachment backend")
     );
@@ -443,9 +458,10 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
             bounded_proof_attachments(vec![attachment]),
         );
         let mut stx = block.transaction();
-        let err = exec
-            .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect_err("protocol name must fail as a generic backend before registry lookup");
+        let err = rejected(
+            exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .expect_err("protocol name must fail as a generic backend before registry lookup"),
+        );
         assert!(
             matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("unsupported proof backends")),
             "unexpected preverify error for {backend}: {err:?}"
@@ -480,9 +496,10 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
             bounded_proof_attachments(vec![attachment]),
         );
         let mut stx = block.transaction();
-        let err = exec
-            .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect_err("production-claim attachment backend must fail before registry lookup");
+        let err = rejected(
+            exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .expect_err("production-claim attachment backend must fail before registry lookup"),
+        );
         assert!(
             matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("production-claim proof backends")),
             "unexpected preverify error for {backend}: {err:?}"
@@ -511,9 +528,10 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-        .expect_err("vk_commitment must not bypass the registry reference requirement");
+    let err = rejected(
+        exec.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            .expect_err("vk_commitment must not bypass the registry reference requirement"),
+    );
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("verifying key inactive"))
     );
@@ -558,9 +576,10 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
         bounded_proof_attachments(vec![attachment]),
     );
     let mut stx = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-        .expect_err("inactive registered vk must not preverify");
+    let err = rejected(
+        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
+            .expect_err("inactive registered vk must not preverify"),
+    );
     assert!(
         matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("verifying key inactive"))
     );
@@ -852,9 +871,10 @@ fn preverify_rejects_empty_proof_as_malformed() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-        .expect_err("empty proof should be rejected as malformed");
+    let err = rejected(
+        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
+            .expect_err("empty proof should be rejected as malformed"),
+    );
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("malformed proof")));
 }
 #[test]
@@ -904,9 +924,10 @@ fn preverify_rejects_proof_too_big() {
     .with_attachments(attachments)
     .sign(&private_key);
     let mut stx = block.transaction();
-    let err = exec
-        .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-        .expect_err("oversized proof should be rejected");
+    let err = rejected(
+        exec.execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
+            .expect_err("oversized proof should be rejected"),
+    );
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("proof too big")));
 }
 #[test]

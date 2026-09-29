@@ -792,15 +792,6 @@ CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and r
     "queue::router::tests::alias_registry_routing_is_unconditional_for_queue_and_replay",
 )), )
 
-CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters", (
-    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
-    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
-    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
-    'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
-    'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
-    'zk::debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
-)), )
-
 CORE_NATIVE_ARCHIVE_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_ARCHIVE_RECOVERY_STAGES
 
@@ -1205,6 +1196,7 @@ HARNESS_TARGETS = {
     "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
     "schema": ("native public schema closure", "iroha_schema_gen", "lib", ["-p", "iroha_schema_gen", "--lib"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
+    "core-zk": ("native Core ZK", "iroha_core_zk", "lib", ["-p", "iroha_core_zk", "--lib"]),
     "sumeragi": ("native current consensus", "iroha_sumeragi", "lib", ["-p", "iroha_sumeragi", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
     "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
@@ -1947,19 +1939,25 @@ CORE_NATIVE_CONNECTION_STAGES = (
     ('native publication and original driver Apply settlement', (
     )),
 )
-CORE_KEY_ROLE_STAGES = (('authenticated indexed polynomial key ownership', (
-    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
-    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
-)),)
-
-CORE_STARTUP_STAGES += CORE_KEY_ROLE_STAGES
-CORE_ADMISSION_STARTUP_STAGES += CORE_KEY_ROLE_STAGES
-CORE_STAGES += CORE_KEY_ROLE_STAGES
-
-CORE_NATIVE_CONNECTION_STAGES += (('Native process publication and bootstrap isolation', (
-    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
-    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
-)), )
+# Proof-stack regressions run in the extracted `iroha_core_zk` library harness.
+CORE_ZK_STAGES = (
+    ("bounded deterministic IPA startup parameters", (
+        'zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
+        'zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
+        'zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
+        'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
+        'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
+        'debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
+    )),
+    ('authenticated indexed polynomial key ownership', (
+        'kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
+        'kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
+    )),
+    ('Native process publication and bootstrap isolation', (
+        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
+        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
+    )),
+)
 
 CORE_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
@@ -2298,7 +2296,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "config": CONFIG_STAGES, "config-fixtures": CONFIG_FIXTURE_STAGES, "config-unit": CONFIG_UNIT_STAGES, "genesis": GENESIS_STAGES, "data-model": DATA_MODEL_STAGES,
         "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
-        "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
+        "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES, "core-zk": CORE_ZK_STAGES,
         "sumeragi": CURRENT_CONSENSUS_STAGES, "schema": SCHEMA_STAGES,
         "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES, "wallet": WALLET_STAGES,
         "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
@@ -2621,7 +2619,11 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
     if any(HARNESS_TARGETS[name][2] != "bin" for name in harnesses):
         raise CheckError("shipping metadata requires only authoritative binary targets")
     requested = {("bin", HARNESS_TARGETS[name][1]) for name in harnesses}
-    fixture_features = {"iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures"}
+    fixture_features = {
+        "iroha_core": "iroha-core-tests",
+        "iroha_core_zk": "test-utils",
+        "iroha_torii": "test-fixtures",
+    }
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check", "--keep-going",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *selection, "--message-format=json-render-diagnostics"]
@@ -2669,12 +2671,13 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
 
 
 PRODUCTION_LIBRARY_FORBIDDEN_FEATURES = {
-    "iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures",
+    "iroha_core": "iroha-core-tests", "iroha_core_zk": "test-utils",
+    "iroha_torii": "test-fixtures",
 }
 
 
 def observe_shipping_production_library(event: dict, observed: set[str]) -> None:
-    """Audit Core/Torii features in the required default-feature build stream.
+    """Audit Core/Core-ZK/Torii features in the required default-feature build stream.
 
     Cargo reports fresh and rebuilt compiler artifacts alike. A missing library
     report is an evidence failure, even when every binary artifact is present.
@@ -4400,8 +4403,8 @@ def pre_network_partition(independent_stages, *, priority_cli, deferred_cli,
     pre-network prefix; every other selected test is deferred until after the
     network fixture. Each test belongs to exactly one side.
     """
-    startup = {"core": CORE_STARTUP_STAGES + native_archive, "daemon": DAEMON_STARTUP_STAGES,
-               "torii-unit": TORII_STARTUP_STAGES}
+    startup = {"core": CORE_STARTUP_STAGES + native_archive, "core-zk": CORE_ZK_STAGES,
+               "daemon": DAEMON_STARTUP_STAGES, "torii-unit": TORII_STARTUP_STAGES}
     if any(stage in startup["torii-unit"] for stage in priority_torii):
         raise CheckError("priority Torii stage overlaps mandatory startup checks")
     prefix, deferred = [], {}

@@ -201,7 +201,7 @@ fn generated_genesis_pasta_authority_matches_each_held_validator_seed_by_default
             .disposable_mint_finality_candidate(network.network_id(), 1)
             .expect("later generation possession from the same held seed");
         assert_eq!(keys.validator, peer.id());
-        iroha_core::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1(
+        iroha_core_zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1(
             network.network_id(),
             1,
             &keys,

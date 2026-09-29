@@ -9,6 +9,7 @@ on:
       - "crates/iroha_primitives/src/numeric/**"
       - "crates/iroha_primitives/src/numeric_abi.rs"
       - "crates/kotodama_lang/src/**"
+      - "crates/kotodama_surface/src/**"
       - "crates/kotodama_lang/tests/**"
       - "crates/ivm/fuzz/**"
       - "crates/ivm/build.rs"

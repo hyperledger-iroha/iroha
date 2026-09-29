@@ -24,7 +24,6 @@ use super::{
     semantic::{self, TypedItem, TypedProgram},
 };
 use crate::{
-    builtins::{Builtin, BuiltinAccess},
     encoding, instruction,
     metadata::{
         self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
@@ -63,6 +62,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::{name::Name, state_path::StatePath};
+use kotodama_surface::builtins::{Builtin, BuiltinAccess};
 use norito::json;
 use std::{
     cell::RefCell,
@@ -76,7 +76,9 @@ pub const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const KOTODAMA_ABI_VERSION: u8 = 1;
 const COLLECTION_ITERATION_CAP: u8 = 64;
 const _: () = assert!(semantic::COLLECTION_ITERATION_LIMIT == COLLECTION_ITERATION_CAP as i64);
-const _: () = assert!(semantic::V1_DYNAMIC_ACCESS_MAX_KEYS == COLLECTION_ITERATION_CAP as u32);
+const _: () = assert!(
+    kotodama_surface::source_policy::V1_DYNAMIC_ACCESS_MAX_KEYS == COLLECTION_ITERATION_CAP as u32
+);
 const _: () = assert!(
     ivm_abi::access_hints::DYNAMIC_ACCESS_HINT_MAX_KEYS_V1 == COLLECTION_ITERATION_CAP as u32
 );
@@ -1699,7 +1701,6 @@ mod tests {
     };
     use crate::{
         ast::BinaryOp,
-        builtins::BuiltinAccess,
         ir,
         parser::parse_test_fragment as parse,
         semantic::{self, analyze},
@@ -1713,6 +1714,7 @@ mod tests {
     use iroha_data_model::asset::{AssetBalanceScope, id::AssetDefinitionId};
     use iroha_model_base::domain::DomainId;
     use ivm_abi::syscalls;
+    use kotodama_surface::builtins::BuiltinAccess;
     use std::collections::{HashMap, HashSet};
     fn test_mode_compiler() -> Compiler {
         Compiler::new_with_options(CompilerOptions {
@@ -9160,23 +9162,23 @@ mod test_mode_tests {
         let code_region = &code[metadata.code_offset..];
         for (builtin, syscall) in [
             (
-                crate::builtins::Builtin::TestActorAccount,
+                Builtin::TestActorAccount,
                 syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
             ),
             (
-                crate::builtins::Builtin::TestActorPublicKey,
+                Builtin::TestActorPublicKey,
                 syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY,
             ),
             (
-                crate::builtins::Builtin::TestActorSign,
+                Builtin::TestActorSign,
                 syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN,
             ),
             (
-                crate::builtins::Builtin::TestInvokeEntrypointAs,
+                Builtin::TestInvokeEntrypointAs,
                 syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
             ),
             (
-                crate::builtins::Builtin::TestExpectRejectAs,
+                Builtin::TestExpectRejectAs,
                 syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
             ),
         ] {

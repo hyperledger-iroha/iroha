@@ -629,7 +629,7 @@ def test_selected_binaries_build_once_and_stage_only_requested_outputs(
     assert command == [
         "cargo", "build", "--locked", "--release",
         "--target-dir", str(tmp_path / "target/ci-binaries/shipping"),
-        "-p", "iroha_cli", "--bin", "iroha", "-p", "ivm", "--bin", "koto",
+        "-p", "iroha_cli", "--bin", "iroha", "-p", "kotodama_toolchain", "--bin", "koto",
     ]
     assert options == {"cwd": tmp_path, "capture_output": False}
     assert sorted(path.name for path in output.iterdir()) == ["iroha", "koto"]

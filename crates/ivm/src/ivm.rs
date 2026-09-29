@@ -2000,13 +2000,19 @@ impl IVM {
     }
     /// Load a fully validated local Kotodama test-suite artifact.
     ///
-    /// The method is crate-private so public raw/program/prepared loaders cannot
-    /// authorize the host-private Kotodama test syscall range.
-    pub(crate) fn load_koto_test_prepared(
+    /// Only a [`crate::KotoTestHarnessContract`] (from
+    /// [`crate::prepare_koto_test_contract`]) enables the host-private Kotodama
+    /// test-syscall range; the raw/program/prepared loaders never do, and
+    /// production hosts still reject those syscalls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError`] when the prepared image cannot be installed.
+    pub fn load_koto_test_harness(
         &mut self,
-        contract: &PreparedContract,
+        contract: &crate::KotoTestHarnessContract,
     ) -> Result<(), VMError> {
-        self.load_prepared_with_koto_test_capability(contract, true)
+        self.load_prepared_with_koto_test_capability(contract.prepared(), true)
     }
     fn load_prepared_with_koto_test_capability(
         &mut self,
@@ -2654,7 +2660,12 @@ impl IVM {
     }
     /// Prove that host TLVs and a separate compiler-owned HEAP reservation fit
     /// together before either allocation class mutates the VM.
-    pub(crate) fn preflight_host_tlv_allocations_with_reserved_heap(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError`] when the TLVs and the HEAP reservation cannot all be
+    /// allocated from the current INPUT and HEAP capacity.
+    pub fn preflight_host_tlv_allocations_with_reserved_heap(
         &self,
         tlv_lengths: &[usize],
         reserved_heap_bytes: u64,
@@ -7351,7 +7362,7 @@ mod tests {
         bytes.extend_from_slice(&literal);
         bytes.push(0);
         let literal_prefix = bytes.len() - header_len;
-        let addi = crate::kotodama::compiler::encode_addi(1, 1, 0).expect("encode addi");
+        let addi = kotodama_lang::compiler::encode_addi(1, 1, 0).expect("encode addi");
         bytes.extend_from_slice(&addi.to_le_bytes());
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, literal_prefix)
@@ -8054,8 +8065,8 @@ seiyaku Demo {
   }
 }
 "#;
-        let output = crate::kotodama::session::CompilerSession::default()
-            .build(crate::kotodama::session::CompileRequest {
+        let output = kotodama_lang::session::CompilerSession::default()
+            .build(kotodama_lang::session::CompileRequest {
                 source,
                 source_name: Some("contracts/runtime_trap.ko"),
             })

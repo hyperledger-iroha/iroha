@@ -1,4 +1,4 @@
-use ivm::kotodama::{
+use kotodama_lang::{
     compiler::Compiler,
     i18n::{self, Language, Message},
 };

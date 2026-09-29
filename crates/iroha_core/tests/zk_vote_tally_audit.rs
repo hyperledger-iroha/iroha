@@ -9,7 +9,8 @@
 mod closed_state;
 #[path = "zk_testkit.rs"]
 mod zk_testkit;
-use iroha_core::{smartcontracts::Execute, state::WorldReadOnly, zk};
+use iroha_core::{smartcontracts::Execute, state::WorldReadOnly};
+use iroha_core_zk as zk;
 use iroha_data_model::{
     block::BlockHeader,
     isi::{

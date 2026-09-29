@@ -3,8 +3,8 @@
 //! The deterministic wallet openings and tree are synthetic local statements,
 //! never ledger-authorized roots. Only generic verification/storage is exercised;
 //! these fixtures confer no execution or value-transfer authority.
-use iroha_core::zk::{
-    self,
+use iroha_core_zk::{
+    self as zk,
     confidential::{ConfidentialProver, ConfidentialTree},
     confidential_v2::{
         ConfidentialUnshieldInputV2, compute_confidential_merkle_path_v2,

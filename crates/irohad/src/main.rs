@@ -418,7 +418,7 @@ fn complete_test_genesis_builder_for_topology(
             let seed_byte = 0xA0_u8.wrapping_add(
                 u8::try_from(index).expect("test genesis validator index fits in one byte"),
             );
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
                 0,
                 validator,
@@ -634,10 +634,21 @@ pub fn is_coloring_supported() -> bool {
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
 }
+/// Feed zk verifier-key cache events into `zk_verifier_cache_events_total`.
+#[cfg(feature = "telemetry")]
+fn record_zk_vk_cache_event(cache: &'static str, event: &'static str) {
+    if let Some(metrics) = iroha_telemetry::metrics::global() {
+        metrics
+            .zk_verifier_cache_events_total
+            .with_label_values(&[cache, event])
+            .inc();
+    }
+}
 #[cfg(feature = "telemetry")]
 fn init_global_metrics_handle(
     panic_on_duplicate_metrics: bool,
 ) -> Arc<iroha_telemetry::metrics::Metrics> {
+    let _ = iroha_core_zk::install_vk_cache_event_observer(record_zk_vk_cache_event);
     set_duplicate_metrics_panic(panic_on_duplicate_metrics);
     iroha_telemetry::metrics::global().map_or_else(
         || {
@@ -8287,7 +8298,7 @@ fn verify_signed_genesis_mint_finality_custody(
     local_validator: &iroha_model_base::peer::PeerId,
     authenticated_authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     held_authority: Option<
-        &iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+        &iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
     >,
 ) -> Result<(), String> {
     authenticated_authority
@@ -8310,7 +8321,7 @@ fn verify_signed_genesis_mint_finality_custody(
         .map_err(|_| "signed-genesis Pasta seat index exceeds u32".to_owned())?;
     if held_authority.authority() != Some(authenticated_authority)
         || held_authority.signer().map(
-            iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::validator_index,
+            iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::validator_index,
         ) != Some(expected_index)
     {
         return Err("held Pasta seed does not match this signed-genesis validator seat".to_owned());
@@ -11132,6 +11143,13 @@ mod tests {
             let first = super::init_global_metrics_handle(false);
             let second = super::init_global_metrics_handle(false);
             assert!(Arc::ptr_eq(&first, &second));
+        }
+        #[test]
+        #[serial]
+        fn init_global_metrics_handle_installs_zk_vk_cache_observer() {
+            fn noop(_: &'static str, _: &'static str) {}
+            let _ = super::init_global_metrics_handle(false);
+            assert!(!iroha_core_zk::install_vk_cache_event_observer(noop));
         }
     }
     mod cli_args {

@@ -2,10 +2,8 @@
 use iroha_crypto::Hash;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
-use ivm::{
-    CoreHost, IVM, ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler,
-    pointer_abi::PointerType,
-};
+use ivm::{CoreHost, IVM, ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
+use kotodama_lang::compiler::Compiler;
 use norito::json as njson;
 use std::{collections::BTreeMap, fmt::Write as _};
 mod common;

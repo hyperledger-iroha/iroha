@@ -7,8 +7,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
-    zk::ZK_BACKEND_HALO2_IPA,
 };
+use iroha_core_zk::ZK_BACKEND_HALO2_IPA;
 use iroha_data_model::{
     block::BlockHeader,
     proof::ProofBox,
@@ -45,19 +45,19 @@ fn preverify_state_wrapper_requires_bound_commitments_and_dedups() {
     let missing = stx.preverify_proof(&proof, None, 100_000, Some(c1), None, true);
     assert!(matches!(
         missing,
-        iroha_core::zk::PreverifyResult::VerifyingKeyMissing
+        iroha_core_zk::PreverifyResult::VerifyingKeyMissing
     ));
     let r1 = stx.preverify_proof(&proof, None, 100_000, None, Some(c1), true);
-    assert!(matches!(r1, iroha_core::zk::PreverifyResult::Accepted));
+    assert!(matches!(r1, iroha_core_zk::PreverifyResult::Accepted));
     let r1_dup = stx.preverify_proof(&proof, None, 100_000, Some(c1), Some(c1), true);
-    assert!(matches!(r1_dup, iroha_core::zk::PreverifyResult::Duplicate));
+    assert!(matches!(r1_dup, iroha_core_zk::PreverifyResult::Duplicate));
     let c2 = [0x22u8; 32];
     let mismatch = stx.preverify_proof(&proof, None, 100_000, Some(c2), Some(c1), true);
     assert!(matches!(
         mismatch,
-        iroha_core::zk::PreverifyResult::VerifyingKeyMismatch
+        iroha_core_zk::PreverifyResult::VerifyingKeyMismatch
     ));
     let proof2 = open_verify_proof(c2);
     let r2 = stx.preverify_proof(&proof2, None, 100_000, Some(c2), Some(c2), true);
-    assert!(matches!(r2, iroha_core::zk::PreverifyResult::Accepted));
+    assert!(matches!(r2, iroha_core_zk::PreverifyResult::Accepted));
 }

@@ -1,5 +1,6 @@
 //! Kotodama pointer roundtrip tests.
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::{CoreHost, IVM};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 fn run_prog(body: &str) {
     let src = format!(

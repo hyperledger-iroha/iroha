@@ -35,6 +35,7 @@ class ShippingCodegenEvidenceTests(unittest.TestCase):
 
     def events(self):
         return [self.library("iroha_core", ["default", "json"]),
+                self.library("iroha_core_zk", ["proofs-halo2", "zk-stark"]),
                 self.library("iroha_torii", ["default", "app_api"]),
                 *(self.binary(name) for name in self.binaries)]
 
@@ -65,7 +66,7 @@ class ShippingCodegenEvidenceTests(unittest.TestCase):
         self.assertEqual(cargo.call_args.kwargs["pass_fds"], (77,))
 
     def test_missing_library_evidence_fails_before_artifact_publication(self):
-        for missing in ("iroha_core", "iroha_torii"):
+        for missing in ("iroha_core", "iroha_core_zk", "iroha_torii"):
             events = [event for event in self.events()
                       if event["target"]["name"] != missing]
             with self.subTest(missing=missing), \

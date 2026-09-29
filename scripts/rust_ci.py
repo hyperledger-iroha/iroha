@@ -61,7 +61,7 @@ BINARY_ARTIFACTS = {
     "iroha3d": BinaryArtifact("irohad", "iroha3d"),
     "iroha": BinaryArtifact("iroha_cli", "iroha"),
     "kagami": BinaryArtifact("iroha_kagami", "kagami"),
-    "koto": BinaryArtifact("ivm", "koto"),
+    "koto": BinaryArtifact("kotodama_toolchain", "koto"),
     "iroha3d_private_settlement_routes": BinaryArtifact(
         "irohad", "iroha3d", ("test-network-private-settlement-route-control",), "private-settlement-route-control"
     ),

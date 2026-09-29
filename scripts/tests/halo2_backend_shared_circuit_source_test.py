@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Guard the Halo2 backend test-shard shared-circuit compaction.
 
-The two audited shards reuse the fixed ``zk::pasta_tiny`` circuits instead of
+The two audited shards reuse the fixed ``iroha_core_zk::pasta_tiny`` circuits instead of
 redeclaring equivalent Halo2 ``Circuit`` implementations inside individual
 tests.  This guard authenticates the historical preimages and the current
 test inventories, pins the shared circuit implementations, and tracks
@@ -28,9 +28,9 @@ from zk_source_tokens import token_hash
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ZK_PATH = ROOT / "crates/iroha_core/src/zk.rs"
-SHARD_01_PATH = ROOT / "crates/iroha_core/src/zk/halo2_backend_01_tests.rs"
-SHARD_03_PATH = ROOT / "crates/iroha_core/src/zk/halo2_backend_03_tests.rs"
+ZK_PATH = ROOT / "crates/iroha_core_zk/src/lib.rs"
+SHARD_01_PATH = ROOT / "crates/iroha_core_zk/src/halo2_backend_01_tests.rs"
+SHARD_03_PATH = ROOT / "crates/iroha_core_zk/src/halo2_backend_03_tests.rs"
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ SHARDS = (
         opening_lines=1_710,
         line_ceiling=1_045,
         code_sha256=(
-            "0825a9370ed90dd40fcdada59040c23a2a696f496330947ee32b0bb9d5d899ae"
+            "54bb48e9b64836235210ea2a900b3eea8c3b40ade6942d19b5318a0c12e829e9"
         ),
         preimage_tests=(
             "vote_bool_commit_merkle8_mock_prover_succeeds",

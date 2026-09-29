@@ -1,0 +1,16 @@
+[package]
+name = "kotodama_surface"
+version.workspace = true
+edition = "2024"
+authors = ["Iroha Contributors"]
+description = "Kotodama V1 source-surface registry: builtins, generated source policy and reserved names"
+license = "Apache-2.0"
+repository = "https://github.com/hyperledger-iroha/iroha"
+documentation = "https://docs.rs/kotodama_surface"
+
+# TODO: adopt [lints] workspace = true once builtins docs satisfy missing_docs
+# (kept without [lints] for parity with kotodama_lang).
+
+[dependencies]
+ivm_abi = { path = "../ivm_abi" }
+strum = { workspace = true, features = ["derive"] }

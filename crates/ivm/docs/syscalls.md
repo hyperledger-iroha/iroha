@@ -296,7 +296,7 @@ canonical V1 Norito payload. The response does not narrow conviction weights to
 qualification.
 
 ZK gating & determinism
-- `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
+- `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core_zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
 - `DefaultHost` has no verifier-key registry or cryptographic backend. It
   canonical-validates `iroha_data_model::zk::OpenVerifyEnvelope`, enforces
   configured size/batch gates, and then fails closed with `ERR_BACKEND`.
@@ -304,7 +304,7 @@ ZK gating & determinism
   verified`), set `r11=ERR_BACKEND`, and set `r12=0` for the first failed item.
 - `CoreHost` additionally binds each envelope to the on-chain VK registry
   before verification; batch items then run through
-  `iroha_core::zk::verify_backend_with_timing_guardrails`.
+  `iroha_core_zk::verify_backend_with_timing_guardrails`.
 - Verification is bound to the VK registry before cryptographic checks:
   - envelope/backend must be supported (`backend = halo2-ipa-pasta`), `vk_hash` must be present, and payload/proof sizes must respect config caps.
   - the referenced verifying key must be active and match circuit id, schema hash (`hash(public_inputs)`), namespace, and owner manifest.

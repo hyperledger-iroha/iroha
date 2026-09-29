@@ -7,13 +7,11 @@ use clap::{Args as ClapArgs, Subcommand};
 #[cfg(unix)]
 use color_eyre::eyre::WrapErr as _;
 use color_eyre::eyre::{bail, eyre};
-use iroha_core::{
-    smartcontracts::isi::kagemusha::{
-        KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1, load_authenticated_kagemusha_v1_runtime_verifier,
-    },
-    zk::kagemusha_v1_recursion::{
-        KagemushaArtifactByteResolverV1, KagemushaDirectoryArtifactResolverV1,
-    },
+use iroha_core::smartcontracts::isi::kagemusha::{
+    KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1, load_authenticated_kagemusha_v1_runtime_verifier,
+};
+use iroha_core_zk::kagemusha_v1_recursion::{
+    KagemushaArtifactByteResolverV1, KagemushaDirectoryArtifactResolverV1,
 };
 use iroha_crypto::{ExposedPrivateKey, KeyPair, SignatureOf, sha256, sha256_reader_bounded};
 use iroha_data_model::{
@@ -2170,7 +2168,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, role)| {
-                use iroha_core::zk::kagemusha_v1_recursion::{
+                use iroha_core_zk::kagemusha_v1_recursion::{
                     KagemushaArtifactDescriptorV1, KagemushaArtifactKindV1,
                 };
                 let descriptor = KagemushaArtifactDescriptorV1::for_role(role);

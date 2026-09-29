@@ -25,7 +25,7 @@ ledger paths:
   cryptographic verification, but only for the standalone native IPA
   `iroha_zkp_halo2::OpenVerifyEnvelope` format. It does not consult the
   verifying-key registry, does not enforce ledger circuit/schema policy, and is
-  not a substitute for `iroha_core::zk::verify_backend_with_timing_guardrails`.
+  not a substitute for `iroha_core_zk::verify_backend_with_timing_guardrails`.
   The wire carries only a `(version, curve, n)` selector; the verifier derives
   the deterministic V1 generators and callers cannot submit another parameter
   set. The complete derived parameter fingerprint is absorbed into the opening

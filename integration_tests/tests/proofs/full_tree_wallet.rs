@@ -6,8 +6,8 @@
 use super::{fetch_proof_snapshot, proof_fixtures::corrupt_native_halo2_proof};
 use eyre::{Report, Result, ensure};
 use integration_tests::sandbox;
-use iroha_core::zk::{
-    self, ProofRelation,
+use iroha_core_zk::{
+    self as zk, ProofRelation,
     confidential::{ConfidentialProof, ConfidentialProver, ConfidentialTree},
     confidential_v2::{
         CONFIDENTIAL_TREE_CAPACITY_V2, ConfidentialUnshieldInputV2,

@@ -302,6 +302,7 @@ on:
       - "scripts/tests/state_source_bundle.py"
       - "xtask/src/main.rs"
       - "crates/iroha_core/**"
+      - "crates/iroha_core_zk/**"
       - "crates/iroha_panic_hook/**"
       - "crates/iroha_sccp/**"
       - "crates/iroha_executor_data_model/**"

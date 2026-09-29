@@ -1430,7 +1430,7 @@ pub(crate) mod tests {
         let authority = KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1, network_id, generation: 1,
             validators: peers.into_iter().enumerate().map(|(index, peer)|
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(&[0xB0 + u8::try_from(index).unwrap(); 32], 1, peer).unwrap()).collect(),
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(&[0xB0 + u8::try_from(index).unwrap(); 32], 1, peer).unwrap()).collect(),
         };
         let context = KagemushaMintFinalitySeatReadinessContextV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,

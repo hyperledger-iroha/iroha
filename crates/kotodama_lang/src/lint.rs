@@ -4,7 +4,6 @@
 //! before compiling them to IVM bytecode. The initial set of checks focuses on surface issues such
 //! as unused `state` declarations and obviously unreachable statements that follow a `return`.
 use super::ast::{Block, Expr, Item, Pattern, PatternBinding, Program, Statement};
-use crate::builtins::{Builtin, BuiltinSurface, PointerConstructor};
 use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
 use crate::{
@@ -18,6 +17,7 @@ use iroha_data_model::{
     },
     query::{QueryRequest, SingularQueryBox},
 };
+use kotodama_surface::builtins::{Builtin, BuiltinSurface, PointerConstructor};
 use std::collections::{BTreeMap, HashSet};
 /// A lint warning produced by [`lint_program`].
 #[derive(Debug, Clone, PartialEq, Eq)]

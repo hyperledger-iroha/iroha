@@ -170,9 +170,9 @@ def test_stable_inventory_read_rejects_hardlinks_and_shared_writes(
     "relative",
     (
         "crates/iroha_core/src/executor.rs",
-        "crates/iroha_core/src/zk.rs",
-        "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs",
-        "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs",
+        "crates/iroha_core_zk/src/lib.rs",
+        "crates/iroha_core_zk/src/kagemusha_v1_recursion/accumulation.rs",
+        "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs",
         "crates/iroha_panic_hook/src/lib.rs",
     ),
 )

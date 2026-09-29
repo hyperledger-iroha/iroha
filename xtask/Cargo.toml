@@ -47,6 +47,7 @@ hex = { workspace = true }
 norito = { workspace = true, features = ["node-codec", "bench-internal", "simd-accel", "parallel-stage1"], default-features = false }
 tempfile = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
+iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
 iroha_config = { workspace = true }
 iroha_torii = { workspace = true, features = [
     "node-api",
