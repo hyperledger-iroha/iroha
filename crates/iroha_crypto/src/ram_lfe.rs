@@ -3143,3 +3143,8 @@ mod tests {
 
 #[cfg(test)]
 mod captured_schema_tests;
+
+// TODO: qualify an RNS encryption profile and complete relation before adopting
+// this structural planner. It cannot authorize encryption or execution.
+#[cfg(test)]
+mod planning_candidate;

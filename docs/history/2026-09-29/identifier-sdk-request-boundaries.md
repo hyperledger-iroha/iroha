@@ -107,13 +107,16 @@ A fresh isolated target retains compiler streams and checks every local artifact
 68 selected current SDK controls follow packaging. Native/Swift results are pending.
 Cross-target archives and C links do not establish device execution.
 
-The older five-slice Apple job remains separate: its historical ABI 24 candidate
-contains only the backend-tag amendment, with host, device iOS and both simulator
-archives completed. Host C ABI/SHA3/SHAKE/ML-DSA/ML-KEM controls pass; simulator C
-consumer linkage was not execution. The x86_64 simulator archive completed in
-60m14s; the fifth, x86_64 macOS slice is compiling. Its warm local dependency
-provenance is limited, and neither it nor its eventual SDK result qualifies the
-current Swift source.
+The separate historical ABI 24 backend-tag candidate completed all five Apple
+archive builds and nine selected host Swift controls with zero failures at
+11:36 UTC. Host C ABI/SHA3/SHAKE/ML-DSA/ML-KEM controls pass; cross-target C
+consumer linkage was not device execution. The fifth x86_64 macOS slice took
+59m42s. Its 39 warm local dependencies lack authenticated predecessor closure,
+so successful compilation and tests do not establish full dependency provenance.
+This candidate omits the later API retirement and strict metadata amendments;
+its result does not qualify current ABI 25 Swift source or signed releases.
+The terminal receipt is `sdk-backend-tag-refresh/swift/complete-receipt.json`
+(SHA-256 `3197988b2b4b01c8793a3055a1cf572045beb136ff971e87fecca12813ddeaf2`).
 
 The later Java/JavaScript policy amendment removes Java's two constructors that
 inferred a program or reused the resolver key as the opening key, and its parser

@@ -161,3 +161,61 @@ is under `fastpq-native-lane-normal-20260929T110745Z`, its
 `remaining-independent-controls`, and `kagami-execution-result-normal-20260929T112602Z`
 in the dated local remediation directory. No canonical fixtures were generated,
 and no production check or signed workload was weakened to obtain a pass.
+
+The recorder amendment's normal Core build passes in 517.449 seconds with exact
+source and dependency-output guards. Its launcher then fails before native tests
+because Python 3.9 does not accept `zip(strict=True)`; the failed runner and error
+are retained. A corrected, independently reviewed no-Cargo continuation uses the
+same copied executable. The 13 State and 12 source context controls pass again.
+Inventory improves to 94 passed / five failed / zero ignored. The new missing,
+reset and foreign-recorder sticky-failure control passes. All five remaining
+failures are in `owned_sources_tests`, whose source fixture lacks an authenticated
+execution route; they now get past the earlier recorder/manifest failures.
+No authority check is relaxed. The route split and exact signed-source fixture
+migration remain in progress. Evidence is retained in
+`fastpq-recorder-normal-20260929T113647Z/native-controls-retry1`.
+
+The remaining three native routing controls and original-recorder ownership
+control pass on that unchanged executable. The combined census is 123 passed,
+five failed and zero ignored, with all 128 selected names executed exactly once.
+`fastpq-recorder-normal-20260929T113647Z/combined-result.json` reconciles both
+reader runs and retains the launcher interruption. The five failures prevent
+claiming a passing inventory suite or canonical SDK fixture readiness.
+
+## Captured physical policy and native ordering scope
+
+The next reviewed candidate separates native ordering identity from physical
+Nexus policy authority. A private typed route resolves physical policy against
+pristine predecessor State before any prefix effects; admission checks both
+committed and successor heights. Fixed-size, charged rows bind the original
+carrier, ordinal, outer entrypoint, inner signed hash and authenticated native
+route. Physical/native dataspaces must agree. Execution keeps the native lane in
+receipts and FASTPQ source identity while physical policy supplies manifest,
+privacy, governance and fraud checks. Sealed reveals carry the same captured
+policy into inner execution. Ordinary routing failures remain bounded transaction
+rejections; no later State-based routing fallback is introduced.
+
+The three reviewed amendment stages change 25 files, including fixture-only
+migration of all 90 output-producer controls to original recorder lifetimes.
+Actual Network fixtures use authenticated signed contexts and materialized
+physical manifests; explicit component fixtures remain test-only. The extension
+preserves 897 existing assertion token streams and adds four write-once failure
+assertions. The five remaining inventory fixtures derive their actual committed
+native contexts. Initial signature/queue-preimage review errors were corrected
+before capture; their drafts remain retained.
+
+`native-policy-candidate/source.json` records 20,737 inputs with SHA-256
+`2ce011167feb442fa39beb29e9067327bfe6fa2bd766cd08f38d22454bff587c`.
+The normal Core/Kagami build and 247 exact controls are running in
+`native-policy-normal-20260929T122739Z`. This is not a passing runtime result.
+The control plan pins the source helper and predecessor compiler-artifact
+inventories before loading them, and verifies every reused output hash. The
+original source-only capture precedes this extra provenance gate; no native
+qualification is retroactively attached to it. The old missing-route, recorder,
+manifest and launcher failures remain unchanged in their original receipts.
+
+A concurrent external merge adds canonical fixture files and changes genesis
+admission on main. Those files and that merged source are not qualified by this
+older frozen candidate's review or by their existence. Main reconciliation,
+actual canonical generation/read-only replay, Kotlin consumers and four-validator
+network evidence remain separate completion steps.

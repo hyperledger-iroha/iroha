@@ -19,7 +19,11 @@ use std::{sync::Arc, time::Duration};
 
 fn install_routes(state: &State) {
     let nexus = state.nexus_snapshot();
-    let registry = LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance);
+    let registry =
+        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
+    registry
+        .validate_materialized_authority_for_catalog(&nexus.lane_catalog, &nexus.governance)
+        .expect("real physical policy manifest fixture");
     state.install_lane_manifests_for_testing(&Arc::new(registry));
 }
 
@@ -167,6 +171,30 @@ fn carrier(inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
     builder.build_with_signature(0, ALICE_KEYPAIR.private_key())
 }
 
+/// Acquire the exact carrier and original recorder before any block-start effects.
+fn recorded_network_block<'state>(
+    state: &'state State,
+    source: &SignedBlock,
+) -> (
+    Box<StateBlock<'state>>,
+    crate::exec_witness::ExecWitnessGuard,
+) {
+    state
+        .block_with_recorded_pristine_carrier_stage(
+            source,
+            |block| {
+                crate::smartcontracts::ivm::active_runtime_abi_hash(
+                    &block.world,
+                    source.header().height().get(),
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+            },
+            |error| error,
+        )
+        .expect("original carrier captures its pristine physical policy and recorder")
+}
+
 fn execute(
     block: &mut StateBlock<'_>,
     source: &SignedBlock,
@@ -195,7 +223,6 @@ fn network_row<'a>(block: &'a StateBlock<'_>, index: usize) -> &'a NetworkExecut
 
 #[test]
 fn actual_signed_sources_apply_once_in_original_output_positions() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, None);
     let source = carrier(
         (0..2)
@@ -216,8 +243,7 @@ fn actual_signed_sources_apply_once_in_original_output_positions() {
             })
             .collect(),
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     assert_eq!(block.committed_fragment_count(), fragments + 2);
@@ -258,7 +284,6 @@ fn actual_signed_sources_apply_once_in_original_output_positions() {
 
 #[test]
 fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut exact = None;
     for case in 0..3 {
         let bytes = match case {
@@ -273,8 +298,7 @@ fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
             FeePaymentIntent::authority(vec![], None),
             false,
         )]);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         let row = network_row(&block, 0);
@@ -331,7 +355,6 @@ fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
 
 #[test]
 fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() {
-    let _guard = exec_witness::exec_witness_guard();
     let missing = DomainId::try_new("missing-network-domain", "universal").unwrap();
     for bytes in [16_384, 65_536] {
         let state = fixture(bytes, Some(32_768));
@@ -344,8 +367,7 @@ fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() 
             FeePaymentIntent::authority(vec![], None),
             false,
         )]);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         let row = network_row(&block, 0);
@@ -394,7 +416,6 @@ fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() 
 
 #[test]
 fn block_gas_admission_rejects_before_business_or_transaction_gas() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, Some(1024));
     let source = carrier(vec![input(
         &state,
@@ -402,8 +423,7 @@ fn block_gas_admission_rejects_before_business_or_transaction_gas() {
         FeePaymentIntent::authority(vec![], None),
         false,
     )]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     // ExecuteTrigger is rejected by the real pre-body gas admission guard.
     // This does not exercise the owner's final post-success gas fallback.
     block.gas_limit_per_block = 1;
@@ -430,7 +450,6 @@ fn block_gas_admission_rejects_before_business_or_transaction_gas() {
 
 #[test]
 fn stateless_rejection_does_not_execute_its_business_instructions() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, None);
     let mut tx = TransactionBuilder::new(
         state.network_id,
@@ -446,7 +465,7 @@ fn stateless_rejection_does_not_execute_its_business_instructions() {
         )])
         .sign(ALICE_KEYPAIR.private_key()),
     )]);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     assert!(
@@ -481,7 +500,6 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
@@ -512,8 +530,7 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         fee,
         true,
     )]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     let row = network_row(&block, 0);
@@ -582,7 +599,6 @@ mod quarantine;
 #[test]
 fn frozen_fraud_admission_refuses_before_business_work_and_grace_preserves_execution() {
     for grace in [Duration::ZERO, Duration::from_secs(1)] {
-        let _guard = exec_witness::exec_witness_guard();
         let mut state = fixture(65_536, None);
         state.fraud_monitoring.enabled = true;
         state.fraud_monitoring.required_minimum_band =
@@ -601,9 +617,8 @@ fn frozen_fraud_admission_refuses_before_business_work_and_grace_preserves_execu
             FeePaymentIntent::authority(vec![], None),
             false,
         )]);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let before = block.committed_fragment_count();
-        exec_witness::start_block();
         execute(&mut block, &source).unwrap();
         let result = network_row(&block, 0);
         if grace.is_zero() {
@@ -641,7 +656,6 @@ fn frozen_fraud_admission_refuses_before_business_work_and_grace_preserves_execu
 #[test]
 fn ordinary_signed_creation_time_must_precede_its_actual_carrier() {
     for created_at in [1_u64, 2, 3] {
-        let _guard = exec_witness::exec_witness_guard();
         let state = fixture(65_536, None);
         let mut builder = TransactionBuilder::new(
             state.network_id,
@@ -658,9 +672,8 @@ fn ordinary_signed_creation_time_must_precede_its_actual_carrier() {
                 )])
                 .sign(ALICE_KEYPAIR.private_key()),
         )]);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
-        exec_witness::start_block();
         execute(&mut block, &source).unwrap();
         let row = network_row(&block, 0);
         assert_eq!(row.input_index, 0);
@@ -707,7 +720,6 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-    let _guard = crate::exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
@@ -751,8 +763,7 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
         ),
         true,
     )]);
-    crate::exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let before_fragments = block.committed_fragment_count();
     let receiver_before = block.world.assets().get(&bob).cloned();
     execute(&mut block, &source).unwrap();
@@ -797,7 +808,6 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
     use crate::{smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction};
     use iroha_data_model::{isi::Grant, transaction::IvmBytecode};
     use ivm::error::ExecutionDeferral;
-    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, None);
     let id: TriggerId = "direct_deferred_callback".parse().unwrap();
     let key: Name = "deferred_native_write".parse().unwrap();
@@ -848,8 +858,7 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
     let cache_owner = state.trigger_ivm_cache.lock().prepared_contract_cache();
     let reason = ExecutionDeferral::AllocationUnavailable;
     cache_owner.set_checkout_refusal_for_test(Some(reason));
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let before = exec_witness::snapshot_exec_witness();
     assert_eq!(
         execute(&mut block, &source),
@@ -877,9 +886,9 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
         Repeats::Exactly(2)
     );
     cache_owner.set_checkout_refusal_for_test(None);
+    drop(_recording);
     drop(block);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).expect("same original source succeeds after local recovery");
     let callbacks = network_row(&block, 0)
         .result

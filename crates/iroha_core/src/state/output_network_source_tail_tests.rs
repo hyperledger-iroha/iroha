@@ -19,7 +19,6 @@ use iroha_test_samples::{BOB_ID, CARPENTER_ID};
 
 #[test]
 fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_entry() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         crate::status::reset_nexus_economics_for_tests();
@@ -96,8 +95,7 @@ fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_
         );
         let hash = Hash::from(entry.execution_call_hash());
         let source = carrier(vec![entry]);
-        crate::exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         assert!(
@@ -269,7 +267,6 @@ fn unchecked_whole_entry_statement_bytes(bundle: &[TransferTranscript]) -> usize
 
 #[test]
 fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activation() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         crate::status::reset_nexus_economics_for_tests();
@@ -293,8 +290,7 @@ fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activatio
         );
         let hash = Hash::from(entry.execution_call_hash());
         let mut source = carrier(vec![entry]);
-        crate::exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         block.execute_ordinary_output_plan(&source, None).unwrap();
         assert!(

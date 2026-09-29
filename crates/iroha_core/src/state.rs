@@ -332,6 +332,7 @@ mod exec_witness_capture;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
 mod fastpq_source_inventory;
+pub(crate) mod network_policy_routes;
 mod output_capacity;
 mod output_publication;
 pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
@@ -12430,6 +12431,8 @@ pub struct StateBlockFields<'state> {
     /// Originally funded ordinary source hashes, bound before block-start effects.
     ordinary_carrier_membership_source:
         Option<carrier_source_admission::PrepaidOrdinaryCarrierMembership>,
+    /// Original physical policy routes captured before any carrier prefix effect.
+    network_policy_routes: Option<network_policy_routes::CapturedNetworkPolicyRoutes>,
     /// Topology used to commit latest block
     pub commit_topology: block_field::CellField<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -28746,6 +28749,15 @@ impl State {
     ) -> Result<(Box<StateBlock<'state>>, R), StateBlockStartError<E>> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
+        let mut policy_routes = carrier
+            .map(|source| {
+                network_policy_routes::CapturedNetworkPolicyRoutes::reserve(
+                    source,
+                    &self.ivm_execution_budget(),
+                )
+            })
+            .transpose()
+            .map_err(StateBlockStartError::ExecutionDeferred)?;
         let mut ordinary_source = carrier
             .map(|source| {
                 carrier_source_admission::PrepaidOrdinaryCarrierMembership::reserve(
@@ -28766,6 +28778,10 @@ impl State {
             prepaid.fill_from_preblock(&sb, source);
         }
         sb.ordinary_carrier_membership_source = ordinary_source;
+        if let (Some(source), Some(routes)) = (carrier, policy_routes.as_mut()) {
+            routes.fill_from_preblock(&sb, source);
+        }
+        sb.network_policy_routes = policy_routes;
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
         let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
@@ -29507,6 +29523,15 @@ impl State {
         carrier: Option<&SignedBlock>,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
     ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
+        let mut policy_routes = carrier
+            .map(|source| {
+                network_policy_routes::CapturedNetworkPolicyRoutes::reserve(
+                    source,
+                    &self.ivm_execution_budget(),
+                )
+            })
+            .transpose()
+            .map_err(StateBlockStartError::ExecutionDeferred)?;
         let mut ordinary_source = carrier
             .map(|source| {
                 carrier_source_admission::PrepaidOrdinaryCarrierMembership::reserve(
@@ -29532,6 +29557,10 @@ impl State {
             prepaid.fill_from_preblock(&state_block, source);
         }
         state_block.ordinary_carrier_membership_source = ordinary_source;
+        if let (Some(source), Some(routes)) = (carrier, policy_routes.as_mut()) {
+            routes.fill_from_preblock(&state_block, source);
+        }
+        state_block.network_policy_routes = policy_routes;
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
         stage(&mut state_block).map_err(StateBlockStartError::Stage)?;

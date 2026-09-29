@@ -20,7 +20,6 @@ use iroha_test_samples::{BOB_ID, gen_account_in};
 
 #[test]
 fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
@@ -113,8 +112,7 @@ fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
             })
             .collect(),
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     let accepted = network_row(&block, 0);
@@ -200,6 +198,7 @@ fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
             if event.referendum_id == referendum && event.reason == GovernanceSlashReason::DoubleVote)
     }).count();
     assert_eq!(slash_events, 1);
+    drop(_recording);
     drop(block);
     let view = state.view();
     assert!(view.world().governance_locks().get(&referendum).is_none());

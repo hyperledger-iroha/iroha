@@ -201,10 +201,19 @@ pub(crate) mod kagemusha_top_up_admission_tests {
         );
         let mut state_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = state_block.transaction();
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let accepted = AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(transaction));
+        let policy_route =
+            crate::state::network_policy_routes::CapturedNetworkPolicyRoute::for_component(
+                &accepted,
+                &state_transaction,
+                route,
+            );
         let error = StateBlock::validate_stateful_admission(
             transaction,
             &mut state_transaction,
-            Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
+            route,
+            policy_route,
             None,
         )
         .expect_err("stateful admission must repeat the KAGEMUSHA top-up invariant");

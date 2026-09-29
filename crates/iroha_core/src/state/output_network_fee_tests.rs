@@ -1,7 +1,6 @@
 //! Actual rejected Instructions/Batch fee ownership, rollback and block-gas boundaries.
 
 use super::*;
-use crate::exec_witness;
 use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     events::data::prelude::{AccountEventFilter, DataEventFilter},
@@ -56,7 +55,6 @@ fn failing_body() -> Vec<InstructionBox> {
 
 #[test]
 fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         let (state, asset) = priced_fixture(None);
@@ -66,8 +64,7 @@ fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
             payment(&asset, 3),
             batch,
         )]);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         assert!(network_row(&block, 0).result.is_err());
@@ -107,7 +104,6 @@ fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
 
 #[test]
 fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit() {
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let body = failing_body();
     let gas = crate::gas::meter_instructions(&body);
@@ -115,8 +111,7 @@ fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit()
     for exact in [false, true] {
         let (state, asset) = priced_fixture(None);
         let source = carrier(vec![input(&state, body.clone(), payment(&asset, 3), false)]);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         block.gas_limit_per_block = if exact { gas } else { gas - 1 };
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -144,7 +139,6 @@ fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit()
 
 #[test]
 fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let source = carrier(vec![input(
@@ -153,8 +147,7 @@ fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
         payment(&asset, 2),
         false,
     )]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     assert!(network_row(&block, 0).result.is_err());
@@ -178,7 +171,6 @@ fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
 
 #[test]
 fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis() {
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let callback: TriggerId = "fee_data_callback".parse().unwrap();
@@ -204,8 +196,7 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
     let body = vec![write("data_callback_event")];
     let direct_gas = crate::gas::meter_instructions(&body);
     let source = carrier(vec![input(&state, body, payment(&asset, 2), false)]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     assert!(network_row(&block, 0).result.is_err());
@@ -256,7 +247,6 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
 
 #[test]
 fn healthy_output_overflow_drops_both_business_and_its_staged_fee() {
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(Some(32_768));
     {
@@ -274,8 +264,7 @@ fn healthy_output_overflow_drops_both_business_and_its_staged_fee() {
         payment(&asset, 2),
         false,
     )]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     assert!(retained(&block).rows[0].is_output_limit_rejection());
@@ -316,7 +305,6 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction,
     };
     use iroha_model_base::topology::LaneId;
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for mutation in 0..11 {
         let (state, asset) = priced_fixture(None);
@@ -334,7 +322,6 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
             unreachable!()
         };
         let source = carrier(vec![entry.clone()]);
-        exec_witness::start_block();
         let mut block = state.block(source.header());
         let parameters = block.world.parameters.get();
         let accepted = AcceptedTransaction::accept_borrowed_entrypoint_at_time(
@@ -355,12 +342,18 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         block.admit_fastpq_source_for_testing(Hash::from(entry.execution_call_hash()));
         let mut failed = block.transaction();
         bind_fee_context(&mut failed, signed);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let policy_route =
+            crate::state::network_policy_routes::CapturedNetworkPolicyRoute::for_component(
+                &accepted, &failed, route,
+            );
         assert!(
             StateBlock::execute_accepted_transaction_in_overlay(
                 accepted,
                 &mut failed,
                 &mut cache,
-                Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
+                route,
+                policy_route,
                 None,
             )
             .is_err()
@@ -444,7 +437,6 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
         ValidationFail,
         transaction::{IvmBytecode, error::TransactionRejectionReason},
     };
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let mut program = ivm::ProgramMetadata {
@@ -474,8 +466,7 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
     let source = carrier(vec![TransactionEntrypoint::External(signed)]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     block.gas_limit_per_block = gas_limit;
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -505,7 +496,6 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
     use crate::{smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction};
     use iroha_data_model::transaction::IvmBytecode;
     use ivm::error::ExecutionDeferral;
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for reason in [
         ExecutionDeferral::AllocationUnavailable,
@@ -538,9 +528,8 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
         let source = carrier(vec![TransactionEntrypoint::External(signed.clone())]);
         let cache_owner = state.pipeline_ivm_prepared_cache.read().clone();
         cache_owner.set_checkout_refusal_for_test(Some(reason));
-        exec_witness::start_block();
         {
-            let mut block = state.block(source.header());
+            let (mut block, _recording) = recorded_network_block(&state, &source);
             let fragments = block.committed_fragment_count();
             assert_eq!(
                 execute(&mut block, &source),
@@ -560,8 +549,7 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
             ));
         }
         cache_owner.set_checkout_refusal_for_test(None);
-        exec_witness::start_block();
-        let mut retry = state.block(source.header());
+        let (mut retry, _recording) = recorded_network_block(&state, &source);
         execute(&mut retry, &source)
             .expect("same authenticated source completes after local recovery");
         assert!(network_row(&retry, 0).result.is_ok());

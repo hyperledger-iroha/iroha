@@ -1,6 +1,7 @@
 //! Real State rollback and linear-owner controls for the private output kernel.
 //! These are unit controls, not qualification of the unfinished production producer.
 
+use self::scheduled_time::recorded_component_block;
 use super::*;
 use crate::{
     exec_witness,
@@ -125,11 +126,9 @@ fn retained<'a>(block: &'a StateBlock<'_>) -> &'a RetainedExecutionOutputs {
 
 #[test]
 fn fitting_complete_output_applies_state_and_retains_exact_row_once() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     let fragments = block.committed_fragment_count();
     let expected = row(0, 1024);
@@ -190,11 +189,9 @@ fn fitting_complete_output_applies_state_and_retains_exact_row_once() {
 
 #[test]
 fn oversized_success_rolls_back_world_events_witness_and_dedup_before_terminal() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     let parameters = block.world.parameters.get().clone();
     let events = block.world.external_event_buf.len();
@@ -236,7 +233,7 @@ fn canonical_exact_row_limit_accepts_and_one_byte_less_rolls_back() {
     ] {
         let state = state(limit);
         let source = source(&state, 1);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         block
             .produce_ordinary_execution_outputs(&source, |producer| {
@@ -254,7 +251,7 @@ fn canonical_exact_row_limit_accepts_and_one_byte_less_rolls_back() {
 fn actual_execution_order_preserves_canonical_network_output_positions() {
     let state = state(16_384);
     let source = source(&state, 3);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block
         .produce_ordinary_execution_outputs(&source, |producer| {
@@ -280,7 +277,7 @@ fn duplicate_or_foreign_network_index_never_executes_and_poison_is_sticky() {
     for index in [0, 1, u32::MAX] {
         let state = state(16_384);
         let source = source(&state, 1);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         assert!(
             block
@@ -315,7 +312,7 @@ fn changed_source_cannot_take_reserved_plan_or_run_body() {
     let state = state(16_384);
     let source = source(&state, 1);
     let foreign = super::tests::source(&state, 2);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     assert!(
         block
@@ -335,7 +332,7 @@ fn changed_source_cannot_take_reserved_plan_or_run_body() {
 fn recursive_producer_entry_cannot_replace_running_owner() {
     let state = state(16_384);
     let source = source(&state, 1);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block
         .produce_ordinary_execution_outputs(&source, |producer| {
@@ -362,7 +359,7 @@ fn unfinished_network_or_callback_obligation_cannot_finish() {
     for skip_network in [false, true] {
         let state = state(16_384);
         let source = source(&state, 1);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         assert!(
             block
@@ -399,14 +396,12 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
             self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
     let budget = mv::allocation::AllocationBudget::new(8);
     let occupied = budget.try_reserve_bytes(8).unwrap();
     let refusal = budget.try_reserve_bytes(1).unwrap_err();
     let state = state(16_384);
     let source = source(&state, 1);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     let before = block.world.parameters.get().clone();
     let error = block
@@ -431,6 +426,7 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
     };
     assert_eq!(sealed_owner.allocation_refusal(), Some(&refusal));
     let owner = sealed_owner;
+    drop(_recording);
     drop(block);
     drop(state);
     drop(budget);
@@ -451,11 +447,9 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
 
 #[test]
 fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     let before = block.world.parameters.get().clone();
     let error = block
@@ -487,11 +481,9 @@ fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
 
 #[test]
 fn unwind_rolls_back_side_channels_and_cannot_reopen_publication() {
-    let _guard = exec_witness::exec_witness_guard();
-    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     let before = block.world.parameters.get().clone();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -523,7 +515,7 @@ fn origin_substitution_and_real_rejection_refuse_before_state_application() {
     for case in 0..4 {
         let state = state(16_384);
         let source = source(&state, 1);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
         assert!(
@@ -559,7 +551,7 @@ fn origin_substitution_and_real_rejection_refuse_before_state_application() {
 fn invalid_skip_cannot_erase_network_obligation_even_if_error_is_ignored() {
     let state = state(16_384);
     let source = source(&state, 1);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     assert!(
         block
@@ -685,12 +677,10 @@ fn real_independent_receipts_are_joined_before_exact_row_fit_and_rollback() {
     };
     use iroha_primitives::numeric::Quantity;
 
-    let _guard = exec_witness::exec_witness_guard();
     let mut exact = None::<ExecutionOutputV1>;
     // First obtain the actual successful row, then test its exact measured
     // boundary and one byte less on fresh independent State overlays.
     for case in 0..3 {
-        exec_witness::start_block();
         let full_bytes = exact
             .as_ref()
             .map(|row| u64::try_from(norito::canonical_frame_len(row).unwrap()).unwrap());
@@ -701,7 +691,7 @@ fn real_independent_receipts_are_joined_before_exact_row_fit_and_rollback() {
         };
         let applies = case != 2;
         let (state, source, source_asset, destination_asset) = receipt_source(limit);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
         let events = block.world.external_event_buf.len();
@@ -817,6 +807,7 @@ fn real_independent_receipts_are_joined_before_exact_row_fit_and_rollback() {
             retained(&block).row_bytes,
             u64::try_from(norito::canonical_frame_len(result).unwrap()).unwrap()
         );
+        drop(_recording);
         drop(block);
         assert_eq!(
             state
@@ -841,11 +832,9 @@ fn unowned_callbacks_or_receipts_refuse_before_real_batch_application() {
     };
     use iroha_primitives::numeric::Quantity;
 
-    let _guard = exec_witness::exec_witness_guard();
     for case in 0..4 {
-        exec_witness::start_block();
         let (state, source, source_asset, destination_asset) = receipt_source(65_536);
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
         let events = block.world.external_event_buf.len();
@@ -937,12 +926,10 @@ mod scheduled_time;
 
 #[test]
 fn completed_work_survives_healthy_output_overflow_and_bounds_the_next_overlay() {
-    let _guard = exec_witness::exec_witness_guard();
     for oversized in [false, true] {
         let state = state(16_384);
         let source = source(&state, 1);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.zk.max_confidential_ops_per_block = 1;
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         block
@@ -1000,11 +987,9 @@ mod network;
 
 #[test]
 fn refused_output_apply_keeps_state_witness_and_auxiliary_rollback_armed() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     for refusal in 0..3 {
-        crate::exec_witness::start_block();
         let state = state(16_384);
-        let mut block = state.block(source(&state, 1).header());
+        let (mut block, _recording) = recorded_component_block(&state, source(&state, 1).header());
         let before = block.world.parameters.get().clone();
         let events = block.world.external_event_buf.len();
         let fragments = block.committed_fragment_count();
@@ -1048,7 +1033,7 @@ fn refused_output_apply_keeps_state_witness_and_auxiliary_rollback_armed() {
 #[test]
 fn poisoned_carrier_refuses_consensus_world_application() {
     let state = state(16_384);
-    let mut block = state.block(source(&state, 1).header());
+    let (mut block, _recording) = recorded_component_block(&state, source(&state, 1).header());
     let before = block.world.parameters.get().clone();
     let fragments = block.committed_fragment_count();
     let mut tx = block.transaction();

@@ -363,7 +363,7 @@ const _: () = {
     assert!(ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1 == 6);
 };
 /// Stable identity of the release SHA batch and call bus.
-pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
+pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
 /// Semantic owner of one canonical SHA call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ZkX509ShaCallRoleV1 {
@@ -3200,6 +3200,12 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
     let digest_event = current.fixed[SHA_WORD_CAPACITY_DIGEST_SELECTOR_V1];
     let segment_last = current.fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1];
     let segment_first = current.fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1];
+    let padding = current.fixed[ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1];
+    // The native domain is cyclic: its final zero padding row precedes the
+    // first live row, whose products start at one. The public schedule makes
+    // terminal and padding selectors disjoint, so this linear gate preserves
+    // live recurrences without joining either boundary to zero padding.
+    let continue_products = A::ONE.sub(segment_last).sub(padding);
     let manifest_call = current.fixed[ZK_X509_SHA_FIXED_CALL_V1];
     let manifest_role = current.fixed[ZK_X509_SHA_FIXED_ROLE_V1];
     let manifest_slot = current.fixed[ZK_X509_SHA_FIXED_SLOT_V1];
@@ -3231,13 +3237,10 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
         let digest_after =
             digest_before.mul(A::ONE.add(digest_event.mul(digest_factor.sub(A::ONE))));
         residues.push(
-            A::ONE
-                .sub(segment_last)
-                .mul(next.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1 + lane].sub(input_after)),
+            continue_products.mul(next.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1 + lane].sub(input_after)),
         );
         residues.push(
-            A::ONE
-                .sub(segment_last)
+            continue_products
                 .mul(next.aux[ZK_X509_SHA_DIGEST_PRODUCTS_V1 + lane].sub(digest_after)),
         );
         residues.push(segment_first.mul(input_before.sub(A::ONE)));
@@ -3278,7 +3281,7 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
                 rfc_challenges,
             )?));
             residues.push(
-                A::ONE.sub(segment_last).mul(
+                continue_products.mul(
                     next.aux[ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1
                         + stream * ZK_X509_SHA_BUS_LANES_V1
                         + lane]
@@ -3292,7 +3295,6 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAir
             );
         }
     }
-    let padding = current.fixed[ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1];
     residues.extend(current.base.map(|value| padding.mul(value)));
     residues.extend(current.aux.map(|value| padding.mul(value)));
     if residues.len() != ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1 {
@@ -3435,6 +3437,7 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 #[cfg(test)]
 mod tests {
     include!("sha_call_bus_rfc_binding_tests.rs");
+    include!("sha_cyclic_padding_tests.rs");
     #[test]
     fn retained_sha_witness_erasure_clears_live_message_and_digest_cells() {
         let mut witness = ZkX509ShaCallWitnessV1 {

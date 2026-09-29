@@ -393,8 +393,14 @@ ordinary/maximum complete column sweeps (105.331/106.444 seconds), profile and
 assembly admission, and 23 engine/codec/protocol known-answer controls pass.
 Receipts and `controls-summary.json` are retained under
 `dist/zk-x509-prover-evidence/frozen-rfc-sha-binding-opt3-clean-20260929`.
-The actual full maximum proof started at 11:13:04 UTC; its outcome remains
-pending. This fixed candidate is the scoped baseline for the separately
+The actual full maximum proof started at 11:13:04 UTC and failed at 12:09:13 UTC
+with `MainProofConstruction(ConstraintOpening)` during composition. Producer
+time was 3,368.579386 seconds; external wall time was 3,368.767274 seconds,
+with 9,639,247,872 bytes of peak RSS. The 300-second target failed; memory
+stayed below the unchanged 12-GiB ceiling. No proof was produced or verified.
+All 20,879 frozen source files remained unchanged. The terminal assessment,
+phase analysis, copied public receipt, and source/binary closure remain in the
+same evidence directory. This fixed candidate is the scoped baseline for the separately
 reviewed allocation-erasure amendment below.
 The profile pin, AIR and proof/memory/time limits are unchanged by this owner
 repair. Current-Core integration and release activation remain unavailable.
@@ -404,13 +410,13 @@ inline reduction or low-S trace with `Option::take` can leave its old payload
 bytes in the base signature allocation after the discriminant becomes `None`.
 The thirteen passing controls establish the stated binding, stack and live-child
 clearing results; they do not establish clearing of those vacated slots. The
-running optimized candidate remains fixed as a scoped baseline. A separate
+retained optimized candidate remains fixed as the failed scoped baseline. A separate
 repair guards construction temporaries and both phase-owner vectors, drops live
 pointer-bearing children first, then uses the existing zeroize implementation
 to wipe the full allocation including spare capacity. Physical allocation
 observations and normal candidate qualification for that repair remain pending.
 No proof, performance, erasure-completeness or release claim follows from the
-running baseline alone.
+failed baseline alone.
 
 The separately reviewed allocation owner reserves capacity before inserting
 private values, exposes only mutable slices, and rejects insertion when full
@@ -424,3 +430,63 @@ The two-file amendment and independent source review are retained under
 `bounded-helper-controls/receipt.json`. The frozen baseline has not been
 amended. Native allocation-owner and default-stack binding checks, followed by
 the complete optimized proof, remain required on the repaired candidate.
+
+The completed baseline attributes 442.104174 seconds to base masks,
+558.477729 to base commitment, 769.593118 to auxiliary masks, 944.937671 to
+auxiliary commitment, and 603.991552 to interrupted composition. These phases
+are nested and must not be added. DEEP/FRI, query openings, and envelope
+self-verification were not reached. Metal completed 1,455 calls for 5,811
+columns under the existing four-column device policy. The 2,510 fixed forward
+columns, 1,247 fixed recovery columns, and both butterfly totals exactly match
+the canonical registration prefix through all eight quotient stripes of SHA
+segment zero. This localizes the failure before SHA segment one's first stripe.
+
+A further source-reviewed amendment removes repeated P-256 arithmetic
+validation during native column replay. A private immutable owner first runs
+the existing complete arithmetic and role-topology checks under a clearing
+guard, retains the checked public schedule, and lends lifetime-bound row views
+to base and auxiliary readers. Arbitrary borrowed traces still use the checked
+constructor. Auxiliary challenge validation and terminal recomputation remain
+in their original order. Actual retained schedule capacity and simultaneous
+validation allocations are charged against the unchanged allowances. The
+source-only review, exact two-file delta, and proposed controls are retained
+under `dist/zk-remediation/2026-09-29/x509-p256-validated-owner`.
+
+The prepared three-file owner-only capture was superseded without being run.
+A further source-reviewed amendment reuses only the bound owner's already
+derived arithmetic terminals and streams at most eight adjacent auxiliary
+columns into the existing batch allocation. The checked raw constructor remains
+the oracle; no additional eight-column allocation, unchecked public constructor,
+AIR, geometry, transcript, or resource-cap change is introduced. Its four-file
+delta and source review are retained under
+`dist/zk-remediation/2026-09-29/x509-p256-auxiliary-replay`. Native every-cell,
+seeded masking, commitment, DEEP, and opening parity remain pending.
+
+A separate correctness diagnosis found that the final native SHA padding row
+has zero products and wraps to a live first row whose products are one, while
+the recurrence gate excluded only the last live row. The exact frozen complete
+796-residue SHA/word/RFC AIR reproduces 24 nonzero residues for all four segment
+contexts, in both base-field and Fp4 evaluation. The corrected complete AIR uses
+`1 - segment_last - physical_padding`, produces zero residues at this edge,
+and rejects every nonzero padding base/auxiliary cell in the isolated controls.
+The padding-zero, first-product, and terminal constraints remain. The full-AIR
+source captures, binaries, logs, counter reconciliation, and pending native
+regressions are retained under
+`dist/zk-remediation/2026-09-29/x509-sha-cyclic-padding`. These are isolated AIR
+controls, not a complete source/proof qualification.
+
+The semantic repair explicitly updates the SHA descriptor. Independent framing
+changes only field 17 of the 29-field manifest, yielding candidate pin
+`9d2d34512de90d13a0f68d352bbcc887ba9ac2f2a89e5deb845ff5c4c64d45ff`.
+Actual native constructor confirmation, rejection of the superseded digest,
+and dependent IO/projection KAT derivations remain required. Fixed schedule
+geometry, constraint degree, and proof/memory/time limits are unchanged.
+
+The next jointly reviewed candidate combines these separately retained
+correctness and performance amendments. Normal controls must include the
+actual maximum-source SHA boundaries and mutations, default-stack maximum
+binding, and rejection/erasure checks. Optimized qualification must explicitly
+execute the otherwise-ignored every-cell and commitment/DEEP/opening parity
+controls before the full maximum proof. Capture remains pending native
+qualification planning and review. No measured speedup, proof-time compliance,
+current-Core, activation, or release claim follows from source review.

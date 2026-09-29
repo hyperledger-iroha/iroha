@@ -108,12 +108,12 @@ network qualification remains open ([record](../docs/history/2026-09-29/zk-curre
 
 RAM-LFE registration, activation, restoration and receipts now reject both signed
 and proof BFV modes: the exact-lift profile loses its public-key noise modulo 257.
-Public evaluators refuse before private work; 68 normal frozen crypto controls pass.
+Public evaluators refuse before private work; 349 native crypto and 37 API controls pass.
 An unrelated generic proof cannot satisfy execution. Secure encryption replacement,
-complete relation and current Torii qualification remain open. The execute API's
+complete relation and integrated network qualification remain open. The execute API's
 false plaintext opening is removed; [boundary evidence](../docs/history/2026-09-29/ram-lfe-production-boundary.md)
-records 63 schema controls, 45 Core and 35 Torii passes. Reused dependency provenance
-was not retained for the latter builds; isolated coherent reruns remain required.
+records 63 schema controls; coherent reruns pass 367 Core, 396 model and 36 Torii controls.
+Source-bound reruns supersede the historical 45/35 results with missing reused-dependency provenance.
 
 The retained diagnostic RAM-LFE stage implements one bounded BLAKE3 initializer, fixed-work
 modulo-257 reduction, distinct canonical policy/tape commitments and a mandatory
@@ -132,7 +132,7 @@ internal BFV scratch remain outstanding in the [execution contract](ram_lfe_exec
 and [initializer record](../docs/history/2026-09-29/ram-lfe-bounded-initializer.md).
 The proposed [semantic commitments](ram_lfe_semantic_commitments.md) replace private wire hashing;
 [replacement encryption](ram_lfe_encryption_replacement.md) and [scalar packing](ram_lfe_plaintext_packing.md)
-remain designs requiring a complete relation and qualification. The unused Pasta leaf passes
+remain unqualified; the [test-only planner](../docs/history/2026-09-29/ram-lfe-structural-planner.md) passes nine isolated controls. The unused Pasta leaf passes
 [18 native controls](../docs/history/2026-09-29/ram-lfe-pasta-leaf.md); its [circuit](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md) passes ten isolated controls at maximum k=16 but misses the 20 ms budget (238.840 ms).
 The distinct [BN254 naming cut](../docs/history/2026-09-29/bn254-poseidon-api.md) passes 19 native/four doc controls and actual GPU/AXT consumer compilation.
 
@@ -200,7 +200,7 @@ The corrected RFC/SHA mapping passes nine native controls and the maximum handof
 its first full BoundSources run overflows the normal stack. The heap-owner repair
 passes all 13 clean native controls, including maximum BoundSources on the normal
 stack and both independently verified component KATs. The fresh optimized run passes 109 controls;
-its full maximum proof is still running and exceeds 300 s; caps remain unchanged ([record](../docs/history/2026-09-29/zk-x509-rfc-temporal-repair.md)).
+its maximum proof fails `ConstraintOpening` during composition after 3,368.579 s; peak RSS 9,639,247,872 B fits 12 GiB, no proof is emitted ([record](../docs/history/2026-09-29/zk-x509-rfc-temporal-repair.md)).
 
 ### ZK07 — developer workflow
 
@@ -256,7 +256,7 @@ all 47 endpoint controls pass, with strict types and lint. The first fixture fai
 C# passes 269 managed controls plus four authenticated-native and three real wallet controls;
 a strict derivation-revision mismatch is repaired. Current Swift five-slice builds are running.
 Rust generic/specialized encryptors are private: 349 native and 37 API compile checks pass;
-Soracloud production refusal and cleanup reruns remain. Source-bound evidence is retained.
+Core/model/Torii containment has passing evidence for all 799 selected controls; the corrected Torii fixture passes its 36-test rerun. Source-bound evidence is retained.
 See [SDK boundary evidence](../docs/history/2026-09-29/ram-lfe-sdk-encryption-retirement.md).
 
 Public guidance belongs in `iroha-docs`. FASTPQ plus 20 translations pass scoped
