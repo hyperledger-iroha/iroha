@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 
 use iroha_sumeragi::{
     api::{Event, ExecOutcome},
-    message::{Block, Qc},
+    availability::AvailableBody,
+    message::Qc,
     sim::driver::{encode_tx, reference_exec},
     types::{ChainParams, Committee, Hash32, HeightConfig, Millis, PublicKey},
 };
@@ -33,15 +34,15 @@ fn config() -> HeightConfig {
     }
 }
 
-fn result_of(parent_result: &Hash32, block: &Block) -> Hash32 {
-    match reference_exec(parent_result, &block.payload) {
+fn result_of(parent_result: &Hash32, block: &AvailableBody) -> Hash32 {
+    match reference_exec(parent_result, &block.payload().as_slice()) {
         ExecOutcome::Valid(r) => r,
         other => panic!("{other:?}"),
     }
 }
 
 /// A block of `height` on `(parent, parent_result)` and its result.
-fn child(height: u64, parent: (Hash32, Hash32), tag: u64) -> (Block, Hash32, Hash32) {
+fn child(height: u64, parent: (Hash32, Hash32), tag: u64) -> (AvailableBody, Hash32, Hash32) {
     let b = block(height, parent.0, parent.1, encode_tx(tag, false, 4));
     let r = result_of(&parent.1, &b);
     let bh = hash(&b);
@@ -175,7 +176,7 @@ fn commit_during_execution_executes_once() {
     assert!(rig.events.iter().any(|e| matches!(
         e,
         Event::BlockApplied { height: 1, block_hash, header, .. }
-            if *block_hash == bh1 && **header == b1.header
+            if *block_hash == bh1 && **header == *b1.header()
     )));
     assert_eq!(rig.blocks.height(), 1, "durable in the block store first");
     assert_eq!(rig.sched.applied(), 1);
@@ -268,7 +269,7 @@ fn build_after_parent_apply_and_payload_ready() {
         .events
         .iter()
         .filter_map(|e| match e {
-            Event::PayloadBuilt { req, payload, .. } if payload.is_empty() => Some(*req),
+            Event::PayloadBuilt { req, payload, .. } if payload.is_none() => Some(*req),
             _ => None,
         })
         .collect();
@@ -281,9 +282,9 @@ fn build_after_parent_apply_and_payload_ready() {
     rig.sched.build(6, 2, 2, 1024, 100);
     rig.drain();
     assert!(
-        rig.events.iter().any(
-            |e| matches!(e, Event::PayloadBuilt { req: 6, payload, .. } if !payload.is_empty())
-        )
+        rig.events
+            .iter()
+            .any(|e| matches!(e, Event::PayloadBuilt { req: 6, payload, .. } if payload.is_some()))
     );
     rig.sched.transactions_available();
     assert!(rig.sched.take_events().is_empty(), "no EMPTY build pending");
@@ -312,7 +313,7 @@ fn arrival_during_a_build_follows_an_empty_answer() {
         vec![
             Event::PayloadBuilt {
                 req: 7,
-                payload: Vec::new(),
+                payload: None,
                 attest: false,
             },
             Event::PayloadReady { req: 7 },
@@ -374,8 +375,8 @@ fn every_execute_is_answered_exactly_once() {
         let mut rig = Rig::new();
         // The canonical chain c1..c4 and a fork block per height.
         let mut chain = vec![(G, RG)];
-        let mut blocks: Vec<(Block, Hash32, Hash32)> = Vec::new();
-        let mut forks: Vec<(Block, Hash32)> = Vec::new();
+        let mut blocks: Vec<(AvailableBody, Hash32, Hash32)> = Vec::new();
+        let mut forks: Vec<(AvailableBody, Hash32)> = Vec::new();
         for h in 1..=4u64 {
             let parent = chain[usize::try_from(h - 1).unwrap()];
             let (b, bh, r) = child(h, parent, h);
@@ -471,21 +472,27 @@ impl Executor for Panicking {
         panic!("boom")
     }
 
-    fn execute(&mut self, _: &Block, _: &Hash32) -> Option<ExecOutcome> {
+    fn execute(&mut self, _: &AvailableBody, _: &Hash32) -> Option<ExecOutcome> {
         panic!("boom")
     }
     fn discard(&mut self, _: u64, _: &[Hash32]) {}
-    fn prepare(&mut self, _: &Block, _: &Qc) -> Result<Option<Hash32>, PublicationError> {
+    fn prepare(&mut self, _: &AvailableBody, _: &Qc) -> Result<Option<Hash32>, PublicationError> {
         panic!("boom")
     }
     fn commit(
         &mut self,
-        _: &Block,
+        _: &AvailableBody,
         _: &Qc,
     ) -> Result<iroha_sumeragi::types::AppliedConfig, PublicationError> {
         panic!("boom")
     }
-    fn build(&mut self, _: u64, _: u64, _: u32, _: u32) -> (Vec<u8>, bool) {
+    fn build(
+        &mut self,
+        _: u64,
+        _: u64,
+        _: u32,
+        _: u32,
+    ) -> Result<(Option<iroha_sumeragi::availability::PayloadBytes>, bool), PublicationError> {
         panic!("boom")
     }
     fn reject(&mut self, _: u64, _: u64, _: &Hash32) {}
@@ -533,12 +540,12 @@ fn executor_panics_become_local_failures() {
             exec_budget_ms: 10,
         },
     );
-    assert_eq!(
-        built,
-        ExecDone::Built {
-            payload: Vec::new(),
-            attest: false
-        }
+    assert!(
+        matches!(
+            built,
+            ExecDone::Built(Err(PublicationError::RecoveryRequired(_)))
+        ),
+        "a panicked builder must not fabricate an empty proposal"
     );
 }
 
@@ -589,7 +596,7 @@ impl Executor for Overlay {
         Ok(())
     }
 
-    fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
+    fn execute(&mut self, block: &AvailableBody, block_hash: &Hash32) -> Option<ExecOutcome> {
         self.other("execute");
         self.inner.execute(block, block_hash)
     }
@@ -599,7 +606,7 @@ impl Executor for Overlay {
     }
     fn prepare(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
         self.calls.push("prepare");
@@ -609,7 +616,7 @@ impl Executor for Overlay {
     }
     fn commit(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<iroha_sumeragi::types::AppliedConfig, PublicationError> {
         self.calls.push("commit");
@@ -624,7 +631,13 @@ impl Executor for Overlay {
         }
         self.inner.commit(block, commit_qc)
     }
-    fn build(&mut self, height: u64, view: u64, max_bytes: u32, budget: u32) -> (Vec<u8>, bool) {
+    fn build(
+        &mut self,
+        height: u64,
+        view: u64,
+        max_bytes: u32,
+        budget: u32,
+    ) -> Result<(Option<iroha_sumeragi::availability::PayloadBytes>, bool), PublicationError> {
         self.other("build");
         self.inner.build(height, view, max_bytes, budget)
     }
@@ -1020,7 +1033,7 @@ fn original_boundary_config_survives_retry_and_is_delivered_atomically() {
             .collect();
         assert_eq!(
             applied,
-            vec![(1, block_hash, Box::new(block.header), original)]
+            vec![(1, block_hash, Box::new(block.header().clone()), original)]
         );
         assert_eq!(rig.sched.applied(), 1);
         assert_eq!(rig.blocks.height(), 1);
@@ -1073,14 +1086,13 @@ fn control_build_refusal_keeps_exact_request_and_does_not_block_transaction_work
         sched.take_events().is_empty(),
         "no invented empty control response"
     );
-    assert_eq!(sched.wakeup(), 10);
+    assert_eq!(sched.wakeup(), 0, "transaction work is ready immediately");
     assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 17, .. })));
-    sched.done(
-        0,
-        ExecDone::Built {
-            payload: vec![1],
-            attest: false,
-        },
+    sched.done(0, ExecDone::Built(Ok((super::payload(vec![1]), false))));
+    assert_eq!(
+        sched.wakeup(),
+        10,
+        "the refused control request retains its retry deadline"
     );
     assert!(sched.next(9).is_none());
     assert_eq!(
@@ -1142,13 +1154,7 @@ fn all_validator_control_waits_for_applied_parent_and_shares_do_not_starve_work(
     );
     sched.done(0, ExecDone::ApplicationControlDriven(Ok(Some(partial(2)))));
     assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 9, .. })));
-    sched.done(
-        0,
-        ExecDone::Built {
-            payload: Vec::new(),
-            attest: false,
-        },
-    );
+    sched.done(0, ExecDone::Built(Ok((None, false))));
     assert!(matches!(
         sched.next(0),
         Some(ExecOp::ReceiveApplicationControl { .. })

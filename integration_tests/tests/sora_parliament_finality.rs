@@ -5,6 +5,7 @@ use super::*;
 use iroha_data_model::sumeragi_finality::{
     FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier, VerifiedSumeragiBlock,
 };
+use iroha_sumeragi::availability::recommended_data_availability_layout;
 
 /// Authenticate one exact block through the bounded contiguous native prefix.
 /// Each HTTP proof remains untrusted until the existing verifier admits its committee and result.

@@ -908,7 +908,7 @@ if status_snapshot.status.lane_governance_sealed_total:
 
 # Inspect governed consensus parameters
 params = client.get_sumeragi_params_typed()
-print(params.block_time_ms, params.next_mode)
+print(params.block_cadence_ms, params.max_clock_drift_ms, params.chain_height)
 
 # Manage triggers
 trigger_payload = {

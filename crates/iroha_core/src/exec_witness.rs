@@ -785,6 +785,18 @@ pub(crate) fn record_write_kagemusha_reserve_receipt_v1(
     });
     Ok(())
 }
+/// Record the write of one AMX record (`specs/sumeragi.md` §11) under its reserved key, so the
+/// block's ordinary-write root commits it for record proofs.
+pub(crate) fn record_write_amx_record(
+    record: &iroha_data_model::sumeragi_amx::AmxRecordV1,
+) -> Result<(), iroha_data_model::sumeragi_amx::AmxError> {
+    let key = record.witness_key().to_vec();
+    let value = record.witness_value()?;
+    with_active_slot(|witness| {
+        witness.writes.insert(key, value);
+    });
+    Ok(())
+}
 /// Record a FASTPQ transfer transcript so `ExecWitness` consumers can replay transfers.
 pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
     with_active_slot(|g| {

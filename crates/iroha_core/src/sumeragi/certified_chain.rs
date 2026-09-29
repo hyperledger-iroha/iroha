@@ -66,12 +66,11 @@ use iroha_data_model::{
 use iroha_sumeragi::{
     crypto::{AttestationVerifier, CertError},
     message::{BlockHeader, Qc, VoteKind},
-    preimage::payload_hash,
+    preimage::TAG_PAY,
     types::{Committee, EpochId, Hash32},
 };
 
 use super::{
-    block_store::{decode_certificate, derive_payload},
     commitment::{ExecutionResultCommitment, result_of_preimage},
     crypto::{BlsCrypto, core_key},
     node::global_instance,
@@ -365,7 +364,10 @@ pub(crate) fn read_frame(
         .ok_or(ChainReadError::MissingCertificate { height })?;
     let genesis = height == GENESIS_HEIGHT;
     let (header, core_hash) = if genesis {
-        if !certificate.consensus_header().is_empty() || !certificate.commit_qc().is_empty() {
+        if !certificate.consensus_header().is_empty()
+            || !certificate.commit_qc().is_empty()
+            || !certificate.availability().is_empty()
+        {
             return Err(malformed(
                 "genesis carries a result-only certificate".into(),
             ));
@@ -374,11 +376,21 @@ pub(crate) fn read_frame(
     } else {
         let header: BlockHeader = norito::decode_canonical(certificate.consensus_header())
             .map_err(|error| malformed(error.to_string()))?;
-        let payload = derive_payload(&block, header.payload_len)
+        let payload_len = block
+            .resultless_proposal_wire_len()
             .map_err(|error| malformed(error.to_string()))?;
-        if header.height != height
-            || u32::try_from(payload.len()).ok() != Some(header.payload_len)
-            || payload_hash(&hasher, &payload) != header.payload_hash
+        let payload_hash = Hash::new_from_writer(|writer| {
+            writer.write_all(TAG_PAY)?;
+            block
+                .write_resultless_proposal_wire(writer)
+                .map_err(std::io::Error::other)
+        })
+        .map_err(|error| malformed(error.to_string()))?;
+        if certificate.availability().is_empty()
+            || header.height != height
+            || header.payload_len == 0
+            || u32::try_from(payload_len).ok() != Some(header.payload_len)
+            || Hash32(*payload_hash.as_ref()) != header.payload_hash
         {
             return Err(ChainReadError::HeaderMismatch { height });
         }
@@ -582,7 +594,10 @@ impl PrefixVerifierContext<'_> {
                 "result changes its authenticated incumbent context".into(),
             ));
         }
-        let certified = self.verify_certificate(committed, &authority)?;
+        let config = scheduled
+            .height_config()
+            .map_err(|error| malformed(error.to_string()))?;
+        let certified = self.verify_certificate(committed, &authority, Some(&config))?;
         if let Some(boundary) = &certified.commitment.schedule.boundary {
             if boundary.selection_anchor != prefix.tip.block_hash() {
                 return Err(malformed(
@@ -630,6 +645,7 @@ impl PrefixVerifierContext<'_> {
         &self,
         committed: CommittedBlock,
         authority: &VerifiedAuthority,
+        config: Option<&iroha_sumeragi::types::HeightConfig>,
     ) -> Result<CertifiedBlock, ChainReadError> {
         let height = committed.height;
         let malformed = |reason: String| ChainReadError::Malformed { height, reason };
@@ -647,8 +663,8 @@ impl PrefixVerifierContext<'_> {
                 certificate_len,
             });
         };
-        let (_, commit_qc) =
-            decode_certificate(certificate).map_err(|error| malformed(error.to_string()))?;
+        let commit_qc: Qc = norito::decode_canonical(certificate.commit_qc())
+            .map_err(|error| malformed(error.to_string()))?;
         if header.epoch != authority.epoch
             || commit_qc.epoch != authority.epoch
             || height < authority.material.authorization.first_height
@@ -681,6 +697,10 @@ impl PrefixVerifierContext<'_> {
         )
         .verify_qc(verifier, &commit_qc);
         checked.map_err(|error| ChainReadError::Certificate { height, error })?;
+        // Parent-authenticated parameters and authority also bind the original signed row
+        // table. A valid CommitQC alone does not certify possession of these payload bytes.
+        let config = config.ok_or_else(|| malformed("non-genesis certificate lacks parent-authenticated configuration".into()))?;
+        verify_availability(&committed, config, &authority.crypto)?;
         Ok(CertifiedBlock {
             committed,
             commit_qc: Some(commit_qc),
@@ -688,6 +708,51 @@ impl PrefixVerifierContext<'_> {
             certificate_len,
         })
     }
+}
+
+fn verify_availability(
+    committed: &CommittedBlock,
+    config: &iroha_sumeragi::types::HeightConfig,
+    crypto: &BlsCrypto,
+) -> Result<(), ChainReadError> {
+    use iroha_sumeragi::availability::{AvailabilityFrame, MAX_AVAILABILITY_FRAME_BYTES};
+    let height = committed.height;
+    let malformed = |reason: String| ChainReadError::Malformed { height, reason };
+    let header = committed
+        .header
+        .as_ref()
+        .ok_or_else(|| malformed("availability requires a non-genesis header".into()))?;
+    let certificate = committed
+        .block
+        .commit_certificate()
+        .ok_or(ChainReadError::MissingCertificate { height })?;
+    // Bounded read-only verification has no native allocation or custody authority.
+    if certificate.availability().len() > MAX_AVAILABILITY_FRAME_BYTES.saturating_add(128)
+        || header.payload_len as usize > 64 * 1024 * 1024
+    {
+        return Err(malformed(
+            "availability exceeds certified reader bound".into(),
+        ));
+    }
+    let table: AvailabilityFrame = norito::decode_canonical(certificate.availability())
+        .map_err(|error| malformed(error.to_string()))?;
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(header.payload_len as usize)
+        .map_err(|error| malformed(error.to_string()))?;
+    committed
+        .block
+        .write_resultless_proposal_wire(&mut payload)
+        .map_err(|error| malformed(error.to_string()))?;
+    iroha_data_model::sumeragi_finality::verify_payload_availability(
+        header.instance,
+        config,
+        header,
+        &table,
+        &payload,
+        crypto,
+    )
+    .map_err(|error| malformed(error.to_string()))
 }
 
 fn make_genesis_prefix(
@@ -1089,7 +1154,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             }
             return self
                 .verification_context()
-                .verify_certificate(committed, &prefix.authority);
+                .verify_certificate(committed, &prefix.authority, None);
         }
         while prefix
             .tip

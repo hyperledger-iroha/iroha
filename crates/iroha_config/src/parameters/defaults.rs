@@ -1028,7 +1028,7 @@ pub mod network {
     /// Drop transaction gossip for dataspaces that are missing from the lane catalog instead of
     /// falling back to restricted targeting.
     pub const TX_GOSSIP_DROP_UNKNOWN_DATASPACE: bool = false;
-    /// Optional cap on restricted-dataspace gossip targets (None = commit topology fanout).
+    /// Optional cap on restricted-dataspace gossip targets (None = all authorized native lane validators).
     pub const TX_GOSSIP_RESTRICTED_TARGET_CAP: Option<NonZeroUsize> = None;
     /// Optional cap on public-dataspace gossip targets (None = broadcast; default = 16).
     pub const TX_GOSSIP_PUBLIC_TARGET_CAP: Option<NonZeroUsize> = Some(nonzero!(16_usize));
@@ -1036,10 +1036,6 @@ pub mod network {
     pub const TX_GOSSIP_PUBLIC_TARGET_RESHUFFLE: Duration = TRANSACTION_GOSSIP_PERIOD;
     /// Interval between reshuffles of restricted gossip target selection.
     pub const TX_GOSSIP_RESTRICTED_TARGET_RESHUFFLE: Duration = TRANSACTION_GOSSIP_PERIOD;
-    /// Fallback strategy for restricted gossip when no targets are available (`drop`|`public_overlay`).
-    pub const TX_GOSSIP_RESTRICTED_FALLBACK: &str = "drop";
-    /// Policy for handling restricted payloads when only the public overlay is available (`refuse`|`forward`).
-    pub const TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD: &str = "refuse";
     /// Interval between peer gossip batches.
     pub const PEER_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
     /// Maximum interval between peer gossip batches (change-driven gossip backs off toward this).
@@ -1188,12 +1184,13 @@ pub mod network {
     ///
     /// The cap was sized for a maximal certified-body response of 16,844,237 bytes
     /// before the P2P relay/data wrapper and AEAD nonce/tag.
-    /// TODO(S4): re-derive this bound from the current Sumeragi full-body transport message.
     /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
     /// layers while keeping every retained frame allocation finite.
     /// The encrypted ceiling includes AEAD expansion in addition to the full
     /// 17 MiB plaintext topic cap; keeping these as distinct constants avoids
     /// making the default geometry invalid by exactly one nonce and tag.
+    // TODO(S4): re-derive the 16,844,237-byte sizing from the current Sumeragi full-body
+    // transport message; it was measured on the retired certified-body response.
     pub const MAX_FRAME_BYTES: NonZeroUsize =
         nonzero!(17 * 1024 * 1024_usize + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES);
     // Per-topic caps (defaults stricter than global except BlockSync)

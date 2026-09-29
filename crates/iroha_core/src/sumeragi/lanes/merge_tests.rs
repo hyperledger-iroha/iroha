@@ -19,8 +19,9 @@ use iroha_data_model::{
 use iroha_model_base::topology::DataSpaceId;
 use iroha_sumeragi::{
     api::ExecOutcome,
+    availability::{PayloadAuthoring, PayloadBytes},
     crypto::{Signer, form_qc},
-    message::{Block, BlockHeader, Vote, VoteKind},
+    message::{BlockHeader, Vote, VoteKind},
     preimage::payload_hash,
     types::{SIGNATURE_LEN, Signature},
 };
@@ -51,16 +52,20 @@ const GENESIS_MS: u64 = 10_000;
 struct Deferred(OnceLock<Arc<super::super::registry::LaneStores>>);
 
 impl LaneBlockSource for Deferred {
-    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> Option<u64> {
-        self.0.get()?.tip(lane, incarnation)
+    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> std::io::Result<Option<u64>> {
+        self.0
+            .get()
+            .map_or(Ok(None), |stores| stores.tip(lane, incarnation))
     }
     fn block(
         &self,
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
-    ) -> Option<CommittedLaneBlock> {
-        self.0.get()?.block(lane, incarnation, height)
+    ) -> std::io::Result<Option<CommittedLaneBlock>> {
+        self.0
+            .get()
+            .map_or(Ok(None), |stores| stores.block(lane, incarnation, height))
     }
     fn wait_for(
         &self,
@@ -68,10 +73,10 @@ impl LaneBlockSource for Deferred {
         incarnation: &[u8; 32],
         height: u64,
         timeout: Duration,
-    ) -> bool {
-        self.0
-            .get()
-            .is_some_and(|stores| stores.wait_for(lane, incarnation, height, timeout))
+    ) -> std::io::Result<bool> {
+        self.0.get().map_or(Ok(false), |stores| {
+            stores.wait_for(lane, incarnation, height, timeout)
+        })
     }
 }
 
@@ -91,6 +96,7 @@ fn other_user() -> KeyPair {
 
 fn policy() -> SumeragiLanePolicy {
     SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         anchor_freshness: 4,
         max_merge_blocks: 8,
         stall_window: 1_000,
@@ -150,12 +156,18 @@ impl Fixture {
         let prepared = CertifiedTestChain::prepare(config).expect("original signed genesis");
         let keys = prepared.validator_keys.clone();
         let chain = CertifiedTestChain::from_prepared(prepared).expect("the chain starts");
-        let crypto: SharedCrypto = Arc::new(BlsCrypto::new());
+        let bls = Arc::new(BlsCrypto::new());
+        let crypto: SharedCrypto = bls.clone();
         let stores = Arc::new(super::super::registry::LaneStores::new(
             dir.path().to_path_buf(),
             chain.network_id(),
             chain.state().view().chain_id().to_string(),
             Arc::clone(&crypto),
+            chain.state().ivm_execution_budget(),
+            Arc::new(crate::sumeragi::test_chain::TestLaneStoreAuthorities::new(
+                Arc::clone(chain.state()),
+                bls,
+            )),
         ));
         assert!(deferred.0.set(Arc::clone(&stores)).is_ok());
         Self {
@@ -211,6 +223,7 @@ impl Fixture {
         let config = super::super::lane_height_config(&record).unwrap();
         let parent = store
             .entry(height - 1)
+            .expect("read original committed predecessor")
             .map(|entry| (entry.commit_qc.block_hash, entry.commit_qc.result))
             .unwrap_or_else(|| {
                 (
@@ -223,39 +236,54 @@ impl Fixture {
             Arc::clone(self.chain.state()),
             Arc::new(AppliedWatch::new(tip, Some(self.anchor(tip)))),
         ));
-        let mut executor = LaneExecutor::<_, _, NoTransactions>::recover(
+        let mut executor = LaneExecutor::<_, _, NoTransactions>::begin_recover(
             record.clone(),
             config.clone(),
+            instance,
             anchors,
             StatelessChecks::new(self.chain.network_id()),
             None,
             super::super::lane_genesis_hash(&self.chain.network_id(), &record),
-            store.as_ref(),
+            store.clone(),
+            Arc::clone(&self.crypto),
+            self.chain.state().ivm_execution_budget(),
         )
-        .unwrap();
+        .complete()
+        .unwrap_or_else(|(_, error)| panic!("original lane recovery: {error}"));
         let payload = LaneBatch {
             anchor_height: anchor,
             anchor_hash: self.anchor(anchor),
             transactions,
         }
         .to_payload();
-        let block = Block {
-            header: BlockHeader {
-                instance,
-                epoch: config.epoch.id,
-                height,
-                origin_view: 0,
-                parent_hash: parent.0,
-                parent_result: parent.1,
-                payload_hash: payload_hash(&*self.crypto, &payload),
-                payload_len: u32::try_from(payload.len()).expect("small"),
-                proposer: 0,
-                skipped_leaders: Vec::new(),
-                control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-                attest: false,
-            },
-            payload,
+        let header = BlockHeader {
+            instance,
+            epoch: config.epoch.id,
+            height,
+            origin_view: 0,
+            parent_hash: parent.0,
+            parent_result: parent.1,
+            payload_hash: payload_hash(&*self.crypto, &payload),
+            availability_digest: Hash32::ZERO,
+            payload_len: u32::try_from(payload.len()).expect("small"),
+            proposer: 0,
+            skipped_leaders: Vec::new(),
+            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
+            attest: false,
         };
+        let budget = self.chain.state().ivm_execution_budget();
+        let mut original = mv::allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        original.append(&payload).unwrap();
+        let payload = PayloadBytes::from_charged(original, &budget)
+            .unwrap_or_else(|_| panic!("original fixture lane payload backing/control"));
+        let signer = KeyPairSigner::new(&self.keys[0]).unwrap();
+        let authored = PayloadAuthoring::new(header, payload)
+            .complete(instance, &config, &budget, &*self.crypto, &signer)
+            .unwrap_or_else(|(_, error)| {
+                panic!("original lane author signatures/codeword: {error:?}")
+            });
+        drop(authored.codeword);
+        let block = authored.body;
         let block_hash = block.hash(&*self.crypto);
         let outcome = executor.execute(&block, &block_hash);
         let Some(ExecOutcome::Valid(result)) = outcome else {
@@ -280,9 +308,9 @@ impl Fixture {
                 let mut vote = Vote {
                     kind: VoteKind::Commit,
                     instance,
-                    epoch: block.header.epoch,
+                    epoch: block.header().epoch,
                     height,
-                    view: block.header.origin_view,
+                    view: block.header().origin_view,
                     block_hash,
                     result,
                     attest: false,
@@ -486,7 +514,8 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
         tip_result: fixture
             .stores
             .block(LANE, &record.incarnation, 1)
-            .unwrap()
+            .expect("original lane storage read")
+            .expect("certified lane block is present")
             .result
             .0,
     };
@@ -541,7 +570,8 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
         &fixture.chain.state().view(),
         &*fixture.stores,
         fixture.chain.height() + 1,
-    );
+    )
+    .expect("fixture lane storage available");
     assert_eq!(
         proposed,
         MergeProposal {
@@ -665,7 +695,7 @@ fn merged_rejection_event_retains_the_original_native_proposal_header() {
     let scheduled = view.world().consensus_schedule().ready(height).unwrap();
     let cadence = Duration::from_millis(scheduled.params.block_time_ms);
     let parent = fixture.chain.committed(height - 1);
-    let merges = propose(&view, &*fixture.stores, height);
+    let merges = propose(&view, &*fixture.stores, height).expect("fixture lane storage available");
     assert_eq!(merges.transactions, 1);
     // The source and certified lane are genuine. Only the proposed global cadence is
     // invalid, so validation must emit a deterministic rejection after expansion.
@@ -690,6 +720,7 @@ fn merged_rejection_event_retains_the_original_native_proposal_header() {
         parent_hash: parent.core_hash(),
         parent_result: parent.result(),
         payload_hash: payload_hash(&*fixture.crypto, &bytes),
+        availability_digest: Hash32::ZERO,
         payload_len: u32::try_from(bytes.len()).unwrap(),
         proposer: 0,
         skipped_leaders: Vec::new(),
@@ -697,6 +728,13 @@ fn merged_rejection_event_retains_the_original_native_proposal_header() {
             || height == scheduled.epoch.authorization.last_height,
         control_witness: Default::default(),
     };
+    // The negative changes only the global cadence; availability uses the original
+    // chain's authenticated schedule, proposer custody and State allocation pool.
+    let header = fixture
+        .chain
+        .author_payload(header, bytes.clone())
+        .header()
+        .clone();
     let topology = Topology::new(
         fixture
             .chain
@@ -742,4 +780,39 @@ fn merged_rejection_event_retains_the_original_native_proposal_header() {
     );
     assert_eq!(state.state_view_generation(), generation);
     assert_eq!(state.view().height(), 3);
+}
+
+#[test]
+fn leader_proposal_preserves_local_storage_error_instead_of_omitting_lane_work() {
+    struct FailedStore;
+    impl LaneBlockSource for FailedStore {
+        fn tip(&self, _: LaneId, _: &[u8; 32]) -> std::io::Result<Option<u64>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "exact fixture custody failure",
+            ))
+        }
+        fn block(
+            &self,
+            _: LaneId,
+            _: &[u8; 32],
+            _: u64,
+        ) -> std::io::Result<Option<CommittedLaneBlock>> {
+            panic!("tip failure must stop proposal before reading a block")
+        }
+        fn wait_for(&self, _: LaneId, _: &[u8; 32], _: u64, _: Duration) -> std::io::Result<bool> {
+            panic!("proposal does not wait through a storage error")
+        }
+    }
+    let mut fixture = Fixture::start();
+    fixture.chain.commit(Vec::new());
+    fixture.chain.commit(Vec::new());
+    let error = propose(
+        &fixture.chain.state().view(),
+        &FailedStore,
+        fixture.chain.height() + 1,
+    )
+    .expect_err("a leader must not silently omit lane work after a storage failure");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(error.to_string(), "exact fixture custody failure");
 }

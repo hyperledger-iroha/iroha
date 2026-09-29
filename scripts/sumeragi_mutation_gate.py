@@ -21,9 +21,10 @@ Purpose
       survived                 nothing failed;
       error                    it did not build, or a named test filter matched no test.
 
-    The table MUTATIONS mirrors §13.4 (MS*/ML* rows and the MA* rows of the commit-attestation
-    extension, §3.7) plus ME* (the as-built rules E1-E7 of Appendix E, with their regression
-    tests) and MR-* (revision-4 rules with det_r4 tests).
+    The table MUTATIONS mirrors §13.4 (MS*/ML* rows, the MA* rows of the commit-attestation
+    extension, §3.7, and the MX* rows of the simulator's toy AMX application, §11) plus ME*
+    (the as-built rules E1-E7 of Appendix E, with their regression tests) and MR-* (revision-4
+    rules with det_r4 tests).
 
 Prerequisites
     Python 3.9+ (stdlib only) and a working `cargo` for the workspace. Builds go to a dedicated
@@ -98,7 +99,7 @@ SCENARIOS = {
     "f28": "sim::tests::f28_key_rotation",
     "f29": "sim::tests::f29_cpu_flood",
     "f30": "sim::tests::f30_max_size_blocks",
-    "f31": "sim::tests::f31_independent_finality",
+    "f31": "sim::tests::f31_amx_two_phase_commit",
     "f32": "sim::tests::f32_cluster_restart_lock_or_cqc",
     "f33": "sim::tests::f33_hidden_pqc",
     "f34": "sim::tests::f34_late_entrants",
@@ -370,6 +371,31 @@ MUTATIONS = [
       ["det_r4_nested_pqc_timeout_counted", "det_s7_lock_monotone"], ["f07"]),
     m("MR-fresh-nonce", "fake driver: Init.nonce not fresh per start",
       ["det_r4_fresh_nonce_per_init"], ["f24"]),
+    # ---- the toy AMX application of the simulator (§11, sim/amx.rs), oracle O-AMX
+    m("MX1", "GlobalState::vote: one Yes decides Commit",
+      ["det_amx_commit_needs_every_yes"], ["f31"]),
+    m("MX2", "GlobalState::vote: Commit after the deadline",
+      ["det_amx_no_commit_after_deadline"], ["f31"]),
+    m("MX3", "GlobalState::expire: no deadline abort",
+      ["det_amx_deadline_aborts_at_d_plus_1"], ["f31"]),
+    m("MX4", "GlobalState::begin: a second Begin replaces the transaction",
+      ["det_amx_second_begin_rejected"], ["f31"]),
+    m("MX5", "GlobalState::vote: a vote counts without verifying its proof",
+      ["det_amx_forged_vote_rejected"], ["f31"]),
+    m("MX6", "DataspaceState::prepare: a second inclusion of x prepares again",
+      ["det_amx_prepare_once"], ["f31"]),
+    m("MX7", "DataspaceState::prepare: a held decision is ignored",
+      ["det_amx_held_decision_votes_no"], ["f31"]),
+    m("MX8", "DataspaceState::settle: a Yes escrow is applied whatever the decision",
+      ["det_amx_settle_follows_decision"], ["f31"]),
+    m("MX9", "DataspaceState::observe: a local timeout releases a Yes escrow",
+      ["det_amx_no_release_without_abort_proof"], ["f31"]),
+    m("MX10", "Tracker::context: the epoch need not contain the certified height",
+      ["det_amx_tracker_epoch_window"], []),
+    m("MX11", "Tracker::handoff: C_{J,e-1} is not kept",
+      ["det_amx_handoff_keeps_previous_epoch"], []),
+    m("MX12", "Tracker::verify: the result-preimage check deleted",
+      ["det_amx_record_bound_to_result"], ["f31"]),
 ]
 
 BY_ID = {mu.id: mu for mu in MUTATIONS}

@@ -335,7 +335,7 @@ fn valid_block_transaction_events_use_entrypoint_index_after_sealed_commitment()
 }
 
 #[test]
-fn peer_received_v2_block_events_use_committed_route_without_local_routing_state() {
+fn peer_received_block_events_use_committed_route_without_local_routing_state() {
     let route = crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70));
     let (valid, hash) = peer_received_valid_block_with_committed_route(0x06, Some(route));
     let events = valid.produce_events().collect::<Vec<_>>();

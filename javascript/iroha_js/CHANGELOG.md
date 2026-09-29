@@ -4,6 +4,23 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added `getSumeragiLanes()` on `ToriiClient` and `ToriiBrowserClient` plus
+  `parseSumeragiLanesJson`/`parseSumeragiLanesPayload` in `sumeragi-typed`: the
+  operator-signed `GET /v1/sumeragi/lanes` list is validated fail-closed (exact
+  fields, canonical BLS-normal committee keys and 96-byte proofs, exact
+  unsigned ranges) against the shared Rust-generated
+  `fixtures/sumeragi/native_lanes_v1.tsv` corpus. `getSumeragiLeader` and its
+  `ToriiSumeragiLeaderSnapshot`/`ToriiSumeragiPrfContext` types are removed:
+  Torii serves no `/v1/sumeragi/leader` route; the current leader is part of
+  the native status.
+
+- `getSumeragiParams()` returns exactly the served
+  `{ block_cadence_ms, max_clock_drift_ms, chain_height }` snapshot and rejects
+  any other field. The retired `block_time_ms`, `commit_time_ms`,
+  `collectors_k`, `redundant_send_r`, `da_enabled`, `next_mode` and
+  `mode_activation_height` fields are gone, as are the unused
+  `ToriiConsensusCaps` and `ToriiSumeragiCommitQuorumSummary` declarations.
+
 - `validateNoritoFrame` and every Norito decoder built on it accept only the
   Norito v1 header flags `0x00` (fixed-width length prefixes) and `0x02`
   (`COMPACT_LEN`). The retired packed-sequence (`0x01`), packed-struct (`0x04`)

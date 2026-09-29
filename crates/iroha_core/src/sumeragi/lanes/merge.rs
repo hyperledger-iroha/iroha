@@ -49,22 +49,31 @@ pub struct CommittedLaneBlock {
 pub trait LaneBlockSource: Send + Sync {
     /// The committed tip height of incarnation `incarnation` of `lane`, or `None` if the node
     /// does not follow it.
-    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> Option<u64>;
+    ///
+    /// # Errors
+    /// Storage corruption, I/O, unresolved authenticated authority or resource refusal.
+    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> std::io::Result<Option<u64>>;
     /// The committed block at `height`.
+    ///
+    /// # Errors
+    /// Storage corruption, I/O, unresolved authenticated authority or resource refusal.
     fn block(
         &self,
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
-    ) -> Option<CommittedLaneBlock>;
+    ) -> std::io::Result<Option<CommittedLaneBlock>>;
     /// Block until the committed tip reaches `height` or `timeout` passes; whether it did.
+    ///
+    /// # Errors
+    /// Store recovery could not complete; failure is never reported as a missing height.
     fn wait_for(
         &self,
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
         timeout: Duration,
-    ) -> bool;
+    ) -> std::io::Result<bool>;
 }
 
 /// A node that follows no lane.
@@ -72,16 +81,16 @@ pub trait LaneBlockSource: Send + Sync {
 pub struct NoLanes;
 
 impl LaneBlockSource for NoLanes {
-    fn tip(&self, _lane: LaneId, _incarnation: &[u8; 32]) -> Option<u64> {
-        None
+    fn tip(&self, _lane: LaneId, _incarnation: &[u8; 32]) -> std::io::Result<Option<u64>> {
+        Ok(None)
     }
     fn block(
         &self,
         _lane: LaneId,
         _incarnation: &[u8; 32],
         _height: u64,
-    ) -> Option<CommittedLaneBlock> {
-        None
+    ) -> std::io::Result<Option<CommittedLaneBlock>> {
+        Ok(None)
     }
     fn wait_for(
         &self,
@@ -89,14 +98,17 @@ impl LaneBlockSource for NoLanes {
         _incarnation: &[u8; 32],
         _height: u64,
         _timeout: Duration,
-    ) -> bool {
-        false
+    ) -> std::io::Result<bool> {
+        Ok(false)
     }
 }
 
 /// Why a global block's lane merge cannot be expanded.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum MergeError {
+    /// Local storage failed; this does not prove that a peer's global block is invalid.
+    #[error("lane storage failed: {0}")]
+    Storage(#[source] std::io::Error),
     /// The node has not committed the referenced lane blocks yet: execution waits.
     #[error("lane blocks are not available yet: {0}")]
     Pending(String),
@@ -215,6 +227,7 @@ fn block_capacity(world: &impl WorldReadOnly) -> usize {
 /// # Errors
 /// [`MergeError::Pending`] while referenced lane blocks are not committed locally;
 /// [`MergeError::Invalid`] for a malformed merge.
+/// [`MergeError::Storage`] preserves local storage/authority/resource failures unchanged.
 pub fn expand<'state>(
     state: &'state State,
     proposal: &SignedBlock,
@@ -373,14 +386,17 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
 /// `max_merge_blocks` and the block's transaction capacity, and the merged transactions they
 /// reserve. Lanes take turns filling the capacity (rotating by height) so none starves; the
 /// merges themselves are listed in ascending lane order.
-#[must_use]
+///
+/// # Errors
+/// Local storage, unavailable authenticated authority or resource refusal. Scheduler callers
+/// may retry `WouldBlock`; errors must not silently remove an otherwise eligible merge.
 pub fn propose<V: StateReadOnly>(
     view: &V,
     source: &dyn LaneBlockSource,
     height: u64,
-) -> MergeProposal {
+) -> std::io::Result<MergeProposal> {
     let Some(policy) = lane_policy(view.world()) else {
-        return MergeProposal::default();
+        return Ok(MergeProposal::default());
     };
     let capacity = block_capacity(view.world());
     let lanes = view.world().sumeragi_lanes();
@@ -390,7 +406,7 @@ pub fn propose<V: StateReadOnly>(
         .filter(|record| height > record.active_from)
         .collect::<Vec<_>>();
     if active.is_empty() {
-        return MergeProposal::default();
+        return Ok(MergeProposal::default());
     }
     let start = usize::try_from(height % u64::try_from(active.len()).unwrap_or(1)).unwrap_or(0);
     let mut used = 0usize;
@@ -398,7 +414,7 @@ pub fn propose<V: StateReadOnly>(
     let mut merges = Vec::new();
     for offset in 0..active.len() {
         let record = active[(start + offset) % active.len()];
-        let Some(tip) = source.tip(record.lane, &record.incarnation) else {
+        let Some(tip) = source.tip(record.lane, &record.incarnation)? else {
             continue;
         };
         let from = record.merged.height.saturating_add(1);
@@ -410,7 +426,7 @@ pub fn propose<V: StateReadOnly>(
         );
         let mut end = None;
         for lane_height in from..=last {
-            let Some(block) = source.block(record.lane, &record.incarnation, lane_height) else {
+            let Some(block) = source.block(record.lane, &record.incarnation, lane_height)? else {
                 break;
             };
             let fresh = block
@@ -437,11 +453,11 @@ pub fn propose<V: StateReadOnly>(
         }
     }
     merges.sort_by_key(|merge| merge.lane);
-    MergeProposal {
+    Ok(MergeProposal {
         merges,
         transactions: used,
         time_floor_ms,
-    }
+    })
 }
 
 /// One millisecond after the latest creation time among `transactions` (`0` for none).
@@ -495,14 +511,20 @@ fn load(
         if merge.len() > u64::from(policy.max_merge_blocks) {
             return Err(invalid(lane, "the range exceeds max_merge_blocks"));
         }
-        if !source.wait_for(lane, &merge.incarnation, merge.to, wait) {
+        if !source
+            .wait_for(lane, &merge.incarnation, merge.to, wait)
+            .map_err(MergeError::Storage)?
+        {
             return Err(MergeError::Pending(format!(
                 "lane {lane} has not committed height {}",
                 merge.to
             )));
         }
         for lane_height in merge.from..=merge.to {
-            let Some(block) = source.block(lane, &merge.incarnation, lane_height) else {
+            let Some(block) = source
+                .block(lane, &merge.incarnation, lane_height)
+                .map_err(MergeError::Storage)?
+            else {
                 return Err(MergeError::Pending(format!(
                     "lane {lane} block {lane_height} is not in the local store"
                 )));
@@ -560,3 +582,7 @@ impl Admissibility {
 #[cfg(test)]
 #[path = "merge_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "merge_storage_tests.rs"]
+mod storage_tests;

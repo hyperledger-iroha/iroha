@@ -6801,7 +6801,7 @@ pub struct BlockSync {
 pub struct DataspaceGossip {
     /// Drop gossip for unknown dataspaces instead of falling back to restricted routing.
     pub drop_unknown_dataspace: bool,
-    /// Optional cap on the number of peers targeted for restricted gossip (None = commit topology).
+    /// Optional cap on restricted gossip targets (None = all authorized native lane validators).
     pub restricted_target_cap: Option<NonZeroUsize>,
     /// Optional cap on the number of peers targeted for public gossip (None = broadcast).
     pub public_target_cap: Option<NonZeroUsize>,
@@ -6809,39 +6809,7 @@ pub struct DataspaceGossip {
     pub public_target_reshuffle: Duration,
     /// Interval between reshuffles of restricted gossip target selection.
     pub restricted_target_reshuffle: Duration,
-    /// Fallback policy when restricted targets are unavailable.
-    pub restricted_fallback: DataspaceGossipFallback,
-    /// Policy for restricted payloads when only the public overlay is available.
-    pub restricted_public_payload: RestrictedPublicPayload,
 }
-/// Fallback behaviour when restricted routing cannot determine targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DataspaceGossipFallback {
-    /// Drop the batch and retry later.
-    Drop,
-    /// Use the public overlay targets when commit topology is unavailable.
-    UsePublicOverlay,
-}
-impl_default!(DataspaceGossipFallback => {
-        match defaults::network::TX_GOSSIP_RESTRICTED_FALLBACK {
-            "public_overlay" => Self::UsePublicOverlay,
-            _ => Self::Drop,
-        }
-});
-/// Action to take when restricted gossip can only target the public overlay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RestrictedPublicPayload {
-    /// Refuse to leak the payload onto the public overlay.
-    Refuse,
-    /// Forward to the public overlay (assumes operators provision their own payload protection).
-    Forward,
-}
-impl_default!(RestrictedPublicPayload => {
-        match defaults::network::TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD {
-            "forward" => Self::Forward,
-            _ => Self::Refuse,
-        }
-});
 impl_default!(DataspaceGossip => {
         Self {
             drop_unknown_dataspace: defaults::network::TX_GOSSIP_DROP_UNKNOWN_DATASPACE,
@@ -6849,8 +6817,6 @@ impl_default!(DataspaceGossip => {
             public_target_cap: defaults::network::TX_GOSSIP_PUBLIC_TARGET_CAP,
             public_target_reshuffle: defaults::network::TX_GOSSIP_PUBLIC_TARGET_RESHUFFLE,
             restricted_target_reshuffle: defaults::network::TX_GOSSIP_RESTRICTED_TARGET_RESHUFFLE,
-            restricted_fallback: DataspaceGossipFallback::default(),
-            restricted_public_payload: RestrictedPublicPayload::default(),
         }
 });
 /// Transaction gossiping parameters.

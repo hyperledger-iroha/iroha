@@ -391,13 +391,15 @@ impl CanonicalKuraEvidenceReader {
                     && if height == 1 {
                         certificate.consensus_header().is_empty()
                             && certificate.commit_qc().is_empty()
+                            && certificate.availability().is_empty()
                     } else {
                         !certificate.consensus_header().is_empty()
                             && !certificate.commit_qc().is_empty()
+                            && !certificate.availability().is_empty()
                     },
                 "native commit certificate shape",
             )?;
-            // The exact three native artifact byte strings remain inside the unchanged wire.
+            // The exact four native artifact byte strings remain inside the unchanged wire.
             // Presence/shape and disk association do not authenticate their signatures or result.
             self.add_output(wire.len())?;
             let result = consume(wire)?;

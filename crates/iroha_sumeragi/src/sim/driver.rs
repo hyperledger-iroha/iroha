@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, VecDeque};
 use crate::message::TrafficClass;
 use crate::{
     api::{Action, Event, ExecOutcome},
-    message::{Block, Qc, WireMessage},
+    availability::AvailableBody,
+    message::{Qc, WireMessage},
     safety::SafetyRecord,
     testing::{Executed, sha256},
     types::{Hash32, Millis, PublicKey},
@@ -221,9 +222,9 @@ pub enum Write {
     /// A safety record for a key.
     Record(Box<SafetyRecord>, Vec<u8>),
     /// A block body.
-    Body(Box<Block>),
+    Body(Box<AvailableBody>),
     /// A committed block and its `CommitQC` (block store), then apply.
-    Commit(Box<(Block, Qc)>),
+    Commit(Box<(AvailableBody, Qc)>),
     /// A write of a host that owns its scheduling (§13.5): operation id, whether it succeeds
     /// (a failed write stores nothing), and what it writes.
     Owned {
@@ -242,9 +243,9 @@ pub enum OwnedWrite {
     /// A safety record and its encoding.
     Record(Box<SafetyRecord>, Vec<u8>),
     /// A block body.
-    Body(Box<Block>),
+    Body(Box<AvailableBody>),
     /// A committed block and its `CommitQC`, appended to the block store (no apply).
-    Append(Box<(Block, Qc)>),
+    Append(Box<(AvailableBody, Qc)>),
 }
 
 /// The write device of a replica: FIFO completion; a write is durable at its completion and
@@ -286,7 +287,11 @@ impl Io {
     }
 
     /// A body in a pending (not yet durable) write.
-    pub fn pending_body(&self, bh: &Hash32, crypto: &dyn crate::crypto::Crypto) -> Option<Block> {
+    pub fn pending_body(
+        &self,
+        bh: &Hash32,
+        crypto: &dyn crate::crypto::Crypto,
+    ) -> Option<AvailableBody> {
         self.pending.iter().find_map(|(_, _, w)| match w {
             Write::Body(block)
             | Write::Owned {
@@ -355,12 +360,12 @@ impl Barrier {
 /// One execution request.
 #[derive(Clone, Debug)]
 pub struct Job {
-    /// Block hash.
+    /// AvailableBody hash.
     pub bh: Hash32,
     /// Request id of the `Execute`.
     pub req: u64,
     /// The block.
-    pub block: Block,
+    pub block: AvailableBody,
     /// Cancelled while running.
     pub cancelled: bool,
     /// Job id.
@@ -394,7 +399,7 @@ pub struct Executor {
 
 impl Executor {
     /// Queue an `Execute`.
-    pub fn submit(&mut self, bh: Hash32, req: u64, block: Block) {
+    pub fn submit(&mut self, bh: Hash32, req: u64, block: AvailableBody) {
         self.next_job += 1;
         self.queue.push(Job {
             bh,
@@ -410,7 +415,7 @@ impl Executor {
     /// answer `Cancelled` at once; a running job is flagged and answered when it finishes, or,
     /// with `abort`, aborted and answered at once too (the executor is then free).
     pub fn discard(&mut self, height: u64, keep: &[Hash32], abort: bool) -> Vec<(Hash32, u64)> {
-        let drop = |job: &Job| job.block.header.height == height && !keep.contains(&job.bh);
+        let drop = |job: &Job| job.block.header().height == height && !keep.contains(&job.bh);
         let mut cancelled = Vec::new();
         for list in [&mut self.queue, &mut self.parked] {
             list.retain(|job| {
@@ -519,17 +524,18 @@ pub fn payload_mints(payload: &[u8]) -> bool {
 /// the application's payload-or-boundary flag rule ([`payload_mints`]), otherwise [`reference_exec`].
 pub fn block_exec(
     parent_result: &Hash32,
-    block: &Block,
+    block: &AvailableBody,
     epoch: &crate::types::EpochConfig,
 ) -> ExecOutcome {
-    if block.header.epoch != epoch.id
-        || !epoch.contains(block.header.height)
-        || block.header.attest
-            != (payload_mints(&block.payload) || block.header.height == epoch.last_height)
+    if block.header().epoch != epoch.id
+        || !epoch.contains(block.header().height)
+        || block.header().attest
+            != (payload_mints(&block.payload().as_slice())
+                || block.header().height == epoch.last_height)
     {
         return ExecOutcome::Invalid;
     }
-    reference_exec(parent_result, &block.payload)
+    reference_exec(parent_result, &block.payload().as_slice())
 }
 
 /// The deterministic reference execution `R = H(parent_R ‖ payload)`; `Invalid` iff the
@@ -592,7 +598,7 @@ mod tests {
     fn lanes_priority_and_bounds() {
         let k = PublicKey::new(vec![1; 32]).unwrap();
         let mut lanes = Lanes::default();
-        let req = WireMessage::BlockRequest(crate::message::BlockRequest {
+        let req = WireMessage::PayloadRequest(crate::message::PayloadRequest {
             instance: Hash32::ZERO,
             height: 1,
             block_hash: Hash32::ZERO,
@@ -613,8 +619,8 @@ mod tests {
     fn io_barrier() {
         let mut io = Io::default();
         let mut barrier = Barrier::default();
-        let block = Block {
-            header: BlockHeader {
+        let block = fixture_body(
+            BlockHeader {
                 control_witness: crate::types::ControlWitness::empty(),
                 epoch: crate::testing::TEST_EPOCH.id,
                 instance: Hash32::ZERO,
@@ -623,13 +629,14 @@ mod tests {
                 parent_hash: Hash32::ZERO,
                 parent_result: Hash32::ZERO,
                 payload_hash: Hash32::ZERO,
+                availability_digest: crate::types::Hash32::ZERO,
                 payload_len: 0,
                 proposer: 0,
                 skipped_leaders: Vec::new(),
                 attest: false,
             },
-            payload: Vec::new(),
-        };
+            &encode_tx(1, false, 0),
+        );
         let (b, t1) = io.write(0, 5, Write::Body(Box::new(block.clone())));
         assert!(
             barrier
@@ -681,31 +688,34 @@ mod tests {
             parent_hash: Hash32::ZERO,
             parent_result: Hash32::ZERO,
             payload_hash: Hash32::ZERO,
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: 0,
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: false,
         };
-        let block = |attest: bool, payload: Vec<u8>| Block {
-            header: BlockHeader {
-                attest,
-                ..header.clone()
-            },
-            payload,
+        let block = |attest: bool, payload: Vec<u8>| {
+            fixture_body(
+                BlockHeader {
+                    attest,
+                    ..header.clone()
+                },
+                &payload,
+            )
         };
         let parent = Hash32([1; 32]);
         assert_eq!(
             block_exec(
                 &parent,
-                &block(false, Vec::new()),
+                &block(false, encode_tx(0, false, 0)),
                 &crate::testing::TEST_EPOCH
             ),
-            reference_exec(&parent, &[])
+            reference_exec(&parent, &encode_tx(0, false, 0))
         );
         assert_eq!(
             block_exec(
                 &parent,
-                &block(true, Vec::new()),
+                &block(true, encode_tx(0, false, 0)),
                 &crate::testing::TEST_EPOCH
             ),
             ExecOutcome::Invalid
@@ -752,4 +762,28 @@ mod tests {
             ExecOutcome::Valid(_)
         ));
     }
+}
+
+#[cfg(test)]
+pub(super) fn fixture_body(
+    mut header: crate::message::BlockHeader,
+    payload: &[u8],
+) -> AvailableBody {
+    let keys = crate::testing::FakeValidators::new(4, 7, None);
+    let config = crate::types::HeightConfig {
+        epoch: Box::new(crate::testing::TEST_EPOCH),
+        committee: keys.committee.clone(),
+        params: crate::types::ChainParams::default(),
+    };
+    header.payload_hash = crate::preimage::payload_hash(&keys.crypto, payload);
+    header.payload_len = payload.len() as u32;
+    let signer = keys.signer(header.proposer);
+    crate::testing::author_body(
+        header,
+        payload,
+        &config,
+        &mv::allocation::AllocationBudget::new(1 << 24),
+        &keys.crypto,
+        signer,
+    )
 }

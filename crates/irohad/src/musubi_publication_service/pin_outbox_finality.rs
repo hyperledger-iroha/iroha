@@ -121,7 +121,7 @@ impl MusubiPublicationPinOutboxHighWaterReaderV1 {
     /// Read the current signer lineage together with an authenticated local finality tip.
     ///
     /// State and Kura must have the same durable height throughout the read. The tip's exact
-    /// canonical block and cryptographically verified V2 finality artifact are checked even when
+    /// canonical block and cryptographically verified Sumeragi finality proof are checked even when
     /// this publisher has no high-water record. This local tip is an input to, not a replacement
     /// for, an independently current network checkpoint.
     ///

@@ -36,9 +36,11 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   `iroha_core::sumeragi` node driver. Lanes are separate core instances whose
   certified blocks the global chain merges (`specs/sumeragi_lanes.md`). Signed
   RS16 `PayloadManifest`/`PayloadChunk` payload availability remains a
-  first-release requirement that the core's full-body transport does not
-  integrate yet (goals, open question 8); raw full-body dissemination is not
-  its qualified replacement. Consensus faults are injected only in the
+  mandatory first-release requirement. The Core/worker integration candidate
+  replaces raw full-body transport with signed availability metadata, actual
+  row acquisition and opaque source-bound custody. Whole-node/network
+  qualification and the unchanged 8,000-line core gate remain open; component
+  tests alone do not establish release or settlement readiness. Consensus faults are injected only in the
   deterministic simulator, never through node configuration.
 - IVM is the Iroha Virtual Machine for Hyperledger Iroha 3.
 - Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.

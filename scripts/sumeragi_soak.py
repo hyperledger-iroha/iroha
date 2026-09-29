@@ -68,15 +68,28 @@ EXIT_OK = 0
 EXIT_VIOLATION = 1
 EXIT_HARNESS = 2
 
+# The node logger of every peer: JSON lines with the audit filter (``[logger]`` keys). The same
+# values are exported as ``LOG_FORMAT``, ``LOG_LEVEL`` and ``LOG_FILTER`` to the start script,
+# because a node's environment overrides its config file and the generated start script
+# exports ``LOG_LEVEL`` and ``LOG_FILTER`` (empty when unset, which would drop the DEBUG
+# durable-record lines and blind O-SIGN).
+NODE_LOGGER = {"format": "json", "level": "info", "filter": logs.AUDIT_LOG_FILTER}
+# The generated client account starts with a small fee-asset allocation that a sustained load
+# spends within minutes (about 0.002 per `Log` transaction at the default fee schedule); the
+# schedule is part of the execution policy genesis signs, so the soak funds the account instead
+# of quoting zero fees. One million covers a 24 h gate at 20 transactions per second 10 times over.
+DEFAULT_FUND = "1000000"
+NODE_LOGGER_ENV = {f"LOG_{key.upper()}": value for key, value in NODE_LOGGER.items()}
+
 # Profiles: presets that explicit options override.
 PROFILES: dict[str, dict[str, Any]] = {
     "smoke": {
         "duration": "5m",
         "warmup": "45s",
-        "final_quiet": "60s",
+        "final_quiet": "100s",
         "fault_window": (15.0, 30.0),
         "fault_gap": (20.0, 40.0),
-        "live_bound": "120s",
+        "live_bound": "90s",
         "max_gap_p99_ms": 10_000.0,
         "max_gap_ms": 60_000.0,
         "max_latency_p99_ms": 60_000.0,
@@ -84,11 +97,13 @@ PROFILES: dict[str, dict[str, Any]] = {
         "warmup_heights": 5,
         "load_tps": 10.0,
         "disk_size_mb": 2048,
+        "storage_budget_mb": 1024,
     },
     "gate": {
         "duration": "24h",
         "warmup": "120s",
-        "final_quiet": "15m",
+        # Longer than B_live for every committee of 4..31 (at most about 17.8 min at n = 31).
+        "final_quiet": "20m",
         "fault_window": (15.0, 60.0),
         "fault_gap": (60.0, 180.0),
         "live_bound": None,  # the §8.2 bound
@@ -97,8 +112,12 @@ PROFILES: dict[str, dict[str, Any]] = {
         "max_latency_p99_ms": 15_000.0,
         "min_tps_ratio": 0.5,
         "warmup_heights": 20,
-        "load_tps": 50.0,
+        "load_tps": 20.0,
         "disk_size_mb": 16_384,
+        # Kura gets a quarter of the budget (the default Nexus storage weights) and keeps about
+        # 1 KiB per committed transaction: 3 GiB hold a day at 20 transactions per second
+        # (about 1.7 GiB) with room to spare.
+        "storage_budget_mb": 12_288,
     },
 }
 
@@ -177,9 +196,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-kill", type=int, default=None, help="validators killed at once at most (default 1, capped at f)")
     parser.add_argument("--disk-node", type=int, default=None, help="peer index whose state lives on the size-limited volume (default: the last peer)")
     parser.add_argument("--disk-size-mb", type=int, help="size of the disk-full volume")
+    parser.add_argument(
+        "--storage-budget-mb",
+        type=int,
+        help="nexus.storage.local_budget_bytes of every peer in MiB; must fit on the disk-full volume",
+    )
     parser.add_argument("--reset-ratio", type=float, default=0.005, help="proxy: connection resets per chunk as a fraction of the loss (default 0.005)")
     parser.add_argument("--load-tps", type=float, help="offered transactions per second")
     parser.add_argument("--probe-interval", type=parse_duration, default=10.0, help="interval of commit-latency probes")
+    parser.add_argument("--fee-payer", default="authority", help="fee source of the load's transactions (iroha tx --fee-payer)")
+    parser.add_argument(
+        "--fund",
+        default=DEFAULT_FUND,
+        help=f"fee-asset quantity the genesis account mints to the load's account before the load starts (0: none; default {DEFAULT_FUND})",
+    )
     parser.add_argument("--live-bound", type=parse_duration, help="O-LIVE bound (default: B_live of spec §8.2 for the committee size)")
     parser.add_argument("--live-lag-heights", type=int, default=64, help="lag term of B_live in heights (default one sync batch)")
     parser.add_argument("--max-gap-p99-ms", type=float, help="O-PERF: p99 commit gap in fault-free intervals")
@@ -228,13 +258,50 @@ def set_toml_keys(text: str, section: str, values: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def literal_checksum(tag: str, body: str) -> str:
+    """The checksum of a Norito literal ``<tag>:<body>#<crc>``: CRC-16 (polynomial 0x1021,
+    initial value 0xFFFF) over ``<tag>:<body>``, four uppercase hex digits
+    (``crates/norito/src/literal.rs``)."""
+    crc = 0xFFFF
+    for byte in f"{tag}:{body}".encode():
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return f"{crc:04X}"
+
+
+def addr_literal(host: str, port: int) -> str:
+    """The canonical address literal ``addr:<host>:<port>#<crc>`` of the node configuration."""
+    body = f"{host}:{port}"
+    return f"addr:{body}#{literal_checksum('addr', body)}"
+
+
+_ADDR_LITERAL_RE = re.compile(r"addr:(?P<host>[^\s\"'#]+):(?P<port>\d+)#(?P<crc>[0-9A-Fa-f]{4})")
+_PLAIN_ADDR_RE = re.compile(r"(?P<host>(?<=[\"'@])[\w.\-]+|\[[0-9A-Fa-f:.]+\]):(?P<port>\d+)(?=[\"'])")
+
+
 def rewrite_p2p_ports(text: str, mapping: dict[int, int]) -> str:
     """Point every advertised P2P address of the ports in ``mapping`` at the mapped proxy port.
 
-    Every ``host:port`` string literal with a mapped port is rewritten (``trusted_peers``
-    entries and ``network.public_address``) except the bind address ``network.address``, so
-    each peer still listens on its own port while every peer dials the proxies.
+    Every address with a mapped port is rewritten — the checksummed literals
+    ``addr:<host>:<port>#<crc>`` of the node configuration (with a recomputed checksum) and
+    plain ``host:port`` strings — in ``trusted_peers`` and ``network.public_address``, but not
+    the bind address ``network.address``: each peer still listens on its own port while every
+    peer dials the proxies.
     """
+
+    def literal(match: re.Match[str]) -> str:
+        port = int(match["port"])
+        if port not in mapping:
+            return match.group(0)
+        return addr_literal(match["host"], mapping[port])
+
+    def plain(match: re.Match[str]) -> str:
+        port = int(match["port"])
+        if port not in mapping:
+            return match.group(0)
+        return f"{match['host']}:{mapping[port]}"
+
     lines = text.splitlines()
     section = None
     for index, line in enumerate(lines):
@@ -245,15 +312,57 @@ def rewrite_p2p_ports(text: str, mapping: dict[int, int]) -> str:
         key = stripped.split("=", 1)[0].strip() if "=" in stripped else None
         if section == "network" and key == "address":
             continue
-        for port, proxy in mapping.items():
-            line = re.sub(rf"(?<=[\w.\]]):{port}(?=[\"'])", f":{proxy}", line)
-        lines[index] = line
+        rewritten = _ADDR_LITERAL_RE.sub(literal, line)
+        if rewritten == line:
+            rewritten = _PLAIN_ADDR_RE.sub(plain, line)
+        lines[index] = rewritten
     return "\n".join(lines) + "\n"
 
 
 def toml_string(value: str) -> str:
     """A TOML basic string."""
     return json.dumps(value)
+
+
+_TOML_HEADER_RE = re.compile(r"^(?P<open>\[\[?)\s*(?P<name>[A-Za-z0-9_.\-]+)\s*\]\]?\s*(#.*)?$")
+
+
+def toml_string_value(text: str, section: str, key: str) -> Optional[str]:
+    """The basic-string value of ``key`` in ``[section]`` of ``text`` (``None`` when absent)."""
+    current = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        header = _TOML_HEADER_RE.match(stripped)
+        if header is not None:
+            # An array-of-tables entry ([[name]]) is never the plain table asked for.
+            current = header["name"] if header["open"] == "[" else f"[[{header['name']}]]"
+            continue
+        if current != section or "=" not in stripped:
+            continue
+        name, value = (part.strip() for part in stripped.split("=", 1))
+        if name == key:
+            match = re.match(r'"((?:[^"\\]|\\.)*)"', value)
+            return json.loads(f'"{match.group(1)}"') if match else None
+    return None
+
+
+def absolutize_path_key(text: str, key: str, base: Path) -> str:
+    """Make the first ``key = "<path>"`` of ``text`` absolute against ``base`` (a relative path
+    names a file next to the original config, which a copy elsewhere must still name)."""
+
+    def absolute(match: re.Match[str]) -> str:
+        path = Path(match["path"])
+        if path.is_absolute():
+            return match.group(0)
+        return match["key"] + toml_string(str(base / path))
+
+    return re.sub(
+        rf'^(?P<key>{re.escape(key)}\s*=\s*)"(?P<path>[^"]*)"',
+        absolute,
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -286,6 +395,29 @@ class BootRecord:
 def now_ms() -> float:
     """Wall clock in milliseconds (log timestamps are wall clock too)."""
     return time.time() * 1000.0
+
+
+def process_running(pid: int) -> bool:
+    """Whether ``pid`` exists and is not a zombie.
+
+    Peers are started by the start script's launcher, which exits, so their parent is the
+    init process of the (container's) PID namespace; one that never reaps would leave a killed
+    peer as a zombie forever, which ``kill(pid, 0)`` still reports as present.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    stat = Path(f"/proc/{pid}/stat")
+    if stat.exists():
+        try:
+            state = stat.read_text().rsplit(")", 1)[1].split()[0]
+        except (OSError, IndexError):
+            return True
+        return state not in ("Z", "X")
+    return True
 
 
 def port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -364,8 +496,16 @@ class Localnet:
         if not (self.net_dir / "start.sh").is_file():
             raise RuntimeError("kagami localnet wrote no start.sh")
 
-    def patch_configs(self, proxy_ports: Optional[dict[int, int]]) -> None:
-        """JSON logs with the audit filter; in proxy mode, advertised P2P ports at the proxies."""
+    def patch_configs(self, proxy_ports: Optional[dict[int, int]], storage_budget_bytes: int) -> None:
+        """JSON logs with the audit filter, an explicit Nexus storage budget, no SCCP light-client
+        keeper and, in proxy mode, advertised P2P ports at the proxies.
+
+        All of these are node-local (outside the execution policy that genesis signs). Without
+        the budget a node derives one from the free space of its filesystem and refuses to start
+        when the reserved headroom leaves none, which a nearly full host or the disk-full peer's
+        small volume would. The keeper polls public Ethereum RPC endpoints by default, which a
+        consensus soak must not depend on or contact.
+        """
         mapping = (
             {self.p2p_port(index): proxy_ports[index] for index in range(self.validators)}
             if proxy_ports
@@ -375,20 +515,42 @@ class Localnet:
             path = self.config(index)
             text = path.read_text()
             text = set_toml_keys(
-                text,
-                "logger",
-                {
-                    "format": toml_string("json"),
-                    "level": toml_string("info"),
-                    "filter": toml_string(logs.AUDIT_LOG_FILTER),
-                },
+                text, "logger", {key: toml_string(value) for key, value in NODE_LOGGER.items()}
             )
+            text = set_toml_keys(text, "nexus.storage", {"local_budget_bytes": str(storage_budget_bytes)})
+            text = set_toml_keys(text, "sccp.light_client_keeper", {"enabled": "false"})
             if mapping:
                 text = rewrite_p2p_ports(text, mapping)
             path.write_text(text)
 
+    def move_kura_into_state(self, index: int) -> Path:
+        """Put a peer's Kura store (and with it the sibling Sumeragi body store) under its state
+        root, so that one volume holds every durable consensus file of the peer: blocks,
+        bodies, safety records and the installation log."""
+        path = self.config(index)
+        target = self.state_dir(index) / "kura"
+        text = path.read_text()
+        match = re.search(r'(?ms)^\[kura\]\s*$.*?^store_dir\s*=\s*"([^"]*)"', text)
+        if match is None:
+            raise RuntimeError(f"{path} has no [kura] store_dir")
+        source = Path(match.group(1))
+        if not source.is_absolute():
+            source = (path.parent / source).resolve()
+        text = set_toml_keys(text, "kura", {"store_dir": toml_string(str(target))})
+        path.write_text(text)
+        self.state_dir(index).mkdir(parents=True, exist_ok=True)
+        if source.exists():
+            shutil.move(str(source), str(target))
+        return target
+
     def client_config(self, index: int) -> Path:
-        """A client config that talks to peer ``index``'s Torii."""
+        """A client config that talks to peer ``index``'s Torii.
+
+        The copy lives outside the network directory, so its relative ``network_id_file`` is
+        made absolute (the client resolves paths against the config's directory). It holds the
+        client's private key: it is written owner-only and renamed into place, so a concurrent
+        caller never reads a partial file.
+        """
         path = self.run_dir / "clients" / f"client{index}.toml"
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -400,8 +562,12 @@ class Localnet:
                 count=1,
                 flags=re.MULTILINE,
             )
-            path.write_text(text)
-            os.chmod(path, 0o600)
+            text = absolutize_path_key(text, "network_id_file", self.net_dir)
+            staging = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
+            descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w") as handle:
+                handle.write(text)
+            os.replace(staging, path)
         return path
 
     def _rotate_log(self, index: int, boot: int) -> None:
@@ -423,6 +589,7 @@ class Localnet:
         env = dict(os.environ)
         env["IROHAD_BIN"] = str(self.bins["iroha3d"])
         env["IROHA_CLI"] = str(self.bins["iroha"])
+        env.update(NODE_LOGGER_ENV)
         result = subprocess.run(
             ["bash", str(self.net_dir / "start.sh"), "--peer-index", str(index)],
             cwd=self.net_dir,
@@ -443,17 +610,9 @@ class Localnet:
             peer.killed = False
 
     def alive(self, index: int) -> bool:
-        """Whether the peer's process exists."""
+        """Whether the peer's process runs (a zombie nobody reaped yet counts as gone)."""
         pid = self.peers[index].pid
-        if pid is None:
-            return False
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
+        return pid is not None and process_running(pid)
 
     def _end_boot(self, index: int, ended: str) -> None:
         peer = self.peers[index]
@@ -511,6 +670,61 @@ class Localnet:
             if peer.boot >= 0:
                 self._rotate_log(peer.index, peer.boot)
 
+    def fee_asset_id(self) -> str:
+        """The fee asset of the network: ``[nexus.fees] fee_asset_id`` of a peer config, or the
+        asset the generated faucet dispenses (``[torii.faucet] asset_definition_id``), which
+        kagami sets to the fee asset."""
+        text = self.config(0).read_text()
+        for section, key in (("nexus.fees", "fee_asset_id"), ("torii.faucet", "asset_definition_id")):
+            value = toml_string_value(text, section, key)
+            if value:
+                return value
+        raise RuntimeError(f"{self.config(0)} names no fee asset ([nexus.fees] fee_asset_id or [torii.faucet])")
+
+    def _cli_output(self, config: Path, arguments: list[str], timeout: float) -> str:
+        result = subprocess.run(
+            [str(self.bins["iroha"]), "--config", str(config), *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"iroha {' '.join(arguments[:3])} failed ({result.returncode}): "
+                + (result.stdout + result.stderr).strip()[-600:]
+            )
+        return result.stdout
+
+    def fund_load_account(self, quantity: str) -> dict[str, str]:
+        """Mint ``quantity`` of the fee asset to the load's account (the generated client),
+        signed by the genesis account, which registered the fee asset in genesis and so may
+        mint it; returns what was minted to whom.
+
+        The genesis key pair (``genesis.public_key``, ``genesis.private_key`` of the network
+        directory) signs through an owner-only copy of the client config.
+        """
+        client = self.client_config(0)
+        public_key = toml_string_value(client.read_text(), "account", "public_key")
+        if not public_key:
+            raise RuntimeError(f"{client} has no [account] public_key")
+        account = self._cli_output(client, ["tools", "address", "convert", public_key], 60).strip().splitlines()[-1]
+        asset = self.fee_asset_id()
+        funder = self.run_dir / "clients" / "funder.toml"
+        text = client.read_text()
+        for key, source in (("public_key", "genesis.public_key"), ("private_key", "genesis.private_key")):
+            value = (self.net_dir / source).read_text().strip()
+            text = set_toml_keys(text, "account", {key: toml_string(value)})
+        descriptor = os.open(funder, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(text)
+        self._cli_output(
+            funder,
+            ["ledger", "asset", "mint", "--definition", asset, "--account", account, "--quantity", quantity, "--fee-payer", "authority"],
+            300,
+        )
+        return {"account": account, "asset": asset, "quantity": quantity}
+
     def kill_everything(self) -> None:
         """Last-resort cleanup: SIGKILL every known peer process."""
         for peer in self.peers:
@@ -551,9 +765,10 @@ class LoadGenerator(threading.Thread):
     """Offers ``tps`` Log transactions per second through the CLI, rotating over live peers,
     probes commit latency and samples the committed-transaction counters."""
 
-    def __init__(self, net: Localnet, tps: float, probe_interval_s: float, record_path: Path) -> None:
+    def __init__(self, net: Localnet, tps: float, probe_interval_s: float, record_path: Path, fee_payer: str = "authority") -> None:
         super().__init__(name="sumeragi-soak-load", daemon=True)
         self.net = net
+        self.fee_payer = fee_payer
         self.tps = tps
         self.probe_interval_s = probe_interval_s
         self.record_path = record_path
@@ -593,7 +808,7 @@ class LoadGenerator(threading.Thread):
         try:
             result = self._cli(
                 index,
-                ["tx", "ping", "--msg", f"soak-{self.sequence}", "--count", str(count), "--parallel", str(min(count, 8)), "--no-wait"],
+                ["tx", "--fee-payer", self.fee_payer, "ping", "--msg", f"soak-{self.sequence}", "--count", str(count), "--parallel", str(min(count, 8)), "--no-wait"],
                 timeout=60,
             )
         except subprocess.TimeoutExpired:
@@ -618,7 +833,7 @@ class LoadGenerator(threading.Thread):
         self.sequence += 1
         start = now_ms()
         try:
-            result = self._cli(index, ["tx", "ping", "--msg", f"soak-probe-{self.sequence}"], timeout=120)
+            result = self._cli(index, ["tx", "--fee-payer", self.fee_payer, "ping", "--msg", f"soak-probe-{self.sequence}"], timeout=120)
             ok = result.returncode == 0
         except subprocess.TimeoutExpired:
             ok = False
@@ -692,6 +907,8 @@ class Options:
     thresholds: logs.Thresholds
     load_tps: float
     disk_size_mb: int
+    storage_budget_mb: int
+    fund: str
     kinds: tuple[str, ...]
     net_mode: str
     seed: int
@@ -726,6 +943,15 @@ def resolve_options(args: argparse.Namespace) -> Options:
         live_bound_ms = parse_duration(profile["live_bound"]) * 1000.0
     else:
         live_bound_ms = logs.live_bound_ms(logs.LiveBoundParams(n=args.validators, lag_heights=args.live_lag_heights))
+    # O-LIVE judges only a fault-free interval at least as long as its bound: the final one
+    # (the whole run without faults) must be, or a stall could never fail the run.
+    judged_s = final_quiet if kinds else duration
+    if judged_s * 1000.0 < live_bound_ms:
+        raise SystemExit(
+            f"the final fault-free interval ({judged_s:.0f} s) is shorter than the O-LIVE bound "
+            f"({live_bound_ms / 1000.0:.0f} s), so O-LIVE could never judge a stall; "
+            "raise --final-quiet (--duration without faults) or lower --live-bound"
+        )
     load_tps = args.load_tps if args.load_tps is not None else profile["load_tps"]
     min_tps = args.min_tps if args.min_tps is not None else round(load_tps * profile["min_tps_ratio"], 3)
     thresholds = logs.Thresholds(
@@ -736,6 +962,21 @@ def resolve_options(args: argparse.Namespace) -> Options:
         min_tps=min_tps,
         warmup_heights=args.warmup_heights if args.warmup_heights is not None else profile["warmup_heights"],
     )
+    disk_size_mb = args.disk_size_mb if args.disk_size_mb is not None else profile["disk_size_mb"]
+    storage_budget_mb = (
+        args.storage_budget_mb if args.storage_budget_mb is not None else profile["storage_budget_mb"]
+    )
+    if storage_budget_mb <= 0 or disk_size_mb <= 0:
+        raise SystemExit("--storage-budget-mb and --disk-size-mb must be positive")
+    if "disk" in kinds and storage_budget_mb >= disk_size_mb:
+        # The disk-full peer must reach ENOSPC only when a disk fault fills its volume, never
+        # by growing within its storage budget.
+        raise SystemExit(
+            f"--storage-budget-mb ({storage_budget_mb}) must be below --disk-size-mb ({disk_size_mb})"
+        )
+    fund = str(args.fund).strip()
+    if not re.fullmatch(r"\d+(\.\d+)?", fund):
+        raise SystemExit(f"--fund must be a non-negative decimal quantity, got {args.fund!r}")
     f = faults.max_faulty(args.validators)
     disk_node = args.disk_node if args.disk_node is not None else args.validators - 1
     if not 0 <= disk_node < args.validators:
@@ -748,7 +989,9 @@ def resolve_options(args: argparse.Namespace) -> Options:
         fault_gap=args.fault_gap or profile["fault_gap"],
         thresholds=thresholds,
         load_tps=load_tps,
-        disk_size_mb=args.disk_size_mb or profile["disk_size_mb"],
+        disk_size_mb=disk_size_mb,
+        storage_budget_mb=storage_budget_mb,
+        fund=fund,
         kinds=kinds,
         net_mode=net_mode,
         seed=seed,
@@ -756,7 +999,12 @@ def resolve_options(args: argparse.Namespace) -> Options:
         loss=args.loss,
         max_kill=min(args.max_kill if args.max_kill is not None else 1, f),
         disk_node=disk_node if "disk" in kinds else None,
-        extra={"reset_ratio": args.reset_ratio, "probe_interval_s": args.probe_interval, "profile": args.profile},
+        extra={
+            "reset_ratio": args.reset_ratio,
+            "probe_interval_s": args.probe_interval,
+            "profile": args.profile,
+            "fee_payer": args.fee_payer,
+        },
     )
 
 
@@ -852,6 +1100,8 @@ def run_soak(args: argparse.Namespace, argv: Sequence[str]) -> int:
         "duration_s": options.duration_s,
         "loss": list(options.loss),
         "load_tps": options.load_tps,
+        "storage_budget_mb": options.storage_budget_mb,
+        "fund": options.fund,
         "bins": {name: str(path) for name, path in bins.items()},
         "thresholds": thresholds_json(options.thresholds),
         "plan": [dataclasses.asdict(fault) for fault in plan],
@@ -882,14 +1132,24 @@ def run_soak(args: argparse.Namespace, argv: Sequence[str]) -> int:
         if "net" in options.kinds and options.net_mode == "netem":
             netem = faults.Netem([net.p2p_port(index) for index in range(options.validators)])
             netem.setup()
-        net.patch_configs(proxy_ports)
+        net.patch_configs(proxy_ports, options.storage_budget_mb * 1024 * 1024)
         if options.disk_node is not None:
+            net.move_kura_into_state(options.disk_node)
             volume = faults.DiskVolume(net.state_dir(options.disk_node), run_dir, options.disk_size_mb)
             volume.mount()
         for index in range(options.validators):
             net.start(index)
         wait_for_torii(net, timeout_s=300)
-        load = LoadGenerator(net, options.load_tps, float(options.extra["probe_interval_s"]), run_dir / "load.json")
+        if float(options.fund) > 0:
+            run_record["funding"] = net.fund_load_account(options.fund)
+            print(f"funded the load account with {options.fund} of {run_record['funding']['asset']}")
+        load = LoadGenerator(
+            net,
+            options.load_tps,
+            float(options.extra["probe_interval_s"]),
+            run_dir / "load.json",
+            str(options.extra["fee_payer"]),
+        )
         start_ms = now_ms()
         load.start()
         started = time.monotonic()
@@ -931,14 +1191,29 @@ def torii_ready(port: int) -> bool:
         return False
 
 
-def wait_for_torii(net: Localnet, timeout_s: float) -> None:
-    """Wait until every peer's Torii answers ``/health``."""
+STARTUP_RESTARTS = 3
+
+
+def wait_for_torii(net: Localnet, timeout_s: float, max_restarts: int = STARTUP_RESTARTS) -> None:
+    """Wait until every peer's Torii answers ``/health``.
+
+    A peer that exits while starting is started again, at most ``max_restarts`` times: its
+    exited boot stays in the timeline, where O-LIVE reports it as an unexpected exit, and the run
+    goes on to judge consensus. A peer that keeps exiting is a harness error.
+    """
     deadline = time.monotonic() + timeout_s
     pending = set(range(net.validators))
+    restarts = dict.fromkeys(pending, 0)
     while pending:
+        for index in net.reap_exited():
+            log = net.log_dir / net.node(index) / f"boot{net.peers[index].boot}.log"
+            if restarts[index] >= max_restarts:
+                raise RuntimeError(f"peer{index} exited during startup {restarts[index] + 1} times; see {log}")
+            restarts[index] += 1
+            print(f"peer{index} exited during startup; starting it again (see {log})", file=sys.stderr)
+            net.start(index)
+            pending.add(index)
         for index in sorted(pending):
-            if not net.alive(index):
-                raise RuntimeError(f"peer{index} exited during startup; see {net.net_dir / f'peer{index}.log'}")
             if torii_ready(net.api_port(index)):
                 pending.discard(index)
         if pending and time.monotonic() > deadline:
@@ -1046,11 +1321,14 @@ def cleanup(
     if netem is not None:
         netem.teardown()
     if volume is not None:
-        volume.free()
-        volume.unmount()
+        try:
+            volume.free()
+        finally:
+            volume.unmount()
     (run_dir / "run.json").write_text(json.dumps(run_record, indent=2))
     if not keep_state:
-        shutil.rmtree(net.net_dir / "state", ignore_errors=True)
+        for durable in ("state", "storage"):
+            shutil.rmtree(net.net_dir / durable, ignore_errors=True)
 
 
 def judge(run_dir: Path) -> int:
@@ -1060,9 +1338,10 @@ def judge(run_dir: Path) -> int:
     load_path = run_dir / "load.json"
     load = logs.LoadRecord.from_json(json.loads(load_path.read_text())) if load_path.exists() else None
     thresholds = logs.Thresholds(**run["thresholds"])
-    node_logs = logs.load_node_logs(run_dir / "logs")
+    # Streamed through the incremental oracles: a 24 h gate's logs never sit in memory whole.
+    analysis = logs.analyze_logs(run_dir / "logs")
     verdict = logs.build_verdict(
-        node_logs,
+        analysis,
         timeline,
         thresholds,
         load,
@@ -1079,6 +1358,9 @@ def judge(run_dir: Path) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point."""
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Progress lines reach a CI log or a redirected file as they happen, not in 8 KiB blocks.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     args = build_parser().parse_args(argv)
     if args.analyze is not None:
         return judge(args.analyze.resolve())

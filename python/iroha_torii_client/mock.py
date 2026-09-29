@@ -123,7 +123,6 @@ class _MockState:
         self._attachment_seq = 0
         self.attachments: Dict[str, Dict[str, Any]] = {}
         self.sumeragi_status: Dict[str, Any] = {}
-        self.sumeragi_leader: Dict[str, Any] = {}
         self.pipeline_sequences: Dict[str, Dict[str, Any]] = {}
         self.pipeline_next_plan: Optional[Dict[str, Any]] = None
         self.pipeline_preflight: Dict[str, Any] = {}
@@ -210,8 +209,6 @@ class _MockState:
             return self._gov_unlock_stats()
         if method == "GET" and path == "/v1/sumeragi/status":
             return _json_response(HTTPStatus.OK, self.sumeragi_status)
-        if method == "GET" and path == "/v1/sumeragi/leader":
-            return _json_response(HTTPStatus.OK, self.sumeragi_leader)
         if method == "GET" and path == "/v1/node/capabilities":
             return _json_response(HTTPStatus.OK, self.node_capabilities)
         if method == "POST" and path == "/__mock__/pipeline/config":
@@ -1129,14 +1126,6 @@ class _MockState:
     def _seed_sumeragi(self) -> None:
         # Observation fixture only; this is not generated finality authority.
         self.sumeragi_status = {'protocol_version': 1, 'config_fingerprint': 'hash:0101010101010101010101010101010101010101010101010101010101010101#B86C', 'beacon_horizon': None, 'instance': '0000000000000000000000000000000000000000000000000000000000000000', 'height': 10, 'view': 2, 'stage': 0, 'leader': None, 'proxy_tail': None, 'high_qc_view': None, 'level': 0, 'start_level': 0, 't_retx_ms': 1, 'committed_height': 9, 'applied_height': 9, 'awaiting': False, 'signer': None, 'unanchored': True, 'abstaining': True, 'halted': None, 'footprint': {'votes': 0, 'timeouts': 0, 'blocks': 0, 'exec_entries': 0, 'wants': 0, 'pending_apply': 0, 'sync_entries': 0, 'sync_bytes': 0, 'peers': 0, 'recent_headers': 0, 'configs': 0, 'cert_cache': 0, 'evidence_keys': 0, 'probe': 0}}
-        self.sumeragi_leader = {
-            "leader_index": 3,
-            "prf": {
-                "height": 20,
-                "view": 2,
-                "epoch_seed": "feedfacecafebeef",
-            },
-        }
 
     def _sumeragi_config(self, body: bytes) -> _Response:
         try:
@@ -1146,7 +1135,7 @@ class _MockState:
         if not isinstance(payload, dict):
             raise ValueError("sumeragi config must be an object")
 
-        allowed_fields = {"status", "leader"}
+        allowed_fields = {"status"}
         unknown_fields = set(payload) - allowed_fields
         if unknown_fields:
             raise ValueError(
@@ -1156,7 +1145,6 @@ class _MockState:
         updates: Dict[str, Dict[str, Any]] = {}
         for name, attribute in (
             ("status", "sumeragi_status"),
-            ("leader", "sumeragi_leader"),
         ):
             value = payload.get(name)
             if value is not None:

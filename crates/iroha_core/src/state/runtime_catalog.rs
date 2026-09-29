@@ -290,7 +290,15 @@ impl StateTransaction<'_, '_> {
                     runtime_catalog_invalid("native lane policy has another parameter identity")
                 })?
                 .map_err(runtime_catalog_invalid)?,
-            None => SumeragiLanePolicy::for_chain(self.world.parameters().sumeragi.clone()),
+            None => SumeragiLanePolicy::for_chain(
+                self.world.parameters().sumeragi.clone(),
+                self.world
+                    .consensus_schedule()
+                    .ready(self.block_height())
+                    .map_err(runtime_catalog_invalid)?
+                    .epoch
+                    .da_layout,
+            ),
         };
         for lane in additions {
             if lane.id == LaneId::SINGLE

@@ -31,6 +31,13 @@ fn plain_signed_block() -> SignedBlock {
 fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
     let reference = block.canonical_resultless_proposal().encode_wire().unwrap();
     assert_eq!(reference[0], block.version());
+    assert_eq!(
+        block.resultless_proposal_wire_len().unwrap(),
+        reference.len()
+    );
+    let mut streamed = Vec::new();
+    block.write_resultless_proposal_wire(&mut streamed).unwrap();
+    assert_eq!(streamed, reference, "exact borrowed proposal writer");
     assert!(
         block
             .canonical_resultless_proposal()
@@ -397,6 +404,14 @@ fn checked_resultless_comparison_rejects_archive_cap_in_isolated_process() {
         matches!(small.checked_resultless_proposal_eq(&small), Err(NoritoFrameError::ArchiveLengthExceeded { length, limit }) if length == small_len as u64 && limit == (small_len - 1) as u64)
     );
     assert!(small.canonical_proposal_wire_hash().is_err());
+    assert!(small.resultless_proposal_wire_len().is_err());
+    let mut untouched = vec![0xa5];
+    assert!(
+        small
+            .write_resultless_proposal_wire(&mut untouched)
+            .is_err()
+    );
+    assert_eq!(untouched, [0xa5], "reject the archive cap before writing");
     assert!(
         !small
             .checked_resultless_proposal_eq(&small)
@@ -684,4 +699,61 @@ fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
     proposal.result = Some(BlockResult::default());
     proposal.set_global_beacon_pulse(None);
     assert!(proposal.is_resultless_proposal());
+}
+
+#[test]
+fn proposal_writer_propagates_partial_destination_refusal_and_retries_exactly() {
+    struct RefuseAfter {
+        accepted: Vec<u8>,
+        remaining: usize,
+    }
+    impl std::io::Write for RefuseAfter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::ErrorKind::StorageFull.into());
+            }
+            let count = bytes.len().min(self.remaining);
+            self.accepted.extend_from_slice(&bytes[..count]);
+            self.remaining -= count;
+            Ok(count)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut block = plain_signed_block();
+    block.result = Some(BlockResult::default());
+    let expected = block.canonical_resultless_proposal().encode_wire().unwrap();
+    for accepted in [0, 1, norito::core::Header::SIZE, expected.len() - 1] {
+        let mut writer = RefuseAfter {
+            accepted: Vec::new(),
+            remaining: accepted,
+        };
+        assert!(block.write_resultless_proposal_wire(&mut writer).is_err());
+        assert_eq!(writer.accepted, expected[..accepted]);
+        writer.accepted.clear();
+        writer.remaining = expected.len();
+        block.write_resultless_proposal_wire(&mut writer).unwrap();
+        assert_eq!(writer.accepted, expected);
+    }
+}
+
+#[test]
+fn proposal_writer_preserves_ambient_codec_flags_and_source_graph() {
+    let mut block = plain_signed_block();
+    block.result = Some(BlockResult::default());
+    let original = block.clone();
+    let expected = block.canonical_resultless_proposal().encode_wire().unwrap();
+    let ambient = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+    let _flags = norito::core::DecodeFlagsGuard::enter(ambient);
+    let before = norito::core::get_decode_flags();
+    let mut bytes = Vec::new();
+    assert_eq!(
+        block.resultless_proposal_wire_len().unwrap(),
+        expected.len()
+    );
+    block.write_resultless_proposal_wire(&mut bytes).unwrap();
+    assert_eq!(bytes, expected);
+    assert_eq!(norito::core::get_decode_flags(), before);
+    assert_eq!(block, original);
 }

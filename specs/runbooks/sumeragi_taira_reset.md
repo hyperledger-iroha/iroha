@@ -1,0 +1,259 @@
+# Sumeragi Taira reset runbook
+
+Operator obligations of Sumeragi for a Taira reset: a fresh genesis with the current consensus
+parameters, the validators' consensus keys and their safety-record provenance
+(`specs/sumeragi.md` §7.4), key rotation (§7.4 **Keys**, §10.4) and the soak that gates the
+cutover (§13.5, §14 item 5; goal S7 in `specs/sumeragi_goals.md`).
+
+The public reset itself — inventory, authorization, release artifacts, onboarding and write
+canaries — is owned by the same-revision `iroha taira public-reset preflight` and
+`iroha taira public-reset apply` workflow (`skills/sora-taira-testnet/SKILL.md`). This runbook
+states what that reset must satisfy for consensus; it does not replace it.
+
+## 1. Before the reset: the soak gate
+
+The cutover requires a passing soak on the release candidate (§13.5): 24 h at `n = 4` and at
+`n = 22`, P2P loss of 10–30 % with delay spikes, random `kill -9` and restart, and disk-full
+injection, with O-AGR, O-SIGN, O-LIVE and O-PERF computed from the node logs. See §8 for how
+to run it and read the verdict. A failing or missing verdict blocks the reset.
+
+## 2. Committee
+
+- The global committee is exactly `3f + 1` validators with `1 <= f <= 10` (4, 7, …, 31); genesis
+  rejects any other size. Every certificate carries exactly `q = n - f = 2f + 1` votes.
+- Each validator has one consensus key: a BLS-normal key pair with a proof of possession. The
+  node signs with the key pair of its configuration (top-level `public_key` / `private_key`),
+  which is also its P2P peer identity.
+- Keys that no longer sign but whose records must stay are listed in `[sumeragi] retired_keys`
+  (§6).
+
+## 3. Consensus keys: generated on the validator host
+
+Generate each validator's key on its own host, into an owner-only directory, and never copy the
+private key anywhere else:
+
+```bash
+kagami keys --algorithm bls_normal --pop --out-dir /var/lib/taira/<role>/consensus-key
+# writes public.key, private.key (never printed) and pop.hex into a new owner-only directory
+```
+
+Only `public.key` and `pop.hex` leave the host (they go into the genesis topology). Put the key
+pair into the validator's configuration (`public_key`, `private_key`).
+
+Provenance note (current truth): the installation log records whether a key was generated on
+the node or imported, and a key generated on the node gets its initial records automatically.
+No operator command registers a key as generated on the node in this release (the store
+function `iroha_core::sumeragi::records::register_generated_key` has no caller), so every key
+generated with `kagami keys` counts as **imported** and a fresh chain needs the explicit
+fresh-key assertion of §5.
+
+## 4. Fresh genesis
+
+Chain parameters come from genesis and committed state only; every validator uses the same
+ones. Build the genesis from the current tree:
+
+1. Generate or materialize the manifest:
+   - `kagami genesis generate --profile iroha3-taira --genesis-public-key <multihash> --ivm-dir <dir> --kagemusha-mint-finality-parameters <file> --vrf-seed-hex <hex> --consensus-mode npos [--lane-policy lanes.json] default > genesis.json`,
+     or `kagami genesis materialize --kagemusha-mint-finality-parameters <file> configs/soranexus/taira/genesis.template.json`
+     for the Taira source template.
+   - `--lane-policy <PATH>` sets the JSON `SumeragiLanePolicy` (fixed lanes, routes,
+     autoscale; `specs/sumeragi_lanes.md`); kagami validates the policy and every fixed
+     member's PoP. Without it the chain has lane 0 only until governance sets a policy.
+2. Put the committee into the topology with the proofs of possession:
+   `kagami genesis embed-pop --manifest genesis.json --out genesis.json --peer-pop <public_key=pop_hex> ...`
+   (one `--peer-pop` per validator; the manifest is read whole before the output is written),
+   or pass `--topology <json> --peer-pop <public_key=pop_hex> ...` to `kagami genesis sign` in
+   step 3.
+3. Sign and publish the bundle:
+   `kagami genesis sign genesis.json --private-key-file <owner-only file> --config <validator config> --out-file genesis.signed.nrt --bound-manifest-out genesis.json --expected-hash-out genesis.expected_hash`.
+   Validators select the published identity with `genesis.expected_hash_file`.
+
+The Sumeragi chain parameters (`SumeragiParameters` in the data model, defaults of §9.3) are:
+`block_cadence_ms` 1000 (the target block time, frozen at genesis), `payload_retry_interval_ms`
+5000 (never below the cadence), `exec_budget_ms` (`E_max`) 4000, `apply_budget_ms` (`A_max`)
+1000, `max_block_bytes` 4 MiB, `epoch_length_blocks` 3600 and `demotion_window` 128 (a genesis
+constant, at least `4n`). The node-local `[sumeragi]` overrides (`view_timeout_base_ms`,
+`view_timeout_max_ms`, `start_level_cap`, `start_level_decay_after`, `rebroadcast_interval_ms`,
+`status_keepalive_ms`, `build_timeout_ms`, `fetch_retry_ms`, `sync_batch`, `sync_retry_ms`,
+`sync_max_bytes`, `max_observers`) stay unset: the node derives the §9.3 defaults for the
+committee size and validates the set against the chain parameters at startup (§9.4). Idle
+chains create no blocks; there is no empty-block setting.
+
+Check a validator's configuration and the published genesis without starting the node:
+`iroha3d --config <config> --check-config` (add `--sora` for Taira).
+
+## 5. First boot: installation log, store id, initial records
+
+Every validator's files (paths are `[sumeragi]` keys; the defaults are siblings of
+`[kura] store_dir`):
+
+| Path | Contents | Backup |
+|---|---|---|
+| `records_dir` (default `<store dir>-sumeragi-records`) | one safety record per `(instance, key)`: `<instance hex>/<H(key) hex>.record`, and the random 128-bit store id in `store_id` | **never** backed up, restored, copied or moved with a key |
+| `installation_log` (default `<store dir>-sumeragi-installation.log`, outside `records_dir`) | append-only: one entry per key (generated or imported) and per `(instance, key)` ever started, each with a fresh store id | with the key store |
+| `[kura] store_dir` and its sibling `<store dir>-sumeragi-bodies` | committed blocks with their CommitQCs; bodies of accepted, unapplied blocks | optional |
+
+At every start the node first compares `records_dir/store_id` with the store id of the log's
+newest entry. If they differ, or one is missing while the log has entries, the log does not
+describe these record files, and the node durably marks every key as imported (§7.4 rule 3).
+Then, for each `(instance, key)` the log does not list yet, the installation event appends the
+entry and — only for a generated key or under the operator's assertion — first writes the
+initial record `{instance, key, height: genesis}`. It never replaces an existing record file.
+Once the entry exists, a missing record is `Absent` and never re-created.
+
+On the reset's first boot of the new chain, start every validator exactly once with the
+assertion that its key never signed for this chain:
+
+```bash
+iroha3d --config <config> --sumeragi-assert-fresh-key      # Taira: iroha3d_taira --config <config> --sora --sumeragi-assert-fresh-key
+```
+
+The node logs the warning `operator asserts that the node's consensus keys never signed for this
+instance` when it applies the assertion. The flag is a one-shot command-line argument, never a
+configuration key: every later start omits it, and it is never passed after a data loss (a
+restored or lost record store must anchor through probes, §7.4 R2). Lane instances need no
+assertion: a node whose installation log lists the global instance for its key writes the
+initial record of every new lane incarnation itself.
+
+A first boot without the assertion writes the `(instance, key)` entry without a record: the key
+stays unanchored, and when no validator of a fresh chain holds a record, none answers probes and
+the chain never commits. The only recovery before any block commits is to stop every
+validator, delete its `records_dir` and `installation_log` (nothing was signed) and repeat the
+first boot with the assertion.
+
+`kagami localnet` start scripts pass the assertion only when a peer's
+`state/peer<i>/sumeragi-records` directory does not exist yet. That inference is for disposable
+networks only: a production launcher must not derive the assertion from a missing directory,
+because a lost record store looks the same.
+
+TODO(S7): the Taira validator unit rendered by `scripts/taira_validator_unit.py` starts
+`iroha3d_taira --config … --sora` and has no first-boot form that adds
+`--sumeragi-assert-fresh-key`, so a public reset cannot yet start a fresh chain that commits. The
+reset needs an explicit one-shot first-boot unit (or reset step) that passes the flag once per
+validator.
+
+## 6. Backups, restores and retired records
+
+- Back up the configuration, the consensus key pair and the installation log together (the
+  key store). Optionally back up the Kura store.
+- Never back up, restore or copy `records_dir` (record files and `store_id`). A rolled-back
+  record would let a key sign again below its real history (§7.4 rule 1).
+- Restoring a key store from a backup is safe: when the restored installation log is older than
+  the record store, its newest store id no longer matches `records_dir/store_id` and the node
+  marks every key imported. Missing records are then `Absent`; the key probes (§6.11) and anchors
+  after `2f + 1` fresh replies of the next height's committee, abstaining through `t' + 2`.
+  Never pass `--sumeragi-assert-fresh-key` after a restore.
+- A restored or older Kura store is safe as well: a record ahead of the block store makes the key
+  abstain and the node sync (§7.4 R5, R6).
+- Retired keys are kept for good: once a key is listed in `[sumeragi] retired_keys` it stays
+  there, and its record files and log entries are never deleted. A dropped record would be
+  `Absent` at every later restart and leave the node unable to answer probes (§7.4 **Keys**).
+
+## 7. Key rotation at a single height
+
+A validator's old key is replaced by its new key at one height; a committee never contains both
+keys of one validator (two configured keys in one committee make the node sign with neither,
+`LocalFault(KeyConflict)`).
+
+1. Generate the new key on the validator host (§3).
+2. Register the new key with its proof of possession
+   (`iroha ledger peer register --key <public key> --pop <hex>`, with the required
+   `--fee-payer`). Registering never changes voting membership.
+3. The committee changes only at an epoch boundary `B`, through the authenticated successor
+   context certified by the current quorum (§10.2–§10.4): from `B + 1` the committee lists the
+   new key in the validator's seat instead of the old one.
+4. On the node, switch keys at the boundary: configure the new key pair (`public_key`,
+   `private_key`), add the old public key to `[sumeragi] retired_keys` and restart without
+   `--sumeragi-assert-fresh-key`. The node signs with the old key only while it is configured,
+   so heights between the restart and `B + 1` (or after `B + 1` until the restart) count as a
+   crashed member; keep that gap short. The new key has no record for the instance and anchors
+   through probes (§7.4 R2).
+5. Keep the old key in `retired_keys` for good (§6).
+
+## 8. Soak gate: running it and reading the verdict
+
+`scripts/sumeragi_soak.py` runs a real multi-process `kagami localnet`, offers a steady `Log`
+transaction load through the CLI, injects faults and judges the run only from the nodes' logs.
+Each peer logs JSON with the audit filter `iroha_core::sumeragi::driver::audit=debug`: the
+executor worker logs `sumeragi block applied` for every applied block of every instance and the
+persistence worker logs `sumeragi record durable` for every durable safety record
+(`crates/iroha_core/src/sumeragi/driver/audit.rs`). The soak exports `LOG_FORMAT`, `LOG_LEVEL`
+and `LOG_FILTER` with the same values to the start script, because a node's environment
+overrides its configuration file. It also changes only node-local settings, never anything the
+signed genesis execution policy covers (fees, for example): an explicit
+`[nexus.storage] local_budget_bytes` (`--storage-budget-mb`, below `--disk-size-mb`; without it a
+node on a nearly full disk derives no budget and refuses to start; Kura gets a quarter of it and
+keeps about 1 KiB per committed transaction, so the gate's 12 GiB hold a day at its 20
+transactions per second, and a Kura over its share stops applying blocks), and
+`[sccp.light_client_keeper] enabled = false` (the keeper polls public Ethereum RPC endpoints by
+default).
+
+Build release binaries once, then run the gate at both committee sizes (the profiles' O-PERF
+thresholds assume release binaries; a debug build on a busy host misses the gap and latency
+thresholds even without faults):
+
+```bash
+cargo build --release -p irohad --bin iroha3d -p iroha_kagami --bin kagami -p iroha_cli --bin iroha
+python3 scripts/sumeragi_soak.py --profile gate --validators 4  --seed 1 --bin-dir target/release --out artifacts/sumeragi-soak/gate-n4
+python3 scripts/sumeragi_soak.py --profile gate --validators 22 --seed 1 --bin-dir target/release --out artifacts/sumeragi-soak/gate-n22
+```
+
+- Faults (`--faults kill,disk,net`): `kill -9` of up to `--max-kill` validators (at most `f`) and a
+  restart through the start script; disk full on one peer (`--disk-node`, default the last),
+  whose Kura store, bodies, records and installation log live on a size-limited volume that
+  the fault fills until `ENOSPC`; P2P loss drawn from `--loss` (default 10–30 %) with delay
+  spikes. Windows never overlap and are separated by fault-free gaps.
+- Network faults: on Linux (`--net-mode netem`, the default there) the soak re-executes itself
+  in `unshare --user --map-root-user --net --mount` and applies `tc netem` to the loopback P2P
+  ports only (needs the `sch_netem` module and unprivileged user namespaces); the disk volume is
+  a size-limited `tmpfs`, which holds the disk peer's state in memory and fills
+  `--disk-size-mb` of it during a disk fault. On macOS (`--net-mode proxy`) a userspace TCP proxy sits in front of
+  every P2P port: it delays every chunk, turns loss into retransmission delays and resets
+  connections with a small probability, and the disk volume is an `hdiutil` HFS+ image. The
+  module documentation of `scripts/sumeragi_soak_faults.py` lists the differences.
+- `--seed` makes the fault plan and link noise reproducible; the run directory keeps
+  `run.json` (options, plan), `timeline.json` (fault windows, process lifetimes), `load.json`,
+  every boot's log under `logs/peer<i>/boot<k>.log` and `verdict.json`.
+- `python3 scripts/sumeragi_soak.py --analyze <run dir>` recomputes the verdict from the logs.
+- Load: the CLI's `ping` (`Log`) transactions at `--load-tps`, paid by the generated client
+  account. Before the load starts, the genesis account (which registered the fee asset in
+  genesis) mints `--fund` of the fee asset to that account (default 1,000,000): its genesis
+  allocation of 10 lasts minutes at the default fee schedule (about 0.002 per transaction), and
+  zero fees are not an option because the fee schedule is part of the signed execution policy.
+- A peer that exits while the network starts, or by itself later, is started again; every such
+  exit stays in the timeline and fails O-LIVE (`unexpected-exit`, with the boot's log under
+  `logs/`).
+
+The exit status is 0 only when every oracle holds, 1 on a violation and 2 when the harness
+failed. `verdict.json` has `ok`, one entry per oracle with its `violations` and what it
+`checked`, `harness` problems (unparsed audit lines, a node without applied or durable-record
+lines — a blind oracle fails the run) and per-node observations (local faults, evidence,
+persistence retries, panics):
+
+- **O-AGR**: every `(instance, height)` has one `(block, result)` on every node and across
+  restarts; within a process lifetime heights are contiguous, and across a restart at most the
+  one height applied but not yet logged when the process died is missing.
+- **O-SIGN**: per key, no two different proposals, Prepares, locks or timeouts at one
+  `(instance, height, view)`; no new Prepare at or below a timeout view the key already made
+  durable; no new timeout carrying a PrepareQC below a durable lock; no durable record that goes
+  backwards (a rollback). A Commit vote is durable only as the record's lock, which a node also
+  adopts from certificates it did not vote for, so "no Commit at or below a timeout view" is
+  judged by the simulator's O-SIGN, not from logs.
+- **O-LIVE**: after every heal, each node commits a new height of the global chain within the
+  bound and again within every later window of the bound until the next fault; no node exits
+  unless it was killed or its disk was full. The gate uses `B_live` of §8.2 for the committee
+  size (about 12 minutes at `n = 4`, 16 at `n = 22`, at most 18 for 31 validators, with one sync
+  batch of lag); `--live-bound` sets a stricter bound. Only a fault-free interval at least as long
+  as the bound can show a stall, so the final one (`--final-quiet`, 20 minutes for the gate) must
+  be: the soak refuses shorter settings, and a run without such an interval fails as a harness
+  problem (`no-interval-judged-by-o-live`). Stalls inside the shorter gaps between faults fail
+  O-PERF's largest-gap threshold instead.
+- **O-PERF**: in fault-free intervals, after `--warmup-heights` commits (Appendix E8), the p99 and
+  the largest commit gap, the p99 of client-observed commit latency and the committed
+  transactions per second against `--max-gap-p99-ms`, `--max-gap-ms`,
+  `--max-latency-p99-ms` and `--min-tps`.
+
+The P2P lane soak (`integration_tests/tests/sumeragi_lanes_soak.rs`, ignored by default) runs
+four validators with a fixed and an elastic lane under sustained load and restarts; the nightly
+workflow `.github/workflows/nightly_sumeragi_soak.yml` runs a smoke-length soak and the lane
+soak, and runs the 24 h gate on manual dispatch.

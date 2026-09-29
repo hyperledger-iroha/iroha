@@ -31,7 +31,9 @@ impl StateBlock<'_> {
         let inventory = self.verified_fastpq_source_inventory_for_capture()?;
         self.verify_cached_ordinary_witness_content(&inventory)?;
         self.verify_sumeragi_lane_state_witness(witness)?;
-        commitment::execution_commitment(witness, block).map_err(|error| error.to_string())
+        let transition = self.world_state_transition()?;
+        commitment::execution_commitment(witness, block, &transition)
+            .map_err(|error| error.to_string())
     }
 }
 

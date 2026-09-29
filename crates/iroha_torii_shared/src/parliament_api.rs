@@ -1044,10 +1044,6 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
     /// # Errors
     /// Returns a stable explanation for a malformed page, mismatched external
     /// trust anchor, invalid finality, invalid witness, or wrong ballot leaf.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "ordered fail-closed proof checks preserve stable error precedence"
-    )]
     pub fn verify_consensus_page_against(
         &self,
         network_id: NetworkId,

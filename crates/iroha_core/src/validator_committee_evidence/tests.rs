@@ -1,6 +1,7 @@
 //! Native committee evidence with exact BLS quorum, paired-Pasta boundary seals and real DKG.
 //! The constructed transcript tests offline proof admission; it does not execute NPoS custody
 //! transitions or qualify a network. Genesis is actually signed; no height-one QC is fabricated.
+//! Every successor binds its real resultless payload and original proposer-signed RS16 availability.
 
 use super::*;
 use crate::{
@@ -33,6 +34,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
+    availability::{PayloadAuthoring, PayloadBytes},
     crypto::{Signer as _, form_qc},
     message::{BlockHeader, CommitAttestation, ResultWitness, Vote, VoteKind},
     preimage::payload_hash,
@@ -221,7 +223,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
     outputs(&mut genesis);
     let initial = ExecutionResultCommitment::new(
         1,
-        execution_commitment(&witness, &genesis).unwrap(),
+        execution_commitment(&witness, &genesis, &synthetic_world()).unwrap(),
         outcome(1, &current, None),
         None,
         iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
@@ -236,6 +238,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         Vec::new(),
         Vec::new(),
         initial.preimage().unwrap(),
+        Vec::new(), // Genesis is the signed root, not a native proposal.
     )));
     let mut parent_core = Hash32(*network.as_bytes());
     let mut history = vec![Arc::new(genesis)];
@@ -324,6 +327,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             );
             assert_eq!(fixture.incumbent, current.authority);
             let next = ValidatorEpochContextV1 {
+                da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                 version: 1,
                 network_id: network,
                 mode: ConsensusMode::Npos,
@@ -347,6 +351,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         } else {
             None
         };
+        let payload = payload::encode(&block).unwrap();
         let header = BlockHeader {
             instance,
             epoch: schedule::core_epoch(&current).unwrap().id,
@@ -354,17 +359,54 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             origin_view: 0,
             parent_hash: parent_core,
             parent_result,
-            payload_hash: payload_hash(&BlsCrypto::new(), &[]),
-            payload_len: 0,
+            payload_hash: payload_hash(&BlsCrypto::new(), &payload),
+            payload_len: u32::try_from(payload.len()).unwrap(),
+            availability_digest: Hash32::ZERO,
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: boundary.is_some(),
             control_witness: crate::sumeragi::epoch_beacon::control::encode(pulse).unwrap(),
         };
+        let config = ScheduledConfig {
+            height,
+            epoch: current.clone(),
+            params: ChainParamsRecord::from_core(&ChainParams {
+                epoch_length: 10,
+                ..ChainParams::default()
+            }),
+        }
+        .height_config()
+        .unwrap();
+        let budget = state.ivm_execution_budget();
+        let mut backing = mv::allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        backing.append(&payload).unwrap();
+        let charged_payload = PayloadBytes::from_charged(backing, &budget)
+            .unwrap_or_else(|_| panic!("original committee fixture payload admission"));
+        let crypto = BlsCrypto::new();
+        crypto
+            .admit_committee(current.committee.iter().map(|member| {
+                (
+                    member.validator.public_key(),
+                    member.proof_of_possession.as_slice(),
+                )
+            }))
+            .unwrap();
+        let signer = KeyPairSigner::new(&keys[0]).unwrap();
+        let authored = PayloadAuthoring::new(header, charged_payload)
+            .complete(instance, &config, &budget, &crypto, &signer)
+            .unwrap_or_else(|(_, error)| {
+                panic!("original committee signed RS16 authoring: {error:?}")
+            });
+        assert!(authored.body.admitted_to(&budget));
+        assert_eq!(authored.body.source().config(), &config);
+        assert_eq!(authored.body.payload().as_slice(), payload);
+        assert!(!authored.body.availability().as_slice().is_empty());
+        let header = authored.body.header().clone();
+        let availability = norito::encode_canonical(authored.body.availability()).unwrap();
         let witness = complete_context_witness(network, height);
         let result = ExecutionResultCommitment::new(
             height,
-            execution_commitment(&witness, &block).unwrap(),
+            execution_commitment(&witness, &block, &synthetic_world()).unwrap(),
             outcome(height, &current, boundary.clone()),
             pulse,
             iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
@@ -377,7 +419,8 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         let preimage = result.preimage().unwrap();
         let qc = certify(&keys, &header, &result, &preimage);
         block = block.with_commit_certificate(Some(
-            crate::sumeragi::block_store::commit_certificate(&header, &qc, preimage).unwrap(),
+            crate::sumeragi::block_store::commit_certificate(&header, &qc, preimage, availability)
+                .unwrap(),
         ));
         parent_core = header.hash(&BlsCrypto::new());
         parent_result = qc.result;
@@ -792,5 +835,14 @@ fn complete_context_witness(network: NetworkId, height: u64) -> ExecWitness {
             value: norito::encode_canonical(&commitment).unwrap(),
         }],
         ..ExecWitness::default()
+    }
+}
+
+/// Synthetic complete-World roots: these fixtures certify structural results, not a World.
+fn synthetic_world() -> crate::sumeragi::commitment::WorldStateTransition {
+    crate::sumeragi::commitment::WorldStateTransition {
+        parent_world_state_root: iroha_crypto::Hash::new(b"synthetic parent World"),
+        world_state_root: iroha_crypto::Hash::new(b"synthetic World"),
+        event_commitment: None,
     }
 }

@@ -22,6 +22,8 @@ const STREAMING_PRIVATE_KEY: &str =
     "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F";
 const EXPECTED_HASH: &str =
     "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
+/// Deployment-owned Soracloud runtime signer handle bound in place of the template placeholder.
+const SORACLOUD_SIGNER_HANDLE: &str = "signer://soracloud/runtime-mutation/primary";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -53,6 +55,79 @@ fn inline_expected_hash(table: &mut Table) {
         .remove("expected_hash_file")
         .expect("samples resolve the genesis hash from a runtime file");
     genesis.insert("expected_hash".into(), EXPECTED_HASH.into());
+}
+
+/// Replace the Soracloud runtime signer placeholders with one valid public binding.
+///
+/// The authority is derived from `STREAMING_PUBLIC_KEY` and rendered for the sample's
+/// chain discriminant, as the deployment renderer does.
+fn bind_soracloud_runtime_signer(table: &mut Table) {
+    let discriminant = table
+        .get("chain_discriminant")
+        .and_then(Value::as_integer)
+        .and_then(|value| u16::try_from(value).ok())
+        .expect("sample declares its chain discriminant");
+    let public_key = STREAMING_PUBLIC_KEY
+        .parse::<iroha_crypto::PublicKey>()
+        .expect("streaming public key");
+    let (_, raw_public_key) = public_key.to_bytes();
+    let authority = {
+        let _chain =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
+        iroha_data_model::account::AccountId::new(public_key.clone()).to_string()
+    };
+    let signer = sub_table(
+        sub_table(sub_table(table, "soracloud_runtime"), "submission"),
+        "signer",
+    );
+    for key in [
+        "handle",
+        "authority",
+        "algorithm",
+        "public_key_hex",
+        "revision",
+        "policy_digest_hex",
+    ] {
+        let placeholder = signer
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("signer.{key} is a template placeholder"));
+        assert!(
+            placeholder.starts_with("REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_"),
+            "signer.{key} must stay an explicit deployment placeholder"
+        );
+    }
+    signer.insert("handle".into(), SORACLOUD_SIGNER_HANDLE.into());
+    signer.insert("authority".into(), authority.into());
+    signer.insert("algorithm".into(), "ed25519".into());
+    signer.insert("public_key_hex".into(), hex::encode(raw_public_key).into());
+    signer.insert("revision".into(), Value::Integer(1));
+    signer.insert("policy_digest_hex".into(), "a5".repeat(32).into());
+}
+
+/// Replace the `InRoU` trusted guest artifact placeholders with one well-formed pair.
+///
+/// The operator preseeds the real artifact; the digest and its content CID here only have the
+/// canonical shapes (32 bytes of `0x31` and the matching CID).
+fn bind_inrou_trusted_guest(table: &mut Table) {
+    let inrou = sub_table(sub_table(table, "soracloud_runtime"), "inrou");
+    for (key, value) in [
+        ("trusted_guest_manifest_digest_hex", "31".repeat(32)),
+        (
+            "trusted_guest_content_cid",
+            "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge".to_owned(),
+        ),
+    ] {
+        let placeholder = inrou
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("inrou.{key} is a template placeholder"));
+        assert!(
+            placeholder.starts_with("REPLACE_WITH_INROU_TRUSTED_GUEST_"),
+            "inrou.{key} must stay an explicit deployment placeholder"
+        );
+        inrou.insert(key.into(), value.into());
+    }
 }
 
 fn parse(table: Table, sample: &str) -> ActualConfig {
@@ -109,7 +184,23 @@ fn taira_validator_template_parses_once_runtime_secrets_are_bound() {
         .expect("Taira reads the streaming key from a runtime file");
     streaming.insert("identity_public_key".into(), STREAMING_PUBLIC_KEY.into());
     streaming.insert("identity_private_key".into(), STREAMING_PRIVATE_KEY.into());
+    bind_soracloud_runtime_signer(&mut table);
+    bind_inrou_trusted_guest(&mut table);
     inline_expected_hash(&mut table);
+    // Every table of the full template, including the deployment-owned Torii custody tables,
+    // must match the schema: a retired key anywhere is an unknown parameter here.
+    ConfigReader::new()
+        .with_toml_source(TomlSource::inline(table.clone()))
+        .read_and_complete::<UserConfig>()
+        .unwrap_or_else(|error| panic!("{SAMPLE} must match the configuration schema: {error:?}"));
+    // The onboarding, faucet and KAGEMUSHA redemption signers read owner-only key files that
+    // exist only on a provisioned validator; parse the rest of the template without them.
+    let torii = sub_table(&mut table, "torii");
+    for custody in ["account_onboarding", "faucet", "kagemusha_v1_commands"] {
+        torii
+            .remove(custody)
+            .unwrap_or_else(|| panic!("Taira template declares `torii.{custody}`"));
+    }
     let config = parse(table, SAMPLE);
     assert_eq!(
         config.sumeragi.role,

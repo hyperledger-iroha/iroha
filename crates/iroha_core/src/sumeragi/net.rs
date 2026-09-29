@@ -2,18 +2,21 @@
 //! integration map §5).
 //!
 //! - **Envelope.** [`NetworkMessage::Sumeragi`] carries one [`SumeragiFrame`]: the exact
-//!   canonical consensus bytes, including source-bound application control, and the
-//!   32-byte instance id. The driver enforces canonical, size-limited decoding with
-//!   `WireMessage::decode`; the network codec sees an opaque byte string.
-//! - **Classes.** A frame's traffic class comes from ONE helper, [`frame_class`] (the core's
-//!   `traffic_class_of_frame` over the exact bytes), used by the decoded path
-//!   ([`SumeragiFrame::topic`], hence `NetworkMessage::topic`/`admission_class`) and by the raw
-//!   pre-decode path ([`inbound_frame_topic`], [`inbound_decode_limits`]) alike, so the P2P
-//!   reader's raw/decoded comparison always agrees. Control → `ConsensusSafety` (the reserved
-//!   safety FIFO), Proposal → `ConsensusPayload`, Bulk → `BlockSync` ([`topic_of_class`]).
+//!   canonical bytes of a core `WireMessage`, including source-bound application control,
+//!   signed payload manifests, row chunks and requests, plus the 32-byte instance id.
+//!   The driver enforces canonical, size-limited decoding with `WireMessage::decode`;
+//!   the network codec sees an opaque byte string.
+//! - **Classes.** [`frame_class`] uses the core's single `traffic_class_of_frame` helper
+//!   over the exact bytes. Both the decoded path ([`SumeragiFrame::topic`], hence
+//!   `NetworkMessage::topic`/`admission_class`) and raw pre-decode path
+//!   ([`inbound_frame_topic`], [`inbound_decode_limits`]) use that helper, so the P2P
+//!   reader's raw/decoded comparison agrees. Signed row chunks are Bulk and requests
+//!   are Control. Control → `ConsensusSafety` (the reserved safety FIFO), Proposal →
+//!   `ConsensusPayload`, Bulk → `BlockSync` ([`topic_of_class`]).
 //! - **Egress.** [`P2pNet`] implements the driver's [`Net`] with one `post_recoverable` per
-//!   recipient ([`SumeragiTransport`]); a backpressured post is dropped (its ticket cancels on
-//!   drop and the core rebroadcasts, "state, not custody"). It never uses `post()` (which
+//!   recipient ([`SumeragiTransport`]); backpressure returns an owned retry containing the
+//!   exact original post and its admission ticket. Payload streams retain that owner until
+//!   admission; protocol-timer sends may explicitly cancel it. It never uses `post()` (which
 //!   asserts on reliable routes) or `broadcast_recoverable` (which targets the P2P topology, not
 //!   the core's explicit recipients). The envelope is built once per frame and shared by every
 //!   recipient.
@@ -38,7 +41,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_p2p::{
     Priority,
     network::{
-        NetworkActorAdmissionError, SubscriberFilter,
+        NetworkActorAdmissionError, NetworkActorAdmissionTicket, SubscriberFilter,
         message::{Post, SubscriberRoute, Topic, TransportAdmissionClass},
     },
     peer::message::PeerMessage,
@@ -56,13 +59,14 @@ use super::{
     crypto::{core_key, iroha_key},
     driver::{
         DriverHandle,
-        traits::{Frame, Net},
+        traits::{Frame, Net, PendingSend, SendOutcome},
     },
 };
 use crate::{IrohaNetwork, NetworkMessage};
 
-/// One Sumeragi wire frame in the P2P envelope: the exact canonical `WireMessage` encoding and
-/// the instance it belongs to. The bytes are never decoded by the network codec.
+/// One Sumeragi wire frame in the P2P envelope: the exact canonical encoding of a core
+/// `WireMessage`, and the instance it belongs to.
+/// The bytes are never decoded by the network codec.
 #[derive(Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::sumeragi::net::SumeragiFrame")]
 pub struct SumeragiFrame {
@@ -116,8 +120,10 @@ impl SumeragiFrame {
     }
 }
 
-/// The traffic class of a canonical consensus frame (§12.3 O8): the single
-/// classifier of both the decoded and the raw P2P paths.
+/// The traffic class of a canonical Sumeragi frame (§12.3 O8): a core `WireMessage` frame by
+/// the core's table, a payload-availability frame (§12.8) by its own (a chunk is proposal
+/// traffic, a chunk request control traffic); `None` for anything else. The single classifier
+/// of both the decoded and the raw P2P paths.
 pub fn frame_class(frame: &[u8]) -> Option<TrafficClass> {
     traffic_class_of_frame(frame)
 }
@@ -263,42 +269,27 @@ pub fn inbound_decode_limits(
     ))
 }
 
-/// What became of one posted frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PostOutcome {
-    /// Admitted by the network actor.
-    Admitted,
-    /// Temporary pressure: dropped (the core rebroadcasts).
-    Backpressured,
-    /// The network is shut down.
-    Closed,
-    /// Permanently refused (e.g. not a reliable route, a frame the P2P layer refuses).
-    Rejected,
-}
-
 /// The non-blocking reliable post the driver needs from the P2P network (a test seam).
-pub trait SumeragiTransport: Send + Sync {
-    /// Post `message` to `to` once, without blocking and without retaining it on pressure.
-    fn post_frame(&self, to: PeerId, message: NetworkMessage, priority: Priority) -> PostOutcome;
+pub trait SumeragiTransport: Send + Sync + 'static {
+    /// Attempt the exact owned post without blocking. Refusal returns the original post
+    /// and its FIFO ticket so the caller can retry without losing occurrence identity.
+    ///
+    /// # Errors
+    /// Backpressure retains admission ownership; closure and rejection are terminal.
+    fn post_frame(
+        &self,
+        post: Post<NetworkMessage>,
+        ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>;
 }
 
 impl SumeragiTransport for IrohaNetwork {
-    fn post_frame(&self, to: PeerId, message: NetworkMessage, priority: Priority) -> PostOutcome {
-        let post = Post {
-            data: message,
-            peer_id: to,
-            priority,
-        };
-        match self.post_recoverable(post, None) {
-            Ok(()) => PostOutcome::Admitted,
-            // The message and its ticket are dropped here: the ticket cancels itself.
-            Err(NetworkActorAdmissionError::Backpressured { .. }) => PostOutcome::Backpressured,
-            Err(NetworkActorAdmissionError::Closed { .. }) => PostOutcome::Closed,
-            Err(NetworkActorAdmissionError::Rejected { reason, .. }) => {
-                iroha_logger::debug!(?reason, "sumeragi frame refused by the P2P actor");
-                PostOutcome::Rejected
-            }
-        }
+    fn post_frame(
+        &self,
+        post: Post<NetworkMessage>,
+        ticket: Option<NetworkActorAdmissionTicket>,
+    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+        self.post_recoverable(post, ticket)
     }
 }
 
@@ -307,7 +298,7 @@ impl SumeragiTransport for IrohaNetwork {
 pub struct NetStats {
     /// Posts admitted.
     pub sent: u64,
-    /// Posts dropped under backpressure.
+    /// Attempts refused under backpressure, including retries of retained posts.
     pub backpressured: u64,
     /// Posts dropped because the network is closed.
     pub closed: u64,
@@ -326,17 +317,66 @@ struct Counters {
     bad_recipient: AtomicU64,
 }
 
+impl Counters {
+    fn record(&self, result: &Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>) {
+        let counter = match result {
+            Ok(()) => &self.sent,
+            Err(NetworkActorAdmissionError::Backpressured { .. }) => &self.backpressured,
+            Err(NetworkActorAdmissionError::Closed { .. }) => &self.closed,
+            Err(NetworkActorAdmissionError::Rejected { reason, .. }) => {
+                iroha_logger::debug!(?reason, "sumeragi frame refused by the P2P actor");
+                &self.rejected
+            }
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// One caller-owned refusal, never a hidden adapter queue. The returned P2P ticket
+/// owns its exact per-recipient/class FIFO position and topology generation.
+struct PendingP2pSend<T> {
+    transport: Arc<T>,
+    counters: Arc<Counters>,
+    post: Option<Post<NetworkMessage>>,
+    ticket: Option<NetworkActorAdmissionTicket>,
+}
+
+impl<T: SumeragiTransport> PendingSend for PendingP2pSend<T> {
+    fn retry(mut self: Box<Self>) -> SendOutcome {
+        // Only this consuming method takes the post. A refused attempt reinstalls
+        // the exact value before returning this same owner to its caller.
+        let post = self
+            .post
+            .take()
+            .expect("pending send owns its original post");
+        let result = self.transport.post_frame(post, self.ticket.take());
+        self.counters.record(&result);
+        match result {
+            Ok(()) => SendOutcome::Admitted,
+            Err(NetworkActorAdmissionError::Backpressured {
+                message, ticket, ..
+            }) => {
+                self.post = Some(message);
+                self.ticket = ticket;
+                SendOutcome::Backpressured(self)
+            }
+            Err(NetworkActorAdmissionError::Closed { .. }) => SendOutcome::Closed,
+            Err(NetworkActorAdmissionError::Rejected { .. }) => SendOutcome::Rejected,
+        }
+    }
+}
+
 /// Largest number of recipient `PeerId`s cached by a [`P2pNet`].
 const PEER_CACHE: usize = 4096;
 
 /// The driver's [`Net`] over the P2P network (see the module documentation).
 pub struct P2pNet<T> {
-    transport: T,
+    transport: Arc<T>,
     /// The envelope of the frame sent last (one per frame, shared by its recipients).
     envelope: Mutex<Option<(Arc<[u8]>, Arc<SumeragiFrame>)>>,
     /// Recipient keys already converted to `PeerId`s.
     peers: Mutex<HashMap<PublicKey, PeerId>>,
-    counters: Counters,
+    counters: Arc<Counters>,
 }
 
 impl<T> core::fmt::Debug for P2pNet<T> {
@@ -351,10 +391,10 @@ impl<T> P2pNet<T> {
     /// A transport over `transport` (the node's `IrohaNetwork`).
     pub fn new(transport: T) -> Self {
         Self {
-            transport,
+            transport: Arc::new(transport),
             envelope: Mutex::new(None),
             peers: Mutex::new(HashMap::new()),
-            counters: Counters::default(),
+            counters: Arc::default(),
         }
     }
 
@@ -400,22 +440,31 @@ impl<T> P2pNet<T> {
 }
 
 impl<T: SumeragiTransport> Net for P2pNet<T> {
-    fn send(&self, to: &PublicKey, frame: &Frame) {
+    fn send(&self, to: &PublicKey, frame: &Frame) -> SendOutcome {
         let Some(peer) = self.peer(to) else {
             self.counters.bad_recipient.fetch_add(1, Ordering::Relaxed);
-            return;
+            return SendOutcome::Rejected;
         };
-        let message = NetworkMessage::Sumeragi(self.envelope(frame));
-        let counter = match self
-            .transport
-            .post_frame(peer, message, priority_of_class(frame.class))
-        {
-            PostOutcome::Admitted => &self.counters.sent,
-            PostOutcome::Backpressured => &self.counters.backpressured,
-            PostOutcome::Closed => &self.counters.closed,
-            PostOutcome::Rejected => &self.counters.rejected,
+        let post = Post {
+            data: NetworkMessage::Sumeragi(self.envelope(frame)),
+            peer_id: peer,
+            priority: priority_of_class(frame.class),
         };
-        counter.fetch_add(1, Ordering::Relaxed);
+        let result = self.transport.post_frame(post, None);
+        self.counters.record(&result);
+        match result {
+            Ok(()) => SendOutcome::Admitted,
+            Err(NetworkActorAdmissionError::Backpressured {
+                message, ticket, ..
+            }) => SendOutcome::Backpressured(Box::new(PendingP2pSend {
+                transport: Arc::clone(&self.transport),
+                counters: Arc::clone(&self.counters),
+                post: Some(message),
+                ticket,
+            })),
+            Err(NetworkActorAdmissionError::Closed { .. }) => SendOutcome::Closed,
+            Err(NetworkActorAdmissionError::Rejected { .. }) => SendOutcome::Rejected,
+        }
     }
 }
 
@@ -686,11 +735,12 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::peer::Peer;
     use iroha_p2p::network::message::ClassifyTopic;
+    use iroha_sumeragi::availability::{AvailabilityFrame, RowBytes};
     use iroha_sumeragi::{
         message::{
-            Block, BlockHeader, BlockRequest, BlockResponse, Proposal, Qc, Status, SyncEntry,
-            SyncRequest, SyncResponse, TcEntry, TimeoutCert, TimeoutVote, Vote, VoteKind,
-            WireMessage,
+            BlockHeader, PayloadChunk, PayloadManifest, PayloadRequest, Proposal, ProposalMessage,
+            Qc, Status, SyncEntry, SyncRequest, SyncResponse, TcEntry, TimeoutCert, TimeoutVote,
+            Vote, VoteKind, WireMessage,
         },
         types::{AggregateSignature, Bitmap, EpochId, SIGNATURE_LEN, Signature},
     };
@@ -735,11 +785,9 @@ mod tests {
         }
     }
 
-    fn block(rng: &mut StdRng, instance: Hash32) -> Block {
-        let payload: Vec<u8> = (0..rng.random_range(0..300))
-            .map(|_| rng.random())
-            .collect();
-        Block {
+    /// Structurally bounded untrusted wire metadata for classifier tests, not body custody.
+    fn manifest(rng: &mut StdRng, instance: Hash32) -> PayloadManifest {
+        PayloadManifest {
             header: BlockHeader {
                 instance,
                 epoch: epoch(rng),
@@ -748,34 +796,36 @@ mod tests {
                 parent_hash: h(rng),
                 parent_result: h(rng),
                 payload_hash: h(rng),
-                payload_len: u32::try_from(payload.len()).unwrap(),
+                availability_digest: h(rng),
+                payload_len: rng.random_range(1..300),
                 proposer: 0,
                 skipped_leaders: Vec::new(),
-                control_witness: iroha_sumeragi::types::ControlWitness::empty(),
+                control_witness: Default::default(),
                 attest: false,
             },
-            payload,
+            availability: AvailabilityFrame::from_untrusted(vec![rng.random(); 100]).unwrap(),
         }
     }
 
-    /// A random message of a random kind (tags 0..=9).
+    /// A random message across round, sync, manifest, request and row carriers.
     fn message(rng: &mut StdRng) -> WireMessage {
         let instance = h(rng);
         let height = rng.random_range(1..1_000);
         let view = rng.random_range(0..10);
-        match rng.random_range(0..10) {
+        match rng.random_range(0..11) {
             0 => {
-                let block = block(rng, instance);
-                let payload = rng.random::<bool>().then_some(block.payload);
-                WireMessage::Proposal(Box::new(Proposal {
-                    instance,
-                    height,
-                    view,
-                    header: block.header,
-                    justify: None,
-                    parent_qc: rng.random::<bool>().then(|| qc(rng, instance)),
-                    payload,
-                    sig: sig(rng),
+                let manifest = manifest(rng, instance);
+                WireMessage::Proposal(Box::new(ProposalMessage {
+                    proposal: Proposal {
+                        instance,
+                        height,
+                        view,
+                        header: manifest.header,
+                        justify: None,
+                        parent_qc: rng.random::<bool>().then(|| qc(rng, instance)),
+                        sig: sig(rng),
+                    },
+                    availability: manifest.availability,
                 }))
             }
             1 => WireMessage::Vote(Vote {
@@ -835,19 +885,23 @@ mod tests {
                 instance,
                 blocks: (0..rng.random_range(0..3))
                     .map(|_| SyncEntry {
-                        block: block(rng, instance),
+                        manifest: manifest(rng, instance),
                         commit_qc: qc(rng, instance),
                     })
                     .collect(),
             }),
-            8 => WireMessage::BlockRequest(BlockRequest {
+            8 => WireMessage::PayloadRequest(PayloadRequest {
                 instance,
                 height,
                 block_hash: h(rng),
             }),
-            _ => WireMessage::BlockResponse(BlockResponse {
+            9 => WireMessage::PayloadManifest(manifest(rng, instance)),
+            _ => WireMessage::PayloadChunk(PayloadChunk {
                 instance,
-                block: block(rng, instance),
+                height,
+                block_hash: h(rng),
+                index: rng.random_range(0..10),
+                bytes: RowBytes::from_untrusted(vec![rng.random(); 128]).unwrap(),
             }),
         }
     }
@@ -974,6 +1028,49 @@ mod tests {
         );
     }
 
+    /// §12.8: payload-availability frames share the envelope and the one classifier: a chunk is
+    /// bulk traffic, a chunk request control traffic, on the raw and the decoded paths under
+    /// every layout, and a frame of neither schema is unclassifiable.
+    #[test]
+    fn availability_frames_are_classified_on_both_paths() {
+        use iroha_sumeragi::{
+            availability::RowBytes,
+            message::{PayloadChunk, PayloadRequest},
+        };
+        let instance = Hash32([4; 32]);
+        let chunk = WireMessage::PayloadChunk(PayloadChunk {
+            instance,
+            height: 3,
+            block_hash: Hash32([5; 32]),
+            index: 2,
+            bytes: RowBytes::from_untrusted(vec![7; 1000]).unwrap(),
+        });
+        let request = WireMessage::PayloadRequest(PayloadRequest {
+            instance,
+            height: 3,
+            block_hash: Hash32([5; 32]),
+        });
+        for (msg, topic) in [
+            (&chunk, Topic::BlockSync),
+            (&request, Topic::ConsensusSafety),
+        ] {
+            let bytes = msg.encode().unwrap();
+            assert_eq!(frame_class(&bytes), Some(msg.traffic_class()));
+            let network =
+                NetworkMessage::Sumeragi(Arc::new(SumeragiFrame::new(instance, bytes.clone())));
+            for layout in LAYOUTS {
+                let (raw_topic, raw_class, decoded) = raw_and_decoded(&network, layout);
+                assert_eq!(raw_topic.unwrap(), Some(topic));
+                assert_eq!(decoded.topic(), topic);
+                assert_eq!(raw_class.unwrap(), admission_of_class(msg.traffic_class()));
+            }
+            // A corrupted schema hash is not a canonical consensus frame.
+            let mut corrupted = bytes;
+            corrupted[10] ^= 0xff;
+            assert_eq!(frame_class(&corrupted), None);
+        }
+    }
+
     #[test]
     fn frame_caps() {
         let caps = FrameCaps::for_params(4 << 20, 16 << 20);
@@ -991,7 +1088,7 @@ mod tests {
         assert_eq!(huge.proposal, FrameCaps::TRANSPORT.proposal);
         assert_eq!(huge.bulk, FrameCaps::TRANSPORT.bulk);
         // A frame above its class's transport cap is refused before decode.
-        let msg = WireMessage::BlockRequest(BlockRequest {
+        let msg = WireMessage::PayloadRequest(PayloadRequest {
             instance: Hash32::ZERO,
             height: 1,
             block_hash: Hash32::ZERO,
@@ -1019,7 +1116,7 @@ mod tests {
     fn raw_native_envelope_rejects_suffix_and_byte_count_substitution() {
         let network = NetworkMessage::Sumeragi(Arc::new(SumeragiFrame::new(
             Hash32::ZERO,
-            WireMessage::BlockRequest(BlockRequest {
+            WireMessage::PayloadRequest(PayloadRequest {
                 instance: Hash32::ZERO,
                 height: 1,
                 block_hash: Hash32::ZERO,
@@ -1078,22 +1175,43 @@ mod tests {
         assert_eq!(frame_class(&bytes), Some(TrafficClass::Control));
     }
 
-    /// A transport that records posts and answers with a scripted outcome.
+    #[derive(Clone, Copy)]
+    enum FakeOutcome {
+        Admitted,
+        Backpressured,
+        Closed,
+        Rejected,
+    }
+
+    /// Records exact occurrences while returning the scripted transport result.
     #[derive(Default)]
     struct FakeTransport {
         posts: Mutex<Vec<(PeerId, NetworkMessage, Priority)>>,
-        outcome: Mutex<Option<PostOutcome>>,
+        outcome: Mutex<Option<FakeOutcome>>,
     }
 
     impl SumeragiTransport for FakeTransport {
         fn post_frame(
             &self,
-            to: PeerId,
-            message: NetworkMessage,
-            priority: Priority,
-        ) -> PostOutcome {
-            self.posts.lock().push((to, message, priority));
-            self.outcome.lock().unwrap_or(PostOutcome::Admitted)
+            post: Post<NetworkMessage>,
+            ticket: Option<NetworkActorAdmissionTicket>,
+        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+            self.posts
+                .lock()
+                .push((post.peer_id.clone(), post.data.clone(), post.priority));
+            match self.outcome.lock().unwrap_or(FakeOutcome::Admitted) {
+                FakeOutcome::Admitted => Ok(()),
+                FakeOutcome::Backpressured => Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 1,
+                }),
+                FakeOutcome::Closed => Err(NetworkActorAdmissionError::Closed { message: post }),
+                FakeOutcome::Rejected => Err(NetworkActorAdmissionError::Rejected {
+                    message: post,
+                    reason: iroha_p2p::network::NetworkActorAdmissionRejection::OutboundDisallowed,
+                }),
+            }
         }
     }
 
@@ -1109,142 +1227,292 @@ mod tests {
         }
     }
 
-    /// Egress: one post per recipient, sharing one envelope; a backpressured (or closed or
-    /// refused) post is dropped and counted, never retried or blocked on; an invalid recipient
-    /// key is skipped.
+    fn pending(outcome: SendOutcome) -> Box<dyn PendingSend> {
+        match outcome {
+            SendOutcome::Backpressured(owner) => owner,
+            _ => panic!("expected caller-owned backpressure"),
+        }
+    }
+
+    fn row_frame(index: u32) -> Frame {
+        frame_of(&WireMessage::PayloadChunk(
+            iroha_sumeragi::message::PayloadChunk {
+                instance: Hash32([9; 32]),
+                height: 3,
+                block_hash: Hash32([8; 32]),
+                index,
+                bytes: iroha_sumeragi::availability::RowBytes::from_untrusted(vec![7; 2]).unwrap(),
+            },
+        ))
+    }
+
+    /// Every retry keeps the original encoded envelope and target; admitted posts need no owner.
     #[test]
-    fn egress_posts_per_recipient_and_drops_on_backpressure() {
+    fn egress_retains_original_frame_on_backpressure_and_counts_retries() {
         let net = P2pNet::new(FakeTransport::default());
         let (a, b) = (bls(1), bls(2));
         let (ka, kb) = (
             core_key(a.public_key()).unwrap(),
             core_key(b.public_key()).unwrap(),
         );
-        let msg = WireMessage::BlockRequest(BlockRequest {
-            instance: Hash32([9; 32]),
-            height: 3,
-            block_hash: Hash32::ZERO,
-        });
-        let frame = frame_of(&msg);
-        net.send(&ka, &frame);
-        net.send(&kb, &frame);
-        {
-            let posts = net.transport.posts.lock();
-            assert_eq!(posts.len(), 2);
-            assert_eq!(posts[0].0, PeerId::new(a.public_key().clone()));
-            assert_eq!(posts[1].0, PeerId::new(b.public_key().clone()));
-            assert_eq!(posts[0].2, Priority::High);
-            let (NetworkMessage::Sumeragi(x), NetworkMessage::Sumeragi(y)) =
-                (&posts[0].1, &posts[1].1)
-            else {
-                panic!("not a Sumeragi frame");
-            };
-            assert!(Arc::ptr_eq(x, y), "one envelope per frame");
-            assert_eq!(WireMessage::decode(x.bytes(), usize::MAX).unwrap(), msg);
-        }
-        for (outcome, expected) in [
-            (
-                PostOutcome::Backpressured,
-                NetStats {
-                    sent: 2,
-                    backpressured: 1,
-                    ..NetStats::default()
-                },
-            ),
-            (
-                PostOutcome::Closed,
-                NetStats {
-                    sent: 2,
-                    backpressured: 1,
-                    closed: 1,
-                    ..NetStats::default()
-                },
-            ),
-            (
-                PostOutcome::Rejected,
-                NetStats {
-                    sent: 2,
-                    backpressured: 1,
-                    closed: 1,
-                    rejected: 1,
-                    ..NetStats::default()
-                },
-            ),
-        ] {
-            *net.transport.outcome.lock() = Some(outcome);
-            net.send(&ka, &frame);
-            assert_eq!(net.stats(), expected);
-        }
+        let frame = row_frame(2);
+        assert!(matches!(net.send(&ka, &frame), SendOutcome::Admitted));
+        assert!(matches!(net.send(&kb, &frame), SendOutcome::Admitted));
+        *net.transport.outcome.lock() = Some(FakeOutcome::Backpressured);
+        let owner = pending(net.send(&ka, &frame));
+        let original = net.envelope(&frame);
+        let replacement = net.envelope(&row_frame(99));
+        assert!(!Arc::ptr_eq(&original, &replacement));
+        let owner_ptr = std::ptr::from_ref::<dyn PendingSend>(&*owner) as *const ();
+        let owner = pending(owner.retry());
         assert_eq!(
-            net.transport.posts.lock().len(),
-            5,
-            "each post attempted once"
+            std::ptr::from_ref::<dyn PendingSend>(&*owner) as *const (),
+            owner_ptr,
+            "retry must return the same owner"
         );
-        net.send(&PublicKey::new(vec![1; 48]).unwrap(), &frame);
-        assert_eq!(net.stats().bad_recipient, 1);
-        assert_eq!(net.transport.posts.lock().len(), 5);
-        // A new frame gets a new envelope; bulk frames go low priority.
-        let bulk = frame_of(&WireMessage::SyncResponse(SyncResponse {
-            instance: Hash32([9; 32]),
-            blocks: Vec::new(),
-        }));
-        net.send(&kb, &bulk);
+        *net.transport.outcome.lock() = Some(FakeOutcome::Admitted);
+        assert!(matches!(owner.retry(), SendOutcome::Admitted));
+        assert_eq!(net.stats().sent, 3);
+        assert_eq!(net.stats().backpressured, 2);
         let posts = net.transport.posts.lock();
-        assert_eq!(posts[5].2, Priority::Low);
-        assert!(format!("{net:?}").contains("P2pNet"));
+        assert_eq!(posts.len(), 5);
+        let NetworkMessage::Sumeragi(original) = &posts[0].1 else {
+            panic!("not a frame")
+        };
+        for (index, (to, message, priority)) in posts.iter().enumerate() {
+            assert_eq!(
+                *to,
+                PeerId::new(
+                    if index == 1 {
+                        b.public_key()
+                    } else {
+                        a.public_key()
+                    }
+                    .clone()
+                )
+            );
+            assert_eq!(*priority, Priority::Low);
+            let NetworkMessage::Sumeragi(envelope) = message else {
+                panic!("not a frame")
+            };
+            assert!(Arc::ptr_eq(original, envelope));
+            assert_eq!(envelope.bytes(), &*frame.bytes);
+        }
     }
 
-    /// Egress through the real P2P actor admission (`post_recoverable`): an admitted post
-    /// reaches the actor queue as the exact frame; a full queue or a peer outside the reliable
-    /// topology backpressures and the frame is dropped at once (never retained or retried);
-    /// after the actor drains, the next frame is admitted; a closed network drops too.
+    /// Closure/rejection are terminal even after a refusal; malformed recipients never post.
     #[test]
-    fn egress_over_the_p2p_actor_drops_on_backpressure() {
-        let (target, stranger) = (bls(4), bls(5));
+    fn egress_terminal_outcomes_release_the_owned_attempt() {
+        for terminal in [FakeOutcome::Closed, FakeOutcome::Rejected] {
+            let net = P2pNet::new(FakeTransport::default());
+            let to = core_key(bls(2).public_key()).unwrap();
+            *net.transport.outcome.lock() = Some(FakeOutcome::Backpressured);
+            let owner = pending(net.send(&to, &row_frame(0)));
+            *net.transport.outcome.lock() = Some(terminal);
+            let result = owner.retry();
+            match terminal {
+                FakeOutcome::Closed => assert!(matches!(result, SendOutcome::Closed)),
+                FakeOutcome::Rejected => assert!(matches!(result, SendOutcome::Rejected)),
+                _ => unreachable!(),
+            }
+            assert_eq!(net.stats().sent, 0);
+            assert_eq!(net.stats().backpressured, 1);
+            assert_eq!(net.stats().closed + net.stats().rejected, 1);
+            assert!(matches!(
+                net.send(&PublicKey::new(vec![1; 48]).unwrap(), &row_frame(1)),
+                SendOutcome::Rejected
+            ));
+            assert_eq!(net.stats().bad_recipient, 1);
+            assert_eq!(net.transport.posts.lock().len(), 2);
+        }
+    }
+
+    /// Real P2P admission permits only one retained frame per target/class. A later caller
+    /// cannot overtake the original refused row after capacity becomes available.
+    #[test]
+    fn egress_real_actor_retains_row_ticket_and_fifo_until_admitted() {
+        let target = bls(4);
         let target_peer = PeerId::new(target.public_key().clone());
         let (network, mut actor) = IrohaNetwork::actor_admission_for_tests(
             PeerId::new(bls(3).public_key().clone()),
             std::collections::HashSet::from([target_peer.clone()]),
+            std::num::NonZeroUsize::new(4).unwrap(),
+        );
+        let net = P2pNet::new(network);
+        let to = core_key(target.public_key()).unwrap();
+        let frames = [row_frame(0), row_frame(1), row_frame(2)];
+        assert!(matches!(net.send(&to, &frames[0]), SendOutcome::Admitted));
+        let original = net.envelope(&frames[1]);
+        let first = pending(net.send(&to, &frames[1]));
+        let second = pending(net.send(&to, &frames[2]));
+        let mut delivered = Vec::new();
+        let mut capture = |post: &Post<NetworkMessage>| {
+            assert_eq!(post.peer_id, target_peer);
+            let NetworkMessage::Sumeragi(frame) = &post.data else {
+                panic!("not a frame")
+            };
+            // Reliable BlockSync posts are promoted by the actual P2P actor boundary.
+            assert_eq!(post.priority, Priority::High);
+            if frame.bytes() == &*frames[1].bytes {
+                assert!(
+                    Arc::ptr_eq(&original, frame),
+                    "retry recreated its encoded envelope"
+                );
+            }
+            delivered.push(frame.bytes().to_vec());
+        };
+        assert_eq!(actor.drain_posts(&mut capture), 1);
+        // Retrying the later ticket first must not silently acquire a fresh queue position.
+        let second = pending(second.retry());
+        assert!(matches!(first.retry(), SendOutcome::Admitted));
+        assert_eq!(actor.drain_posts(&mut capture), 1);
+        // The pending attempt owns its transport lifetime, not a borrow of the adapter.
+        drop(net);
+        assert!(matches!(second.retry(), SendOutcome::Admitted));
+        assert_eq!(actor.drain_posts(&mut capture), 1);
+        assert_eq!(
+            delivered,
+            frames
+                .iter()
+                .map(|frame| frame.bytes.to_vec())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// An occupied stream cannot block another target, and explicit cancellation releases
+    /// the original rank so the next retained attempt can progress.
+    #[test]
+    fn egress_real_actor_isolates_recipients_and_cancels_only_dropped_owner() {
+        let (a, b) = (bls(4), bls(5));
+        let targets = [
+            PeerId::new(a.public_key().clone()),
+            PeerId::new(b.public_key().clone()),
+        ];
+        let (network, mut actor) = IrohaNetwork::actor_admission_for_tests(
+            PeerId::new(bls(3).public_key().clone()),
+            targets.iter().cloned().collect(),
+            std::num::NonZeroUsize::new(4).unwrap(),
+        );
+        let net = P2pNet::new(network);
+        let (ka, kb) = (
+            core_key(a.public_key()).unwrap(),
+            core_key(b.public_key()).unwrap(),
+        );
+        assert!(matches!(
+            net.send(&ka, &row_frame(0)),
+            SendOutcome::Admitted
+        ));
+        let cancelled = pending(net.send(&ka, &row_frame(1)));
+        let next = pending(net.send(&ka, &row_frame(2)));
+        assert!(matches!(
+            net.send(&kb, &row_frame(0)),
+            SendOutcome::Admitted
+        ));
+        assert_eq!(actor.drain_posts(|_| {}), 2);
+        drop(cancelled);
+        assert!(matches!(next.retry(), SendOutcome::Admitted));
+        assert_eq!(
+            actor.drain_posts(|post| assert_eq!(post.peer_id, targets[0])),
+            1
+        );
+    }
+
+    /// The actual actor must see a live FIFO owner for the row refused by Net::send.
+    /// This same test fails against the old void/dropping adapter and passes when the
+    /// returned outcome owns the original post and rank until explicitly cancelled.
+    #[test]
+    fn actor_rank_one_refusal_preserves_the_returned_row_owner() {
+        let target = bls(4);
+        let target_peer = PeerId::new(target.public_key().clone());
+        let (network, mut actor) = IrohaNetwork::actor_admission_for_tests(
+            PeerId::new(bls(3).public_key().clone()),
+            std::collections::HashSet::from([target_peer.clone()]),
+            std::num::NonZeroUsize::new(4).unwrap(),
+        );
+        let net = P2pNet::new(network);
+        let to = core_key(target.public_key()).unwrap();
+        let row = |index| {
+            frame_of(&WireMessage::PayloadChunk(
+                iroha_sumeragi::message::PayloadChunk {
+                    instance: Hash32([9; 32]),
+                    height: 3,
+                    block_hash: Hash32([8; 32]),
+                    index,
+                    bytes: iroha_sumeragi::availability::RowBytes::from_untrusted(vec![7; 2])
+                        .unwrap(),
+                },
+            ))
+        };
+        let _initial = net.send(&to, &row(0));
+        let retained = net.send(&to, &row(1));
+        let later = Post {
+            data: NetworkMessage::Sumeragi(net.envelope(&row(2))),
+            peer_id: target_peer,
+            priority: Priority::Low,
+        };
+        let (later, ticket) = match net.transport.post_recoverable(later, None) {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message,
+                ticket: Some(ticket),
+                rank,
+            }) => {
+                assert_eq!(
+                    rank, 2,
+                    "the refused row lost its original per-recipient queue rank"
+                );
+                (message, ticket)
+            }
+            _ => panic!("later row must retain the second admission rank"),
+        };
+        assert_eq!(ticket.rank(), Some(2));
+        drop(retained);
+        assert_eq!(
+            ticket.rank(),
+            Some(1),
+            "only explicit cancellation releases the older owner"
+        );
+        assert_eq!(actor.drain_posts(|_| {}), 1);
+        assert!(net.transport.post_recoverable(later, Some(ticket)).is_ok());
+        assert_eq!(actor.drain_posts(|_| {}), 1);
+    }
+
+    #[test]
+    fn egress_real_actor_closure_is_terminal_for_a_retained_row() {
+        let target = bls(4);
+        let (network, actor) = IrohaNetwork::actor_admission_for_tests(
+            PeerId::new(bls(3).public_key().clone()),
+            std::collections::HashSet::from([PeerId::new(target.public_key().clone())]),
+            std::num::NonZeroUsize::new(4).unwrap(),
+        );
+        let net = P2pNet::new(network);
+        let to = core_key(target.public_key()).unwrap();
+        assert!(matches!(
+            net.send(&to, &row_frame(0)),
+            SendOutcome::Admitted
+        ));
+        let owner = pending(net.send(&to, &row_frame(1)));
+        drop(actor);
+        assert!(matches!(owner.retry(), SendOutcome::Closed));
+        assert_eq!(net.stats().closed, 1);
+        assert_eq!(net.stats().backpressured, 1);
+    }
+
+    #[test]
+    fn egress_missing_membership_returns_ownership_without_actor_admission() {
+        let target = bls(4);
+        let (network, mut actor) = IrohaNetwork::actor_admission_for_tests(
+            PeerId::new(bls(3).public_key().clone()),
+            std::collections::HashSet::new(),
             std::num::NonZeroUsize::new(1).unwrap(),
         );
         let net = P2pNet::new(network);
-        let msg = WireMessage::BlockRequest(BlockRequest {
-            instance: Hash32([9; 32]),
-            height: 3,
-            block_hash: Hash32::ZERO,
-        });
-        let frame = frame_of(&msg);
         let to = core_key(target.public_key()).unwrap();
-        net.send(&to, &frame);
-        assert_eq!(net.stats().sent, 1);
-        net.send(&to, &frame);
-        assert_eq!(net.stats().backpressured, 1, "queue full: dropped");
-        net.send(&core_key(stranger.public_key()).unwrap(), &frame);
-        assert_eq!(
-            net.stats().backpressured,
-            2,
-            "no reliable membership: dropped"
-        );
-        let mut seen = Vec::new();
-        let drained = actor.drain_posts(|post| {
-            let NetworkMessage::Sumeragi(envelope) = &post.data else {
-                panic!("not a Sumeragi frame");
-            };
-            seen.push((post.peer_id.clone(), envelope.bytes().to_vec()));
-        });
-        assert_eq!(drained, 1);
-        assert_eq!(seen, vec![(target_peer, msg.encode().unwrap())]);
-        net.send(&to, &frame);
-        assert_eq!(
-            net.stats().sent,
-            2,
-            "admitted again after the actor drained"
-        );
-        let closed = P2pNet::new(IrohaNetwork::closed_for_tests());
-        closed.send(&to, &frame);
-        let stats = closed.stats();
-        assert_eq!(stats.sent, 0);
-        assert_eq!(stats.closed + stats.backpressured + stats.rejected, 1);
+        let owner = pending(net.send(&to, &row_frame(0)));
+        let owner = pending(owner.retry());
+        assert_eq!(actor.drain_posts(|_| {}), 0);
+        assert_eq!(net.stats().sent, 0);
+        assert_eq!(net.stats().backpressured, 2);
+        drop(owner);
     }
 
     /// A sink that records deliveries.
@@ -1276,7 +1544,7 @@ mod tests {
         let sink = Arc::new(Sink::default());
         ingress.register(i, sink.clone());
         let sender = bls(5);
-        let msg = WireMessage::BlockRequest(BlockRequest {
+        let msg = WireMessage::PayloadRequest(PayloadRequest {
             instance: i,
             height: 3,
             block_hash: Hash32::ZERO,
@@ -1308,28 +1576,13 @@ mod tests {
             ingress.route(peer_message(&ed, frame(i))),
             Routed::BadSender
         );
-        let big = WireMessage::BlockResponse(BlockResponse {
+        let big = WireMessage::PayloadChunk(PayloadChunk {
             instance: i,
-            block: Block {
-                header: BlockHeader {
-                    instance: i,
-                    epoch: EpochId {
-                        epoch: 0,
-                        context: Hash32([0x61; 32]),
-                    },
-                    height: 1,
-                    origin_view: 0,
-                    parent_hash: Hash32::ZERO,
-                    parent_result: Hash32::ZERO,
-                    payload_hash: Hash32::ZERO,
-                    payload_len: 0,
-                    proposer: 0,
-                    skipped_leaders: Vec::new(),
-                    control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-                    attest: false,
-                },
-                payload: vec![0; 70 * 1024],
-            },
+            height: 1,
+            block_hash: Hash32::ZERO,
+            index: 0,
+            // A bounded valid row frame can exceed this instance's smaller bulk cap.
+            bytes: RowBytes::from_untrusted(vec![0; caps.bulk]).unwrap(),
         });
         let oversize =
             NetworkMessage::Sumeragi(Arc::new(SumeragiFrame::new(i, big.encode().unwrap())));
@@ -1386,7 +1639,7 @@ mod tests {
         )
         .unwrap();
         let sender = bls(7);
-        let msg = WireMessage::BlockRequest(BlockRequest {
+        let msg = WireMessage::PayloadRequest(PayloadRequest {
             instance: i,
             height: 3,
             block_hash: Hash32::ZERO,

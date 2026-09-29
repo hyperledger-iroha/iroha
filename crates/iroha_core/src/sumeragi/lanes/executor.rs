@@ -4,6 +4,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    io,
     sync::Arc,
     time::Duration,
 };
@@ -16,14 +17,21 @@ use iroha_data_model::{
 };
 use iroha_sumeragi::{
     api::ExecOutcome,
-    message::{Block, Qc},
+    availability::{AvailableBody, PayloadBytes},
+    message::Qc,
     types::{AppliedConfig, ConfigSlot, Hash32, HeightConfig},
 };
 
 use super::{
     Admission, AnchorView, LANE_DEDUP_WINDOW, LaneBatch, LaneChainView, TransactionCheck, admit,
 };
-use crate::sumeragi::driver::traits::{BlockStore, Executor, PublicationError};
+use crate::sumeragi::driver::{
+    SharedCrypto,
+    acquisition::{StoredAcquisition, StoredProgress},
+    payload_build::PayloadBuild,
+    traits::{BlockStore, Executor, PublicationError},
+};
+use mv::allocation::AllocationBudget;
 
 /// The global chain as a lane executor sees it: anchors, and a way to wait for one.
 pub trait AnchorSource: AnchorView + Send + Sync {
@@ -97,6 +105,7 @@ struct Applied {
 /// The executor of one lane instance.
 pub struct LaneExecutor<A, C, T> {
     record: SumeragiLaneRecord,
+    instance: Hash32,
     config: HeightConfig,
     anchors: Arc<A>,
     checks: C,
@@ -104,6 +113,26 @@ pub struct LaneExecutor<A, C, T> {
     anchor_wait: Duration,
     applied: Applied,
     cache: BTreeMap<Hash32, Executed>,
+    budget: AllocationBudget,
+    payload_build: Option<LanePayloadBuild>,
+}
+
+struct LanePayloadBuild {
+    height: u64,
+    view: u64,
+    max_bytes: u32,
+    job: PayloadBuild<LaneBatch>,
+}
+
+/// Retained lane startup. A local refusal returns this exact prefix/read/restoration owner.
+/// Only verified available bodies supply the recovered deduplication facts.
+pub struct LaneRecovery<A, C, T> {
+    executor: LaneExecutor<A, C, T>,
+    store: Arc<dyn BlockStore>,
+    crypto: SharedCrypto,
+    tip: u64,
+    next: u64,
+    pending: Option<(Qc, StoredAcquisition)>,
 }
 
 impl<A, C, T> core::fmt::Debug for LaneExecutor<A, C, T> {
@@ -123,68 +152,112 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
     ///
     /// # Errors
     /// A stored block that is missing or whose payload is not a lane batch.
-    pub fn recover(
+    pub fn begin_recover(
         record: SumeragiLaneRecord,
         config: HeightConfig,
+        instance: Hash32,
         anchors: Arc<A>,
         checks: C,
         transactions: Option<Arc<T>>,
         genesis_hash: Hash32,
-        store: &dyn BlockStore,
-    ) -> Result<Self, String> {
+        store: Arc<dyn BlockStore>,
+        crypto: SharedCrypto,
+        budget: AllocationBudget,
+    ) -> LaneRecovery<A, C, T> {
         let tip = store.height();
-        let mut state = ChainState::default();
-        let mut block_hash = genesis_hash;
-        let first = tip
-            .saturating_sub(u64::try_from(LANE_DEDUP_WINDOW).unwrap_or(u64::MAX))
-            .saturating_add(1);
-        for height in first.max(1)..=tip {
-            let entry = store
-                .entry(height)
-                .ok_or_else(|| format!("lane block {height} is missing from the store"))?;
-            let batch = LaneBatch::from_payload(&entry.block.payload)
-                .map_err(|error| format!("lane block {height}: {error}"))?;
-            state = state.after(
-                batch.anchor_height,
-                batch
-                    .transactions
-                    .iter()
-                    .map(SignedTransaction::hash_as_entrypoint)
-                    .collect(),
-            );
-            block_hash = entry.commit_qc.block_hash;
-        }
-        Ok(Self {
-            anchor_wait: Duration::from_millis(config.params.e_max.into()),
-            record,
-            config,
-            anchors,
-            checks,
-            transactions,
-            applied: Applied {
-                height: tip,
-                block_hash,
-                state,
+        let next = tip
+            .saturating_sub(LANE_DEDUP_WINDOW as u64)
+            .saturating_add(1)
+            .max(1);
+        LaneRecovery {
+            executor: Self {
+                anchor_wait: Duration::from_millis(config.params.e_max.into()),
+                record,
+                config,
+                instance,
+                anchors,
+                checks,
+                transactions,
+                applied: Applied {
+                    height: tip,
+                    block_hash: genesis_hash,
+                    state: ChainState::default(),
+                },
+                cache: BTreeMap::new(),
+                budget,
+                payload_build: None,
             },
-            cache: BTreeMap::new(),
-        })
+            store,
+            crypto,
+            tip,
+            next,
+            pending: None,
+        }
     }
 
-    fn parent_state(&self, block: &Block) -> Option<ChainState> {
-        let parent = block.header.parent_hash;
-        if parent == self.applied.block_hash && block.header.height == self.applied.height + 1 {
+    fn finish_payload(&mut self) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+        let build = self
+            .payload_build
+            .take()
+            .expect("retained lane payload source");
+        let LanePayloadBuild {
+            height,
+            view,
+            max_bytes,
+            job,
+        } = build;
+        match job.finish(
+            |batch| norito::codec::encode_adaptive_into(batch, &mut io::sink()),
+            |batch, mut writer| norito::codec::encode_adaptive_into(batch, &mut writer).map(|_| ()),
+        ) {
+            Ok((_, payload)) => Ok((Some(payload), false)),
+            Err((job, error)) => {
+                let local = error.is_local_refusal();
+                self.payload_build = Some(LanePayloadBuild {
+                    height,
+                    view,
+                    max_bytes,
+                    job,
+                });
+                if local {
+                    Err(PublicationError::Retryable(format!(
+                        "lane payload admission: {error:?}"
+                    )))
+                } else {
+                    Err(PublicationError::RecoveryRequired(format!(
+                        "lane payload encoding: {error:?}"
+                    )))
+                }
+            }
+        }
+    }
+
+    fn parent_state(&self, block: &AvailableBody) -> Option<ChainState> {
+        let parent = block.header().parent_hash;
+        if parent == self.applied.block_hash && block.header().height == self.applied.height + 1 {
             return Some(self.applied.state.clone());
         }
         self.cache
             .get(&parent)
-            .filter(|executed| executed.height + 1 == block.header.height)
+            .filter(|executed| executed.height + 1 == block.header().height)
             .map(|executed| executed.state.clone())
     }
 
-    fn run(&mut self, block: &Block, block_hash: &Hash32, parent: ChainState) -> ExecOutcome {
+    fn run(
+        &mut self,
+        block: &AvailableBody,
+        block_hash: &Hash32,
+        parent: ChainState,
+    ) -> ExecOutcome {
+        if !block.admitted_to(&self.budget)
+            || block.source().instance() != self.instance
+            || block.source().config() != &self.config
+        {
+            return ExecOutcome::Invalid;
+        }
         // Lane instances admit batches; only G executes beacon/Parliament control.
         // Match the independent lane evidence verifier before caching any admission.
-        if block.header.attest || !block.header.control_witness.is_empty() {
+        if block.header().attest || !block.header().control_witness.is_empty() {
             return ExecOutcome::Invalid;
         }
         let admission = |executor: &Self| {
@@ -194,12 +267,12 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
                 &parent.view(),
                 &executor.checks,
                 &executor.config,
-                &block.payload,
+                block.payload().as_slice(),
             )
         };
         let mut outcome = admission(self);
         if let Ok(Admission::Pending) = outcome
-            && let Ok(batch) = LaneBatch::from_payload(&block.payload)
+            && let Ok(batch) = LaneBatch::from_payload(block.payload().as_slice())
             && self.anchors.wait_for(batch.anchor_height, self.anchor_wait)
         {
             outcome = admission(self);
@@ -211,8 +284,8 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
                 self.cache.insert(
                     *block_hash,
                     Executed {
-                        height: block.header.height,
-                        parent: block.header.parent_hash,
+                        height: block.header().height,
+                        parent: block.header().parent_hash,
                         result: r,
                         state,
                     },
@@ -228,6 +301,111 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
             }
         }
     }
+}
+
+impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecovery<A, C, T> {
+    /// Continue the same startup owner, preserving every completed prefix and partial read.
+    ///
+    /// # Errors
+    /// Returns this exact job on temporary refusal or corrupt historical data. Only WouldBlock
+    /// is retryable; the caller reports other errors instead of starting from an empty state.
+    #[allow(
+        clippy::result_large_err,
+        reason = "retain exact lane recovery ownership"
+    )]
+    pub fn complete(mut self) -> Result<LaneExecutor<A, C, T>, (Self, io::Error)> {
+        match self.advance() {
+            Ok(()) => Ok(self.executor),
+            Err(error) => Err((self, error)),
+        }
+    }
+    fn advance(&mut self) -> io::Result<()> {
+        while self.next <= self.tip {
+            if self.pending.is_none() {
+                let entry = self.store.entry(self.next)?.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "committed lane entry missing")
+                })?;
+                let source = self
+                    .store
+                    .availability_source(self.next, entry.commit_qc.block_hash)?
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "lane recovery authority unresolved",
+                        )
+                    })?;
+                if source.config() != &self.executor.config {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "lane recovery authority differs from activated incarnation",
+                    ));
+                }
+                let job = StoredAcquisition::begin(&*self.store, source).map_err(recovery_error)?;
+                self.pending = Some((entry.commit_qc, job));
+            }
+            let (qc, job) = self
+                .pending
+                .as_mut()
+                .expect("retained original lane restoration");
+            match job
+                .poll(&self.executor.budget, &*self.crypto)
+                .map_err(recovery_error)?
+            {
+                StoredProgress::Pending(_) => {
+                    return Err(io::Error::from(io::ErrorKind::WouldBlock));
+                }
+                StoredProgress::Absent => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "committed lane body missing",
+                    ));
+                }
+                StoredProgress::Available(body) => {
+                    let batch =
+                        LaneBatch::from_payload(body.payload().as_slice()).map_err(|error| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("lane recovery batch: {error}"),
+                            )
+                        })?;
+                    self.executor.applied.state = self.executor.applied.state.after(
+                        batch.anchor_height,
+                        batch
+                            .transactions
+                            .iter()
+                            .map(SignedTransaction::hash_as_entrypoint)
+                            .collect(),
+                    );
+                    self.executor.applied.block_hash = qc.block_hash;
+                    self.pending = None;
+                    self.next = self.next.checked_add(1).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "lane height overflow")
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+fn recovery_error(error: crate::sumeragi::driver::acquisition::StoredError) -> io::Error {
+    use crate::sumeragi::{driver::acquisition::StoredError, durable_artifact::BodyReadError};
+    let retry = match &error {
+        StoredError::Restoration(error) => error.is_local_refusal(),
+        StoredError::Read(BodyReadError::Admission(error)) => error.is_local_refusal(),
+        StoredError::Read(BodyReadError::Io(error)) => matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        ),
+        _ => false,
+    };
+    io::Error::new(
+        if retry {
+            io::ErrorKind::WouldBlock
+        } else {
+            io::ErrorKind::InvalidData
+        },
+        format!("lane recovery: {error:?}"),
+    )
 }
 
 impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
@@ -257,7 +435,13 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
         Ok(())
     }
 
-    fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
+    fn execute(&mut self, block: &AvailableBody, block_hash: &Hash32) -> Option<ExecOutcome> {
+        if !block.admitted_to(&self.budget)
+            || block.source().instance() != self.instance
+            || block.source().config() != &self.config
+        {
+            return Some(ExecOutcome::Invalid);
+        }
         if let Some(executed) = self.cache.get(block_hash) {
             return Some(ExecOutcome::Valid(executed.result));
         }
@@ -272,9 +456,17 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
 
     fn prepare(
         &mut self,
-        block: &Block,
+        block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
+        if !block.admitted_to(&self.budget)
+            || block.source().instance() != self.instance
+            || block.source().config() != &self.config
+        {
+            return Err(PublicationError::RecoveryRequired(
+                "lane publication changed its original custody authority".into(),
+            ));
+        }
         let hash = commit_qc.block_hash;
         if let Some(executed) = self.cache.get(&hash)
             && executed.parent == self.applied.block_hash
@@ -293,12 +485,24 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
         }
     }
 
-    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<AppliedConfig, PublicationError> {
+    fn commit(
+        &mut self,
+        block: &AvailableBody,
+        commit_qc: &Qc,
+    ) -> Result<AppliedConfig, PublicationError> {
+        if !block.admitted_to(&self.budget)
+            || block.source().instance() != self.instance
+            || block.source().config() != &self.config
+        {
+            return Err(PublicationError::RecoveryRequired(
+                "lane apply changed its original custody authority".into(),
+            ));
+        }
         let executed = self.cache.remove(&commit_qc.block_hash).ok_or_else(|| {
             PublicationError::Retryable("the committed lane block is not prepared".into())
         })?;
         self.applied = Applied {
-            height: block.header.height,
+            height: block.header().height,
             block_hash: commit_qc.block_hash,
             state: executed.state,
         };
@@ -311,25 +515,33 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
 
     fn build(
         &mut self,
-        _height: u64,
-        _view: u64,
+        height: u64,
+        view: u64,
         max_bytes: u32,
         _exec_budget_ms: u32,
-    ) -> (Vec<u8>, bool) {
+    ) -> Result<(Option<PayloadBytes>, bool), PublicationError> {
+        if self
+            .payload_build
+            .as_ref()
+            .is_some_and(|p| p.height == height && p.view == view && p.max_bytes == max_bytes)
+        {
+            return self.finish_payload();
+        }
+        self.payload_build = None;
         let Some(transactions) = self.transactions.as_ref() else {
-            return (Vec::new(), false);
+            return Ok((None, false));
         };
         let (anchor_height, anchor_hash) = self.anchors.tip();
         if !self.record.admits_anchor(anchor_height) || anchor_height < self.applied.state.anchor {
-            return (Vec::new(), false);
+            return Ok((None, false));
         }
         // Skip what the lane still carries: recent blocks the global chain may merge fresh, and
         // executed, uncommitted blocks.
-        let view = self.applied.state.view();
-        let mut skip = view
+        let chain_view = self.applied.state.view();
+        let mut skip = chain_view
             .recent
             .keys()
-            .filter(|hash| view.repeats(hash, anchor_height, self.record.anchor_freshness))
+            .filter(|hash| chain_view.repeats(hash, anchor_height, self.record.anchor_freshness))
             .copied()
             .collect::<BTreeSet<_>>();
         for executed in self.cache.values() {
@@ -344,18 +556,35 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
         // The batch merges after the anchor: route as of the next global height.
         let selected = transactions.candidates(anchor_height.saturating_add(1), budget, &skip);
         if selected.is_empty() {
-            return (Vec::new(), false);
+            return Ok((None, false));
         }
-        let payload = LaneBatch {
+        // Canonical framing is part of the payload limit. Trim the selected source before
+        // creating its retained encoding job; allocator refusal never changes selection.
+        let mut batch = LaneBatch {
             anchor_height,
             anchor_hash,
             transactions: selected,
+        };
+        loop {
+            let length =
+                norito::codec::encode_adaptive_into(&batch, &mut io::sink()).map_err(|error| {
+                    PublicationError::RecoveryRequired(format!("lane payload length: {error}"))
+                })?;
+            if length <= max_bytes as usize {
+                break;
+            }
+            batch.transactions.pop();
+            if batch.transactions.is_empty() {
+                return Ok((None, false));
+            }
         }
-        .to_payload();
-        if u32::try_from(payload.len()).map_or(true, |len| len > max_bytes) {
-            return (Vec::new(), false);
-        }
-        (payload, false)
+        self.payload_build = Some(LanePayloadBuild {
+            height,
+            view,
+            max_bytes,
+            job: PayloadBuild::new(batch, self.budget.clone(), max_bytes as usize),
+        });
+        self.finish_payload()
     }
 
     fn reject(&mut self, height: u64, view: u64, block_hash: &Hash32) {
@@ -387,15 +616,19 @@ mod tests {
         topology::{DataSpaceId, LaneId},
     };
     use iroha_sumeragi::{
+        availability::{AvailabilitySource, PayloadAuthoring},
         message::{BlockHeader as CoreHeader, VoteKind},
         preimage::payload_hash,
-        testing::FakeCrypto,
         types::{AggregateSignature, Bitmap, SIGNATURE_LEN},
     };
     use parking_lot::Mutex;
 
     use super::*;
-    use crate::sumeragi::lanes::lane_height_config;
+    use crate::sumeragi::{
+        body_read::{BodyReadError, BodyReadJob, BodyReader},
+        crypto::{BlsCrypto, KeyPairSigner},
+        lanes::lane_height_config,
+    };
 
     fn anchor_hash(height: u64) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([u8::try_from(height).unwrap(); 32]))
@@ -450,14 +683,22 @@ mod tests {
     }
 
     struct NoStore;
+    impl BodyReader for NoStore {
+        fn begin_read(&self, _: AvailabilitySource) -> Result<Box<dyn BodyReadJob>, BodyReadError> {
+            panic!("the empty committed store must never be read during height-zero recovery");
+        }
+    }
     impl BlockStore for NoStore {
         fn height(&self) -> u64 {
             0
         }
-        fn entry(&self, _height: u64) -> Option<iroha_sumeragi::message::SyncEntry> {
-            None
+        fn entry(&self, _height: u64) -> io::Result<Option<iroha_sumeragi::message::SyncEntry>> {
+            Ok(None)
         }
-        fn append(&self, _block: &Block, _qc: &Qc) -> std::io::Result<()> {
+        fn availability_source(&self, _: u64, _: Hash32) -> io::Result<Option<AvailabilitySource>> {
+            Ok(None)
+        }
+        fn append(&self, _block: &AvailableBody, _qc: &Qc) -> std::io::Result<()> {
             Ok(())
         }
     }
@@ -472,6 +713,7 @@ mod tests {
 
     fn record() -> SumeragiLaneRecord {
         SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(16),
             dataspace: DataSpaceId::new(0),
             incarnation: [4; 32],
@@ -501,35 +743,63 @@ mod tests {
         .sign(pair.private_key())
     }
 
-    fn block(height: u64, parent: Hash32, payload: Vec<u8>) -> Block {
-        let crypto = FakeCrypto::new();
-        Block {
-            header: CoreHeader {
-                instance: Hash32([1; 32]),
-                epoch: lane_height_config(&record()).unwrap().epoch.id,
-                height,
-                origin_view: 0,
-                parent_hash: parent,
-                parent_result: Hash32([0; 32]),
-                payload_hash: payload_hash(&crypto, &payload),
-                payload_len: u32::try_from(payload.len()).unwrap(),
-                proposer: 0,
-                skipped_leaders: Vec::new(),
-                control_witness: Default::default(),
-                attest: false,
-            },
-            payload,
-        }
+    fn funded(lane: &LaneExecutor<Global, Accept, Queue>, bytes: Vec<u8>) -> PayloadBytes {
+        let mut payload = PayloadBytes::from_untrusted(bytes).expect("nonempty fixture work");
+        payload.admit(&lane.budget).expect("original fixture pool");
+        payload
     }
 
-    fn qc(block: &Block, result: Hash32) -> Qc {
+    fn authored(
+        lane: &LaneExecutor<Global, Accept, Queue>,
+        header: CoreHeader,
+        payload: PayloadBytes,
+    ) -> AvailableBody {
+        let pair = KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal);
+        let signer = KeyPairSigner::new(&pair).expect("actual lane signer");
+        PayloadAuthoring::new(header, payload)
+            .complete(
+                lane.instance,
+                &lane.config,
+                &lane.budget,
+                &BlsCrypto::new(),
+                &signer,
+            )
+            .unwrap_or_else(|_| panic!("actual original signed lane availability"))
+            .body
+    }
+
+    fn block(
+        lane: &LaneExecutor<Global, Accept, Queue>,
+        height: u64,
+        parent: Hash32,
+        payload: PayloadBytes,
+    ) -> AvailableBody {
+        let header = CoreHeader {
+            instance: lane.instance,
+            epoch: lane.config.epoch.id,
+            height,
+            origin_view: 0,
+            parent_hash: parent,
+            parent_result: Hash32::ZERO,
+            payload_hash: payload_hash(&BlsCrypto::new(), payload.as_slice()),
+            availability_digest: Hash32::ZERO,
+            payload_len: u32::try_from(payload.as_slice().len()).unwrap(),
+            proposer: 0,
+            skipped_leaders: Vec::new(),
+            control_witness: Default::default(),
+            attest: false,
+        };
+        authored(lane, header, payload)
+    }
+
+    fn qc(block: &AvailableBody, result: Hash32) -> Qc {
         Qc {
             kind: VoteKind::Commit,
-            instance: block.header.instance,
-            epoch: block.header.epoch,
-            height: block.header.height,
+            instance: block.header().instance,
+            epoch: block.header().epoch,
+            height: block.header().height,
             view: 0,
-            block_hash: block.hash(&FakeCrypto::new()),
+            block_hash: block.header().hash(&BlsCrypto::new()),
             result,
             attest: false,
             signers: Bitmap::from_indices(1, [0]).unwrap(),
@@ -545,16 +815,20 @@ mod tests {
     ) -> LaneExecutor<Global, Accept, Queue> {
         let record = record();
         let config = lane_height_config(&record).expect("config");
-        LaneExecutor::recover(
+        LaneExecutor::begin_recover(
             record,
             config,
+            Hash32([1; 32]),
             Arc::clone(global),
             Accept,
             queue,
-            Hash32([0; 32]),
-            &NoStore,
+            Hash32::ZERO,
+            Arc::new(NoStore),
+            Arc::new(BlsCrypto::new()),
+            AllocationBudget::new(1 << 20),
         )
-        .expect("recover")
+        .complete()
+        .unwrap_or_else(|_| panic!("empty lane store recovery"))
     }
 
     #[test]
@@ -610,11 +884,12 @@ mod tests {
         );
         assert!(lane.cache.is_empty());
         assert_eq!(lane.applied.height, 0);
-        let payload = lane.build(1, 0, 1 << 20, 100).0;
-        let valid = block(1, lane.applied.block_hash, payload);
-        let mut foreign = valid.clone();
-        foreign.header.control_witness = control;
-        let foreign_hash = foreign.hash(&FakeCrypto::new());
+        let payload = lane.build(1, 0, 1 << 20, 100).unwrap().0.unwrap();
+        let valid = block(&lane, 1, lane.applied.block_hash, payload);
+        let mut header = valid.header().clone();
+        header.control_witness = control;
+        let foreign = authored(&lane, header, valid.payload().clone());
+        let foreign_hash = foreign.hash(&BlsCrypto::new());
         assert_eq!(
             lane.execute(&foreign, &foreign_hash),
             Some(ExecOutcome::Invalid)
@@ -624,15 +899,16 @@ mod tests {
             Ok(None)
         );
         assert!(lane.cache.is_empty());
-        foreign = valid.clone();
-        foreign.header.attest = true;
+        let mut header = valid.header().clone();
+        header.attest = true;
+        let foreign = authored(&lane, header, valid.payload().clone());
         assert_eq!(
-            lane.execute(&foreign, &foreign.hash(&FakeCrypto::new())),
+            lane.execute(&foreign, &foreign.hash(&BlsCrypto::new())),
             Some(ExecOutcome::Invalid)
         );
         assert!(lane.cache.is_empty());
         assert!(matches!(
-            lane.execute(&valid, &valid.hash(&FakeCrypto::new())),
+            lane.execute(&valid, &valid.hash(&BlsCrypto::new())),
             Some(ExecOutcome::Valid(_))
         ));
     }
@@ -645,34 +921,67 @@ mod tests {
         let first = tx(1);
         let queue = Arc::new(Queue(Mutex::new(vec![first.clone()])));
         let mut lane = executor(&global, Some(Arc::clone(&queue)));
-        let (payload, attest) = lane.build(1, 0, 1 << 20, 100);
+        let (payload, attest) = lane.build(1, 0, 1 << 20, 100).unwrap();
+        let payload = payload.expect("selected transaction work");
         assert!(!attest);
-        let batch = LaneBatch::from_payload(&payload).expect("batch");
+        let batch = LaneBatch::from_payload(payload.as_slice()).expect("batch");
         assert_eq!(batch.anchor_height, 5);
         assert_eq!(batch.transactions, vec![first.clone()]);
-        let b1 = block(1, Hash32([0; 32]), payload);
-        let h1 = b1.hash(&FakeCrypto::new());
+        let b1 = block(&lane, 1, Hash32::ZERO, payload);
+        let h1 = b1.hash(&BlsCrypto::new());
         let Some(ExecOutcome::Valid(r1)) = lane.execute(&b1, &h1) else {
             panic!("valid");
         };
         assert_eq!(lane.prepare(&b1, &qc(&b1, r1)), Ok(Some(r1)));
         lane.commit(&b1, &qc(&b1, r1)).expect("commit");
         // The committed transaction is not proposed again, and a block repeating it is invalid.
-        assert!(lane.build(2, 0, 1 << 20, 100).0.is_empty());
+        assert!(lane.build(2, 0, 1 << 20, 100).unwrap().0.is_none());
         let repeat = LaneBatch {
             anchor_height: 5,
             anchor_hash: anchor_hash(5),
             transactions: vec![first],
         }
         .to_payload();
-        let b2 = block(2, h1, repeat);
+        let b2 = block(&lane, 2, h1, funded(&lane, repeat));
         assert_eq!(
-            lane.execute(&b2, &b2.hash(&FakeCrypto::new())),
+            lane.execute(&b2, &b2.hash(&BlsCrypto::new())),
             Some(ExecOutcome::Invalid)
         );
         // A block whose parent is neither applied nor executed is parked.
-        let orphan = block(3, Hash32([9; 32]), Vec::new());
+        let orphan = block(&lane, 3, Hash32([9; 32]), b1.payload().clone());
         assert_eq!(lane.execute(&orphan, &Hash32([8; 32])), None);
+    }
+
+    #[test]
+    fn payload_refusal_retains_selected_work_and_anchor_for_retry() {
+        let global = Arc::new(Global {
+            applied: AtomicU64::new(5),
+        });
+        let first = tx(1);
+        let queue = Arc::new(Queue(Mutex::new(vec![first.clone()])));
+        let mut lane = executor(&global, Some(Arc::clone(&queue)));
+        lane.budget.set_limit_bytes(lane.budget.reserved_bytes());
+        assert!(matches!(
+            lane.build(1, 0, 1 << 20, 100),
+            Err(PublicationError::Retryable(_))
+        ));
+        // New ambient work must not replace the source already selected by this job.
+        *queue.0.lock() = vec![tx(2)];
+        global.applied.store(6, Ordering::SeqCst);
+        lane.budget.set_limit_bytes(1 << 20);
+        let (payload, attest) = lane.build(1, 0, 1 << 20, 100).unwrap();
+        let payload = payload.expect("refusal must not manufacture an empty proposal");
+        assert!(!attest);
+        assert!(payload.admitted_to(&lane.budget));
+        let batch = LaneBatch::from_payload(payload.as_slice()).expect("retained batch");
+        assert_eq!(batch.anchor_height, 5);
+        assert_eq!(batch.anchor_hash, anchor_hash(5));
+        assert_eq!(batch.transactions, vec![first]);
+        let body = block(&lane, 1, Hash32::ZERO, payload);
+        assert!(matches!(
+            lane.execute(&body, &body.hash(&BlsCrypto::new())),
+            Some(ExecOutcome::Valid(_))
+        ));
     }
 
     #[test]
@@ -687,8 +996,8 @@ mod tests {
             transactions: vec![tx(2)],
         }
         .to_payload();
-        let b1 = block(1, Hash32([0; 32]), ahead);
-        let h1 = b1.hash(&FakeCrypto::new());
+        let b1 = block(&lane, 1, Hash32::ZERO, funded(&lane, ahead));
+        let h1 = b1.hash(&BlsCrypto::new());
         assert!(matches!(
             lane.execute(&b1, &h1),
             Some(ExecOutcome::Failed(_))
@@ -699,6 +1008,6 @@ mod tests {
             Some(ExecOutcome::Valid(_))
         ));
         // A lane without a transaction source builds nothing.
-        assert!(lane.build(1, 0, 1 << 20, 100).0.is_empty());
+        assert!(lane.build(1, 0, 1 << 20, 100).unwrap().0.is_none());
     }
 }

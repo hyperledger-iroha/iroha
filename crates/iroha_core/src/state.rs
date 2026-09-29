@@ -18,7 +18,9 @@ use crate::private_settlement::{
         plan_private_settlement_prepare_locks_v1, plan_private_settlement_receipt_v1,
         validate_private_settlement_persisted_state_v1,
     },
-    protocol::validate_private_settlement_committee_authority_v1,
+    protocol::{
+        native_private_settlement_route_v1, validate_private_settlement_committee_authority_v1,
+    },
     state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
 };
 use eyre::{Result, WrapErr, eyre};
@@ -1103,9 +1105,11 @@ macro_rules! with_world_overlay_fields {
             parameters,
             peers,
             consensus_schedule,
+            state_accumulator,
             consensus_keys,
             consensus_keys_by_pk,
             sumeragi_lanes,
+            sumeragi_amx,
             domain_committees,
             domain_endorsement_policies,
             domain_endorsements,
@@ -3736,6 +3740,10 @@ pub struct WorldData {
     /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator after the last published block: the parent World
+    /// state root of the next execution result (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    /// Derived from every canonical World entry; it never commits to itself.
+    pub(crate) state_accumulator: Cell<world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
@@ -4002,6 +4010,8 @@ pub struct WorldData {
         Storage<String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
     /// The global chain's lanes and autoscale history (`specs/sumeragi_lanes.md` §2, §6).
     pub(crate) sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
+    pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -4664,6 +4674,8 @@ pub struct WorldBlockFields<'world> {
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule:
         CellField<'world, crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    pub(crate) state_accumulator: CellField<'world, world_projection::WorldStateAccumulator>,
     /// Registered consensus/committee keys.
     pub(crate) consensus_keys: StorageField<'world, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
@@ -4671,6 +4683,8 @@ pub struct WorldBlockFields<'world> {
     /// The global chain's lanes and autoscale history.
     pub(crate) sumeragi_lanes:
         CellField<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state.
+    pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -5966,6 +5980,7 @@ impl WorldBlock<'_> {
             parameters,
             peers,
             consensus_schedule,
+            state_accumulator,
             viral_reward_budget,
             viral_campaign_budget,
             executor_data_model,
@@ -5987,6 +6002,7 @@ impl WorldBlock<'_> {
             merge_hint_roots,
             merge_global_state_root,
             sumeragi_lanes,
+            sumeragi_amx,
         );
         append_merge_executor_delta(&mut out, "executor", &self.executor);
         self.triggers.append_merge_execution_write_set(&mut out);
@@ -6326,6 +6342,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule:
         CellTransaction<'block, 'world, crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    pub(crate) state_accumulator:
+        CellTransaction<'block, 'world, world_projection::WorldStateAccumulator>,
     /// Registered consensus/committee keys.
     pub(crate) consensus_keys: StorageTransaction<'block, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
@@ -6333,6 +6352,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// The global chain's lanes and autoscale history.
     pub(crate) sumeragi_lanes:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state.
+    pub(crate) sumeragi_amx:
+        CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -8605,6 +8627,8 @@ pub struct WorldView<'world> {
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule:
         CellView<'world, crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    pub(crate) state_accumulator: CellView<'world, world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
@@ -8848,6 +8872,8 @@ pub struct WorldView<'world> {
     /// The global chain's lanes and autoscale history.
     pub(crate) sumeragi_lanes:
         CellView<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state.
+    pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -20863,6 +20889,8 @@ macro_rules! world_ro_accessors {
             storage consensus_keys_by_pk: String => Vec<ConsensusKeyId>;
             /// The global chain's lanes and autoscale history (read-only).
             ref sumeragi_lanes: iroha_data_model::sumeragi_lanes::SumeragiLaneState;
+            /// The global chain's AMX two-phase-commit state (read-only).
+            ref sumeragi_amx: iroha_data_model::sumeragi_amx::SumeragiAmxState;
             /// Pedersen parameter registry (read-only).
             storage pedersen_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>
@@ -24534,6 +24562,7 @@ impl<'block> WorldTransaction<'block, '_> {
             parameters: _,
             peers: _,
             consensus_schedule: _,
+            state_accumulator: _,
             domain_committees: _,
             domain_endorsement_policies: _,
             domain_endorsements: _,
@@ -24639,6 +24668,7 @@ impl<'block> WorldTransaction<'block, '_> {
             consensus_keys: _,
             consensus_keys_by_pk: _,
             sumeragi_lanes: _,
+            sumeragi_amx: _,
             pedersen_params: _,
             poseidon_params: _,
             runtime_upgrades: _,
@@ -24866,6 +24896,7 @@ impl<'block> WorldTransaction<'block, '_> {
         self.consensus_keys.apply();
         self.consensus_keys_by_pk.apply();
         self.sumeragi_lanes.apply();
+        self.sumeragi_amx.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
         self.runtime_upgrades.apply();
@@ -25167,6 +25198,7 @@ impl<'block> WorldTransaction<'block, '_> {
         self.sccp_light_client_stride_index.apply();
         self.peers.apply();
         self.consensus_schedule.apply();
+        self.state_accumulator.apply();
         self.parameters.apply();
     }
     /// Get `Domain` with an ability to modify it.
@@ -37454,6 +37486,11 @@ impl<'state> StateBlock<'state> {
             current_axt_slot,
             this.nexus.axt.replay_retention_slots.get(),
         );
+        // Fixture World edits stay inside the complete World state commitment.
+        let genesis = this._curr_block.is_genesis();
+        this.world
+            .advance_state_accumulator(genesis)
+            .map_err(|_| TransactionsBlockError::WorldCommitPreparation)?;
         let _state_commit_lock = commit_fence.lock();
         let _state_write_lock = write_fence.lock();
         this.world.prepare_publication();
@@ -39926,17 +39963,15 @@ impl StateTransaction<'_, '_> {
         &self,
         route: iroha_data_model::nexus::PrivateSettlementRouteV1,
     ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
-        let lane = self
-            .nexus
-            .lane_config
-            .entry(route.lane_id)
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Capability)?;
-        if lane.dataspace_id != route.dataspace_id
-            || self.lane_incarnations.get(&route.lane_id) != Some(&route.lane_incarnation)
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Capability);
-        }
-        Ok(())
+        // Match native transaction routing: block h consumes the committed
+        // global anchor h - 1, including activation and closing boundaries.
+        native_private_settlement_route_v1(
+            self.world.sumeragi_lanes(),
+            route,
+            self.block_height().saturating_sub(1),
+        )
+        .map(|_| ())
+        .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)
     }
     /// Bootstrap one explicitly governed confidential settlement pool in this transaction.
     pub(crate) fn bootstrap_private_settlement_pool_v1(

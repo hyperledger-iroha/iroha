@@ -253,13 +253,15 @@ impl ReadinessNode {
 
     pub(crate) fn start_at_tip(with_transaction: bool) -> Self {
         use iroha_core::sumeragi::{
-            driver::traits::{Frame, Net, NoObserver},
+            driver::traits::{Frame, Net, NoObserver, SendOutcome},
             node::{NodeConfig, NodeInputs},
             test_chain::{CertifiedTestChain, TestChainConfig},
         };
         struct DisconnectedTransport;
         impl Net for DisconnectedTransport {
-            fn send(&self, _: &iroha_sumeragi::types::PublicKey, _: &Frame) {}
+            fn send(&self, _: &iroha_sumeragi::types::PublicKey, _: &Frame) -> SendOutcome {
+                SendOutcome::Admitted
+            }
         }
         let prepared = CertifiedTestChain::prepare(TestChainConfig::new(World::default(), 10_000))
             .expect("original signed genesis and pristine State");

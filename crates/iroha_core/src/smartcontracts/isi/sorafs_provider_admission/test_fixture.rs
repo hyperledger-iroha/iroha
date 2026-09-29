@@ -211,17 +211,16 @@ impl ProviderAdmissionTestFixtureV1 {
 
     /// Commit the next block, one second after the previous one, after `setup` edited the World
     /// it is read at (setup outside consensus, see [`CertifiedTestChain::setup_world_at`]).
-    /// Without `certified`, the block's local `CommitQC` does not verify (two of four signers).
+    /// Without `certified`, corrupt the local QC after the actual exact-quorum commit.
     pub fn commit(&mut self, setup: impl FnOnce(&mut StateTransaction<'_, '_>), certified: bool) {
         self.time += 1;
         let time_ms = self.time * 1000;
         self.chain.setup_world_at(time_ms, setup);
-        let signers = if certified {
-            Signers::Quorum
-        } else {
-            Signers::BelowQuorum
-        };
-        self.chain.commit_with(Some(time_ms), Vec::new(), signers);
+        self.chain.commit_at(time_ms, Vec::new());
+        if !certified {
+            self.chain
+                .corrupt_local_quorum_for_test(self.chain.height(), Signers::BelowQuorum);
+        }
     }
 
     /// Configure the council and admit the provider (owned by `key(1)`) in one certified block.

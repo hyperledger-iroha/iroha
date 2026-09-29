@@ -181,9 +181,7 @@ fn canonical_leaves<'a>(
         })
         .collect();
     leaves.sort_by(|(left_order, left), (right_order, right)| {
-        left.path
-            .cmp(&right.path)
-            .then(left_order.cmp(right_order))
+        left.path.cmp(&right.path).then(left_order.cmp(right_order))
     });
     let mut out: Vec<Leaf<'a>> = Vec::with_capacity(leaves.len());
     for (_, leaf) in leaves {

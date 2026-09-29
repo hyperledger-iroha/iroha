@@ -8933,7 +8933,9 @@ fn validate_genesis_execution_offline(
         None,
     )
     .map_err(|error| {
-        Report::new(MainError::Config).attach(format!("native genesis execution failed: {error}"))
+        Report::new(error)
+            .change_context(MainError::Config)
+            .attach("native genesis execution failed")
     })?;
     let executed = state.world_view();
     if required_inrou_deployment_authority.is_some_and(|authority| {
@@ -11927,11 +11929,16 @@ mod tests {
                 )
                 .err()
                 .expect("same-named malformed token must never qualify");
-                assert!(
-                    format!("{error:?}").contains(
-                        &iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()
-                    )
-                );
+                let startup = error
+                    .downcast_ref::<iroha_core::sumeragi::startup::StartupError>()
+                    .expect("offline failure retains the native startup error");
+                assert!(matches!(
+                    startup,
+                    iroha_core::sumeragi::startup::StartupError::InvalidGenesis(error)
+                        if matches!(error.as_ref(), iroha_core::block::BlockValidationError::InvalidGenesis(
+                            iroha_core::block::InvalidGenesisError::RejectedOutput(_)
+                        ))
+                ));
             }
         }
         #[test]
@@ -12028,15 +12035,29 @@ mod tests {
             )
             .err()
             .expect("duplicate genesis registration must fail semantic execution");
-            let rendered = format!("{error:?}");
-            assert!(
-                rendered
-                    .contains(&iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()),
-                "unexpected offline validation error: {rendered}"
-            );
+            let startup = error
+                .downcast_ref::<iroha_core::sumeragi::startup::StartupError>()
+                .expect("offline failure retains the native startup error");
+            let iroha_core::sumeragi::startup::StartupError::InvalidGenesis(error) = startup else {
+                panic!("unexpected offline validation error: {startup:?}");
+            };
+            let iroha_core::block::BlockValidationError::InvalidGenesis(
+                iroha_core::block::InvalidGenesisError::RejectedOutput(rejection),
+            ) = error.as_ref()
+            else {
+                panic!("unexpected native validation error: {error:?}");
+            };
+            assert!(matches!(
+                rejection.reason.as_ref(),
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InstructionFailed(
+                        iroha_data_model::isi::error::InstructionExecutionError::Repetition(_)
+                    )
+                )
+            ));
         }
         #[test]
-        fn consensus_config_caps_use_canonical_v2_fields() {
+        fn consensus_config_caps_use_canonical_fields() {
             let config = sample_config();
             let caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("config caps should build");

@@ -130,3 +130,51 @@ def test_first_release_status_rejects_other_protocol_versions(version):
     value["protocol_version"] = version
     with pytest.raises(ValueError):
         SumeragiStatus.from_payload(value)
+
+
+def _status_corpus() -> dict[str, str]:
+    """Rows of the shared Rust-produced `GET /v1/sumeragi/status` corpus."""
+    from pathlib import Path
+
+    for directory in Path(__file__).resolve().parents:
+        path = directory / "fixtures" / "sumeragi" / "native_status_v1.tsv"
+        if path.is_file():
+            rows: dict[str, str] = {}
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                name, payload, norito_hex = line.split("\t")
+                assert name not in rows
+                assert norito_hex.startswith("4e525430"), "producer must retain its Norito archive"
+                rows[name] = payload
+            return rows
+    raise FileNotFoundError("fixtures/sumeragi/native_status_v1.tsv")
+
+
+def test_rust_status_corpus_parses_every_served_field_and_halt_reason():
+    from dataclasses import fields
+
+    rows = _status_corpus()
+    halts = {"safety_record_corrupt", "safety_record_inconsistent", "safety_violation",
+             "apply_diverged", "publication_recovery_required", "driver_anomaly"}
+    assert set(rows) == {"validator", "observer"} | halts
+    model_fields = {field.name for field in fields(SumeragiStatus)}
+    for name, payload in rows.items():
+        served = json.loads(payload)
+        assert set(served) == model_fields, name
+        status = SumeragiStatus.from_payload(parse_native_status_json(payload.encode()))
+        assert status.protocol_version == 1
+        assert status.view == (1 << 64) - 1 and status.level == (1 << 32) - 1
+        assert status.footprint.votes == (1 << 64) - 1
+        assert set(served["footprint"]) == {field.name for field in fields(status.footprint)}
+        if name in halts:
+            assert status.halted is not None and status.halted.reason == name
+            assert status.halted.details == served["halted"]["details"]
+        else:
+            assert status.halted is None
+    validator = SumeragiStatus.from_payload(parse_native_status_json(rows["validator"].encode()))
+    assert validator.leader is not None and validator.leader.startswith("ea0130")
+    assert validator.beacon_horizon is not None and validator.beacon_horizon.local_provider_ready
+    observer = SumeragiStatus.from_payload(parse_native_status_json(rows["observer"].encode()))
+    assert (observer.leader, observer.proxy_tail, observer.signer, observer.beacon_horizon) == (None,) * 4
+    assert observer.awaiting and observer.abstaining

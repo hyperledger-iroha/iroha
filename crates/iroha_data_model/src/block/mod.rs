@@ -602,6 +602,43 @@ impl SignedBlock {
         enforce_payload_len_limit(payload_len)?;
         Ok(payload_len)
     }
+    /// Exact byte length of this block's canonical resultless, certificate-free proposal wire.
+    ///
+    /// Counts the borrowed proposal graph without cloning transactions, execution context,
+    /// signatures or allocating a complete encoded payload. Includes the version and header.
+    ///
+    /// # Errors
+    /// A serialization, length overflow or active archive-limit error.
+    pub fn resultless_proposal_wire_len(&self) -> Result<usize, NoritoFrameError> {
+        self.checked_resultless_payload_len()?
+            .checked_add(1 + norito::core::Header::SIZE)
+            .ok_or(NoritoFrameError::LengthMismatch)
+    }
+
+    /// Write the canonical resultless, certificate-free proposal while borrowing this block.
+    ///
+    /// Executed and certified blocks project to their original proposal without copying the
+    /// source graph. The writer can use an exact original-pool allocation or a comparison sink.
+    /// Encoding and archive limits are checked before writing the first byte. A writer error
+    /// may leave a prefix; the caller retains and resets its own destination before retrying.
+    ///
+    /// # Errors
+    /// A serialization, archive-limit or destination I/O error.
+    pub fn write_resultless_proposal_wire<W: std::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<(), NoritoFrameError> {
+        self.resultless_proposal_wire_len()?;
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: None,
+            commit_certificate: None,
+        };
+        writer.write_all(&[self.version()])?;
+        norito::core::write_canonical_to_writer(&proposal, writer)
+    }
+
     /// Compare this exact borrowed resultless proposal with its canonical complete wire.
     ///
     /// The canonical encoder writes directly into a byte-comparison sink; this does not copy
@@ -697,20 +734,13 @@ impl SignedBlock {
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        self.checked_resultless_payload_len()?;
-        let proposal = SignedBlockOutputCandidate {
-            signatures: OutputFieldRef(&self.signatures),
-            payload: OutputFieldRef(&self.payload),
-            result: None,
-            commit_certificate: None,
-        };
         let mut codec_error = None;
         let hash = Hash::new_from_writer(|writer| {
-            writer.write_all(&[self.version()])?;
-            norito::core::write_canonical_to_writer(&proposal, writer).map_err(|error| {
-                codec_error = Some(error);
-                std::io::Error::other("canonical proposal encoding failed")
-            })
+            self.write_resultless_proposal_wire(writer)
+                .map_err(|error| {
+                    codec_error = Some(error);
+                    std::io::Error::other("canonical proposal encoding failed")
+                })
         });
         if let Some(error) = codec_error {
             return Err(error);
@@ -725,13 +755,11 @@ impl SignedBlock {
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn executed_block_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        self.without_commit_certificate()
-            .encode_wire()
-            .map(|wire| Hash::new(&wire))
+        self.executed_block_wire_identity().map(|(_, hash)| hash)
     }
     /// The byte length and hash of this exact canonical block wire without the node-local
     /// commit certificate (the pair a certified execution result commits to), computed by
-    /// borrowing the block instead of copying it.
+    /// borrowing the block and streaming its canonical wire without a complete encoded buffer.
     ///
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
@@ -742,13 +770,25 @@ impl SignedBlock {
             result: self.result.as_ref().map(OutputFieldRef),
             commit_certificate: None,
         };
-        let payload = encode_signed_block_payload(&candidate);
-        let mut prefix = Vec::with_capacity(1 + norito::core::Header::SIZE);
-        prefix.push(self.version());
-        write_signed_block_header(&payload, &mut prefix)?;
-        let len = u64::try_from(prefix.len().saturating_add(payload.len()))
-            .map_err(|_| NoritoFrameError::LengthMismatch)?;
-        Ok((len, Hash::new_from_chunks(&[&prefix, &payload])))
+        let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());
+        let payload_len = norito::core::encoded_payload_len(&candidate)?;
+        enforce_payload_len_limit(payload_len)?;
+        let len = payload_len
+            .checked_add(1 + norito::core::Header::SIZE)
+            .and_then(|len| u64::try_from(len).ok())
+            .ok_or(NoritoFrameError::LengthMismatch)?;
+        let mut codec_error = None;
+        let hash = Hash::new_from_writer(|writer| {
+            writer.write_all(&[self.version()])?;
+            norito::core::write_canonical_to_writer(&candidate, writer).map_err(|error| {
+                codec_error = Some(error);
+                std::io::Error::other("canonical executed block encoding failed")
+            })
+        });
+        if let Some(error) = codec_error {
+            return Err(error);
+        }
+        Ok((len, hash.map_err(NoritoFrameError::from)?))
     }
     #[inline]
     pub(crate) fn result_ref(&self) -> &BlockResult {
@@ -4146,3 +4186,7 @@ mod output_attachment_tests;
 #[cfg(test)]
 #[path = "proposal_wire_hash_tests.rs"]
 mod proposal_wire_hash_tests;
+
+#[cfg(all(test, feature = "transparent_api"))]
+#[path = "executed_wire_identity_tests.rs"]
+mod executed_wire_identity_tests;

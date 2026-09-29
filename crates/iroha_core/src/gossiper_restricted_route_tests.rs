@@ -47,13 +47,24 @@ async fn gossip_accepts_restricted_route_match() {
         nexus,
         LiveQueryStore::start_test(),
     ));
+    let native = super::restricted::tests::install_members(&state.world, 11, true);
+    super::restricted::tests::install_lane(&state.world, restricted_lane.as_u32(), native.clone());
+    let mut world = state.world.block();
+    let record = world
+        .sumeragi_lanes
+        .get_mut()
+        .lane_mut(restricted_lane)
+        .unwrap();
+    record.dataspace = restricted_dataspace;
+    record.active_from = 0;
+    world.commit();
     assert!(state.is_lane_active_for_authority(restricted_lane));
     let queue = Arc::new(Queue::test(
         QueueConfig::default(),
         &TimeSource::new_system(),
     ));
     let now = Instant::now();
-    let gossiper = TransactionGossiper {
+    let mut gossiper = TransactionGossiper {
         gossip_period: Duration::from_millis(50),
         gossip_size: NonZeroU32::new(1).expect("nonzero size"),
         gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -67,6 +78,7 @@ async fn gossip_accepts_restricted_route_match() {
         last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
         last_drop_at: None,
         network: IrohaNetwork::closed_for_tests(),
+        self_peer_id: native[0].peer.clone(),
         queue: Arc::clone(&queue),
         state: Arc::clone(&state),
         tx_frame_cap: 1024,
@@ -92,11 +104,54 @@ async fn gossip_accepts_restricted_route_match() {
             .expect("restricted route should resolve locally"),
         plan_for_route(route)
     );
+    for shared in [false, true] {
+        let (signed, _) = build_transaction(&format!("restricted-route-{shared}"));
+        let message = Arc::new(TransactionGossip {
+            txs: vec![signed.into()],
+            routes: vec![route],
+            plans: vec![plan_for_route(route)],
+            plane: GossipPlane::Restricted,
+        });
+        if shared {
+            gossiper.handle_transaction_gossip(Arc::clone(&message));
+        } else {
+            gossiper.handle_transaction_gossip(message);
+        }
+    }
+    assert_eq!(
+        queue.queued_len(),
+        2,
+        "owned and shared native deliveries are admitted"
+    );
+    // A restricted route cannot bypass recipient admission by declaring itself public.
+    let (signed, _) = build_transaction("restricted-body-public-plane");
     gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
         txs: vec![signed.into()],
         routes: vec![route],
         plans: vec![plan_for_route(route)],
-        plane: GossipPlane::Restricted,
+        plane: GossipPlane::Public,
     }));
-    assert_eq!(queue.queued_len(), 1);
+    assert_eq!(queue.queued_len(), 2);
+    // A global-only peer is not a recipient even when the private route is valid.
+    let global = super::restricted::tests::install_members(&state.world, 31, false);
+    gossiper.self_peer_id = global[0].peer.clone();
+    for shared in [false, true] {
+        let (signed, _) = build_transaction(&format!("unrelated-recipient-{shared}"));
+        let message = Arc::new(TransactionGossip {
+            txs: vec![signed.into()],
+            routes: vec![route],
+            plans: vec![plan_for_route(route)],
+            plane: GossipPlane::Restricted,
+        });
+        if shared {
+            gossiper.handle_transaction_gossip(Arc::clone(&message));
+        } else {
+            gossiper.handle_transaction_gossip(message);
+        }
+    }
+    assert_eq!(
+        queue.queued_len(),
+        2,
+        "unrelated identities cannot ingest restricted gossip"
+    );
 }

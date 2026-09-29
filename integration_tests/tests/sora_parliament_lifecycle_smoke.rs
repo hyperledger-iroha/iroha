@@ -7,6 +7,7 @@ use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
 };
+use iroha_sumeragi::availability::recommended_data_availability_layout;
 use std::{
     collections::BTreeMap,
     num::NonZeroU64,
@@ -26,7 +27,7 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         account::AccountId,
-        block::{SignedBlock, consensus::recommended_data_availability_layout},
+        block::SignedBlock,
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,

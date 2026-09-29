@@ -40,3 +40,45 @@ impl HttpTransport for AsyncOnlyTransport {
         })
     }
 }
+
+/// Deterministic pending-I/O barrier for executor responsiveness tests.
+///
+/// The controller waits for dispatch to enter the async transport, then releases
+/// it from a sibling future. Notifications retain one permit if the peer has
+/// not yet polled; operating-system preemption cannot turn success into a race.
+#[derive(Debug, Default)]
+pub(super) struct TransportGate {
+    entered: tokio::sync::Notify,
+    released: tokio::sync::Notify,
+}
+
+impl TransportGate {
+    pub(super) async fn wait_until_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    pub(super) fn release(&self) {
+        self.released.notify_one();
+    }
+}
+
+/// Async-only test transport that cannot finish before a sibling releases it.
+#[derive(Debug)]
+pub(super) struct GatedTransport {
+    pub(super) inner: AsyncOnlyTransport,
+    pub(super) gate: Arc<TransportGate>,
+}
+
+impl HttpTransport for GatedTransport {
+    fn send_blocking(&self, _: TransportRequest) -> eyre::Result<Response<Vec<u8>>> {
+        panic!("capability operations must use asynchronous transport")
+    }
+
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        Box::pin(async move {
+            self.gate.entered.notify_one();
+            self.gate.released.notified().await;
+            self.inner.send(request).await
+        })
+    }
+}

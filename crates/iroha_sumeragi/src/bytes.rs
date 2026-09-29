@@ -8,6 +8,9 @@ use std::{
     marker::PhantomData,
 };
 
+mod shared;
+pub use shared::{ByteAdmissionError, SharedBytes, SharedDomain};
+
 /// Storage policy for one semantic byte domain; only crate-owned policies are exposed.
 pub trait ByteStorage {
     /// Minimum occupied length, before constructing storage.
@@ -106,7 +109,7 @@ impl<S: ByteStorage> norito::NoritoSchema for ByteSequence<S> {
 }
 
 /// Semantic identity of a fixed-capacity byte sequence.
-pub trait InlineDomain {
+pub trait ByteDomain {
     /// Semantic name used for diagnostics.
     const NAME: &'static str;
     /// Fixed canonical Norito frame identity.
@@ -119,7 +122,7 @@ pub struct InlineBytes<const N: usize, D> {
     len: u16,
     domain: PhantomData<D>,
 }
-impl<const N: usize, D: InlineDomain> ByteStorage for InlineBytes<N, D> {
+impl<const N: usize, D: ByteDomain> ByteStorage for InlineBytes<N, D> {
     const MAX: usize = N;
     const NAME: &'static str = D::NAME;
     const FRAME: &'static str = D::FRAME;
@@ -147,7 +150,7 @@ impl fmt::Display for ByteLengthError {
     }
 }
 impl std::error::Error for ByteLengthError {}
-impl<const N: usize, D: InlineDomain> ByteSequence<InlineBytes<N, D>> {
+impl<const N: usize, D: ByteDomain> ByteSequence<InlineBytes<N, D>> {
     /// Empty bytes; application validation still determines whether a witness is required.
     #[must_use]
     pub const fn empty() -> Self {
@@ -185,13 +188,13 @@ impl<const N: usize, D: InlineDomain> ByteSequence<InlineBytes<N, D>> {
         self.storage.len as usize
     }
 }
-impl<const N: usize, D: InlineDomain> Default for ByteSequence<InlineBytes<N, D>> {
+impl<const N: usize, D: ByteDomain> Default for ByteSequence<InlineBytes<N, D>> {
     fn default() -> Self {
         Self::empty()
     }
 }
 // Failed writes preserve the original owner and bytes; there is no partial write or growth.
-impl<const N: usize, D: InlineDomain> io::Write for ByteSequence<InlineBytes<N, D>> {
+impl<const N: usize, D: ByteDomain> io::Write for ByteSequence<InlineBytes<N, D>> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let start = self.len();
         let end = start

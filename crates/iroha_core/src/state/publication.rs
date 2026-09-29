@@ -390,31 +390,43 @@ impl<'state> StateBlock<'state> {
                 nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
                 nexus.dataspace_catalog = pending.catalog_update.updated_dataspace_catalog.clone();
             }
-            *world_effects = Some(
-                world_commit::PreparedWorldCommit::prepare_overlay_mutations(
-                    world,
+            let effects = world_commit::PreparedWorldCommit::prepare_overlay_mutations(
+                world,
+                block_height,
+                &nexus,
+                &lane_incarnation_activation_heights,
+                pending_da_pin_intents.as_ref(),
+                pending_autoscale_lifecycle.as_ref(),
+            )
+            .map_err(|error| {
+                error!(
                     block_height,
-                    &nexus,
-                    &lane_incarnation_activation_heights,
-                    pending_da_pin_intents.as_ref(),
-                    pending_autoscale_lifecycle.as_ref(),
-                )
+                    ?error,
+                    "failed to prepare the exact World commit"
+                );
+                match error {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                        TransactionsBlockError::WorldCommitPreparation
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        TransactionsBlockError::ExecutionDeferred(reason)
+                    }
+                }
+            })?;
+            // The last World write: fold the block's complete change set, including every
+            // deterministic tail write above, into the stored World state accumulator, the
+            // parent World state root of the next execution result (§4.1, Appendix E, E51).
+            world
+                .advance_state_accumulator(_curr_block.is_genesis())
                 .map_err(|error| {
                     error!(
                         block_height,
                         ?error,
-                        "failed to prepare the exact World commit"
+                        "failed to advance the World state accumulator"
                     );
-                    match error {
-                        crate::execution_attempt::ExecutionAttemptError::Rejected(_) => {
-                            TransactionsBlockError::WorldCommitPreparation
-                        }
-                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                            TransactionsBlockError::ExecutionDeferred(reason)
-                        }
-                    }
-                })?,
-            );
+                    TransactionsBlockError::WorldCommitPreparation
+                })?;
+            *world_effects = Some(effects);
         }
         if !*fields_frozen {
             // All final private writes completed once above. Install every original

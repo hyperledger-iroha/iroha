@@ -422,6 +422,8 @@ pub struct EpochId {
 /// Authenticated scheduling bounds and leader randomness for one authority generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EpochConfig {
+    /// Exact signed layout; immutable across scheduling successors.
+    pub da_layout: crate::availability::DataAvailabilityLayout,
     /// Exact scheduling authorization and complete context identity.
     pub id: EpochId,
     /// Immutable authority-generation identity; retained epochs may share this value.
@@ -448,6 +450,7 @@ impl EpochConfig {
             && previous.last_height.checked_add(1) == Some(self.first_height)
             && self.contains(self.first_height)
             && self.id.context != previous.id.context
+            && self.da_layout == previous.da_layout
     }
 }
 
@@ -529,6 +532,7 @@ mod tests {
     #[test]
     fn authenticated_epoch_bounds_and_retention() {
         let first = EpochConfig {
+            da_layout: crate::availability::recommended_data_availability_layout(),
             id: EpochId {
                 epoch: 7,
                 context: Hash32([1; 32]),

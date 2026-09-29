@@ -36,8 +36,8 @@ const OPERATOR_READS = [
   ["/v1/pipeline/recovery/42", (client) => client.getPipelineRecovery(42)],
   ["/v1/sumeragi/status", (client) => client.getSumeragiStatus()],
   ["/v1/sumeragi/status", (client) => client.getSumeragiStatusTyped()],
+  ["/v1/sumeragi/lanes", (client) => client.getSumeragiLanes()],
   ["/v1/sumeragi/bls-keys", (client) => client.getSumeragiBlsKeys()],
-  ["/v1/sumeragi/leader", (client) => client.getSumeragiLeader()],
   ["/v1/sumeragi/params", (client) => client.getSumeragiParams()],
   [
     "/v1/sumeragi/evidence/count",

@@ -48,5 +48,6 @@ nonzero_ext = { workspace = true }
 zeroize.workspace = true
 
 [dev-dependencies]
+iroha_sumeragi = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
 irohad = { path = "../irohad", default-features = false, features = ["daemon"] }

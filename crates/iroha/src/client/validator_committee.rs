@@ -7,7 +7,7 @@ use iroha_data_model::{
 
 const COMMITTEE_STATUS_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
 
-impl Client {
+impl super::Nexus<'_> {
     /// Fetch one committee attempt as canonical Norito under the normal request deadline.
     ///
     /// Omit `target_epoch` to inspect the next scheduling epoch. These are progress
@@ -18,27 +18,51 @@ impl Client {
     ///
     /// # Errors
     /// Rejects transport, HTTP status, media type, body bound, codec, network and target mismatches.
-    pub fn get_validator_committee_status(
+    pub async fn validator_committee(
         &self,
         target_epoch: Option<u64>,
-    ) -> Result<ValidatorCommitteeStatusV1> {
-        let mut path = iroha_torii_shared::route_catalog::core::NEXUS_VALIDATOR_COMMITTEE_GET
-            .path()
-            .to_owned();
-        if let Some(epoch) = target_epoch {
-            path.push_str(&format!("?target_epoch={epoch}"));
+    ) -> crate::Result<ValidatorCommitteeStatusV1> {
+        let operation = "nexus.validator_committee.read";
+        if target_epoch == Some(0) {
+            return Err(crate::Error::InvalidRequest {
+                operation,
+                details: "target epoch must be positive".to_owned(),
+            });
         }
-        self.ensure_activation_evidence_deadline()?;
-        let response = self.send_builder(self.canonical_norito_get_request(
-            &path,
-            COMMITTEE_STATUS_RESPONSE_MAX_BYTES,
-            ActivationEvidenceReadAuth::Public,
-        )?)?;
-        let status: ValidatorCommitteeStatusV1 = Self::decode_canonical_norito_response(
+        let route = iroha_torii_shared::route_catalog::core::NEXUS_VALIDATOR_COMMITTEE_GET.path();
+        let path = target_epoch.map_or_else(
+            || route.to_owned(),
+            |epoch| format!("{route}?target_epoch={epoch}"),
+        );
+        let request = self
+            .client
+            .canonical_norito_get_request(
+                &path,
+                COMMITTEE_STATUS_RESPONSE_MAX_BYTES,
+                ActivationEvidenceReadAuth::Public,
+            )
+            .map_err(|error| crate::Error::InvalidRequest {
+                operation,
+                details: error.to_string(),
+            })?;
+        let response = dispatch::send(self.client, operation, request, APPLICATION_NORITO).await?;
+        if response.status() != StatusCode::OK {
+            return Err(crate::Error::Http {
+                operation,
+                status: response.status().as_u16(),
+                retry_after: crate::error::retry_after(response.headers()),
+                body: response.into_body(),
+            });
+        }
+        let status: ValidatorCommitteeStatusV1 = Client::decode_canonical_norito_response(
             &response,
             COMMITTEE_STATUS_RESPONSE_MAX_BYTES,
             "Failed to get validator committee status",
-        )?;
+        )
+        .map_err(|error| crate::Error::Decode {
+            operation,
+            details: error.to_string(),
+        })?;
         let source = status
             .latest_finality
             .decode_block(NativeFinalityLimits {
@@ -47,20 +71,31 @@ impl Client {
                 block_count: 256,
                 allocated_bytes: 64 * 1024 * 1024,
             })
-            .map_err(|error| eyre!("noncanonical native committee source: {error}"))?;
-        if status.network_id != self.network_id
+            .map_err(|error| crate::Error::Decode {
+                operation,
+                details: format!("noncanonical native committee source: {error}"),
+            })?;
+        if status.network_id != self.client.network_id
             || target_epoch.is_some_and(|epoch| status.target_epoch != epoch)
             || status.target_epoch == 0
             || source.header().height().get() < 2
             || source
                 .external_transactions()
-                .any(|transaction| transaction.network_id() != Some(&self.network_id))
+                .any(|transaction| transaction.network_id() != Some(&self.client.network_id))
         {
-            return Err(eyre!(
-                "committee observation differs from requested network, target or native source"
-            ));
+            return Err(crate::Error::ResponseBinding {
+                operation,
+                field: "network, target epoch or native source",
+            });
         }
-        self.ensure_activation_evidence_deadline()?;
+        if self
+            .client
+            .http_transport
+            .deadline()
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err(crate::Error::Timeout { operation });
+        }
         Ok(status)
     }
 }

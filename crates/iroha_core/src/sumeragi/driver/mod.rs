@@ -37,11 +37,17 @@
 //! (`sumeragi::crypto`). TODO(WP5): the Kura block store, the State executor and builder,
 //! `Init` from replay, and the node wiring.
 
+pub mod acquisition;
 mod audit;
 pub mod barrier;
 pub mod exec;
 pub mod ingress;
 mod node_gate;
+pub mod payload_build;
+pub mod payload_jobs;
+pub mod payload_worker;
+#[cfg(test)]
+mod payload_worker_tests;
 pub mod persist;
 pub mod serve;
 pub mod traits;
@@ -89,7 +95,8 @@ use self::{
     persist::{Backoff, PersistQueue, Write},
     serve::{ServeLimits, ServeRequest, ServeSched, Served},
     traits::{
-        BlockStore, BodyStore, Clock, Executor, Frame, Net, Observer, PublicationError, RecordStore,
+        BlockStore, BodyStore, Clock, Executor, Frame, Net, Observer, PendingSend,
+        PublicationError, RecordStore, SendOutcome,
     },
 };
 
@@ -212,12 +219,14 @@ pub struct Backlog {
 
 /// What the kernel of an instance starts from.
 pub struct KernelStart {
+    /// Exact original instance resource pool shared by Core and workers.
+    pub allocation_budget: mv::allocation::AllocationBudget,
     /// Local parameters.
     pub local: LocalParams,
     /// Startup input (§7.4).
     pub init: Init,
     /// Configured signing keys.
-    pub signers: Vec<Box<dyn Signer>>,
+    pub signers: Vec<Arc<dyn Signer>>,
     /// The core's crypto.
     pub crypto: Box<dyn Crypto>,
     /// The kernel's hashing (block hashes of stored and executed bodies).
@@ -324,6 +333,7 @@ impl Kernel {
             start.signers,
             start.crypto,
             start.attestation,
+            start.allocation_budget,
             start.now,
         )?;
         let mut kernel = Self {
@@ -421,7 +431,7 @@ impl Kernel {
                 }
                 Action::StoreBody { block } => {
                     // An applied height lives in the block store.
-                    if block.header.height > self.exec.applied() {
+                    if block.header().height > self.exec.applied() {
                         self.persist.push(Write::Body(Box::new(block)));
                     }
                 }
@@ -429,7 +439,18 @@ impl Kernel {
                     let block_hash = block.hash(&*self.hasher);
                     self.exec.execute(req, block_hash, block);
                 }
-                Action::DiscardExecution { height, keep } => self.exec.discard(height, keep),
+                Action::DiscardExecution { height, keep } => {
+                    self.exec.discard(height, keep.clone());
+                    // The same authorized lifetime ends obsolete proactive payload streams.
+                    // Release their funded codewords before a subsequent Author allocates.
+                    self.serve.push(
+                        ServeRequest::Payload(Box::new(payload_worker::PayloadWork::Retain {
+                            height,
+                            keep,
+                        })),
+                        self.now,
+                    );
+                }
                 Action::BuildControlWitness { req, context } => {
                     self.exec.build_control(req, context)
                 }
@@ -474,7 +495,7 @@ impl Kernel {
         ) && !matches!(
             &action,
             Action::ServeBlocks { .. }
-                | Action::ServeBody { .. }
+                | Action::ServePayload { .. }
                 | Action::ReportEvidence(_)
                 | Action::Halt(_)
         ) {
@@ -554,13 +575,17 @@ impl Kernel {
             Completion::Exec(done) => {
                 if let Some(height) = self.exec.done(now, done) {
                     self.persist.push(Write::Prune(height));
+                    self.serve.push(
+                        ServeRequest::Payload(Box::new(payload_worker::PayloadWork::Applied(
+                            height,
+                        ))),
+                        now,
+                    );
                 }
             }
             Completion::Served(served) => {
-                self.serve.done(now, served.bytes);
-                if let Some(event) = served.event {
-                    self.local.push_back(event);
-                }
+                self.serve.done(now, &served);
+                self.local.extend(served.events);
             }
         }
         self.collect();
@@ -596,6 +621,7 @@ impl Kernel {
             .next_wakeup()
             .min(self.persist.wakeup())
             .min(self.exec.wakeup())
+            .min(self.serve.wakeup())
     }
 
     /// The effects held behind the O2 barrier, in order.
@@ -662,12 +688,13 @@ pub fn assemble_init(
     } else {
         let entry = blocks
             .entry(t)
+            .map_err(|_| ConfigError::InvalidInit("block store tip read failed"))?
             .ok_or(ConfigError::InvalidInit("block store tip missing"))?;
         CommittedTip {
             height: t,
             block_hash: entry.commit_qc.block_hash,
             result: entry.commit_qc.result,
-            header: Some(entry.block.header),
+            header: Some(entry.manifest.header),
             commit_qc: Some(entry.commit_qc),
         }
     };
@@ -678,8 +705,9 @@ pub fn assemble_init(
     for height in first..=t {
         let entry = blocks
             .entry(height)
+            .map_err(|_| ConfigError::InvalidInit("block store history read failed"))?
             .ok_or(ConfigError::InvalidInit("block store entry missing"))?;
-        recent_headers.push(entry.block.header);
+        recent_headers.push(entry.manifest.header);
     }
     Ok(Init {
         instance,
@@ -749,6 +777,9 @@ pub type SharedCrypto = Arc<dyn Crypto + Send + Sync>;
 struct CryptoRef(SharedCrypto);
 
 impl Crypto for CryptoRef {
+    fn hash_chunks(&self, chunks: &[&[u8]]) -> Hash32 {
+        self.0.hash_chunks(chunks)
+    }
     fn hash(&self, bytes: &[u8]) -> Hash32 {
         self.0.hash(bytes)
     }
@@ -781,7 +812,7 @@ pub struct DriverStart {
     /// Startup input ([`assemble_init`]).
     pub init: Init,
     /// Configured signing keys.
-    pub signers: Vec<Box<dyn Signer + Send>>,
+    pub signers: Vec<Arc<dyn Signer>>,
     /// Cryptography.
     pub crypto: SharedCrypto,
     /// The node's commit-attestation authority (§3.7).
@@ -799,7 +830,7 @@ enum Input {
     Stop,
 }
 
-/// One original decoded frame awaiting its remaining witness-control admission.
+/// One original decoded frame awaiting its remaining semantic-byte admission.
 /// Only this slot can retain an incompletely admitted frame; Core never observes it.
 struct PendingMessage {
     from: PublicKey,
@@ -834,10 +865,7 @@ impl Shared {
         let Some(pending) = slot.as_mut() else {
             return false;
         };
-        if let Err(error) = pending
-            .message
-            .admit_attestation_witnesses(&self.allocation_budget)
-        {
+        if let Err(error) = pending.message.admit_owned_bytes(&self.allocation_budget) {
             if !error.is_local_refusal() {
                 slot.take();
             }
@@ -946,7 +974,7 @@ impl DriverHandle {
 
     /// Deliver a decoded message (in-process transports and tests).
     ///
-    /// A local witness refusal may retain this original frame in the sole pending slot.
+    /// A local semantic-byte refusal may retain this original frame in the sole pending slot.
     /// True means retained for retry or queued; incomplete admission never reaches Core.
     /// A full slot refuses new unadmitted frames while already admitted/control traffic
     /// continues. Refusal is local backpressure, not evidence of invalid consensus data.
@@ -967,16 +995,16 @@ impl DriverHandle {
         if shared.node_gate.is_closed() || !shared.alive.load(Ordering::Acquire) {
             return false;
         }
-        if pending.is_some() && !msg.attestation_witnesses_admitted_to(&shared.allocation_budget) {
+        if pending.is_some() && !msg.owned_bytes_admitted_to(&shared.allocation_budget) {
             return false;
         }
-        if let Err(error) = msg.admit_attestation_witnesses(&shared.allocation_budget) {
+        if let Err(error) = msg.admit_owned_bytes(&shared.allocation_budget) {
             if !error.is_local_refusal() {
                 return false;
             }
             debug_assert!(
                 pending.is_none(),
-                "completed witnesses cannot require allocation"
+                "completed semantic bytes cannot require allocation"
             );
             *pending = Some(PendingMessage { from, message: msg });
             drop(pending);
@@ -1218,6 +1246,14 @@ where
         let (serve_tx, serve_rx) = mpsc::channel::<ServeRequest>();
         {
             let (bodies, blocks, net) = (self.bodies, self.blocks, Arc::clone(&net));
+            let mut payloads = payload_worker::PayloadWorker::new(
+                instance,
+                start.allocation_budget.clone(),
+                Arc::clone(&start.crypto),
+                start.signers.clone(),
+                config.serve.max_peers,
+                start.init.tip.height,
+            );
             let tx = inputs.clone();
             let gate = Arc::clone(&shared.node_gate);
             threads.push(
@@ -1231,12 +1267,13 @@ where
                             break;
                         };
                         let served = catch_unwind(AssertUnwindSafe(|| {
-                            serve::serve(request, instance, &*bodies, &*blocks, &*net)
+                            serve::serve(request, instance, &*bodies, &*blocks, &*net, &mut payloads)
                         }))
-                        .unwrap_or_else(|_| {
-                            iroha_logger::error!("sumeragi serving panicked");
-                            Served::default()
-                        });
+                        .unwrap_or_else(|_| Err(std::io::Error::other("sumeragi serving panicked")));
+                        let served = match served {
+                            Ok(served) => served,
+                            Err(error) => { iroha_logger::error!(%error, "sumeragi availability/storage worker failed"); break; }
+                        };
                         if tx.send(Input::Done(Completion::Served(served))).is_err() {
                             break;
                         }
@@ -1269,11 +1306,8 @@ where
                     let kernel = Kernel::start(KernelStart {
                         local: start.local,
                         init: start.init,
-                        signers: start
-                            .signers
-                            .into_iter()
-                            .map(|s| -> Box<dyn Signer> { s })
-                            .collect(),
+                        allocation_budget: start.allocation_budget,
+                        signers: start.signers,
                         crypto: Box::new(CryptoRef(Arc::clone(&start.crypto))),
                         hasher: Box::new(CryptoRef(start.crypto)),
                         attestation: Attestation::new(start.attestor, start.verifier),
@@ -1423,13 +1457,12 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
             max_bytes,
             exec_budget_ms,
             ..
-        } => {
-            let (payload, attest) = catch_unwind(AssertUnwindSafe(|| {
+        } => ExecDone::Built(
+            catch_unwind(AssertUnwindSafe(|| {
                 executor.build(height, view, max_bytes, exec_budget_ms)
             }))
-            .unwrap_or_default();
-            ExecDone::Built { payload, attest }
-        }
+            .unwrap_or_else(|_| Err(PublicationError::RecoveryRequired(failed("build payload")))),
+        ),
         ExecOp::Reject {
             height,
             view,
@@ -1449,13 +1482,43 @@ struct NodeNet<N> {
     gate: Arc<NodeGate>,
 }
 impl<N: Net> Net for NodeNet<N> {
-    fn send(&self, to: &PublicKey, frame: &Frame) {
+    fn send(&self, to: &PublicKey, frame: &Frame) -> SendOutcome {
         let Some(_send) = self.gate.enter() else {
-            return;
+            return SendOutcome::Closed;
         };
-        self.net.send(to, frame);
+        gate_send(self.net.send(to, frame), &self.gate)
     }
 }
+
+/// A retained send obeys the same node gate as its first admission attempt.
+struct GatedSend {
+    pending: Box<dyn PendingSend>,
+    gate: Arc<NodeGate>,
+}
+
+fn gate_send(outcome: SendOutcome, gate: &Arc<NodeGate>) -> SendOutcome {
+    match outcome {
+        SendOutcome::Backpressured(pending) => SendOutcome::Backpressured(Box::new(GatedSend {
+            pending,
+            gate: Arc::clone(gate),
+        })),
+        terminal => terminal,
+    }
+}
+
+impl PendingSend for GatedSend {
+    fn retry(self: Box<Self>) -> SendOutcome {
+        let Self { pending, gate } = *self;
+        let Some(_send) = gate.enter() else {
+            return SendOutcome::Closed;
+        };
+        gate_send(pending.retry(), &gate)
+    }
+}
+
+#[cfg(test)]
+#[path = "delivery_gate_tests.rs"]
+mod delivery_gate_tests;
 
 /// Where the event loop sends operations.
 struct Workers {
@@ -1478,7 +1541,9 @@ impl Workers {
                 Op::Send { to, msg } => contained("transport", || {
                     if let Some(frame) = serve::frame(&msg) {
                         for peer in &to {
-                            self.net.send(peer, &frame);
+                            // Core owns bounded retransmission timers for these messages.
+                            // Payload streams instead retain the original admission owner.
+                            drop(self.net.send(peer, &frame));
                         }
                     }
                 }),

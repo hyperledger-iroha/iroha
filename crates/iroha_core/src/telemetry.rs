@@ -18,7 +18,6 @@ use crate::{
     status::{self, SettlementOutcomeKind},
 };
 use http::StatusCode;
-use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
 use iroha_crypto::HashOf;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::da::types::DaRentQuote;
@@ -963,8 +962,6 @@ impl StateTelemetry {
         public_cap: Option<usize>,
         restricted_cap: Option<usize>,
         drop_unknown: bool,
-        fallback: DataspaceGossipFallback,
-        policy: RestrictedPublicPayload,
         public_target_reshuffle: std::time::Duration,
         restricted_target_reshuffle: std::time::Duration,
     ) {
@@ -993,18 +990,6 @@ impl StateTelemetry {
         self.metrics
             .tx_gossip_drop_unknown_dataspace
             .set(u64::from(drop_unknown));
-        self.metrics
-            .tx_gossip_restricted_fallback
-            .set(match fallback {
-                DataspaceGossipFallback::Drop => 0,
-                DataspaceGossipFallback::UsePublicOverlay => 1,
-            });
-        self.metrics
-            .tx_gossip_restricted_public_policy
-            .set(match policy {
-                RestrictedPublicPayload::Forward => 1,
-                RestrictedPublicPayload::Refuse => 0,
-            });
         let mut caps = self
             .metrics
             .tx_gossip_caps
@@ -1017,14 +1002,6 @@ impl StateTelemetry {
             public_target_reshuffle_ms: Some(public_target_reshuffle_ms),
             restricted_target_reshuffle_ms: Some(restricted_target_reshuffle_ms),
             drop_unknown_dataspace: drop_unknown,
-            restricted_fallback: match fallback {
-                DataspaceGossipFallback::Drop => "drop".to_string(),
-                DataspaceGossipFallback::UsePublicOverlay => "public_overlay".to_string(),
-            },
-            restricted_public_policy: match policy {
-                RestrictedPublicPayload::Forward => "forward".to_string(),
-                RestrictedPublicPayload::Refuse => "refuse".to_string(),
-            },
         };
     }
     /// Record a transaction gossip attempt (sent or dropped) with labels for status/metrics.
@@ -1038,8 +1015,6 @@ impl StateTelemetry {
         target_cap: Option<NonZeroUsize>,
         sent: bool,
         reason: Option<&str>,
-        fallback_used: bool,
-        fallback_surface: Option<&str>,
         batch_txs: usize,
         frame_bytes: usize,
     ) {
@@ -1073,13 +1048,6 @@ impl StateTelemetry {
                 .with_label_values(&[plane_label, ds_label.as_str()])
                 .set(0);
         }
-        if fallback_used {
-            let surface = fallback_surface.unwrap_or(if sent { "forward" } else { "drop" });
-            self.metrics
-                .tx_gossip_fallback_total
-                .with_label_values(&[plane_label, ds_label.as_str(), surface])
-                .inc();
-        }
         let dataspace_alias = self
             .dataspace_metadata
             .read()
@@ -1097,8 +1065,6 @@ impl StateTelemetry {
             lane_ids: lanes,
             targets: target_count as u64,
             target_peers,
-            fallback_used,
-            fallback_surface: fallback_surface.map(ToOwned::to_owned),
             outcome: if sent {
                 "sent".to_string()
             } else {
@@ -7489,8 +7455,6 @@ mod tests {
             Some(3),
             None,
             true,
-            DataspaceGossipFallback::UsePublicOverlay,
-            RestrictedPublicPayload::Refuse,
             std::time::Duration::from_secs(2),
             std::time::Duration::from_secs(5),
         );
@@ -7502,18 +7466,13 @@ mod tests {
             metrics.tx_gossip_restricted_target_reshuffle_ms.get(),
             5_000
         );
-        assert_eq!(metrics.tx_gossip_restricted_public_policy.get(), 0);
         assert_eq!(metrics.tx_gossip_drop_unknown_dataspace.get(), 1);
-        assert_eq!(metrics.tx_gossip_restricted_fallback.get(), 1);
-        let caps = metrics
+        let caps = *metrics
             .tx_gossip_caps
             .read()
-            .expect("tx gossip caps cache poisoned")
-            .clone();
+            .expect("tx gossip caps cache poisoned");
         assert_eq!(caps.public_target_reshuffle_ms, Some(2_000));
         assert_eq!(caps.restricted_target_reshuffle_ms, Some(5_000));
-        assert_eq!(caps.restricted_public_policy, "refuse");
-        assert_eq!(caps.restricted_fallback, "public_overlay");
         assert!(caps.drop_unknown_dataspace);
         let dataspace = DataSpaceId::new(7);
         let lane = LaneId::new(2);
@@ -7526,9 +7485,7 @@ mod tests {
             &targets,
             Some(nonzero!(3usize)),
             true,
-            Some("restricted_public_overlay_forward"),
-            true,
-            Some("public_overlay"),
+            None,
             2,
             128,
         );
@@ -7542,11 +7499,6 @@ mod tests {
             .with_label_values(&["restricted", "7"])
             .get();
         assert_eq!(targets, 1);
-        let fallback_forward = metrics
-            .tx_gossip_fallback_total
-            .with_label_values(&["restricted", "7", "public_overlay"])
-            .get();
-        assert_eq!(fallback_forward, 1);
         let status = metrics
             .tx_gossip_status
             .read()
@@ -7557,16 +7509,11 @@ mod tests {
         assert_eq!(entry.dataspace_id, 7);
         assert_eq!(entry.lane_ids, vec![lane.as_u32()]);
         assert_eq!(entry.targets, 1);
-        assert!(entry.fallback_used);
         assert_eq!(entry.target_cap, 3);
         assert_eq!(entry.batch_txs, 2);
         assert_eq!(entry.frame_bytes, 128);
         assert_eq!(entry.outcome, "sent");
-        assert_eq!(
-            entry.reason.as_deref(),
-            Some("restricted_public_overlay_forward")
-        );
-        assert_eq!(entry.fallback_surface.as_deref(), Some("public_overlay"));
+        assert!(entry.reason.is_none());
         assert_eq!(entry.target_peers.len(), 1);
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
@@ -7576,8 +7523,6 @@ mod tests {
             Some(nonzero!(3usize)),
             false,
             Some("no_restricted_targets"),
-            true,
-            Some("public_overlay"),
             0,
             0,
         );
@@ -7591,11 +7536,6 @@ mod tests {
             .with_label_values(&["restricted", "7"])
             .get();
         assert_eq!(targets_after, 0);
-        let fallback_drop = metrics
-            .tx_gossip_fallback_total
-            .with_label_values(&["restricted", "7", "public_overlay"])
-            .get();
-        assert_eq!(fallback_drop, 2);
         let status = metrics
             .tx_gossip_status
             .read()
@@ -7603,7 +7543,6 @@ mod tests {
             .clone();
         assert_eq!(status.len(), 1);
         assert_eq!(status[0].reason.as_deref(), Some("no_restricted_targets"));
-        assert!(status[0].fallback_used);
         assert_eq!(status[0].outcome, "dropped");
     }
     #[cfg(feature = "telemetry")]
@@ -7665,8 +7604,6 @@ mod tests {
             Some(nonzero!(3usize)),
             true,
             None,
-            false,
-            None,
             2,
             256,
         );
@@ -7678,8 +7615,6 @@ mod tests {
             Some(nonzero!(2usize)),
             false,
             Some("no_restricted_targets"),
-            true,
-            Some("public_overlay"),
             0,
             0,
         );
@@ -7706,7 +7641,6 @@ mod tests {
         assert_eq!(alpha.targets, 1);
         assert_eq!(alpha.target_peers.len(), 1);
         assert_eq!(alpha.outcome, "sent");
-        assert!(!alpha.fallback_used);
         assert!(alpha.reason.is_none());
         let beta = status
             .tx_gossip
@@ -7719,8 +7653,6 @@ mod tests {
         assert_eq!(beta.targets, 0);
         assert_eq!(beta.outcome, "dropped");
         assert_eq!(beta.reason.as_deref(), Some("no_restricted_targets"));
-        assert!(beta.fallback_used);
-        assert_eq!(beta.fallback_surface.as_deref(), Some("public_overlay"));
         assert_eq!(beta.target_cap, 2);
         assert_eq!(beta.batch_txs, 0);
         assert_eq!(beta.frame_bytes, 0);

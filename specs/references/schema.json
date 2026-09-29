@@ -1693,66 +1693,6 @@
       }
     ]
   },
-  "AutonomousLanePayloadEnvelopeV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "epoch",
-        "type": "u64"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "descriptor_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "payload_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "producer",
-        "type": "PeerId"
-      },
-      {
-        "name": "canonical_payload",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
   "AxtAnchoredSpendDraftV1": {
     "Struct": [
       {
@@ -2372,6 +2312,30 @@
       }
     ]
   },
+  "BeaconHorizonStatusV1": {
+    "Struct": [
+      {
+        "name": "epoch_length_blocks",
+        "type": "u64"
+      },
+      {
+        "name": "next_required_pulse_height",
+        "type": "Option<u64>"
+      },
+      {
+        "name": "active_session_id",
+        "type": "Option<Array<u8, 32>>"
+      },
+      {
+        "name": "session_covers_next_pulse",
+        "type": "bool"
+      },
+      {
+        "name": "local_provider_ready",
+        "type": "bool"
+      }
+    ]
+  },
   "BigInt": {
     "Struct": []
   },
@@ -2409,26 +2373,6 @@
       {
         "name": "external",
         "type": "Vec<ExternalExecutionContext>"
-      },
-      {
-        "name": "autonomous_lane_payloads",
-        "type": "Vec<AutonomousLanePayloadEnvelopeV1>"
-      },
-      {
-        "name": "lane_payload_ownerships",
-        "type": "Vec<SumeragiLanePayloadOwnership>"
-      },
-      {
-        "name": "queue_plan_admissions",
-        "type": "Vec<Vec<u8>>"
-      },
-      {
-        "name": "merge_entry",
-        "type": "Option<CertifiedMergeLedgerReference>"
-      },
-      {
-        "name": "native_lane_decisions",
-        "type": "Option<LaneDecisionBatchV1>"
       },
       {
         "name": "lane_merge",
@@ -2734,22 +2678,6 @@
       }
     ]
   },
-  "BlockSubject": {
-    "Struct": [
-      {
-        "name": "parent_block_hash",
-        "type": "Option<HashOf<BlockHeader>>"
-      },
-      {
-        "name": "block_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "payload_hash",
-        "type": "Hash"
-      }
-    ]
-  },
   "BlockSubscriptionRequest": "NonZero<u64>",
   "BridgeEvent": {
     "Enum": [
@@ -3026,7 +2954,6 @@
       }
     ]
   },
-  "CanManageLaneRelayEmergency": null,
   "CanManagePeers": null,
   "CanManageRoles": null,
   "CanManageSmartContractCode": null,
@@ -3263,21 +3190,16 @@
       },
       {
         "discriminant": 1,
-        "tag": "HashOnlyBodyUnavailable",
-        "type": "CanonicalHistoryHeightHashSchema"
-      },
-      {
-        "discriminant": 2,
         "tag": "BodyUnavailable",
         "type": "CanonicalHistoryHeightHashSchema"
       },
       {
-        "discriminant": 3,
+        "discriminant": 2,
         "tag": "BlockHashMismatch",
         "type": "CanonicalHistoryHashMismatchSchema"
       },
       {
-        "discriminant": 4,
+        "discriminant": 3,
         "tag": "BlockHeightMismatch",
         "type": "CanonicalHistoryHeightMismatchSchema"
       }
@@ -3349,70 +3271,6 @@
       {
         "discriminant": 2,
         "tag": "Withdrawn"
-      }
-    ]
-  },
-  "CertPhase": {
-    "Enum": [
-      {
-        "discriminant": 1,
-        "tag": "Prepare"
-      },
-      {
-        "discriminant": 2,
-        "tag": "Commit"
-      },
-      {
-        "discriminant": 3,
-        "tag": "NewView"
-      }
-    ]
-  },
-  "CertifiedMergeLedgerReference": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "entry_hash",
-        "type": "HashOf<MergeLedgerEntry>"
-      },
-      {
-        "name": "encoded_len",
-        "type": "u64"
-      },
-      {
-        "name": "epoch_id",
-        "type": "u64"
-      },
-      {
-        "name": "execution_batch_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "entrypoint_count",
-        "type": "Option<u64>"
-      },
-      {
-        "name": "entrypoint_merkle_root",
-        "type": "Option<HashOf<MerkleTree<TransactionEntrypoint>>>"
-      },
-      {
-        "name": "result_merkle_root",
-        "type": "Option<HashOf<MerkleTree<TransactionResult>>>"
-      },
-      {
-        "name": "base_state_height",
-        "type": "Option<u64>"
-      },
-      {
-        "name": "base_state_hash",
-        "type": "Option<HashOf<BlockHeader>>"
-      },
-      {
-        "name": "merge_qc",
-        "type": "MergeQuorumCertificate"
       }
     ]
   },
@@ -3825,22 +3683,6 @@
       {
         "discriminant": 1,
         "tag": "npos"
-      }
-    ]
-  },
-  "ConsensusRound": {
-    "Struct": [
-      {
-        "name": "context_id",
-        "type": "HeightContextId"
-      },
-      {
-        "name": "height",
-        "type": "u64"
-      },
-      {
-        "name": "view",
-        "type": "u64"
       }
     ]
   },
@@ -4706,34 +4548,6 @@
       }
     ]
   },
-  "DataAvailabilityLayout": {
-    "Struct": [
-      {
-        "name": "encoding",
-        "type": "PayloadEncoding"
-      },
-      {
-        "name": "chunk_size_bytes",
-        "type": "u32"
-      },
-      {
-        "name": "data_shards",
-        "type": "u16"
-      },
-      {
-        "name": "parity_shards",
-        "type": "u16"
-      },
-      {
-        "name": "max_payload_size_bytes",
-        "type": "u64"
-      },
-      {
-        "name": "max_chunk_count",
-        "type": "u32"
-      }
-    ]
-  },
   "DataEvent": {
     "Enum": [
       {
@@ -5596,18 +5410,6 @@
       }
     ]
   },
-  "DualQuorum": {
-    "Struct": [
-      {
-        "name": "min_signers",
-        "type": "u32"
-      },
-      {
-        "name": "total_power",
-        "type": "u64"
-      }
-    ]
-  },
   "DurationFactorSet": {
     "Struct": [
       {
@@ -6099,6 +5901,14 @@
       }
     ]
   },
+  "Evidence": {
+    "Struct": [
+      {
+        "name": "native",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "ExecKv": {
     "Struct": [
       {
@@ -6223,66 +6033,6 @@
       {
         "name": "authority",
         "type": "Option<AccountId>"
-      }
-    ]
-  },
-  "ExecutionCommitment": {
-    "Struct": [
-      {
-        "name": "parent_state_root",
-        "type": "Hash"
-      },
-      {
-        "name": "post_state_root",
-        "type": "Hash"
-      },
-      {
-        "name": "ordinary_writes_root",
-        "type": "Hash"
-      },
-      {
-        "name": "kagemusha_top_up_root",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "kagemusha_top_up_count",
-        "type": "u32"
-      },
-      {
-        "name": "native_amx_application_manifest_version",
-        "type": "u16"
-      },
-      {
-        "name": "native_amx_application_manifest_root",
-        "type": "Hash"
-      },
-      {
-        "name": "native_amx_application_manifest_count",
-        "type": "u32"
-      },
-      {
-        "name": "lane_finality_manifest",
-        "type": "Option<MerkleTreeCommitment<LaneFinalityStatement>>"
-      },
-      {
-        "name": "merge_carrier",
-        "type": "Option<MergeCarrierCommitmentV1>"
-      },
-      {
-        "name": "executed_block_wire_len",
-        "type": "u64"
-      },
-      {
-        "name": "executed_block_wire_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "transaction_input_commitment",
-        "type": "Option<MerkleTreeCommitment<TransactionEntrypoint>>"
-      },
-      {
-        "name": "transaction_output_commitment",
-        "type": "Option<MerkleTreeCommitment<ExecutionOutputV1>>"
       }
     ]
   },
@@ -6448,10 +6198,6 @@
       {
         "name": "routing_plan_legs",
         "type": "Vec<ExternalExecutionRouteLeg>"
-      },
-      {
-        "name": "native_amx_receipt",
-        "type": "Option<NativeAmxReceipt>"
       }
     ]
   },
@@ -7306,20 +7052,6 @@
       }
     ]
   },
-  "FeeDebitSource": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "account",
-        "type": "AccountId"
-      },
-      {
-        "discriminant": 1,
-        "tag": "sponsor_program",
-        "type": "FeeSponsorProgramId"
-      }
-    ]
-  },
   "FeePaymentIntent": {
     "Enum": [
       {
@@ -8047,6 +7779,10 @@
         "type": "Array<u8, 32>"
       },
       {
+        "name": "context",
+        "type": "GlobalThresholdBeaconPulseContextV1"
+      },
+      {
         "name": "height",
         "type": "u64"
       },
@@ -8068,50 +7804,6 @@
       },
       {
         "name": "pulse_id",
-        "type": "Array<u8, 32>"
-      }
-    ]
-  },
-  "FinalizedNextEpochSnapshot": {
-    "Struct": [
-      {
-        "name": "committee_preparation",
-        "type": "Option<ValidatorCommitteePreparationV1>"
-      },
-      {
-        "name": "epoch",
-        "type": "u64"
-      },
-      {
-        "name": "kagemusha_mint_finality_authorization",
-        "type": "KagemushaMintFinalityEpochAuthorizationV1"
-      },
-      {
-        "name": "kagemusha_mint_finality_authority",
-        "type": "KagemushaMintFinalityAuthorityGenerationV1"
-      },
-      {
-        "name": "epoch_end_height",
-        "type": "u64"
-      },
-      {
-        "name": "mode",
-        "type": "ConsensusMode"
-      },
-      {
-        "name": "roster",
-        "type": "Vec<ValidatorPower>"
-      },
-      {
-        "name": "validator_set_pops",
-        "type": "Vec<Vec<u8>>"
-      },
-      {
-        "name": "quorum",
-        "type": "DualQuorum"
-      },
-      {
-        "name": "leader_seed",
         "type": "Array<u8, 32>"
       }
     ]
@@ -8597,14 +8289,6 @@
       {
         "name": "session_id",
         "type": "Hash"
-      }
-    ]
-  },
-  "FindLaneRelayEnvelopeByRef": {
-    "Struct": [
-      {
-        "name": "relay_ref",
-        "type": "LaneRelayEnvelopeRef"
       }
     ]
   },
@@ -10063,6 +9747,30 @@
       }
     ]
   },
+  "GlobalThresholdBeaconPulseContextV1": {
+    "Struct": [
+      {
+        "name": "instance",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "epoch",
+        "type": "u64"
+      },
+      {
+        "name": "epoch_context_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "parent_consensus_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "parent_result",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "GoldilocksDigest384V1": "Array<u8, 48>",
   "GovernanceAttemptId": "Array<u8, 32>",
   "GovernanceBallotAccepted": {
@@ -10882,6 +10590,7 @@
   "HashOf<Array<u8, 32>>": "Hash",
   "HashOf<BlockExecutionContextBundle>": "Hash",
   "HashOf<BlockHeader>": "Hash",
+  "HashOf<ChainParamsRecord>": "Hash",
   "HashOf<DaCommitmentBundle>": "Hash",
   "HashOf<DaPinIntentBundle>": "Hash",
   "HashOf<DaProofPolicyBundle>": "Hash",
@@ -10889,96 +10598,14 @@
   "HashOf<FastpqOrdinarySourceStatementLeafV1>": "Hash",
   "HashOf<FeedEvent>": "Hash",
   "HashOf<FinalizedGlobalThresholdBeaconPulseV1>": "Hash",
-  "HashOf<HeightContext>": "Hash",
-  "HashOf<LaneBlockCommitment>": "Hash",
-  "HashOf<LaneFinalityStatement>": "Hash",
-  "HashOf<MergeLedgerEntry>": "Hash",
-  "HashOf<MerkleTree<ExecutionOutputV1>>": "Hash",
-  "HashOf<MerkleTree<LaneFinalityStatement>>": "Hash",
   "HashOf<MerkleTree<TransactionEntrypoint>>": "Hash",
-  "HashOf<MerkleTree<TransactionResult>>": "Hash",
-  "HashOf<NativeAmxParticipantSettlement>": "Hash",
   "HashOf<NposConsensusEffects>": "Hash",
   "HashOf<ObservationBody>": "Hash",
   "HashOf<SignedTransaction>": "Hash",
   "HashOf<TransactionEntrypoint>": "Hash",
   "HashOf<TransactionResult>": "Hash",
-  "HashOf<V2FinalityArtifact>": "Hash",
   "HashOf<Vec<InstructionBox>>": "Hash",
-  "HashOf<Vec<PeerId>>": "Hash",
-  "HeightContext": {
-    "Struct": [
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "protocol_version",
-        "type": "u16"
-      },
-      {
-        "name": "height",
-        "type": "u64"
-      },
-      {
-        "name": "epoch",
-        "type": "u64"
-      },
-      {
-        "name": "kagemusha_mint_finality_authorization",
-        "type": "KagemushaMintFinalityEpochAuthorizationV1"
-      },
-      {
-        "name": "kagemusha_mint_finality_authority",
-        "type": "KagemushaMintFinalityAuthorityGenerationV1"
-      },
-      {
-        "name": "epoch_end_height",
-        "type": "u64"
-      },
-      {
-        "name": "next_epoch_snapshot",
-        "type": "Option<FinalizedNextEpochSnapshot>"
-      },
-      {
-        "name": "mode",
-        "type": "ConsensusMode"
-      },
-      {
-        "name": "parent_commit_qc",
-        "type": "Option<QuorumCertificate>"
-      },
-      {
-        "name": "snapshot_bootstrap",
-        "type": "Option<SnapshotBootstrapAnchor>"
-      },
-      {
-        "name": "roster",
-        "type": "Vec<ValidatorPower>"
-      },
-      {
-        "name": "quorum",
-        "type": "DualQuorum"
-      },
-      {
-        "name": "nexus_amx_context_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "execution_policy_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "da_layout",
-        "type": "DataAvailabilityLayout"
-      },
-      {
-        "name": "leader_seed",
-        "type": "Array<u8, 32>"
-      }
-    ]
-  },
-  "HeightContextId": "HashOf<HeightContext>",
+  "HeightContextId": "HashOf<ChainParamsRecord>",
   "IdBox": {
     "Enum": [
       {
@@ -11731,864 +11358,8 @@
       }
     ]
   },
-  "LaneAdmittedInputV1": {
-    "Struct": [
-      {
-        "name": "entrypoint",
-        "type": "TransactionEntrypoint"
-      },
-      {
-        "name": "certificate",
-        "type": "QueuePlanAdmissionCertificateV1"
-      }
-    ]
-  },
-  "LaneBlockCommitment": {
-    "Struct": [
-      {
-        "name": "block_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "tx_count",
-        "type": "u64"
-      },
-      {
-        "name": "total_local_amount",
-        "type": "Quantity"
-      },
-      {
-        "name": "total_xor_due",
-        "type": "Quantity"
-      },
-      {
-        "name": "total_xor_after_haircut",
-        "type": "Quantity"
-      },
-      {
-        "name": "total_xor_variance",
-        "type": "Quantity"
-      },
-      {
-        "name": "swap_metadata",
-        "type": "Option<LaneSwapMetadata>"
-      },
-      {
-        "name": "receipts",
-        "type": "Vec<LaneSettlementReceipt>"
-      },
-      {
-        "name": "nexus_fee_receipts",
-        "type": "Vec<NexusFeeReceipt>"
-      },
-      {
-        "name": "native_amx_receipts",
-        "type": "Vec<NativeAmxReceipt>"
-      }
-    ]
-  },
-  "LaneBlockDescriptorV1": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "previous_lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "previous_lane_block_descriptor_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "subject_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "payload_ownership_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "rbc_instance_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "accepted_candidate_indices",
-        "type": "Vec<u64>"
-      },
-      {
-        "name": "accepted_transaction_hashes",
-        "type": "Vec<Hash>"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "validator_count",
-        "type": "u32"
-      },
-      {
-        "name": "min_quorum",
-        "type": "u32"
-      },
-      {
-        "name": "qc_mode_tag",
-        "type": "String"
-      },
-      {
-        "name": "descriptor_hash",
-        "type": "Hash"
-      }
-    ]
-  },
-  "LaneBlockProposalPayloadHintV1": {
-    "Struct": [
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "proposal_view",
-        "type": "u64"
-      },
-      {
-        "name": "proposal_block_hash",
-        "type": "HashOf<BlockHeader>"
-      }
-    ]
-  },
-  "LaneBlockProposalV1": {
-    "Struct": [
-      {
-        "name": "descriptor",
-        "type": "LaneBlockDescriptorV1"
-      },
-      {
-        "name": "proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "payload_block_hint",
-        "type": "Option<LaneBlockProposalPayloadHintV1>"
-      }
-    ]
-  },
-  "LaneBlockQcV1": {
-    "Struct": [
-      {
-        "name": "body",
-        "type": "LaneBlockVoteBodyV1"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "signers_bitmap",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "bls_aggregate_signature",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "payload_availability_qc",
-        "type": "Option<LanePayloadAvailabilityQcV1>"
-      }
-    ]
-  },
-  "LaneBlockVoteBodyV1": {
-    "Struct": [
-      {
-        "name": "phase",
-        "type": "CertPhase"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "descriptor_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "subject_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "payload_ownership_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "rbc_instance_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "accepted_candidate_indices",
-        "type": "Vec<u64>"
-      },
-      {
-        "name": "accepted_transaction_hashes",
-        "type": "Vec<Hash>"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_count",
-        "type": "u32"
-      },
-      {
-        "name": "min_quorum",
-        "type": "u32"
-      },
-      {
-        "name": "qc_mode_tag",
-        "type": "String"
-      }
-    ]
-  },
   "LaneCommitmentId": "u16",
-  "LaneDecisionBatchV1": {
-    "Struct": [
-      {
-        "name": "base_state_height",
-        "type": "u64"
-      },
-      {
-        "name": "base_state_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "groups",
-        "type": "Vec<LaneDecisionGroupV1>"
-      }
-    ]
-  },
-  "LaneDecisionGroupV1": {
-    "Struct": [
-      {
-        "name": "payload",
-        "type": "LaneInputPayloadV1"
-      },
-      {
-        "name": "decisions",
-        "type": "Vec<LaneDecisionV1>"
-      }
-    ]
-  },
-  "LaneDecisionV1": {
-    "Struct": [
-      {
-        "name": "manifest",
-        "type": "LaneManifestV1"
-      },
-      {
-        "name": "commit_qc",
-        "type": "LaneQcV1"
-      }
-    ]
-  },
-  "LaneDrainCertificateBodyV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "intent",
-        "type": "LaneDrainIntentV1"
-      },
-      {
-        "name": "final_frontier",
-        "type": "LaneDrainFrontierV1"
-      }
-    ]
-  },
-  "LaneDrainCertificateV1": {
-    "Struct": [
-      {
-        "name": "body",
-        "type": "LaneDrainCertificateBodyV1"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "signers_bitmap",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "signer_proofs",
-        "type": "Vec<MergeSignerProof>"
-      },
-      {
-        "name": "aggregate_signature",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
-  "LaneDrainFrontierV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_descriptor_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "native_application",
-        "type": "Option<LaneDrainNativeFrontierEvidenceV1>"
-      },
-      {
-        "name": "unresolved_evidence_root",
-        "type": "Hash"
-      }
-    ]
-  },
-  "LaneDrainIntentV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "close_global_height",
-        "type": "u64"
-      },
-      {
-        "name": "initial_frontier",
-        "type": "LaneDrainFrontierV1"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "validator_count",
-        "type": "u32"
-      },
-      {
-        "name": "min_quorum",
-        "type": "u32"
-      }
-    ]
-  },
-  "LaneDrainNativeFrontierEvidenceV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "participant_view",
-        "type": "u64"
-      },
-      {
-        "name": "predecessor_height",
-        "type": "u64"
-      },
-      {
-        "name": "predecessor_descriptor_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "participant_proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "participant_settlement_hash",
-        "type": "HashOf<NativeAmxParticipantSettlement>"
-      },
-      {
-        "name": "source_count",
-        "type": "u32"
-      },
-      {
-        "name": "application_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "application_block_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "executed_block_wire_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "finality_artifact_hash",
-        "type": "HashOf<V2FinalityArtifact>"
-      },
-      {
-        "name": "application_manifest_root",
-        "type": "Hash"
-      },
-      {
-        "name": "application_manifest_leaf_count",
-        "type": "u32"
-      },
-      {
-        "name": "application_manifest_leaf_index",
-        "type": "u32"
-      },
-      {
-        "name": "manifest_artifact_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "receipt_artifact_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "latest_index_artifact_hash",
-        "type": "Hash"
-      }
-    ]
-  },
-  "LaneFastpqProofMaterial": {
-    "Struct": [
-      {
-        "name": "proof_digest",
-        "type": "Hash"
-      },
-      {
-        "name": "verified_at_height",
-        "type": "u64"
-      }
-    ]
-  },
-  "LaneFinalityAuthorityV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "global_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "finality_artifact_hash",
-        "type": "HashOf<V2FinalityArtifact>"
-      },
-      {
-        "name": "statement_proof",
-        "type": "MerkleProof<LaneFinalityStatement>"
-      }
-    ]
-  },
-  "LaneFinalityStatement": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "block_height",
-        "type": "u64"
-      },
-      {
-        "name": "block_header_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "da_commitment_hash",
-        "type": "Option<HashOf<DaCommitmentBundle>>"
-      },
-      {
-        "name": "lane_block_descriptor_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "manifest_root",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "settlement_commitment",
-        "type": "LaneBlockCommitment"
-      },
-      {
-        "name": "settlement_hash",
-        "type": "HashOf<LaneBlockCommitment>"
-      },
-      {
-        "name": "rbc_bytes_total",
-        "type": "u64"
-      }
-    ]
-  },
   "LaneId": "u32",
-  "LaneInputDescriptorV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "admission_priority",
-        "type": "QueuePlanAdmissionPriorityV1"
-      },
-      {
-        "name": "admission_carrier_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "admitted_input_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "slots",
-        "type": "Vec<LaneInputRouteSlotV1>"
-      }
-    ]
-  },
-  "LaneInputPayloadV1": {
-    "Struct": [
-      {
-        "name": "descriptor",
-        "type": "LaneInputDescriptorV1"
-      },
-      {
-        "name": "input",
-        "type": "LaneAdmittedInputV1"
-      }
-    ]
-  },
-  "LaneInputRouteSlotV1": {
-    "Struct": [
-      {
-        "name": "route",
-        "type": "RoutingDecision"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "instance_id",
-        "type": "Hash"
-      },
-      {
-        "name": "lane_height",
-        "type": "u64"
-      }
-    ]
-  },
-  "LaneLiquidityProfile": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "Tier1"
-      },
-      {
-        "discriminant": 1,
-        "tag": "Tier2"
-      },
-      {
-        "discriminant": 2,
-        "tag": "Tier3"
-      }
-    ]
-  },
-  "LaneManifestV1": {
-    "Struct": [
-      {
-        "name": "value",
-        "type": "LaneValueRefV1"
-      },
-      {
-        "name": "layout",
-        "type": "DataAvailabilityLayout"
-      },
-      {
-        "name": "chunk_root",
-        "type": "Hash"
-      },
-      {
-        "name": "byte_len",
-        "type": "u64"
-      },
-      {
-        "name": "chunk_count",
-        "type": "u32"
-      }
-    ]
-  },
-  "LanePayloadAvailabilityBodyV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "epoch",
-        "type": "u64"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "origin_lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "origin_proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "origin_descriptor_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "current_lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "current_proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "current_descriptor_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "current_subject_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "current_payload_ownership_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "current_rbc_instance_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "executable_payload_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_count",
-        "type": "u32"
-      },
-      {
-        "name": "min_quorum",
-        "type": "u32"
-      },
-      {
-        "name": "qc_mode_tag",
-        "type": "String"
-      }
-    ]
-  },
-  "LanePayloadAvailabilityQcV1": {
-    "Struct": [
-      {
-        "name": "body",
-        "type": "LanePayloadAvailabilityBodyV1"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "validator_set_pops",
-        "type": "Vec<Vec<u8>>"
-      },
-      {
-        "name": "signers_bitmap",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "bls_aggregate_signature",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
-  "LanePhaseV1": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "prepare"
-      },
-      {
-        "discriminant": 1,
-        "tag": "commit"
-      }
-    ]
-  },
   "LanePrivacyMerkleWitness": {
     "Struct": [
       {
@@ -12619,254 +11390,6 @@
         "discriminant": 0,
         "tag": "merkle",
         "type": "LanePrivacyMerkleWitness"
-      }
-    ]
-  },
-  "LaneQcV1": {
-    "Struct": [
-      {
-        "name": "statement",
-        "type": "LaneVoteStatementV1"
-      },
-      {
-        "name": "shares",
-        "type": "Vec<LaneSignatureShareV1>"
-      }
-    ]
-  },
-  "LaneRelayEnvelope": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "block_height",
-        "type": "u64"
-      },
-      {
-        "name": "block_header",
-        "type": "BlockHeader"
-      },
-      {
-        "name": "finality_authority",
-        "type": "Option<LaneFinalityAuthorityV1>"
-      },
-      {
-        "name": "da_commitment_hash",
-        "type": "Option<HashOf<DaCommitmentBundle>>"
-      },
-      {
-        "name": "lane_block_descriptor_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "settlement_commitment",
-        "type": "LaneBlockCommitment"
-      },
-      {
-        "name": "settlement_hash",
-        "type": "HashOf<LaneBlockCommitment>"
-      },
-      {
-        "name": "rbc_bytes_total",
-        "type": "u64"
-      },
-      {
-        "name": "manifest_root",
-        "type": "Option<Array<u8, 32>>"
-      },
-      {
-        "name": "fastpq_proof",
-        "type": "Option<LaneFastpqProofMaterial>"
-      }
-    ]
-  },
-  "LaneRelayEnvelopeRef": {
-    "Struct": [
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "block_height",
-        "type": "u64"
-      }
-    ]
-  },
-  "LaneRoundV1": {
-    "Struct": [
-      {
-        "name": "instance_id",
-        "type": "Hash"
-      },
-      {
-        "name": "lane_height",
-        "type": "u64"
-      },
-      {
-        "name": "voting_view",
-        "type": "u64"
-      }
-    ]
-  },
-  "LaneSettlementReceipt": {
-    "Struct": [
-      {
-        "name": "source_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "local_amount",
-        "type": "Quantity"
-      },
-      {
-        "name": "xor_due",
-        "type": "Quantity"
-      },
-      {
-        "name": "xor_after_haircut",
-        "type": "Quantity"
-      },
-      {
-        "name": "xor_variance",
-        "type": "Quantity"
-      },
-      {
-        "name": "timestamp_ms",
-        "type": "u64"
-      }
-    ]
-  },
-  "LaneSignatureShareV1": {
-    "Struct": [
-      {
-        "name": "signer",
-        "type": "u32"
-      },
-      {
-        "name": "signature",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
-  "LaneSwapMetadata": {
-    "Struct": [
-      {
-        "name": "epsilon_bps",
-        "type": "u16"
-      },
-      {
-        "name": "twap_window_seconds",
-        "type": "u32"
-      },
-      {
-        "name": "liquidity_profile",
-        "type": "LaneLiquidityProfile"
-      },
-      {
-        "name": "twap_local_per_xor",
-        "type": "Numeric"
-      },
-      {
-        "name": "volatility_class",
-        "type": "LaneVolatilityClass"
-      }
-    ]
-  },
-  "LaneValueKindV1": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "execution"
-      },
-      {
-        "discriminant": 1,
-        "tag": "atomic_group"
-      }
-    ]
-  },
-  "LaneValueRefV1": {
-    "Struct": [
-      {
-        "name": "instance_id",
-        "type": "Hash"
-      },
-      {
-        "name": "admitted_binding_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "kind",
-        "type": "LaneValueKindV1"
-      },
-      {
-        "name": "origin_view",
-        "type": "u64"
-      },
-      {
-        "name": "origin_producer",
-        "type": "u32"
-      },
-      {
-        "name": "descriptor_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "payload_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "availability_hash",
-        "type": "Hash"
-      }
-    ]
-  },
-  "LaneVolatilityClass": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "Stable"
-      },
-      {
-        "discriminant": 1,
-        "tag": "Elevated"
-      },
-      {
-        "discriminant": 2,
-        "tag": "Dislocated"
-      }
-    ]
-  },
-  "LaneVoteStatementV1": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "LaneRoundV1"
-      },
-      {
-        "name": "phase",
-        "type": "LanePhaseV1"
-      },
-      {
-        "name": "value",
-        "type": "LaneValueRefV1"
       }
     ]
   },
@@ -12981,418 +11504,6 @@
       }
     ]
   },
-  "MergeCarrierCommitmentV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "entry_hash",
-        "type": "HashOf<MergeLedgerEntry>"
-      }
-    ]
-  },
-  "MergeExecutionBatch": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "base_state_height",
-        "type": "u64"
-      },
-      {
-        "name": "base_state_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "application_block_header",
-        "type": "BlockHeader"
-      },
-      {
-        "name": "lanes",
-        "type": "Vec<MergeLaneExecution>"
-      },
-      {
-        "name": "entrypoint_count",
-        "type": "u64"
-      },
-      {
-        "name": "entrypoint_merkle_root",
-        "type": "HashOf<MerkleTree<TransactionEntrypoint>>"
-      },
-      {
-        "name": "result_merkle_root",
-        "type": "HashOf<MerkleTree<TransactionResult>>"
-      },
-      {
-        "name": "execution_root",
-        "type": "Hash"
-      },
-      {
-        "name": "application_write_set_root",
-        "type": "Hash"
-      },
-      {
-        "name": "write_set_root",
-        "type": "Hash"
-      },
-      {
-        "name": "expected_post_state_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "batch_hash",
-        "type": "Hash"
-      }
-    ]
-  },
-  "MergeLaneAuthorityCatalogV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "rosters",
-        "type": "Vec<MergeLaneCommitteeRosterV1>"
-      },
-      {
-        "name": "lane_roster_indices",
-        "type": "Vec<u16>"
-      }
-    ]
-  },
-  "MergeLaneBinding": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_config_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "activation_height",
-        "type": "u64"
-      }
-    ]
-  },
-  "MergeLaneCommitteeRosterV1": {
-    "Struct": [
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validators",
-        "type": "Vec<PeerId>"
-      }
-    ]
-  },
-  "MergeLaneExecution": {
-    "Struct": [
-      {
-        "name": "source_bundle",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "source_bundle_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "proposal",
-        "type": "LaneBlockProposalV1"
-      },
-      {
-        "name": "origin_proposal",
-        "type": "LaneBlockProposalV1"
-      },
-      {
-        "name": "prepare_qc",
-        "type": "LaneBlockQcV1"
-      },
-      {
-        "name": "commit_qc",
-        "type": "LaneBlockQcV1"
-      },
-      {
-        "name": "signer_proofs",
-        "type": "Vec<MergeLaneSignerProof>"
-      },
-      {
-        "name": "autonomous_network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "autonomous_epoch",
-        "type": "u64"
-      },
-      {
-        "name": "autonomous_payload_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "entrypoint_hashes",
-        "type": "Vec<Hash>"
-      },
-      {
-        "name": "entrypoints",
-        "type": "Vec<TransactionEntrypoint>"
-      },
-      {
-        "name": "authenticated_signed_replay_aliases",
-        "type": "Vec<Option<Hash>>"
-      },
-      {
-        "name": "reservation_keys",
-        "type": "Vec<Vec<u8>>"
-      },
-      {
-        "name": "routing_plans",
-        "type": "Vec<Vec<u8>>"
-      },
-      {
-        "name": "native_amx_receipts",
-        "type": "Vec<Option<NativeAmxReceipt>>"
-      },
-      {
-        "name": "result_hashes",
-        "type": "Vec<Hash>"
-      },
-      {
-        "name": "results",
-        "type": "Vec<TransactionResult>"
-      },
-      {
-        "name": "settlement_commitment",
-        "type": "LaneBlockCommitment"
-      },
-      {
-        "name": "settlement_hash",
-        "type": "HashOf<LaneBlockCommitment>"
-      },
-      {
-        "name": "fastpq_transcripts",
-        "type": "MergeLaneFastpqTranscripts"
-      }
-    ]
-  },
-  "MergeLaneFastpqTranscripts": {
-    "Struct": [
-      {
-        "name": "fastpq_transcripts",
-        "type": "Vec<TransferTranscriptBundle>"
-      }
-    ]
-  },
-  "MergeLaneSignerProof": {
-    "Struct": [
-      {
-        "name": "public_key",
-        "type": "PublicKey"
-      },
-      {
-        "name": "proof_of_possession",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
-  "MergeLaneSnapshot": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "incarnation_activation_height",
-        "type": "u64"
-      },
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "tip_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "merge_hint_root",
-        "type": "Hash"
-      },
-      {
-        "name": "settlement_commitment",
-        "type": "LaneBlockCommitment"
-      },
-      {
-        "name": "settlement_hash",
-        "type": "HashOf<LaneBlockCommitment>"
-      },
-      {
-        "name": "relay_envelope",
-        "type": "Option<LaneRelayEnvelope>"
-      }
-    ]
-  },
-  "MergeLedgerEntry": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u8"
-      },
-      {
-        "name": "epoch_id",
-        "type": "u64"
-      },
-      {
-        "name": "lane_catalog_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "active_lanes",
-        "type": "Vec<MergeLaneBinding>"
-      },
-      {
-        "name": "lane_authority_catalog",
-        "type": "MergeLaneAuthorityCatalogV1"
-      },
-      {
-        "name": "incarnation_root",
-        "type": "Hash"
-      },
-      {
-        "name": "activation_root",
-        "type": "Hash"
-      },
-      {
-        "name": "lane_snapshots",
-        "type": "Vec<MergeLaneSnapshot>"
-      },
-      {
-        "name": "global_state_root",
-        "type": "Hash"
-      },
-      {
-        "name": "merge_qc",
-        "type": "MergeQuorumCertificate"
-      },
-      {
-        "name": "execution_batch",
-        "type": "Option<MergeExecutionBatch>"
-      },
-      {
-        "name": "lane_drain_certificates",
-        "type": "Vec<LaneDrainCertificateV1>"
-      }
-    ]
-  },
-  "MergeLedgerEvent": {
-    "Struct": [
-      {
-        "name": "entry",
-        "type": "MergeLedgerEntry"
-      }
-    ]
-  },
-  "MergeLedgerEventFilter": {
-    "Struct": [
-      {
-        "name": "epoch_id",
-        "type": "Option<u64>"
-      }
-    ]
-  },
-  "MergeQuorumCertificate": {
-    "Struct": [
-      {
-        "name": "view",
-        "type": "u64"
-      },
-      {
-        "name": "epoch_id",
-        "type": "u64"
-      },
-      {
-        "name": "carrier_height",
-        "type": "u64"
-      },
-      {
-        "name": "carrier_parent_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "signers_bitmap",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "signer_proofs",
-        "type": "Vec<MergeSignerProof>"
-      },
-      {
-        "name": "aggregate_signature",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "message_digest",
-        "type": "Hash"
-      }
-    ]
-  },
-  "MergeSignerProof": {
-    "Struct": [
-      {
-        "name": "signer",
-        "type": "u32"
-      },
-      {
-        "name": "proof_of_possession",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
   "MerkleProof<Array<u8, 32>>": {
     "Struct": [
       {
@@ -13429,18 +11540,6 @@
       }
     ]
   },
-  "MerkleProof<LaneFinalityStatement>": {
-    "Struct": [
-      {
-        "name": "leaf_index",
-        "type": "u32"
-      },
-      {
-        "name": "audit_path",
-        "type": "Vec<Option<HashOf<LaneFinalityStatement>>>"
-      }
-    ]
-  },
   "MerkleProof<TransactionEntrypoint>": {
     "Struct": [
       {
@@ -13463,42 +11562,6 @@
     "Tuple": [
       "u8",
       "Vec<HashOf<SignedTransaction>>"
-    ]
-  },
-  "MerkleTreeCommitment<ExecutionOutputV1>": {
-    "Struct": [
-      {
-        "name": "root",
-        "type": "HashOf<MerkleTree<ExecutionOutputV1>>"
-      },
-      {
-        "name": "leaf_count",
-        "type": "NonZero<u64>"
-      }
-    ]
-  },
-  "MerkleTreeCommitment<LaneFinalityStatement>": {
-    "Struct": [
-      {
-        "name": "root",
-        "type": "HashOf<MerkleTree<LaneFinalityStatement>>"
-      },
-      {
-        "name": "leaf_count",
-        "type": "NonZero<u64>"
-      }
-    ]
-  },
-  "MerkleTreeCommitment<TransactionEntrypoint>": {
-    "Struct": [
-      {
-        "name": "root",
-        "type": "HashOf<MerkleTree<TransactionEntrypoint>>"
-      },
-      {
-        "name": "leaf_count",
-        "type": "NonZero<u64>"
-      }
     ]
   },
   "Metadata": "SortedMap<Name, Json>",
@@ -17120,274 +15183,6 @@
       }
     ]
   },
-  "NativeAmxAttestationBodyV2": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "epoch",
-        "type": "u64"
-      },
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "source_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "tx_entrypoint_hash",
-        "type": "HashOf<TransactionEntrypoint>"
-      },
-      {
-        "name": "plan_digest",
-        "type": "Hash"
-      },
-      {
-        "name": "phase",
-        "type": "NativeAmxPhase"
-      },
-      {
-        "name": "coordinator_lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "coordinator_dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "coordinator_lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "participant_lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "participant_dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "participant_lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "participant_previous_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "participant_previous_block_descriptor_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "participant_lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "participant_lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "participant_proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "participant_settlement_commitment",
-        "type": "Hash"
-      },
-      {
-        "name": "participant_validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "participant_validator_count",
-        "type": "u32"
-      },
-      {
-        "name": "participant_min_quorum",
-        "type": "u32"
-      },
-      {
-        "name": "authority_context_height",
-        "type": "u64"
-      },
-      {
-        "name": "planned_coordinator_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "coordinator_lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "coordinator_proposal_hash",
-        "type": "Hash"
-      }
-    ]
-  },
-  "NativeAmxAttestationQcV2": {
-    "Struct": [
-      {
-        "name": "body",
-        "type": "NativeAmxAttestationBodyV2"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "validator_set_pops",
-        "type": "Vec<Vec<u8>>"
-      },
-      {
-        "name": "signers_bitmap",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "bls_aggregate_signature",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
-  "NativeAmxLegRecordV2": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "participant_proposal",
-        "type": "LaneBlockProposalV1"
-      },
-      {
-        "name": "participant_settlement",
-        "type": "NativeAmxParticipantSettlement"
-      },
-      {
-        "name": "participant_settlement_hash",
-        "type": "HashOf<NativeAmxParticipantSettlement>"
-      },
-      {
-        "name": "prepare_qc",
-        "type": "NativeAmxAttestationQcV2"
-      },
-      {
-        "name": "commit_qc",
-        "type": "NativeAmxAttestationQcV2"
-      }
-    ]
-  },
-  "NativeAmxParticipantSettlement": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "participant_lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "authority_context_height",
-        "type": "u64"
-      },
-      {
-        "name": "previous_native_settlement_hash",
-        "type": "Option<HashOf<NativeAmxParticipantSettlement>>"
-      },
-      {
-        "name": "source_ids",
-        "type": "Vec<Array<u8, 32>>"
-      }
-    ]
-  },
-  "NativeAmxPhase": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "prepare"
-      },
-      {
-        "discriminant": 1,
-        "tag": "commit"
-      }
-    ]
-  },
-  "NativeAmxReceipt": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "source_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "network_id",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "plan_digest",
-        "type": "Hash"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "authority_context_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "coordinator_proposal_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "legs",
-        "type": "Vec<NativeAmxLegRecordV2>"
-      }
-    ]
-  },
   "NetworkExecutionOutputV1": {
     "Struct": [
       {
@@ -17489,86 +15284,6 @@
       {
         "name": "description",
         "type": "Option<String>"
-      }
-    ]
-  },
-  "NexusFeeReceipt": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "source_id",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "block_height",
-        "type": "u64"
-      },
-      {
-        "name": "debit_source",
-        "type": "FeeDebitSource"
-      },
-      {
-        "name": "fee_asset_id",
-        "type": "AssetDefinitionId"
-      },
-      {
-        "name": "program_revision",
-        "type": "Option<u64>"
-      },
-      {
-        "name": "lease_id",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "fee_amount",
-        "type": "Quantity"
-      },
-      {
-        "name": "schedule",
-        "type": "NexusFeeScheduleInputs"
-      }
-    ]
-  },
-  "NexusFeeScheduleInputs": {
-    "Struct": [
-      {
-        "name": "tx_bytes_len",
-        "type": "u64"
-      },
-      {
-        "name": "instruction_count",
-        "type": "u64"
-      },
-      {
-        "name": "gas_used",
-        "type": "u64"
-      },
-      {
-        "name": "base_fee",
-        "type": "Quantity"
-      },
-      {
-        "name": "per_byte_fee",
-        "type": "Quantity"
-      },
-      {
-        "name": "per_instruction_fee",
-        "type": "Quantity"
-      },
-      {
-        "name": "per_gas_unit_fee",
-        "type": "Quantity"
       }
     ]
   },
@@ -18095,12 +15810,8 @@
   "NposConsensusEffects": {
     "Struct": [
       {
-        "name": "finalized_global_beacon_pulse",
-        "type": "Option<FinalizedGlobalThresholdBeaconPulseV1>"
-      },
-      {
-        "name": "v2_evidence_admissions",
-        "type": "Vec<SumeragiV2EquivocationEvidence>"
+        "name": "evidence_admissions",
+        "type": "Vec<Evidence>"
       },
       {
         "name": "penalty_actions",
@@ -18266,6 +15977,9 @@
   "Option<AxtEffectBinding>": {
     "Option": "AxtEffectBinding"
   },
+  "Option<BeaconHorizonStatusV1>": {
+    "Option": "BeaconHorizonStatusV1"
+  },
   "Option<BlockExecutionContextBundle>": {
     "Option": "BlockExecutionContextBundle"
   },
@@ -18277,9 +15991,6 @@
   },
   "Option<BridgeProofRecord>": {
     "Option": "BridgeProofRecord"
-  },
-  "Option<CertifiedMergeLedgerReference>": {
-    "Option": "CertifiedMergeLedgerReference"
   },
   "Option<CommitCertificate>": {
     "Option": "CommitCertificate"
@@ -18341,9 +16052,6 @@
   "Option<FinalizedGlobalThresholdBeaconPulseV1>": {
     "Option": "FinalizedGlobalThresholdBeaconPulseV1"
   },
-  "Option<FinalizedNextEpochSnapshot>": {
-    "Option": "FinalizedNextEpochSnapshot"
-  },
   "Option<ForwardCursor>": {
     "Option": "ForwardCursor"
   },
@@ -18386,17 +16094,8 @@
   "Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>": {
     "Option": "HashOf<FinalizedGlobalThresholdBeaconPulseV1>"
   },
-  "Option<HashOf<LaneFinalityStatement>>": {
-    "Option": "HashOf<LaneFinalityStatement>"
-  },
   "Option<HashOf<MerkleTree<TransactionEntrypoint>>>": {
     "Option": "HashOf<MerkleTree<TransactionEntrypoint>>"
-  },
-  "Option<HashOf<MerkleTree<TransactionResult>>>": {
-    "Option": "HashOf<MerkleTree<TransactionResult>>"
-  },
-  "Option<HashOf<NativeAmxParticipantSettlement>>": {
-    "Option": "HashOf<NativeAmxParticipantSettlement>"
   },
   "Option<HashOf<NposConsensusEffects>>": {
     "Option": "HashOf<NposConsensusEffects>"
@@ -18410,35 +16109,11 @@
   "Option<KeyedHash>": {
     "Option": "KeyedHash"
   },
-  "Option<LaneBlockProposalPayloadHintV1>": {
-    "Option": "LaneBlockProposalPayloadHintV1"
-  },
-  "Option<LaneDecisionBatchV1>": {
-    "Option": "LaneDecisionBatchV1"
-  },
-  "Option<LaneDrainNativeFrontierEvidenceV1>": {
-    "Option": "LaneDrainNativeFrontierEvidenceV1"
-  },
-  "Option<LaneFastpqProofMaterial>": {
-    "Option": "LaneFastpqProofMaterial"
-  },
-  "Option<LaneFinalityAuthorityV1>": {
-    "Option": "LaneFinalityAuthorityV1"
-  },
   "Option<LaneId>": {
     "Option": "LaneId"
   },
-  "Option<LanePayloadAvailabilityQcV1>": {
-    "Option": "LanePayloadAvailabilityQcV1"
-  },
   "Option<LanePrivacyProof>": {
     "Option": "LanePrivacyProof"
-  },
-  "Option<LaneRelayEnvelope>": {
-    "Option": "LaneRelayEnvelope"
-  },
-  "Option<LaneSwapMetadata>": {
-    "Option": "LaneSwapMetadata"
   },
   "Option<ManifestAliasBinding>": {
     "Option": "ManifestAliasBinding"
@@ -18448,21 +16123,6 @@
   },
   "Option<ManifestProvenance>": {
     "Option": "ManifestProvenance"
-  },
-  "Option<MergeCarrierCommitmentV1>": {
-    "Option": "MergeCarrierCommitmentV1"
-  },
-  "Option<MergeExecutionBatch>": {
-    "Option": "MergeExecutionBatch"
-  },
-  "Option<MerkleTreeCommitment<ExecutionOutputV1>>": {
-    "Option": "MerkleTreeCommitment<ExecutionOutputV1>"
-  },
-  "Option<MerkleTreeCommitment<LaneFinalityStatement>>": {
-    "Option": "MerkleTreeCommitment<LaneFinalityStatement>"
-  },
-  "Option<MerkleTreeCommitment<TransactionEntrypoint>>": {
-    "Option": "MerkleTreeCommitment<TransactionEntrypoint>"
   },
   "Option<ModerationChallengeDecisionV1>": {
     "Option": "ModerationChallengeDecisionV1"
@@ -18520,9 +16180,6 @@
   },
   "Option<Name>": {
     "Option": "Name"
-  },
-  "Option<NativeAmxReceipt>": {
-    "Option": "NativeAmxReceipt"
   },
   "Option<NexusLaneRuntimeUpgradeHookStatus>": {
     "Option": "NexusLaneRuntimeUpgradeHookStatus"
@@ -18608,9 +16265,6 @@
   "Option<Quantity>": {
     "Option": "Quantity"
   },
-  "Option<QuorumCertificate>": {
-    "Option": "QuorumCertificate"
-  },
   "Option<RepairFinalizedCursorV1>": {
     "Option": "RepairFinalizedCursorV1"
   },
@@ -18664,9 +16318,6 @@
   },
   "Option<SignedGameCheckpointV1>": {
     "Option": "SignedGameCheckpointV1"
-  },
-  "Option<SnapshotBootstrapAnchor>": {
-    "Option": "SnapshotBootstrapAnchor"
   },
   "Option<SorafsGarPolicy>": {
     "Option": "SorafsGarPolicy"
@@ -20045,14 +17696,6 @@
       }
     ]
   },
-  "ParentCommitJustification": {
-    "Struct": [
-      {
-        "name": "certificate",
-        "type": "Option<QuorumCertificate>"
-      }
-    ]
-  },
   "ParliamentAutomaticExecutionFailedV1": {
     "Struct": [
       {
@@ -20252,42 +17895,6 @@
       {
         "discriminant": 9,
         "tag": "RandomnessRedrawBudgetExhausted"
-      }
-    ]
-  },
-  "PayloadEncoding": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "reed_solomon16"
-      }
-    ]
-  },
-  "PayloadManifest": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "subject",
-        "type": "BlockSubject"
-      },
-      {
-        "name": "payload_size_bytes",
-        "type": "u64"
-      },
-      {
-        "name": "layout",
-        "type": "DataAvailabilityLayout"
-      },
-      {
-        "name": "chunk_hashes",
-        "type": "Vec<Hash>"
-      },
-      {
-        "name": "chunk_root",
-        "type": "Hash"
       }
     ]
   },
@@ -20705,11 +18312,6 @@
       },
       {
         "discriminant": 3,
-        "tag": "Merge",
-        "type": "MergeLedgerEvent"
-      },
-      {
-        "discriminant": 4,
         "tag": "Witness",
         "type": "ExecWitnessMsg"
       }
@@ -20729,11 +18331,6 @@
       },
       {
         "discriminant": 2,
-        "tag": "Merge",
-        "type": "MergeLedgerEventFilter"
-      },
-      {
-        "discriminant": 3,
         "tag": "Witness",
         "type": "WitnessEventFilter"
       }
@@ -22745,49 +20342,7 @@
       }
     ]
   },
-  "Proposal": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "proposer",
-        "type": "u32"
-      },
-      {
-        "name": "subject",
-        "type": "BlockSubject"
-      },
-      {
-        "name": "manifest",
-        "type": "PayloadManifest"
-      },
-      {
-        "name": "justification",
-        "type": "ProposalJustification"
-      },
-      {
-        "name": "signature",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
   "ProposalContentId": "Array<u8, 32>",
-  "ProposalJustification": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "parent_commit",
-        "type": "ParentCommitJustification"
-      },
-      {
-        "discriminant": 1,
-        "tag": "timeout",
-        "type": "TimeoutJustification"
-      }
-    ]
-  },
   "ProviderDisputeEventV1": {
     "Struct": [
       {
@@ -23350,190 +20905,6 @@
       {
         "name": "params",
         "type": "QueryParams"
-      }
-    ]
-  },
-  "QueuePlanAdmissionAttestationV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_index",
-        "type": "u16"
-      },
-      {
-        "name": "signature",
-        "type": "Signature"
-      }
-    ]
-  },
-  "QueuePlanAdmissionBindingV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "network_id_digest",
-        "type": "Hash"
-      },
-      {
-        "name": "request_id",
-        "type": "Hash"
-      },
-      {
-        "name": "entrypoint_hash",
-        "type": "HashOf<TransactionEntrypoint>"
-      },
-      {
-        "name": "signed_transaction_hash",
-        "type": "Option<HashOf<SignedTransaction>>"
-      },
-      {
-        "name": "routing_plan_digest",
-        "type": "Hash"
-      },
-      {
-        "name": "admission_context",
-        "type": "QueuePlanAdmissionContextV1"
-      },
-      {
-        "name": "enqueue_timestamp_ms",
-        "type": "u64"
-      },
-      {
-        "name": "queue_plan_journal_version",
-        "type": "u16"
-      },
-      {
-        "name": "durable_admission_version",
-        "type": "u16"
-      },
-      {
-        "name": "journal_record_digest",
-        "type": "Hash"
-      }
-    ]
-  },
-  "QueuePlanAdmissionCertificateV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "binding",
-        "type": "QueuePlanAdmissionBindingV1"
-      },
-      {
-        "name": "attestations",
-        "type": "Vec<QueuePlanAdmissionAttestationV1>"
-      }
-    ]
-  },
-  "QueuePlanAdmissionContextV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "authority_height",
-        "type": "u64"
-      },
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "predecessor_block_hash",
-        "type": "Option<HashOf<BlockHeader>>"
-      },
-      {
-        "name": "routing_plan_digest",
-        "type": "Hash"
-      },
-      {
-        "name": "route_incarnations",
-        "type": "Vec<QueuePlanRouteIncarnationV1>"
-      }
-    ]
-  },
-  "QueuePlanAdmissionPriorityV1": {
-    "Struct": [
-      {
-        "name": "carrier_height",
-        "type": "u64"
-      },
-      {
-        "name": "admission_index",
-        "type": "u32"
-      }
-    ]
-  },
-  "QueuePlanRouteIncarnationV1": {
-    "Struct": [
-      {
-        "name": "leg",
-        "type": "RouteLeg"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "validator_set_hash_version",
-        "type": "u16"
-      },
-      {
-        "name": "validator_set_hash",
-        "type": "HashOf<Vec<PeerId>>"
-      },
-      {
-        "name": "validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "validator_count",
-        "type": "u16"
-      },
-      {
-        "name": "durability_threshold",
-        "type": "u16"
-      }
-    ]
-  },
-  "QuorumCertificate": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "proposal_round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "phase",
-        "type": "SumeragiV2GlobalPhase"
-      },
-      {
-        "name": "subject",
-        "type": "BlockSubject"
-      },
-      {
-        "name": "execution_commitment",
-        "type": "ExecutionCommitment"
-      },
-      {
-        "name": "signers",
-        "type": "Vec<u32>"
-      },
-      {
-        "name": "aggregate_signature",
-        "type": "Vec<u8>"
       }
     ]
   },
@@ -25193,42 +22564,6 @@
       {
         "name": "permission",
         "type": "Permission"
-      }
-    ]
-  },
-  "RouteLeg": {
-    "Struct": [
-      {
-        "name": "route",
-        "type": "RoutingDecision"
-      },
-      {
-        "name": "role",
-        "type": "RouteLegRole"
-      }
-    ]
-  },
-  "RouteLegRole": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "Coordinator"
-      },
-      {
-        "discriminant": 1,
-        "tag": "Participant"
-      }
-    ]
-  },
-  "RoutingDecision": {
-    "Struct": [
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
       }
     ]
   },
@@ -27277,381 +24612,376 @@
       },
       {
         "discriminant": 26,
-        "tag": "FindLaneRelayEnvelopeByRef",
-        "type": "FindLaneRelayEnvelopeByRef"
-      },
-      {
-        "discriminant": 27,
         "tag": "FindFeeSponsorProgramById",
         "type": "FindFeeSponsorProgramById"
       },
       {
-        "discriminant": 28,
+        "discriminant": 27,
         "tag": "FindSettlementReceiptById",
         "type": "FindSettlementReceiptById"
       },
       {
-        "discriminant": 29,
+        "discriminant": 28,
         "tag": "FindFxCorridorPolicyRegistry",
         "type": "FindFxCorridorPolicyRegistry"
       },
       {
-        "discriminant": 30,
+        "discriminant": 29,
         "tag": "FindFxCorridorPolicyById",
         "type": "FindFxCorridorPolicyById"
       },
       {
-        "discriminant": 31,
+        "discriminant": 30,
         "tag": "FindSorafsProviderOwner",
         "type": "FindSorafsProviderOwner"
       },
       {
-        "discriminant": 32,
+        "discriminant": 31,
         "tag": "FindSorafsPinManifest",
         "type": "FindSorafsPinManifest"
       },
       {
-        "discriminant": 33,
+        "discriminant": 32,
         "tag": "FindSorafsPinManifests",
         "type": "FindSorafsPinManifests"
       },
       {
-        "discriminant": 34,
+        "discriminant": 33,
         "tag": "FindSorafsOrderbookPolicy",
         "type": "FindSorafsOrderbookPolicy"
       },
       {
-        "discriminant": 35,
+        "discriminant": 34,
         "tag": "FindSorafsOrderbookOrderById",
         "type": "FindSorafsOrderbookOrderById"
       },
       {
-        "discriminant": 36,
+        "discriminant": 35,
         "tag": "FindSorafsOrderbookCancellationByOrderId",
         "type": "FindSorafsOrderbookCancellationByOrderId"
       },
       {
-        "discriminant": 37,
+        "discriminant": 36,
         "tag": "FindSorafsOrderbookReceiptById",
         "type": "FindSorafsOrderbookReceiptById"
       },
       {
-        "discriminant": 38,
+        "discriminant": 37,
         "tag": "FindSorafsOrderbookTradeById",
         "type": "FindSorafsOrderbookTradeById"
       },
       {
-        "discriminant": 39,
+        "discriminant": 38,
         "tag": "FindSorafsOrderbookChannelById",
         "type": "FindSorafsOrderbookChannelById"
       },
       {
-        "discriminant": 40,
+        "discriminant": 39,
         "tag": "FindSorafsOrderbookStatus",
         "type": "FindSorafsOrderbookStatus"
       },
       {
-        "discriminant": 41,
+        "discriminant": 40,
         "tag": "FindSorafsOrderbookOrders",
         "type": "FindSorafsOrderbookOrders"
       },
       {
-        "discriminant": 42,
+        "discriminant": 41,
         "tag": "FindSorafsOrderbookReceipts",
         "type": "FindSorafsOrderbookReceipts"
       },
       {
-        "discriminant": 43,
+        "discriminant": 42,
         "tag": "FindSorafsOrderbookTrades",
         "type": "FindSorafsOrderbookTrades"
       },
       {
-        "discriminant": 44,
+        "discriminant": 43,
         "tag": "FindSorafsOrderbookChannels",
         "type": "FindSorafsOrderbookChannels"
       },
       {
-        "discriminant": 45,
+        "discriminant": 44,
         "tag": "FindSorafsOrderbookEvents",
         "type": "FindSorafsOrderbookEvents"
       },
       {
-        "discriminant": 46,
+        "discriminant": 45,
         "tag": "FindSorafsReservePolicy",
         "type": "FindSorafsReservePolicy"
       },
       {
-        "discriminant": 47,
+        "discriminant": 46,
         "tag": "FindSorafsReserveProviderById",
         "type": "FindSorafsReserveProviderById"
       },
       {
-        "discriminant": 48,
+        "discriminant": 47,
         "tag": "FindSorafsReserveMovementById",
         "type": "FindSorafsReserveMovementById"
       },
       {
-        "discriminant": 49,
+        "discriminant": 48,
         "tag": "FindSorafsReserveAppealById",
         "type": "FindSorafsReserveAppealById"
       },
       {
-        "discriminant": 50,
+        "discriminant": 49,
         "tag": "FindSorafsReserveProviders",
         "type": "FindSorafsReserveProviders"
       },
       {
-        "discriminant": 51,
+        "discriminant": 50,
         "tag": "FindSorafsReserveMovements",
         "type": "FindSorafsReserveMovements"
       },
       {
-        "discriminant": 52,
+        "discriminant": 51,
         "tag": "FindSorafsReserveAppeals",
         "type": "FindSorafsReserveAppeals"
       },
       {
-        "discriminant": 53,
+        "discriminant": 52,
         "tag": "FindSorafsReserveEvents",
         "type": "FindSorafsReserveEvents"
       },
       {
-        "discriminant": 54,
+        "discriminant": 53,
         "tag": "FindSorafsPopIssuerPolicy",
         "type": "FindSorafsPopIssuerPolicy"
       },
       {
-        "discriminant": 55,
+        "discriminant": 54,
         "tag": "FindSorafsPopCredentialCommitmentByDigest",
         "type": "FindSorafsPopCredentialCommitmentByDigest"
       },
       {
-        "discriminant": 56,
+        "discriminant": 55,
         "tag": "FindSorafsPopCommitmentRootByVersion",
         "type": "FindSorafsPopCommitmentRootByVersion"
       },
       {
-        "discriminant": 57,
+        "discriminant": 56,
         "tag": "FindSorafsPopRevocationPublicationByVersion",
         "type": "FindSorafsPopRevocationPublicationByVersion"
       },
       {
-        "discriminant": 58,
+        "discriminant": 57,
         "tag": "FindSorafsPopRevocationByNonceCommitment",
         "type": "FindSorafsPopRevocationByNonceCommitment"
       },
       {
-        "discriminant": 59,
+        "discriminant": 58,
         "tag": "FindSorafsPopAuditDigestBySequence",
         "type": "FindSorafsPopAuditDigestBySequence"
       },
       {
-        "discriminant": 60,
+        "discriminant": 59,
         "tag": "FindSorafsPopRegistryStatus",
         "type": "FindSorafsPopRegistryStatus"
       },
       {
-        "discriminant": 61,
+        "discriminant": 60,
         "tag": "FindSorafsCitizenBondBySerialCommitment",
         "type": "FindSorafsCitizenBondBySerialCommitment"
       },
       {
-        "discriminant": 62,
+        "discriminant": 61,
         "tag": "FindSorafsCitizenBondSnapshot",
         "type": "FindSorafsCitizenBondSnapshot"
       },
       {
-        "discriminant": 63,
+        "discriminant": 62,
         "tag": "FindSorafsRepairTask",
         "type": "FindSorafsRepairTask"
       },
       {
-        "discriminant": 64,
+        "discriminant": 63,
         "tag": "FindSorafsRepairTasks",
         "type": "FindSorafsRepairTasks"
       },
       {
-        "discriminant": 65,
+        "discriminant": 64,
         "tag": "FindSorafsRepairStatus",
         "type": "FindSorafsRepairStatus"
       },
       {
-        "discriminant": 66,
+        "discriminant": 65,
         "tag": "FindSorafsRepairEvents",
         "type": "FindSorafsRepairEvents"
       },
       {
-        "discriminant": 67,
+        "discriminant": 66,
         "tag": "FindSorafsProofOutcome",
         "type": "FindSorafsProofOutcome"
       },
       {
-        "discriminant": 68,
+        "discriminant": 67,
         "tag": "FindSorafsProofOutcomeEvents",
         "type": "FindSorafsProofOutcomeEvents"
       },
       {
-        "discriminant": 69,
+        "discriminant": 68,
         "tag": "FindSorafsReputationJournalAuthorityPolicy",
         "type": "FindSorafsReputationJournalAuthorityPolicy"
       },
       {
-        "discriminant": 70,
+        "discriminant": 69,
         "tag": "FindSorafsReputationJournalEventBySourceId",
         "type": "FindSorafsReputationJournalEventBySourceId"
       },
       {
-        "discriminant": 71,
+        "discriminant": 70,
         "tag": "FindSorafsReputationJournalEvents",
         "type": "FindSorafsReputationJournalEvents"
       },
       {
-        "discriminant": 72,
+        "discriminant": 71,
         "tag": "FindSorafsModerationPolicy",
         "type": "FindSorafsModerationPolicy"
       },
       {
-        "discriminant": 73,
+        "discriminant": 72,
         "tag": "FindSorafsModerationAppeal",
         "type": "FindSorafsModerationAppeal"
       },
       {
-        "discriminant": 74,
+        "discriminant": 73,
         "tag": "FindSorafsModerationJurorEligibility",
         "type": "FindSorafsModerationJurorEligibility"
       },
       {
-        "discriminant": 75,
+        "discriminant": 74,
         "tag": "FindSorafsModerationCase",
         "type": "FindSorafsModerationCase"
       },
       {
-        "discriminant": 76,
+        "discriminant": 75,
         "tag": "FindSorafsModerationCommit",
         "type": "FindSorafsModerationCommit"
       },
       {
-        "discriminant": 77,
+        "discriminant": 76,
         "tag": "FindSorafsModerationReveal",
         "type": "FindSorafsModerationReveal"
       },
       {
-        "discriminant": 78,
+        "discriminant": 77,
         "tag": "FindSorafsModerationChallenge",
         "type": "FindSorafsModerationChallenge"
       },
       {
-        "discriminant": 79,
+        "discriminant": 78,
         "tag": "FindSorafsModerationOutcome",
         "type": "FindSorafsModerationOutcome"
       },
       {
-        "discriminant": 80,
+        "discriminant": 79,
         "tag": "FindSorafsModerationNoShow",
         "type": "FindSorafsModerationNoShow"
       },
       {
-        "discriminant": 81,
+        "discriminant": 80,
         "tag": "FindSorafsModerationStatus",
         "type": "FindSorafsModerationStatus"
       },
       {
-        "discriminant": 82,
+        "discriminant": 81,
         "tag": "FindSorafsModerationSnapshot",
         "type": "FindSorafsModerationSnapshot"
       },
       {
-        "discriminant": 83,
+        "discriminant": 82,
         "tag": "FindSorafsModerationEvents",
         "type": "FindSorafsModerationEvents"
       },
       {
-        "discriminant": 84,
+        "discriminant": 83,
         "tag": "FindDataspaceNameOwnerById",
         "type": "FindDataspaceNameOwnerById"
       },
       {
-        "discriminant": 85,
+        "discriminant": 84,
         "tag": "FindMusubiExactPackageV1",
         "type": "FindMusubiExactPackageV1"
       },
       {
-        "discriminant": 86,
+        "discriminant": 85,
         "tag": "FindMusubiExactReleaseV1",
         "type": "FindMusubiExactReleaseV1"
       },
       {
-        "discriminant": 87,
+        "discriminant": 86,
         "tag": "FindMusubiProviderBundleAttestationV1",
         "type": "FindMusubiProviderBundleAttestationV1"
       },
       {
-        "discriminant": 88,
+        "discriminant": 87,
         "tag": "FindMusubiResolverIndexV1",
         "type": "FindMusubiResolverIndexV1"
       },
       {
-        "discriminant": 89,
+        "discriminant": 88,
         "tag": "FindMusubiVersionsV1",
         "type": "FindMusubiVersionsV1"
       },
       {
-        "discriminant": 90,
+        "discriminant": 89,
         "tag": "FindMusubiMaintainersV1",
         "type": "FindMusubiMaintainersV1"
       },
       {
-        "discriminant": 91,
+        "discriminant": 90,
         "tag": "FindMusubiArchiveLocationsV1",
         "type": "FindMusubiArchiveLocationsV1"
       },
       {
-        "discriminant": 92,
+        "discriminant": 91,
         "tag": "FindMusubiArchiveRetentionV1",
         "type": "FindMusubiArchiveRetentionV1"
       },
       {
-        "discriminant": 93,
+        "discriminant": 92,
         "tag": "FindMusubiAliasV1",
         "type": "FindMusubiAliasV1"
       },
       {
-        "discriminant": 94,
+        "discriminant": 93,
         "tag": "FindMusubiAliasHistoryV1",
         "type": "FindMusubiAliasHistoryV1"
       },
       {
-        "discriminant": 95,
+        "discriminant": 94,
         "tag": "FindMusubiOrderedPrefixV1",
         "type": "FindMusubiOrderedPrefixV1"
       },
       {
-        "discriminant": 96,
+        "discriminant": 95,
         "tag": "FindAccountByAlias",
         "type": "FindAccountByAlias"
       },
       {
-        "discriminant": 97,
+        "discriminant": 96,
         "tag": "FindDomainById",
         "type": "FindDomainById"
       },
       {
-        "discriminant": 98,
+        "discriminant": 97,
         "tag": "FindNftById",
         "type": "FindNftById"
       },
       {
-        "discriminant": 99,
+        "discriminant": 98,
         "tag": "FindGameSessionById",
         "type": "FindGameSessionById"
       },
       {
-        "discriminant": 100,
+        "discriminant": 99,
         "tag": "FindExecutionProofVerificationById",
         "type": "FindExecutionProofVerificationById"
       },
       {
-        "discriminant": 101,
+        "discriminant": 100,
         "tag": "FindNftSaleOfferById",
         "type": "FindNftSaleOfferById"
       }
@@ -27786,371 +25116,366 @@
       },
       {
         "discriminant": 25,
-        "tag": "VerifiedLaneRelayRecord",
-        "type": "VerifiedLaneRelayRecord"
-      },
-      {
-        "discriminant": 26,
         "tag": "FeeSponsorProgram",
         "type": "FeeSponsorProgram"
       },
       {
-        "discriminant": 27,
+        "discriminant": 26,
         "tag": "SorafsPinManifest",
         "type": "PinManifestFinalizedRecordV1"
       },
       {
-        "discriminant": 28,
+        "discriminant": 27,
         "tag": "SorafsPinManifestPage",
         "type": "PinManifestPageV1"
       },
       {
-        "discriminant": 29,
+        "discriminant": 28,
         "tag": "SorafsOrderbookPolicy",
         "type": "OrderbookAdmissionPolicyRecord"
       },
       {
-        "discriminant": 30,
+        "discriminant": 29,
         "tag": "SorafsOrderbookOrder",
         "type": "OrderbookOrderRecord"
       },
       {
-        "discriminant": 31,
+        "discriminant": 30,
         "tag": "SorafsOrderbookCancellation",
         "type": "OrderbookCancellationRecord"
       },
       {
-        "discriminant": 32,
+        "discriminant": 31,
         "tag": "SorafsOrderbookReceipt",
         "type": "OrderbookSettlementReceiptRecord"
       },
       {
-        "discriminant": 33,
+        "discriminant": 32,
         "tag": "SorafsOrderbookTrade",
         "type": "OrderbookTradeRecord"
       },
       {
-        "discriminant": 34,
+        "discriminant": 33,
         "tag": "SorafsOrderbookChannel",
         "type": "OrderbookSettlementChannelRecord"
       },
       {
-        "discriminant": 35,
+        "discriminant": 34,
         "tag": "SorafsOrderbookStatus",
         "type": "OrderbookLedgerStatusV1"
       },
       {
-        "discriminant": 36,
+        "discriminant": 35,
         "tag": "SorafsOrderbookOrderPage",
         "type": "OrderbookOrderPageV1"
       },
       {
-        "discriminant": 37,
+        "discriminant": 36,
         "tag": "SorafsOrderbookReceiptPage",
         "type": "OrderbookSettlementReceiptPageV1"
       },
       {
-        "discriminant": 38,
+        "discriminant": 37,
         "tag": "SorafsOrderbookTradePage",
         "type": "OrderbookTradePageV1"
       },
       {
-        "discriminant": 39,
+        "discriminant": 38,
         "tag": "SorafsOrderbookChannelPage",
         "type": "OrderbookSettlementChannelPageV1"
       },
       {
-        "discriminant": 40,
+        "discriminant": 39,
         "tag": "SorafsOrderbookEventPage",
         "type": "OrderbookFinalizedEventPageV1"
       },
       {
-        "discriminant": 41,
+        "discriminant": 40,
         "tag": "SorafsReservePolicy",
         "type": "ReserveAuthorityPolicyRecordV1"
       },
       {
-        "discriminant": 42,
+        "discriminant": 41,
         "tag": "SorafsReserveProvider",
         "type": "ReserveProviderAccountV1"
       },
       {
-        "discriminant": 43,
+        "discriminant": 42,
         "tag": "SorafsReserveMovement",
         "type": "ReserveMovementRecordV1"
       },
       {
-        "discriminant": 44,
+        "discriminant": 43,
         "tag": "SorafsReserveAppeal",
         "type": "ReserveAppealRecordV1"
       },
       {
-        "discriminant": 45,
+        "discriminant": 44,
         "tag": "SorafsReserveProviderPage",
         "type": "ReserveProviderAccountPageV1"
       },
       {
-        "discriminant": 46,
+        "discriminant": 45,
         "tag": "SorafsReserveMovementPage",
         "type": "ReserveMovementPageV1"
       },
       {
-        "discriminant": 47,
+        "discriminant": 46,
         "tag": "SorafsReserveAppealPage",
         "type": "ReserveAppealPageV1"
       },
       {
-        "discriminant": 48,
+        "discriminant": 47,
         "tag": "SorafsReserveEventPage",
         "type": "ReserveFinalizedEventPageV1"
       },
       {
-        "discriminant": 49,
+        "discriminant": 48,
         "tag": "SorafsPopIssuerPolicy",
         "type": "PopIssuerPolicyRecordV1"
       },
       {
-        "discriminant": 50,
+        "discriminant": 49,
         "tag": "SorafsPopCredentialCommitment",
         "type": "PopCredentialCommitmentRecordV1"
       },
       {
-        "discriminant": 51,
+        "discriminant": 50,
         "tag": "SorafsPopCommitmentRoot",
         "type": "PopCommitmentRootRecordV1"
       },
       {
-        "discriminant": 52,
+        "discriminant": 51,
         "tag": "SorafsPopRevocationPublication",
         "type": "PopRevocationPublicationRecordV1"
       },
       {
-        "discriminant": 53,
+        "discriminant": 52,
         "tag": "SorafsPopRevocation",
         "type": "PopRevocationRecordV1"
       },
       {
-        "discriminant": 54,
+        "discriminant": 53,
         "tag": "SorafsPopAuditDigest",
         "type": "PopRegistryAuditDigestRecordV1"
       },
       {
-        "discriminant": 55,
+        "discriminant": 54,
         "tag": "SorafsPopRegistryStatus",
         "type": "PopRegistryStatusV1"
       },
       {
-        "discriminant": 56,
+        "discriminant": 55,
         "tag": "SorafsCitizenBond",
         "type": "SorafsCitizenBondV1"
       },
       {
-        "discriminant": 57,
+        "discriminant": 56,
         "tag": "SorafsCitizenBondSnapshot",
         "type": "SorafsCitizenBondSnapshotV1"
       },
       {
-        "discriminant": 58,
+        "discriminant": 57,
         "tag": "SorafsRepairTask",
         "type": "RepairFinalizedTaskV1"
       },
       {
-        "discriminant": 59,
+        "discriminant": 58,
         "tag": "SorafsRepairTaskPage",
         "type": "RepairLedgerTaskPageV1"
       },
       {
-        "discriminant": 60,
+        "discriminant": 59,
         "tag": "SorafsRepairStatus",
         "type": "RepairFinalizedStatusV1"
       },
       {
-        "discriminant": 61,
+        "discriminant": 60,
         "tag": "SorafsRepairEventPage",
         "type": "RepairFinalizedEventPageV1"
       },
       {
-        "discriminant": 62,
+        "discriminant": 61,
         "tag": "SorafsProofOutcome",
         "type": "ProofOutcomeFinalizedRecordV1"
       },
       {
-        "discriminant": 63,
+        "discriminant": 62,
         "tag": "SorafsProofOutcomeEventPage",
         "type": "ProofOutcomeFinalizedEventPageV1"
       },
       {
-        "discriminant": 64,
+        "discriminant": 63,
         "tag": "SorafsReputationJournalAuthorityPolicy",
         "type": "ReputationJournalAuthorityPolicyRecordV1"
       },
       {
-        "discriminant": 65,
+        "discriminant": 64,
         "tag": "SorafsReputationJournalEvent",
         "type": "ReputationJournalFinalizedEventV1"
       },
       {
-        "discriminant": 66,
+        "discriminant": 65,
         "tag": "SorafsReputationJournalEventPage",
         "type": "ReputationJournalFinalizedEventPageV1"
       },
       {
-        "discriminant": 67,
+        "discriminant": 66,
         "tag": "SorafsModerationPolicy",
         "type": "ModerationLedgerPolicyRecord"
       },
       {
-        "discriminant": 68,
+        "discriminant": 67,
         "tag": "SorafsModerationAppeal",
         "type": "ModerationAppealRecordV1"
       },
       {
-        "discriminant": 69,
+        "discriminant": 68,
         "tag": "SorafsModerationJurorEligibility",
         "type": "ModerationJurorEligibilityRecordV1"
       },
       {
-        "discriminant": 70,
+        "discriminant": 69,
         "tag": "SorafsModerationCase",
         "type": "ModerationCaseRecordV1"
       },
       {
-        "discriminant": 71,
+        "discriminant": 70,
         "tag": "SorafsModerationCommit",
         "type": "ModerationCommitRecordV1"
       },
       {
-        "discriminant": 72,
+        "discriminant": 71,
         "tag": "SorafsModerationReveal",
         "type": "ModerationRevealRecordV1"
       },
       {
-        "discriminant": 73,
+        "discriminant": 72,
         "tag": "SorafsModerationChallenge",
         "type": "ModerationChallengeRecordV1"
       },
       {
-        "discriminant": 74,
+        "discriminant": 73,
         "tag": "SorafsModerationOutcome",
         "type": "ModerationOutcomeRecordV1"
       },
       {
-        "discriminant": 75,
+        "discriminant": 74,
         "tag": "SorafsModerationNoShow",
         "type": "ModerationNoShowRecordV1"
       },
       {
-        "discriminant": 76,
+        "discriminant": 75,
         "tag": "SorafsModerationStatus",
         "type": "ModerationLedgerStatusV1"
       },
       {
-        "discriminant": 77,
+        "discriminant": 76,
         "tag": "SorafsModerationSnapshot",
         "type": "ModerationFinalizedLedgerSnapshotV1"
       },
       {
-        "discriminant": 78,
+        "discriminant": 77,
         "tag": "SorafsModerationEventPage",
         "type": "ModerationFinalizedEventPageV1"
       },
       {
-        "discriminant": 79,
+        "discriminant": 78,
         "tag": "SettlementReceipt",
         "type": "SettlementReceipt"
       },
       {
-        "discriminant": 80,
+        "discriminant": 79,
         "tag": "FxCorridorPolicyRegistry",
         "type": "FxCorridorPolicyRegistry"
       },
       {
-        "discriminant": 81,
+        "discriminant": 80,
         "tag": "FxCorridorPolicy",
         "type": "FxCorridorPolicy"
       },
       {
-        "discriminant": 82,
+        "discriminant": 81,
         "tag": "MusubiPackage",
         "type": "MusubiPackageRecordV1"
       },
       {
-        "discriminant": 83,
+        "discriminant": 82,
         "tag": "MusubiRelease",
         "type": "MusubiExactReleaseSnapshotV1"
       },
       {
-        "discriminant": 84,
+        "discriminant": 83,
         "tag": "MusubiProviderBundleAttestation",
         "type": "MusubiProviderBundleAttestationRecordV1"
       },
       {
-        "discriminant": 85,
+        "discriminant": 84,
         "tag": "MusubiResolverIndexPage",
         "type": "MusubiResolverIndexPageV1"
       },
       {
-        "discriminant": 86,
+        "discriminant": 85,
         "tag": "MusubiVersionPage",
         "type": "MusubiVersionPageV1"
       },
       {
-        "discriminant": 87,
+        "discriminant": 86,
         "tag": "MusubiMaintainerPage",
         "type": "MusubiMaintainerPageV1"
       },
       {
-        "discriminant": 88,
+        "discriminant": 87,
         "tag": "MusubiArchiveLocationPage",
         "type": "MusubiArchiveLocationPageV1"
       },
       {
-        "discriminant": 89,
+        "discriminant": 88,
         "tag": "MusubiArchiveRetentionPage",
         "type": "MusubiArchiveRetentionPageV1"
       },
       {
-        "discriminant": 90,
+        "discriminant": 89,
         "tag": "MusubiAlias",
         "type": "MusubiAliasRecordV1"
       },
       {
-        "discriminant": 91,
+        "discriminant": 90,
         "tag": "MusubiAliasHistoryPage",
         "type": "MusubiAliasHistoryPageV1"
       },
       {
-        "discriminant": 92,
+        "discriminant": 91,
         "tag": "MusubiOrderedPackagePage",
         "type": "MusubiOrderedPackagePageV1"
       },
       {
-        "discriminant": 93,
+        "discriminant": 92,
         "tag": "AccountId",
         "type": "AccountId"
       },
       {
-        "discriminant": 94,
+        "discriminant": 93,
         "tag": "Domain",
         "type": "Domain"
       },
       {
-        "discriminant": 95,
+        "discriminant": 94,
         "tag": "Nft",
         "type": "Nft"
       },
       {
-        "discriminant": 96,
+        "discriminant": 95,
         "tag": "GameSessionRecord",
         "type": "GameSessionRecordV1"
       },
       {
-        "discriminant": 97,
+        "discriminant": 96,
         "tag": "ExecutionProofVerification",
         "type": "ExecutionProofVerificationV1"
       },
       {
-        "discriminant": 98,
+        "discriminant": 97,
         "tag": "NftSaleRecord",
         "type": "NftSaleRecordV1"
       }
@@ -28260,26 +25585,6 @@
       {
         "name": "max_output_bytes",
         "type": "NonZero<u64>"
-      }
-    ]
-  },
-  "SnapshotBootstrapAnchor": {
-    "Struct": [
-      {
-        "name": "snapshot_height",
-        "type": "u64"
-      },
-      {
-        "name": "snapshot_block_hash",
-        "type": "HashOf<BlockHeader>"
-      },
-      {
-        "name": "snapshot_block_creation_time_ms",
-        "type": "u64"
-      },
-      {
-        "name": "snapshot_state_hash",
-        "type": "Hash"
       }
     ]
   },
@@ -30956,86 +28261,6 @@
       }
     ]
   },
-  "SumeragiLanePayloadOwnership": {
-    "Struct": [
-      {
-        "name": "proposal_height",
-        "type": "u64"
-      },
-      {
-        "name": "proposal_view",
-        "type": "u64"
-      },
-      {
-        "name": "lane_id",
-        "type": "LaneId"
-      },
-      {
-        "name": "dataspace_id",
-        "type": "DataSpaceId"
-      },
-      {
-        "name": "lane_incarnation",
-        "type": "Hash"
-      },
-      {
-        "name": "lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "lane_block_view",
-        "type": "u64"
-      },
-      {
-        "name": "subject_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "qc_mode_tag",
-        "type": "String"
-      },
-      {
-        "name": "accepted_candidate_indices",
-        "type": "Vec<u64>"
-      },
-      {
-        "name": "accepted_transaction_hashes",
-        "type": "Vec<Hash>"
-      },
-      {
-        "name": "previous_lane_block_height",
-        "type": "u64"
-      },
-      {
-        "name": "previous_lane_block_descriptor_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "lane_block_descriptor_hash",
-        "type": "Option<Hash>"
-      },
-      {
-        "name": "lane_block_descriptor_validator_set",
-        "type": "Vec<PeerId>"
-      },
-      {
-        "name": "lane_block_descriptor_validator_count",
-        "type": "u32"
-      },
-      {
-        "name": "lane_block_descriptor_min_quorum",
-        "type": "u32"
-      },
-      {
-        "name": "payload_ownership_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "rbc_instance_hash",
-        "type": "Hash"
-      }
-    ]
-  },
   "SumeragiParameter": {
     "Enum": [
       {
@@ -31150,6 +28375,18 @@
   "SumeragiStatus": {
     "Struct": [
       {
+        "name": "protocol_version",
+        "type": "u16"
+      },
+      {
+        "name": "config_fingerprint",
+        "type": "Hash"
+      },
+      {
+        "name": "beacon_horizon",
+        "type": "Option<BeaconHorizonStatusV1>"
+      },
+      {
         "name": "instance",
         "type": "Array<u8, 32>"
       },
@@ -31220,89 +28457,6 @@
       {
         "name": "footprint",
         "type": "SumeragiFootprint"
-      }
-    ]
-  },
-  "SumeragiV2Equivocation": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "proposal",
-        "type": "SumeragiV2ProposalEquivocationSchema"
-      },
-      {
-        "discriminant": 1,
-        "tag": "phase_vote",
-        "type": "SumeragiV2PhaseVoteEquivocationSchema"
-      },
-      {
-        "discriminant": 2,
-        "tag": "timeout_vote",
-        "type": "SumeragiV2TimeoutVoteEquivocationSchema"
-      }
-    ]
-  },
-  "SumeragiV2EquivocationEvidence": {
-    "Struct": [
-      {
-        "name": "context",
-        "type": "HeightContext"
-      },
-      {
-        "name": "proofs_of_possession",
-        "type": "Vec<Vec<u8>>"
-      },
-      {
-        "name": "conflict",
-        "type": "SumeragiV2Equivocation"
-      }
-    ]
-  },
-  "SumeragiV2GlobalPhase": {
-    "Enum": [
-      {
-        "discriminant": 1,
-        "tag": "Prepare"
-      },
-      {
-        "discriminant": 2,
-        "tag": "Commit"
-      }
-    ]
-  },
-  "SumeragiV2PhaseVoteEquivocationSchema": {
-    "Struct": [
-      {
-        "name": "first",
-        "type": "Vote"
-      },
-      {
-        "name": "second",
-        "type": "Vote"
-      }
-    ]
-  },
-  "SumeragiV2ProposalEquivocationSchema": {
-    "Struct": [
-      {
-        "name": "first",
-        "type": "Proposal"
-      },
-      {
-        "name": "second",
-        "type": "Proposal"
-      }
-    ]
-  },
-  "SumeragiV2TimeoutVoteEquivocationSchema": {
-    "Struct": [
-      {
-        "name": "first",
-        "type": "TimeoutVote"
-      },
-      {
-        "name": "second",
-        "type": "TimeoutVote"
       }
     ]
   },
@@ -31548,66 +28702,6 @@
       {
         "name": "retry_after_ms",
         "type": "NonZero<u64>"
-      }
-    ]
-  },
-  "TimeoutCertificate": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "groups",
-        "type": "Vec<TimeoutVoteGroup>"
-      }
-    ]
-  },
-  "TimeoutJustification": {
-    "Struct": [
-      {
-        "name": "timeout_certificate",
-        "type": "TimeoutCertificate"
-      },
-      {
-        "name": "highest_prepare_qc",
-        "type": "Option<QuorumCertificate>"
-      }
-    ]
-  },
-  "TimeoutVote": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "highest_prepare_qc",
-        "type": "Option<QuorumCertificate>"
-      },
-      {
-        "name": "signer",
-        "type": "u32"
-      },
-      {
-        "name": "signature",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
-  "TimeoutVoteGroup": {
-    "Struct": [
-      {
-        "name": "highest_prepare_qc",
-        "type": "Option<QuorumCertificate>"
-      },
-      {
-        "name": "signers",
-        "type": "Vec<u32>"
-      },
-      {
-        "name": "aggregate_signature",
-        "type": "Vec<u8>"
       }
     ]
   },
@@ -31973,18 +29067,6 @@
       }
     ]
   },
-  "TransactionAdmissionIntent": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "ordinary"
-      },
-      {
-        "discriminant": 1,
-        "tag": "queue_plan_synced"
-      }
-    ]
-  },
   "TransactionDomain": {
     "Enum": [
       {
@@ -32191,10 +29273,6 @@
       {
         "name": "fee_payment",
         "type": "FeePaymentIntent"
-      },
-      {
-        "name": "admission_intent",
-        "type": "TransactionAdmissionIntent"
       },
       {
         "name": "metadata",
@@ -32749,14 +29827,6 @@
       {
         "name": "drop_unknown_dataspace",
         "type": "bool"
-      },
-      {
-        "name": "restricted_fallback",
-        "type": "String"
-      },
-      {
-        "name": "restricted_public_policy",
-        "type": "String"
       }
     ]
   },
@@ -32801,14 +29871,6 @@
       {
         "name": "outcome",
         "type": "String"
-      },
-      {
-        "name": "fallback_used",
-        "type": "bool"
-      },
-      {
-        "name": "fallback_surface",
-        "type": "Option<String>"
       },
       {
         "name": "reason",
@@ -33082,18 +30144,6 @@
       }
     ]
   },
-  "ValidatorPower": {
-    "Struct": [
-      {
-        "name": "validator",
-        "type": "PeerId"
-      },
-      {
-        "name": "power",
-        "type": "u64"
-      }
-    ]
-  },
   "Vec<Account>": {
     "Vec": "Account"
   },
@@ -33132,9 +30182,6 @@
   },
   "Vec<AssetId>": {
     "Vec": "AssetId"
-  },
-  "Vec<AutonomousLanePayloadEnvelopeV1>": {
-    "Vec": "AutonomousLanePayloadEnvelopeV1"
   },
   "Vec<AxtAnchoredSpendV1>": {
     "Vec": "AxtAnchoredSpendV1"
@@ -33240,6 +30287,9 @@
   },
   "Vec<EventFilterBox>": {
     "Vec": "EventFilterBox"
+  },
+  "Vec<Evidence>": {
+    "Vec": "Evidence"
   },
   "Vec<ExecKv>": {
     "Vec": "ExecKv"
@@ -33361,45 +30411,6 @@
   "Vec<KotobaTranslationEntry>": {
     "Vec": "KotobaTranslationEntry"
   },
-  "Vec<LaneDecisionGroupV1>": {
-    "Vec": "LaneDecisionGroupV1"
-  },
-  "Vec<LaneDecisionV1>": {
-    "Vec": "LaneDecisionV1"
-  },
-  "Vec<LaneDrainCertificateV1>": {
-    "Vec": "LaneDrainCertificateV1"
-  },
-  "Vec<LaneFinalityStatement>": {
-    "Vec": "LaneFinalityStatement"
-  },
-  "Vec<LaneInputRouteSlotV1>": {
-    "Vec": "LaneInputRouteSlotV1"
-  },
-  "Vec<LaneSettlementReceipt>": {
-    "Vec": "LaneSettlementReceipt"
-  },
-  "Vec<LaneSignatureShareV1>": {
-    "Vec": "LaneSignatureShareV1"
-  },
-  "Vec<MergeLaneBinding>": {
-    "Vec": "MergeLaneBinding"
-  },
-  "Vec<MergeLaneCommitteeRosterV1>": {
-    "Vec": "MergeLaneCommitteeRosterV1"
-  },
-  "Vec<MergeLaneExecution>": {
-    "Vec": "MergeLaneExecution"
-  },
-  "Vec<MergeLaneSignerProof>": {
-    "Vec": "MergeLaneSignerProof"
-  },
-  "Vec<MergeLaneSnapshot>": {
-    "Vec": "MergeLaneSnapshot"
-  },
-  "Vec<MergeSignerProof>": {
-    "Vec": "MergeSignerProof"
-  },
   "Vec<Metadata>": {
     "Vec": "Metadata"
   },
@@ -33481,20 +30492,11 @@
   "Vec<Name>": {
     "Vec": "Name"
   },
-  "Vec<NativeAmxLegRecordV2>": {
-    "Vec": "NativeAmxLegRecordV2"
-  },
-  "Vec<NativeAmxReceipt>": {
-    "Vec": "NativeAmxReceipt"
-  },
   "Vec<NexusDataspaceCatalogStatus>": {
     "Vec": "NexusDataspaceCatalogStatus"
   },
   "Vec<NexusDataspaceTeuStatus>": {
     "Vec": "NexusDataspaceTeuStatus"
-  },
-  "Vec<NexusFeeReceipt>": {
-    "Vec": "NexusFeeReceipt"
   },
   "Vec<NexusLaneManifestValidatorBindingStatus>": {
     "Vec": "NexusLaneManifestValidatorBindingStatus"
@@ -33532,14 +30534,8 @@
   "Vec<Option<HashOf<FastpqOrdinarySourceStatementLeafV1>>>": {
     "Vec": "Option<HashOf<FastpqOrdinarySourceStatementLeafV1>>"
   },
-  "Vec<Option<HashOf<LaneFinalityStatement>>>": {
-    "Vec": "Option<HashOf<LaneFinalityStatement>>"
-  },
   "Vec<Option<HashOf<TransactionEntrypoint>>>": {
     "Vec": "Option<HashOf<TransactionEntrypoint>>"
-  },
-  "Vec<Option<NativeAmxReceipt>>": {
-    "Vec": "Option<NativeAmxReceipt>"
   },
   "Vec<Option<Vec<u8>>>": {
     "Vec": "Option<Vec<u8>>"
@@ -33646,12 +30642,6 @@
   "Vec<QueryOutputBatchBox>": {
     "Vec": "QueryOutputBatchBox"
   },
-  "Vec<QueuePlanAdmissionAttestationV1>": {
-    "Vec": "QueuePlanAdmissionAttestationV1"
-  },
-  "Vec<QueuePlanRouteIncarnationV1>": {
-    "Vec": "QueuePlanRouteIncarnationV1"
-  },
   "Vec<RecoveryGuardian>": {
     "Vec": "RecoveryGuardian"
   },
@@ -33724,12 +30714,6 @@
   "Vec<SumeragiLaneMerge>": {
     "Vec": "SumeragiLaneMerge"
   },
-  "Vec<SumeragiLanePayloadOwnership>": {
-    "Vec": "SumeragiLanePayloadOwnership"
-  },
-  "Vec<SumeragiV2EquivocationEvidence>": {
-    "Vec": "SumeragiV2EquivocationEvidence"
-  },
   "Vec<TaikaiAliasRotationStatus>": {
     "Vec": "TaikaiAliasRotationStatus"
   },
@@ -33738,9 +30722,6 @@
   },
   "Vec<TaikaiIngestStatus>": {
     "Vec": "TaikaiIngestStatus"
-  },
-  "Vec<TimeoutVoteGroup>": {
-    "Vec": "TimeoutVoteGroup"
   },
   "Vec<TransactionEntrypoint>": {
     "Vec": "TransactionEntrypoint"
@@ -33775,14 +30756,8 @@
   "Vec<ValidatorCommitteeMemberV1>": {
     "Vec": "ValidatorCommitteeMemberV1"
   },
-  "Vec<ValidatorPower>": {
-    "Vec": "ValidatorPower"
-  },
   "Vec<Vec<u8>>": {
     "Vec": "Vec<u8>"
-  },
-  "Vec<u16>": {
-    "Vec": "u16"
   },
   "Vec<u32>": {
     "Vec": "u32"
@@ -33802,58 +30777,6 @@
       {
         "name": "max_allowed",
         "type": "u8"
-      }
-    ]
-  },
-  "VerifiedLaneRelayRecord": {
-    "Struct": [
-      {
-        "name": "relay_ref",
-        "type": "LaneRelayEnvelopeRef"
-      },
-      {
-        "name": "relay_envelope",
-        "type": "LaneRelayEnvelope"
-      },
-      {
-        "name": "proof_payload_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "fastpq_statement_digest",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "lane_finality_statement_hash",
-        "type": "Hash"
-      },
-      {
-        "name": "fastpq_old_root",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "fastpq_new_root",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "fastpq_tx_set_hash",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "fastpq_proof_digest",
-        "type": "Hash"
-      },
-      {
-        "name": "verified_at_height",
-        "type": "u64"
-      },
-      {
-        "name": "manifest_root",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "fastpq_binding",
-        "type": "AxtFastpqBinding"
       }
     ]
   },
@@ -34143,38 +31066,6 @@
       {
         "name": "spent",
         "type": "Quantity"
-      }
-    ]
-  },
-  "Vote": {
-    "Struct": [
-      {
-        "name": "round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "proposal_round",
-        "type": "ConsensusRound"
-      },
-      {
-        "name": "phase",
-        "type": "SumeragiV2GlobalPhase"
-      },
-      {
-        "name": "subject",
-        "type": "BlockSubject"
-      },
-      {
-        "name": "execution_commitment",
-        "type": "ExecutionCommitment"
-      },
-      {
-        "name": "signer",
-        "type": "u32"
-      },
-      {
-        "name": "signature",
-        "type": "Vec<u8>"
       }
     ]
   },

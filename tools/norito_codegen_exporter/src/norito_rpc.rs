@@ -3866,21 +3866,21 @@ mod tests {
             properties["canonical.prefix.hex"],
             format!("00000000{}", properties["compact.length.hex"])
         );
-        assert_eq!(properties["versioned.bytes"], "624");
+        assert_eq!(properties["versioned.bytes"], "619");
         assert_eq!(
             properties["versioned.sha256"],
-            "564f351b91c59f2fbad3f02fdeb4a477f9ded3af4ec7576c8bdf6a8c7e5513af"
+            "f8a4e12f40d0d5d92d74a032a4b782b6b3361363a1a313161f2336b68006087f"
         );
-        assert_eq!(properties["bare.bytes"], "623");
-        assert_eq!(properties["compact.length.hex"], "df03");
-        assert_eq!(properties["canonical.prefix.hex"], "00000000df03");
+        assert_eq!(properties["bare.bytes"], "618");
+        assert_eq!(properties["compact.length.hex"], "da03");
+        assert_eq!(properties["canonical.prefix.hex"], "00000000da03");
         assert_eq!(
             properties["canonical.hash"],
-            "2515ee634afb06d636c4947ffce5c0ebe70b9d9df52943f95e3e074e65438d91"
+            "76ca8143ab4fc3697dd755576ceb33c82086af30d69d77b030f9817a8e9c2fc3"
         );
         assert_eq!(
             properties["payload.prehash"],
-            "cf3c67158dfa4b370219f4ff24861551de386ce3ce07fa3e142c242ed49e421d"
+            "36b2c7537acc2c100743039539ed28612e5f34e1ecf6df2e2afb4ad55fcebe43"
         );
     }
     #[test]

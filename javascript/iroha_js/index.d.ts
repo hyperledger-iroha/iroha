@@ -6184,49 +6184,13 @@ export interface ToriiSumeragiLaneStatus {
   instance: ToriiSumeragiStatus | null;
 }
 
-export interface ToriiConsensusCaps {
-  collectors_k: number;
-  redundant_send_r: number;
-  da_enabled: boolean;
-  rbc_chunk_max_bytes: number;
-  rbc_session_ttl_ms: number;
-  rbc_store_max_sessions: number;
-  rbc_store_soft_sessions: number;
-  rbc_store_max_bytes: number;
-  rbc_store_soft_bytes: number;
-}
-
-export interface ToriiSumeragiCommitQuorumSummary {
-  height: number;
-  view: number;
-  block_hash: string | null;
-  signatures_present: number;
-  signatures_counted: number;
-  signatures_set_b: number;
-  signatures_required: number;
-  last_updated_ms: number;
-}
-
-export interface ToriiSumeragiPrfContext {
-  height: number;
-  view: number;
-  epoch_seed?: string | null;
-}
-
-export interface ToriiSumeragiLeaderSnapshot {
-  leader_index: number;
-  prf: ToriiSumeragiPrfContext;
-}
-
+/** Committed Sumeragi timing parameters and chain height (`GET /v1/sumeragi/params`). */
 export interface ToriiSumeragiParamsSnapshot {
-  block_time_ms: number;
-  commit_time_ms: number;
+  /** Target block cadence in milliseconds; never zero. */
+  block_cadence_ms: number;
+  /** Maximum tolerated clock drift in milliseconds. */
   max_clock_drift_ms: number;
-  collectors_k: number;
-  redundant_send_r: number;
-  da_enabled: boolean;
-  next_mode?: string | null;
-  mode_activation_height?: number | null;
+  /** Committed chain height the snapshot was read at. */
   chain_height: number;
 }
 
@@ -10980,9 +10944,6 @@ export declare class ToriiClient {
   getSumeragiBlsKeys(options?: {
     signal?: AbortSignal;
   }): Promise<Record<string, string | null>>;
-  getSumeragiLeader(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiLeaderSnapshot>;
   getSumeragiParams(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiParamsSnapshot>;

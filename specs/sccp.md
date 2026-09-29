@@ -2083,7 +2083,7 @@ item 4 ensures while an SCCP attempt is active.
    becomes mandatory), and every validator MUST run its beacon partial signer.
    A pulse requires the active beacon session to match the height's roster,
    and the NPoS pre-boundary slot and every requested Parliament slot are
-   consensus-mandatory (`crates/iroha_core/src/sumeragi/v2_beacon.rs`). Every
+   consensus-mandatory (`crates/iroha_core/src/sumeragi/epoch_beacon.rs`). Every
    validator-set change therefore needs a new beacon DKG and
    `InstallGlobalBeaconKey` before the next pulse. That is a consensus
    prerequisite of free validator churn (D3) on Taira whether or not SCCP

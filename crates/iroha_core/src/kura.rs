@@ -3,6 +3,8 @@
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 mod block_hash_range;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod certificate_corruption_test_support;
 mod fastpq_artifact_store;
 mod lane_geometry;
 mod lane_storage;

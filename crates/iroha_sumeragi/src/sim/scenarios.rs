@@ -1078,7 +1078,7 @@ pub fn f26(seed: u64) -> Scenario {
         .collect();
     let honest: Vec<usize> = (0..n).filter(|m| !byz.contains(m)).collect();
     let starved = *rng.pick(&honest).unwrap_or(&0);
-    sc.net_rules = vec![NetRule::StripProposalsTo(starved)];
+    sc.net_rules = vec![NetRule::DropRowsTo(starved)];
     let victim = *rng.pick(&honest).unwrap_or(&0);
     let at = rng.range(8_000, 20_000);
     sc.script.push((at, Fault::Crash(victim)));

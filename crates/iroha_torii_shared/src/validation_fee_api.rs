@@ -1051,10 +1051,6 @@ impl ValidationFeeCurrentPolicyProofV1 {
     /// # Errors
     ///
     /// Returns a stable explanation when any portable binding is malformed or inconsistent.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the ordered V1 proof checks preserve fail-closed validation and stable error precedence"
-    )]
     pub fn verify_against(
         &self,
         network_id: NetworkId,

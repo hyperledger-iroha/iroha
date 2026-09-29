@@ -200,17 +200,35 @@ fn check_field(
             }
         }
         Role::Derived { sources, check } => {
-            let DerivationCheck::Rebuild(procedure) = check;
+            let (DerivationCheck::Rebuild(procedure) | DerivationCheck::Commitment(procedure)) =
+                check;
             if sources.is_empty()
                 || sources.iter().any(|source| source.is_empty())
                 || procedure.is_empty()
             {
                 return Err(CompleteInventoryError::IncompleteDescriptor(field.id));
             }
-            let mut active = vec![field.id];
-            sources
-                .iter()
-                .try_for_each(|source| check_derivation_source(fields, source, &mut active))?;
+            match check {
+                DerivationCheck::Rebuild(_) => {
+                    let mut active = vec![field.id];
+                    sources.iter().try_for_each(|source| {
+                        check_derivation_source(fields, source, &mut active)
+                    })?;
+                }
+                // A commitment derives from whole owners: their canonical descendants.
+                DerivationCheck::Commitment(_) => {
+                    for &source in sources {
+                        if count_identity(fields, source) != 1 {
+                            return Err(CompleteInventoryError::UnknownSource(source));
+                        }
+                        let owner = find_identity(fields, source)
+                            .expect("unique commitment source remains registered");
+                        if !matches!(owner.role, Role::Canonical(Canonical::Owner(_))) {
+                            return Err(CompleteInventoryError::NonAuthoritySource(source));
+                        }
+                    }
+                }
+            }
         }
         Role::History {
             source,
@@ -446,7 +464,7 @@ mod tests {
     fn every_current_derived_source_resolves_to_one_actual_inventory_identity() {
         let mut checked = 0;
         visit(STATE_FIELDS, &mut |field| {
-            if let Role::Derived { sources, .. } = field.role {
+            if let Role::Derived { sources, check } = field.role {
                 for source in sources {
                     assert_eq!(
                         count_identity(STATE_FIELDS, source),
@@ -455,6 +473,19 @@ mod tests {
                         field.id,
                         source
                     );
+                    if let DerivationCheck::Commitment(_) = check {
+                        // A commitment derives from a whole owner's canonical values.
+                        assert!(
+                            matches!(
+                                find_identity(STATE_FIELDS, source).map(|owner| owner.role),
+                                Some(Role::Canonical(Canonical::Owner(_)))
+                            ),
+                            "{} commits to a non-owner {source}",
+                            field.id
+                        );
+                        checked += 1;
+                        continue;
+                    }
                     check_derivation_source(STATE_FIELDS, source, &mut vec![field.id])
                         .unwrap_or_else(|error| {
                             panic!(

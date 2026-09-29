@@ -4,7 +4,8 @@
 
 use super::{Core, ExecState};
 use crate::{
-    message::WireMessage,
+    api::Action,
+    message::{ProposalMessage, WireMessage},
     pacemaker::retransmit_spacing,
     types::{Hash32, Millis, PublicKey},
 };
@@ -198,7 +199,7 @@ impl Core {
         self.repush_proposal();
     }
 
-    /// Re-send the own proposal (with payload) once per member per view to members whose
+    /// Re-send the own proposal manifest and rows once per member per view to members whose
     /// latest `Status`, received at least `rebroadcast_interval` after the proposal was sent,
     /// is for `(h, view)` without it.
     fn repush_proposal(&mut self) {
@@ -213,7 +214,7 @@ impl Core {
             return;
         };
         let bh = block.hash(&*self.crypto);
-        let payload = block.payload.clone();
+        let body = block.clone();
         let threshold = sent.saturating_add(self.local.rebroadcast_interval);
         let targets: Vec<(u32, PublicKey)> = self
             .peers
@@ -229,9 +230,15 @@ impl Core {
             .collect();
         for (index, key) in targets {
             self.repushed.insert(index);
-            let mut full = p.clone();
-            full.payload = Some(payload.clone());
-            self.send(key, WireMessage::Proposal(Box::new(full)));
+            let full = ProposalMessage {
+                proposal: p.clone(),
+                availability: body.availability().clone(),
+            };
+            self.send(key.clone(), WireMessage::Proposal(Box::new(full)));
+            self.out.push(Action::DisseminatePayload {
+                peers: vec![key],
+                body: body.clone(),
+            });
         }
     }
 

@@ -251,6 +251,7 @@ mod tests {
 
     fn record(lane: u32, active_from: u64, closing: Option<u64>) -> SumeragiLaneRecord {
         SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(lane),
             dataspace: DataSpaceId::new(0),
             incarnation: [u8::try_from(lane).unwrap(); 32],
@@ -293,6 +294,7 @@ mod tests {
 
     fn policy(routes: Vec<SumeragiLaneRoute>) -> SumeragiLanePolicy {
         SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
             max_merge_blocks: 32,
             stall_window: 256,

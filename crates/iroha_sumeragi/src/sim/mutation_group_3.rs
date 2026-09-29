@@ -49,7 +49,7 @@ fn common_view0_lock(w: &World) -> Option<(u64, Qc)> {
 fn proposer_of(w: &World, height: u64, bh: &Hash32) -> Option<usize> {
     let block = w.replicas.iter().find_map(|rep| rep.bodies.get(bh))?;
     let committee = w.instances[0].committee(height);
-    let key = committee.get(block.header.proposer)?;
+    let key = committee.get(block.header().proposer)?;
     w.key_owner.get(key).copied()
 }
 
@@ -188,7 +188,10 @@ fn restart_without_proposers(w: &mut World) {
         if rep.inst != 0 {
             continue;
         }
-        let tip = rep.store.last().map_or(0, |(block, _)| block.header.height);
+        let tip = rep
+            .store
+            .last()
+            .map_or(0, |(block, _)| block.header().height);
         for durable in rep.records.values() {
             top = top.max(durable.record.height);
             let qcs = [

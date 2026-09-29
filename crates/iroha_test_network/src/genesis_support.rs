@@ -400,6 +400,75 @@ mod tests {
         let genesis_key = KeyPair::try_random().expect("generate genesis key");
         (manifest, genesis_key)
     }
+    /// Prepare this test-owned manifest before exercising the strict signing boundary.
+    fn bind_fixture_policy(
+        manifest: RawGenesisTransaction,
+        key: &KeyPair,
+        config_path: &Path,
+    ) -> RawGenesisTransaction {
+        let (config, _) = load_node_config(config_path, true).expect("parse fixture config");
+        let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            *config.common.chain_discriminant.value(),
+        );
+        let da = Some(iroha_core::da::proof_policy_bundle(
+            &config.nexus.lane_config,
+        ));
+        let confidential = Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+            &config.zk,
+        ));
+        let proposal = manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                key,
+                da.clone(),
+                confidential,
+            )
+            .expect("sign unpublished fixture proposal");
+        let topology = iroha_core::sumeragi::startup::genesis_committee_peers(&proposal.0)
+            .expect("canonical four-validator fixture roster");
+        assert_eq!(topology.len(), 4);
+        let account = AccountId::new(key.public_key().clone());
+        let staged = crate::config::discover_generated_policy_hashes(
+            crate::config::staged_genesis_policy_hashes(
+                &proposal,
+                &account,
+                &topology,
+                key,
+                None,
+                None,
+                None,
+                Some(&config),
+            ),
+        )
+        .expect("derive actual fixture commitments from native execution");
+        let mut context = manifest.sumeragi_context_parameters();
+        context.nexus_amx_context_hash = staged.nexus_amx.into();
+        context.execution_policy_hash = staged.execution_policy.into();
+        let manifest = manifest
+            .with_sumeragi_context_parameters(context)
+            .with_consensus_meta();
+        let proposal = manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                key,
+                da,
+                confidential,
+            )
+            .expect("sign policy-bound fixture proposal");
+        let actual = crate::config::staged_genesis_policy_hashes(
+            &proposal,
+            &account,
+            &topology,
+            key,
+            None,
+            None,
+            None,
+            Some(&config),
+        )
+        .expect("final fixture must pass the strict native validator without rebinding");
+        assert_eq!(actual, staged);
+        manifest
+    }
     fn write_node_config(
         directory: &Path,
         chain_id: &ChainId,
@@ -450,7 +519,12 @@ manifest_store_dir = "managed/torii/da-manifests"
 data_dir = "managed/sorafs"
 
 [streaming.codec]
+cabac_mode = "disabled"
+trellis_blocks = []
 rans_tables_path = "__RANS_TABLES_PATH__"
+entropy_mode = "rans_bundled"
+bundle_width = 2
+bundle_accel = "none"
 
 [network.soranet_handshake.pow]
 revocation_store_path = "managed/soranet/revocations.norito"
@@ -553,11 +627,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
         let chain_id = ChainId::from("managed-signing-fixture");
         let (manifest, genesis_key) = prepared_manifest(chain_id.clone());
         let manifest_path = directory.path().join("genesis.json");
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("serialize manifest"),
-        )
-        .expect("write manifest");
         let config_path = write_node_config(
             directory.path(),
             &chain_id,
@@ -565,6 +634,12 @@ revocation_store_path = "managed/soranet/revocations.norito"
             genesis_key.public_key(),
             UNRESOLVED_GENESIS_EXPECTED_HASH,
         );
+        let manifest = bind_fixture_policy(manifest, &genesis_key, &config_path);
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
         let (parsed, replaced) =
             load_node_config(&config_path, true).expect("parse sentinel config");
         assert!(replaced);
@@ -631,11 +706,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
         let chain_id = ChainId::from("managed-binding-fixture");
         let (manifest, genesis_key) = prepared_manifest(chain_id.clone());
         let manifest_path = directory.path().join("genesis.json");
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("serialize manifest"),
-        )
-        .expect("write manifest");
         let config_path = write_node_config(
             directory.path(),
             &chain_id,
@@ -643,6 +713,12 @@ revocation_store_path = "managed/soranet/revocations.norito"
             genesis_key.public_key(),
             CONFIGURED_HASH,
         );
+        let manifest = bind_fixture_policy(manifest, &genesis_key, &config_path);
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
         let error = sign_prepared_genesis_from_config(
             &manifest_path,
             &config_path,

@@ -22,7 +22,7 @@ pub(crate) enum ExecutionOutputSealError<E> {
     /// Local execution did not complete; no output may be sealed or published.
     Deferred(crate::execution_attempt::ExecutionDeferred),
     /// Authenticated genesis produced a rejected output before schedule finalization.
-    RejectedGenesis,
+    RejectedGenesis(crate::block::GenesisOutputRejection),
     /// The block finalizer rejected its actual deterministic effects.
     Finalizer(E),
 }
@@ -295,15 +295,17 @@ impl StateBlock<'_> {
         // validator registrations. Report the actual output failure before the
         // schedule finalizer inspects that rolled-back World. Component fixtures
         // without authenticated genesis keep their ordinary output semantics.
-        if genesis.is_some()
-            && matches!(
-                self.execution_output_plan.as_ref(),
-                Some(ExecutionOutputPlanState::Retained(retained))
-                    if retained.rows.iter().any(|row| row.result().is_err())
-            )
-        {
-            self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
-            return Err(ExecutionOutputSealError::RejectedGenesis);
+        if genesis.is_some() {
+            let rejection = match self.execution_output_plan.as_ref() {
+                Some(ExecutionOutputPlanState::Retained(retained)) => {
+                    crate::block::GenesisOutputRejection::first(&retained.rows)
+                }
+                _ => None,
+            };
+            if let Some(rejection) = rejection {
+                self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+                return Err(ExecutionOutputSealError::RejectedGenesis(rejection));
+            }
         }
         self.seal_execution_outputs(block, finalize)
     }

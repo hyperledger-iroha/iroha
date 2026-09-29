@@ -1914,8 +1914,6 @@ fn sample_status() -> Status {
                 public_target_reshuffle_ms: None,
                 restricted_target_reshuffle_ms: None,
                 drop_unknown_dataspace: false,
-                restricted_fallback: "drop".to_string(),
-                restricted_public_policy: "refuse".to_string(),
             },
             targets: Vec::new(),
         },
@@ -2181,9 +2179,7 @@ fn serialize_status_json() {
         "tx_gossip": {
             "caps": {
                 "frame_cap_bytes": 0,
-                "drop_unknown_dataspace": false,
-                "restricted_fallback": "drop",
-                "restricted_public_policy": "refuse"
+                "drop_unknown_dataspace": false
             }
         }
     });

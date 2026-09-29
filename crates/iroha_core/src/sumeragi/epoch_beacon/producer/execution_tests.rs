@@ -9,7 +9,7 @@ use crate::sumeragi::{
     payload,
     test_chain::Signers,
 };
-use iroha_sumeragi::{api::ExecOutcome, message::Block, preimage::payload_hash};
+use iroha_sumeragi::{api::ExecOutcome, availability::AvailableBody, preimage::payload_hash};
 
 fn completed() -> (Fixture, ControlWitness) {
     let mut fixture = fixture();
@@ -104,9 +104,9 @@ fn executor(chain: &CertifiedTestChain) -> StateExecutor {
     .unwrap()
 }
 
-fn invalid(executor: &mut StateExecutor, chain: &CertifiedTestChain, candidate: &Block) {
+fn invalid(executor: &mut StateExecutor, chain: &CertifiedTestChain, candidate: &AvailableBody) {
     let hash = candidate
-        .header
+        .header()
         .hash(&crate::sumeragi::crypto::BlsCrypto::new());
     assert!(matches!(
         executor.execute(candidate, &hash),
@@ -136,19 +136,21 @@ fn transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_resu
     );
     let view = fixture.chain.state().view();
     let certified = CertifiedChain::new(&view).unwrap().certified(9).unwrap();
-    let qc = certified.commit_qc().unwrap().clone();
+    let original_qc = certified.commit_qc().unwrap().clone();
     drop(view);
     let proposal = stored.block().canonical_resultless_proposal();
-    let block = Block {
-        header: stored.header().unwrap().clone(),
-        payload: payload::encode(&proposal).unwrap(),
-    };
     let mut worker = executor(&replay);
     // A correctly decoded control witness is still obligatory at this exact source.
-    let mut missing = block.clone();
-    missing.header.control_witness = ControlWitness::empty();
+    let mut missing_header = stored.header().unwrap().clone();
+    missing_header.control_witness = ControlWitness::empty();
+    let missing = replay.author_payload(missing_header, payload::encode(&proposal).unwrap());
     invalid(&mut worker, &replay, &missing);
     replay.kura().store_block(stored.block().clone()).unwrap();
+    let (block, qc) = replay
+        .committed_body(9)
+        .unwrap()
+        .expect("restore the original signed certificate in the replay State pool");
+    assert_eq!(qc, original_qc);
     worker
         .replay(&block, &qc)
         .expect("cold executor reproduces the original certified pulse writes");
@@ -182,10 +184,8 @@ fn native_pulse_refusals_preserve_the_exact_predecessor_and_require_actual_work(
         .commit_with_control(Some(50_000), Vec::new(), Signers::Quorum, witness);
     let stored = fixture.chain.committed(9);
     let proposal = stored.block().canonical_resultless_proposal();
-    let block = Block {
-        header: stored.header().unwrap().clone(),
-        payload: payload::encode(&proposal).unwrap(),
-    };
+    let header = stored.header().unwrap().clone();
+    let proposal_bytes = payload::encode(&proposal).unwrap();
     let mut worker = executor(&predecessor);
     for field in 0..15 {
         let mut wrong = pulse;
@@ -213,19 +213,19 @@ fn native_pulse_refusals_preserve_the_exact_predecessor_and_require_actual_work(
             13 => wrong.context.parent_consensus_hash[0] ^= 1,
             _ => wrong.context.parent_result[0] ^= 1,
         }
-        let mut candidate = block.clone();
-        candidate.header.control_witness = control::encode(Some(wrong)).unwrap();
+        let mut candidate_header = header.clone();
+        candidate_header.control_witness = control::encode(Some(wrong)).unwrap();
+        let candidate = predecessor.author_payload(candidate_header, proposal_bytes.clone());
         invalid(&mut worker, &predecessor, &candidate);
     }
     let mut duplicate = proposal.clone();
     duplicate.set_global_beacon_pulse(Some(pulse));
-    let mut candidate = block.clone();
-    candidate.payload = payload::encode(&duplicate).unwrap();
-    candidate.header.payload_len = u32::try_from(candidate.payload.len()).unwrap();
-    candidate.header.payload_hash = payload_hash(
-        &crate::sumeragi::crypto::BlsCrypto::new(),
-        &candidate.payload,
-    );
+    let duplicate_bytes = payload::encode(&duplicate).unwrap();
+    let mut candidate_header = header.clone();
+    candidate_header.payload_len = u32::try_from(duplicate_bytes.len()).unwrap();
+    candidate_header.payload_hash =
+        payload_hash(&crate::sumeragi::crypto::BlsCrypto::new(), &duplicate_bytes);
+    let candidate = predecessor.author_payload(candidate_header, duplicate_bytes);
     invalid(&mut worker, &predecessor, &candidate);
     let mut empty = proposal;
     empty.set_external_entrypoints(Vec::new());
@@ -234,5 +234,6 @@ fn native_pulse_refusals_preserve_the_exact_predecessor_and_require_actual_work(
         payload::encode(&empty).is_err(),
         "control cannot substitute transaction work"
     );
-    invalid(&mut executor(&unrequested), &unrequested, &block);
+    let unrequested_body = unrequested.author_payload(header, proposal_bytes);
+    invalid(&mut executor(&unrequested), &unrequested, &unrequested_body);
 }

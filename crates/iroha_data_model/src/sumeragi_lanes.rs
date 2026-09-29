@@ -93,6 +93,8 @@ pub struct SumeragiLaneFrontier {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi_lanes::SumeragiLaneRecord")]
 pub struct SumeragiLaneRecord {
+    /// Signed policy layout pinned for this complete incarnation.
+    pub da_layout: iroha_sumeragi::availability::DataAvailabilityLayout,
     /// The lane.
     pub lane: LaneId,
     /// The dataspace owning the lane.
@@ -448,6 +450,8 @@ pub struct SumeragiLaneAutoscale {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi_lanes::SumeragiLanePolicy")]
 pub struct SumeragiLanePolicy {
+    /// Explicit signed availability geometry for newly created incarnations.
+    pub da_layout: iroha_sumeragi::availability::DataAvailabilityLayout,
     /// Anchor freshness bound `A` pinned into new incarnations.
     pub anchor_freshness: u64,
     /// Lane blocks one global block merges per lane at most.
@@ -468,6 +472,9 @@ pub struct SumeragiLanePolicy {
 /// Why a [`SumeragiLanePolicy`] is not valid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SumeragiLanePolicyError {
+    /// The explicitly signed availability geometry is malformed.
+    #[error("invalid signed lane availability layout")]
+    AvailabilityLayout,
     /// A bound that must be positive is zero.
     #[error("`{0}` must be positive")]
     Zero(&'static str),
@@ -501,12 +508,16 @@ impl SumeragiLanePolicy {
     /// 16-block anchor window, at most 16 merged blocks per lane, and a 64-block stall
     /// window. New lane instances inherit the chain's committed consensus parameters.
     #[must_use]
-    pub fn for_chain(lane_params: SumeragiParameters) -> Self {
+    pub fn for_chain(
+        lane_params: SumeragiParameters,
+        da_layout: iroha_sumeragi::availability::DataAvailabilityLayout,
+    ) -> Self {
         Self {
             anchor_freshness: 16,
             max_merge_blocks: 16,
             stall_window: 64,
             lane_params,
+            da_layout,
             fixed: Vec::new(),
             routes: Vec::new(),
             autoscale: None,
@@ -571,6 +582,13 @@ impl SumeragiLanePolicy {
     /// # Errors
     /// See [`SumeragiLanePolicyError`].
     pub fn validate(&self) -> Result<(), SumeragiLanePolicyError> {
+        self.da_layout
+            .validate()
+            .map_err(|_| SumeragiLanePolicyError::AvailabilityLayout)?;
+        if u64::from(self.lane_params.max_block_bytes.get()) > self.da_layout.max_payload_size_bytes
+        {
+            return Err(SumeragiLanePolicyError::AvailabilityLayout);
+        }
         if self.anchor_freshness == 0 {
             return Err(SumeragiLanePolicyError::Zero("anchor_freshness"));
         }
@@ -639,7 +657,10 @@ mod tests {
     #[test]
     fn first_dataspace_policy_inherits_chain_parameters_and_roundtrips() {
         let params = SumeragiParameters::default();
-        let policy = SumeragiLanePolicy::for_chain(params.clone());
+        let policy = SumeragiLanePolicy::for_chain(
+            params.clone(),
+            iroha_sumeragi::availability::recommended_data_availability_layout(),
+        );
         assert_eq!(policy.lane_params, params);
         assert_eq!(
             (
@@ -662,8 +683,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn lane_policy_requires_explicit_valid_availability_layout() {
+        let mut invalid = policy();
+        invalid.da_layout.chunk_size_bytes = 3;
+        assert_eq!(
+            invalid.validate(),
+            Err(SumeragiLanePolicyError::AvailabilityLayout)
+        );
+        let mut invalid = policy();
+        invalid.da_layout.max_payload_size_bytes = 1;
+        assert_eq!(
+            invalid.validate(),
+            Err(SumeragiLanePolicyError::AvailabilityLayout)
+        );
+        let mut json = norito::json::to_value(&policy()).unwrap();
+        json.as_object_mut().unwrap().remove("da_layout");
+        assert!(norito::json::from_value::<SumeragiLanePolicy>(json).is_err());
+    }
+
     fn record(closing: Option<u64>) -> SumeragiLaneRecord {
         SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(3),
             dataspace: DataSpaceId::new(0),
             incarnation: [7; 32],
@@ -706,6 +747,7 @@ mod tests {
 
     fn policy() -> SumeragiLanePolicy {
         SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
             max_merge_blocks: 32,
             stall_window: 256,

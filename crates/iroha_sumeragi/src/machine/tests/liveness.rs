@@ -3,12 +3,9 @@
 //! scheduling) and the randomized scenarios belong to the simulator stage.
 
 use super::*;
-use crate::{
-    message::BlockResponse,
-    preimage::{KIND_COMMIT, KIND_PREPARE},
-};
+use crate::preimage::{KIND_COMMIT, KIND_PREPARE};
 
-fn prop(h: &mut H, view: u64, block: &Block, justify: Option<TimeoutCert>) -> Vec<Action> {
+fn prop(h: &mut H, view: u64, block: &AvailableBody, justify: Option<TimeoutCert>) -> Vec<Action> {
     let p = h.proposal(view, block, justify);
     h.deliver(h.leader(view), WireMessage::Proposal(Box::new(p)))
 }
@@ -253,7 +250,7 @@ fn det_l7_demotion_golden() {
     let silent = h.leader(0);
     h.enter_view(1);
     let block = h.commit_with(1, b"B1");
-    assert_eq!(block.header.skipped_leaders, vec![h.key_at(silent)]);
+    assert_eq!(block.header().skipped_leaders, vec![h.key_at(silent)]);
     h.commit_heights(1);
     let perm = h.core.topo.permutation().to_vec();
     let n = perm.len();
@@ -314,11 +311,9 @@ fn det_l11_pending_apply_after_peers_moved_on() {
         .out
         .iter()
         .find_map(|a| match a {
-            Action::FetchBody {
-                height: 1,
-                block_hash,
-                peers,
-            } => Some((*block_hash, peers.clone())),
+            Action::FetchPayload { source, peers } if source.height() == 1 => {
+                Some((source.block_hash(), peers.clone()))
+            }
             _ => None,
         })
         .expect("the committed body is fetched");
@@ -333,41 +328,29 @@ fn det_l11_pending_apply_after_peers_moved_on() {
     assert!(h.core.awaiting);
     // Bodies answered by peers that moved on, in any order; CommitBlock stays in height order.
     let peer = h.others(1, &[])[0];
-    let out = h.deliver(
-        peer,
-        WireMessage::BlockResponse(BlockResponse {
-            instance: I,
-            block: b2.clone(),
-        }),
-    );
+    let out = h.deliver(peer, WireMessage::PayloadManifest(manifest(&b2)));
     assert!(!out.iter().any(|a| matches!(a, Action::CommitBlock { .. })));
-    let out = h.deliver(
-        peer,
-        WireMessage::BlockResponse(BlockResponse {
-            instance: I,
-            block: b1.clone(),
-        }),
-    );
+    let out = h.deliver(peer, WireMessage::PayloadManifest(manifest(&b1)));
     let heights: Vec<u64> = out
         .iter()
         .filter_map(|a| match a {
-            Action::CommitBlock { block, .. } => Some(block.header.height),
+            Action::CommitBlock { block, .. } => Some(block.header().height),
             _ => None,
         })
         .collect();
     assert_eq!(heights, vec![1, 2]);
     assert!(!h.core.awaiting);
     assert_eq!(h.height(), 3);
-    // Serving: a BlockRequest for a committed height is answered from the stores.
+    // Serving: a PayloadRequest for a committed height is answered from the stores.
     let out = h.deliver(
         peer,
-        WireMessage::BlockRequest(crate::message::BlockRequest {
+        WireMessage::PayloadRequest(crate::message::PayloadRequest {
             instance: I,
             height: 1,
             block_hash: h.bh(&b1),
         }),
     );
-    assert!(matches!(out[..], [Action::ServeBody { height: 1, .. }]));
+    assert!(matches!(out[..], [Action::ServePayload { height: 1, .. }]));
 }
 
 #[test]
@@ -391,8 +374,10 @@ fn det_l13_late_views_build_nonempty_work() {
     );
     let out = h.built(b"pending transaction");
     assert_eq!(
-        proposals(&out)[0].payload.as_deref(),
-        Some(&b"pending transaction"[..])
+        h.bodies[&proposals(&out)[0].block_hash(&h.v.crypto)]
+            .payload()
+            .as_slice(),
+        &b"pending transaction"[..]
     );
     let mut h = H::new(4, pick::set_b(0));
     h.enter_view(1);
@@ -770,8 +755,8 @@ fn det_l25_equivocating_leader_early_timeout() {
     let b = h.block(0, b"B");
     prop(&mut h, 0, &a, None);
     // (1) A relayed copy without its payload (unsigned bytes): same `(bh, ad)`.
-    let mut stripped = h.proposal(0, &a, None);
-    stripped.payload = None;
+    let stripped = h.proposal(0, &a, None);
+    // Replaying metadata alone supplies no new rows.
     let other = h.others(1, &[h.leader(0)])[0];
     let out = h.deliver(other, WireMessage::Proposal(Box::new(stripped)));
     assert!(timeouts(&out).is_empty() && evidence(&out).is_empty());
@@ -781,7 +766,7 @@ fn det_l25_equivocating_leader_early_timeout() {
     let out = h.deliver(other, WireMessage::Proposal(Box::new(forged)));
     assert!(timeouts(&out).is_empty() && evidence(&out).is_empty());
     let mut reused = h.proposal(0, &b, None);
-    reused.sig = h.proposal(0, &a, None).sig;
+    reused.proposal.sig = h.proposal(0, &a, None).proposal.sig;
     let out = h.deliver(other, WireMessage::Proposal(Box::new(reused)));
     assert!(timeouts(&out).is_empty() && evidence(&out).is_empty());
     assert_eq!(h.core.timeout_view, None);
@@ -1029,7 +1014,7 @@ fn det_l27_pending_execution_counts() {
 fn det_l29_late_leader_does_not_raise() {
     let half = LocalParams::default().t_base / 2; // T(0)/2
     let start = |h: &H| h.core.status().start_level;
-    let commit_after = |h: &mut H, view: u64, block: &Block, ms: Millis| {
+    let commit_after = |h: &mut H, view: u64, block: &AvailableBody, ms: Millis| {
         h.exec_all();
         h.now += ms;
         let cqc = h.qc_q(VoteKind::Commit, view, block);
@@ -1066,14 +1051,14 @@ fn det_l29_late_leader_does_not_raise() {
     let mut h = H::new(4, pick::set_b(0));
     h.auto_fetch = false;
     let blk = h.block(0, b"A");
-    let mut bare = h.proposal(0, &blk, None);
-    bare.payload = None;
+    let bare = h.proposal(0, &blk, None);
+    h.withheld_rows.insert(h.bh(&blk));
     h.now += 100;
     h.deliver(h.leader(0), WireMessage::Proposal(Box::new(bare)));
     assert!(h.core.proposal.is_some() && h.core.t_body.is_none());
     let late = h.now + half + 100;
     h.run_until(late);
-    prop(&mut h, 0, &blk, None);
+    h.deliver_rows(h.leader(0), &blk);
     assert_eq!(h.core.t_body, Some(late), "body held now");
     commit_after(&mut h, 0, &blk, 50);
     assert_eq!(start(&h), 0, "late body");

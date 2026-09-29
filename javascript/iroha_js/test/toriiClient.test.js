@@ -11077,50 +11077,35 @@ test("getSumeragiBlsKeys rejects malformed payloads", async () => {
   await assert.rejects(() => client.getSumeragiBlsKeys(), /sumeragi BLS key/);
 });
 
-test("getSumeragiLeader fetches leader and PRF context", async () => {
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/leader`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        leader_index: "3",
-        prf: { height: "10", view: "2", epoch_seed: "seed" },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const leader = await client.getSumeragiLeader();
-  assert.equal(leader.leader_index, 3);
-  assert.equal(leader.prf.epoch_seed, "seed");
-});
-
 test("getSumeragiParams fetches on-chain parameters", async () => {
+  let served = { block_cadence_ms: 1000, max_clock_drift_ms: 50, chain_height: 4200 };
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sumeragi/params`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
-      jsonData: {
-        block_time_ms: "1000",
-        commit_time_ms: "400",
-        max_clock_drift_ms: "50",
-        collectors_k: "3",
-        redundant_send_r: "1",
-        da_enabled: "false",
-        next_mode: "Npos",
-        mode_activation_height: "5000",
-        chain_height: "4200",
-      },
+      jsonData: served,
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const params = await client.getSumeragiParams();
-  assert.equal(params.block_time_ms, 1000);
-  assert.equal(params.next_mode, "Npos");
-  assert.equal(params.da_enabled, false);
+  assert.deepEqual(await client.getSumeragiParams(), {
+    block_cadence_ms: 1000,
+    max_clock_drift_ms: 50,
+    chain_height: 4200,
+  });
+
+  const current = served;
+  for (const [label, payload, pattern] of [
+    ["retired field", { ...current, collectors_k: 3 }, /unsupported fields: collectors_k/],
+    ["retired name", { ...current, block_cadence_ms: undefined, block_time_ms: 1000 }, /unsupported fields: block_time_ms/],
+    ["missing field", { block_cadence_ms: 1000, max_clock_drift_ms: 50 }, /chain_height/],
+    ["zero cadence", { ...current, block_cadence_ms: 0 }, /must be nonzero/],
+    ["negative height", { ...current, chain_height: -1 }, /must be >= 0/],
+  ]) {
+    served = JSON.parse(JSON.stringify(payload));
+    await assert.rejects(() => client.getSumeragiParams(), pattern, label);
+  }
 });
 
 test("Sumeragi params reject unsupported options", async () => {

@@ -731,7 +731,10 @@ fn runtime_catalog_rejects_native_lane_conflict_without_partial_state() {
             0,
             0,
         ));
-        let mut policy = SumeragiLanePolicy::for_chain(block.world.parameters().sumeragi.clone());
+        let mut policy = SumeragiLanePolicy::for_chain(
+            block.world.parameters().sumeragi.clone(),
+            iroha_sumeragi::availability::recommended_data_availability_layout(),
+        );
         policy.fixed.push(SumeragiFixedLane {
             lane: LaneId::new(5),
             dataspace: DataSpaceId::new(99),

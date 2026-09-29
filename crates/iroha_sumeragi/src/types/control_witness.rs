@@ -1,6 +1,6 @@
 //! Fixed-capacity application control bytes carried and signed independently of transactions.
 
-use crate::bytes::{ByteSequence, InlineBytes, InlineDomain};
+use crate::bytes::{ByteSequence, InlineBytes, ByteDomain};
 
 /// Maximum occupied bytes in one signed application control witness.
 pub const MAX_CONTROL_WITNESS_BYTES: usize = 2048;
@@ -8,7 +8,7 @@ pub const MAX_CONTROL_WITNESS_BYTES: usize = 2048;
 /// Semantic identity of application control bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlDomain {}
-impl InlineDomain for ControlDomain {
+impl ByteDomain for ControlDomain {
     const NAME: &'static str = "ControlWitness";
     const FRAME: &'static str = "iroha_sumeragi::ControlWitness";
 }

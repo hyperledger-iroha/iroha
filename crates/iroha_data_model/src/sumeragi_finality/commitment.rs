@@ -1,8 +1,8 @@
 //! Current consensus result commitments shared by execution and independent proof readers.
 use super::{NativeLaneStateProof, ScheduleOutcome};
 use crate::{
-    block::execution_output::ExecutionOutputV1, parameter::system::SumeragiParameters,
-    transaction::signed::TransactionEntrypoint,
+    block::execution_output::ExecutionOutputV1, events::EventBox,
+    parameter::system::SumeragiParameters, transaction::signed::TransactionEntrypoint,
 };
 use crate::{
     consensus::FinalizedGlobalThresholdBeaconPulseV1, isi::kagemusha_v1::BeaconEpochBindingV1,
@@ -124,8 +124,9 @@ pub fn result_of_preimage(preimage: &[u8]) -> Hash32 {
     Hash32(Hash::new_from_chunks(&[RESULT_TAG, preimage]).into())
 }
 
-/// The deterministic outcome of executing one block: roots over the execution witness and the
-/// identity of the result-bearing block.
+/// The deterministic outcome of executing one block: the complete World state before and after
+/// it, the events it emitted, roots over its execution witness and the identity of the
+/// result-bearing block (`specs/sumeragi.md` §4.1, Appendix E, E51).
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionCommitment")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -141,6 +142,14 @@ pub struct ExecutionCommitment {
     pub kagemusha_top_up_root: Option<Hash>,
     /// Number of KAGEMUSHA top-ups.
     pub kagemusha_top_up_count: u32,
+    /// Complete World state root the block executed on: every canonical World entry after the
+    /// parent block's publication (the empty World for genesis, which absorbs everything).
+    pub parent_world_state_root: Hash,
+    /// Complete World state root after the block's execution (the post-state root of §4.1).
+    pub world_state_root: Hash,
+    /// Merkle root and count of the events the block's execution emitted, in emission order
+    /// (the event root of §4.1); `None` when it emitted none.
+    pub event_commitment: Option<MerkleTreeCommitment<EventBox>>,
     /// Byte length of the canonical result-bearing block wire.
     pub executed_block_wire_len: u64,
     /// Hash of the canonical result-bearing block wire (every transaction result and output).
@@ -418,6 +427,9 @@ mod execution_validation_tests {
             ordinary_writes_root: Hash::new(b"writes"),
             kagemusha_top_up_root: None,
             kagemusha_top_up_count: 0,
+            parent_world_state_root: Hash::new(b"parent world"),
+            world_state_root: Hash::new(b"world"),
+            event_commitment: None,
             executed_block_wire_len: 1,
             executed_block_wire_hash: Hash::new(b"wire"),
             transaction_input_commitment: None,

@@ -17,7 +17,8 @@ use super::{
 };
 use crate::{
     api::Action,
-    message::{Block, BlockHeader, Evidence, Qc, SyncRequest, Vote, VoteKind, WireMessage},
+    availability::{AvailabilitySource, AvailableBody},
+    message::{BlockHeader, Evidence, Qc, SyncRequest, Vote, VoteKind, WireMessage},
     safety::SafetyRecord,
     types::{
         AggregateSignature, Bitmap, Hash32, Millis, PublicKey, SIGNATURE_LEN, Signature,
@@ -72,9 +73,9 @@ fn vote(block_hash: Hash32) -> Vote {
     }
 }
 
-fn block() -> Block {
-    Block {
-        header: BlockHeader {
+fn block() -> AvailableBody {
+    super::driver::fixture_body(
+        BlockHeader {
             control_witness: crate::types::ControlWitness::empty(),
             epoch: crate::testing::TEST_EPOCH.id,
             instance: Hash32::ZERO,
@@ -83,13 +84,14 @@ fn block() -> Block {
             parent_hash: Hash32::ZERO,
             parent_result: Hash32::ZERO,
             payload_hash: Hash32::ZERO,
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: 0,
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: false,
         },
-        payload: Vec::new(),
-    }
+        &super::driver::encode_tx(1, false, 0),
+    )
 }
 
 /// One action of every externally visible kind that O2 (§12.3) makes wait for durability.
@@ -114,14 +116,14 @@ fn every_effect() -> Vec<Action> {
             max_count: 8,
             max_bytes: 1 << 20,
         },
-        Action::ServeBody {
+        Action::ServePayload {
             to: key(2),
             height: 1,
             block_hash: a,
         },
-        Action::FetchBody {
-            height: 1,
-            block_hash: a,
+        Action::FetchPayload {
+            source: AvailabilitySource::new(Hash32::ZERO, 1, a, block().source().config().clone())
+                .unwrap(),
             peers: vec![key(1)],
         },
         Action::ReportEvidence(Box::new(Evidence::ConflictingCertificates(
@@ -134,7 +136,7 @@ fn every_effect() -> Vec<Action> {
 
 /// SR24 at the driver: behind a pending `PersistSafety` the write device holds **every**
 /// externally visible effect of §12.3 O2 — messages, `CommitBlock` (the block store is served),
-/// `ServeBlocks`, `ServeBody`, `FetchBody` and evidence — and releases them in order once the
+/// `ServeBlocks`, `ServePayload`, `FetchPayload` and evidence — and releases them in order once the
 /// record is durable; a crash before that loses them all.
 #[test]
 fn det_s24_o2_barrier_holds_every_effect() {
@@ -267,7 +269,7 @@ impl Tail {
     /// Step 1: run until X holds the `CommitBlock` of height 1 behind its barrier; check that
     /// its own Commit is in the certificate and not yet durable, that the certificate's
     /// broadcast waits too and that nothing is written to the block store.
-    fn form_cqc_behind_barrier(&self, world: &mut World) -> (Block, Qc) {
+    fn form_cqc_behind_barrier(&self, world: &mut World) -> (AvailableBody, Qc) {
         let xr = self.replica;
         let (block, cqc) = step_until(world, "a CommitBlock held behind X's barrier", |w| {
             w.replicas[xr]
@@ -334,7 +336,11 @@ impl Tail {
     fn crash_and_check(&self, world: &mut World, cqc: &Qc) {
         world.crash(self.machine);
         assert!(
-            !world.log.borrow().was_signed(&self.key, &cqc.preimage()),
+            !world
+                .log
+                .lock()
+                .expect("signing log")
+                .was_signed(&self.key, &cqc.preimage()),
             "X's Commit signature left X before its record was durable"
         );
         let carried = |q: &Qc| q.height == 1 && q.signers.get(self.index);

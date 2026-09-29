@@ -37,6 +37,9 @@ pub enum ExecutionWitnessKeyTagV1 {
     KagemushaReserveReceipt = 0xD6,
     /// Fixed ordinary FASTPQ source-statement manifest, derived by validator execution.
     FastpqOrdinarySourceStatements = 0xD7,
+    /// AMX record by kind and transaction id (`crate::sumeragi_amx::amx_record_witness_key`).
+    /// `0xD8` is the SCCP state-delta key of the node's executor.
+    AmxRecord = 0xD9,
 }
 
 const fn tagged_fixed_key<const N: usize>(
@@ -111,6 +114,7 @@ mod tests {
             ParliamentTimedOvnCasting,
             KagemushaReserveReceipt,
             FastpqOrdinarySourceStatements,
+            AmxRecord,
         ];
         let distinct = tags
             .into_iter()

@@ -62,6 +62,8 @@ pub struct ValidatorCommitteeMemberV1 {
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1")]
 pub struct ValidatorEpochContextV1 {
+    /// Exact signed genesis availability layout, immutable across epoch transitions.
+    pub da_layout: iroha_sumeragi::availability::DataAvailabilityLayout,
     /// Sole first-release layout version, 1.
     pub version: u16,
     /// Exact genesis-derived network.
@@ -88,6 +90,9 @@ impl ValidatorEpochContextV1 {
     /// # Errors
     /// Rejects identity, ordering, key, proof, geometry, seed, and epoch-bound mismatches.
     pub fn validate(&self) -> Result<(), String> {
+        self.da_layout
+            .validate()
+            .map_err(|error| error.to_string())?;
         if self.version != 1 || self.leader_seed == [0; 32] {
             return Err("invalid native epoch version or leader seed".into());
         }
@@ -143,7 +148,10 @@ impl ValidatorEpochContextV1 {
         self.authorization
             .validate_successor(&previous.authorization)
             .map_err(|error| error.to_string())?;
-        if self.mode != previous.mode || self.network_id != previous.network_id {
+        if self.mode != previous.mode
+            || self.network_id != previous.network_id
+            || self.da_layout != previous.da_layout
+        {
             return Err("native epoch successor changes network or consensus policy".into());
         }
         if matches!(

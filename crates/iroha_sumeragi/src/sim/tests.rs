@@ -294,7 +294,7 @@ fn f22_idle_chain_100k_heights() {
     let height = world.honest().iter().map(|r| world.committed(*r)).min();
     eprintln!(
         "F22 100k: min committed height {height:?}, signatures logged {}",
-        world.log.borrow().len()
+        world.log.lock().expect("signing log").len()
     );
     assert!(height.is_some_and(|h| h >= 99_000));
 }
@@ -445,7 +445,7 @@ fn f37_commit_attestation() {
 #[test]
 fn o_att_requires_exactly_q_attested_signers() {
     use crate::{
-        message::{Block, BlockHeader, Qc, VoteKind},
+        message::{BlockHeader, Qc, VoteKind},
         preimage,
         testing::fake_attestation,
         types::{AggregateSignature, Bitmap, Hash32, SIGNATURE_LEN},
@@ -462,16 +462,26 @@ fn o_att_requires_exactly_q_attested_signers() {
         origin_view: 0,
         parent_hash: inst.genesis_hash,
         parent_result: inst.genesis_result,
-        payload_hash: Hash32([1; 32]),
+        payload_hash: preimage::payload_hash(&world.hasher, &[0]),
+        availability_digest: crate::types::Hash32::ZERO,
         payload_len: 1,
         proposer: 0,
         skipped_leaders: Vec::new(),
         attest: true,
     };
-    let block = Block {
+    let signer = super::crypto::SimSigner::new(
+        committee.get(0).unwrap().clone(),
+        None,
+        std::sync::Arc::clone(&world.log),
+    );
+    let block = crate::testing::author_body(
         header,
-        payload: vec![0],
-    };
+        &[0],
+        &inst.config(1),
+        &world.replicas[0].budget,
+        &world.hasher,
+        &signer,
+    );
     let (bh, result) = (Hash32([2; 32]), Hash32([3; 32]));
     let statement = preimage::att_preimage(&inst.id, &inst.config(1).epoch.id, 1, &bh, &result);
     let qc_of = |count: usize| {

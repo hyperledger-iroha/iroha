@@ -18,16 +18,7 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
         )))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
-            layer
-                .write(["network", "transaction_gossip_period_ms"], 200_i64)
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
-                );
+            layer.write(["network", "transaction_gossip_period_ms"], 200_i64);
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -151,16 +142,7 @@ pub(super) async fn run() -> Result<()> {
         .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
-            layer
-                .write(["network", "transaction_gossip_period_ms"], 200_i64)
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
-                );
+            layer.write(["network", "transaction_gossip_period_ms"], 200_i64);
         });
     let context = stringify!(permissioned_idle_chain_advances_only_for_external_or_internal_work);
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {

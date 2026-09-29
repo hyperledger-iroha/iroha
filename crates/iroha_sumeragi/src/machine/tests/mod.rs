@@ -20,10 +20,11 @@ use std::collections::{BTreeMap, VecDeque};
 use super::Core;
 use crate::{
     api::{Action, CommittedTip, Event, ExecOutcome, HaltReason, Init, LocalFault, LocalParams},
+    availability::{AvailableBody, PayloadAcquisition, PayloadAuthoring, PayloadBytes, RowBytes},
     crypto::{Crypto, Signer},
     message::{
-        Block, BlockHeader, Evidence, Proposal, Qc, TcEntry, TimeoutCert, TimeoutVote, Vote,
-        VoteKind, WireMessage,
+        BlockHeader, Evidence, PayloadChunk, PayloadManifest, Proposal, ProposalMessage, Qc,
+        TcEntry, TimeoutCert, TimeoutVote, Vote, VoteKind, WireMessage,
     },
     preimage,
     safety::{RecordState, SafetyRecord},
@@ -47,9 +48,16 @@ pub(super) const G_HASH: Hash32 = Hash32([0xaa; 32]);
 pub(super) const G_RESULT: Hash32 = Hash32([0xbb; 32]);
 
 /// The deterministic execution result of the tests: `R = H(parent_R ‖ payload)`.
-pub(super) fn result_of(block: &Block) -> Hash32 {
-    let mut input = block.header.parent_result.0.to_vec();
-    input.extend_from_slice(&block.payload);
+pub(super) fn manifest(body: &AvailableBody) -> PayloadManifest {
+    PayloadManifest {
+        header: body.header().clone(),
+        availability: body.availability().clone(),
+    }
+}
+
+pub(super) fn result_of(block: &AvailableBody) -> Hash32 {
+    let mut input = block.header().parent_result.0.to_vec();
+    input.extend_from_slice(&block.payload().as_slice());
     Hash32(sha256(&input))
 }
 
@@ -63,6 +71,10 @@ pub(super) struct H {
     pub me: ValidatorIndex,
     pub core: Core,
     pub now: Millis,
+    pub budget: mv::allocation::AllocationBudget,
+    pub remote_bodies: std::cell::RefCell<BTreeMap<Hash32, AvailableBody>>,
+    pub withheld_rows: std::collections::BTreeSet<Hash32>,
+    acquisitions: BTreeMap<Hash32, PayloadAcquisition>,
     pub local: LocalParams,
     pub params: ChainParams,
     /// The core's configured signers (default: the harness key of `me`).
@@ -70,13 +82,13 @@ pub(super) struct H {
     /// Committee overrides by height (default: the harness committee).
     pub committees: BTreeMap<u64, Committee>,
     /// Durable block store: committed `(block, CommitQC)` in height order.
-    pub store: Vec<(Block, Qc)>,
+    pub store: Vec<(AvailableBody, Qc)>,
     /// Durable body store.
-    pub bodies: BTreeMap<Hash32, Block>,
+    pub bodies: BTreeMap<Hash32, AvailableBody>,
     /// Durable safety records per key.
     pub records: BTreeMap<PublicKey, Vec<u8>>,
     /// Outstanding `Execute` requests.
-    pub pending_exec: Vec<(Hash32, u64, Block)>,
+    pub pending_exec: Vec<(Hash32, u64, AvailableBody)>,
     /// Actions of the most recent `fire`.
     pub out: Vec<Action>,
     /// Every action since the core was (re)started.
@@ -131,6 +143,10 @@ impl H {
             me,
             core,
             now: 0,
+            budget: mv::allocation::AllocationBudget::new(1 << 30),
+            remote_bodies: std::cell::RefCell::new(BTreeMap::new()),
+            withheld_rows: std::collections::BTreeSet::new(),
+            acquisitions: BTreeMap::new(),
             local,
             params,
             signers,
@@ -197,10 +213,10 @@ impl H {
                 commit_qc: None,
             },
             Some((block, qc)) => CommittedTip {
-                height: block.header.height,
+                height: block.header().height,
                 block_hash: qc.block_hash,
                 result: qc.result,
-                header: Some(block.header.clone()),
+                header: Some(block.header().clone()),
                 commit_qc: Some(qc.clone()),
             },
         };
@@ -224,7 +240,7 @@ impl H {
             nonce: self.nonce,
             tip,
             configs,
-            recent_headers: self.store.iter().map(|(b, _)| b.header.clone()).collect(),
+            recent_headers: self.store.iter().map(|(b, _)| b.header().clone()).collect(),
         }
     }
 
@@ -243,10 +259,10 @@ impl H {
             records.push((key.clone(), state, true));
         }
         let init = self.init(records);
-        let signers: Vec<Box<dyn Signer>> = self
+        let signers: Vec<std::sync::Arc<dyn Signer>> = self
             .signers
             .iter()
-            .map(|s| -> Box<dyn Signer> { Box::new(s.clone()) })
+            .map(|s| -> std::sync::Arc<dyn Signer> { std::sync::Arc::new(s.clone()) })
             .collect();
         let (core, actions) = Core::new(
             self.local,
@@ -254,11 +270,13 @@ impl H {
             signers,
             Box::new(self.v.crypto.clone()),
             fake_attestation_ext(self.attestor.clone()),
+            self.budget.clone(),
             self.now,
         )
         .expect("valid test configuration");
         self.core = core;
         self.pending_exec.clear();
+        self.acquisitions.clear();
         self.all.clear();
         self.out.clear();
         self.absorb(actions);
@@ -282,8 +300,20 @@ impl H {
     }
 
     /// Handle one event at the current time, absorbing the actions like a driver.
-    pub fn fire(&mut self, event: Event) -> Vec<Action> {
+    pub fn fire(&mut self, mut event: Event) -> Vec<Action> {
         self.out.clear();
+        if let Event::Message { msg, .. } = &mut event {
+            let Ok(bytes) = msg.encode() else {
+                return Vec::new();
+            };
+            let Ok(decoded) = WireMessage::decode(&bytes, 32 << 20) else {
+                return Vec::new();
+            };
+            *msg = decoded;
+            if msg.admit_owned_bytes(&self.budget).is_err() {
+                return Vec::new();
+            }
+        }
         let actions = self.core.handle(self.now, event);
         self.absorb(actions);
         self.out.clone()
@@ -335,13 +365,83 @@ impl H {
                             queue.push_back(self.applied_event(block));
                         }
                     }
-                    Action::FetchBody { block_hash, .. } => {
+                    Action::FetchPayload { source, .. } => {
                         if self.auto_fetch
-                            && let Some(block) = self.bodies.get(block_hash)
+                            && let Some(block) = self.bodies.get(&source.block_hash())
                         {
-                            queue.push_back(Event::BodyAvailable {
-                                block: block.clone(),
+                            let frame = crate::availability::AvailabilityFrame::from_untrusted(
+                                block.availability().as_slice().to_vec(),
+                            )
+                            .unwrap();
+                            let payload =
+                                PayloadBytes::from_untrusted(block.payload().as_slice().to_vec())
+                                    .unwrap();
+                            let job = crate::availability::BodyRestoration::new(
+                                source.clone(),
+                                block.header().clone(),
+                                frame,
+                                payload,
+                            );
+                            let block = job
+                                .complete(&self.budget, &self.v.crypto)
+                                .unwrap_or_else(|(_, e)| panic!("restore fixture: {e:?}"));
+                            queue.push_back(Event::BodyAvailable { block });
+                        }
+                    }
+                    Action::AuthorPayload {
+                        req,
+                        config,
+                        header,
+                        payload,
+                    } => {
+                        let signer = self.signer_of(config.committee.get(header.proposer).unwrap());
+                        let body = PayloadAuthoring::new(header.clone(), payload.clone())
+                            .complete(I, config, &self.budget, &self.v.crypto, &signer)
+                            .unwrap_or_else(|(_, e)| panic!("author fixture: {e:?}"))
+                            .body;
+                        queue.push_back(Event::PayloadAuthored { req: *req, body });
+                    }
+                    Action::AcquirePayload { source, manifest } => {
+                        if self.acquisitions.contains_key(&source.block_hash()) {
+                            continue;
+                        }
+                        let mut job = PayloadAcquisition::new(source.clone(), manifest.clone());
+                        if let Err(error) = job.prepare(&self.budget, &self.v.crypto) {
+                            assert!(error.rejects_manifest());
+                            queue.push_back(Event::ManifestRejected {
+                                manifest: manifest.clone(),
                             });
+                            continue;
+                        }
+                        let bh = source.block_hash();
+                        self.acquisitions.entry(bh).or_insert(job);
+                        if !self.withheld_rows.contains(&bh)
+                            && let Some(body) = self.remote_bodies.borrow().get(&bh)
+                        {
+                            for chunk in self.chunks(body) {
+                                queue.push_back(Event::Message {
+                                    from: self.key_at(body.header().proposer),
+                                    msg: WireMessage::PayloadChunk(chunk),
+                                });
+                            }
+                        }
+                    }
+                    Action::ReceivePayloadChunk { chunk, .. } => {
+                        let bh = chunk.block_hash;
+                        if let Some(mut job) = self.acquisitions.remove(&bh) {
+                            let _ = job.push(chunk.clone(), &self.budget, &self.v.crypto);
+                            match job.complete(&self.budget, &self.v.crypto) {
+                                Ok(block) => queue.push_back(Event::BodyAvailable { block }),
+                                Err((job, crate::availability::AcquisitionError::Incomplete)) => {
+                                    self.acquisitions.insert(bh, job);
+                                }
+                                Err((job, e)) if e.rejects_manifest() => {
+                                    queue.push_back(Event::ManifestRejected {
+                                        manifest: job.manifest().clone(),
+                                    })
+                                }
+                                Err((_, e)) => panic!("fixture reconstruction: {e:?}"),
+                            }
                         }
                     }
                     _ => {}
@@ -357,12 +457,12 @@ impl H {
     }
 
     /// The `BlockApplied` a conforming driver reports for a committed `block` (O3).
-    pub fn applied_event(&self, block: &Block) -> Event {
-        let height = block.header.height;
+    pub fn applied_event(&self, block: &AvailableBody) -> Event {
+        let height = block.header().height;
         Event::BlockApplied {
             height,
             block_hash: block.hash(&self.v.crypto),
-            header: Box::new(block.header.clone()),
+            header: Box::new(block.header().clone()),
             config: crate::testing::applied_config(
                 height,
                 &self.config(height),
@@ -377,11 +477,53 @@ impl H {
         let block = self
             .store
             .iter()
-            .find(|(b, _)| b.header.height == height)
+            .find(|(b, _)| b.header().height == height)
             .map(|(b, _)| b.clone())
             .expect("the block of the height is in the store");
         let event = self.applied_event(&block);
         self.fire(event)
+    }
+
+    /// Actual canonical rows of a fixture body; the original authorization table is retained.
+    fn chunks(&self, body: &AvailableBody) -> Vec<PayloadChunk> {
+        let shape = self
+            .config(body.header().height)
+            .epoch
+            .da_layout
+            .shape(body.payload().as_slice().len() as u64)
+            .unwrap();
+        let encoded = iroha_primitives::erasure::rs16::compact::encode_funded(
+            shape,
+            body.payload().as_slice(),
+            &self.budget,
+        )
+        .unwrap();
+        (0..shape.chunk_count())
+            .map(|index| {
+                let mut chunk = PayloadChunk {
+                    instance: I,
+                    height: body.header().height,
+                    block_hash: self.bh(body),
+                    index: index as u32,
+                    bytes: RowBytes::from_untrusted(
+                        encoded.codeword()[shape.chunk_range(index).unwrap()].to_vec(),
+                    )
+                    .unwrap(),
+                };
+                chunk.bytes.admit(&self.budget).unwrap();
+                chunk
+            })
+            .collect()
+    }
+
+    /// Deliver actually received rows separately from the authenticated manifest.
+    fn deliver_rows(&mut self, from: ValidatorIndex, body: &AvailableBody) -> Vec<Action> {
+        self.withheld_rows.remove(&self.bh(body));
+        let mut actions = Vec::new();
+        for chunk in self.chunks(body) {
+            actions.extend(self.deliver(from, WireMessage::PayloadChunk(chunk)));
+        }
+        actions
     }
 
     /// A message from member `from` of the current committee.
@@ -416,12 +558,21 @@ impl H {
         all
     }
 
+    fn payload(&self, payload: &[u8]) -> Option<PayloadBytes> {
+        if payload.is_empty() {
+            return None;
+        }
+        let mut bytes = PayloadBytes::from_untrusted(payload.to_vec()).unwrap();
+        bytes.admit(&self.budget).unwrap();
+        Some(bytes)
+    }
+
     /// Answer the latest `BuildPayload` with `payload`.
     pub fn built(&mut self, payload: &[u8]) -> Vec<Action> {
         let req = self.last_build.expect("a BuildPayload was requested");
         self.fire(Event::PayloadBuilt {
             req,
-            payload: payload.to_vec(),
+            payload: self.payload(payload),
             attest: false,
         })
     }
@@ -431,7 +582,7 @@ impl H {
         let req = self.last_build.expect("a BuildPayload was requested");
         self.fire(Event::PayloadBuilt {
             req,
-            payload: payload.to_vec(),
+            payload: self.payload(payload),
             attest: true,
         })
     }
@@ -550,7 +701,7 @@ impl H {
     // ---- message construction -----------------------------------------------------------
 
     /// A fresh block of the current height first proposed in `view` by `L(h, view)`.
-    pub fn block(&self, view: u64, payload: &[u8]) -> Block {
+    pub fn block(&self, view: u64, payload: &[u8]) -> AvailableBody {
         let topo = &self.core.topo;
         let header = BlockHeader {
             control_witness: crate::types::ControlWitness::empty(),
@@ -561,29 +712,54 @@ impl H {
             parent_hash: self.core.tip.block_hash,
             parent_result: self.core.tip.result,
             payload_hash: preimage::payload_hash(&self.v.crypto, payload),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(view),
             skipped_leaders: topo.skipped_leader_keys(&self.committee(), view),
             attest: self.height() == self.config(self.height()).epoch.last_height,
         };
-        Block {
+        self.author(header, payload)
+    }
+
+    /// Author exact fixture bytes with the current historical committee, using the actual worker.
+    pub fn author(&self, header: BlockHeader, payload: &[u8]) -> AvailableBody {
+        let config = self.config(header.height);
+        // These are externally supplied fixture bodies, not actions by the local Core.
+        // The actual AuthorPayload worker above retains the local signing log unchanged.
+        let signer =
+            FakeSigner::with_key(config.committee.get(header.proposer).unwrap().clone(), None);
+        let body = crate::testing::author_body(
             header,
-            payload: payload.to_vec(),
-        }
+            payload,
+            &config,
+            &self.budget,
+            &self.v.crypto,
+            &signer,
+        );
+        self.remote_bodies
+            .borrow_mut()
+            .insert(body.hash(&self.v.crypto), body.clone());
+        body
     }
 
     /// `block` with the attestation flag set (§3.7): its Commit votes need attestations.
-    pub fn flagged(mut block: Block) -> Block {
-        block.header.attest = true;
-        block
+    pub fn flagged(&self, block: AvailableBody) -> AvailableBody {
+        let mut header = block.header().clone();
+        header.attest = true;
+        self.author(header, block.payload().as_slice())
     }
 
-    pub fn bh(&self, block: &Block) -> Hash32 {
+    pub fn bh(&self, block: &AvailableBody) -> Hash32 {
         block.hash(&self.v.crypto)
     }
 
     /// The proposal of `block` in `(h, view)` signed by `L(h, view)` with the tip's `CommitQC`.
-    pub fn proposal(&self, view: u64, block: &Block, justify: Option<TimeoutCert>) -> Proposal {
+    pub fn proposal(
+        &self,
+        view: u64,
+        block: &AvailableBody,
+        justify: Option<TimeoutCert>,
+    ) -> ProposalMessage {
         self.proposal_by(self.leader(view), view, block, justify)
     }
 
@@ -591,9 +767,9 @@ impl H {
         &self,
         signer: ValidatorIndex,
         view: u64,
-        block: &Block,
+        block: &AvailableBody,
         justify: Option<TimeoutCert>,
-    ) -> Proposal {
+    ) -> ProposalMessage {
         let parent_qc = self.core.tip.commit_qc.clone();
         let bh = self.bh(block);
         let ad = preimage::att_digest(&self.v.crypto, justify.as_ref(), parent_qc.as_ref());
@@ -605,15 +781,17 @@ impl H {
             &bh,
             &ad,
         );
-        Proposal {
-            instance: I,
-            height: self.height(),
-            view,
-            header: block.header.clone(),
-            justify,
-            parent_qc,
-            payload: Some(block.payload.clone()),
-            sig: self.sign_as(signer, &msg),
+        ProposalMessage {
+            availability: block.availability().clone(),
+            proposal: Proposal {
+                instance: I,
+                height: self.height(),
+                view,
+                header: block.header().clone(),
+                justify,
+                parent_qc,
+                sig: self.sign_as(signer, &msg),
+            },
         }
     }
 
@@ -685,13 +863,19 @@ impl H {
     }
 
     /// A certificate of `block` (with its flag) by exactly `signers`.
-    pub fn qc(&self, kind: VoteKind, view: u64, block: &Block, signers: &[ValidatorIndex]) -> Qc {
+    pub fn qc(
+        &self,
+        kind: VoteKind,
+        view: u64,
+        block: &AvailableBody,
+        signers: &[ValidatorIndex],
+    ) -> Qc {
         let value = (self.bh(block), result_of(block));
-        self.qc_value_flagged(kind, view, value, signers, block.header.attest)
+        self.qc_value_flagged(kind, view, value, signers, block.header().attest)
     }
 
     /// A certificate by `q` members other than the core.
-    pub fn qc_q(&self, kind: VoteKind, view: u64, block: &Block) -> Qc {
+    pub fn qc_q(&self, kind: VoteKind, view: u64, block: &AvailableBody) -> Qc {
         let signers = self.others(self.q(), &[]);
         self.qc(kind, view, block, &signers)
     }
@@ -751,9 +935,15 @@ impl H {
     }
 
     /// A vote for `block` (with its flag).
-    pub fn vote(&self, kind: VoteKind, signer: ValidatorIndex, view: u64, block: &Block) -> Vote {
+    pub fn vote(
+        &self,
+        kind: VoteKind,
+        signer: ValidatorIndex,
+        view: u64,
+        block: &AvailableBody,
+    ) -> Vote {
         let value = (self.bh(block), result_of(block));
-        self.vote_value_flagged(kind, signer, view, value, block.header.attest)
+        self.vote_value_flagged(kind, signer, view, value, block.header().attest)
     }
 
     pub fn timeout(&self, signer: ValidatorIndex, view: u64, qc: Option<Qc>) -> TimeoutVote {
@@ -825,7 +1015,7 @@ impl H {
 
     /// Commit the current height with a fresh view-`view` block (the body comes from the
     /// local store) through a `CommitQC` of `q` other members. Returns the block.
-    pub fn commit_with(&mut self, view: u64, payload: &[u8]) -> Block {
+    pub fn commit_with(&mut self, view: u64, payload: &[u8]) -> AvailableBody {
         let block = self.block(view, payload);
         self.bodies.insert(self.bh(&block), block.clone());
         let qc = self.qc_q(VoteKind::Commit, view, &block);
@@ -850,9 +1040,9 @@ impl H {
         parent: (Hash32, Hash32),
         proposer: ValidatorIndex,
         payload: &[u8],
-    ) -> Block {
-        Block {
-            header: BlockHeader {
+    ) -> AvailableBody {
+        self.author(
+            BlockHeader {
                 control_witness: crate::types::ControlWitness::empty(),
                 epoch: self.config(height).epoch.id,
                 instance: I,
@@ -861,13 +1051,14 @@ impl H {
                 parent_hash: parent.0,
                 parent_result: parent.1,
                 payload_hash: preimage::payload_hash(&self.v.crypto, payload),
+                availability_digest: crate::types::Hash32::ZERO,
                 payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer,
                 skipped_leaders: Vec::new(),
                 attest: height == self.config(height).epoch.last_height,
             },
-            payload: payload.to_vec(),
-        }
+            payload,
+        )
     }
 
     /// A certificate of any height signed by the holders of `keys`, with the bitmap of
@@ -942,8 +1133,8 @@ impl H {
 
     /// A `CommitQC` for `block` (any height) by `q` members of its height's committee other
     /// than the core.
-    pub fn cqc_for(&self, block: &Block, view: u64) -> Qc {
-        let height = block.header.height;
+    pub fn cqc_for(&self, block: &AvailableBody, view: u64) -> Qc {
+        let height = block.header().height;
         let committee = self.config(height).committee;
         let keys: Vec<PublicKey> = committee
             .members()
@@ -953,7 +1144,7 @@ impl H {
             .cloned()
             .collect();
         let value = (self.bh(block), result_of(block));
-        let attest = block.header.attest;
+        let attest = block.header().attest;
         self.qc_keys_flagged(
             &committee,
             VoteKind::Commit,
@@ -1048,9 +1239,9 @@ fn placeholder_core(
         ],
         recent_headers: Vec::new(),
     };
-    let boxed: Vec<Box<dyn Signer>> = signers
+    let boxed: Vec<std::sync::Arc<dyn Signer>> = signers
         .iter()
-        .map(|s| -> Box<dyn Signer> { Box::new(s.clone()) })
+        .map(|s| -> std::sync::Arc<dyn Signer> { std::sync::Arc::new(s.clone()) })
         .collect();
     Core::new(
         *local,
@@ -1058,6 +1249,7 @@ fn placeholder_core(
         boxed,
         Box::new(v.crypto.clone()),
         fake_attestation_ext(FakeAttestor::new()),
+        mv::allocation::AllocationBudget::new(1 << 30),
         0,
     )
     .expect("valid test configuration")
@@ -1109,7 +1301,7 @@ pub(super) fn proposals(actions: &[Action]) -> Vec<Proposal> {
     sent(actions)
         .into_iter()
         .filter_map(|(_, m)| match m {
-            WireMessage::Proposal(p) => Some(*p),
+            WireMessage::Proposal(p) => Some(p.proposal),
             _ => None,
         })
         .collect()
@@ -1130,7 +1322,7 @@ pub(super) fn tcs(actions: &[Action]) -> Vec<TimeoutCert> {
         .into_iter()
         .filter_map(|(_, m)| match m {
             WireMessage::Tc(t) => Some(*t),
-            WireMessage::Proposal(p) => p.justify,
+            WireMessage::Proposal(p) => p.proposal.justify,
             _ => None,
         })
         .collect()
@@ -1180,7 +1372,7 @@ pub(super) fn executes(actions: &[Action]) -> Vec<(Hash32, u64)> {
     actions
         .iter()
         .filter_map(|a| match a {
-            Action::Execute { block, req } => Some((block.header.payload_hash, *req)),
+            Action::Execute { block, req } => Some((block.header().payload_hash, *req)),
             _ => None,
         })
         .collect()

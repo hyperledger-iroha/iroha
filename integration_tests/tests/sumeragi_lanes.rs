@@ -23,12 +23,17 @@ use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;
 
+/// The long-running P2P lane soak (ignored by default).
+#[path = "sumeragi_lanes_soak.rs"]
+mod soak;
+
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const LANE: LaneId = LaneId::new(2);
 
 /// Fixed lane 2 over the whole validator set; `Log` instructions route to it.
 fn lane_policy(topology: &[GenesisTopologyEntry]) -> SumeragiLanePolicy {
     SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         anchor_freshness: 64,
         max_merge_blocks: 16,
         stall_window: 10_000,

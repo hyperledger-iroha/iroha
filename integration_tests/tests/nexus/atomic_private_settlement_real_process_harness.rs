@@ -1,9 +1,16 @@
+#[path = "atomic_private_settlement_transport.rs"]
+mod transport_evidence;
+
 #[path = "atomic_private_settlement_session.rs"]
 mod benchmark_session;
 
 #[path = "atomic_private_settlement_matched_workload.rs"]
 mod matched_benchmark_workload;
 use matched_benchmark_workload::*;
+
+#[path = "atomic_private_settlement_executable_inventory.rs"]
+mod executable_inventory;
+use executable_inventory::{ExecutableInventory, sha256_regular_file};
 
 use base64::Engine as _;
 use futures_util::StreamExt as _;
@@ -1805,25 +1812,6 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1_000.0
 }
 
-fn sha256_regular_file(path: &Path) -> Result<String> {
-    let metadata = fs::symlink_metadata(path).wrap_err("inspect executable")?;
-    ensure!(
-        metadata.file_type().is_file(),
-        "executable is not a regular file"
-    );
-    let mut file = File::open(path).wrap_err("open executable")?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let read = file.read(&mut buffer).wrap_err("hash executable")?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-    }
-    Ok(hex::encode(digest.finalize()))
-}
-
 /// Resolve the kernel-owned executable path, never a process display string.
 #[cfg_attr(target_os = "macos", allow(unsafe_code))]
 fn executable_for_pid(pid: u32) -> Result<PathBuf> {
@@ -2962,8 +2950,19 @@ fn write_smoke_evidence<T: norito::json::JsonSerialize>(
     name: &str,
     value: &T,
 ) -> Result<SmokeEvidenceFileV1> {
+    let raw = canonical_harness_json_bytes(value)?;
+    write_smoke_evidence_bytes(root, name, &raw, ".json", HARNESS_MAX_JSON_BYTES)
+}
+
+fn write_smoke_evidence_bytes(
+    root: &Path,
+    name: &str,
+    raw: &[u8],
+    extension: &str,
+    limit: usize,
+) -> Result<SmokeEvidenceFileV1> {
     ensure!(
-        name.ends_with(".json")
+        name.ends_with(extension)
             && name.bytes().all(|byte| byte.is_ascii_lowercase()
                 || byte.is_ascii_digit()
                 || matches!(byte, b'-' | b'.'))
@@ -2975,24 +2974,45 @@ fn write_smoke_evidence<T: norito::json::JsonSerialize>(
         metadata.file_type().is_dir() && metadata.permissions().mode() & 0o777 == 0o700,
         "smoke evidence requires an owner-only regular directory"
     );
-    let raw = canonical_harness_json_bytes(value)?;
-    ensure!(
-        raw.len() <= HARNESS_MAX_JSON_BYTES,
-        "smoke evidence exceeds its byte bound"
-    );
+    ensure!(raw.len() <= limit, "smoke evidence exceeds its byte bound");
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(root.join(name))?;
-    file.write_all(&raw)?;
+    file.write_all(raw)?;
     file.sync_all()?;
     File::open(root)?.sync_all()?;
     Ok(SmokeEvidenceFileV1 {
         name: name.to_owned(),
         bytes: u64::try_from(raw.len())?,
-        sha256: sha256_hex(&raw),
+        sha256: sha256_hex(raw),
     })
+}
+
+#[test]
+fn smoke_transport_prefix_is_retained_exactly_and_bounded() {
+    let temporary = tempfile::tempdir().expect("temporary evidence directory");
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let raw = b"original process output\n";
+    let name = "finality-before-transport-00.log";
+    let artifact =
+        write_smoke_evidence_bytes(temporary.path(), name, raw, ".log", raw.len()).unwrap();
+    assert_eq!(fs::read(temporary.path().join(name)).unwrap(), raw);
+    assert_eq!(artifact.sha256, sha256_hex(raw));
+    assert_eq!(artifact.bytes, raw.len() as u64);
+    assert!(write_smoke_evidence_bytes(temporary.path(), name, raw, ".log", raw.len()).is_err());
+    assert!(
+        write_smoke_evidence_bytes(
+            temporary.path(),
+            "too-large.log",
+            raw,
+            ".log",
+            raw.len() - 1
+        )
+        .is_err()
+    );
+    assert!(!temporary.path().join("too-large.log").exists());
 }
 
 #[test]
@@ -3377,6 +3397,7 @@ fn smoke_process_inventory(
     let mut pids = BTreeSet::new();
     let mut peers = BTreeSet::new();
     let mut inventory = Vec::new();
+    let mut images = ExecutableInventory::default();
     for (index, peer) in network.all_peers().enumerate() {
         let pid = runtime
             .block_on(peer.process_id())
@@ -3389,12 +3410,12 @@ fn smoke_process_inventory(
         );
         let client = peer.client();
         smoke_inventory_health_v1(index, readiness, |_| {
-            let check_identity = || {
+            let mut check_identity = || {
                 smoke_inventory_identity_v1(
                     pid,
                     &expected_sha,
                     || runtime.block_on(peer.process_id()),
-                    |live_pid| sha256_regular_file(&executable_for_pid(live_pid)?),
+                    |live_pid| images.sha256(&executable_for_pid(live_pid)?),
                 )
             };
             check_identity()?;
@@ -3437,6 +3458,7 @@ fn smoke_process_inventory(
         inventory.len() == shape.process_count(),
         "smoke process inventory is incomplete"
     );
+    images.verify_all()?;
     Ok(inventory)
 }
 
@@ -4076,11 +4098,14 @@ fn capture_fault_state_observation(
 }
 
 fn capture_fault_state_snapshot(network: &Network, label: &str) -> Result<FaultStateSnapshotV1> {
-    let validators = network
-        .all_peers()
-        .enumerate()
-        .map(|(peer_index, peer)| capture_fault_state_observation(peer_index, peer))
-        .collect::<Result<Vec<_>>>()?;
+    let peers = network.all_peers().cloned().enumerate().collect();
+    // Each process has an independent read-only endpoint. Preserve every peer and
+    // its input index while bounding concurrency exactly as receipt/finality reads.
+    let validators = collect_bounded_observations(peers, TEST_STACK_BYTES, |(peer_index, peer)| {
+        capture_fault_state_observation(peer_index, &peer)
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
     ensure!(
         validators.len() == network.all_peers().count(),
         "fault state snapshot omitted a validator or committee observer"
@@ -5599,16 +5624,57 @@ fn ensure_signed_rs16_finality_identity(
     Ok(())
 }
 
+/// Initial live ingress and canonical restart recovery are distinct observations.
+#[derive(Clone, Copy)]
+enum FinalityObservationV1 {
+    LiveTransport,
+    Restored(SignedRs16FinalityAnchorV1),
+}
+
+impl FinalityObservationV1 {
+    fn prior_anchor(self) -> Option<SignedRs16FinalityAnchorV1> {
+        match self {
+            Self::LiveTransport => None,
+            Self::Restored(anchor) => Some(anchor),
+        }
+    }
+}
+
+#[test]
+fn recovered_finality_requires_the_original_anchor_without_new_transport() {
+    let anchor = SignedRs16FinalityAnchorV1 {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"restored-block")),
+        context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"restored-context",
+        ))),
+    };
+    assert_eq!(FinalityObservationV1::LiveTransport.prior_anchor(), None);
+    assert_eq!(
+        FinalityObservationV1::Restored(anchor).prior_anchor(),
+        Some(anchor)
+    );
+}
+
 fn verify_signed_rs16_finality(
     network: &Network,
+    runtime: &tokio::runtime::Runtime,
     finalized_height: u64,
 ) -> Result<SignedRs16FinalityObservationsV1> {
-    Ok(collect_signed_rs16_finality(network, finalized_height, None)?.0)
+    Ok(collect_signed_rs16_finality(
+        network,
+        runtime,
+        finalized_height,
+        FinalityObservationV1::LiveTransport,
+        None,
+    )?
+    .0)
 }
 
 fn collect_signed_rs16_finality(
     network: &Network,
+    runtime: &tokio::runtime::Runtime,
     finalized_height: u64,
+    observation: FinalityObservationV1,
     evidence: Option<(&Path, &str)>,
 ) -> Result<(SignedRs16FinalityObservationsV1, Vec<SmokeEvidenceFileV1>)> {
     let height = NonZeroU64::new(finalized_height)
@@ -5620,28 +5686,61 @@ fn collect_signed_rs16_finality(
         expected_observations > 0,
         "finality observations omitted every validator"
     );
-    let responses = collect_bounded_observations(peers, TEST_STACK_BYTES, |peer| {
+    let pids = peers
+        .iter()
+        .map(|peer| {
+            runtime
+                .block_on(peer.process_id())
+                .ok_or_else(|| eyre!("finality peer lacks a live PID"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let responses = collect_bounded_observations(peers.clone(), TEST_STACK_BYTES, |peer| {
         let client = peer.client();
-        let response = client.client().get_sumeragi_finality_proof(height);
-        (peer.id(), client, response)
-    });
-    let mut observations = 0_u64;
-    let mut anchor = None;
-    let mut files = Vec::new();
-    let mut failures = Vec::new();
-    for (peer_index, (peer_id, client, response)) in responses.into_iter().enumerate() {
-        let validated = (|| -> Result<()> {
-            let proof =
-                response.wrap_err_with(|| format!("fetch native finality proof from {peer_id}"))?;
+        let response = (|| -> Result<_> {
+            let proof = client.client().get_sumeragi_finality_proof(height)?;
             let certified = authenticated_native_history(network, &client)?
                 .into_iter()
                 .find(|block| block.committed().height() == finalized_height)
                 .ok_or_else(|| eyre!("peer omitted the requested certified native height"))?;
+            Ok((proof, certified))
+        })();
+        (peer.id(), response)
+    });
+    let mut observations = 0_u64;
+    let mut anchor = observation.prior_anchor();
+    let mut files = Vec::new();
+    let mut failures = Vec::new();
+    let snapshots = network.startup_snapshot();
+    ensure!(
+        snapshots.len() == expected_observations,
+        "transport snapshot omitted a process"
+    );
+    for (peer_index, (peer_id, response)) in responses.into_iter().enumerate() {
+        let validated = (|| -> Result<()> {
+            let (proof, certified) = response
+                .wrap_err_with(|| format!("verify native finality history from {peer_id}"))?;
+            let owned_peer = &peers[peer_index];
+            ensure!(
+                owned_peer.id() == peer_id
+                    && snapshots[peer_index].index == peer_index
+                    && owned_peer.is_running()
+                    && runtime.block_on(owned_peer.process_id()) == Some(pids[peer_index]),
+                "finality observation changed its owned process identity"
+            );
             let committed = certified.committed();
             ensure!(
                 proof.block_header.height() == height
                     && proof.block_header == committed.block().header()
                     && proof.block_wire == committed.block().encode_wire()?
+                    && proof.committee.len()
+                        == committed.commitment().schedule.current.committee.len()
+                    && proof
+                        .committee
+                        .iter()
+                        .zip(&committed.commitment().schedule.current.committee)
+                        .all(|(candidate, original)| candidate.public_key
+                            == *original.validator.public_key()
+                            && candidate.proof_of_possession == original.proof_of_possession)
                     && certified
                         .commit_qc()
                         .is_some_and(|qc| qc.signers.count_ones() == 3),
@@ -5665,6 +5764,38 @@ fn collect_signed_rs16_finality(
                 anchor,
                 observed_anchor,
             )?;
+            if matches!(observation, FinalityObservationV1::LiveTransport) {
+                let log_name =
+                    evidence.map(|(_, prefix)| format!("{prefix}-transport-{peer_index:02}.log"));
+                let (transport, log) = verify_signed_rs16_transport(
+                    network,
+                    owned_peer,
+                    pids[peer_index],
+                    &snapshots[peer_index],
+                    &certified,
+                    &proof,
+                    log_name.as_deref(),
+                )?;
+                if let Some((root, prefix)) = evidence {
+                    files.push(write_smoke_evidence_bytes(
+                        root,
+                        log_name.as_deref().expect("evidence log name"),
+                        &log,
+                        ".log",
+                        64 * 1024 * 1024,
+                    )?);
+                    files.push(write_smoke_evidence(
+                        root,
+                        &format!("{prefix}-transport-{peer_index:02}.json"),
+                        &transport,
+                    )?);
+                }
+            }
+            ensure!(
+                owned_peer.is_running()
+                    && runtime.block_on(owned_peer.process_id()) == Some(pids[peer_index]),
+                "finality process changed while retaining observations"
+            );
             anchor = Some(observed_anchor);
             observations += 1;
             // Evidence writes remain on the caller in stable all_peers order.
@@ -5686,7 +5817,6 @@ fn collect_signed_rs16_finality(
         usize::try_from(observations)? == expected_observations,
         "signed finality omitted a configured peer"
     );
-    require_signed_rs16_transport()?;
     Ok((
         SignedRs16FinalityObservationsV1 {
             observations,
@@ -5696,19 +5826,128 @@ fn collect_signed_rs16_finality(
     ))
 }
 
-/// Fail closed until the node supplies authenticated RS16 manifest/chunk custody evidence.
-fn require_signed_rs16_transport() -> Result<()> {
-    // TODO: Bind signed PayloadManifest/PayloadChunk source evidence from the native transport
-    // when specs/sumeragi_goals.md open question 8 is implemented. A full carrier proves finality
-    // and application execution, but cannot qualify that separate availability requirement.
-    Err(eyre!(
-        "native finality verified; required signed RS16 PayloadManifest/PayloadChunk evidence is not integrated"
-    ))
+/// A bounded prefix of the current process log; appends cannot alter retained evidence.
+fn transport_log_prefix(path: &Path) -> Result<Vec<u8>> {
+    use std::os::unix::fs::MetadataExt as _;
+    let before = fs::symlink_metadata(path)?;
+    ensure!(
+        before.is_file() && !before.file_type().is_symlink() && before.len() <= 64 * 1024 * 1024,
+        "invalid transport log source"
+    );
+    let mut file = File::open(path)?;
+    let opened = file.metadata()?;
+    ensure!(
+        before.dev() == opened.dev() && before.ino() == opened.ino(),
+        "transport log source replaced"
+    );
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(before.len())
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 == before.len() && file.metadata()?.len() >= before.len(),
+        "transport log truncated"
+    );
+    // A logger may be appending one unrelated line after the observed application.
+    if let Some(end) = bytes.iter().rposition(|byte| *byte == b'\n') {
+        bytes.truncate(end + 1);
+    } else {
+        bytes.clear();
+    }
+    Ok(bytes)
 }
 
-#[test]
-fn full_body_finality_cannot_qualify_signed_rs16_transport() {
-    assert!(require_signed_rs16_transport().is_err());
+fn verify_signed_rs16_transport(
+    network: &Network,
+    peer: &iroha_test_network::NetworkPeer,
+    pid: u32,
+    snapshot: &iroha_test_network::PeerStartupState,
+    certified: &iroha_core::sumeragi::certified_chain::CertifiedBlock,
+    proof: &iroha_data_model::sumeragi_finality::SumeragiFinalityProof,
+    log_artifact: Option<&str>,
+) -> Result<(HarnessJsonValue, Vec<u8>)> {
+    let peer_id = peer.id();
+    let committed = certified.committed();
+    let header = committed
+        .header()
+        .ok_or_else(|| eyre!("transport requires a non-genesis header"))?;
+    let current = &committed.commitment().schedule.current;
+    let author = current
+        .committee
+        .get(usize::try_from(header.proposer)?)
+        .ok_or_else(|| eyre!("certified proposer absent from original committee"))?;
+    let layout = current.da_layout;
+    let shape = layout.shape(u64::from(header.payload_len))?;
+    let key = |peer: &PeerId| -> Result<String> {
+        Ok(hex::encode(
+            iroha_core::sumeragi::schedule::consensus_key(peer)?.as_bytes(),
+        ))
+    };
+    let expected = transport_evidence::Expected {
+        process_id: pid,
+        instance: header.instance.to_string(),
+        height: header.height,
+        block: committed.core_hash().to_string(),
+        result: committed.result().to_string(),
+        availability: header.availability_digest.to_string(),
+        payload: header.payload_hash.to_string(),
+        bytes: u64::from(header.payload_len),
+        epoch: header.epoch.epoch,
+        context: header.epoch.context.to_string(),
+        proposer: u64::from(header.proposer),
+        local_is_author: author.validator == peer_id,
+        local: key(&peer_id)?,
+        peers: network
+            .all_peers()
+            .map(|p| key(&p.id()))
+            .collect::<Result<_>>()?,
+        k: usize::from(layout.data_shards),
+        width: usize::from(layout.data_shards) + usize::from(layout.parity_shards),
+        stripes: shape.stripe_count(),
+    };
+    ensure!(
+        snapshot.is_running && snapshot.logs.stderr_run_id.is_some(),
+        "transport source lacks live process identity"
+    );
+    let path = snapshot
+        .logs
+        .stdout_log
+        .as_ref()
+        .ok_or_else(|| eyre!("transport source lacks process stdout"))?;
+    let stderr = snapshot
+        .logs
+        .stderr_log
+        .as_ref()
+        .ok_or_else(|| eyre!("transport source lacks process stderr"))?;
+    let run_id = transport_evidence::current_run_log(
+        &network.env_dir().join(peer.mnemonic()),
+        snapshot.logs.stderr_run_id,
+        path,
+        stderr,
+    )?;
+    let stdout_path = path
+        .strip_prefix(network.env_dir())?
+        .to_str()
+        .ok_or_else(|| eyre!("transport source path is not UTF-8"))?;
+    let bytes = transport_log_prefix(path)?;
+    let verified = transport_evidence::verify(&bytes, &expected)?;
+    let value = norito::json!({
+        "peer_index": (snapshot.index), "peer": (peer_id), "pid": (pid),
+        "run_id": (run_id), "stdout_path": (stdout_path), "log_artifact": (log_artifact),
+        "log_sha256": (sha256_hex(&bytes)), "log_bytes": (bytes.len()),
+        "network_id": (network.network_id()), "proof_sha256": (sha256_hex(&canonical_harness_json_bytes(proof)?)),
+        "instance": (expected.instance), "height": (header.height),
+        "block": (expected.block), "availability_digest": (expected.availability),
+        "result": (expected.result),
+        "payload_hash": (expected.payload), "payload_bytes": (expected.bytes),
+        "epoch": (expected.epoch), "context": (expected.context), "proposer": (expected.proposer),
+        "local_key": (expected.local), "peer_keys": (expected.peers),
+        "data_shards": (expected.k), "parity_shards": (expected.width - expected.k), "stripes": (expected.stripes),
+        "admitted_rows": (verified.admitted_rows), "local_author": (expected.local_is_author),
+        "audit_lines": (verified.audit_lines),
+        "provenance": "retained process binary and local authenticated-ingress observations"
+    });
+    Ok((value, bytes))
 }
 
 #[test]
@@ -7139,7 +7378,8 @@ fn run_fresh_route_fault_trial(
     ensure_fault_state_finalized_once(&before, &after, request.participants)?;
     observer.complete_phase()?;
     let continuous_observations = observer.finish(&after)?;
-    let signed_rs16 = verify_signed_rs16_finality(network, receipt.finalized_height)?.observations;
+    let signed_rs16 =
+        verify_signed_rs16_finality(network, runtime, receipt.finalized_height)?.observations;
     let (collection, trial_index) = match fault {
         FreshRouteFaultV1::Loss { trial_index, .. } => ("loss_trials", trial_index),
         FreshRouteFaultV1::Hold { trial_index, .. } => ("phase_cut_partitions", trial_index),
@@ -7429,6 +7669,7 @@ fn run_real_process_fault_campaign(
     };
     verify_controller_readiness(&network, &runtime)?;
     let sponsor = network.client();
+    prepare_participant_assets(&network, shape)?;
     require_genesis_private_note_active(&sponsor)?;
     let routes = routes_from_network(&network, shape)?;
     let committees = committees_from_network(&network, shape, &routes)?;
@@ -7800,35 +8041,239 @@ fn authenticated_native_history(
     network: &Network,
     client: &Client,
 ) -> Result<Vec<iroha_core::sumeragi::certified_chain::CertifiedBlock>> {
-    let mut blocks = client.client().query(FindBlocks).execute_all()?;
-    blocks.sort_by_key(|block| block.header().height().get());
-    let first = blocks
-        .first()
-        .ok_or_else(|| eyre!("native history omitted original genesis"))?;
-    ensure!(
-        first.canonical_resultless_proposal().encode_wire()?
-            == network
-                .genesis()
-                .0
-                .canonical_resultless_proposal()
-                .encode_wire()?,
-        "peer substituted the independently signed genesis"
+    let started = Instant::now();
+    let deadline = started + FINALITY_TIMEOUT;
+    let client = client.client().with_request_deadline(deadline);
+    let mut captured_tip = None;
+    let result = (|| {
+        // The advertised height bounds retrieval only; every original carrier is
+        // independently authenticated below against the configured signed genesis.
+        let height = client.get_privacy_capabilities()?.committed_height;
+        captured_tip = Some(height);
+        certified_native_history_from_proofs(
+            &network.genesis().0,
+            &network.chain_id(),
+            network.network_id(),
+            height,
+            deadline,
+            |at| Ok(client.get_sumeragi_finality_proof(at)?),
+        )
+    })();
+    if SmokeDiagnosticScopeV1::capture().is_some() {
+        // A complete prefix includes genesis; a rejected prefix qualifies no blocks.
+        let block_count = result.as_ref().map_or(0, |blocks| blocks.len() + 1);
+        let _ = write_native_history_diagnostic(
+            &mut std::io::stderr().lock(),
+            captured_tip,
+            block_count,
+            started.elapsed().as_nanos(),
+            result.is_ok(),
+        );
+    }
+    result
+}
+
+/// Emit only bounded public counters; observation failure cannot change verification.
+fn write_native_history_diagnostic(
+    writer: &mut impl std::io::Write,
+    captured_tip: Option<u64>,
+    block_count: usize,
+    elapsed_ns: u128,
+    complete: bool,
+) -> std::io::Result<()> {
+    let tip = captured_tip.map_or_else(|| "none".to_owned(), |tip| tip.to_string());
+    let record = format!(
+        "APS_NATIVE_HISTORY_DIAGNOSTIC_V1 captured_tip={tip} block_count={block_count} elapsed_ns={elapsed_ns} complete={complete}\n"
     );
-    let mut verifier = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
-        &network.chain_id(),
-        network.network_id(),
-        Arc::new(first.clone()),
-    )?;
-    blocks
-        .into_iter()
-        .skip(1)
-        .map(|block| {
-            verifier
-                .push(Arc::new(block))
-                .map(|step| step.into_parts().0)
-                .map_err(Into::into)
+    writer.write_all(record.as_bytes())
+}
+
+#[test]
+fn native_history_diagnostic_contains_only_public_counts() {
+    let mut record = Vec::new();
+    write_native_history_diagnostic(&mut record, Some(3), 3, 42, true).unwrap();
+    assert_eq!(
+        String::from_utf8(record).unwrap(),
+        "APS_NATIVE_HISTORY_DIAGNOSTIC_V1 captured_tip=3 block_count=3 elapsed_ns=42 complete=true\n"
+    );
+    let mut record = Vec::new();
+    write_native_history_diagnostic(&mut record, None, 0, 99, false).unwrap();
+    assert_eq!(
+        String::from_utf8(record).unwrap(),
+        "APS_NATIVE_HISTORY_DIAGNOSTIC_V1 captured_tip=none block_count=0 elapsed_ns=99 complete=false\n"
+    );
+}
+
+fn certified_native_history_from_proofs(
+    trusted_genesis: &iroha::data_model::block::SignedBlock,
+    chain_id: &iroha_model_base::chain::ChainId,
+    network_id: iroha::data_model::NetworkId,
+    height: u64,
+    deadline: Instant,
+    mut fetch: impl FnMut(
+        NonZeroU64,
+    ) -> Result<iroha::data_model::sumeragi_finality::SumeragiFinalityProof>,
+) -> Result<Vec<iroha_core::sumeragi::certified_chain::CertifiedBlock>> {
+    const MAX_NATIVE_HISTORY_HEIGHT: u64 = 4_096;
+    ensure!(
+        (1..=MAX_NATIVE_HISTORY_HEIGHT).contains(&height),
+        "native history exceeds the bounded diagnostic corridor"
+    );
+    let mut verifier = None;
+    let mut certified = Vec::new();
+    for at in 1..=height {
+        ensure!(
+            Instant::now() < deadline,
+            "native history verification deadline elapsed"
+        );
+        let proof = fetch(NonZeroU64::new(at).expect("history heights start at one"))?;
+        ensure!(
+            proof.height() == at,
+            "native history proof differs from requested height"
+        );
+        proof.decode_checked()?;
+        let block = iroha::data_model::block::decode_versioned_signed_block(&proof.block_wire)?;
+        if at == 1 {
+            ensure!(
+                block.canonical_resultless_proposal().encode_wire()?
+                    == trusted_genesis
+                        .canonical_resultless_proposal()
+                        .encode_wire()?,
+                "peer substituted the independently signed genesis"
+            );
+            verifier = Some(iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
+                chain_id,
+                network_id,
+                Arc::new(block),
+            )?);
+        } else {
+            let step = verifier
+                .as_mut()
+                .expect("original genesis authenticated first")
+                .push(Arc::new(block))?;
+            certified.push(step.into_parts().0);
+        }
+    }
+    ensure!(
+        Instant::now() < deadline,
+        "native history verification deadline elapsed"
+    );
+    Ok(certified)
+}
+
+#[test]
+fn native_history_public_proofs_authenticate_exact_complete_prefix() {
+    thread::Builder::new()
+        .name("native-history-proof-control".to_owned())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(|| {
+            use iroha::data_model::Registrable;
+            use iroha_core::{
+                state::{StateReadOnly, World, WorldReadOnly},
+                sumeragi::{
+                    finality::build_proof,
+                    test_chain::{CertifiedTestChain, TestChainConfig},
+                },
+            };
+            let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+            let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 10_000)).unwrap();
+            for ordinal in 0..2 {
+                let transaction = chain.sign(
+                    &ALICE_KEYPAIR,
+                    [InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("required history work {ordinal}"),
+                    ))],
+                    10_001 + ordinal,
+                );
+                assert_eq!(chain.commit(vec![transaction]), vec![true]);
+            }
+            let view = chain.state().view();
+            assert!(
+                view.world()
+                    .account_permissions_iter(&ALICE_ID)
+                    .unwrap()
+                    .next()
+                    .is_none(),
+                "public consensus proofs require no broad or restricted observer grant"
+            );
+            let proofs = (1..=3)
+                .map(|height| build_proof(&view, height).unwrap())
+                .collect::<Vec<_>>();
+            let chain_id = view.chain_id().clone();
+            drop(view);
+            let verify =
+                |height, proofs: &[iroha::data_model::sumeragi_finality::SumeragiFinalityProof]| {
+                    certified_native_history_from_proofs(
+                        chain.genesis(),
+                        &chain_id,
+                        chain.network_id(),
+                        height,
+                        Instant::now() + Duration::from_secs(30),
+                        |height| {
+                            proofs
+                                .get(height.get() as usize - 1)
+                                .cloned()
+                                .ok_or_else(|| eyre!("requested proof is missing"))
+                        },
+                    )
+                };
+            let certified = verify(3, &proofs).expect("all original proof carriers authenticate");
+            assert_eq!(certified.len(), 2);
+            for (ordinal, block) in certified.iter().enumerate() {
+                assert_eq!(block.committed().height(), ordinal as u64 + 2);
+                assert_eq!(
+                    block.committed().block().encode_wire().unwrap(),
+                    proofs[ordinal + 1].block_wire
+                );
+            }
+            assert!(verify(0, &proofs).is_err());
+            assert!(verify(4_097, &proofs).is_err());
+            assert!(
+                verify(3, &proofs[..2]).is_err(),
+                "a prefix cannot omit the selected tip"
+            );
+            let mut changed = proofs.clone();
+            changed.swap(1, 2);
+            assert!(
+                verify(3, &changed).is_err(),
+                "height gaps or reordered responses reject"
+            );
+            let mut changed = proofs.clone();
+            changed[1].block_wire[0] ^= 1;
+            assert!(
+                verify(3, &changed).is_err(),
+                "altered canonical frame rejects"
+            );
+            let mut changed = proofs.clone();
+            changed[1].committee.pop();
+            assert!(
+                verify(3, &changed).is_err(),
+                "candidate committee substitution rejects"
+            );
+            let foreign =
+                CertifiedTestChain::start(TestChainConfig::new(World::new(), 20_000)).unwrap();
+            let mut changed = proofs.clone();
+            changed[0] = build_proof(&foreign.state().view(), 1).unwrap();
+            assert!(
+                verify(3, &changed).is_err(),
+                "even an authentic foreign genesis cannot choose the trust root"
+            );
+            assert!(
+                certified_native_history_from_proofs(
+                    chain.genesis(),
+                    &chain_id,
+                    chain.network_id(),
+                    3,
+                    Instant::now(),
+                    |_| panic!("an expired request must not fetch")
+                )
+                .is_err()
+            );
         })
-        .collect()
+        .expect("spawn bounded proof verifier control")
+        .join()
+        .expect("proof verifier control completes");
 }
 
 fn certified_settlement(
@@ -8327,7 +8772,7 @@ fn run_real_process_transparent_control_benchmark(
     // typed failure was authenticated on every peer above; no applied replay is accepted.
 
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, carrier.height().get())?.observations;
+        owner.verify_signed_rs16_finality(carrier.height().get())?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
@@ -8493,6 +8938,7 @@ fn run_real_process_leakage_campaign(
     let inventory =
         collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
     let sponsor = network.client();
+    prepare_participant_assets(&network, shape)?;
     let activated_height = require_genesis_private_note_active(&sponsor)?;
     let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
@@ -8803,7 +9249,7 @@ fn run_real_process_leakage_campaign(
                     .ok_or_else(|| eyre!("leakage atomicity check count overflow"))
             })?;
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, receipt.finalized_height)?.observations;
+        verify_signed_rs16_finality(&network, &runtime, receipt.finalized_height)?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 leakage finality observations are incomplete"
@@ -9410,7 +9856,7 @@ fn run_real_process_private_benchmark(
         "private benchmark atomicity observer omitted a validator or committee observer"
     );
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, receipt.finalized_height)?.observations;
+        owner.verify_signed_rs16_finality(receipt.finalized_height)?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"

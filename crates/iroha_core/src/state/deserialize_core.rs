@@ -831,8 +831,9 @@ impl KuraSeed {
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
-        // A verified native result authenticates witnessed writes, not all decoded World fields.
-        // TODO(S7): admit accelerated restore only with full-World execution provenance.
+        // A decoded World is unauthenticated until its cold-captured state root matches the
+        // certified parent World state root of its successor block. TODO(S9): admit accelerated
+        // restore only with that check and the State-level fields' own provenance.
         if !block_hashes.is_empty() {
             return Err(StateRestoreError::NativeExecutionReplayRequired);
         }

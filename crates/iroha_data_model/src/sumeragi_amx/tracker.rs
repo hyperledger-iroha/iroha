@@ -17,7 +17,7 @@
 
 use iroha_schema::IntoSchema;
 use iroha_sumeragi::{
-    crypto::{Crypto as _, Verifier},
+    crypto::Verifier,
     message::{BlockHeader as CoreHeader, Qc, VoteKind},
     types::Hash32,
 };

@@ -140,9 +140,7 @@
   "tx_gossip": {
     "caps": {
       "frame_cap_bytes": 0,
-      "drop_unknown_dataspace": false,
-      "restricted_fallback": "drop",
-      "restricted_public_policy": "refuse"
+      "drop_unknown_dataspace": false
     }
   }
 }

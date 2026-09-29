@@ -385,7 +385,7 @@ fn non_faulty_sync_timeout(
     if faulty_peers == 0 {
         return sync_timeout;
     }
-    // Keep relay partitions within the v2 liveness windows so fault injection does not span
+    // Keep relay partitions within the Sumeragi liveness windows so fault injection does not span
     // unnecessary view rotations.
     let cap = if faulty_peers > 1 {
         pipeline_time
