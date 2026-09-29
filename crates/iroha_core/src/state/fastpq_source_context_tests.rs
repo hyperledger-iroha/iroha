@@ -108,6 +108,173 @@ fn delta() -> TransferDeltaTranscript {
 }
 
 #[test]
+fn native_lane_source_uses_its_committed_incarnation_without_a_physical_catalog_entry() {
+    use crate::sumeragi::test_chain::{
+        CertifiedTestChain, Signers, TestChainConfig, fixture_validators,
+    };
+    use iroha_data_model::{
+        isi::{Register, SetKeyValue},
+        parameter::Parameter,
+        sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+        },
+    };
+    use iroha_test_samples::ALICE_KEYPAIR;
+
+    let lane = LaneId::new(2);
+    let policy = SumeragiLanePolicy {
+        anchor_freshness: 16,
+        max_merge_blocks: 8,
+        stall_window: 100,
+        lane_params: Default::default(),
+        fixed: vec![SumeragiFixedLane {
+            lane,
+            dataspace: DataSpaceId::UNIVERSAL,
+            committee: fixture_validators()
+                .into_iter()
+                .map(|(peer, pop)| SumeragiLaneMember { peer, pop })
+                .collect(),
+        }],
+        routes: vec![SumeragiLaneRoute {
+            lane,
+            account: Some(ALICE_ID.to_string()),
+            instruction: None,
+        }],
+        autoscale: None,
+    };
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config
+        .genesis_instructions
+        .push(Register::account(Account::new(ALICE_ID.clone())).into());
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(policy.into_custom_parameter()));
+    let mut chain = CertifiedTestChain::start(config).expect("original native lane policy");
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let original = chain
+        .state()
+        .view()
+        .world()
+        .sumeragi_lanes()
+        .lane(lane)
+        .unwrap()
+        .clone();
+    assert!(original.admits_anchor(chain.height()));
+    assert!(
+        !chain
+            .state()
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|entry| entry.id == lane)
+    );
+    let expected = Hash::from_marked_bytes(original.incarnation).expect("exact native chain hash");
+    let transaction = chain.sign(
+        &ALICE_KEYPAIR,
+        [SetKeyValue::account(
+            ALICE_ID.clone(),
+            "native_source".parse().unwrap(),
+            Json::new(1_u32),
+        )
+        .into()],
+        chain.committed(chain.height()).block_time_ms(),
+    );
+    let proposal = chain.proposal(None, vec![transaction]);
+    let mut pending = chain
+        .begin_proposal(proposal, Default::default())
+        .expect("native routed execution has its original frozen source");
+    pending
+        .inspect(move |execution| {
+            let inventory = execution.state.fastpq_source_inventory().unwrap().unwrap();
+            assert_eq!(inventory.entries().len(), 1);
+            assert_eq!(
+                inventory.entries()[0].route,
+                iroha_data_model::fastpq::FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
+                    lane_id: lane,
+                    lane_incarnation: expected
+                },)
+            );
+            let result = &execution
+                .block
+                .as_ref()
+                .network_output_at(0)
+                .unwrap()
+                .1
+                .result;
+            assert!(
+                result.is_ok(),
+                "original native execution rejected: {result:?}"
+            );
+        })
+        .unwrap();
+    pending
+        .publish(Signers::Quorum)
+        .expect("publish the original native source");
+}
+
+#[test]
+fn native_source_freezes_original_activation_closing_and_incarnation() {
+    use iroha_data_model::sumeragi_lanes::{SumeragiLaneRecord, SumeragiLaneState};
+
+    let state = state();
+    let lane = LaneId::new(7);
+    let original = Hash::new(b"original native incarnation");
+    let record = SumeragiLaneRecord {
+        lane,
+        dataspace: DataSpaceId::UNIVERSAL,
+        incarnation: original.into(),
+        params: Default::default(),
+        committee: Vec::new(),
+        created_at: 10,
+        active_from: 12,
+        closing: Some(20),
+        anchor_freshness: 16,
+        merged: Default::default(),
+        merged_at: 12,
+        rescued: 0,
+    };
+    let native = SumeragiLaneState {
+        lanes: vec![record],
+        ..Default::default()
+    };
+    let mut lanes = state.world.sumeragi_lanes.block();
+    *lanes.get_mut() = native.clone();
+    lanes.commit();
+    for (height, expected) in [
+        (12, None),
+        (13, Some(original)),
+        (20, Some(original)),
+        (21, None),
+    ] {
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).unwrap(),
+            None,
+            None,
+            height,
+            0,
+        ));
+        let captured = Arc::clone(block.fastpq_source_context.as_ref().unwrap());
+        assert_eq!(
+            captured.lane_incarnations.get(&lane).copied().flatten(),
+            expected
+        );
+        assert!(captured.lane_incarnations[&LaneId::SINGLE].is_some());
+        let mut changed = native.clone();
+        changed.lanes[0].incarnation = Hash::new(b"later incarnation").into();
+        changed.lanes[0].active_from = 1;
+        changed.lanes[0].closing = None;
+        *block.world.sumeragi_lanes.get_mut() = changed;
+        assert_eq!(
+            captured.lane_incarnations.get(&lane).copied().flatten(),
+            expected,
+            "later overlay effects cannot alter the original source-height capture"
+        );
+    }
+}
+
+#[test]
 fn source_records_publish_only_on_apply_and_survive_transcript_drain() {
     let state = state();
     let mut block = state.block(header());

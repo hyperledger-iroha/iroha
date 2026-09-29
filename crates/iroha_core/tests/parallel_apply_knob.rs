@@ -68,14 +68,10 @@ fn canonical_output_owner_does_not_allocate_detached_journals() {
         .view()
         .metrics()
         .pipeline_detached_counts();
-    let status_s = iroha_core::status::snapshot();
+
     assert_eq!(prep_s, 0, "sequential: prepared must be zero");
     assert_eq!(merged_s, 0, "sequential: merged must be zero");
     assert_eq!(fallback_s, 0, "sequential: fallback must be zero");
-    assert_eq!(
-        status_s.pipeline_execution.detached_prepared_total, 0,
-        "sequential status: prepared must be zero"
-    );
     // The parallel setting must retain the same canonical execution owner.
     let (mut chain_par, alice_id, kp) = build_world(true);
     apply_work(&mut chain_par, &alice_id, &kp);
@@ -84,9 +80,8 @@ fn canonical_output_owner_does_not_allocate_detached_journals() {
         .view()
         .metrics()
         .pipeline_detached_counts();
-    let status_p = iroha_core::status::snapshot();
+
     assert_eq!(prep_p, 0, "canonical owner retains its original journal");
-    assert_eq!(status_p.pipeline_execution.detached_prepared_total, 0);
 }
 #[test]
 #[cfg(not(feature = "telemetry"))]
@@ -95,10 +90,5 @@ fn parallel_apply_knob_compiles_without_telemetry() {
     for &flag in &[false, true] {
         let (mut chain, alice_id, kp) = build_world(flag);
         apply_work(&mut chain, &alice_id, &kp);
-        let status = iroha_core::status::snapshot();
-        assert_eq!(
-            status.pipeline_execution.detached_prepared_total, 0,
-            "canonical execution retains its original journal for either setting"
-        );
     }
 }

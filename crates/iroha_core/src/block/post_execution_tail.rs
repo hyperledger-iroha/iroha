@@ -131,24 +131,4 @@ impl ValidBlock {
         )?;
         Ok(())
     }
-
-    /// Reexecute a fixture through the actual whole producer and metadata finalizer.
-    /// The explicit genesis key is fixture trust input; ordinary source/finality
-    /// admission remains the caller's responsibility. No supplied rows enter here.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn execute_block_outputs_for_test(
-        block: &mut SignedBlock,
-        state: &mut StateBlock<'_>,
-        genesis_account: Option<&AccountId>,
-    ) -> Result<(), BlockValidationError> {
-        let genesis = genesis_account
-            .map(|account| authenticate_genesis_block_intents(block, account))
-            .transpose()?;
-        Self::validate_staged_execution_controls(block, state)?;
-        let _guard = crate::exec_witness::exec_witness_guard();
-        Self::execute_and_record_canonical_outputs(block, state, None, genesis.as_ref())?;
-        state
-            .capture_exec_witness()
-            .map_err(Self::execution_context_error)
-    }
 }

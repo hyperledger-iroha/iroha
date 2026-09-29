@@ -145,6 +145,7 @@ fn native_execution_rejects_forged_and_zero_advertised_fragment_counts() {
 #[test]
 fn native_validation_enforces_fraud_policy_with_a_populated_stateless_cache() {
     use iroha_config::parameters::actual::{FraudMonitoring, FraudRiskBand};
+    use iroha_primitives::json::Json;
     let fixture = NativeValidationFixture::with_configuration(|config| {
         config.pipeline.stateless_cache_cap = 64;
         config.fraud_monitoring = FraudMonitoring {
@@ -154,31 +155,51 @@ fn native_validation_enforces_fraud_policy_with_a_populated_stateless_cache() {
             ..Default::default()
         };
     });
-    let transaction = fixture.transaction(2_001, None);
-    for _ in 0..2 {
-        let proposal = fixture.proposal(vec![transaction.clone()], fixture.cadence());
-        let (valid, overlay) = fixture.validate(proposal).unpack(|_| {}).unwrap();
-        let rejection = valid
-            .as_ref()
-            .network_output_at(0)
-            .unwrap()
-            .1
-            .result
-            .as_ref()
-            .unwrap_err();
-        assert!(matches!(rejection,
+    let mut low_assessment = Metadata::default();
+    low_assessment.insert("fraud_assessment_band".parse().unwrap(), Json::new("low"));
+    low_assessment.insert(
+        "fraud_assessment_score_bps".parse().unwrap(),
+        Json::new(100_u64),
+    );
+    low_assessment.insert(
+        "fraud_assessment_tenant".parse().unwrap(),
+        Json::new("native-test"),
+    );
+    for (transaction, expected_message) in [
+        (
+            fixture.transaction(2_001, None),
+            "fraud monitoring requires an attached assessment",
+        ),
+        (
+            fixture.transaction_with_metadata(2_001, None, low_assessment),
+            "below required minimum",
+        ),
+    ] {
+        for _ in 0..2 {
+            let proposal = fixture.proposal(vec![transaction.clone()], fixture.cadence());
+            let (valid, overlay) = fixture.validate(proposal).unpack(|_| {}).unwrap();
+            let rejection = valid
+                .as_ref()
+                .network_output_at(0)
+                .unwrap()
+                .1
+                .result
+                .as_ref()
+                .unwrap_err();
+            assert!(matches!(rejection,
             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(message)
-            ) if message.contains("fraud monitoring requires an attached assessment")));
-        drop(overlay);
+            ) if message.contains(expected_message)));
+            drop(overlay);
+        }
+        assert!(
+            fixture
+                .chain
+                .state()
+                .stateless_validation_cache()
+                .lock()
+                .contains_key(&crate::tx::StatelessValidationCacheKey::new(&transaction),)
+        );
     }
-    assert!(
-        fixture
-            .chain
-            .state()
-            .stateless_validation_cache()
-            .lock()
-            .contains_key(&crate::tx::StatelessValidationCacheKey::new(&transaction),)
-    );
     assert_eq!(fixture.chain.state().view().height(), 2);
 }

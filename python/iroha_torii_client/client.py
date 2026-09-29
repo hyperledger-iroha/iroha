@@ -748,8 +748,6 @@ __all__ = [
     "ConnectAppPolicyControls",
     "ConnectAdmissionManifestEntry",
     "ConnectAdmissionManifest",
-    "LaneCommitmentSnapshot",
-    "DataspaceCommitmentSnapshot",
     "UaidPortfolioTotals",
     "UaidPortfolioAsset",
     "UaidPortfolioAccount",
@@ -3512,33 +3510,6 @@ class ProtectedNamespacesStatus:
 
 
 @dataclass(frozen=True)
-class LaneCommitmentSnapshot:
-    """Aggregated TEU commitment for a Nexus lane."""
-
-    block_height: int
-    lane_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash: str
-
-
-@dataclass(frozen=True)
-class DataspaceCommitmentSnapshot:
-    """Aggregated TEU commitment for a Nexus dataspace."""
-
-    block_height: int
-    lane_id: int
-    dataspace_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash: str
-
-
-@dataclass(frozen=True)
 class UaidPortfolioTotals:
     """Aggregate counts returned by ``/v1/accounts/{uaid}/portfolio``."""
 
@@ -3817,8 +3788,6 @@ class StatusPayload:
     txs_rejected: int
     view_changes: int
     governance: Optional[GovernanceStatusSnapshot]
-    lane_commitments: List[LaneCommitmentSnapshot]
-    dataspace_commitments: List[DataspaceCommitmentSnapshot]
     lane_governance: List[LaneGovernanceSnapshot]
     dataspace_catalog: List[DataspaceCatalogEntry]
     lane_governance_sealed_total: int
@@ -9657,15 +9626,10 @@ class ToriiClient(
         context: str,
     ) -> StatusPayload:
         record = self._ensure_mapping(payload, context)
+        for field_name in ("lane_commitments", "dataspace_commitments", "pipeline_execution"):
+            if field_name in record:
+                raise RuntimeError(f"{context} contains retired field `{field_name}`")
         governance = self._parse_status_governance(record.get("governance"))
-        lane_commitments = self._parse_lane_commitments(
-            record.get("lane_commitments"),
-            context=f"{context}.lane_commitments",
-        )
-        dataspace_commitments = self._parse_dataspace_commitments(
-            record.get("dataspace_commitments"),
-            context=f"{context}.dataspace_commitments",
-        )
         lane_governance = self._parse_lane_governance(
             record.get("lane_governance"),
             context=f"{context}.lane_governance",
@@ -9721,8 +9685,6 @@ class ToriiClient(
             txs_rejected=self._coerce_int(record.get("txs_rejected"), f"{context}.txs_rejected"),
             view_changes=self._coerce_int(record.get("view_changes"), f"{context}.view_changes"),
             governance=governance,
-            lane_commitments=lane_commitments,
-            dataspace_commitments=dataspace_commitments,
             lane_governance=lane_governance,
             dataspace_catalog=dataspace_catalog,
             lane_governance_sealed_total=self._coerce_int(
@@ -10080,65 +10042,6 @@ class ToriiClient(
                 )
             )
         return activations
-
-    def _parse_lane_commitments(
-        self,
-        payload: Any,
-        *,
-        context: str,
-    ) -> List[LaneCommitmentSnapshot]:
-        if payload is None:
-            return []
-        if not isinstance(payload, list):
-            raise RuntimeError(f"{context} must be a list")
-        snapshots: List[LaneCommitmentSnapshot] = []
-        for index, entry in enumerate(payload):
-            record = self._ensure_mapping(entry, f"{context}[{index}]")
-            snapshots.append(
-                LaneCommitmentSnapshot(
-                    block_height=self._coerce_int(record.get("block_height"), f"{context}[{index}].block_height"),
-                    lane_id=self._coerce_int(record.get("lane_id"), f"{context}[{index}].lane_id"),
-                    tx_count=self._coerce_int(record.get("tx_count"), f"{context}[{index}].tx_count"),
-                    total_chunks=self._coerce_int(record.get("total_chunks"), f"{context}[{index}].total_chunks"),
-                    rbc_bytes_total=self._coerce_int(
-                        record.get("rbc_bytes_total"),
-                        f"{context}[{index}].rbc_bytes_total",
-                    ),
-                    teu_total=self._coerce_int(record.get("teu_total"), f"{context}[{index}].teu_total"),
-                    block_hash="" if record.get("block_hash") is None else str(record.get("block_hash")),
-                )
-            )
-        return snapshots
-
-    def _parse_dataspace_commitments(
-        self,
-        payload: Any,
-        *,
-        context: str,
-    ) -> List[DataspaceCommitmentSnapshot]:
-        if payload is None:
-            return []
-        if not isinstance(payload, list):
-            raise RuntimeError(f"{context} must be a list")
-        snapshots: List[DataspaceCommitmentSnapshot] = []
-        for index, entry in enumerate(payload):
-            record = self._ensure_mapping(entry, f"{context}[{index}]")
-            snapshots.append(
-                DataspaceCommitmentSnapshot(
-                    block_height=self._coerce_int(record.get("block_height"), f"{context}[{index}].block_height"),
-                    lane_id=self._coerce_int(record.get("lane_id"), f"{context}[{index}].lane_id"),
-                    dataspace_id=self._coerce_int(record.get("dataspace_id"), f"{context}[{index}].dataspace_id"),
-                    tx_count=self._coerce_int(record.get("tx_count"), f"{context}[{index}].tx_count"),
-                    total_chunks=self._coerce_int(record.get("total_chunks"), f"{context}[{index}].total_chunks"),
-                    rbc_bytes_total=self._coerce_int(
-                        record.get("rbc_bytes_total"),
-                        f"{context}[{index}].rbc_bytes_total",
-                    ),
-                    teu_total=self._coerce_int(record.get("teu_total"), f"{context}[{index}].teu_total"),
-                    block_hash="" if record.get("block_hash") is None else str(record.get("block_hash")),
-                )
-            )
-        return snapshots
 
     def _parse_dataspace_catalog(
         self,

@@ -42,7 +42,7 @@ enum NativeExecutionEvidenceFixtures {
             let request = record([length(id.count) + id, integer(phase == "warmup" ? 0 : 1, 4),
                 try CanonicalNorito.encodeCompactAccountId(authority), entrypointHash, integer(carrierHeight, 8),
                 carrierHash, laneSource.map { Data([1]) + record([$0.encoded()]) } ?? Data([0]),
-                integer(UInt64(leafIndex), 4), integer(UInt64(laneID), 4), integer(dataspaceID, 8)])
+                integer(UInt64(leafIndex), 4), record([integer(UInt64(laneID), 4)]), record([integer(dataspaceID, 8)])])
             return record([integer(sequence, 8), request])
         }
     }
@@ -126,13 +126,27 @@ enum NativeExecutionEvidenceFixtures {
             guard try state.number(8) == height else { throw Failure() }
             let carrierHash = try state.fixed(32)
             guard carrierHash[31] & 1 == 1 else { throw Failure() }
-            // Rust verifies R.native_lanes and each original lane certificate. This
-            // parity decoder retains every source byte without claiming finality.
-            _ = try state.field(); try state.finish()
+            // Rust replay authenticates complete lanes and ordered ordinary writes
+            // against their native result roots, then verifies original lane frames.
+            _ = try state.field()
+            var writes = try Reader(state.field())
+            _ = try writes.sequence { bytes in
+                var write = Reader(bytes)
+                var key = try Reader(write.field())
+                var value = try Reader(write.field())
+                _ = try key.byteVector(); _ = try value.byteVector()
+                try write.finish()
+            }
+            var casting = try Reader(state.field())
+            // These workload captures contain no Parliament casting bindings.
+            guard try casting.sequence({ $0 }).isEmpty else { throw Failure() }
+            try state.finish()
             var originals = try Reader(evidence.field())
             _ = try originals.sequence { bytes in
                 var original = Reader(bytes)
-                guard try original.number(4) > 0 else { throw Failure() }
+                var lane = try Reader(original.field())
+                guard try lane.number(4) > 0 else { throw Failure() }
+                try lane.finish()
                 var vector = try Reader(original.field())
                 var frame = try Reader(vector.byteVector())
                 _ = try frame.field(); _ = try frame.field(); try frame.finish(); try original.finish()

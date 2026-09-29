@@ -2529,9 +2529,16 @@ impl Iso20022BridgeRuntime {
         let mut record = IsoMessageRecordV2::pending(now);
         record.metadata = metadata.clone();
         record.parties = parties;
-        record.replay_expires_at = SystemTime::now()
-            .checked_add(self.dedupe_ttl)
-            .unwrap_or(SystemTime::UNIX_EPOCH + Duration::from_secs(u64::MAX));
+        // Persist the configured TTL exactly in the canonical millisecond domain.
+        // Neither host time overflow nor wire overflow may shorten replay protection.
+        let replay_expires_at_ms = wall_now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .and_then(|age| age.as_millis().checked_add(self.dedupe_ttl.as_millis()))
+            .and_then(|millis| u64::try_from(millis).ok())
+            .ok_or(IsoAdmissionError::PersistenceUnavailable)?;
+        record.replay_expires_at = system_time_from_ms(replay_expires_at_ms)
+            .ok_or(IsoAdmissionError::PersistenceUnavailable)?;
         let tombstone = IsoReplayTombstone {
             expires_at: record.replay_expires_at,
             payload_hash: metadata.payload_hash.clone(),
@@ -2712,36 +2719,6 @@ impl Iso20022BridgeRuntime {
                 record.updated_at = SystemTime::now();
                 record.detail = Some("signed transaction prepared for queue admission".to_owned());
                 record.hold_reason_code = None;
-                record.rejection_reason_code = None;
-            })
-            .map(|_| candidate);
-        self.finish_status_transition(message_id, Some(previous), transition)
-    }
-    /// Preserve an indeterminate queue outcome for reconciliation by exact hash.
-    pub fn mark_queue_outcome_unknown(
-        &self,
-        message_id: &str,
-        transaction_hash: &str,
-        detail: String,
-    ) -> bool {
-        let _state_guard = self.state_lock.lock();
-        let Some(previous) = self.records.get(message_id).map(|record| record.clone()) else {
-            return false;
-        };
-        if previous.state != IsoMessageState::Pending
-            || previous.transaction_hash.as_deref() != Some(transaction_hash)
-        {
-            return false;
-        }
-        let mut candidate = previous.clone();
-        let transition = candidate
-            .try_transition(|record| {
-                record.last_seen = Instant::now();
-                record.updated_at = SystemTime::now();
-                record.detail = Some(detail);
-                record.ledger_tx_queued = false;
-                record.settled_at = None;
-                record.set_hold_reason(Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()));
                 record.rejection_reason_code = None;
             })
             .map(|_| candidate);
@@ -5817,7 +5794,7 @@ fn replay_tombstone_from_value(value: &JsonValue) -> Option<(String, IsoReplayTo
     Some((
         required_clean_string(object, "message_id")?,
         IsoReplayTombstone {
-            expires_at: system_time_from_ms(object.get("expires_at_ms")?.as_u64()?),
+            expires_at: system_time_from_ms(object.get("expires_at_ms")?.as_u64()?)?,
             payload_hash: required_nullable_string(object, "payload_hash")?,
             business_message_id: required_nullable_string(object, "business_message_id")?,
             uetr: required_nullable_string(object, "uetr")?,
@@ -6060,7 +6037,7 @@ fn required_nullable_string(obj: &norito::json::Map, key: &str) -> Option<Option
 fn required_nullable_time_ms(obj: &norito::json::Map, key: &str) -> Option<Option<SystemTime>> {
     match obj.get(key)? {
         JsonValue::Null => Some(None),
-        value => value.as_u64().map(system_time_from_ms).map(Some),
+        value => value.as_u64().and_then(system_time_from_ms).map(Some),
     }
 }
 fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageRecordV2)> {
@@ -6079,7 +6056,7 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     let updated_at = obj
         .get("updated_at_ms")
         .and_then(JsonValue::as_u64)
-        .map(system_time_from_ms)?;
+        .and_then(system_time_from_ms)?;
     let transaction_hash = required_nullable_string(obj, "transaction_hash")?;
     let detail = required_nullable_string(obj, "detail")?;
     let ledger_tx_queued = obj.get("ledger_tx_queued")?.as_bool()?;
@@ -6105,7 +6082,7 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     let replay_expires_at = obj
         .get("replay_expires_at_ms")
         .and_then(JsonValue::as_u64)
-        .map(system_time_from_ms)?;
+        .and_then(system_time_from_ms)?;
     let status_history_values = obj.get("status_history")?.as_array()?;
     if status_history_values.is_empty()
         || status_history_values.len() > ISO_STATUS_HISTORY_MAX_ENTRIES_V1
@@ -6842,7 +6819,16 @@ fn prepare_real_directory_with_sync(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir(&durable_path)?
         }
-        Err(error) => return Err(error),
+        Err(error) => {
+            #[cfg(unix)]
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ISO persistence path is not a real directory",
+                ));
+            }
+            return Err(error);
+        }
     }
     let prepared = secure_file_metadata::from_path(&durable_path)?;
     let requested = secure_file_metadata::from_path(path)?;
@@ -6871,14 +6857,21 @@ fn prepare_real_directory_with_sync(
     let durable_parent_after_sync = secure_file_metadata::from_path(&durable_parent)?;
     let requested_parent_after_sync = secure_file_metadata::from_path(parent)?;
     if !secure_file_metadata::unchanged(&prepared, &durable_prepared)
-        || !secure_file_metadata::unchanged(
+        // Sibling stores may create or remove their own names while this one is
+        // synchronized. Pin the parent object and permissions, not its entry
+        // timestamps; the prepared store itself must remain unchanged.
+        || !secure_file_metadata::same_file(
             &durable_parent_after_create,
             &durable_parent_after_sync,
         )
-        || !secure_file_metadata::unchanged(
+        || !secure_file_metadata::same_file(
             &requested_parent_after_create,
             &requested_parent_after_sync,
         )
+        || !secure_file_metadata::is_direct_directory(&durable_parent_after_sync)
+        || !secure_file_metadata::is_direct_directory(&requested_parent_after_sync)
+        || durable_parent_after_create.permissions() != durable_parent_after_sync.permissions()
+        || requested_parent_after_create.permissions() != requested_parent_after_sync.permissions()
         || !secure_file_metadata::same_file(
             &requested_parent_after_sync,
             &durable_parent_after_sync,
@@ -7287,7 +7280,7 @@ fn history_from_value(value: &JsonValue) -> Option<IsoStatusHistoryEntry> {
         updated_at: obj
             .get("updated_at_ms")?
             .as_u64()
-            .map(system_time_from_ms)?,
+            .and_then(system_time_from_ms)?,
         detail: required_nullable_string(obj, "detail")?,
         reason_code: required_nullable_string(obj, "reason_code")?,
     })
@@ -7311,8 +7304,8 @@ fn system_time_to_ms(time: SystemTime) -> u64 {
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
 }
-fn system_time_from_ms(ms: u64) -> SystemTime {
-    std::time::UNIX_EPOCH + Duration::from_millis(ms)
+fn system_time_from_ms(ms: u64) -> Option<SystemTime> {
+    std::time::UNIX_EPOCH.checked_add(Duration::from_millis(ms))
 }
 fn state_from_label(value: &str) -> Option<IsoMessageState> {
     match value {

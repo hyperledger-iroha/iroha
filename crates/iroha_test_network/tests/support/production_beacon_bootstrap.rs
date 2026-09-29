@@ -23,6 +23,7 @@ use iroha_data_model::{
     sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
     transaction::TransactionEntrypoint,
 };
+use iroha_model_base::topology::{DataSpaceId, LaneId};
 use iroha_test_network::{
     DisposableGenesisConfigSeat, DisposableGenesisDkgOutput, NativeGenesisProvisioningBundle,
     Program, ReleasePrebuiltBinary, revalidate_release_prebuilt_binary,

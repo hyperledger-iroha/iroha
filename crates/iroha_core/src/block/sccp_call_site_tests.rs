@@ -106,7 +106,7 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
     use crate::smartcontracts::isi::sccp::{height::SccpHeightInputsV1, hook::observed};
     use crate::sumeragi::{
         startup::GENESIS_HEIGHT,
-        test_chain::{CertifiedTestChain, TestChainConfig},
+        test_chain::{CertifiedTestChain, Signers, TestChainConfig},
     };
     use iroha_data_model::parameter::system::ConsensusMode;
     let signer = KeyPair::try_from_seed(vec![0x55; 32], Algorithm::Ed25519)
@@ -121,8 +121,14 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         block.commit();
     }
     let _ = observed::take();
-    let mut chain =
-        CertifiedTestChain::start(TestChainConfig::new(world, 10_000)).expect("the chain starts");
+    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, 10_000))
+        .expect("the original signed genesis is prepared");
+    let preparation_inputs = observed::take();
+    assert!(
+        !preparation_inputs.is_empty(),
+        "policy derivation executes genesis"
+    );
+    let mut chain = CertifiedTestChain::from_prepared(prepared).expect("the chain starts");
     let state = chain.state();
     let expected = |height: u64| {
         let view = state.view();
@@ -155,6 +161,12 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         }
     };
     let genesis_inputs = expected(GENESIS_HEIGHT);
+    assert!(
+        preparation_inputs
+            .iter()
+            .all(|input| input == &(GENESIS_HEIGHT, Some(genesis_inputs.clone()))),
+        "each disposable genesis execution uses the original scheduled inputs"
+    );
     assert_eq!(
         observed::take(),
         vec![(GENESIS_HEIGHT, Some(genesis_inputs.clone()))],
@@ -187,9 +199,11 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         u64::try_from(block_time.as_millis()).expect("fixture time fits") - 1,
     );
     let expected_next = expected(GENESIS_HEIGHT + 1);
-    chain.commit(vec![transaction]);
+    let proposal = chain.proposal(None, vec![transaction]);
+    let worker_inputs = observed::for_header(&proposal.header());
+    chain.commit_proposal(proposal, Signers::Quorum, Default::default());
     assert_eq!(
-        observed::take(),
+        worker_inputs.take(),
         vec![(GENESIS_HEIGHT + 1, Some(expected_next))],
         "a Sumeragi-core block never reaches the hook without height inputs"
     );

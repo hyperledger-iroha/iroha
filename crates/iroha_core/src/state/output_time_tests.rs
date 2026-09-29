@@ -20,6 +20,26 @@ use iroha_data_model::{
     },
 };
 
+/// Acquire State first and bind the original recorder before component effects.
+/// These synthetic output callbacks do not acquire production Network authority.
+pub(super) fn recorded_component_block(
+    state: &State,
+    header: BlockHeader,
+) -> (Box<StateBlock<'_>>, crate::exec_witness::ExecWitnessGuard) {
+    let (block, recording) = state
+        .block_with_owned_start_stages(
+            header,
+            |block| {
+                let recording = crate::exec_witness::begin_exec_witness_capture()?;
+                block.bind_original_execution_recorder()?;
+                Ok::<_, String>(recording)
+            },
+            |_, recording| Ok(recording),
+        )
+        .expect("original recorder before component output effects");
+    (block, recording)
+}
+
 fn fixture(
     row_bytes: u64,
     maximum: u32,
@@ -57,11 +77,20 @@ fn fixture(
         ALICE_ID.clone(),
         FeePaymentIntent::authority(vec![], None),
     );
-    builder.set_creation_time(header.creation_time());
+    builder.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
     let signed = builder
         .with_instructions(network)
         .sign(ALICE_KEYPAIR.private_key());
     let mut builder = BlockBuilder::new(header);
+    builder.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            iroha_data_model::block::ExternalExecutionContext::new(
+                signed.hash_as_entrypoint(),
+                iroha_model_base::topology::LaneId::SINGLE,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            ),
+        ]),
+    ));
     builder.push_transaction(signed);
     (
         state,
@@ -148,10 +177,8 @@ fn time_row<'a>(block: &'a StateBlock<'_>) -> &'a TimeExecutionOutputV1 {
 
 #[test]
 fn scheduled_time_owns_actual_root_nested_trace_and_completion_call() {
-    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = nested_fixture(65_536);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     let use_before =
         crate::smartcontracts::isi::triggers::set::invocation_identity::time_trigger_use_v1(
@@ -229,7 +256,6 @@ fn scheduled_time_owns_actual_root_nested_trace_and_completion_call() {
 
 #[test]
 fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut measured = None;
     let mut measured_gas = None;
     for case in 0..3 {
@@ -239,8 +265,7 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
             _ => measured.unwrap() - 1,
         };
         let (state, source) = nested_fixture(limit);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
         block
@@ -320,7 +345,6 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
 
 #[test]
 fn time_matching_uses_frozen_count_and_revalidates_later_removed_action() {
-    let _guard = exec_witness::exec_witness_guard();
     let later: TriggerId = "b_later".parse().unwrap();
     let registrations = vec![
         time_trigger(
@@ -346,8 +370,7 @@ fn time_matching_uses_frozen_count_and_revalidates_later_removed_action() {
         .into(),
     ];
     let (state, source) = fixture(65_536, 3, registrations, network);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block
         .produce_ordinary_execution_outputs(&source, |producer| {
@@ -392,7 +415,6 @@ fn time_matching_uses_frozen_count_and_revalidates_later_removed_action() {
 
 #[test]
 fn real_time_failure_retains_rejection_without_retry_or_business_effects() {
-    let _guard = exec_witness::exec_witness_guard();
     let bad: TriggerId = "missing_trigger".parse().unwrap();
     let (state, source) = fixture(
         65_536,
@@ -412,8 +434,7 @@ fn real_time_failure_retains_rejection_without_retry_or_business_effects() {
         )],
         plain_network(),
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block
         .produce_ordinary_execution_outputs(&source, |producer| {
@@ -459,11 +480,9 @@ fn real_time_failure_retains_rejection_without_retry_or_business_effects() {
 
 #[test]
 fn time_phase_cannot_bypass_network_or_run_twice() {
-    let _guard = exec_witness::exec_witness_guard();
     for early in [true, false] {
         let (state, source) = nested_fixture(65_536);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         assert!(
             block
@@ -537,7 +556,6 @@ mod retry_and_periodic {
 
     #[test]
     fn real_retry_failure_advances_or_removes_action_even_when_diagnostic_is_omitted() {
-        let _guard = exec_witness::exec_witness_guard();
         for prior in [1, 3] {
             let id: TriggerId = "actual_retry_failure".parse().unwrap();
             let original = TimeTriggerRetryState {
@@ -567,8 +585,7 @@ mod retry_and_periodic {
                 plain_network(),
             );
             install_pending_retry(&state, &id, original);
-            exec_witness::start_block();
-            let mut block = state.block(source.header());
+            let (mut block, _recording) = recorded_component_block(&state, source.header());
             block.reserve_ordinary_execution_outputs(&source).unwrap();
             block
                 .produce_ordinary_execution_outputs(&source, |producer| {
@@ -603,6 +620,7 @@ mod retry_and_periodic {
                     })
                 );
             }
+            drop(_recording);
             drop(block);
             assert_eq!(
                 state
@@ -620,7 +638,6 @@ mod retry_and_periodic {
 
     #[test]
     fn due_retry_is_one_actual_attempt_before_ordinary_matches() {
-        let _guard = exec_witness::exec_witness_guard();
         let id: TriggerId = "z_due_retry".parse().unwrap();
         let retry = TimeTriggerRetryState {
             retries_used: 1,
@@ -654,8 +671,7 @@ mod retry_and_periodic {
             plain_network(),
         );
         install_pending_retry(&state, &id, retry);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let expected_use = time_trigger_use_v1(&block.world.triggers, &id, 2).unwrap();
         let fragments = block.committed_fragment_count();
@@ -709,6 +725,7 @@ mod retry_and_periodic {
         );
         assert_eq!(block.committed_fragment_count(), fragments + 3);
         assert!(block.batch_transfer_outcomes.is_empty());
+        drop(_recording);
         drop(block);
         assert_eq!(
             state
@@ -725,7 +742,6 @@ mod retry_and_periodic {
 
     #[test]
     fn due_retry_output_limit_retains_retry_repeat_and_only_root_failure() {
-        let _guard = exec_witness::exec_witness_guard();
         let id: TriggerId = "bounded_due_retry".parse().unwrap();
         let retry = TimeTriggerRetryState {
             retries_used: 2,
@@ -761,8 +777,7 @@ mod retry_and_periodic {
                 plain_network(),
             );
             install_pending_retry(&state, &id, retry);
-            exec_witness::start_block();
-            let mut block = state.block(source.header());
+            let (mut block, _recording) = recorded_component_block(&state, source.header());
             block.reserve_ordinary_execution_outputs(&source).unwrap();
             let expected_use = time_trigger_use_v1(&block.world.triggers, &id, 2).unwrap();
             let fragments = block.committed_fragment_count();
@@ -850,6 +865,7 @@ mod retry_and_periodic {
             } else {
                 completed_gas = Some(block.gas_used_in_block);
             }
+            drop(_recording);
             drop(block);
             let view = state.world.triggers.view();
             let original = view.time_triggers().get(&id).unwrap();
@@ -934,11 +950,20 @@ mod retry_and_periodic {
             ALICE_ID.clone(),
             FeePaymentIntent::authority(vec![], None),
         );
-        transaction.set_creation_time(header.creation_time());
+        transaction.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
         let signed = transaction
             .with_instructions(plain_network())
             .sign(ALICE_KEYPAIR.private_key());
         let mut builder = BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+                iroha_data_model::block::ExternalExecutionContext::new(
+                    signed.hash_as_entrypoint(),
+                    iroha_model_base::topology::LaneId::SINGLE,
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                ),
+            ]),
+        ));
         builder.push_transaction(signed);
         let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
         (state, source, history)
@@ -946,11 +971,10 @@ mod retry_and_periodic {
 
     #[test]
     fn repeated_periodic_matches_bind_distinct_positions_and_use_time_actions() {
-        let _guard = exec_witness::exec_witness_guard();
         let (state, source, history) = periodic_fixture();
         let id: TriggerId = "periodic_repeat".parse().unwrap();
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
+        let guard = exec_witness::exec_witness_guard();
         let initial_use = time_trigger_use_v1(&block.world.triggers, &id, 3).unwrap();
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
@@ -1018,6 +1042,8 @@ mod retry_and_periodic {
         assert_eq!(block.committed_fragment_count(), fragments + 4);
         assert!(block.batch_transfer_outcomes.is_empty());
         assert!(block.fastpq_transcripts.is_empty());
+        drop(guard);
+        drop(_recording);
         drop(block);
         assert_eq!(
             state
@@ -1034,7 +1060,6 @@ mod retry_and_periodic {
 
     #[test]
     fn retry_callback_self_replacement_keeps_fresh_repeat_policy_and_incarnation() {
-        let _guard = exec_witness::exec_witness_guard();
         let id: TriggerId = "retry_self_replace".parse().unwrap();
         let retry = TimeTriggerRetryState {
             retries_used: 1,
@@ -1079,8 +1104,7 @@ mod retry_and_periodic {
         );
         let (state, source) = fixture(65_536, 3, vec![original], plain_network());
         install_pending_retry(&state, &id, retry);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let expected_use = time_trigger_use_v1(&block.world.triggers, &id, 2).unwrap();
         let fragments = block.committed_fragment_count();
@@ -1136,6 +1160,7 @@ mod retry_and_periodic {
                 .is_none()
         );
         assert_eq!(block.committed_fragment_count(), fragments + 2);
+        drop(_recording);
         drop(block);
         let triggers = state.world.triggers.view();
         let original = triggers.time_triggers().get(&id).unwrap();
@@ -1148,7 +1173,6 @@ mod retry_and_periodic {
 fn scheduled_vm_refusal_does_not_advance_retry_policy_or_emit_a_failure() {
     use iroha_data_model::transaction::IvmBytecode;
     use ivm::error::ExecutionDeferral;
-    let _guard = exec_witness::exec_witness_guard();
     let id: TriggerId = "time_local_refusal".parse().unwrap();
     let mut program = ivm::ProgramMetadata {
         max_cycles: 100,
@@ -1172,9 +1196,8 @@ fn scheduled_vm_refusal_does_not_advance_retry_policy_or_emit_a_failure() {
     let cache_owner = state.trigger_ivm_cache.lock().prepared_contract_cache();
     let reason = ExecutionDeferral::AllocationUnavailable;
     cache_owner.set_checkout_refusal_for_test(Some(reason));
-    exec_witness::start_block();
     {
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let outcome = block.produce_ordinary_execution_outputs(&source, |producer| {
             execute_network(producer)?;
@@ -1194,8 +1217,7 @@ fn scheduled_vm_refusal_does_not_advance_retry_policy_or_emit_a_failure() {
         );
     }
     cache_owner.set_checkout_refusal_for_test(None);
-    exec_witness::start_block();
-    let mut retry = state.block(source.header());
+    let (mut retry, _recording) = recorded_component_block(&state, source.header());
     retry.reserve_ordinary_execution_outputs(&source).unwrap();
     retry
         .produce_ordinary_execution_outputs(&source, |producer| {

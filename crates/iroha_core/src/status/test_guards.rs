@@ -55,7 +55,7 @@ impl Drop for TestLockGuard {
 #[cfg(test)]
 static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-pub(crate) static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+pub(crate) static OPERATOR_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
@@ -125,20 +125,20 @@ pub(crate) struct NexusFeeTestGuard {
 impl NexusFeeTestLock {
     pub(crate) fn lock(&'static self) -> Result<NexusFeeTestGuard, std::convert::Infallible> {
         Ok(NexusFeeTestGuard {
-            _guard: reentrant_test_guard(&RBC_STATUS_TEST_LOCK),
+            _guard: reentrant_test_guard(&OPERATOR_STATUS_TEST_LOCK),
         })
     }
 }
 #[cfg(test)]
-/// Serialize every process-wide v2 status mutation with tests that need a
+/// Serialize process-wide operator status mutations with tests that need a
 /// stable clear/publish/observe window.
 ///
 /// This is a synchronous, owner-reentrant test lease. Do not move it to another
 /// task or thread for nested use, hold it across `.await`, or wait for a child
 /// which can call a guarded status mutation; each of those patterns can prevent
 /// the original owner from releasing the lease.
-pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
-    reentrant_test_guard(&RBC_STATUS_TEST_LOCK)
+pub(crate) fn operator_status_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&OPERATOR_STATUS_TEST_LOCK)
 }
 #[cfg(test)]
 pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {
@@ -153,13 +153,4 @@ pub(crate) fn local_removed_test_guard() -> TestLockGuard {
 pub fn settlement_status_reset_for_tests() {
     *lock_operator_status_slot(settlement_status_slot(), "settlement status") =
         SettlementStatusState::default();
-}
-#[cfg(test)]
-/// Reset process-local lane-adapter diagnostics.
-pub(crate) fn reset_rbc_backlog_stats_for_tests() {
-    let _guard = rbc_status_test_guard();
-    lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot").clear();
-    lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot").clear();
-    *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") =
-        PipelineExecutionSnapshot::default();
 }

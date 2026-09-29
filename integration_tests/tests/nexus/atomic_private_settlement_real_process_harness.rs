@@ -7789,9 +7789,7 @@ fn wait_for_transparent_control_balances(
 }
 
 /// Exact original native carrier, independently verified from the configured signed genesis.
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CertifiedSettlement {
     block_header: BlockHeader,
     block_wire: Vec<u8>,
@@ -8334,9 +8332,10 @@ fn run_real_process_transparent_control_benchmark(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
     );
+    // Measure the received canonical carrier, including its native certificate, and the
+    // queried business receipt. The local comparison wrapper is not an additional wire receipt.
     let receipt_bytes = u64::try_from(
-        norito::encode_canonical(&receipt)?.len()
-            + norito::encode_canonical(&business_receipt)?.len(),
+        receipt.block_wire.len() + norito::encode_canonical(&business_receipt)?.len(),
     )?;
     let storage_growth_bytes = storage_after
         .checked_sub(storage_before)

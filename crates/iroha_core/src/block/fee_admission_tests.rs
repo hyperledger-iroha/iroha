@@ -4,7 +4,6 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-single-transfer-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -18,8 +17,10 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -127,15 +128,7 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         errors.is_empty(),
         "fee-enabled transfer should be accepted: {errors:?}"
     );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
-    assert_eq!(
-        snapshot
-            .pipeline_execution
-            .detached_fallback_fee_postprocessing_total,
-        0
-    );
+
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_transfer_asset).expect("payer rose").0,
@@ -159,7 +152,6 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-non-transfer-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -167,10 +159,10 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
     let domain = Domain::new(domain_id.clone()).build(&payer_id);
     let payer = Account::new(payer_id.clone()).build(&payer_id);
     let sink = Account::new(sink_id.clone()).build(&sink_id);
-    let fee_asset_definition_id = AssetDefinitionId::derive_from_components(
-        domain_id.clone(),
-        "xor".parse().expect("asset name"),
-    );
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let fee_asset_definition = AssetDefinition::numeric(
         fee_asset_definition_id.clone(),
         "xor".to_owned(),
@@ -261,26 +253,7 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
             .is_none(),
         "supported non-transfer fee transaction should be accepted by its canonical owner"
     );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(
-        snapshot.pipeline_execution.detached_fallback_total, 0,
-        "canonical execution does not create detached fallback attempts"
-    );
-    assert_eq!(
-        snapshot
-            .pipeline_execution
-            .detached_fallback_fee_postprocessing_total,
-        0,
-        "fee postprocessing remains within the same canonical owner"
-    );
-    assert_eq!(
-        snapshot
-            .pipeline_execution
-            .detached_fallback_unsupported_instruction_total,
-        0,
-        "canonical metadata writes do not enter detached execution"
-    );
+
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_fee_asset).expect("payer xor").0,
@@ -300,7 +273,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-insufficient-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -314,8 +286,10 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -467,7 +441,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-data-trigger-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -481,8 +454,10 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -610,21 +585,7 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
             .is_none(),
         "fee-enabled transfer and its callback must share the same canonical output owner"
     );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
-    assert_eq!(
-        snapshot
-            .pipeline_execution
-            .detached_fallback_fee_postprocessing_total,
-        0
-    );
-    assert_eq!(
-        snapshot
-            .pipeline_execution
-            .detached_fallback_durable_state_total,
-        0
-    );
+
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_transfer_asset).expect("payer rose").0,
@@ -974,7 +935,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-missing-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -988,8 +948,10 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -1136,7 +1098,6 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-same-asset-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1146,8 +1107,10 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
     let payer = Account::new(payer_id.clone()).build(&payer_id);
     let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
     let sink = Account::new(sink_id.clone()).build(&sink_id);
-    let asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "rose".parse().expect("asset name"));
+    let asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let asset_definition = AssetDefinition::numeric(
         asset_definition_id.clone(),
         "rose".to_owned(),
@@ -1242,9 +1205,7 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         Some(0),
         "fee debit must reject when the payer only has enough balance for the transfer itself"
     );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
+
     let assets = state_block.world.assets();
     assert_eq!(
         assets
@@ -1265,7 +1226,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-shared-fee-balance-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1279,8 +1239,10 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -1405,15 +1367,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         1,
         "only one of the two transfers can pay the configured base fee"
     );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(
-        snapshot.pipeline_execution.detached_merged_total, 0,
-        "the accepted transfer executes within the canonical output owner"
-    );
-    assert_eq!(
-        snapshot.pipeline_execution.detached_fallback_total, 0,
-        "signed fee admission must reject after the first debit drains the balance"
-    );
+
     let (_, rejection) = valid_block
         .as_ref()
         .output_results()
@@ -1464,7 +1418,6 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-transfer-then-fail-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1478,8 +1431,10 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -1584,16 +1539,7 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         Some(0),
         "the failing instruction after the transfer must reject the whole transaction"
     );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
-    assert_eq!(
-        snapshot
-            .pipeline_execution
-            .detached_fallback_unsupported_instruction_total,
-        0,
-        "multi-instruction transfer transactions share one canonical execution owner"
-    );
+
     assert_eq!(
         valid_block.as_ref().output_results().count(),
         1,
@@ -1649,7 +1595,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-sequence-admission-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1663,8 +1608,10 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -1782,9 +1729,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         Some(0),
         "non-increasing tx_sequence must reject before transfer or fee application"
     );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
+
     let (_, rejection) = valid_block
         .as_ref()
         .output_results()
@@ -1836,7 +1781,6 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-default-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -1852,8 +1796,10 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -1945,7 +1891,6 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-configured-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -1961,8 +1906,10 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let fee_asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let fee_asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let transfer_asset_definition = AssetDefinition::numeric(
         transfer_asset_definition_id.clone(),
         "rose".to_owned(),
@@ -2061,7 +2008,6 @@ fn invalid_fee_asset_is_rejected_before_runtime_or_balance_mutation() {
         .lock()
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
-    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -2158,8 +2104,10 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     let domain = Domain::new(domain_id.clone()).build(&payer_id);
     let payer = Account::new(payer_id.clone()).build(&payer_id);
     let sink = Account::new(sink_id.clone()).build(&sink_id);
-    let asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let asset_definition = AssetDefinition::numeric(
         asset_definition_id.clone(),
         "xor".to_owned(),

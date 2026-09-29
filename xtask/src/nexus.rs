@@ -1,8 +1,8 @@
+//! Current Nexus Connect fixture and lane observability tooling.
 use arrow_array::{
     ArrayRef, BooleanArray, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
-use hex::decode;
 use iroha::nexus_app::{
     NexusAppClient, NexusAppConfig, NexusAppError, NexusFinalizeOptions, NexusSignatureAlgorithm,
     NexusToriiSubmitter, NexusTransferInput, NexusTransferReceipt, NexusWalletSignature,
@@ -12,17 +12,12 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
     account::{AccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionId, AssetId},
-    block::consensus::{
-        LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-        LaneVolatilityClass,
-    },
     nexus::LaneCompliancePolicy,
     prelude::NetworkId,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::status::Status;
 use norito::{
@@ -32,7 +27,7 @@ use norito::{
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     error::Error,
     fmt::Write,
     fs,
@@ -526,91 +521,6 @@ fn sync_nexus_connect_fixture(
     }
     Ok(())
 }
-pub fn write_lane_commitment_fixtures(output: &Path) -> Result<(), Box<dyn Error>> {
-    fs::create_dir_all(output)?;
-    for fixture in sample_commitments() {
-        let json_value = json::to_value(&fixture.payload)?;
-        let rendered = canonical_json(&json_value)?;
-        let json_path = output.join(format!("{}.json", fixture.file_stem));
-        fs::write(&json_path, rendered)?;
-        let to_path = output.join(format!("{}.to", fixture.file_stem));
-        let bytes = norito::to_bytes(&fixture.payload)?;
-        fs::write(&to_path, bytes)?;
-    }
-    Ok(())
-}
-pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>> {
-    let fixtures = sample_commitments();
-    let mut expected_entries = BTreeSet::new();
-    for fixture in &fixtures {
-        expected_entries.insert(format!("{}.json", fixture.file_stem));
-        expected_entries.insert(format!("{}.to", fixture.file_stem));
-    }
-    for fixture in fixtures {
-        let json_path = dir.join(format!("{}.json", fixture.file_stem));
-        if !json_path.is_file() {
-            return Err(format!("missing lane commitment JSON {:?}", json_path).into());
-        }
-        let raw = fs::read_to_string(&json_path)?;
-        let parsed: LaneBlockCommitment = json::from_str(&raw)?;
-        if parsed != fixture.payload {
-            return Err(format!(
-                "lane commitment JSON {:?} does not match the generated payload",
-                json_path
-            )
-            .into());
-        }
-        let json_value = json::to_value(&fixture.payload)?;
-        let canonical = canonical_json(&json_value)?;
-        if raw != canonical {
-            return Err(format!(
-                "lane commitment JSON {:?} is not canonical; run `cargo xtask nexus-fixtures`",
-                json_path
-            )
-            .into());
-        }
-        let to_path = dir.join(format!("{}.to", fixture.file_stem));
-        if !to_path.is_file() {
-            return Err(format!("missing lane commitment Norito bytes {:?}", to_path).into());
-        }
-        let bytes = fs::read(&to_path)?;
-        let decoded = norito::decode_from_bytes::<LaneBlockCommitment>(&bytes)
-            .map_err(|err| format!("failed to deserialize {:?}: {err}", to_path))?;
-        if decoded != fixture.payload {
-            return Err(format!(
-                "lane commitment Norito bytes {:?} do not match the generated payload",
-                to_path
-            )
-            .into());
-        }
-        let expected_bytes = norito::to_bytes(&fixture.payload)?;
-        if bytes != expected_bytes {
-            return Err(format!(
-                "lane commitment Norito bytes {:?} are not canonical; rerun generator",
-                to_path
-            )
-            .into());
-        }
-    }
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
-            && expected_entries.contains(file_name)
-        {
-            continue;
-        }
-        return Err(format!(
-            "unexpected lane commitment artefact {:?}; delete it or extend the generator",
-            path
-        )
-        .into());
-    }
-    Ok(())
-}
 fn load_lane_compliance_map(
     path: &Path,
 ) -> Result<HashMap<u32, LaneComplianceEvidence>, Box<dyn Error>> {
@@ -667,102 +577,6 @@ fn load_lane_compliance_map(
         }
     }
     Ok(map)
-}
-fn canonical_json(value: &JsonValue) -> Result<String, Box<dyn Error>> {
-    Ok(format!("{}\n", json::to_string_pretty(value)?))
-}
-struct CommitmentFixture {
-    file_stem: &'static str,
-    payload: LaneBlockCommitment,
-}
-fn sample_commitments() -> Vec<CommitmentFixture> {
-    vec![
-        CommitmentFixture {
-            file_stem: "default_public_lane_commitment",
-            payload: LaneBlockCommitment {
-                block_height: 8_642,
-                lane_id: LaneId::new(1),
-                lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-                dataspace_id: DataSpaceId::new(7),
-                tx_count: 2,
-                total_local_amount: quantity("7.5"),
-                total_xor_due: quantity("3.05"),
-                total_xor_after_haircut: quantity("3"),
-                total_xor_variance: quantity("0.05"),
-                swap_metadata: Some(LaneSwapMetadata {
-                    epsilon_bps: 25,
-                    twap_window_seconds: 60,
-                    liquidity_profile: LaneLiquidityProfile::Tier1,
-                    twap_local_per_xor: "8123.4455".parse().expect("canonical TWAP"),
-                    volatility_class: LaneVolatilityClass::Stable,
-                }),
-                receipts: vec![
-                    receipt(
-                        "4f25818e98f7b549a21ceda9a1f3812d95d64c83f7d02c361e13caf113e53344",
-                        "4",
-                        "1.62",
-                        "1.6",
-                        1_726_296_400_000,
-                    ),
-                    receipt(
-                        "ab56be456758d5be8d3d24ae7ef44c6a0ca1cf4a788ad18cf3b987fe9954f0d2",
-                        "3.5",
-                        "1.43",
-                        "1.4",
-                        1_726_296_401_200,
-                    ),
-                ],
-                nexus_fee_receipts: Vec::new(),
-                native_amx_receipts: Vec::new(),
-            },
-        },
-        CommitmentFixture {
-            file_stem: "cbdc_private_lane_commitment",
-            payload: LaneBlockCommitment {
-                block_height: 91_234,
-                lane_id: LaneId::new(12),
-                lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-                dataspace_id: DataSpaceId::new(24),
-                tx_count: 3,
-                total_local_amount: quantity("9.3"),
-                total_xor_due: quantity("4.2"),
-                total_xor_after_haircut: quantity("4.05"),
-                total_xor_variance: quantity("0.15"),
-                swap_metadata: Some(LaneSwapMetadata {
-                    epsilon_bps: 120,
-                    twap_window_seconds: 300,
-                    liquidity_profile: LaneLiquidityProfile::Tier3,
-                    twap_local_per_xor: "1.2456".parse().expect("canonical TWAP"),
-                    volatility_class: LaneVolatilityClass::Dislocated,
-                }),
-                receipts: vec![
-                    receipt(
-                        "beadf1f4a09fd303cc6971f2f58d7f2c1eca1aa1a5d2cda7088fcfd97994cb8a",
-                        "3.3",
-                        "1.6",
-                        "1.55",
-                        1_726_297_000_500,
-                    ),
-                    receipt(
-                        "d74fefc1c3f216e8844141493dfd9e4fb3c947ff9b35331a37c6ae16a5f97028",
-                        "2.8",
-                        "1.3",
-                        "1.25",
-                        1_726_297_001_250,
-                    ),
-                    receipt(
-                        "cedf9cb93f1b8f52a08ff19793b0ce6049db0a89c9a6ec7fd65dd8f5ecd0f92b",
-                        "3.2",
-                        "1.3",
-                        "1.25",
-                        1_726_297_001_900,
-                    ),
-                ],
-                nexus_fee_receipts: Vec::new(),
-                native_amx_receipts: Vec::new(),
-            },
-        },
-    ]
 }
 #[derive(Debug)]
 pub struct LaneAuditOptions {
@@ -1148,49 +962,15 @@ fn compute_teu_utilization_pct(capacity: u64, committed: u64) -> f64 {
 fn micro_xor_to_units(value: u128) -> f64 {
     (value as f64) / 1_000_000.0
 }
-fn quantity(value: &str) -> Quantity {
-    value.parse().expect("canonical quantity fixture")
-}
-fn receipt(
-    source_hex: &str,
-    local_amount: &str,
-    xor_due: &str,
-    xor_after_haircut: &str,
-    timestamp_ms: u64,
-) -> LaneSettlementReceipt {
-    let local_amount = quantity(local_amount);
-    let xor_due = quantity(xor_due);
-    let xor_after_haircut = quantity(xor_after_haircut);
-    let variance = xor_due
-        .checked_sub(&xor_after_haircut)
-        .expect("fixture haircut cannot exceed XOR due");
-    LaneSettlementReceipt {
-        source_id: hex32(source_hex),
-        local_amount,
-        xor_due,
-        xor_after_haircut,
-        xor_variance: variance,
-        timestamp_ms,
-    }
-}
-fn hex32(input: &str) -> [u8; 32] {
-    let bytes = decode(input).expect("fixture hex payload");
-    assert_eq!(
-        bytes.len(),
-        32,
-        "lane commitment fixture ids must be 32 bytes"
-    );
-    let mut out = [0_u8; 32];
-    out.copy_from_slice(&bytes);
-    out
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::{Array, BooleanArray, Float64Array, StringArray, UInt32Array, UInt64Array};
     use iroha_data_model::nexus::{AuditControls, JurisdictionSet, LaneCompliancePolicyId};
     use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use std::collections::BTreeSet;
     use std::fs;
     use tempfile::{NamedTempFile, tempdir};
     #[test]
@@ -1435,21 +1215,6 @@ mod tests {
             "| lane-4 (#4) | payments (#7) | 42 | 3 | 1.250000 | 99.0 | lag,backlog,manifest,compliance,teu-high |"
         ));
         assert!(rendered.contains("| lane-9 (#9) | #11 | 7 | 0 | 0.000000 | 80.0 | ok |"));
-    }
-    #[test]
-    fn canonical_json_renders_lane_commitment_value() {
-        let fixture = sample_commitments()
-            .into_iter()
-            .next()
-            .expect("lane commitment fixture");
-        let value = json::to_value(&fixture.payload).expect("lane commitment json value");
-        let rendered = canonical_json(&value).expect("canonical JSON");
-        assert!(
-            rendered.ends_with('\n'),
-            "canonical lane commitment JSON should end with a newline"
-        );
-        let parsed: LaneBlockCommitment = json::from_str(&rendered).expect("parse canonical JSON");
-        assert_eq!(parsed, fixture.payload);
     }
     #[test]
     fn nexus_connect_fixture_options_require_one_mode_and_absolute_root() {

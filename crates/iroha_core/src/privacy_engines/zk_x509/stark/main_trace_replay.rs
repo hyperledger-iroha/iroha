@@ -692,8 +692,8 @@ pub(super) enum MainTraceReplaySourcesV1<'phase, 'assembly> {
 }
 
 impl MainTraceReplaySourcesV1<'_, '_> {
-    /// Extract each SHA run once, while preserving public group/registration
-    /// order and the closed base/bound phase. Other sources remain serial.
+    /// Extract each SHA run and bound arithmetic auxiliary run once, preserving
+    /// public group/registration order and the closed base/bound phase.
     pub(super) fn native_columns_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -717,6 +717,35 @@ impl MainTraceReplaySourcesV1<'_, '_> {
         while first < columns.end {
             let (registration, local) =
                 registered_main_group_column_v1(layout, group, kind, first)?;
+            if registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic
+                && matches!(kind, MainTraceColumnKindV1::Aux)
+                && let Self::Bound { log19, .. } = self
+            {
+                let end = columns.end.min(registration.aux_end()?);
+                if end <= first {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let binding = log19.p256_binding_v1(registration)?;
+                let mut batch = (first..end)
+                    .map(|_| zeroed_main_trace_column_v1(registration.segment.trace_size()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                {
+                    let count = batch.len();
+                    let mut targets: [&mut [F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                        core::array::from_fn(|_| -> &mut [F] { &mut [] });
+                    for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
+                        *target = &mut **column;
+                    }
+                    log19.p256.fill_arithmetic_aux_columns_v1(
+                        binding.p256,
+                        local,
+                        &mut targets[..count],
+                    )?;
+                }
+                output.extend(batch);
+                first = end;
+                continue;
+            }
             if registration.segment.adapter != SegmentAdapterIdV1::Sha256CallBus {
                 output.push(self.native_column_v1(layout, kind, registration, local)?);
                 first += 1;

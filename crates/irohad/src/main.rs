@@ -95,7 +95,6 @@ use iroha_config::{
 use iroha_core::telemetry::{StateTelemetry, StreamingTelemetry};
 use iroha_core::{
     IrohaNetwork,
-    block::ValidBlock,
     compliance::LaneComplianceEngine,
     gossiper::{TransactionGossiper, TransactionGossiperHandle},
     governance::manifest::{
@@ -112,8 +111,10 @@ use iroha_core::{
     },
     state::{State, World, WorldReadOnly as _},
     streaming::{ManifestPublisher, run_ticket_event_listener},
-    sumeragi::{filter_validators_from_trusted, network_topology::Topology},
+    sumeragi::filter_validators_from_trusted,
 };
+#[cfg(test)]
+use iroha_core::{block::ValidBlock, sumeragi::network_topology::Topology};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     isi::RegisterPeerWithPop,
@@ -11193,7 +11194,7 @@ mod tests {
         use super::*;
         use iroha_config::base::toml::TomlSource;
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
-        use iroha_model_base::chain::ChainId;
+        use iroha_model_base::{chain::ChainId, domain::DomainId};
         fn sample_manifest() -> RawGenesisTransaction {
             complete_test_genesis_builder(GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),
@@ -11385,17 +11386,14 @@ mod tests {
                     iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
                         .expect("executed genesis policy"),
                 ),
-                Err((
-                    _,
+                Err((_, error)) => match *error {
                     iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
                         actual_nexus,
                         actual_execution,
                         ..
-                    },
-                )) => (actual_nexus, actual_execution),
-                Err((_, error)) => {
-                    panic!("genesis signing draft failed native validation: {error}")
-                }
+                    } => (actual_nexus, actual_execution),
+                    error => panic!("genesis signing draft failed native validation: {error}"),
+                },
             }
         }
         #[test]
@@ -11913,7 +11911,11 @@ mod tests {
                 )
                 .err()
                 .expect("same-named malformed token must never qualify");
-                assert!(format!("{error:?}").contains("genesis instruction execution failed"));
+                assert!(
+                    format!("{error:?}").contains(
+                        &iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()
+                    )
+                );
             }
         }
         #[test]
@@ -12011,7 +12013,8 @@ mod tests {
             .expect("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
             assert!(
-                rendered.contains("genesis instruction execution failed"),
+                rendered
+                    .contains(&iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()),
                 "unexpected offline validation error: {rendered}"
             );
         }

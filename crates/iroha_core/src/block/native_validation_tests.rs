@@ -37,6 +37,14 @@ impl NativeValidationFixture {
         Self { chain, user }
     }
     fn transaction(&self, created_ms: u64, ttl_ms: Option<u64>) -> SignedTransaction {
+        self.transaction_with_metadata(created_ms, ttl_ms, Metadata::default())
+    }
+    fn transaction_with_metadata(
+        &self,
+        created_ms: u64,
+        ttl_ms: Option<u64>,
+        metadata: Metadata,
+    ) -> SignedTransaction {
         let mut builder = TransactionBuilder::new(
             self.chain.network_id(),
             AccountId::new(self.user.public_key().clone()),
@@ -48,6 +56,7 @@ impl NativeValidationFixture {
         }
         builder
             .with_instructions([Log::new(Level::INFO, format!("native work {created_ms}"))])
+            .with_metadata(metadata)
             .sign(self.user.private_key())
     }
     fn cadence(&self) -> Duration {
@@ -201,7 +210,7 @@ fn native_validation_populates_stateless_cache() {
 
 #[test]
 fn native_validation_rechecks_signature_despite_forged_positive_cache_entry() {
-    let fixture = NativeValidationFixture::new();
+    let mut fixture = NativeValidationFixture::new();
     let valid = fixture.transaction(2_001, None);
     let good_key = crate::tx::StatelessValidationCacheKey::new(&valid);
     let proposal = fixture.proposal(vec![valid.clone()], fixture.cadence());
@@ -233,6 +242,8 @@ fn native_validation_rechecks_signature_despite_forged_positive_cache_entry() {
             .contains_key(&invalid_key)
     );
     let proposal = fixture.proposal(vec![invalid], fixture.cadence());
+    let executor_proposal = proposal.clone();
+    let rejected_header = proposal.header();
     let mut events = Vec::new();
     let (_, error) = fixture
         .validate(proposal)
@@ -244,6 +255,32 @@ fn native_validation_rechecks_signature_despite_forged_positive_cache_entry() {
         BlockValidationError::TransactionAccept(AcceptTransactionFail::SignatureVerification(_))
     ));
     assert_eq!(events.iter().filter(|event| matches!(event, PipelineEventBox::Block(block) if matches!(block.status, BlockStatus::Rejected(_)))).count(), 1);
+    assert_eq!(fixture.chain.state().view().height(), 2);
+    fixture
+        .chain
+        .take_events()
+        .expect("drain previously committed events");
+    assert!(
+        fixture
+            .chain
+            .begin_proposal(executor_proposal, Default::default())
+            .is_err()
+    );
+    let published = fixture
+        .chain
+        .take_events()
+        .expect("native rejection events");
+    assert_eq!(
+        published.len(),
+        1,
+        "only the authenticated rejection is published"
+    );
+    assert!(matches!(
+        &published[0],
+        iroha_data_model::events::EventBox::Pipeline(PipelineEventBox::Block(event))
+        if event.header == rejected_header
+            && event.status == BlockStatus::Rejected(Reason::TransactionValidationFailed)
+    ));
     assert_eq!(fixture.chain.state().view().height(), 2);
 }
 
@@ -301,12 +338,17 @@ fn native_validation_rejects_changed_original_header_before_state_publication() 
             8 => header.epoch.context.0[0] ^= 1,
             _ => unreachable!(),
         }
+        let mut events = Vec::new();
         assert!(
             fixture
                 .validate_bound(proposal.clone(), &header, &payload)
-                .unpack(|_| {})
+                .unpack(|event| events.push(event))
                 .is_err(),
             "mutation {changed}"
+        );
+        assert!(
+            events.is_empty(),
+            "unbound source {changed} must not publish a rejection"
         );
         assert_eq!(fixture.chain.state().view().height(), 2);
         assert_eq!(

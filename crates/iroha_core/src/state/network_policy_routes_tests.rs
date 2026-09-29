@@ -10,16 +10,17 @@ use iroha_data_model::{
     parameter::Parameter,
     sumeragi_lanes::{
         SumeragiFixedLane, SumeragiLaneFrontier, SumeragiLaneMergeSection, SumeragiLanePolicy,
-        SumeragiLaneRecord, SumeragiLaneRoute,
+        SumeragiLaneRecord, SumeragiLaneRoute, SumeragiLaneState,
     },
-    transaction::{FeePaymentIntent, SealedTransactionReveal, TransactionBuilder},
+    transaction::{FeePaymentIntent, TransactionBuilder, signed::SealedTransactionReveal},
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use std::sync::Arc;
 
 fn state() -> State {
     let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-    let mut committee = crate::sumeragi::test_chain::fixture_validators().into_iter()
+    let mut committee = crate::sumeragi::test_chain::fixture_validators()
+        .into_iter()
         .map(|(peer, pop)| iroha_data_model::sumeragi_lanes::SumeragiLaneMember { peer, pop })
         .collect::<Vec<_>>();
     committee.sort();
@@ -42,11 +43,11 @@ fn state() -> State {
     };
     policy.validate().expect("valid native policy fixture");
     // Component setup supplies committed native policy/state, not a certificate substitute.
-    world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(policy.into_custom_parameter()));
-    world.sumeragi_lanes.get_mut().upsert(SumeragiLaneRecord {
+    let mut parameters = world.parameters.view().get().clone();
+    parameters.set_parameter(Parameter::Custom(policy.into_custom_parameter()));
+    world.parameters = mv::cell::Cell::new(parameters);
+    let mut lanes = SumeragiLaneState::default();
+    lanes.upsert(SumeragiLaneRecord {
         lane: LaneId::new(1),
         dataspace: DataSpaceId::UNIVERSAL,
         incarnation: Hash::new(b"native ordering identity").into(),
@@ -60,6 +61,7 @@ fn state() -> State {
         merged_at: 3,
         rescued: 0,
     });
+    world.sumeragi_lanes = mv::cell::Cell::new(lanes);
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -180,7 +182,7 @@ fn native_ordering_lane_uses_independently_resolved_physical_policy() {
             unreachable!()
         };
         let mut tx = block.transaction();
-        StateBlock::validate_stateful_admission(signed, &mut tx, native, token).unwrap();
+        StateBlock::validate_stateful_admission(signed, &mut tx, native, token, None).unwrap();
         assert_eq!(tx.current_lane_id, Some(LaneId::new(1)));
         assert_eq!(tx.current_dataspace_id, Some(DataSpaceId::UNIVERSAL));
     });
@@ -287,14 +289,10 @@ fn native_activation_and_closure_are_checked_at_the_exact_predecessor_height() {
         (4, Some(3), false),
         (4, Some(4), true),
     ] {
-        let mut state = state();
-        state
-            .world
-            .sumeragi_lanes
-            .get_mut()
-            .lane_mut(LaneId::new(1))
-            .unwrap()
-            .closing = closing;
+        let state = state();
+        let mut lanes = state.world.sumeragi_lanes.block();
+        lanes.get_mut().lane_mut(LaneId::new(1)).unwrap().closing = closing;
+        lanes.commit();
         let entry = input(&state, "native activation");
         let source = source(
             vec![entry.clone()],
@@ -321,14 +319,10 @@ fn native_activation_and_closure_are_checked_at_the_exact_predecessor_height() {
 
 #[test]
 fn physical_dataspace_mismatch_is_a_transaction_refusal_not_a_carrier_failure() {
-    let mut state = state();
-    state
-        .world
-        .sumeragi_lanes
-        .get_mut()
-        .lane_mut(LaneId::new(1))
-        .unwrap()
-        .dataspace = DataSpaceId::new(7);
+    let state = state();
+    let mut lanes = state.world.sumeragi_lanes.block();
+    lanes.get_mut().lane_mut(LaneId::new(1)).unwrap().dataspace = DataSpaceId::new(7);
+    lanes.commit();
     let entry = input(&state, "dataspace mismatch");
     let source = source(
         vec![entry.clone()],
@@ -363,8 +357,14 @@ fn physical_dataspace_mismatch_is_a_transaction_refusal_not_a_carrier_failure() 
 
 #[test]
 fn missing_physical_route_is_retained_as_bounded_ordinary_rejection() {
-    let mut state = state();
-    state.nexus.get_mut().routing_policy.default_lane = LaneId::new(99);
+    let state = state();
+    // Seed the malformed route in its canonical owner; the process-local Nexus cache
+    // is not the authority from which block acquisition projects routing policy.
+    let mut runtime = state.canonical_runtime.view().get().clone();
+    runtime.owner_policy.routing_default_lane = LaneId::new(99);
+    state
+        .canonical_runtime
+        .replace_current_preserving_predecessor(runtime);
     let source = carrier(vec![input(&state, "missing physical lane")]);
     before_effects(&state, &source, false, |block| {
         let (_, token) = block
@@ -392,6 +392,22 @@ fn original_source_hash_order_and_carrier_are_required() {
         assert!(owner.get(&source, 2).is_err());
         assert!(owner.get(&foreign, 0).is_err());
         assert!(owner.get(&foreign, 1).is_err());
+        // Original owner capture is write-once even with the same valid source.
+        let mut owner = block.network_policy_routes.take().unwrap();
+        let retained_rows = owner.rows.as_slice().len();
+        owner.fill_from_preblock(block, &source);
+        assert_eq!(
+            owner.validate_carrier(&source),
+            Err("physical policy capture is not repeatable")
+        );
+        assert!(owner.get(&source, 0).is_err());
+        owner.fill_from_preblock(block, &foreign);
+        owner.fill_from_preblock(block, &source);
+        assert_eq!(
+            owner.validate_carrier(&source),
+            Err("physical policy capture is not repeatable")
+        );
+        assert_eq!(owner.rows.as_slice().len(), retained_rows);
     });
 }
 
@@ -400,8 +416,13 @@ fn actual_merged_suffix_receives_original_ordinal_and_policy_rows() {
     let state = state();
     let a = input(&state, "ordinary");
     let b = input(&state, "merged");
-    let mut builder =
-        BlockBuilder::new(BlockHeader::new(4_u64.try_into().unwrap(), None, None, 1000, 0));
+    let mut builder = BlockBuilder::new(BlockHeader::new(
+        4_u64.try_into().unwrap(),
+        None,
+        None,
+        1000,
+        0,
+    ));
     let TransactionEntrypoint::External(signed) = a.clone() else {
         unreachable!()
     };
@@ -490,6 +511,7 @@ fn policy_rows_remain_charged_until_the_original_block_owner_drops() {
     let budget = AllocationBudget::new(bytes);
     let owner = CapturedNetworkPolicyRoutes::reserve(&source, &budget).unwrap();
     assert_eq!(budget.reserved_bytes(), bytes);
+    assert!(owner.validate_carrier(&source).is_err());
     assert!(CapturedNetworkPolicyRoutes::reserve(&source, &budget).is_err());
     drop(owner);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -514,4 +536,107 @@ fn only_genesis_carries_explicit_bootstrap_policy_and_normal_scope_has_no_fallba
     });
     let absent = state.block(carrier(vec![entry]).header());
     assert!(absent.network_policy_routes.is_none());
+}
+
+#[test]
+fn missing_governed_and_private_physical_manifests_cannot_use_native_number_collision() {
+    use crate::governance::manifest::LaneManifestStatus;
+    use iroha_data_model::nexus::{LaneStorageProfile, LaneVisibility};
+    for (governance, storage) in [
+        (None, LaneStorageProfile::FullReplica),
+        (Some("required".to_owned()), LaneStorageProfile::FullReplica),
+        (None, LaneStorageProfile::CommitmentOnly),
+    ] {
+        let state = state();
+        let source = carrier(vec![input(&state, "physical manifest denial")]);
+        before_effects(&state, &source, false, |block| {
+            let (native, token) = block
+                .network_policy_routes
+                .as_ref()
+                .unwrap()
+                .get(&source, 0)
+                .unwrap();
+            let native_status = LaneManifestStatus {
+                lane: LaneId::new(1),
+                alias: "unrelated native number".into(),
+                dataspace: DataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: None,
+                manifest_path: None,
+                governance_rules: None,
+                privacy_commitments: vec![],
+            };
+            let mut statuses = BTreeMap::from([(LaneId::new(1), native_status.clone())]);
+            if governance.is_some() || storage != LaneStorageProfile::FullReplica {
+                statuses.insert(
+                    LaneId::SINGLE,
+                    LaneManifestStatus {
+                        lane: LaneId::SINGLE,
+                        alias: "actual physical policy".into(),
+                        governance,
+                        storage,
+                        ..native_status
+                    },
+                );
+            }
+            block.lane_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+            assert!(
+                block
+                    .lane_manifests
+                    .ensure_lane_ready(native.lane_id)
+                    .is_ok()
+            );
+            assert!(
+                block
+                    .lane_manifests
+                    .ensure_lane_ready(LaneId::SINGLE)
+                    .is_err()
+            );
+            let TransactionEntrypoint::External(signed) = source.network_entrypoint_at(0).unwrap()
+            else {
+                unreachable!()
+            };
+            let mut tx = block.transaction();
+            assert!(matches!(
+                StateBlock::validate_stateful_admission(signed, &mut tx, native, token, None),
+                Err(TransactionRejectionReason::Validation(_))
+            ));
+            assert_eq!(tx.current_lane_id, Some(native.lane_id));
+        });
+    }
+}
+
+#[test]
+fn allocation_refusal_precedes_normal_and_replacement_pristine_callbacks() {
+    for replacement in [false, true] {
+        let state = state();
+        let source = carrier(vec![input(&state, "prepaid refusal")]);
+        let budget = state.ivm_execution_budget();
+        let before = budget.reserved_bytes();
+        budget.set_limit_bytes(before);
+        let stage = |_: &mut StateBlock<'_>| -> Result<(), &'static str> {
+            panic!("allocation refusal cannot enter a pristine callback")
+        };
+        let result = if replacement {
+            state
+                .block_and_revert_with_pristine_carrier_stage(&source, stage)
+                .map(|_| ())
+        } else {
+            state
+                .block_with_owned_start_stages_with_carrier(
+                    source.header(),
+                    Some(&source),
+                    stage,
+                    |_, ()| Ok(()),
+                )
+                .map(|_| ())
+        };
+        assert!(matches!(
+            result,
+            Err(StateBlockStartError::ExecutionDeferred(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), before);
+        assert_eq!(state.committed_height(), 0);
+    }
 }

@@ -34,14 +34,13 @@ fn bind_root(transaction: &mut StateTransaction<'_, '_>, signed: &SignedTransact
 
 #[test]
 fn preparation_refusal_is_fee_free_but_admitted_business_failure_charges_actual_work() {
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         for maximum in [1, 2] {
-            let asset = AssetDefinitionId::derive_from_components(
-                DomainId::try_new("network-fee", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
+            let asset = AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .expect("canonical network XOR fee asset");
             let mut state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
             state.pipeline.overlay_max_instructions = maximum;
             state.pipeline.overlay_max_bytes = 0;
@@ -61,8 +60,7 @@ fn preparation_refusal_is_fee_free_but_admitted_business_failure_charges_actual_
                 ),
                 batch,
             )]);
-            exec_witness::start_block();
-            let mut block = state.block(source.header());
+            let (mut block, _recording) = recorded_network_block(&state, &source);
             let fragments = block.committed_fragment_count();
             execute(&mut block, &source).unwrap();
             let result = network_row(&block, 0).result.as_ref();
@@ -125,7 +123,6 @@ fn preparation_refusal_is_fee_free_but_admitted_business_failure_charges_actual_
 
 #[test]
 fn actual_by_call_callback_keeps_its_separate_instruction_scope() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut state = fixture(65_536, Some(512));
     let root: InstructionBox = ExecuteTrigger::new("network_callback".parse().unwrap()).into();
     let direct_gas = crate::gas::meter_instructions(std::slice::from_ref(&root));
@@ -137,8 +134,7 @@ fn actual_by_call_callback_keeps_its_separate_instruction_scope() {
         FeePaymentIntent::authority(vec![], None),
         false,
     )]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     assert!(
         network_row(&block, 0).result.is_ok(),
@@ -284,8 +280,7 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
         )
     };
     let source = carrier(vec![entrypoint]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     assert!(
         network_row(&block, 0).result.is_ok(),
@@ -303,13 +298,11 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
 
 #[test]
 fn actual_generic_ivm_callback_artifact_is_outside_the_signed_root_budget() {
-    let _guard = exec_witness::exec_witness_guard();
     let _ = actual_generic_ivm_callback_output(false);
 }
 
 #[test]
 fn actual_quarantined_network_root_does_not_charge_callback_vm_cycles() {
-    let _guard = exec_witness::exec_witness_guard();
     let (ordinary, ordinary_gas) = actual_generic_ivm_callback_output(false);
     let (quarantined, quarantined_gas) = actual_generic_ivm_callback_output(true);
     // The real callback must pass three LDLITs before its SET_ACCOUNT_DETAIL
@@ -334,7 +327,6 @@ fn actual_quarantined_network_root_does_not_charge_callback_vm_cycles() {
 
 #[test]
 fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() {
-    let _guard = exec_witness::exec_witness_guard();
     for (consensus_only, mutation) in [
         (false, 0),
         (false, 1),
@@ -357,7 +349,6 @@ fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() 
             unreachable!()
         };
         let source = carrier(vec![entry.clone()]);
-        exec_witness::start_block();
         let mut block = state.block(source.header());
         let fragments = block.committed_fragment_count();
         let mut transaction =
@@ -438,7 +429,6 @@ fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() 
 
 #[test]
 fn unwinding_before_root_close_cannot_publish_already_staged_effects() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, None);
     let entry = input(
         &state,
@@ -450,7 +440,6 @@ fn unwinding_before_root_close_cannot_publish_already_staged_effects() {
         unreachable!()
     };
     let source = carrier(vec![entry.clone()]);
-    exec_witness::start_block();
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     let mut transaction = block.transaction();

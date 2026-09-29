@@ -412,8 +412,9 @@ state_test! { consensus_stack axt_post_validation_envelope_replacement_cannot_pu
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
     .unpack(|_| {})
     .into();
-    let mut staged = state.block(signed.header());
-    ValidBlock::execute_block_outputs_for_test(&mut signed, &mut staged, None)
+    let (mut staged, recorder) = ValidBlock::start_component_execution(&signed, state)
+        .expect("original AXT source starts recording before block effects");
+    ValidBlock::execute_recorded_component_outputs(&mut signed, &mut staged, &recorder)
         .expect("execute and seal the genuine source");
     assert!(signed.output_error(0).is_none());
     let outputs = signed.execution_outputs().to_vec();

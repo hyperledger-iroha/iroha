@@ -85,6 +85,7 @@ async fn nexus_public_lane_endpoints_exist() {
     .await
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    fixtures::response_body(resp, "public lane endpoint response").await;
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request(&("/v1/nexus/public-lanes/0/stake"))),
@@ -92,6 +93,7 @@ async fn nexus_public_lane_endpoints_exist() {
     .await
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    fixtures::response_body(resp, "public lane endpoint response").await;
     router.shutdown().await;
 }
 #[tokio::test]
@@ -169,7 +171,6 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let delegator_asset_id = AssetId::new(asset_definition_id.clone(), delegator_id.clone());
     let validator_asset = Asset::new(validator_asset_id, Quantity::from(10_000_u64));
     let delegator_asset = Asset::new(delegator_asset_id, Quantity::from(10_000_u64));
-    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let mut world = World::with_assets(
         [domain],
         [validator, delegator, escrow],
@@ -177,8 +178,9 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
         [validator_asset, delegator_asset],
         [],
     );
-    let mut npos = SumeragiNposParameters::default();
-    npos.xor_asset_definition_id = asset_definition_id;
+    let npos = SumeragiNposParameters::default();
+    npos.validate()
+        .expect("valid committed NPoS fixture parameters");
     {
         let mut block = world.block();
         block
@@ -187,7 +189,6 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
             .set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         block.commit();
     }
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
     (
         world,
         validator_keypair,
@@ -197,10 +198,7 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     )
 }
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("domain id"),
-        "xor".parse().expect("asset definition name"),
-    )
+    SumeragiNposParameters::default().xor_asset_definition_id
 }
 fn seed_public_lane_state(
     state: &State,
@@ -310,8 +308,6 @@ fn build_test_router(
     let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_tx));
     let torii = fixtures::ToriiHarness::new(
         &cfg,
-        iroha_model_base::chain::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
         kura,
         &state,
         &queue,

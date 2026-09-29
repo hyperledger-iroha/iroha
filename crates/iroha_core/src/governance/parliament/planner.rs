@@ -21,11 +21,6 @@ use mv::storage::StorageReadOnly as _;
 
 use super::*;
 
-/// Blocks from the committed tip a public transaction is submitted at to the block that
-/// executes it: `QueuePlan` admits it at `tip + 1`, carries its autonomous payload at `tip + 2`
-/// and merges it at `tip + 3`.
-pub const PARLIAMENT_DRIVER_EXECUTION_LAG_BLOCKS: u64 = 3;
-
 /// World inputs of a driver plan.
 pub trait ParliamentPlanWorldV1 {
     /// The verified finalized pulse of `session` at `height`, as its id and governance seed.
@@ -473,8 +468,12 @@ impl<W: crate::state::WorldReadOnly> ParliamentPlanWorldV1 for WorldPlanInputsV1
     }
 }
 
-/// Plan `attempt_id` over committed `state` for a transaction submitted now, returning the
-/// committed and execution heights with the plan, or `None` for an unknown attempt.
+/// Plan `attempt_id` for the next native candidate after committed `state`.
+///
+/// Returns the committed and candidate execution heights with the plan, or `None` for an
+/// unknown attempt or height overflow. Queueing and lane routing do not reserve inclusion
+/// at that height: a driver must refresh this advice as the committed tip advances, and
+/// execution rechecks each transition against its actual carrier height.
 #[must_use]
 pub fn plan_parliament_attempt_v1(
     state: &impl crate::state::StateReadOnly,
@@ -484,7 +483,7 @@ pub fn plan_parliament_attempt_v1(
 ) -> Option<(u64, u64, ParliamentDriverPlanV1)> {
     use crate::state::WorldReadOnly as _;
     let committed_height = u64::try_from(state.height()).ok()?;
-    let execution_height = committed_height.checked_add(PARLIAMENT_DRIVER_EXECUTION_LAG_BLOCKS)?;
+    let execution_height = committed_height.checked_add(1)?;
     let world = state.world();
     let attempt = world.parliament_attempts().get(&attempt_id)?;
     let inputs = WorldPlanInputsV1 { world, network_id };

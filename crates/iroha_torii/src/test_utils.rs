@@ -82,14 +82,6 @@ fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
 }
-fn checked_random_keypair_with_algorithm(
-    algorithm: Algorithm,
-    context: &str,
-) -> iroha_crypto::KeyPair {
-    iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
-        panic!("{context}: checked random {algorithm:?} key generation failed: {err}")
-    })
-}
 /// Parameters for invoking a contract within Torii integration tests.
 pub struct ContractCallOptions<'a> {
     /// Explicit entry point function to call on the contract.

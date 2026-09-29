@@ -11,8 +11,10 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     let domain = Domain::new(domain_id.clone()).build(&payer_id);
     let payer = Account::new(payer_id.clone()).build(&payer_id);
     let sink = Account::new(sink_id.clone()).build(&sink_id);
-    let asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let asset_definition = AssetDefinition::numeric(
         asset_definition_id.clone(),
         "xor".to_owned(),
@@ -182,8 +184,10 @@ fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
     let domain = Domain::new(domain_id.clone()).build(&payer_id);
     let payer = Account::new(payer_id.clone()).build(&payer_id);
     let sink = Account::new(sink_id.clone()).build(&sink_id);
-    let asset_definition_id =
-        AssetDefinitionId::derive_from_components(domain_id, "xor".parse().expect("asset name"));
+    let asset_definition_id = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .expect("canonical network XOR identity");
     let asset_definition = AssetDefinition::numeric(
         asset_definition_id.clone(),
         "xor".to_owned(),

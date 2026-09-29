@@ -195,9 +195,9 @@ The direct V1 instruction contains only the referendum selector, owner, new tota
 bond and requested lock duration. The choice is immutable and read from finalized
 state; a repeated cast is not an update.
 
-Contract-call drafts require the signature-bound `QueuePlanSynced` admission
-intent. `CallContractAsync` checks it with the exact caller-trusted network,
-authority, invocation, metadata and fee before returning a draft for local signing.
+`CallContractAsync` validates the canonical nine-field transaction payload against
+the exact caller-trusted network, authority, invocation, metadata and fee before
+returning a draft for local signing. Retired admission-intent layouts are rejected.
 
 ## Run the sample
 

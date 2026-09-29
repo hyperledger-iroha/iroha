@@ -127,8 +127,7 @@ const TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES: &[&str] = &[
 const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] = &[
     "transaction_admission_worker_failed",
     "route_unavailable",
-    "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
-    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+    "transaction_dispatch_outcome_unknown",
     "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
 ];
 const KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
@@ -391,6 +390,17 @@ fn expected_operation_effect(method: &str, path: &str) -> &'static str {
     if expected_operator_operation(method, path) {
         return "operator";
     }
+    if method == "post"
+        && matches!(
+            path,
+            "/v1/sorafs/provider/source"
+                | "/v1/sorafs/publish/prepare"
+                | "/v1/sorafs/publish/proof"
+                | "/v1/sorafs/repair/source"
+        )
+    {
+        return "expensive";
+    }
     if method == "post" && path.starts_with("/v1/musubi/instructions/") {
         return "build_instruction";
     }
@@ -477,6 +487,7 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
                     | "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule"
+                    | "/v1/nexus/staking/prepare"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
                     | "/v1/rwas/query"

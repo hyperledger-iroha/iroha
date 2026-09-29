@@ -21,16 +21,17 @@ fn keys() -> Vec<KeyPair> {
 
 fn bootstrap() -> (KagemushaTestnetNativeStartupContextV1, Vec<u8>) {
     let context = crate::kagemusha_testnet_native_startup_v1::startup_test_context_v1();
-    let checkpoint =
-        *crate::kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1().checkpoint();
+    let checkpoint = crate::kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1()
+        .checkpoint()
+        .clone();
+    let approval_payload = checkpoint.approval_payload();
     let package = KagemushaMobileBootstrapPackageV1 {
         checkpoint,
         approvals: keys()[..2]
             .iter()
             .map(|key| KagemushaMobileBootstrapApprovalV1 {
                 public_key: key.public_key().clone(),
-                signature: SignatureOf::try_new(key.private_key(), &checkpoint.approval_payload())
-                    .unwrap(),
+                signature: SignatureOf::try_new(key.private_key(), &approval_payload).unwrap(),
             })
             .collect(),
     };

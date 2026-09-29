@@ -896,26 +896,8 @@ print(snapshot.committed_height, snapshot.applied_height, snapshot.halted)
 # bounded observation is not a finality proof. Global QC and grouped diagnostic
 # DTOs and methods are removed. Native capture parity remains an open gate.
 
-# Inspect Nexus lane commitments and governance coverage from `/status`
+# Inspect physical-lane governance coverage from `/status`
 status_snapshot = client.get_status_snapshot_typed()
-for commitment in status_snapshot.status.lane_commitments:
-    print(
-        "lane",
-        commitment.lane_id,
-        "TEU",
-        commitment.teu_total,
-        "tx_count",
-        commitment.tx_count,
-    )
-for dataspace in status_snapshot.status.dataspace_commitments:
-    print(
-        "dataspace",
-        dataspace.dataspace_id,
-        "lane",
-        dataspace.lane_id,
-        "TEU",
-        dataspace.teu_total,
-    )
 for lane in status_snapshot.status.lane_governance:
     state = "ready" if lane.manifest_ready else "missing"
     print(f"lane {lane.alias} manifest {state}; validators={', '.join(lane.validator_ids)}")

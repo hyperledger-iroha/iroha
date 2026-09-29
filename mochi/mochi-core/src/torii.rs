@@ -297,13 +297,13 @@ impl ToriiError {
             ),
         }
     }
-    fn is_queue_plan_journal_outcome_unknown(&self) -> bool {
+    fn is_transaction_dispatch_outcome_unknown(&self) -> bool {
         matches!(
             self,
             Self::UnexpectedStatus {
                 reject_code: Some(code),
                 ..
-            } if code == QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE
+            } if code == TRANSACTION_DISPATCH_OUTCOME_UNKNOWN_REJECT_CODE
         )
     }
     fn confirms_existing_submission(&self) -> bool {
@@ -861,8 +861,8 @@ const SMOKE_TTL: Duration = Duration::from_secs(30);
 const SMOKE_SUBMISSION_MARGIN: Duration = Duration::from_secs(5);
 const SMOKE_EXACT_RESUBMIT_DELAY: Duration = Duration::from_millis(250);
 const SMOKE_EXACT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(1);
-const QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE: &str =
-    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
+const TRANSACTION_DISPATCH_OUTCOME_UNKNOWN_REJECT_CODE: &str =
+    "transaction_dispatch_outcome_unknown";
 fn encode_lower_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -2562,7 +2562,7 @@ impl ToriiClient {
         let mut admission_outcome_unknown = match submission {
             Ok(()) => false,
             Err(err) if err.confirms_existing_submission() => false,
-            Err(err) if err.is_queue_plan_journal_outcome_unknown() => true,
+            Err(err) if err.is_transaction_dispatch_outcome_unknown() => true,
             Err(ToriiError::Timeout { .. }) => {
                 return Err(ToriiError::SmokeAdmissionOutcomeUnknown { hash: tx_hash_str });
             }

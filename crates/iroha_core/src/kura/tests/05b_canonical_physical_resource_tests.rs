@@ -88,7 +88,11 @@ fn canonical_physical_append_uses_only_fixed_and_actual_written_height() {
             block_count: 1,
         };
         let (paths, _) = Kura::canonical_physical_paths(&mut store, operation).unwrap();
-        assert_eq!(paths.len(), 12);
+        assert_eq!(
+            paths.len(),
+            10,
+            "nine current fixed paths and the new DA height"
+        );
         assert_eq!(
             paths
                 .iter()
@@ -133,8 +137,8 @@ fn canonical_physical_rewrite_preobserves_multiple_chunks_and_keeps_fence_busy()
     let (paths, _) = Kura::canonical_physical_paths(&mut store, operation).unwrap();
     assert_eq!(
         paths.len(),
-        60,
-        "fixed11 plus the49 actual image heights, globally deduplicated"
+        58,
+        "nine current fixed paths plus 49 actual image heights, globally deduplicated"
     );
     let mut resources = kura.begin_canonical_physical_mutation(&mut store, operation);
     assert_eq!(resources.leaves.len(), 2);
@@ -165,10 +169,13 @@ fn canonical_physical_recovery_preserves_both_exact_marker_choices() {
         initialize_physical_fixture(&kura);
         let _write = kura.block_store_write_lock.lock();
         let mut store = kura.block_store.lock();
-        let selected = if new_marker { replacement.hash() } else { blocks[1].hash() };
-        let resources = kura.begin_canonical_physical_mutation(
-            &mut store, CanonicalPhysicalOperation::Recovery,
-        );
+        let selected = if new_marker {
+            replacement.hash()
+        } else {
+            blocks[1].hash()
+        };
+        let resources = kura
+            .begin_canonical_physical_mutation(&mut store, CanonicalPhysicalOperation::Recovery);
         store.recover_canonical_storage_stages().unwrap();
         resources.finish_resources_before_disk_rescan();
         assert!(!store.da_block_rewrite_stage_path().exists());

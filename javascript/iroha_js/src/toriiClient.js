@@ -14056,6 +14056,11 @@ function normalizeTimeStatusResponse(payload) {
 }
 
 function parseStatusPayload(payload) {
+  for (const field of ["lane_commitments", "dataspace_commitments", "pipeline_execution"]) {
+    if (Object.hasOwn(payload, field)) {
+      rejectType(`status.${field} is retired and unsupported`);
+    }
+  }
   return {
     observed_at_ms: coerceStatusInt(payload.observed_at_ms, "status.observed_at_ms"),
     peers: coerceStatusInt(payload.peers, "status.peers"),
@@ -14083,8 +14088,6 @@ function parseStatusPayload(payload) {
     txs_rejected: coerceStatusInt(payload.txs_rejected, "status.txs_rejected"),
     view_changes: coerceStatusInt(payload.view_changes, "status.view_changes"),
     governance: parseGovernanceSnapshot(payload.governance),
-    lane_commitments: parseLaneCommitments(payload.lane_commitments),
-    dataspace_commitments: parseDataspaceCommitments(payload.dataspace_commitments),
     lane_governance: parseLaneGovernance(payload.lane_governance),
     dataspace_catalog: parseDataspaceCatalog(payload.dataspace_catalog),
     lane_governance_sealed_total: coerceStatusInt(
@@ -14250,83 +14253,6 @@ function parseGovernanceActivations(payload) {
 
 function normalizePipelineStatusPayload(payload) {
   return normalizePipelineTransactionStatus(payload, "pipeline status payload");
-}
-
-function parseLaneCommitments(payload) {
-  if (payload == null) {
-    return [];
-  }
-  if (!Array.isArray(payload)) {
-    rejectType("status.lane_commitments must be an array");
-  }
-  return payload.map((entry, index) => {
-    const record = ensureRecord(entry, `status.lane_commitments[${index}]`);
-    return {
-      block_height: coerceNestedInt(
-        record,
-        "block_height",
-        `status.lane_commitments[${index}]`,
-      ),
-      lane_id: coerceNestedInt(record, "lane_id", `status.lane_commitments[${index}]`),
-      tx_count: coerceNestedInt(record, "tx_count", `status.lane_commitments[${index}]`),
-      total_chunks: coerceNestedInt(
-        record,
-        "total_chunks",
-        `status.lane_commitments[${index}]`,
-      ),
-      rbc_bytes_total: coerceNestedInt(
-        record,
-        "rbc_bytes_total",
-        `status.lane_commitments[${index}]`,
-      ),
-      teu_total: coerceNestedInt(record, "teu_total", `status.lane_commitments[${index}]`),
-      block_hash:
-        record.block_hash === undefined || record.block_hash === null
-          ? ""
-          : String(record.block_hash),
-    };
-  });
-}
-
-function parseDataspaceCommitments(payload) {
-  if (payload == null) {
-    return [];
-  }
-  if (!Array.isArray(payload)) {
-    rejectType("status.dataspace_commitments must be an array");
-  }
-  return payload.map((entry, index) => {
-    const record = ensureRecord(entry, `status.dataspace_commitments[${index}]`);
-    return {
-      block_height: coerceNestedInt(
-        record,
-        "block_height",
-        `status.dataspace_commitments[${index}]`,
-      ),
-      lane_id: coerceNestedInt(record, "lane_id", `status.dataspace_commitments[${index}]`),
-      dataspace_id: coerceNestedInt(
-        record,
-        "dataspace_id",
-        `status.dataspace_commitments[${index}]`,
-      ),
-      tx_count: coerceNestedInt(record, "tx_count", `status.dataspace_commitments[${index}]`),
-      total_chunks: coerceNestedInt(
-        record,
-        "total_chunks",
-        `status.dataspace_commitments[${index}]`,
-      ),
-      rbc_bytes_total: coerceNestedInt(
-        record,
-        "rbc_bytes_total",
-        `status.dataspace_commitments[${index}]`,
-      ),
-      teu_total: coerceNestedInt(record, "teu_total", `status.dataspace_commitments[${index}]`),
-      block_hash:
-        record.block_hash === undefined || record.block_hash === null
-          ? ""
-          : String(record.block_hash),
-    };
-  });
 }
 
 function parseDataspaceCatalog(payload) {

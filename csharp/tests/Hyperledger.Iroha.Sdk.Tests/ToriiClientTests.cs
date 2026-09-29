@@ -16319,9 +16319,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         switch (mutation)
         {
             case "intent":
-                var changed = ReplaceTransactionAdmissionIntent(
+                var changed = InsertRetiredAdmissionIntent(
                     Convert.FromBase64String(detached.TransactionPayloadBase64!),
-                    TransactionAdmissionIntent.Ordinary, new TransactionEncodingContext(request.Authority));
+                    0U, new TransactionEncodingContext(request.Authority));
                 detached = detached with
                 {
                     TransactionPayloadBase64 = Convert.ToBase64String(changed),
@@ -16363,7 +16363,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var reader = new CanonicalNoritoReader(Convert.FromBase64String(request.TransactionPayloadBase64!), "TTL mutation", "payload");
         var writer = new CanonicalNoritoWriter();
-        for (var index = 0; index < 10; index++)
+        for (var index = 0; index < 9; index++)
         {
             var field = reader.ReadField($"field_{index}");
             writer.WriteField(index == 4 ? new byte[] { 0 } : field);
@@ -16615,15 +16615,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData(TransactionAdmissionIntent.Ordinary)]
-    [InlineData((TransactionAdmissionIntent)2)]
-    public async Task CallContractAsyncRejectsRehashedAdmissionIntentSubstitution(
-        TransactionAdmissionIntent admissionIntent)
+    [InlineData(0U)]
+    [InlineData(1U)]
+    [InlineData(2U)]
+    public async Task CallContractAsyncRejectsRehashedRetiredAdmissionField(
+        uint retiredAdmissionIntent)
     {
         var request = TrustedContractCallRequest();
         var responseJson = BoundContractCallResponseJsonObject(
             request,
-            transactionAdmissionIntent: admissionIntent);
+            retiredTransactionAdmissionIntent: retiredAdmissionIntent);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
         using var client = BoundContractToriiClient(handler);
 
@@ -16632,7 +16633,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 request,
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("admission intent", error.Message);
+        Assert.Contains("canonical nine-field TransactionPayload", error.Message, StringComparison.Ordinal);
         Assert.NotNull(handler.LastRequest);
     }
 
@@ -28924,18 +28925,15 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             builder.ReplaceMetadata(metadata);
         }
         var encoding = new TransactionEncodingContext(signerAccountId);
-        var payload = ReplaceTransactionAdmissionIntent(
-            builder.BuildPayloadBytes(encoding),
-            TransactionAdmissionIntent.Ordinary,
-            encoding);
+        var payload = builder.BuildPayloadBytes(encoding);
         return (
             Convert.ToBase64String(payload),
             Convert.ToBase64String(IrohaHash.Hash(payload)));
     }
 
-    private static byte[] ReplaceTransactionAdmissionIntent(
+    private static byte[] InsertRetiredAdmissionIntent(
         byte[] payload,
-        TransactionAdmissionIntent admissionIntent,
+        uint retiredAdmissionIntent,
         TransactionEncodingContext encoding)
     {
         var reader = new CanonicalNoritoReader(
@@ -28943,17 +28941,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "test transaction payload",
             nameof(payload));
         var writer = new CanonicalNoritoWriter();
-        for (var index = 0; index < 10; index++)
+        for (var index = 0; index < 9; index++)
         {
             var field = reader.ReadField($"field_{index}");
             if (index == 7)
             {
-                writer.WriteField(encoding.EncodeUInt32((uint)admissionIntent));
+                writer.WriteField(encoding.EncodeUInt32(retiredAdmissionIntent));
             }
-            else
-            {
-                writer.WriteField(field);
-            }
+            writer.WriteField(field);
         }
         reader.RequireEnd();
         return writer.ToArray();
@@ -29106,7 +29101,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         TransactionContractInvocation invocation,
         IReadOnlyDictionary<string, JsonNode?> metadata,
         NetworkId? networkId = null,
-        TransactionAdmissionIntent admissionIntent = TransactionAdmissionIntent.QueuePlanSynced)
+        uint? retiredAdmissionIntent = null)
     {
         var encoding = new TransactionEncodingContext(authority);
         var payload = new CanonicalNoritoWriter();
@@ -29121,7 +29116,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             encoding.EncodeUInt64));
         payload.WriteField(encoding.EncodeOption<uint>(null, encoding.EncodeUInt32));
         payload.WriteField(encoding.EncodeFeePaymentIntent(feePayment));
-        payload.WriteField(encoding.EncodeUInt32((uint)admissionIntent));
+        if (retiredAdmissionIntent is { } retiredIntent)
+        {
+            payload.WriteField(encoding.EncodeUInt32(retiredIntent));
+        }
         payload.WriteField(encoding.EncodeMetadata(metadata));
         payload.WriteField(new byte[] { 0 });
         var bytes = payload.ToArray();
@@ -29138,7 +29136,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         IReadOnlyDictionary<string, JsonNode?>? transactionMetadata = null,
         ulong creationTimeMilliseconds = 123456,
         NetworkId? transactionNetworkId = null,
-        TransactionAdmissionIntent transactionAdmissionIntent = TransactionAdmissionIntent.QueuePlanSynced)
+        uint? retiredTransactionAdmissionIntent = null)
     {
         var draftIntent = request.DraftIntent
             ?? throw new InvalidOperationException("Test request requires a draft intent.");
@@ -29151,7 +29149,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             transactionInvocation ?? draftIntent.Invocation,
             transactionMetadata ?? draftIntent.Metadata,
             transactionNetworkId,
-            transactionAdmissionIntent);
+            retiredTransactionAdmissionIntent);
         var response = new JsonObject
         {
             ["ok"] = true,
@@ -30317,7 +30315,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VkOption(VkUInt64(100_000)),
             [0],
             feePayment,
-            VkUInt32(1),
             VkUInt64(0),
             [0]);
     }

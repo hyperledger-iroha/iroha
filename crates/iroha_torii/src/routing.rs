@@ -465,8 +465,7 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLaneCommitment,
-        SumeragiLaneGovernance, SumeragiNposDiagnostics, SumeragiPipelineExecutionStatus,
+        SumeragiDiagnosticsStatus, SumeragiLaneGovernance, SumeragiNposDiagnostics,
         SumeragiRuntimeUpgradeHook,
     },
     events::{
@@ -42917,31 +42916,6 @@ pub async fn handle_v1_sumeragi_lanes(
     };
     Ok(crate::utils::respond_with_format(lanes, format))
 }
-fn sumeragi_pipeline_execution_status(
-    snapshot: iroha_core::status::PipelineExecutionSnapshot,
-) -> SumeragiPipelineExecutionStatus {
-    SumeragiPipelineExecutionStatus {
-        tx_vertices_total: snapshot.tx_vertices_total,
-        tx_edges_total: snapshot.tx_edges_total,
-        overlay_count_total: snapshot.overlay_count_total,
-        overlay_instr_total: snapshot.overlay_instr_total,
-        overlay_bytes_total: snapshot.overlay_bytes_total,
-        rbc_chunks_total: snapshot.rbc_chunks_total,
-        rbc_bytes_total: snapshot.rbc_bytes_total,
-        detached_prepared_total: snapshot.detached_prepared_total,
-        detached_merged_total: snapshot.detached_merged_total,
-        detached_fallback_total: snapshot.detached_fallback_total,
-        detached_fallback_fee_postprocessing_total: snapshot
-            .detached_fallback_fee_postprocessing_total,
-        detached_fallback_user_executor_total: snapshot.detached_fallback_user_executor_total,
-        detached_fallback_durable_state_total: snapshot.detached_fallback_durable_state_total,
-        detached_fallback_unsupported_instruction_total: snapshot
-            .detached_fallback_unsupported_instruction_total,
-        detached_fallback_rejected_eval_total: snapshot.detached_fallback_rejected_eval_total,
-        detached_fallback_overlay_error_total: snapshot.detached_fallback_overlay_error_total,
-        quarantine_executed_total: snapshot.quarantine_executed_total,
-    }
-}
 fn sumeragi_npos_diagnostics(
     params: &iroha_data_model::parameter::system::SumeragiNposParameters,
 ) -> Result<SumeragiNposDiagnostics> {
@@ -42960,48 +42934,26 @@ fn sumeragi_npos_diagnostics(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_diagnostics(
     State(state): State<std::sync::Arc<CoreState>>,
-    _durable_queue: Option<std::sync::Arc<Queue>>,
+    durable_queue: Option<std::sync::Arc<Queue>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
+    let durable_queue = durable_queue.ok_or_else(|| Error::AppServiceUnavailable {
+        code: "transaction_queue_unavailable",
+        message: "transaction queue diagnostics require the live queue owner".to_owned(),
+    })?;
+    let queue =
+        durable_queue.refresh_pressure_budget_from_block_time(state.sumeragi_block_cadence());
     let snapshot = iroha_core::status::snapshot();
-    let queue = iroha_core::status::tx_queue_backpressure();
     let world = state.world_view();
     let npos = world
         .sumeragi_npos_parameters()
         .map(|params| sumeragi_npos_diagnostics(&params))
         .transpose()?;
     drop(world);
-    let lane_commitments = snapshot
-        .lane_commitments
-        .iter()
-        .map(|entry| SumeragiLaneCommitment {
-            block_height: entry.block_height,
-            lane_id: entry.lane_id.into(),
-            tx_count: entry.tx_count,
-            total_chunks: entry.total_chunks,
-            rbc_bytes_total: entry.rbc_bytes_total,
-            teu_total: entry.teu_total,
-            block_hash: entry.block_hash,
-        })
-        .collect();
-    let dataspace_commitments = snapshot
-        .dataspace_commitments
-        .iter()
-        .map(|entry| SumeragiDataspaceCommitment {
-            block_height: entry.block_height,
-            lane_id: entry.lane_id.into(),
-            dataspace_id: entry.dataspace_id.into(),
-            tx_count: entry.tx_count,
-            total_chunks: entry.total_chunks,
-            rbc_bytes_total: entry.rbc_bytes_total,
-            teu_total: entry.teu_total,
-            block_hash: entry.block_hash,
-        })
-        .collect();
     let lane_governance = snapshot
         .lane_governance
         .iter()
@@ -43026,19 +42978,16 @@ pub async fn handle_v1_sumeragi_diagnostics(
         })
         .collect();
     let diagnostics = SumeragiDiagnosticsStatus {
-        pipeline_execution: sumeragi_pipeline_execution_status(snapshot.pipeline_execution),
-        tx_queue_depth: queue.depth,
-        tx_queue_capacity: queue.capacity,
+        tx_queue_depth: queue.queued_tx_count as u64,
+        tx_queue_capacity: queue.capacity.get() as u64,
         tx_queue_retained_bytes: queue.retained_bytes,
-        tx_queue_max_retained_bytes: queue.max_retained_bytes,
-        tx_queue_saturated: queue.saturated,
+        tx_queue_max_retained_bytes: queue.max_retained_bytes.get(),
+        tx_queue_saturated: queue.saturated_by_count || queue.saturated_by_bytes,
         tx_queue_saturated_by_count: queue.saturated_by_count,
         tx_queue_saturated_by_bytes: queue.saturated_by_bytes,
         tx_queue_saturated_by_age: queue.saturated_by_age,
-        tx_queue_oldest_queued_age_ms: queue.oldest_queued_age_ms,
+        tx_queue_oldest_queued_age_ms: queue.oldest_queued_tx_age_ms,
         npos,
-        lane_commitments,
-        dataspace_commitments,
         lane_governance_sealed_total: snapshot.lane_governance_sealed_total,
         lane_governance_sealed_aliases: snapshot.lane_governance_sealed_aliases,
         lane_governance,
@@ -57122,7 +57071,6 @@ struct DataspaceSummaryAccumulator {
     portfolio_accounts: u64,
     portfolio_positions: u64,
     asset_definitions: BTreeSet<String>,
-    commitments: Vec<iroha_core::status::DataspaceCommitmentSnapshot>,
 }
 fn upsert_dataspace_summary<'a>(
     summaries: &'a mut BTreeMap<DataSpaceId, DataspaceSummaryAccumulator>,
@@ -57210,75 +57158,6 @@ fn manifest_summary_json(manifest: Option<&SpaceDirectoryManifestRecord>) -> Val
     }
     Value::Object(map)
 }
-fn commitments_summary_json(
-    commitments: &[iroha_core::status::DataspaceCommitmentSnapshot],
-) -> Value {
-    let mut map = Map::new();
-    let mut lane_ids = BTreeSet::new();
-    let mut tx_count = 0_u64;
-    let mut total_chunks = 0_u64;
-    let mut rbc_bytes_total = 0_u64;
-    let mut teu_total = 0_u64;
-    let mut last_block_height = None;
-    let mut last_block_hash: Option<String> = None;
-    let mut sorted = commitments.to_vec();
-    sorted.sort_by(|lhs, rhs| {
-        rhs.block_height
-            .cmp(&lhs.block_height)
-            .then_with(|| lhs.lane_id.cmp(&rhs.lane_id))
-    });
-    for commitment in &sorted {
-        lane_ids.insert(u64::from(commitment.lane_id));
-        tx_count = tx_count.saturating_add(commitment.tx_count);
-        total_chunks = total_chunks.saturating_add(commitment.total_chunks);
-        rbc_bytes_total = rbc_bytes_total.saturating_add(commitment.rbc_bytes_total);
-        teu_total = teu_total.saturating_add(commitment.teu_total);
-    }
-    if let Some(latest) = sorted.first() {
-        last_block_height = Some(latest.block_height);
-        last_block_hash = Some(format!("{}", latest.block_hash));
-    }
-    let details = sorted
-        .iter()
-        .map(|commitment| {
-            let mut detail = Map::new();
-            detail.insert("block_height".into(), Value::from(commitment.block_height));
-            detail.insert("lane_id".into(), Value::from(u64::from(commitment.lane_id)));
-            detail.insert("dataspace_id".into(), Value::from(commitment.dataspace_id));
-            detail.insert("tx_count".into(), Value::from(commitment.tx_count));
-            detail.insert("total_chunks".into(), Value::from(commitment.total_chunks));
-            detail.insert(
-                "rbc_bytes_total".into(),
-                Value::from(commitment.rbc_bytes_total),
-            );
-            detail.insert("teu_total".into(), Value::from(commitment.teu_total));
-            detail.insert(
-                "block_hash".into(),
-                Value::from(format!("{}", commitment.block_hash)),
-            );
-            Value::Object(detail)
-        })
-        .collect();
-    map.insert("entries".into(), Value::from(sorted.len() as u64));
-    map.insert(
-        "lane_ids".into(),
-        Value::Array(lane_ids.into_iter().map(Value::from).collect()),
-    );
-    map.insert("tx_count".into(), Value::from(tx_count));
-    map.insert("total_chunks".into(), Value::from(total_chunks));
-    map.insert("rbc_bytes_total".into(), Value::from(rbc_bytes_total));
-    map.insert("teu_total".into(), Value::from(teu_total));
-    map.insert(
-        "last_block_height".into(),
-        last_block_height.map(Value::from).unwrap_or(Value::Null),
-    );
-    map.insert(
-        "last_block_hash".into(),
-        last_block_hash.map(Value::from).unwrap_or(Value::Null),
-    );
-    map.insert("details".into(), Value::Array(details));
-    Value::Object(map)
-}
 pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
     state: Arc<CoreState>,
     axum::extract::Path(raw_literal): axum::extract::Path<String>,
@@ -57319,11 +57198,6 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
     totals.insert("portfolio_positions".into(), Value::from(0_u64));
     totals.insert("manifests_total".into(), Value::from(0_u64));
     totals.insert("manifests_active".into(), Value::from(0_u64));
-    totals.insert("consensus_entries".into(), Value::from(0_u64));
-    totals.insert("consensus_tx_count".into(), Value::from(0_u64));
-    totals.insert("consensus_chunks_total".into(), Value::from(0_u64));
-    totals.insert("consensus_rbc_bytes_total".into(), Value::from(0_u64));
-    totals.insert("consensus_teu_total".into(), Value::from(0_u64));
     let mut dataspaces_json = Vec::new();
     let mut uaid_value = Value::Null;
     if let Some(uaid) = account.uaid().copied() {
@@ -57333,7 +57207,6 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
         let bindings = world.uaid_dataspaces().get(&uaid);
         let manifests = world.space_directory_manifests().get(&uaid);
         let portfolio = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
-        let status_snapshot = iroha_core::status::snapshot();
         let mut summaries: BTreeMap<DataSpaceId, DataspaceSummaryAccumulator> = BTreeMap::new();
         if let Some(binding_set) = bindings.as_ref() {
             for (dataspace_id, accounts) in binding_set.iter() {
@@ -57370,22 +57243,11 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
                 }
             }
         }
-        for commitment in &status_snapshot.dataspace_commitments {
-            let dataspace_id = DataSpaceId::new(commitment.dataspace_id);
-            if let Some(summary) = summaries.get_mut(&dataspace_id) {
-                summary.commitments.push(*commitment);
-            }
-        }
         let mut unique_accounts = BTreeSet::new();
         let mut portfolio_accounts_total = 0_u64;
         let mut portfolio_positions_total = 0_u64;
         let mut manifests_total = 0_u64;
         let mut manifests_active = 0_u64;
-        let mut consensus_entries_total = 0_u64;
-        let mut consensus_tx_total = 0_u64;
-        let mut consensus_chunks_total = 0_u64;
-        let mut consensus_rbc_bytes_total = 0_u64;
-        let mut consensus_teu_total = 0_u64;
         dataspaces_json.reserve(summaries.len());
         for (_, summary) in summaries {
             if !visibility.allows_dataspace(summary.dataspace_id) {
@@ -57402,22 +57264,6 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
                     manifests_active = manifests_active.saturating_add(1);
                 }
             }
-            let mut consensus_tx = 0_u64;
-            let mut consensus_chunks = 0_u64;
-            let mut consensus_rbc = 0_u64;
-            let mut consensus_teu = 0_u64;
-            for commitment in &summary.commitments {
-                consensus_tx = consensus_tx.saturating_add(commitment.tx_count);
-                consensus_chunks = consensus_chunks.saturating_add(commitment.total_chunks);
-                consensus_rbc = consensus_rbc.saturating_add(commitment.rbc_bytes_total);
-                consensus_teu = consensus_teu.saturating_add(commitment.teu_total);
-            }
-            consensus_entries_total =
-                consensus_entries_total.saturating_add(summary.commitments.len() as u64);
-            consensus_tx_total = consensus_tx_total.saturating_add(consensus_tx);
-            consensus_chunks_total = consensus_chunks_total.saturating_add(consensus_chunks);
-            consensus_rbc_bytes_total = consensus_rbc_bytes_total.saturating_add(consensus_rbc);
-            consensus_teu_total = consensus_teu_total.saturating_add(consensus_teu);
             let account_values = summary
                 .accounts
                 .iter()
@@ -57450,10 +57296,6 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
                 "manifest".into(),
                 manifest_summary_json(summary.manifest.as_ref()),
             );
-            row.insert(
-                "consensus".into(),
-                commitments_summary_json(&summary.commitments),
-            );
             dataspaces_json.push(Value::Object(row));
         }
         totals.insert(
@@ -57474,23 +57316,7 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
         );
         totals.insert("manifests_total".into(), Value::from(manifests_total));
         totals.insert("manifests_active".into(), Value::from(manifests_active));
-        totals.insert(
-            "consensus_entries".into(),
-            Value::from(consensus_entries_total),
-        );
-        totals.insert("consensus_tx_count".into(), Value::from(consensus_tx_total));
-        totals.insert(
-            "consensus_chunks_total".into(),
-            Value::from(consensus_chunks_total),
-        );
-        totals.insert(
-            "consensus_rbc_bytes_total".into(),
-            Value::from(consensus_rbc_bytes_total),
-        );
-        totals.insert(
-            "consensus_teu_total".into(),
-            Value::from(consensus_teu_total),
-        );
+
     }
     let mut root = Map::new();
     root.insert(

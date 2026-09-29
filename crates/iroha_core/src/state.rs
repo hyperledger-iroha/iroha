@@ -12788,23 +12788,18 @@ impl<'state> StateBlock<'state> {
             self.fastpq_source_inventory = Some(Err(error.clone()));
         }
         self.fastpq_source_quota = Some(quota);
-        // The global chain retains its genesis-authenticated primary identity.
-        // Nonzero execution lanes belong exclusively to the native committed
-        // lane records, using the same parent-anchor boundary as routing.
-        let global_lane = crate::sumeragi::lanes::routing::GLOBAL_LANE;
+        // Global execution retains its original lane-zero identity. Every other execution
+        // lane comes from the native committed record used by routing and merge admission;
+        // physical Nexus catalogs do not authorize Sumeragi execution incarnations.
+        let global = crate::sumeragi::lanes::routing::GLOBAL_LANE;
         let mut lane_incarnations = BTreeMap::from([(
-            global_lane,
-            StateReadOnly::lane_incarnation_at_height(self, global_lane, height),
+            global,
+            StateReadOnly::lane_incarnation_at_height(self, global, height),
         )]);
         for record in &self.world.sumeragi_lanes.get().lanes {
-            if record.lane == global_lane {
-                continue;
+            if record.lane != global && record.admits_anchor(height.saturating_sub(1)) {
+                lane_incarnations.insert(record.lane, Hash::from_marked_bytes(record.incarnation));
             }
-            let incarnation = record
-                .admits_anchor(height.saturating_sub(1))
-                .then(|| Hash::from_marked_bytes(record.incarnation))
-                .flatten();
-            lane_incarnations.insert(record.lane, incarnation);
         }
         self.fastpq_source_context = Some(Arc::new(crate::fastpq::FastpqBlockStartSourceContext {
             source: iroha_data_model::fastpq::FastpqSourceStatementContextV1 {
@@ -38240,7 +38235,7 @@ mod public_lane_slash_observability_staging_tests {
 
     #[test]
     fn consensus_effects_apply_only_world_and_block_observability() {
-        let _status_guard = crate::status::rbc_status_test_guard();
+        let _status_guard = crate::status::operator_status_test_guard();
         crate::status::reset_nexus_economics_for_tests();
         let state = test_state();
         #[cfg(feature = "telemetry")]
@@ -39499,11 +39494,11 @@ mod fastpq_tx_set_hash_tests {
             .chain(0, state.view().latest_block().as_deref())
             .sign(keypair.private_key())
             .unpack(|_| {});
-        let new_block: SignedBlock = new_block.into();
+        let source: SignedBlock = new_block.into();
         let (mut state_block, guard) =
-            crate::block::ValidBlock::start_component_execution(&new_block, state)
+            crate::block::ValidBlock::start_component_execution(&source, state)
                 .expect("original recorder before execution");
-        let _ = crate::block::ValidBlock::validate_unchecked(new_block, &mut state_block, guard)
+        let _ = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard)
             .unpack(|_| {});
         let entrypoints = [
             TransactionEntrypoint::External(tx1),

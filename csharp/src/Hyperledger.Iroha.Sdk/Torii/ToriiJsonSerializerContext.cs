@@ -11,7 +11,6 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(FeeChargeLimit))]
 [JsonSerializable(typeof(FeeSponsorProgramId))]
 [JsonSerializable(typeof(FeePaymentIntent))]
-[JsonSerializable(typeof(TransactionAdmissionIntent))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupItem))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupResponse))]

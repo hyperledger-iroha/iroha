@@ -1,8 +1,8 @@
 # BFV construction and Soracloud production containment
 
 Date: 2026-09-29. Source amendment and genuine Norito schema capture are
-complete. The crypto and default API-boundary controls pass; Core/model/Torii
-qualification remains pending. This record does not qualify replacement
+complete. Crypto, default API-boundary and focused Core/model/Torii controls
+pass on the retained isolated candidate sequence. This record does not qualify replacement
 encryption or a complete private execution relation.
 
 The exact BFV profile exposes a noiseless public-key equation modulo the
@@ -94,9 +94,9 @@ shared debug cache was imported. The subsequent ordinary doctest command passed;
 its log is retained separately from the compiler JSON artifact inventory.
 The native command excludes only the explicit print/regeneration entrypoint,
 not a correctness test. Total build/control time was 931.839 seconds.
-These results qualify the scoped crypto hard cut and fixtures, not the pending
-Core/model/Torii containment paths, replacement encryption, full private
-execution, network behavior, or a release build.
+These results qualify the scoped crypto hard cut and fixtures. The separate
+component results below cover containment paths; replacement encryption, full
+private execution, network behavior and release qualification remain open.
 
 The subsequent component snapshot adds only the independently reviewed lease
 transaction-owner fixture and two integration smoke compilation fixes, with no
@@ -108,12 +108,30 @@ scoped formatting checks pass with unchanged source, recorded in
 compilation passed in 1,166.563 seconds in
 `bfv-fhe-components-20260929T101705Z`, using the same candidate-specific target.
 All 73 local artifacts have verified lineage, including ten reused outputs.
-Immutable binaries and their hashes are retained. Native execution is running:
-the three new public-route/cleanup controls and repaired lease setup have passed;
-the Torii run exposes the same stale unsupported-backend error assertion as the
-older candidate. That one-test main repair remains separate until the running
-source guard finishes. No complete component runtime pass is inferred from
-compilation or the preceding crypto results.
+Immutable binaries and their hashes are retained. Native execution finished in
+4,464.812 seconds with 798 passes and one failure, zero ignored and unchanged
+source/binary guards. The name audit proves all 367 mandatory Core controls
+passed exactly once, including all 302 broad Soracloud tests. Model execution
+passed 396 controls: all 385 mandatory names plus 11 explicitly retained substring
+matches in instruction tests. Torii passed 35 of 36; the sole failure was the
+reviewed stale HKDF error-code assertion. The original failed receipt and exact
+execution-name audit remain in `native-controls/`; no failure is relabeled.
+
+Only that reviewed test file was then overlaid with current modification time.
+Normal Torii compilation and all 36 exact controls passed, zero ignored, in
+`bfv-fhe-torii-fixture-retry-20260929T115654Z`. Build time was 894.444 seconds;
+total time was 954.988 seconds. All 71 emitted local artifacts have verified
+lineage (44 rebuilt, 27 reused exact paths/hashes). The amended source manifest
+SHA-256 is `ac7741554a10fb026c4af6f1b107eb618c6f071b68fd6c509f8fcb82eef7e5dd`;
+the retained binary is
+`1431a6c1f3ae370c41d28de6ca4596ef5845f150b2208556c2e0d0a91d55a8e1`.
+Source and immutable binary guards pass. The native assertions distinguish
+known-insecure BFV and unsupported HKDF encrypted-route 503 responses, their
+stable headers and canonical Norito envelopes, and generic 500 error redaction.
+The preceding Core/model binaries retain their exact predecessor scope; their
+sources and production behavior did not change in this one-test amendment.
+This closes focused containment component qualification, not replacement
+cryptography, a complete private relation, network behavior or release readiness.
 
 A later main-only three-comment amendment removes public rustdoc links to retired
 constructors and states the known-insecure gate directly. The non-doc source is

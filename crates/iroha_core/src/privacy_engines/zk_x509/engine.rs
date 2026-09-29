@@ -86,11 +86,11 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // Independently encoded and SHA-256 checked from the exact ordered 29-field
 // manifest, including the compact-CA descriptor and all six SHA3-384 algebraic
 // schedule digests in their opaque byte order. The manifest itself uses SHA-256.
-// This identifies the sole compiled geometry; activation additionally requires
+// This identifies the sole compiled AIR and geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0xf8, 0x2e, 0x78, 0xa9, 0x95, 0xce, 0x1b, 0x9c, 0xa1, 0xe9, 0x16, 0x28, 0x90, 0x1e, 0x9a, 0xcd,
-    0x9b, 0x01, 0xa6, 0x84, 0x1c, 0x13, 0xe0, 0x62, 0xe3, 0x0a, 0xd6, 0xdf, 0xdf, 0x02, 0x87, 0x95,
+    0x9d, 0x2d, 0x34, 0x51, 0x2d, 0xe9, 0x0d, 0x13, 0xa0, 0xf6, 0x8d, 0x35, 0x2b, 0xbc, 0xc8, 0x87,
+    0xba, 0x9a, 0xc2, 0xf2, 0xa8, 0x9e, 0x5d, 0xeb, 0x84, 0x5f, 0xf5, 0xc4, 0xc6, 0x4d, 0x45, 0xff,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -687,6 +687,35 @@ mod tests {
                 .digest(),
             independent
         );
+    }
+    #[test]
+    fn compiled_profile_rejects_the_superseded_sha_padding_descriptor() {
+        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let mut superseded = fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        let current = core::str::from_utf8(&superseded[17]).unwrap();
+        let boundary =
+            "cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:";
+        assert_eq!(current.matches(boundary).count(), 1);
+        superseded[17] = current.replace(boundary, "").into_bytes();
+        let old_fields = superseded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let old_digest = independent_compiled_profile_digest_v1(&old_fields);
+        assert_eq!(
+            hex::encode(old_digest),
+            "f82e78a995ce1b9ca1e91628901e9acd9b01a6841c13e062e30ad6dfdf028795"
+        );
+        assert_ne!(Some(old_digest), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
+        assert_ne!(
+            construct_zk_x509_compiled_profile_v1().unwrap().digest(),
+            old_digest
+        );
+        let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
+            .expect("current verifier profile");
+        supplied.compiled_profile_digest = old_digest;
+        assert!(super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err());
     }
     /// Record forbidden entropy reads while rejecting every request immediately.
     #[derive(Default)]

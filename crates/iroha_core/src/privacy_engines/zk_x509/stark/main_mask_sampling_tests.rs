@@ -255,3 +255,214 @@ fn canonical_sha_sampling_work_is_batched_inside_existing_replay_allowance() {
         "SHA sampling source constructions: {scalar_calls} -> {batch_calls}; native batch payload={resident}"
     );
 }
+
+#[test]
+fn canonical_arithmetic_auxiliary_runs_stay_within_existing_native_batch() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let bound = aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1;
+    let group = &layout.trace_groups[5];
+    let resident = bound
+        * ((1 << group.native_trace_log2) * core::mem::size_of::<F>()
+            + core::mem::size_of::<ZeroizingMainTraceColumnV1>());
+    assert!(resident < plan.replay_batch);
+    let mut scalar = 0;
+    let mut batched = 0;
+    for registration in &layout.registered_segments {
+        if registration.segment.adapter != SegmentAdapterIdV1::P256Arithmetic {
+            continue;
+        }
+        assert_eq!(registration.trace_group, 5);
+        assert_eq!(registration.segment.aux_width, 72);
+        let end = registration.aux_end().unwrap();
+        scalar += registration.segment.aux_width;
+        for start in (0..group.aux_width).step_by(bound) {
+            if start < end && start + bound > registration.aux_start {
+                batched += 1;
+            }
+        }
+    }
+    assert_eq!(scalar, 5 * 72);
+    assert!(batched <= scalar.div_ceil(bound) + 5);
+    assert!(batched * 7 < scalar);
+    eprintln!(
+        "arithmetic auxiliary full native traversals per replay: {scalar} -> {batched}; retained terminal delta=0; native batch payload={resident}"
+    );
+}
+
+#[test]
+#[ignore = "actual maximum bound sources, native dispatch and log22 commitment/opening parity; optimized qualification"]
+fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_openings() {
+    use crate::privacy_engines::zk_x509::{
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true).unwrap();
+    let trust_anchor = fixture.authoritative_state.trust_anchor();
+    let crl = fixture.authoritative_state.crl_record();
+    let assembly = build_zk_x509_main_trace_assembly_v1(
+        &fixture.statement,
+        ZkX509GovernanceV1 {
+            trust_anchor: &trust_anchor,
+            certificate_policy: fixture.authoritative_state.certificate_policy(),
+            crl: &crl,
+        },
+        &fixture.witness,
+    )
+    .unwrap();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let digest = |seed| PrivacyOuterDigestV1::from_bytes([seed; 48]);
+    let binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+            [0x81; 32],
+            assembly.verifier_profile.compiled_profile_digest,
+            core::array::from_fn(|index| digest(index as u8 + 1)),
+        ),
+        digest(0x91),
+        digest(0xa1),
+        digest(0xb1),
+    )
+    .unwrap();
+    let sha =
+        main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses).unwrap();
+    let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
+    let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+        &layout, &assembly, sha, p256, binding,
+    )
+    .unwrap();
+    let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
+        &layout,
+        &fixture.statement,
+        &assembly.projection_trace,
+    )
+    .unwrap();
+    let mut io =
+        MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
+    projection
+        .bind_challenges_v1(binding.main_post_base())
+        .unwrap();
+    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    let sources = MainTraceReplaySourcesV1::Bound {
+        log19: &bound,
+        projection: &projection,
+        io: &io,
+    };
+    let first_arithmetic = layout
+        .registered_segments
+        .iter()
+        .find(|registration| registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .copied()
+        .unwrap();
+    let boundary = first_arithmetic.aux_end().unwrap();
+    // Split one requested batch across two canonical signature registrations.
+    let crossed = sources
+        .native_columns_v1(
+            &layout,
+            MainTraceColumnKindV1::Aux,
+            5,
+            boundary - 3..boundary + 5,
+        )
+        .unwrap();
+    for (offset, actual) in crossed.iter().enumerate() {
+        let (registration, local) = registered_main_group_column_v1(
+            &layout,
+            5,
+            MainTraceColumnKindV1::Aux,
+            boundary - 3 + offset,
+        )
+        .unwrap();
+        assert_eq!(
+            **actual,
+            *bound.native_aux_column_v1(registration, local).unwrap()
+        );
+    }
+    drop(crossed);
+    for range in [0..0, 0..9, usize::MAX..usize::MAX] {
+        assert!(
+            sources
+                .native_columns_v1(&layout, MainTraceColumnKindV1::Aux, 5, range)
+                .is_err()
+        );
+    }
+    // Use two adjacent real arithmetic columns on the unchanged native19/common22
+    // domains. These exact seeded masks feed real Merkle roots and opening replay.
+    let start = first_arithmetic.aux_start + 47;
+    let width = 2;
+    let mut scalar = |column| {
+        let (registration, local) =
+            registered_main_group_column_v1(&layout, 5, MainTraceColumnKindV1::Aux, start + column)
+                .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+        bound
+            .native_aux_column_v1(registration, local)
+            .map(ZeroizingMainTraceColumnV1::into_vec_v1)
+            .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
+    };
+    let sources_ref = &sources;
+    let layout_ref = &layout;
+    let batched = || {
+        let mut pending = Vec::new().into_iter();
+        move |column| {
+            if pending.len() == 0 {
+                assert_eq!(column, 0);
+                pending = sources_ref
+                    .native_columns_v1(
+                        layout_ref,
+                        MainTraceColumnKindV1::Aux,
+                        5,
+                        start..start + width,
+                    )
+                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+                    .into_iter();
+            }
+            pending
+                .next()
+                .map(ZeroizingMainTraceColumnV1::into_vec_v1)
+                .ok_or(AggregateStarkErrorV1::InvalidLayout)
+        }
+    };
+    let mut scalar_rng = StdRng::from_seed([53; 32]);
+    let mut batch_rng = scalar_rng.clone();
+    let indices = [0, 1, (1 << layout.common_lde_log2) - 1];
+    let commit =
+        |rng: &mut StdRng,
+         source: &mut dyn FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>| {
+            aggregate::commit_masked_trace_columns_v1(
+                ZK_X509_DIGEST_CONTEXT_V1,
+                AUX_LEAF_DOMAIN,
+                AUX_NODE_DOMAIN,
+                5,
+                first_arithmetic.segment.trace_log2,
+                layout.common_lde_log2,
+                width,
+                MASK_DEGREE,
+                &indices,
+                rng,
+                source,
+            )
+            .unwrap()
+        };
+    let (scalar_commitment, scalar_masks) = commit(&mut scalar_rng, &mut scalar);
+    let (batch_commitment, batch_masks) = commit(&mut batch_rng, &mut batched());
+    assert_eq!(scalar_rng.next_u64(), batch_rng.next_u64());
+    assert_eq!(scalar_commitment, batch_commitment);
+    let point = E::from_coefficients([F(113), F(127), F(131), F(137)]).unwrap();
+    assert_eq!(
+        aggregate::evaluate_masked_native_columns_at_deep_v1(&scalar_masks, point, scalar).unwrap(),
+        aggregate::evaluate_masked_native_columns_at_deep_v1(&batch_masks, point, batched())
+            .unwrap()
+    );
+    let opening_replay = aggregate::replay_masked_trace_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
+        AUX_LEAF_DOMAIN,
+        AUX_NODE_DOMAIN,
+        5,
+        &batch_masks,
+        &indices,
+        batched(),
+    )
+    .unwrap();
+    assert_eq!(opening_replay, scalar_commitment);
+}

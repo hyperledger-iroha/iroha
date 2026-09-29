@@ -3720,7 +3720,6 @@ public sealed partial class ToriiClient : IDisposable
             var timeToLive = reader.ReadField("time_to_live_ms");
             var nonce = reader.ReadField("nonce");
             var feePayment = reader.ReadField("fee_payment");
-            var admissionIntent = reader.ReadField("admission_intent");
             var metadata = reader.ReadField("metadata");
             var attachments = reader.ReadField("attachments");
             reader.RequireEnd();
@@ -3730,11 +3729,9 @@ public sealed partial class ToriiClient : IDisposable
                 networkDomain,
                 timeToLive,
                 nonce,
-                admissionIntent,
                 attachments,
                 expectedNetworkId,
                 TransactionBuilder.DefaultTimeToLiveMilliseconds,
-                TransactionAdmissionIntent.Ordinary,
                 encoding,
                 context);
             if (!authority.SequenceEqual(encoding.EncodeAccountId(expectedSignerAccountId)))
@@ -3763,7 +3760,7 @@ public sealed partial class ToriiClient : IDisposable
         catch (Exception error) when (error is ArgumentException or FormatException)
         {
             throw new JsonException(
-                $"{context}.transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload.",
+                $"{context}.transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload.",
                 error);
         }
     }
@@ -3784,11 +3781,9 @@ public sealed partial class ToriiClient : IDisposable
         ReadOnlySpan<byte> networkDomain,
         ReadOnlySpan<byte> timeToLive,
         ReadOnlySpan<byte> nonce,
-        ReadOnlySpan<byte> admissionIntent,
         ReadOnlySpan<byte> attachments,
         NetworkId expectedNetworkId,
         ulong expectedTimeToLiveMilliseconds,
-        TransactionAdmissionIntent expectedAdmissionIntent,
         TransactionEncodingContext encoding,
         string context)
     {
@@ -3819,13 +3814,10 @@ public sealed partial class ToriiClient : IDisposable
             throw new JsonException($"{context} transaction TTL differs from the exact request.");
         }
         if (!nonce.SequenceEqual(new byte[] { 0 })
-            || admissionIntent.Length != sizeof(uint)
-            || BinaryPrimitives.ReadUInt32LittleEndian(admissionIntent)
-                != (uint)expectedAdmissionIntent
             || !attachments.SequenceEqual(new byte[] { 0 }))
         {
             throw new JsonException(
-                $"{context} transaction nonce, admission intent, or attachments were substituted.");
+                $"{context} transaction nonce or attachments were substituted.");
         }
     }
 
@@ -5172,7 +5164,6 @@ public sealed partial class ToriiClient : IDisposable
             var timeToLive = transactionPayload.ReadField("time_to_live_ms");
             _ = transactionPayload.ReadField("nonce");
             var feePayment = transactionPayload.ReadField("fee_payment").ToArray();
-            var admissionIntent = transactionPayload.ReadField("admission_intent");
             var metadata = transactionPayload.ReadField("metadata").ToArray();
             var attachments = transactionPayload.ReadField("attachments");
             transactionPayload.RequireEnd();
@@ -5181,17 +5172,10 @@ public sealed partial class ToriiClient : IDisposable
                 || creationTime.Length != sizeof(ulong)
                 || executable.Length == 0
                 || feePayment.Length == 0
-                || admissionIntent.Length != sizeof(uint)
                 || !attachments.SequenceEqual(new byte[] { 0 }))
             {
                 throw new JsonException(
                     $"{context}.signed_transaction_wire_hex contains a noncanonical TransactionPayload.");
-            }
-            var admission = BinaryPrimitives.ReadUInt32LittleEndian(admissionIntent);
-            if (admission != (uint)TransactionAdmissionIntent.QueuePlanSynced)
-            {
-                throw new JsonException(
-                    $"{context}.signed_transaction_wire_hex must use QueuePlanSynced admission.");
             }
             var ttl = new CanonicalNoritoReader(timeToLive, $"{context} time_to_live_ms", nameof(wireHex));
             if (ttl.ReadByte("tag") != 1)
@@ -6103,7 +6087,6 @@ public sealed partial class ToriiClient : IDisposable
             var timeToLive = reader.ReadField("time_to_live_ms");
             var nonce = reader.ReadField("nonce");
             var feePayment = reader.ReadField("fee_payment");
-            var admissionIntent = reader.ReadField("admission_intent");
             var metadata = reader.ReadField("metadata");
             var attachments = reader.ReadField("attachments");
             reader.RequireEnd();
@@ -6113,12 +6096,10 @@ public sealed partial class ToriiClient : IDisposable
                 networkDomain,
                 timeToLive,
                 nonce,
-                admissionIntent,
                 attachments,
                 expectedNetworkId,
                 request.TransactionTimeToLiveMilliseconds
                     ?? TransactionBuilder.DefaultTimeToLiveMilliseconds,
-                TransactionAdmissionIntent.QueuePlanSynced,
                 encoding,
                 context);
             if (!authority.SequenceEqual(encoding.EncodeAccountId(request.Authority)))
@@ -6152,7 +6133,7 @@ public sealed partial class ToriiClient : IDisposable
         catch (Exception error) when (error is ArgumentException or FormatException)
         {
             throw new JsonException(
-                $"{context}.transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload.",
+                $"{context}.transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload.",
                 error);
         }
     }

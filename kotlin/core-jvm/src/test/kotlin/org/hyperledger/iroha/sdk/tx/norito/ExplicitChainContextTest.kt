@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.sdk.tx.norito
 
-import java.lang.reflect.Modifier
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -20,6 +19,7 @@ import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.testing.JvmApiInventory
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -38,7 +38,9 @@ class ExplicitChainContextTest {
     @Test
     fun `adapters require bounded explicit context and reject mismatched prefixes`() {
         assertFalse(
-            NoritoJavaCodecAdapter::class.java.constructors.any { it.parameterCount == 0 },
+            JvmApiInventory.read(NoritoJavaCodecAdapter::class.java).methods.any {
+                it.name == "<init>" && it.isPublic && it.parameterTypes.isEmpty()
+            },
             "the codec must not expose a context-free constructor",
         )
         assertFailsWith<IllegalArgumentException> { NoritoJavaCodecAdapter(-1) }
@@ -192,19 +194,19 @@ class ExplicitChainContextTest {
 
     @Test
     fun jniTransactionBridgeRequiresExactNetworkIdBytes() {
-        val managed = NativeSignerBridge::class.java.declaredMethods.single {
+        val managed = JvmApiInventory.read(NativeSignerBridge::class.java).methods.single {
             it.name == "encodeRegisterZkAssetSignedTransaction" &&
-                Modifier.isPublic(it.modifiers) &&
-                Modifier.isStatic(it.modifiers)
+                it.isPublic &&
+                it.isStatic
         }
-        val native = NativeSignerBridge::class.java.declaredMethods.single {
+        val native = JvmApiInventory.read(NativeSignerBridge::class.java).methods.single {
             it.name == "nativeEncodeRegisterZkAssetSignedTransaction" &&
-                Modifier.isNative(it.modifiers)
+                it.isNative
         }
 
-        assertEquals(NetworkId::class.java, managed.parameterTypes[1])
-        assertEquals(ByteArray::class.java, native.parameterTypes[1])
-        assertEquals(12, native.parameterCount, "retired shield verifier JNI parameters must be absent")
+        assertEquals("Lorg/hyperledger/iroha/sdk/core/model/NetworkId;", managed.parameterTypes[1])
+        assertEquals("[B", native.parameterTypes[1])
+        assertEquals(12, native.parameterTypes.size, "retired shield verifier JNI parameters must be absent")
         assertEquals(32, NetworkId.BYTE_LENGTH)
     }
 
@@ -265,8 +267,8 @@ class ExplicitChainContextTest {
         SignedTransaction(payload, ByteArray(64) { 0x55.toByte() }, ByteArray(0), schemaName)
 
     private fun swapMetadataEntries(canonicalPayload: ByteArray): ByteArray {
-        val fields = decodeSizedFields(canonicalPayload, 10)
-        val metadata = NoritoDecoder(fields[8], NoritoCodec.DEFAULT_FLAGS)
+        val fields = decodeSizedFields(canonicalPayload, 9)
+        val metadata = NoritoDecoder(fields[7], NoritoCodec.DEFAULT_FLAGS)
         assertEquals(2L, metadata.readLength(false))
         val first = readSizedField(metadata)
         val second = readSizedField(metadata)
@@ -276,7 +278,7 @@ class ExplicitChainContextTest {
         swapped.writeLength(2, false)
         writeSizedField(swapped, second)
         writeSizedField(swapped, first)
-        fields[8] = swapped.toByteArray()
+        fields[7] = swapped.toByteArray()
         return encodeSizedFields(fields)
     }
 
@@ -322,13 +324,13 @@ class ExplicitChainContextTest {
         name: String,
         parameterIndex: Int,
     ) {
-        val methods = type.declaredMethods.filter {
-            it.name == name && Modifier.isStatic(it.modifiers)
+        val methods = JvmApiInventory.read(type).methods.filter {
+            it.name == name && it.isStatic
         }
         assertTrue(methods.isNotEmpty(), "missing method ${type.name}.$name")
         methods.forEach { method ->
-            assertTrue(method.parameterCount > parameterIndex)
-            assertEquals(Int::class.javaPrimitiveType, method.parameterTypes[parameterIndex])
+            assertTrue(method.parameterTypes.size > parameterIndex)
+            assertEquals("I", method.parameterTypes[parameterIndex])
         }
     }
 
@@ -337,10 +339,10 @@ class ExplicitChainContextTest {
         name: String,
         parameterIndex: Int,
     ) {
-        val method = type.declaredMethods.firstOrNull { it.name == name }
+        val method = JvmApiInventory.read(type).methods.firstOrNull { it.name == name }
             ?: error("missing method ${type.name}.$name")
-        assertTrue(method.parameterCount > parameterIndex)
-        assertEquals(Int::class.javaPrimitiveType, method.parameterTypes[parameterIndex])
+        assertTrue(method.parameterTypes.size > parameterIndex)
+        assertEquals("I", method.parameterTypes[parameterIndex])
     }
 
     private fun assertMethodHasParameterCount(
@@ -348,9 +350,9 @@ class ExplicitChainContextTest {
         name: String,
         parameterCount: Int,
     ) {
-        val method = type.declaredMethods.firstOrNull { it.name == name }
+        val method = JvmApiInventory.read(type).methods.firstOrNull { it.name == name }
             ?: error("missing method ${type.name}.$name")
-        assertEquals(parameterCount, method.parameterCount)
+        assertEquals(parameterCount, method.parameterTypes.size)
     }
 
     private companion object {

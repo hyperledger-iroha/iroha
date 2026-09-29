@@ -127,6 +127,7 @@ pub(super) struct CapturedNetworkPolicyRoutes {
     carrier: HashOf<BlockHeader>,
     rows: ChargedBuffer<SourceRow>,
     invalid_context: Option<&'static str>,
+    captured: bool,
 }
 
 impl CapturedNetworkPolicyRoutes {
@@ -147,10 +148,16 @@ impl CapturedNetworkPolicyRoutes {
             carrier: source.hash(),
             rows,
             invalid_context: None,
+            captured: false,
         })
     }
 
     pub(super) fn fill_from_preblock(&mut self, state: &StateBlock<'_>, source: &SignedBlock) {
+        if self.captured {
+            self.invalid_context = Some("physical policy capture is not repeatable");
+            return;
+        }
+        self.captured = true;
         self.invalid_context = self.capture(state, source).err();
     }
 
@@ -246,6 +253,9 @@ impl CapturedNetworkPolicyRoutes {
     }
 
     pub(super) fn validate_carrier(&self, source: &SignedBlock) -> Result<(), &'static str> {
+        if !self.captured {
+            return Err("physical policy owner was not captured from pristine State");
+        }
         if let Some(error) = self.invalid_context {
             return Err(error);
         }

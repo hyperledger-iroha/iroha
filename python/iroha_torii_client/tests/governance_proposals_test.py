@@ -782,3 +782,12 @@ def test_kagemusha_release_schema_requires_network_and_closed_purpose() -> None:
     ):
         with pytest.raises(TypeError):
             validate_release_schema_v1(schema, {**manifest, "purpose": purpose})
+
+
+def test_kagemusha_hardware_capability_mask_uses_the_complete_u32_wire_range() -> None:
+    hardware = _release_install_fixture()["payload"]["manifest"]["enabled_profiles"][0]["hardware_profile"]
+    hardware["capability_mask"] = (1 << 32) - 1
+    validate_release_schema_v1("GovernanceKagemushaHardwareProfileV1", hardware)
+    hardware["capability_mask"] = 1 << 32
+    with pytest.raises(TypeError, match="integer"):
+        validate_release_schema_v1("GovernanceKagemushaHardwareProfileV1", hardware)

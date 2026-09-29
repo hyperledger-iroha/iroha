@@ -103,10 +103,14 @@ import tomllib
 import uuid
 
 
-# The static native census is captured alongside this gate. It contains no source-dependent filtering.
-_native_inventory_path = Path(__file__).with_name("taira_native_test_inventory.py")
-_native_inventory = {"__name__": "taira_native_inventory", "__file__": str(_native_inventory_path)}
-exec(compile(_native_inventory_path.read_bytes(), str(_native_inventory_path), "exec"), _native_inventory)
+# Authenticated preparation injects the census executed from retained verified bytes.
+# Only the explicitly mutable development gate reads its adjacent source from disk.
+if __name__ == "taira_captured_release_check":
+    _native_inventory = _captured_native_inventory
+else:
+    _native_inventory_path = Path(__file__).with_name("taira_native_test_inventory.py")
+    _native_inventory = {"__name__": "taira_native_inventory", "__file__": str(_native_inventory_path)}
+    exec(compile(_native_inventory_path.read_bytes(), str(_native_inventory_path), "exec"), _native_inventory)
 native_owner_stages = _native_inventory["native_owner_stages"]
 
 STAGES = (
@@ -797,8 +801,8 @@ CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters
     'zk::debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
 )), )
 
-CORE_PENDING_KURA_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
-CORE_ADMISSION_STARTUP_STAGES += CORE_PENDING_KURA_RECOVERY_STAGES
+CORE_NATIVE_ARCHIVE_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
+CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_ARCHIVE_RECOVERY_STAGES
 
 
 CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity boundary", (
@@ -2101,6 +2105,8 @@ CONCREAD_STAGES = (
         'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
         'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
         'release::tests::charged_notification_retains_original_control_through_observers_and_deferred_releases',
+        'release::tests::deferred_notice_merge_retains_exact_source_and_never_wakes_early',
+        'release::tests::deferred_notice_merge_preserves_poison_after_rejected_transfer',
     )),
     ('failed native cursor retains cleanup after unlock', (
         'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
@@ -3889,10 +3895,7 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
         selected_by_package.setdefault(package, []).extend((harness, name) for name in names)
 
     try:
-        helper = root / "scripts/formal/rust_text.py"
-        namespace = {"__name__": "taira_selected_source_text", "__file__": str(helper)}
-        exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
-        mask = namespace["mask_rust_comments"]
+        mask = _native_inventory["rust_source_masker"](root)
         validate_cli_seating_test_registration(
             root, [("cli", name) for _, names in scoped_stages.get("cli", ()) for name in names], mask)
         declarations = (
@@ -3974,10 +3977,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
     )
     try:
-        helper = root / "scripts/formal/rust_text.py"
-        namespace = {"__name__": "taira_mv_source_text", "__file__": str(helper)}
-        exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
-        mask = namespace["mask_rust_comments"]
+        mask = _native_inventory["rust_source_masker"](root)
         package = root / "crates/mv/src"
         sources = {}
         def source(relative):
@@ -4297,20 +4297,20 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         for name in selections:
             if name != "config" and name not in focused:
                 harnesses.release(name)
-        pending_kura_names = {test for _, tests in CORE_PENDING_KURA_RECOVERY_STAGES
+        native_archive_names = {test for _, tests in CORE_NATIVE_ARCHIVE_RECOVERY_STAGES
                               for test in tests}
         core_stages = focused.get("core", ())
-        pending_kura = tuple((label, tuple(test for test in tests if test in pending_kura_names))
+        native_archive = tuple((label, tuple(test for test in tests if test in native_archive_names))
                              for label, tests in core_stages
-                             if any(test in pending_kura_names for test in tests))
-        remaining_core = tuple((label, tuple(test for test in tests if test not in pending_kura_names))
+                             if any(test in native_archive_names for test in tests))
+        remaining_core = tuple((label, tuple(test for test in tests if test not in native_archive_names))
                                for label, tests in core_stages
-                               if any(test not in pending_kura_names for test in tests))
+                               if any(test not in native_archive_names for test in tests))
         # Retain the same Core copy for its remaining tests. A partial focus must
         # neither expand to all recovery tests nor bury their failures in later work.
-        if pending_kura:
-            source_unchanged("pending Kura recovery regressions")
-            run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds)
+        if native_archive:
+            source_unchanged("native archive recovery regressions")
+            run_stages(harnesses["core"], fixture_root, env, native_archive, lock_fds)
         failures = []
         for name in selections:
             if name in {"config", "network"} or name not in focused:
@@ -4397,14 +4397,14 @@ def partition_priority_stages(stages, *, test_names=(), stage_labels=(),
 
 
 def pre_network_partition(independent_stages, *, priority_cli, deferred_cli,
-                          priority_torii, pending_kura):
+                          priority_torii, native_archive):
     """Split the complete independent census at the four-peer fixture.
 
-    MV ownership, pending-Kura recovery, startup and priority groups form the
+    MV ownership, native archive recovery, startup and priority groups form the
     pre-network prefix; every other selected test is deferred until after the
     network fixture. Each test belongs to exactly one side.
     """
-    startup = {"core": CORE_STARTUP_STAGES + pending_kura, "daemon": DAEMON_STARTUP_STAGES,
+    startup = {"core": CORE_STARTUP_STAGES + native_archive, "daemon": DAEMON_STARTUP_STAGES,
                "torii-unit": TORII_STARTUP_STAGES}
     if any(stage in startup["torii-unit"] for stage in priority_torii):
         raise CheckError("priority Torii stage overlaps mandatory startup checks")
@@ -4506,11 +4506,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
             # Startup fixtures are part of the same canonical census, but execute
             # before CLI and long consensus/proof groups. Retain each immutable copy
             # until its remaining stages finish; no test runs twice or gains a skip flag.
-            pending_kura = tuple(stage for stage in scoped_stages["core"]
-                                 if stage in CORE_PENDING_KURA_RECOVERY_STAGES)
+            native_archive = tuple(stage for stage in scoped_stages["core"]
+                                 if stage in CORE_NATIVE_ARCHIVE_RECOVERY_STAGES)
             prefix_stages, deferred_stages = pre_network_partition(
                 independent_stages, priority_cli=priority_cli, deferred_cli=deferred_cli,
-                priority_torii=priority_torii, pending_kura=pending_kura)
+                priority_torii=priority_torii, native_archive=native_archive)
             prefix = dict(prefix_stages)
             checkpoint_enabled = update_independent_checks is not None
             evidence = independent_check_evidence(harnesses, independent_stages,
@@ -4540,17 +4540,17 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                     if prefix.get(name):
                         run_stages(harnesses[name], fixture_root, env, prefix[name], lock_fds,
                                    inventories=inventories)
-                # Actual post-Kura recovery is a prerequisite for every later
+                # Actual native archive recovery is a prerequisite for every later
                 # stage. Keep the shared Cargo graph and exact checkpoint census,
                 # but do not bury a publication failure among other startup cases.
-                if pending_kura:
-                    run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds,
+                if native_archive:
+                    run_stages(harnesses["core"], fixture_root, env, native_archive, lock_fds,
                                inventories=inventories)
                 startup_failures = []
                 for name, _ in early_stages:
-                    # MV ownership and pending-Kura ran above; priority Torii
+                    # MV ownership and native archive recovery ran above; priority Torii
                     # runs with the priority CLI group below.
-                    separate = {"core": pending_kura, "torii-unit": priority_torii}.get(name, ())
+                    separate = {"core": native_archive, "torii-unit": priority_torii}.get(name, ())
                     stages = () if name in MV_OWNERSHIP_HARNESSES else tuple(
                         stage for stage in prefix.get(name, ()) if stage not in separate)
                     if stages:

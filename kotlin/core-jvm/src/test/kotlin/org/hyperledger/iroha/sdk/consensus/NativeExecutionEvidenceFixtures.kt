@@ -70,12 +70,24 @@ object NativeExecutionEvidenceFixtures {
             require(state.number(8) == height)
             val carrierHash = state.fixed(32)
             require(carrierHash[31].toInt() and 1 == 1)
-            // The sole native R.native_lanes authenticates every complete state byte;
-            // the Rust verifier additionally authenticates each original lane frame.
-            state.field(); state.finish()
+            // The Rust replay authenticates complete lanes and ordered ordinary writes
+            // against their native result roots, then verifies every original lane frame.
+            state.field()
+            Reader(state.field()).sequence { bytes ->
+                val write = Reader(bytes)
+                Reader(write.field()).byteVector()
+                Reader(write.field()).byteVector()
+                write.finish()
+            }
+            require(Reader(state.field()).sequence { it }.isEmpty()) {
+                "these native workload fixtures have no Parliament casting bindings"
+            }
+            state.finish()
             Reader(evidence.field()).sequence { bytes ->
                 val original = Reader(bytes)
-                require(original.number(4).signum() > 0)
+                val lane = Reader(original.field())
+                require(lane.number(4).signum() > 0)
+                lane.finish()
                 val frame = Reader(Reader(original.field()).byteVector())
                 frame.field(); frame.field(); frame.finish()
                 original.finish()
@@ -127,7 +139,7 @@ object NativeExecutionEvidenceFixtures {
             TransferWirePayloadEncoder.encodeAccountIdPayload(authority),
             hexHash(row["entrypoint_hash"]), number("carrier_height", 8), hexHash(row["carrier_hash"]),
             encodeSource(row["lane_source"], p.u32(row["lane_id"], "lane_id"), p.positiveU64(row["carrier_height"], "carrier_height")),
-            number("leaf_index", 4), number("lane_id", 4), number("dataspace_id", 8))
+            number("leaf_index", 4), record(number("lane_id", 4)), record(number("dataspace_id", 8)))
         return record(number("sequence", 8), request)
     }
 

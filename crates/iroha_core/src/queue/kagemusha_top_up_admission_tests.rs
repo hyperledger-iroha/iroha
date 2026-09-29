@@ -214,6 +214,7 @@ pub(crate) mod kagemusha_top_up_admission_tests {
             &mut state_transaction,
             route,
             policy_route,
+            None,
         )
         .expect_err("stateful admission must repeat the KAGEMUSHA top-up invariant");
         assert!(matches!(

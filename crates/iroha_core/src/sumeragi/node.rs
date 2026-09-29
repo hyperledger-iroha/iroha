@@ -1504,6 +1504,7 @@ mod tests {
             if start.elapsed() >= limit {
                 for validator in validators {
                     eprintln!("{:#?}", validator.node.driver.handle().status());
+                    eprintln!("lanes: {:#?}", validator.node.lanes.handle().statuses());
                     let view = validator.state.view();
                     for height in 2..=view.height() {
                         let block = validator
@@ -1601,7 +1602,7 @@ mod tests {
                 .queue
                 .push(accepted.clone(), validator.state.view())
                 .expect("queued");
-            validator.node.driver.handle().transactions_available();
+            validator.node.handle().transactions_available();
         }
         hash
     }
@@ -1777,9 +1778,30 @@ mod tests {
         shutdown(validators);
     }
 
+    const ELASTIC_BURST_INPUTS: u32 = 256;
+
     /// A lane policy that autoscales one elastic lane (16) over the whole validator set.
     fn elastic_lane_policy(_keys: &[KeyPair]) -> Vec<Parameter> {
-        use iroha_data_model::sumeragi_lanes::{SumeragiLaneAutoscale, SumeragiLanePolicy};
+        use iroha_data_model::{
+            parameter::{ExecutionOutputPolicyV1, FastpqSourcePolicyV1, system::BlockParameter},
+            sumeragi_lanes::{SumeragiLaneAutoscale, SumeragiLanePolicy},
+        };
+        // This signed genesis supports the test's Log-only load, with no Pipeline callbacks.
+        // Keep every other output/source ceiling; the default 256 callbacks per input reserve
+        // most source capacity and limit native proposals to eleven Network inputs.
+        let output = ExecutionOutputPolicyV1 {
+            max_pipeline_triggers: 0,
+            ..ExecutionOutputPolicyV1::bootstrap()
+        };
+        output
+            .validate()
+            .expect("finite signed Log-workload profile");
+        assert!(
+            FastpqSourcePolicyV1::bootstrap()
+                .maximum_network_inputs(output)
+                .expect("original finite source capacity")
+                >= ELASTIC_BURST_INPUTS
+        );
         let policy = SumeragiLanePolicy {
             anchor_freshness: 4,
             max_merge_blocks: 16,
@@ -1803,7 +1825,10 @@ mod tests {
                 cooldown: 3,
             }),
         };
-        vec![Parameter::Custom(policy.into_custom_parameter())]
+        vec![
+            Parameter::Block(BlockParameter::ExecutionOutput(output)),
+            Parameter::Custom(policy.into_custom_parameter()),
+        ]
     }
 
     fn lane_record(
@@ -1825,6 +1850,23 @@ mod tests {
         let chain = chain_with(4, 200, elastic_lane_policy);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
+        let autoscale = crate::sumeragi::lanes::lane_policy(validators[0].state.view().world())
+            .expect("the signed lane policy")
+            .autoscale
+            .expect("the signed autoscale policy");
+        {
+            let view = validators[0].state.view();
+            let block = view.world().parameters().block();
+            assert_eq!(block.execution_output().max_pipeline_triggers, 0);
+            assert!(
+                block
+                    .fastpq_source()
+                    .maximum_network_inputs(block.execution_output())
+                    .expect("authenticated genesis source capacity")
+                    >= ELASTIC_BURST_INPUTS
+            );
+        }
+        let peak_utilization = std::cell::Cell::new(None::<u64>);
         let mut round = 0usize;
         let mut burst = |validators: &[Validator], size: usize| {
             round += 1;
@@ -1836,6 +1878,16 @@ mod tests {
                 Duration::from_secs(60),
                 "a burst commits",
                 || {
+                    let view = validators[0].state.view();
+                    if let Some(utilization) = crate::sumeragi::lanes::step::utilization_permille(
+                        &view.world().sumeragi_lanes().samples,
+                        autoscale.window,
+                        autoscale.per_lane_target_tps,
+                    ) {
+                        peak_utilization
+                            .set(Some(peak_utilization.get().unwrap_or(0).max(utilization)));
+                    }
+                    drop(view);
                     hashes
                         .iter()
                         .all(|hash| committed_everywhere(validators, *hash))
@@ -1854,9 +1906,30 @@ mod tests {
             if running(&validators) == vec![1; 4] {
                 break;
             }
-            burst(&validators, 6);
+            // Amortize real proposal/QC work with a bounded queue of ordinary signed inputs.
+            // Six inputs per several-second commit do not supply the policy's 3 TPS threshold.
+            burst(
+                &validators,
+                usize::try_from(ELASTIC_BURST_INPUTS).expect("bounded burst"),
+            );
         }
-        assert_eq!(running(&validators), vec![1; 4], "the elastic lane runs");
+        assert!(
+            peak_utilization
+                .get()
+                .is_some_and(|value| value >= u64::from(autoscale.scale_out_permille)),
+            "the actual committed load must cross the signed scale-out threshold: peak {:?}, threshold {}",
+            peak_utilization.get(),
+            autoscale.scale_out_permille,
+        );
+        assert_eq!(
+            running(&validators),
+            vec![1; 4],
+            "the elastic lane runs: {:?}",
+            validators
+                .iter()
+                .map(|validator| validator.state.view().world().sumeragi_lanes().clone())
+                .collect::<Vec<_>>()
+        );
         let record = lane_record(&validators[0], elastic).expect("the elastic lane");
         assert_eq!(record.committee.len(), 4, "drawn from the validators");
         // The second shard's account is routed to the elastic lane.
@@ -2104,6 +2177,32 @@ mod tests {
         let entry = blocks.entry(2).expect("height 2 stored");
         let mut forged = entry.commit_qc.clone();
         forged.result = Hash32([0xAB; 32]);
+        // This negative must reach execution comparison, not fail earlier on a stale
+        // signature. The original committee signs the wrong result over the real block.
+        use iroha_sumeragi::crypto::{Crypto as _, Signer as _};
+        assert!(
+            !forged.attest,
+            "ordinary fixture height has no attestation obligation"
+        );
+        let committee = schedule::scheduled_committee(state.view().world(), 2)
+            .expect("authenticated original committee");
+        let preimage = forged.preimage();
+        let signatures = forged
+            .signers
+            .ones()
+            .map(|index| {
+                let member = &committee[usize::try_from(index).expect("committee index")];
+                let key = chain
+                    .keys
+                    .iter()
+                    .find(|key| key.public_key() == member.public_key())
+                    .expect("original validator custody");
+                KeyPairSigner::new(key)
+                    .expect("original BLS signer")
+                    .sign(&preimage)
+            })
+            .collect::<Vec<_>>();
+        forged.agg_sig = crypto.aggregate(&signatures);
         let error = executor
             .replay(&entry.block, &forged)
             .expect_err("a differing certified result");

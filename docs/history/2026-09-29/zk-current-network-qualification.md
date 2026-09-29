@@ -181,3 +181,41 @@ five failed and zero ignored, with all 128 selected names executed exactly once.
 `fastpq-recorder-normal-20260929T113647Z/combined-result.json` reconciles both
 reader runs and retains the launcher interruption. The five failures prevent
 claiming a passing inventory suite or canonical SDK fixture readiness.
+
+## Captured physical policy and native ordering scope
+
+The next reviewed candidate separates native ordering identity from physical
+Nexus policy authority. A private typed route resolves physical policy against
+pristine predecessor State before any prefix effects; admission checks both
+committed and successor heights. Fixed-size, charged rows bind the original
+carrier, ordinal, outer entrypoint, inner signed hash and authenticated native
+route. Physical/native dataspaces must agree. Execution keeps the native lane in
+receipts and FASTPQ source identity while physical policy supplies manifest,
+privacy, governance and fraud checks. Sealed reveals carry the same captured
+policy into inner execution. Ordinary routing failures remain bounded transaction
+rejections; no later State-based routing fallback is introduced.
+
+The three reviewed amendment stages change 25 files, including fixture-only
+migration of all 90 output-producer controls to original recorder lifetimes.
+Actual Network fixtures use authenticated signed contexts and materialized
+physical manifests; explicit component fixtures remain test-only. The extension
+preserves 897 existing assertion token streams and adds four write-once failure
+assertions. The five remaining inventory fixtures derive their actual committed
+native contexts. Initial signature/queue-preimage review errors were corrected
+before capture; their drafts remain retained.
+
+`native-policy-candidate/source.json` records 20,737 inputs with SHA-256
+`2ce011167feb442fa39beb29e9067327bfe6fa2bd766cd08f38d22454bff587c`.
+The normal Core/Kagami build and 247 exact controls are running in
+`native-policy-normal-20260929T122739Z`. This is not a passing runtime result.
+The control plan pins the source helper and predecessor compiler-artifact
+inventories before loading them, and verifies every reused output hash. The
+original source-only capture precedes this extra provenance gate; no native
+qualification is retroactively attached to it. The old missing-route, recorder,
+manifest and launcher failures remain unchanged in their original receipts.
+
+A concurrent external merge adds canonical fixture files and changes genesis
+admission on main. Those files and that merged source are not qualified by this
+older frozen candidate's review or by their existence. Main reconciliation,
+actual canonical generation/read-only replay, Kotlin consumers and four-validator
+network evidence remain separate completion steps.

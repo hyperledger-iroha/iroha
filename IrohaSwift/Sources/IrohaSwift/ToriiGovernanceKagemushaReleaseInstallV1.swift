@@ -720,7 +720,7 @@ public struct ToriiGovernanceKagemushaHardwareProfileV1: Decodable, Sendable, Eq
   public let allowedSuiteCommitment: ToriiGovernanceKagemushaBytes32V1
   public let policyEpoch: UInt64
   public let governanceCredentialPublicKey: ToriiGovernanceKagemushaDevicePublicKeyV1
-  public let capabilityMask: UInt16
+  public let capabilityMask: UInt32
   public let qualificationReportDigest: ToriiGovernanceKagemushaBytes32V1
   public let validFromMs: UInt64
   public let expiresAtMs: UInt64
@@ -782,7 +782,7 @@ public struct ToriiGovernanceKagemushaHardwareProfileV1: Decodable, Sendable, Eq
     }
     governanceCredentialPublicKey = try container.decode(
       ToriiGovernanceKagemushaDevicePublicKeyV1.self, forKey: .governanceCredentialPublicKey)
-    capabilityMask = try container.decode(UInt16.self, forKey: .capabilityMask)
+    capabilityMask = try container.decode(UInt32.self, forKey: .capabilityMask)
     qualificationReportDigest = try container.decode(
       ToriiGovernanceKagemushaBytes32V1.self, forKey: .qualificationReportDigest)
     validFromMs = try container.decode(UInt64.self, forKey: .validFromMs)

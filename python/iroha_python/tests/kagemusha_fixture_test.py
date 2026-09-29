@@ -49,6 +49,7 @@ def test_rust_generated_three_message_fixture_is_byte_identical() -> None:
 
     request_raw = _raw(fixture["payment_request"])
     request = Kagemusha.decode_payment_request(request_raw)
+    assert request.hardware_credential.app_policy_binding_digest == bytes([0xA6]) * 32
     payment_raw = _raw(fixture["payment"])
     payment = Kagemusha.decode_payment(payment_raw, request)
     acknowledgement_raw = _raw(fixture["acknowledgement"])

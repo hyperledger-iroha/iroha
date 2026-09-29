@@ -1,8 +1,9 @@
 # Rust BFV construction boundary
 
 Date: 2026-09-29. The fixed candidate passed 348 native crypto controls and
-15 default API compile-fail doctests. Core, model, Torii and integration
-qualification remains pending. No replacement encryption security is claimed.
+15 default API compile-fail doctests. The subsequent containment candidate
+also passed focused Core/model/Torii qualification, linked below; integration
+qualification remains separate. No replacement encryption security is claimed.
 
 Seven generic seeded key-generation/encryption functions are crate-private.
 Their former root and `fhe_bfv` module imports are compile-fail boundaries;
@@ -97,3 +98,12 @@ diagnostics own that amended candidate next. A separate main-only Torii fixture
 amendment now checks the intended 503 status, backend-specific reject header and
 canonical Norito error envelope; it was not silently folded into the seven-file
 handoff. Normal repaired component/integration retries remain pending.
+
+The later specialized-constructor containment stage supersedes the open focused
+component result without changing these historical failures: 349 native crypto
+controls and 37 API import rejections passed, followed by 367 Core and 396 model
+controls. A separate reviewed one-test Torii correction then passed all 36
+controls with exact source, binary and local dependency lineage. See
+[the containment record](bfv-soracloud-production-containment.md) for manifests,
+retained failed predecessors and the final Torii binary. This does not promote
+the diagnostic arithmetic or qualify the separate integration/network work.

@@ -3496,8 +3496,8 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
     signed_finality_timing.complete();
     let replay_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
-    // Replay the original signed carrier while it is live. QueuePlan acknowledges
-    // its immutable admission owner; this must not create another financial effect.
+    // Replay the original signed carrier while it is live. The acknowledgment must
+    // retain its finalized identity without creating another financial effect.
     let replay_height = sponsor
         .client()
         .get_privacy_capabilities()?

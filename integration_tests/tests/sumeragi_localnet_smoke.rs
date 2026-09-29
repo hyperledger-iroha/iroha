@@ -2942,32 +2942,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 Duration::from_secs(45),
             )
             .await?;
-            let routing_deadline = Instant::now() + Duration::from_secs(45);
-            let mut observed_cross_lane_routing = false;
-            while Instant::now() < routing_deadline {
-                let statuses = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-                observed_cross_lane_routing = statuses.iter().any(|status| {
-                    status
-                        .lane_commitments
-                        .iter()
-                        .any(|commitment| commitment.lane_id.as_u32() != 0)
-                        || status
-                            .dataspace_commitments
-                            .iter()
-                            .any(|commitment| commitment.dataspace_id.as_u64() != 0)
-
-                });
-                if observed_cross_lane_routing {
-                    break;
-                }
-                sleep(Duration::from_millis(200)).await;
-            }
-            if !observed_cross_lane_routing {
-                eprintln!(
-                    "cross-lane probes were accepted but no native lane or dataspace commitments appeared within {:?}; continuing with status-endpoint decode coverage only",
-                    Duration::from_secs(45)
-                );
-            }
         } else {
             eprintln!(
                 "cross-lane route bindings stayed unavailable within {:?}; continuing with status-endpoint decode coverage only",
@@ -2979,14 +2953,16 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             .await
             .wrap_err("join operator-signed Sumeragi status JSON request")?
             .wrap_err("fetch and decode operator-signed Sumeragi status JSON payload")?;
-        let mode_tag = payload
-            .get("mode_tag")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let status: iroha_data_model::sumeragi::SumeragiStatus =
+            norito::json::from_value(payload).wrap_err("decode the current native status DTO")?;
         ensure!(
-            !mode_tag.is_empty(),
-            "decoded sumeragi status JSON payload has empty mode_tag"
+            status.protocol_version == iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            "status must report the first-release native protocol"
         );
+        ensure!(status.committed_height >= 2, "status lost the observed committed height");
+        ensure!(status.applied_height <= status.committed_height,
+            "status reports application beyond native commitment");
+        ensure!(status.instance != [0; 32], "native status has an empty instance identity");
         network.shutdown().await;
         Ok(())
     }

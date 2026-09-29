@@ -189,26 +189,33 @@ fn append_block_batch_sidecars_block_when_inline_budget_exceeded() {
         vec![block2.hash()]
     );
 }
+/// Two independently certified successors over the same original signed genesis.
+fn native_rewrite_branch_fixture() -> [Arc<SignedBlock>; 3] {
+    let mut original = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("original signed genesis");
+    let block1 = Arc::clone(original.committed(1).block());
+    original.commit(Vec::new());
+    let block2 = Arc::clone(original.committed(2).block());
+    let mut alternative = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("same original signed genesis");
+    assert_eq!(alternative.genesis().hash(), block1.hash());
+    let replacement_time = original
+        .committed(2)
+        .block_time_ms()
+        .checked_add(1)
+        .expect("fixture time has room for a distinct successor");
+    alternative.commit_at(replacement_time, Vec::new());
+    let replacement = Arc::clone(alternative.committed(2).block());
+    assert_ne!(block2.hash(), replacement.hash());
+    [block1, block2, replacement]
+}
+
 #[test]
 fn restart_resolves_staged_evicted_rewrite_by_durable_marker() {
     let dir = tempfile::tempdir().unwrap();
     let mut block_store = BlockStore::new(dir.path());
     block_store.create_files_if_they_do_not_exist().unwrap();
-    let leader = checked_keypair();
-    let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
-    let block2: Arc<SignedBlock> = Arc::new(
-        ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-            header.set_prev_block_hash(Some(block1.hash()));
-        })
-        .into(),
-    );
-    let replacement: Arc<SignedBlock> = Arc::new(
-        ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-            header.set_prev_block_hash(Some(block1.hash()));
-            header.set_view_change_index(header.view_change_index().saturating_add(1));
-        })
-        .into(),
-    );
+    let [block1, block2, replacement] = native_rewrite_branch_fixture();
     assert_ne!(replacement.hash(), block2.hash());
     let block1_frame = block1.canonical_wire().expect("block one wire").into_vec();
     let inline_budget = u64::try_from(block1_frame.len())
@@ -317,21 +324,7 @@ fn startup_recovers_both_abrupt_da_rewrite_boundaries() {
     let dir = tempfile::tempdir().unwrap();
     let mut block_store = BlockStore::new(dir.path());
     block_store.create_files_if_they_do_not_exist().unwrap();
-    let leader = checked_keypair();
-    let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
-    let block2: Arc<SignedBlock> = Arc::new(
-        ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-            header.set_prev_block_hash(Some(block1.hash()));
-        })
-        .into(),
-    );
-    let replacement: Arc<SignedBlock> = Arc::new(
-        ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-            header.set_prev_block_hash(Some(block1.hash()));
-            header.set_view_change_index(header.view_change_index().saturating_add(1));
-        })
-        .into(),
-    );
+    let [block1, block2, replacement] = native_rewrite_branch_fixture();
     let block1_frame = block1.canonical_wire().expect("block one wire").into_vec();
     let inline_budget = u64::try_from(block1_frame.len())
         .expect("block one length")
@@ -415,7 +408,6 @@ fn startup_recovers_both_abrupt_da_rewrite_boundaries() {
         vec![replacement.hash()]
     );
 }
-
 
 #[test]
 fn append_block_batch_at_rewrites_tail() {
@@ -517,10 +509,17 @@ fn raw_block_read_preserves_wire_without_promoting_execution_custody() {
         "strict init should load all appended blocks"
     );
     let first = kura.get_block(height).expect("block available");
-    let second = kura.get_block(height).expect("same original wire available");
+    let second = kura
+        .get_block(height)
+        .expect("same original wire available");
     assert_eq!(first.encode_wire().unwrap(), second.encode_wire().unwrap());
     assert!(!Arc::ptr_eq(&first, &second));
-    assert!(kura.block_data.lock().cached_body(height.get() - 1).is_none());
+    assert!(
+        kura.block_data
+            .lock()
+            .cached_body(height.get() - 1)
+            .is_none()
+    );
     assert!(!kura.transaction_entrypoint_index.lock().complete);
 }
 #[test]
@@ -578,7 +577,10 @@ fn raw_block_reads_do_not_authenticate_reopened_transaction_index() {
         let height = NonZeroUsize::new(height).expect("non-zero height");
         kura.get_block(height).expect("block loads from disk");
     }
-    assert!(kura.get_block_heights_by_entrypoint_hash(entrypoint_hash).is_none());
+    assert!(
+        kura.get_block_heights_by_entrypoint_hash(entrypoint_hash)
+            .is_none()
+    );
     assert!(!kura.transaction_entrypoint_index.lock().complete);
 }
 #[test]

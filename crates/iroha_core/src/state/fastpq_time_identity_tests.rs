@@ -119,9 +119,15 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
     let mut prior_wire = None;
     for _ in 0..2 {
         let mut carrier = source.clone();
-        let mut block = state.block(header);
-        crate::block::ValidBlock::execute_block_outputs_for_test(&mut carrier, &mut block, None)
-            .expect("actual complete Time execution seals successfully");
+        let (mut block, recorder) =
+            crate::block::ValidBlock::start_component_execution(&carrier, &state)
+                .expect("original Time carrier starts recording before block effects");
+        crate::block::ValidBlock::execute_recorded_component_outputs(
+            &mut carrier,
+            &mut block,
+            &recorder,
+        )
+        .expect("actual complete Time execution seals successfully");
         assert_eq!(carrier.network_entrypoint_count(), 0);
         let rows = carrier.execution_outputs();
         assert_eq!(rows.len(), 2);

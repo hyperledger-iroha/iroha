@@ -13,9 +13,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
-    status,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::{AccountId, NewAccount},
     asset::{AssetBalancePolicy, AssetDefinitionId, AssetId, NewAssetDefinition},
@@ -34,16 +33,11 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Value};
-use std::{
-    collections::HashSet,
-    num::NonZeroU64,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
-};
+use std::{collections::HashSet, num::NonZeroU64, sync::Arc};
 use tokio::sync::broadcast;
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
-static CONSENSUS_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 fn checked_nexus_dataspaces_summary_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked Nexus dataspaces summary Ed25519 fixture keypair")
@@ -59,12 +53,8 @@ fn nexus_dataspaces_summary_ed25519_fixture_uses_checked_key_generation() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -76,7 +66,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::dataspaces::summary"));
     let dataspace = DataSpaceId::new(42);
     let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -106,8 +95,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-    let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    let mut nexus = state.nexus_snapshot();
+    let mut nexus = cfg.nexus.clone();
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -118,7 +106,13 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         },
     ])
     .expect("dataspace catalog");
-    state.set_nexus(nexus).expect("set nexus config");
+    let (state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        world,
+        nexus,
+        query,
+        cfg.common.chain.clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
+    );
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("domain id"),
         "xor".parse().expect("asset definition name"),
@@ -155,22 +149,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     block
         .commit_world_overlay_for_testing()
         .expect("commit seeded state");
-    status::set_lane_commitments(
-        Vec::new(),
-        vec![status::DataspaceCommitmentSnapshot {
-            block_height: 123,
-            lane_id: 7,
-            dataspace_id: dataspace.as_u64(),
-            tx_count: 2,
-            total_chunks: 4,
-            rbc_bytes_total: 640,
-            teu_total: 320,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0xAB; Hash::LENGTH],
-            )),
-        }],
-    );
-    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
+    let router = build_test_router(Arc::new(state));
     let response = router
         .router()
         .oneshot(
@@ -198,7 +177,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     assert_eq!(payload["totals"]["dataspaces"], Value::from(1));
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(1));
-    assert_eq!(payload["totals"]["consensus_tx_count"], Value::from(2));
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -212,16 +190,10 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     );
     assert_eq!(row["manifest"]["status"], Value::from("Active"));
     assert_eq!(row["portfolio"]["positions"], Value::from(1));
-    assert_eq!(row["consensus"]["entries"], Value::from(1));
-    assert_eq!(row["consensus"]["lane_ids"][0], Value::from(7));
-    assert_eq!(row["consensus"]["last_block_height"], Value::from(123));
-    status::set_lane_commitments(Vec::new(), Vec::new());
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_without_uaid() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -239,13 +211,14 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
     block
         .commit_world_overlay_for_testing()
         .expect("commit account");
-    let router = build_test_router(state, &kura, local_peer_id);
+    let router = build_test_router(state);
     let spaced_literal = format!("  {account_literal}  ");
     let literal = urlencoding::encode(&spaced_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
+    assert_current_summary_shape(&payload);
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert!(payload["uaid"].is_null(), "uaid should be null: {body}");
@@ -255,14 +228,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(0));
     assert_eq!(payload["totals"]["manifests_total"], Value::from(0));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_entries"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_tx_count"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_chunks_total"], Value::from(0));
-    assert_eq!(
-        payload["totals"]["consensus_rbc_bytes_total"],
-        Value::from(0)
-    );
-    assert_eq!(payload["totals"]["consensus_teu_total"], Value::from(0));
     assert_eq!(
         payload["dataspaces"].as_array().expect("dataspaces"),
         &Vec::<Value>::new()
@@ -271,8 +236,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_dataspace() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -316,12 +279,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
     block
         .commit_world_overlay_for_testing()
         .expect("commit seeded state");
-    let router = build_test_router(state, &kura, local_peer_id);
+    let router = build_test_router(state);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
+    assert_current_summary_shape(&payload);
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
@@ -331,8 +295,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_total"], Value::from(0));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_entries"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_tx_count"], Value::from(0));
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -349,25 +311,12 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
     assert_eq!(row["portfolio"]["positions"], Value::from(1));
     assert_eq!(row["portfolio"]["asset_definitions"], Value::from(1));
     assert_eq!(row["manifest"]["status"], Value::from("Missing"));
-    assert_eq!(row["consensus"]["entries"], Value::from(0));
-    assert!(
-        row["consensus"]["last_block_height"].is_null(),
-        "expected null last block height: {body}"
-    );
-    assert_eq!(
-        row["consensus"]["details"].as_array().expect("details"),
-        &Vec::<Value>::new()
-    );
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_manifests() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let pending_dataspace = DataSpaceId::new(7);
     let expired_dataspace = DataSpaceId::new(8);
     let revoked_dataspace = DataSpaceId::new(9);
@@ -389,7 +338,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         entries: Vec::new(),
     };
     let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = UaidDataspaceBindings::default();
     for dataspace in [pending_dataspace, expired_dataspace, revoked_dataspace] {
         bindings.bind_account(dataspace, account_id.clone());
@@ -416,8 +364,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-    let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    let mut nexus = state.nexus_snapshot();
+    let mut nexus = cfg.nexus.clone();
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -440,7 +387,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         },
     ])
     .expect("dataspace catalog");
-    state.set_nexus(nexus).expect("set nexus config");
+    let (state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        world,
+        nexus,
+        query,
+        cfg.common.chain.clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
+    );
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
@@ -450,27 +403,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     block
         .commit_world_overlay_for_testing()
         .expect("commit account");
-    status::set_lane_commitments(
-        Vec::new(),
-        vec![status::DataspaceCommitmentSnapshot {
-            block_height: 77,
-            lane_id: 5,
-            dataspace_id: DataSpaceId::new(99).as_u64(),
-            tx_count: 9,
-            total_chunks: 18,
-            rbc_bytes_total: 900,
-            teu_total: 450,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0xCD; Hash::LENGTH],
-            )),
-        }],
-    );
-    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
+    let router = build_test_router(Arc::new(state));
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
+    assert_current_summary_shape(&payload);
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
@@ -480,14 +419,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(0));
     assert_eq!(payload["totals"]["manifests_total"], Value::from(3));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_entries"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_tx_count"], Value::from(0));
-    assert_eq!(payload["totals"]["consensus_chunks_total"], Value::from(0));
-    assert_eq!(
-        payload["totals"]["consensus_rbc_bytes_total"],
-        Value::from(0)
-    );
-    assert_eq!(payload["totals"]["consensus_teu_total"], Value::from(0));
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 4);
     let universal = &dataspaces[0];
@@ -503,7 +434,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert_eq!(universal["manifest"]["status"], Value::from("Missing"));
     assert_eq!(universal["portfolio"]["accounts"], Value::from(1));
     assert_eq!(universal["portfolio"]["positions"], Value::from(0));
-    assert_eq!(universal["consensus"]["entries"], Value::from(0));
     let pending = &dataspaces[1];
     assert_eq!(
         pending["dataspace_id"],
@@ -517,7 +447,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert!(pending["manifest"]["revoked_epoch"].is_null());
     assert_eq!(pending["portfolio"]["accounts"], Value::from(0));
     assert_eq!(pending["portfolio"]["positions"], Value::from(0));
-    assert_eq!(pending["consensus"]["entries"], Value::from(0));
     let expired = &dataspaces[2];
     assert_eq!(
         expired["dataspace_id"],
@@ -530,7 +459,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert_eq!(expired["manifest"]["expired_epoch"], Value::from(22));
     assert!(expired["manifest"]["revoked_epoch"].is_null());
     assert_eq!(expired["portfolio"]["accounts"], Value::from(0));
-    assert_eq!(expired["consensus"]["entries"], Value::from(0));
     let revoked = &dataspaces[3];
     assert_eq!(
         revoked["dataspace_id"],
@@ -546,18 +474,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         Value::from("operator request")
     );
     assert_eq!(revoked["portfolio"]["accounts"], Value::from(0));
-    assert_eq!(revoked["consensus"]["entries"], Value::from(0));
-    status::set_lane_commitments(Vec::new(), Vec::new());
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_dataspace() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let dataspace = DataSpaceId::new(404);
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -573,7 +496,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         "lotus".parse().expect("asset definition name"),
     );
     let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = UaidDataspaceBindings::default();
     bindings.bind_account(dataspace, account_id.clone());
     world
@@ -632,12 +554,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         .world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
+    let router = build_test_router(Arc::new(state));
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
+    assert_current_summary_shape(&payload);
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
@@ -647,7 +570,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_total"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(1));
-    assert_eq!(payload["totals"]["consensus_entries"], Value::from(0));
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -664,17 +586,12 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     assert_eq!(row["portfolio"]["positions"], Value::from(1));
     assert_eq!(row["portfolio"]["asset_definitions"], Value::from(1));
     assert_eq!(row["manifest"]["status"], Value::from("Active"));
-    assert_eq!(row["consensus"]["entries"], Value::from(0));
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
-async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_totals() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
+async fn nexus_dataspaces_summary_endpoint_joins_multiple_bound_accounts_and_portfolio() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let dataspace = DataSpaceId::new(52);
     let primary_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let primary_account_id = AccountId::new(primary_keypair.public_key().clone());
@@ -689,14 +606,13 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         .to_account_address()
         .and_then(|address| address.to_i105())
         .expect("secondary i105 account literal");
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::binding_consensus_merge"));
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::bound_account_portfolio"));
     let domain_id: DomainId = DomainId::try_new("multi-bindings", "universal").expect("domain id");
     let definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "cedar".parse().expect("asset definition name"),
     );
     let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -713,8 +629,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-    let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    let mut nexus = state.nexus_snapshot();
+    let mut nexus = cfg.nexus.clone();
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -725,7 +640,13 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         },
     ])
     .expect("dataspace catalog");
-    state.set_nexus(nexus).expect("set nexus config");
+    let (mut state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        world,
+        nexus,
+        query,
+        cfg.common.chain.clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
+    );
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::domain(Domain::new(domain_id.clone()))
@@ -773,41 +694,13 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         .world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-    status::set_lane_commitments(
-        Vec::new(),
-        vec![
-            status::DataspaceCommitmentSnapshot {
-                block_height: 41,
-                lane_id: 9,
-                dataspace_id: dataspace.as_u64(),
-                tx_count: 3,
-                total_chunks: 5,
-                rbc_bytes_total: 500,
-                teu_total: 250,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0xD1; Hash::LENGTH],
-                )),
-            },
-            status::DataspaceCommitmentSnapshot {
-                block_height: 42,
-                lane_id: 3,
-                dataspace_id: dataspace.as_u64(),
-                tx_count: 4,
-                total_chunks: 6,
-                rbc_bytes_total: 600,
-                teu_total: 300,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0xD2; Hash::LENGTH],
-                )),
-            },
-        ],
-    );
-    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
+    let router = build_test_router(Arc::new(state));
     let literal = urlencoding::encode(&primary_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
+    assert_current_summary_shape(&payload);
     assert_eq!(payload["account_id"], Value::from(primary_literal.as_str()));
     assert_eq!(
         payload["account"],
@@ -820,14 +713,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_total"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(1));
-    assert_eq!(payload["totals"]["consensus_entries"], Value::from(2));
-    assert_eq!(payload["totals"]["consensus_tx_count"], Value::from(7));
-    assert_eq!(payload["totals"]["consensus_chunks_total"], Value::from(11));
-    assert_eq!(
-        payload["totals"]["consensus_rbc_bytes_total"],
-        Value::from(1_100)
-    );
-    assert_eq!(payload["totals"]["consensus_teu_total"], Value::from(550));
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -847,27 +732,12 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     assert_eq!(row["portfolio"]["positions"], Value::from(1));
     assert_eq!(row["portfolio"]["asset_definitions"], Value::from(1));
     assert_eq!(row["manifest"]["status"], Value::from("Active"));
-    assert_eq!(row["consensus"]["entries"], Value::from(2));
-    assert_eq!(row["consensus"]["tx_count"], Value::from(7));
-    assert_eq!(row["consensus"]["total_chunks"], Value::from(11));
-    assert_eq!(row["consensus"]["last_block_height"], Value::from(42));
-    assert_eq!(
-        row["consensus"]["lane_ids"].as_array().expect("lane ids"),
-        &vec![Value::from(3_u64), Value::from(9_u64)]
-    );
-    assert_eq!(
-        row["consensus"]["details"].as_array().expect("details")[0]["lane_id"],
-        Value::from(3_u64)
-    );
-    status::set_lane_commitments(Vec::new(), Vec::new());
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
-    let router = build_test_router(state, &kura, local_peer_id);
+    let router = build_test_router(state);
     let (status, body) = request_summary(
         &router,
         "/v1/nexus/dataspaces/accounts/not-a-valid-literal/summary",
@@ -882,10 +752,8 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
-    let router = build_test_router(state, &kura, local_peer_id);
+    let router = build_test_router(state);
     let (status, body) =
         request_summary(&router, "/v1/nexus/dataspaces/accounts/%20%20/summary").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -897,10 +765,8 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account() {
-    let _guard = consensus_guard();
-    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
-    let router = build_test_router(state, &kura, local_peer_id);
+    let router = build_test_router(state);
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
@@ -912,9 +778,7 @@ fn minimal_state() -> (Arc<State>, Arc<Kura>, PeerId) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let world = World::default();
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
     (Arc::new(state), kura, local_peer_id)
 }
@@ -939,26 +803,100 @@ async fn request_summary(router: &axum::Router, uri: &str) -> (StatusCode, Strin
     let body = String::from_utf8_lossy(&bytes).to_string();
     (status, body)
 }
-fn consensus_guard() -> MutexGuard<'static, ()> {
-    CONSENSUS_LOCK.lock().unwrap_or_else(|err| err.into_inner())
+fn assert_current_summary_shape(payload: &Value) {
+    let totals = payload["totals"].as_object().expect("summary totals");
+    assert_eq!(
+        totals.keys().map(String::as_str).collect::<HashSet<_>>(),
+        HashSet::from([
+            "dataspaces",
+            "accounts_bound",
+            "portfolio_accounts",
+            "portfolio_positions",
+            "manifests_total",
+            "manifests_active",
+        ]),
+    );
+    for row in payload["dataspaces"].as_array().expect("dataspace rows") {
+        assert_eq!(
+            row.as_object()
+                .expect("dataspace row")
+                .keys()
+                .map(String::as_str)
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "dataspace_id",
+                "dataspace_alias",
+                "accounts",
+                "portfolio",
+                "manifest"
+            ]),
+        );
+    }
 }
 fn valid_missing_account_literal() -> String {
     let key_pair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     AccountId::new(key_pair.public_key().clone()).to_string()
 }
-fn build_test_router(
-    state: Arc<State>,
-    kura: &Arc<Kura>,
-    local_peer_id: PeerId,
-) -> iroha_torii::TestApiRouterRuntime {
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+fn build_test_router(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
+    // The fixture assembly above only populates a pre-genesis World. Authenticate that exact
+    // initial World through original signed genesis before exercising native fanout reads.
+    assert_eq!(state.committed_height(), 0);
+    let mut nexus = state.nexus_snapshot();
+    // The catalog routes are physical storage/authority labels, separate from native lanes.
+    let lanes = nexus
+        .dataspace_catalog
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(index, dataspace)| iroha_data_model::nexus::LaneConfig {
+            id: iroha_model_base::topology::LaneId::new(u32::try_from(index).unwrap()),
+            alias: format!("summary-ds-{}", dataspace.id.as_u64()),
+            dataspace_id: dataspace.id,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    nexus.lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+        std::num::NonZeroU32::new(u32::try_from(lanes.len()).unwrap()).unwrap(),
+        lanes,
+    )
+    .expect("one physical summary route per configured dataspace");
+    nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+    let seed_state = Arc::try_unwrap(state)
+        .unwrap_or_else(|_| panic!("pre-genesis summary fixture must have a single owner"));
+    let mut config =
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(seed_state.world, 1_000);
+    config.genesis_key = iroha_test_samples::ALICE_KEYPAIR.clone();
+    config.nexus = Some(nexus);
+    let prepared = iroha_core::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+        .expect("summary fixture original signed genesis");
+    let local_key = prepared.validator_keys[0].clone();
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::from_prepared(prepared)
+        .expect("execute summary fixture original signed genesis");
+    let state = chain.state().clone();
+    let kura = chain.kura();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.common.key_pair = local_key;
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    assert!(
+        chain
+            .validators()
+            .iter()
+            .any(|(peer, _)| peer == &local_peer_id)
+    );
+    for lane in state.nexus_snapshot().lane_catalog.lanes() {
+        let authority = state
+            .resolve_route_authority(iroha_core::state::LaneAuthorityRoute::new(
+                lane.id,
+                lane.dataspace_id,
+            ))
+            .expect("original signed committee resolves every configured summary route");
+        assert!(authority.validators().contains(&local_peer_id));
+    }
     let queue_cfg = Queue::default();
     let (events_tx, _events_rx) = broadcast::channel(1);
     let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_tx));
     let torii = fixtures::ToriiHarness::new(
         &cfg,
-        iroha_model_base::chain::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
         kura,
         &state,
         &queue,

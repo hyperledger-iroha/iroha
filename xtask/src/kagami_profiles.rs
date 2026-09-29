@@ -1113,29 +1113,12 @@ submitters = [{telemetry_submitters}]
             )
         });
     let torii_max_content_len = format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN);
-    let max_transactions =
-        iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get();
-    let max_payload_bytes =
-        iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get();
     let nexus_topology = rendered_nexus_topology(spec);
     let genesis_section_spacing = if spec.chain_discriminant.is_some() {
         "\n\n"
     } else {
         "\n"
     };
-    let authenticated_non_validator_sources =
-        iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get();
-    let body_source_bytes =
-        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-    let source_partitions = peers
-        .len()
-        .checked_add(authenticated_non_validator_sources)
-        .expect("profile ingress source-partition count must fit usize");
-    let body_bytes = source_partitions
-        .checked_mul(body_source_bytes)
-        .expect("profile aggregate body-ingress bytes must fit usize")
-        .max(iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get());
     let p2p_port = node
         .address
         .rsplit_once(':')
@@ -1174,16 +1157,6 @@ trusted_peers_pop = [
 [sumeragi]
 role = "validator"
 
-[sumeragi.block]
-max_transactions = {max_transactions}
-max_payload_bytes = {max_payload_bytes}
-proposal_queue_scan_multiplier = 4
-
-[sumeragi.queues]
-authenticated_non_validator_sources = {authenticated_non_validator_sources}
-body_bytes = {body_bytes}
-body_source_bytes = {body_source_bytes}
-
 [network]
 address = "{network_address}"
 public_address = "{network_public_address}"
@@ -1211,11 +1184,6 @@ file = "genesis.signed.nrt"
         soranet_transport_private_key = soranet_transport_private_key,
         trusted_peers = trusted_peers,
         trusted_peers_pop = trusted_peers_pop,
-        max_transactions = max_transactions,
-        max_payload_bytes = max_payload_bytes,
-        authenticated_non_validator_sources = authenticated_non_validator_sources,
-        body_bytes = body_bytes,
-        body_source_bytes = body_source_bytes,
         network_address = network_address,
         network_public_address = network_public_address,
         torii_address = torii_address,
@@ -2127,12 +2095,27 @@ mod tests {
             let _chain_discriminant = profile
                 .chain_discriminant
                 .map(ChainDiscriminantGuard::enter);
-            actual::Root::from_toml_source(TomlSource::new(path, table)).unwrap_or_else(|error| {
-                panic!(
-                    "rendered profile {} must pass exact runtime config admission: {error:?}",
+            actual::Root::from_toml_source(TomlSource::new(path.clone(), table.clone()))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "rendered profile {} must pass exact runtime config admission: {error:?}",
+                        profile.slug
+                    )
+                });
+            for retired in ["block", "queues"] {
+                let mut retired_config = table.clone();
+                retired_config
+                    .get_mut("sumeragi")
+                    .and_then(toml::Value::as_table_mut)
+                    .expect("node-local Sumeragi config")
+                    .insert(retired.to_owned(), toml::Value::Table(toml::Table::new()));
+                assert!(
+                    actual::Root::from_toml_source(TomlSource::new(path.clone(), retired_config))
+                        .is_err(),
+                    "profile {} must reject retired sumeragi.{retired} configuration",
                     profile.slug
-                )
-            });
+                );
+            }
         }
     }
     #[test]
@@ -2264,8 +2247,8 @@ mod tests {
             "- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs\n\nRegenerate:"
         ));
         let dev_config = render_config(&PROFILES[0], &dev_peers, genesis_key.public_key());
-        assert!(dev_config.contains("lane_count = 3\n\n\n\n[genesis]"));
-        assert!(!dev_config.contains("lane_count = 3\n\n\n\n\n[genesis]"));
+        assert!(dev_config.contains("lane_count = 3\n\n\n[genesis]"));
+        assert!(!dev_config.contains("lane_count = 3\n\n\n\n[genesis]"));
     }
     #[test]
     fn nexus_readme_regeneration_includes_asset_definition_id() {
@@ -2450,38 +2433,48 @@ mod tests {
         }
     }
     #[test]
-    fn all_profile_configs_scale_body_ingress_for_the_complete_committee() {
-        let authenticated_non_validator_sources =
-            iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-                .get();
-        let body_source_bytes =
-            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-        let default_body_bytes =
-            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get();
+    fn all_profile_configs_use_only_current_sumeragi_node_parameters() {
         for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
-                &format!("config-{}-queue-genesis", profile.slug),
+                &format!("config-{}-sumeragi-genesis", profile.slug),
                 Algorithm::Ed25519,
             )
             .expect("derive deterministic genesis key");
             let rendered = render_config(profile, &peers, genesis_key.public_key());
-            let expected_body_bytes = peers
-                .len()
-                .checked_add(authenticated_non_validator_sources)
-                .and_then(|count| count.checked_mul(body_source_bytes))
-                .expect("test profile ingress geometry fits usize")
-                .max(default_body_bytes);
-            assert!(
-                rendered.contains(&format!(
-                    "[sumeragi.queues]\n\
-                     authenticated_non_validator_sources = {authenticated_non_validator_sources}\n\
-                     body_bytes = {expected_body_bytes}\n\
-                     body_source_bytes = {body_source_bytes}\n"
-                )),
-                "profile {} must allocate one isolated byte partition per validator and authenticated non-validator source",
+            let config = rendered.parse::<toml::Table>().expect("profile TOML");
+            let sumeragi = config["sumeragi"]
+                .as_table()
+                .expect("node-local Sumeragi config");
+            assert_eq!(
+                sumeragi.len(),
+                1,
+                "profile {} adds unsigned protocol policy",
                 profile.slug
             );
+            assert_eq!(sumeragi["role"].as_str(), Some("validator"));
+        }
+    }
+    #[test]
+    fn checked_in_dev_peers_use_the_current_sumeragi_node_parameters() {
+        for peer in 0..PROFILES[0].min_peers {
+            let path = workspace_root()
+                .join("defaults/kagami/iroha3-dev")
+                .join(peer_config_file_name(peer));
+            let config = fs::read_to_string(&path)
+                .expect("checked-in peer config")
+                .parse::<toml::Table>()
+                .expect("checked-in peer TOML");
+            let sumeragi = config["sumeragi"]
+                .as_table()
+                .expect("node-local Sumeragi config");
+            assert_eq!(
+                sumeragi.len(),
+                1,
+                "{} retains retired local policy",
+                path.display()
+            );
+            assert_eq!(sumeragi["role"].as_str(), Some("validator"));
         }
     }
     #[test]
@@ -2626,19 +2619,26 @@ mod tests {
     fn checked_in_profile_transport_identities_are_reproducible() {
         let expected = [
             (
+                "iroha3-dev",
                 "ed01205A4FF1E3840273F79909F02BA854FE9394DE6FBAEF06B87397B059C16BAD6ADC",
                 "802620BBEB9930B26B2CFB85EF7683349DAB2921927F0EA1F5E5BFF89C7E60A7D1700B",
             ),
             (
-                "ed012080A47B672C44202B67EC8E81DFFA4D0B46AD2507113C8627F30599FB1CC83717",
-                "802620F18FE388B674C8831AB6061413C8184D7BC03C5595B3AD671852B8FE1611240F",
-            ),
-            (
+                "iroha3-nexus",
                 "ed01201F60DE7C82F77FF1EA9AA2DFC60166A0DF904A771DCBFF36186EFAE8AC8324D3",
                 "802620720B9507E31A382E02FF4523D0E22071E19D39974C9AE907492EEAE616F23E15",
             ),
         ];
-        for (spec, (public_key, private_key)) in PROFILES.iter().zip(expected) {
+        assert_eq!(
+            PROFILES.len(),
+            expected.len(),
+            "every current profile has a vector"
+        );
+        for (slug, public_key, private_key) in expected {
+            let spec = PROFILES
+                .iter()
+                .find(|spec| spec.slug == slug)
+                .expect("current profile");
             let peers = build_peers(spec).expect("build deterministic profile peers");
             assert_eq!(peers[0].soranet_transport_public_key, public_key);
             assert_eq!(peers[0].soranet_transport_private_key, private_key);

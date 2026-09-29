@@ -822,6 +822,24 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: fixture, options: [.sortedKeys])
     }
 
+    func testKagemushaHardwareCapabilityMaskUsesCompleteUInt32Range() throws {
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: kagemushaReleaseInstallFixture()) as? [String: Any])
+        let payload = try XCTUnwrap(fixture["payload"] as? [String: Any])
+        let manifest = try XCTUnwrap(payload["manifest"] as? [String: Any])
+        let profiles = try XCTUnwrap(manifest["enabled_profiles"] as? [[String: Any]])
+        var hardware = try XCTUnwrap(profiles.first?["hardware_profile"] as? [String: Any])
+        hardware["capability_mask"] = UInt64(UInt32.max)
+        let encoded = try JSONSerialization.data(withJSONObject: hardware)
+        let decoded = try JSONDecoder().decode(
+            ToriiGovernanceKagemushaHardwareProfileV1.self, from: encoded)
+        XCTAssertEqual(decoded.capabilityMask, UInt32.max)
+        hardware["capability_mask"] = UInt64(UInt32.max) + 1
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            ToriiGovernanceKagemushaHardwareProfileV1.self,
+            from: JSONSerialization.data(withJSONObject: hardware)))
+    }
+
     func testKagemushaReleaseInstallDecodesExactFixture() throws {
         let fixture = try kagemushaReleaseInstallFixture()
         let proposal = try ToriiParliamentProposalV1(validating: fixture)

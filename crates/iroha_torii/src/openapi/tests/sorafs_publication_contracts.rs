@@ -135,14 +135,17 @@ fn provider_source_contract_binds_assignment_authority_and_metadata_chunk_bounds
         response["x-iroha-norito-schema"].as_str(),
         Some("sorafs_car::publisher::ProviderSourceResponseV1")
     );
-    assert_eq!(
-        operation["responses"]["200"]["headers"]["Cache-Control"]["schema"]["enum"][0].as_str(),
-        Some("private, no-store")
-    );
-    for status in ["400", "401", "403", "404", "413", "429", "503"] {
+    for status in ["200", "400", "401", "403", "404", "413", "429", "503"] {
         assert!(
             operation["responses"][status].is_object(),
             "missing status {status}"
+        );
+        let cache = &operation["responses"][status]["headers"]["Cache-Control"];
+        assert_eq!(cache["required"].as_bool(), Some(true), "status {status}");
+        assert_eq!(
+            cache["schema"]["const"].as_str(),
+            Some("private, no-store"),
+            "status {status}"
         );
     }
     let description = operation["description"].as_str().unwrap();

@@ -199,7 +199,12 @@ internal object SumeragiJsonPrimitives {
 
     fun parseObject(payload: String, context: String): Map<String, Any?> {
         rejectNegativeZeroTokens(payload, context)
-        return objectValue(JsonParser.parse(payload), context)
+        val parsed = try {
+            JsonParser.parse(payload)
+        } catch (error: IllegalStateException) {
+            throw IllegalArgumentException("$context must be valid JSON with unique keys", error)
+        }
+        return objectValue(parsed, context)
     }
 
     @Suppress("UNCHECKED_CAST")

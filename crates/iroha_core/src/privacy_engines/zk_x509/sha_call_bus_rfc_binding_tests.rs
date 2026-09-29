@@ -196,6 +196,7 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
     }
     let mut segments = Vec::new();
     let mut ca_calls = Vec::new();
+    let mut boundary_rows = Vec::new();
     let mut column = zeroize::Zeroizing::new(vec![F::ZERO; ZK_X509_SHA_SEGMENT_ROWS_V1]);
     // Raw SHA word/value rows populate base column zero. Fixed-column selector
     // indices are a separate address space and must not select this probe.
@@ -219,7 +220,25 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
             <[u8; 32]>::from(hash.finalize())
         };
         let base_before = fingerprint(&column);
-        let bound = source.bind_v1(binding).unwrap();
+        let active = ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[segment];
+        let indices = [
+            0,
+            1,
+            active - 2,
+            active - 1,
+            active,
+            active + 1,
+            ZK_X509_SHA_SEGMENT_ROWS_V1 - 1,
+        ];
+        let mut rows = indices.map(|row| {
+            let (base, fixed) = source.base_fixed_row_v1(row).unwrap();
+            ZkX509ShaBatchRowV1 {
+                base,
+                aux: [F::ZERO; ZK_X509_SHA_BATCH_AUX_WIDTH_V1],
+                fixed,
+            }
+        });
+        let mut bound = source.bind_v1(binding).unwrap();
         bound
             .replay_base_column_v1(segment, NATIVE_WORD_COLUMN, &mut column)
             .unwrap();
@@ -231,6 +250,18 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         let terminal = bound
             .fill_aux_column_with_air_terminals_v1(segment, 0, &mut column)
             .unwrap();
+        let mut seen = [false; 7];
+        let streamed = bound
+            .for_each_aux_row_with_air_terminals_v1(|row, aux| {
+                if let Some(index) = indices.iter().position(|&index| index == row) {
+                    rows[index].aux = aux;
+                    seen[index] = true;
+                }
+            })
+            .unwrap();
+        assert!(seen.into_iter().all(|seen| seen));
+        assert_eq!(streamed, terminal);
+        boundary_rows.push(rows);
         segments.push(terminal.segment);
         ca_calls.extend(terminal.ca_call_boundaries);
     }
@@ -239,6 +270,15 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         ca_calls.try_into().unwrap(),
     )
     .expect("four canonical segments and all thirteen compact-CA call boundaries");
+    for (segment, rows) in boundary_rows.iter().enumerate() {
+        assert_actual_sha_cyclic_boundaries_v1(
+            segment,
+            rows,
+            binding,
+            claims.segments[segment],
+            &claims.ca_calls,
+        );
+    }
     for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
         assert_eq!(
             claims

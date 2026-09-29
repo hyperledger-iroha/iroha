@@ -1,7 +1,6 @@
 //! Actual Pipeline event ordering, rollback, repeat and quarantine controls.
 
 use super::*;
-use crate::exec_witness;
 use iroha_data_model::{
     block::execution_output::{PipelineEventPositionV1, TriggerFailureRootV1},
     events::pipeline::{
@@ -76,7 +75,6 @@ fn execute_all(block: &mut StateBlock<'_>, source: &SignedBlock) {
 
 #[test]
 fn actual_pipeline_uses_network_then_approved_block_and_distinct_calls() {
-    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![
@@ -96,8 +94,7 @@ fn actual_pipeline_uses_network_then_approved_block_and_distinct_calls() {
             ),
         ],
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute_all(&mut block, &source);
     let rows = &retained(&block).rows;
     assert_eq!(rows.len(), 3);
@@ -130,7 +127,6 @@ fn actual_pipeline_uses_network_then_approved_block_and_distinct_calls() {
 
 #[test]
 fn real_pipeline_rejection_quarantines_only_failed_callback_and_preserves_siblings() {
-    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![
@@ -147,8 +143,7 @@ fn real_pipeline_rejection_quarantines_only_failed_callback_and_preserves_siblin
             callback("c_good", vec![write("later")], block_filter(), 1),
         ],
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute_all(&mut block, &source);
     let rows = &retained(&block).rows;
     assert_eq!(rows.len(), 4);
@@ -183,7 +178,6 @@ fn real_pipeline_rejection_quarantines_only_failed_callback_and_preserves_siblin
 
 #[test]
 fn pipeline_full_row_exact_fit_and_one_byte_below_keep_failure_policy_separate() {
-    let _guard = exec_witness::exec_witness_guard();
     let build = |bytes| {
         pipeline_fixture(
             bytes,
@@ -199,16 +193,15 @@ fn pipeline_full_row_exact_fit_and_one_byte_below_keep_failure_policy_separate()
         )
     };
     let (state, source) = build(65_536);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute_all(&mut block, &source);
     let exact =
         u64::try_from(norito::canonical_frame_len(&retained(&block).rows[1]).unwrap()).unwrap();
+    drop(_recording);
     drop(block);
     for (bytes, applied) in [(exact, true), (exact - 1, false)] {
         let (state, source) = build(bytes);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         execute_all(&mut block, &source);
         let row = &retained(&block).rows[1];
         assert_eq!(row.result().is_ok(), applied);
@@ -242,7 +235,6 @@ fn pipeline_full_row_exact_fit_and_one_byte_below_keep_failure_policy_separate()
 
 #[test]
 fn pipeline_stale_match_keeps_original_candidate_gap_and_cannot_repeat_phase() {
-    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![
@@ -256,8 +248,7 @@ fn pipeline_stale_match_keeps_original_candidate_gap_and_cannot_repeat_phase() {
             callback("c_last", vec![write("last")], block_filter(), 1),
         ],
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute_all(&mut block, &source);
     let rows = &retained(&block).rows;
     assert_eq!(rows.len(), 3);
@@ -274,8 +265,9 @@ fn pipeline_stale_match_keeps_original_candidate_gap_and_cannot_repeat_phase() {
             .get("never")
             .is_none()
     );
+    drop(_recording);
     drop(block);
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     assert!(
         block
@@ -291,7 +283,6 @@ fn pipeline_stale_match_keeps_original_candidate_gap_and_cannot_repeat_phase() {
 
 #[test]
 fn exhausted_pipeline_gas_skips_callbacks_without_failure_or_repeat_debit() {
-    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![callback(
@@ -301,8 +292,7 @@ fn exhausted_pipeline_gas_skips_callbacks_without_failure_or_repeat_debit() {
             1,
         )],
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block
         .produce_ordinary_execution_outputs(&source, |producer| {
@@ -343,7 +333,6 @@ mod internal_failures;
 fn pipeline_vm_refusal_preserves_callback_repeats_and_publishes_no_rejection() {
     use iroha_data_model::transaction::IvmBytecode;
     use ivm::error::ExecutionDeferral;
-    let _guard = exec_witness::exec_witness_guard();
     let id: TriggerId = "pipeline_local_refusal".parse().unwrap();
     let mut program = ivm::ProgramMetadata {
         max_cycles: 100,
@@ -362,9 +351,8 @@ fn pipeline_vm_refusal_preserves_callback_repeats_and_publishes_no_rejection() {
     let reason = ExecutionDeferral::AllocationUnavailable;
     let cache_owner = state.trigger_ivm_cache.lock().prepared_contract_cache();
     cache_owner.set_checkout_refusal_for_test(Some(reason));
-    exec_witness::start_block();
     {
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         assert_eq!(
             block.execute_ordinary_output_plan(&source, None),
@@ -390,8 +378,7 @@ fn pipeline_vm_refusal_preserves_callback_repeats_and_publishes_no_rejection() {
         );
     }
     cache_owner.set_checkout_refusal_for_test(None);
-    exec_witness::start_block();
-    let mut retry = state.block(source.header());
+    let (mut retry, _recording) = recorded_network_block(&state, &source);
     execute_all(&mut retry, &source);
     let ExecutionOutputV1::Pipeline(row) = &retained(&retry).rows[1] else {
         panic!("actual Pipeline output");

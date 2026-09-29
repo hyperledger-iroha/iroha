@@ -11184,29 +11184,6 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
           },
         ],
       },
-      lane_commitments: [
-        {
-          block_height: 12,
-          lane_id: 7,
-          tx_count: 2,
-          total_chunks: 3,
-          rbc_bytes_total: 256,
-          teu_total: 64,
-          block_hash: "feedface",
-        },
-      ],
-      dataspace_commitments: [
-        {
-          block_height: 12,
-          lane_id: 7,
-          dataspace_id: 9,
-          tx_count: 1,
-          total_chunks: 1,
-          rbc_bytes_total: 128,
-          teu_total: 16,
-          block_hash: "facedead",
-        },
-      ],
       dataspace_catalog: [
         {
           lane_id: 7,
@@ -11290,29 +11267,6 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
           },
         ],
       },
-      lane_commitments: [
-        {
-          block_height: 13,
-          lane_id: 8,
-          tx_count: 1,
-          total_chunks: 2,
-          rbc_bytes_total: 200,
-          teu_total: 48,
-          block_hash: "cafebeef",
-        },
-      ],
-      dataspace_commitments: [
-        {
-          block_height: 13,
-          lane_id: 8,
-          dataspace_id: 4,
-          tx_count: 1,
-          total_chunks: 1,
-          rbc_bytes_total: 96,
-          teu_total: 24,
-          block_hash: "feedbead",
-        },
-      ],
       dataspace_catalog: [
         {
           lane_id: 8,
@@ -11392,29 +11346,8 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(first.status.raw.commit_time_ms, 420);
   assert.ok(first.status.governance);
   assert.equal(first.status.governance?.manifest_admission.runtime_hook_rejected, 0);
-  assert.deepEqual(first.status.lane_commitments, [
-    {
-      block_height: 12,
-      lane_id: 7,
-      tx_count: 2,
-      total_chunks: 3,
-      rbc_bytes_total: 256,
-      teu_total: 64,
-      block_hash: "feedface",
-    },
-  ]);
-  assert.deepEqual(first.status.dataspace_commitments, [
-    {
-      block_height: 12,
-      lane_id: 7,
-      dataspace_id: 9,
-      tx_count: 1,
-      total_chunks: 1,
-      rbc_bytes_total: 128,
-      teu_total: 16,
-      block_hash: "facedead",
-    },
-  ]);
+  assert.equal(Object.hasOwn(first.status, "lane_commitments"), false);
+  assert.equal(Object.hasOwn(first.status, "dataspace_commitments"), false);
   assert.deepEqual(first.status.dataspace_catalog, [
     {
       lane_id: 7,
@@ -11497,8 +11430,6 @@ test("getStatusSnapshot rejects non-integer counters", async () => {
         txs_rejected: 0,
         view_changes: 0,
         governance: null,
-        lane_commitments: [],
-        dataspace_commitments: [],
         lane_governance: [],
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: [],
@@ -11528,8 +11459,6 @@ test("getStatusSnapshot rejects removed SNARK lane commitments", async () => {
         txs_rejected: 0,
         view_changes: 0,
         governance: null,
-        lane_commitments: [],
-        dataspace_commitments: [],
         lane_governance: [
           {
             lane_id: 1,
@@ -11553,46 +11482,20 @@ test("getStatusSnapshot rejects removed SNARK lane commitments", async () => {
   );
 });
 
-test("getStatusSnapshot rejects non-integer lane commitment values", async () => {
-  const fetchImpl = async () =>
-    createResponse({
+for (const field of ["lane_commitments", "dataspace_commitments", "pipeline_execution"]) {
+  test(`getStatusSnapshot rejects retired ${field}`, async () => {
+    const fetchImpl = async () => createResponse({
       status: 200,
-      jsonData: {
-        peers: 1,
-        queue_size: 0,
-        commit_time_ms: 1,
-        txs_approved: 0,
-        txs_rejected: 0,
-        view_changes: 0,
-        governance: null,
-        lane_commitments: [
-          {
-            block_height: 1,
-            lane_id: 2,
-            tx_count: 1.5,
-            total_chunks: 0,
-            rbc_bytes_total: 0,
-            teu_total: 0,
-            block_hash: "deadbeef",
-          },
-        ],
-        dataspace_commitments: [],
-        lane_governance: [],
-        lane_governance_sealed_total: 0,
-        lane_governance_sealed_aliases: [],
-      },
+      jsonData: { peers: 1, queue_size: 0, commit_time_ms: 1, [field]: [] },
       headers: { "content-type": "application/json" },
     });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getStatusSnapshot(),
-    (error) => {
-      assert(error instanceof RangeError);
-      assert.match(error.message, /status\.lane_commitments\[0\]\.tx_count/);
-      return true;
-    },
-  );
-});
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    await assert.rejects(
+      () => client.getStatusSnapshot(),
+      (error) => error instanceof TypeError && error.message === `status.${field} is retired and unsupported`,
+    );
+  });
+}
 
 test("getStatusSnapshot forwards AbortSignal", async () => {
   const controller = new AbortController();

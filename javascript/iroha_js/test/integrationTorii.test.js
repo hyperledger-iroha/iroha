@@ -309,10 +309,9 @@ test(
       Array.isArray(status.lane_governance_sealed_aliases),
       "lane governance sealed aliases must be an array",
     );
-    assert.ok(
-      Array.isArray(status.dataspace_commitments),
-      "dataspace commitments must be an array",
-    );
+    assert.equal(Object.hasOwn(status, "lane_commitments"), false);
+    assert.equal(Object.hasOwn(status, "dataspace_commitments"), false);
+    assert.equal(Object.hasOwn(status, "pipeline_execution"), false);
 
     assert.equal(typeof metrics.commit_latency_ms, "number");
     assert.equal(typeof metrics.queue_size, "number");

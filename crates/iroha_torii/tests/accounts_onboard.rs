@@ -14,14 +14,12 @@ use iroha_core::{
     state::{LaneAuthorityRoute, State, StateReadOnly, World, WorldReadOnly},
     tx::TransactionBuilder,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     IntoKeyValue, NetworkId, Registrable,
     account::{AccountAddress, AccountId},
     asset::{AssetDefinitionId, AssetId},
-    isi::{
-        ActivatePublicLaneValidator, RegisterPublicLaneValidator, register::RegisterPeerWithPop,
-    },
+    isi::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     level::Level,
     nexus::PublicLaneMonetaryPlanV1,
     parameter::{Parameter, system::SumeragiNposParameters},
@@ -131,14 +129,14 @@ fn install_universal_parent_lease(world: &mut World, authority: &AccountId) {
     );
 }
 fn build_onboarding_test_context() -> OnboardingTestContext {
-    build_onboarding_test_context_with(iroha_torii::test_utils::signed_query_network_id(), 0xD1)
+    build_onboarding_test_context_with(0xA1, 0xD1)
 }
 fn build_onboarding_test_context_with(
-    network_id: NetworkId,
+    genesis_discriminator: u8,
     onboarding_signer_seed: u8,
 ) -> OnboardingTestContext {
     build_onboarding_test_context_at(
-        network_id,
+        genesis_discriminator,
         onboarding_signer_seed,
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -146,7 +144,7 @@ fn build_onboarding_test_context_with(
     )
 }
 fn build_onboarding_test_context_at(
-    network_id: NetworkId,
+    genesis_discriminator: u8,
     onboarding_signer_seed: u8,
     anchor_time: Duration,
 ) -> OnboardingTestContext {
@@ -160,11 +158,11 @@ fn build_onboarding_test_context_at(
         .collect();
     cfg.common.key_pair = validator_keys[0].clone();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let authority_key_pair = checked_key_pair(
-        onboarding_signer_seed,
-        Algorithm::Ed25519,
-        "derive onboarding authority fixture",
-    );
+    // Genesis custody is independent of the currently configured service signer.
+    // Both eligible authorities are registered and funded in the same original genesis.
+    let authority_key_pair = checked_key_pair(0xD1, Algorithm::Ed25519, "genesis authority");
+    let alternate_key_pair = checked_key_pair(0xE1, Algorithm::Ed25519, "alternate service signer");
+    let alternate_id = AccountId::new(alternate_key_pair.public_key().clone());
     let authority_id = AccountId::new(authority_key_pair.public_key().clone());
     let fee_domain = DomainId::try_new("universal", "universal").expect("fee domain");
     let fee_asset_id: AssetDefinitionId =
@@ -184,7 +182,10 @@ fn build_onboarding_test_context_at(
         AssetId::of(fee_asset_id.clone(), authority_id.clone()),
         Quantity::from(100_u32),
     );
-    let mut accounts = vec![authority];
+    let mut accounts = vec![
+        authority,
+        Account::new(alternate_id.clone()).build(&authority_id),
+    ];
     accounts.extend(validator_keys.iter().map(|key_pair| {
         let account_id = AccountId::new(key_pair.public_key().clone());
         Account::new(account_id.clone()).build(&account_id)
@@ -203,7 +204,13 @@ fn build_onboarding_test_context_at(
     let escrow_id =
         AccountId::parse_encoded(&staking.stake_escrow_account_id).expect("canonical stake escrow");
     accounts.push(Account::new(escrow_id.clone()).build(&escrow_id));
-    let mut assets = vec![fee_asset];
+    let mut assets = vec![
+        fee_asset,
+        Asset::new(
+            AssetId::of(fee_asset_id.clone(), alternate_id.clone()),
+            Quantity::from(100_u32),
+        ),
+    ];
     assets.extend(validator_keys.iter().map(|key_pair| {
         Asset::new(
             AssetId::new(
@@ -229,24 +236,23 @@ fn build_onboarding_test_context_at(
     }
     install_account_alias_policy(&mut world, &authority_id, &fee_asset_id);
     install_universal_parent_lease(&mut world, &authority_id);
-    world.account_permissions_mut_for_testing().insert(
-        authority_id.clone(),
-        BTreeSet::from([Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-        })]),
-    );
-    let chain_id = iroha_model_base::chain::ChainId::from("onboarding-test-chain");
-    let mut genesis_instructions: Vec<iroha_data_model::prelude::InstructionBox> =
-        vec![Log::new(Level::INFO, "onboarding anchor".to_owned()).into()];
-    for key_pair in &validator_keys {
-        genesis_instructions.push(
-            RegisterPeerWithPop::new(
-                PeerId::new(key_pair.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
-                    .expect("validator proof of possession"),
-            )
-            .into(),
+    for permitted in [authority_id.clone(), alternate_id] {
+        world.account_permissions_mut_for_testing().insert(
+            permitted,
+            BTreeSet::from([Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+            })]),
         );
+    }
+    let chain_id = iroha_model_base::chain::ChainId::from("onboarding-test-chain");
+    let mut genesis_instructions: Vec<iroha_data_model::prelude::InstructionBox> = vec![
+        Log::new(
+            Level::INFO,
+            format!("onboarding anchor {genesis_discriminator}"),
+        )
+        .into(),
+    ];
+    for key_pair in &validator_keys {
         let validator = AccountId::new(key_pair.public_key().clone());
         // Authenticate and execute validator rows, bonded shares, escrow, and
         // quantity-ledger mutations together in the signed genesis transaction.
@@ -300,10 +306,15 @@ fn build_onboarding_test_context_at(
         .expect("committed fixture must resolve real lane authority");
     assert_eq!(committee.validators().len(), 4);
     assert!(committee.validators().contains(&local_peer_id));
+    let service_signer = checked_key_pair(
+        onboarding_signer_seed,
+        Algorithm::Ed25519,
+        "active onboarding signer",
+    );
     cfg.torii.account_onboarding = Some(iroha_config::parameters::actual::AccountOnboarding {
-        authority: authority_id,
+        authority: AccountId::new(service_signer.public_key().clone()),
         private_key_file: ONBOARDING_SIGNER_PATH.into(),
-        signer: authority_key_pair,
+        signer: service_signer,
         credentials: vec![
             iroha_config::parameters::actual::AccountOnboardingCredential {
                 id: "local-test".parse().expect("credential id"),
@@ -340,8 +351,6 @@ fn build_onboarding_test_context_at(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let torii = fixtures::ToriiHarness::new(
         &cfg,
-        chain_id.clone(),
-        network_id,
         &kura,
         &state,
         &queue,
@@ -360,70 +369,6 @@ fn build_onboarding_test_context_at(
     }
 }
 
-fn install_conflicting_onboarding_state_for_test(
-    context: &OnboardingTestContext,
-    alias_literal: &str,
-    account_id: &AccountId,
-) {
-    use iroha_data_model::account::rekey::{AccountAlias, AccountRekeyRecord};
-
-    let catalog = context.state.nexus_snapshot().dataspace_catalog;
-    let alias = AccountAlias::from_literal(alias_literal, &catalog).expect("fixture account alias");
-    let selector =
-        iroha_core::sns::selector_for_account_alias(&alias, &catalog).expect("fixture selector");
-    let address = AccountAddress::from_account_id(account_id).expect("fixture account address");
-    let record = NameRecordV1::new(
-        selector.clone(),
-        account_id.clone(),
-        vec![NameControllerV1::account(&address)],
-        0,
-        0,
-        u64::MAX,
-        u64::MAX,
-        u64::MAX,
-        Default::default(),
-    );
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(2).expect("fixture height"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = context.state.block(header);
-    let mut tx = block.transaction();
-    let world = tx.world_mut_for_testing();
-    let authority = checked_key_pair(0xD1, Algorithm::Ed25519, "fixture authority");
-    let authority_id = AccountId::new(authority.public_key().clone());
-    world.insert_account_for_testing(
-        account_id.clone(),
-        Account::new(account_id.clone())
-            .build(&authority_id)
-            .into_key_value()
-            .1,
-    );
-    world.smart_contract_state_mut_for_testing().insert(
-        iroha_core::sns::record_storage_key(&selector),
-        norito::codec::Encode::encode(&record),
-    );
-    world
-        .account_aliases_mut_for_testing()
-        .insert(alias.clone(), account_id.clone());
-    world
-        .account_aliases_by_account_mut_for_testing()
-        .insert(account_id.clone(), BTreeSet::from([alias.clone()]));
-    world.replace_account_rekey_record_for_testing(AccountRekeyRecord::new(
-        alias,
-        account_id.clone(),
-    ));
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("install competing account and alias without a synthetic block");
-}
-fn distinct_onboarding_network_id(seed: u8) -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed])))
-}
 fn onboarding_plan_request(alias: &str, account_id: &AccountId) -> norito::json::Value {
     json_object(vec![
         json_entry("version", 1_u64),
@@ -626,11 +571,15 @@ fn sponsored_onboarding_catalog_contains_plan_prepare_submit_and_readiness() {
 }
 #[tokio::test]
 async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
-    let local_network = distinct_onboarding_network_id(0xA1);
-    let foreign_network = distinct_onboarding_network_id(0xA2);
-    let origin = build_onboarding_test_context_with(local_network, 0xD1);
-    let foreign_genesis = build_onboarding_test_context_with(foreign_network, 0xD1);
-    let rotated_signer = build_onboarding_test_context_with(local_network, 0xE1);
+    let anchor_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time");
+    let origin = build_onboarding_test_context_at(0xA1, 0xD1, anchor_time);
+    let foreign_genesis = build_onboarding_test_context_at(0xA2, 0xD1, anchor_time);
+    let rotated_signer = build_onboarding_test_context_at(0xA1, 0xE1, anchor_time);
+    let local_network = *origin.state.network_id_ref();
+    assert_ne!(local_network, *foreign_genesis.state.network_id_ref());
+    assert_eq!(local_network, *rotated_signer.state.network_id_ref());
     assert_eq!(origin.chain_id, foreign_genesis.chain_id);
     assert_eq!(origin.chain_id, rotated_signer.chain_id);
     let target = AccountId::new(
@@ -925,7 +874,7 @@ async fn sponsored_onboarding_prepared_submit_is_idempotent_until_certified_exec
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
     assert_eq!(
         response_loss_replay.status,
-        StatusCode::ACCEPTED,
+        StatusCode::OK,
         "{}",
         response_loss_replay.raw_body
     );
@@ -1027,11 +976,8 @@ async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_and_enter
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
-    let context = build_onboarding_test_context_at(
-        iroha_torii::test_utils::signed_query_network_id(),
-        0xD1,
-        now - Duration::from_secs(33 * 60 * 60),
-    );
+    let context =
+        build_onboarding_test_context_at(0xA1, 0xD1, now - Duration::from_secs(33 * 60 * 60));
     let anchor = context
         .state
         .view()
@@ -1110,11 +1056,8 @@ async fn sponsored_onboarding_rejects_signed_expired_receipt_without_block_progr
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
-    let context = build_onboarding_test_context_at(
-        iroha_torii::test_utils::signed_query_network_id(),
-        0xD1,
-        now - Duration::from_secs(33 * 60 * 60),
-    );
+    let context =
+        build_onboarding_test_context_at(0xA1, 0xD1, now - Duration::from_secs(33 * 60 * 60));
     let anchor_hash = context
         .state
         .view()
@@ -1218,11 +1161,8 @@ async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
-    let context = build_onboarding_test_context_at(
-        iroha_torii::test_utils::signed_query_network_id(),
-        0xD1,
-        now - Duration::from_secs(33 * 60 * 60),
-    );
+    let context =
+        build_onboarding_test_context_at(0xA1, 0xD1, now - Duration::from_secs(33 * 60 * 60));
     let target = AccountId::new(
         checked_key_pair(0xD9, Algorithm::Ed25519, "derive expiry target")
             .public_key()
@@ -1419,14 +1359,13 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     .await;
     assert_eq!(
         conflicting_submit.status,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::ACCEPTED,
         "{}",
         conflicting_submit.raw_body
     );
-    assert_eq!(context.queue.active_len(), 0);
-    // This one-router fixture has no f+1 peer quorum. Install the competing
-    // account and alias as a test-only world overlay so the stale-receipt test
-    // exercises live-state revalidation without inventing a canonical block.
+    assert_eq!(context.queue.active_len(), 1);
+    // Execute the exact competing prepared transaction through the native chain,
+    // then revalidate the old receipt against that certified account and alias.
     let prepared: iroha::client::AccountOnboardingPreparedTransactionV1 =
         norito::json::from_value(conflicting_prepared.payload).expect("typed racing envelope");
     let request: iroha::client::AccountOnboardingPlanRequestV1 =
@@ -1443,7 +1382,15 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     transaction
         .verify_signature()
         .expect("exact current transaction signature");
-    install_conflicting_onboarding_state_for_test(&context, alias, &conflicting_target);
+    assert_eq!(
+        iroha_torii::test_utils::apply_queued_in_one_block(
+            &mut context.native_chain.lock(),
+            &context.queue,
+        ),
+        1
+    );
+    assert_eq!(context.queue.active_len(), 0);
+    assert_eq!(context.state.view().height(), 2);
     assert!(
         context
             .state

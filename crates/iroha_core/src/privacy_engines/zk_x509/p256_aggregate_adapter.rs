@@ -372,6 +372,76 @@ fn fill_aggregate_aux_column_v1<const WIDTH: usize>(
     destination.commit_v1();
     Ok(())
 }
+/// One commit decision covers every caller-owned destination in a bounded batch.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+struct P256AggregateColumnsDestinationGuardV1<'a, 'b> {
+    outputs: &'a mut [&'b mut [F]],
+    committed: bool,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256AggregateColumnsDestinationGuardV1<'_, '_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            for output in self.outputs.iter_mut() {
+                super::private_table::zeroize_fields_v1(output);
+            }
+        }
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+struct P256AggregateAuxRowScratchV1<const WIDTH: usize>([F; WIDTH]);
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl<const WIDTH: usize> Drop for P256AggregateAuxRowScratchV1<WIDTH> {
+    fn drop(&mut self) {
+        super::private_table::zeroize_fields_v1(&mut self.0);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn fill_aggregate_aux_columns_v1<const WIDTH: usize>(
+    rows: usize,
+    first: usize,
+    outputs: &mut [&mut [F]],
+    mut next_row_v1: impl FnMut() -> Result<Option<[F; WIDTH]>, P256AggregateAdapterErrorV1>,
+) -> Result<(), P256AggregateAdapterErrorV1> {
+    if outputs.is_empty()
+        || outputs.len() > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+        || first
+            .checked_add(outputs.len())
+            .is_none_or(|end| end > WIDTH)
+        || !rows.is_power_of_two()
+        || outputs.iter().any(|output| output.len() != rows)
+    {
+        return Err(P256AggregateAdapterErrorV1::Topology);
+    }
+    let mut destination = P256AggregateColumnsDestinationGuardV1 {
+        outputs,
+        committed: false,
+    };
+    for row in 0..rows {
+        let values = P256AggregateAuxRowScratchV1(
+            next_row_v1()?.ok_or(P256AggregateAdapterErrorV1::Topology)?,
+        );
+        for (offset, output) in destination.outputs.iter_mut().enumerate() {
+            output[row] = values.0[first + offset];
+        }
+    }
+    if let Some(extra) = next_row_v1()? {
+        let _clear = P256AggregateAuxRowScratchV1(extra);
+        return Err(P256AggregateAdapterErrorV1::Topology);
+    }
+    destination.committed = true;
+    Ok(())
+}
+/// Stack-owned replay state in addition to the already admitted native columns.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn p256_arithmetic_aux_replay_scratch_v1() -> usize {
+    core::mem::size_of::<P256ArithmeticAggregateAuxStreamV1<'static>>()
+        + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>>(
+        )
+        + core::mem::size_of::<P256AggregateColumnsDestinationGuardV1<'static, 'static>>()
+        + crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            * core::mem::size_of::<&mut [F]>()
+}
 fn encode_cross_event_v1(event: P256CrossTraceEventFixedV1, target: &mut [F]) {
     target[0] = event.active;
     target[1] = event.endpoint;
@@ -1774,6 +1844,8 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         scalar_challenges: P256ScalarBitBusChallengesV1,
         arithmetic_copy_challenges: P256ArithmeticCopyChallengesV1,
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
+        #[cfg(test)]
+        auxiliary_replay_tests::record_terminal_derivation_v1();
         let mut scalar_terminal = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
         for operation in [13_usize, 14] {
             for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
@@ -1831,6 +1903,8 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         if self.next_row == P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
             return Ok(None);
         }
+        #[cfg(test)]
+        auxiliary_replay_tests::record_arithmetic_row_v1();
         let base = self.rows.base_row_v1(self.next_row)?;
         let events = arithmetic_scalar_events_v1(self.next_row)?;
         let sources = arithmetic_scalar_sources_v1(self.next_row, &base);
@@ -4628,7 +4702,10 @@ impl P256MainBaseSourceV1 {
                 fixed.allocated_heap_bytes_v1(),
             ]));
         }
-        Ok(certificate.max(wallet).max(validation_scratch))
+        Ok(certificate
+            .max(wallet)
+            .max(validation_scratch)
+            .max(p256_arithmetic_aux_replay_scratch_v1()))
     }
     /// Predict the complete canonical five-signature source before private allocations.
     ///
@@ -5701,6 +5778,86 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .fill_fixed_column_v1(registration, column, output)
     }
+    /// Borrow one arithmetic stream from this source's sole checked bind result.
+    /// No caller can supply a trace, terminal, challenge, or different token.
+    fn arithmetic_aux_stream_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+    ) -> Result<P256ArithmeticAggregateAuxStreamV1<'_>, P256AggregateAdapterErrorV1> {
+        if registration.adapter_v1() != P256MainAdapterV1::Arithmetic
+            || registration.local_instance_v1() != 0
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let signature = self.signature_v1(registration)?;
+        let post_base = self.post_base_v1()?;
+        let scalar_challenges = post_base.p256_scalar();
+        let arithmetic_copy_challenges = post_base.p256_arithmetic_copy();
+        scalar_challenges
+            .validate_v1()
+            .map_err(|_| P256AggregateAdapterErrorV1::Challenge)?;
+        arithmetic_copy_challenges.validate_v1()?;
+        let rows = signature
+            .arithmetic
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?
+            .rows_v1(signature.role)?;
+        let claims = self
+            .terminal_claims
+            .as_ref()
+            .ok_or(P256AggregateAdapterErrorV1::Phase)?;
+        let buses = if registration.signature_v1() < P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1 {
+            &claims.certificate_or_crl[registration.signature_v1()].buses
+        } else if registration.signature_v1() == P256_X5S1_SIGNATURES_V1 - 1 {
+            &claims.wallet.buses
+        } else {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        };
+        // These products were computed from this same immutable trace while
+        // binding this source. Borrowing self prevents replacing that owner or
+        // its claims until the returned stream is gone.
+        Ok(P256ArithmeticAggregateAuxStreamV1 {
+            rows,
+            scalar_challenges,
+            scalar_running: [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1],
+            scalar_terminal: buses.arithmetic_scalar,
+            arithmetic_copy_challenges,
+            arithmetic_copy_running: [F::ONE; P256_ARITHMETIC_COPY_LANES_V1],
+            arithmetic_copy_terminal: buses.arithmetic_value_copy,
+            next_row: 0,
+            _not_copy: core::cell::Cell::new(()),
+        })
+    }
+    /// Replay at most eight adjacent arithmetic auxiliary columns together.
+    /// Caller-owned columns occupy the existing native replay batch; no matrix
+    /// or second column batch is allocated by this source.
+    pub(crate) fn fill_arithmetic_aux_columns_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let shape = registration.shape_v1()?;
+        if outputs.is_empty()
+            || outputs.len()
+                > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || first
+                .checked_add(outputs.len())
+                .is_none_or(|end| end > shape.aux_width)
+            || outputs
+                .iter()
+                .any(|output| output.len() != shape.trace_size)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let mut stream = self.arithmetic_aux_stream_v1(registration)?;
+        fill_aggregate_aux_columns_v1::<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>(
+            shape.trace_size,
+            first,
+            outputs,
+            || stream.next_aux_row_v1(),
+        )
+    }
     /// Replay one complete challenge-dependent committed column from the
     /// single retained X5B1 token.
     pub(crate) fn fill_aux_column_v1(
@@ -5741,18 +5898,9 @@ impl P256MainBoundSourceV1 {
                     },
                 )
             }
-            (P256MainAdapterV1::Arithmetic, 0) => {
-                P256ArithmeticAggregateAuxStreamV1::from_validated_v1(
-                    signature.role,
-                    signature
-                        .arithmetic
-                        .as_ref()
-                        .ok_or(P256AggregateAdapterErrorV1::Phase)?,
-                    post_base.p256_scalar(),
-                    post_base.p256_arithmetic_copy(),
-                )?
-                .fill_aux_column_v1(column, output)
-            }
+            (P256MainAdapterV1::Arithmetic, 0) => self
+                .arithmetic_aux_stream_v1(registration)?
+                .fill_aux_column_v1(column, output),
             (P256MainAdapterV1::WindowBatch, 0) => {
                 let start = self
                     .cross_claim_v1(registration, P256CrossTraceTerminalRoleV1::WindowBatch)?
@@ -5987,6 +6135,9 @@ pub(crate) fn p256_main_base_source_fixture_for_test_v1()
 #[cfg(test)]
 #[path = "p256_arithmetic_fp4_tests.rs"]
 mod arithmetic_fp4_tests;
+#[cfg(test)]
+#[path = "p256_auxiliary_replay_tests.rs"]
+mod auxiliary_replay_tests;
 #[cfg(test)]
 #[path = "p256_binding_sink_fp4_tests.rs"]
 mod sink_fp4_tests;

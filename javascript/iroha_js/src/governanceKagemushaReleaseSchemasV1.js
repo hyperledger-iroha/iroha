@@ -602,8 +602,8 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
         "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
       },
       "capability_mask": {
-        "format": "uint16",
-        "maximum": 65535,
+        "format": "uint32",
+        "maximum": 4294967295,
         "minimum": 0,
         "type": "integer"
       },
@@ -1368,10 +1368,7 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
         "type": "array"
       },
       "network_id": {
-        "maxLength": 74,
-        "minLength": 74,
-        "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
-        "type": "string"
+        "$ref": "#/components/schemas/Hash"
       },
       "profile_digest": {
         "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
@@ -1536,6 +1533,10 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
       "report"
     ],
     "type": "object"
+  },
+  "Hash": {
+    "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+    "type": "string"
   }
 });
 

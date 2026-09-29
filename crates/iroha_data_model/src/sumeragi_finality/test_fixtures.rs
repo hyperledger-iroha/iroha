@@ -71,20 +71,7 @@ impl NativeFinalityFixture {
     #[must_use]
     pub fn new() -> Self {
         let mut fixture = Self::start("portable-native-fixture");
-        let signer = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
-        let mut tx = TransactionBuilder::new(
-            fixture.network_id(),
-            AccountId::new(signer.public_key().clone()),
-            FeePaymentIntent::authority(vec![], None),
-        );
-        tx.set_creation_time(Duration::from_millis(1));
-        let tx = tx
-            .with_instructions([Log::new(Level::INFO, "fixture submitted work".into())])
-            .sign(signer.private_key());
-        let mut builder = BlockBuilder::new(fixture.next_header());
-        builder.push_transaction(tx);
-        let mut block = builder.build(BTreeSet::new());
-        Self::install_network_results(&mut block, vec![Ok(Default::default())]);
+        let block = fixture.block_with_submitted_work(fixture.next_header());
         fixture.certify(block);
         fixture
     }
@@ -252,6 +239,40 @@ impl NativeFinalityFixture {
             self.tip.block_header.creation_time_ms + 1,
             0,
         )
+    }
+
+    /// Build nonempty, originally signed work for structural proof/custody tests.
+    ///
+    /// The transaction uses this fixture's network and is signed one millisecond before
+    /// the supplied original proposal time, preserving the reviewed height-two fixture.
+    /// Its success row is explicitly synthetic: this helper executes no World transition
+    /// and grants no monetary or business-execution qualification. Certify the returned
+    /// block only after its intended witness is selected, using the original fixture quorum.
+    ///
+    /// # Panics
+    /// Panics if the proposal time is zero and cannot follow the submitted work.
+    #[must_use]
+    pub fn block_with_submitted_work(&self, header: BlockHeader) -> SignedBlock {
+        let signer = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
+        let mut tx = TransactionBuilder::new(
+            self.network_id(),
+            AccountId::new(signer.public_key().clone()),
+            FeePaymentIntent::authority(vec![], None),
+        );
+        tx.set_creation_time(Duration::from_millis(
+            header
+                .creation_time_ms
+                .checked_sub(1)
+                .expect("proposal follows submitted work"),
+        ));
+        let tx = tx
+            .with_instructions([Log::new(Level::INFO, "fixture submitted work".into())])
+            .sign(signer.private_key());
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(tx);
+        let mut block = builder.build(BTreeSet::new());
+        Self::install_network_results(&mut block, vec![Ok(Default::default())]);
+        block
     }
 
     /// Install explicit synthetic network outputs for codec/verifier tests.
@@ -444,6 +465,38 @@ impl NativeFinalityFixture {
 mod tests {
     use super::*;
     #[test]
+    fn structural_work_binds_original_signature_network_and_header_time() {
+        let mut fixture = NativeFinalityFixture::start("structural-work-fixture");
+        let mut header = fixture.next_header();
+        header.creation_time_ms += 17;
+        let block = fixture.block_with_submitted_work(header);
+        assert_eq!(block.external_transactions().len(), 1);
+        assert_eq!(block.execution_outputs().len(), 1);
+        let transaction = block.external_transactions().next().unwrap();
+        header.merkle_root =
+            iroha_crypto::MerkleTree::from_iter([transaction.hash_as_entrypoint()]).root();
+        assert_eq!(block.header(), header);
+        assert_eq!(transaction.network_id(), Some(&fixture.network_id()));
+        assert_eq!(
+            transaction.creation_time(),
+            Duration::from_millis(header.creation_time_ms - 1)
+        );
+        transaction.verify_signature().unwrap();
+        let original_wire = block.canonical_resultless_proposal().encode_wire().unwrap();
+        let proof = fixture.certify(block);
+        let certified = proof.decode_checked().unwrap();
+        assert_eq!(
+            certified
+                .block
+                .canonical_resultless_proposal()
+                .encode_wire()
+                .unwrap(),
+            original_wire
+        );
+        fixture.verifier().verify_retained_decision(&proof).unwrap();
+    }
+
+    #[test]
     fn synthetic_witness_certification_binds_all_writes_and_rejects_foreign_height() {
         use crate::block::consensus::{ExecKv, ExecWitness};
         let mut fixture = NativeFinalityFixture::new();
@@ -467,13 +520,11 @@ mod tests {
             ],
             ..ExecWitness::default()
         };
-        let mut block = BlockBuilder::new(fixture.next_header()).build(BTreeSet::new());
-        NativeFinalityFixture::install_network_results(&mut block, vec![]);
+        let block = fixture.block_with_submitted_work(fixture.next_header());
         let proof = fixture.certify_with_witness(block.clone(), &writes);
         assert_eq!(proof.height(), height);
         fixture.verifier().verify_retained_decision(&proof).unwrap();
-        let mut next = BlockBuilder::new(fixture.next_header()).build(BTreeSet::new());
-        NativeFinalityFixture::install_network_results(&mut next, vec![]);
+        let next = fixture.block_with_submitted_work(fixture.next_header());
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 fixture.certify_with_witness(next, &writes)

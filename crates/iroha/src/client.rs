@@ -23358,7 +23358,7 @@ mod tests {
             AliasTransactionPlanV1, ResolvedAccountAliasV1,
         },
         asset::AssetDefinitionId,
-        block::{BlockHeader, consensus::SumeragiPipelineExecutionStatus},
+        block::BlockHeader,
         da::{
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, ExtraMetadata, StorageTicketId},
@@ -28702,7 +28702,6 @@ mod tests {
     }
     fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
         SumeragiDiagnosticsStatus {
-            pipeline_execution: SumeragiPipelineExecutionStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
             tx_queue_retained_bytes: 3_072,
@@ -28713,8 +28712,6 @@ mod tests {
             tx_queue_saturated_by_age: true,
             tx_queue_oldest_queued_age_ms: 1_250,
             npos: None,
-            lane_commitments: Vec::new(),
-            dataspace_commitments: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),
@@ -32723,27 +32720,49 @@ mod tests {
     #[test]
     fn get_sumeragi_diagnostics_rejects_unknown_json_fields() {
         let client = client_with_base_url(base_url());
-        let status = sample_sumeragi_diagnostics();
-        let mut value = norito::json::to_value(&status).expect("serialize diagnostics fixture");
-        value
-            .pointer_mut("/lane_relay_envelopes/0/settlement_commitment")
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("diagnostics fixture contains nested settlement commitment")
-            .insert("canonical".to_owned(), norito::json::Value::Null);
-        let (result, _) = capture_request(
-            mk_response(
-                StatusCode::OK,
-                norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"),
-                Some(APPLICATION_JSON),
-            ),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
+        let mut status = sample_sumeragi_diagnostics();
+        status.npos = Some(
+            iroha_data_model::block::consensus::SumeragiNposDiagnostics {
+                epoch_length_blocks: NonZeroU64::new(100).unwrap(),
+                epoch_seed: [0xA5; 32],
             },
         );
-        assert!(result.is_err(), "unknown nested fields must be rejected");
+        let current = norito::json::to_value(&status).expect("serialize diagnostics fixture");
+        let mut nested = current.clone();
+        nested
+            .pointer_mut("/npos")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("diagnostics fixture contains the current NPoS schedule")
+            .insert("canonical".to_owned(), norito::json::Value::Null);
+        let mut rejected = vec![("unknown nested schedule field", nested)];
+        for field in [
+            "lane_commitments",
+            "dataspace_commitments",
+            "pipeline_execution",
+        ] {
+            let mut retired = current.clone();
+            retired
+                .as_object_mut()
+                .expect("diagnostics object")
+                .insert(field.to_owned(), norito::json::Value::Array(Vec::new()));
+            rejected.push((field, retired));
+        }
+        for (case, value) in rejected {
+            let (result, _) = capture_request(
+                mk_response(
+                    StatusCode::OK,
+                    norito::json::to_vec(&value).expect("encode adversarial diagnostics JSON"),
+                    Some(APPLICATION_JSON),
+                ),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
+                },
+            );
+            assert!(result.is_err(), "{case} must be rejected");
+        }
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_zero_npos_seed() {

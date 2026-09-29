@@ -14,16 +14,31 @@ const INITIAL_VALUES: usize = 34; // Input, 32 state embeddings, shared register
 // broadcast creates 15. Retired IDs are never reused during one private plan.
 const VALUE_CAPACITY: usize = INITIAL_VALUES + TAPE_CAPACITY * 20;
 const GALOIS_EXPONENTS: [u16; 7] = [5, 25, 625, 5601, 4033, 3969, 8191];
-const BLOCKERS: [&str; 9] = [
-    "reviewed encryption parameters and security qualification",
-    "genuine RNS levels, exact scale-round and deterministic backend parity",
-    "typed noise transfers for the complete operation schedule",
-    "authenticated key generation, distribution and ownership",
-    "client input well-formedness proof bound to the execution statement",
-    "reviewed output sanitization and circuit privacy",
-    "key, NTT, basis, decomposition, sanitizer and prover scratch ownership",
-    "bounded canonical ciphertext and proof codecs",
-    "complete private 256-position relation within the existing budgets",
+const PROGRAM_KEY_BYTES: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QualificationBlocker {
+    SecurityParameters,
+    PhysicalRnsLevelsAndBackendParity,
+    NoiseTransfers,
+    AuthenticatedKeyOwnership,
+    BoundClientInputProof,
+    CircuitPrivacySanitizer,
+    AlgorithmAndProverScratch,
+    CanonicalBoundedCodecs,
+    CompleteUniversalRelationAndBudgets,
+}
+
+const BLOCKERS: [QualificationBlocker; 9] = [
+    QualificationBlocker::SecurityParameters,
+    QualificationBlocker::PhysicalRnsLevelsAndBackendParity,
+    QualificationBlocker::NoiseTransfers,
+    QualificationBlocker::AuthenticatedKeyOwnership,
+    QualificationBlocker::BoundClientInputProof,
+    QualificationBlocker::CircuitPrivacySanitizer,
+    QualificationBlocker::AlgorithmAndProverScratch,
+    QualificationBlocker::CanonicalBoundedCodecs,
+    QualificationBlocker::CompleteUniversalRelationAndBudgets,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -151,7 +166,11 @@ struct Work {
 
 impl Drop for Work {
     fn drop(&mut self) {
-        self.values.as_mut_slice().zeroize();
+        for row in &mut self.values {
+            for word in row {
+                word.zeroize();
+            }
+        }
         self.registers.zeroize();
         self.memory.zeroize();
         if let Some(id) = &mut self.output {
@@ -477,11 +496,7 @@ mod tests {
         assert_eq!(plan.required_galois, GALOIS_EXPONENTS);
         assert_eq!(plan.output_ranks[0], 11);
         assert_eq!(BLOCKERS.len(), 9);
-        assert!(
-            BLOCKERS
-                .iter()
-                .any(|blocker| blocker.contains("sanitization"))
-        );
+        assert!(BLOCKERS.contains(&QualificationBlocker::CircuitPrivacySanitizer));
         assert_eq!(
             format!("{plan:?}"),
             "[REDACTED unqualified RAM structural plan]"
@@ -531,6 +546,29 @@ mod tests {
         assert_eq!(outputs.count(Count::Add), 63);
         assert_eq!(outputs.count(Count::Mul), 0);
         assert_eq!(outputs.output_ranks, [0; 64]);
+    }
+
+    #[test]
+    fn select_destination_alias_and_branch_rank_follow_the_real_validator() {
+        let condition_alias = lower(
+            std::iter::repeat_n(Op::Mul(0, 0, 0), 6)
+                .chain([Op::SelectEqZero(0, 0, 1, 2), Op::Output(0)]),
+        );
+        assert_eq!(condition_alias.output_ranks[0], 16);
+        assert_eq!(condition_alias.count(Count::Mul), 16);
+        let branch_alias = lower(
+            std::iter::repeat_n(Op::Mul(1, 1, 1), 15)
+                .chain([Op::SelectEqZero(1, 0, 1, 1), Op::Output(1)]),
+        );
+        assert_eq!(branch_alias.output_ranks[0], 16);
+        assert_eq!(branch_alias.count(Count::Mul), 25);
+        let mut rejected = HiddenRamFheProgram::builder().unwrap();
+        for op in std::iter::repeat_n(Op::Mul(0, 0, 0), 7)
+            .chain([Op::SelectEqZero(0, 0, 1, 2), Op::Output(0)])
+        {
+            rejected.push(op).unwrap();
+        }
+        assert!(rejected.finish().is_err());
     }
 
     #[test]
@@ -596,17 +634,11 @@ mod tests {
             assert!(CLEARED.with_borrow(|events| events.is_empty()));
         }
         assert!(plan(&program, 1_048_576, 512).is_ok());
-        assert!(BLOCKERS.iter().any(|blocker| blocker.contains("noise")));
-        assert!(
-            BLOCKERS
-                .iter()
-                .any(|blocker| blocker.contains("input well-formedness"))
-        );
-        assert!(
-            BLOCKERS
-                .iter()
-                .any(|blocker| blocker.contains("256-position"))
-        );
+        assert!(BLOCKERS.contains(&QualificationBlocker::NoiseTransfers));
+        assert_eq!(PROGRAM_KEY_BYTES, 32);
+        assert_eq!(TAPE_CAPACITY, 256);
+        assert!(BLOCKERS.contains(&QualificationBlocker::BoundClientInputProof));
+        assert!(BLOCKERS.contains(&QualificationBlocker::CompleteUniversalRelationAndBudgets));
     }
 
     #[test]
@@ -641,5 +673,158 @@ mod tests {
                 assert!(events.iter().all(|&(_, cleared)| cleared));
             });
         }
+    }
+
+    #[test]
+    fn independent_raii_lifetimes_match_each_aliased_operation_peak() {
+        use std::{cell::Cell, rc::Rc};
+
+        #[derive(Default)]
+        struct Heap {
+            owners: Cell<usize>,
+            components: Cell<usize>,
+            peaks: Cell<[usize; 2]>,
+        }
+        struct Value {
+            heap: Rc<Heap>,
+            rank: usize,
+            components: usize,
+        }
+        impl Drop for Value {
+            fn drop(&mut self) {
+                self.heap
+                    .components
+                    .set(self.heap.components.get() - self.components);
+                if self.components == 2 {
+                    self.heap.owners.set(self.heap.owners.get() - 1);
+                }
+            }
+        }
+        // Independent reference: actual Rc ownership and destructor timing, no
+        // value IDs, manual retain/release, planner counters or reused peak code.
+        fn allocate(heap: &Rc<Heap>, rank: usize, components: usize) -> Rc<Value> {
+            heap.components.set(heap.components.get() + components);
+            if components == 2 {
+                heap.owners.set(heap.owners.get() + 1);
+            }
+            let old = heap.peaks.get();
+            heap.peaks.set([
+                old[0].max(heap.owners.get()),
+                old[1].max(heap.components.get()),
+            ]);
+            Rc::new(Value {
+                heap: Rc::clone(heap),
+                rank,
+                components,
+            })
+        }
+        fn binary(heap: &Rc<Heap>, a: &Rc<Value>, b: &Rc<Value>, multiply: bool) -> Rc<Value> {
+            let rank = a.rank.max(b.rank);
+            let aligned = (a.rank != b.rank).then(|| allocate(heap, rank, 2));
+            let raw = multiply.then(|| allocate(heap, rank, 3));
+            let result = allocate(heap, rank + usize::from(multiply), 2);
+            drop(raw);
+            drop(aligned);
+            result
+        }
+        fn select(heap: &Rc<Heap>, c: &Rc<Value>, z: &Rc<Value>, n: &Rc<Value>) -> Rc<Value> {
+            let mut base = Rc::clone(c);
+            let one = allocate(heap, 0, 2);
+            for _ in 0..8 {
+                base = binary(heap, &base, &base, true);
+            }
+            let powered = binary(heap, &one, &base, true);
+            drop(one);
+            drop(base);
+            let one = allocate(heap, 0, 2);
+            let indicator = binary(heap, &one, &powered, false);
+            drop(one);
+            drop(powered);
+            let delta = binary(heap, z, n, false);
+            let selected = binary(heap, &indicator, &delta, true);
+            drop(indicator);
+            drop(delta);
+            binary(heap, n, &selected, false)
+        }
+        let heap = Rc::new(Heap::default());
+        let input = allocate(&heap, 0, 2);
+        let mut memory: [_; 32] = std::array::from_fn(|_| allocate(&heap, 0, 2));
+        let mut registers: [_; 4] = {
+            let zero = allocate(&heap, 0, 2);
+            std::array::from_fn(|_| Rc::clone(&zero))
+        };
+        let mut output: Option<Rc<Value>> = None;
+        let mut work = Work::new().unwrap();
+        let program = tape([
+            Op::LoadState(0, 0),
+            Op::StoreState(31, 0),
+            Op::Mul(0, 0, 0),
+            Op::Output(0),
+            Op::LoadState(1, 31),
+            Op::Add(1, 1, 0),
+            Op::Output(1),
+            Op::StoreState(0, 1),
+            Op::SelectEqZero(0, 2, 0, 1),
+            Op::Output(0),
+            Op::LoadInput(0, 63),
+            Op::SelectEqZero(1, 0, 1, 1),
+            Op::Output(1),
+        ]);
+        for op in program.instructions() {
+            match op {
+                Op::LoadState(dst, lane) => {
+                    registers[usize::from(dst)] = Rc::clone(&memory[usize::from(lane)])
+                }
+                Op::StoreState(lane, src) => {
+                    memory[usize::from(lane)] = Rc::clone(&registers[usize::from(src)])
+                }
+                Op::Mul(dst, a, b) | Op::Add(dst, a, b) => {
+                    registers[usize::from(dst)] = binary(
+                        &heap,
+                        &registers[usize::from(a)],
+                        &registers[usize::from(b)],
+                        matches!(op, Op::Mul(..)),
+                    );
+                }
+                Op::Output(src) => {
+                    let masked = allocate(&heap, registers[usize::from(src)].rank, 2);
+                    output = Some(match output.take() {
+                        Some(old) => binary(&heap, &old, &masked, false),
+                        None => masked,
+                    });
+                }
+                Op::SelectEqZero(dst, c, z, n) => {
+                    registers[usize::from(dst)] = select(
+                        &heap,
+                        &registers[usize::from(c)],
+                        &registers[usize::from(z)],
+                        &registers[usize::from(n)],
+                    );
+                }
+                Op::LoadInput(dst, _) => {
+                    let mut running = allocate(&heap, input.rank, 2);
+                    for _ in 0..7 {
+                        let rotated = allocate(&heap, running.rank, 2);
+                        running = binary(&heap, &running, &rotated, false);
+                    }
+                    registers[usize::from(dst)] = running;
+                }
+                _ => unreachable!("closed independent ownership schedule"),
+            }
+            work.instruction(op).unwrap();
+            assert_eq!(work.live, heap.owners.get(), "live values after {op:?}");
+            assert_eq!(work.plan.peaks, heap.peaks.get(), "peak after {op:?}");
+            assert_eq!(
+                work.registers.map(|id| work.rank(id)),
+                registers.each_ref().map(|value| value.rank)
+            );
+            assert_eq!(
+                work.memory.map(|id| work.rank(id)),
+                memory.each_ref().map(|value| value.rank)
+            );
+        }
+        drop((input, memory, registers, output));
+        assert_eq!(heap.owners.get(), 0);
+        assert_eq!(heap.components.get(), 0);
     }
 }

@@ -287,10 +287,6 @@ fn print_usage() {
     eprintln!(
         "    Rebuild the pin registry snapshot fixture (manifests, aliases, replication orders). Defaults to crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json"
     );
-    eprintln!("  cargo xtask nexus-fixtures [--out <dir>] [--verify]");
-    eprintln!(
-        "    Regenerate Nexus lane commitment fixtures (defaults to fixtures/nexus/lane_commitments); pass --verify to ensure existing files match the generated payloads."
-    );
     eprintln!(
         "  cargo xtask nexus-connect-fixture --print | (--write|--check) --output-root <absolute-directory>"
     );
