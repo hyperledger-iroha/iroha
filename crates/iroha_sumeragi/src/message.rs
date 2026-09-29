@@ -990,6 +990,7 @@ pub enum Defect {
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
 #[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Evidence")]
+#[allow(clippy::large_enum_variant, reason = "boxing changes Norito encoding")]
 pub enum Evidence {
     /// Same `(I, h, v)`, both signed by `L(h, v)`, different `(bh, ad)`.
     ProposalEquivocation(Box<Proposal>, Box<Proposal>),
@@ -1407,7 +1408,7 @@ mod tests {
             signers: Bitmap::from_bytes(vec![0; MAX_BITMAP_BYTES + 1]),
             ..sample_qc(VoteKind::Commit, 0)
         };
-        let cases = [
+        let cases = vec![
             WireMessage::Qc(big_bitmap.clone()),
             WireMessage::Timeout(Box::new(TimeoutVote {
                 high_pqc: Some(big_bitmap.clone()),

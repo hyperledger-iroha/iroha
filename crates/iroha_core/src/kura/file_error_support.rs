@@ -132,42 +132,6 @@ fn promote_commit_marker_temp_and_sync(temporary_path: &Path, stable_path: &Path
     }
     Ok(())
 }
-fn sync_bound_progress_intent_file(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected bound progress append-intent sync failure",
-        ));
-    }
-    file.sync_data()
-}
-fn sync_bound_progress_append_data(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected journaled progress payload sync failure",
-        ));
-    }
-    file.sync_data()
-}
-fn sync_bound_progress_append_index(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected journaled progress index sync failure",
-        ));
-    }
-    file.sync_data()
-}
-fn sync_native_amx_latest_index_recovery_temp(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected Native AMX latest-index recovery temporary sync failure",
-        ));
-    }
-    file.sync_all()
-}
 fn sync_indexed_sidecar_data(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.replace(false)) {

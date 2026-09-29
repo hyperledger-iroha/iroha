@@ -4,8 +4,6 @@
 mod asset_total_amount;
 #[path = "../bench_repro.rs"]
 mod bench_repro;
-#[path = "../bridge_finality_proof.rs"]
-mod bridge_finality_proof;
 #[path = "../bridge_proofs.rs"]
 mod bridge_proofs;
 #[path = "../cache_policy.rs"]

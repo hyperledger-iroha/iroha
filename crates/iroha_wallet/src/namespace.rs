@@ -50,14 +50,15 @@ pub struct DomainNamespaceQuote {
 pub fn prepare_domain_request(config: &Config, domain: &str) -> Result<DomainNamespaceQuote> {
     let domain =
         DomainId::parse_fully_qualified(domain).wrap_err("namespace must be domain.dataspace")?;
-    let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+    let account_profile = config.account_chain_discriminant;
+    let _profile = ChainDiscriminantGuard::enter(account_profile);
     let bootstrap = blocking::account_bootstrap::Client::new(
         config.torii_api_url.clone(),
         config.torii_request_timeout,
     )?;
     let capabilities = bootstrap.capabilities()?;
     if capabilities.network_id != config.network_id
-        || capabilities.network_prefix != config.account_chain_discriminant
+        || capabilities.network_prefix != account_profile
     {
         return Err(eyre!(
             "namespace endpoint changed the wallet's exact network or account profile"

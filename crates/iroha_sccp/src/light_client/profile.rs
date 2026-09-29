@@ -682,11 +682,11 @@ mod tests {
         let mut other_root = compiled;
         other_root.ethereum.genesis_validators_root[0] ^= 1;
         assert_ne!(other_root.policy_hash(), compiled.policy_hash());
-        let later_bsc = compiled.with_bsc(BSC_MAINNET.with_supported_until_ms(1));
-        assert_ne!(later_bsc.policy_hash(), compiled.policy_hash());
-        let later_ton = compiled.with_ton(TON_MAINNET.with_supported_until_ms(1));
-        assert_ne!(later_ton.policy_hash(), compiled.policy_hash());
-        let later_tron = compiled.with_tron(TRON_MAINNET.with_supported_until_ms(1));
-        assert_ne!(later_tron.policy_hash(), compiled.policy_hash());
+        let later = compiled.with_bsc(BSC_MAINNET.with_supported_until_ms(1));
+        assert_ne!(later.policy_hash(), compiled.policy_hash());
+        let later = compiled.with_ton(TON_MAINNET.with_supported_until_ms(1));
+        assert_ne!(later.policy_hash(), compiled.policy_hash());
+        let later = compiled.with_tron(TRON_MAINNET.with_supported_until_ms(1));
+        assert_ne!(later.policy_hash(), compiled.policy_hash());
     }
 }

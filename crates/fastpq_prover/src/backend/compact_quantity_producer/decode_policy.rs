@@ -19,7 +19,7 @@ use crate::{Result, backend::offline_compact::quantity_artifact_resources};
 /// Passing these necessary minima does not guarantee the final decode succeeds.
 pub(super) fn preflight_decode_policy(
     count: usize,
-    verification: VerificationLimits,
+    verification: &VerificationLimits,
 ) -> Result<()> {
     if count == 0 {
         return Err(invalid("quantity decode policy requires a nonempty bundle"));
@@ -116,11 +116,11 @@ mod tests {
         }
     }
 
-    fn assert_limit(result: Result<()>, name: &str, minimum: usize, cap: usize) {
+    fn assert_limit(result: &Result<()>, name: &str, minimum: usize, cap: usize) {
         assert!(matches!(
             result,
             Err(Error::VerifierLimitExceeded { limit, actual, max })
-                if limit == name && actual == minimum && max == cap
+                if *limit == name && *actual == minimum && *max == cap
         ));
     }
 
@@ -129,7 +129,7 @@ mod tests {
         assert_eq!(CHILD_ROW_PAYLOAD_BYTES, 154_112);
         for count in [1, 2, 128] {
             let exact = policy(count);
-            preflight_decode_policy(count, exact).unwrap();
+            preflight_decode_policy(count, &exact).unwrap();
             for (name, child) in [
                 (
                     "max_compact_producer_segment_decode_allocation_charges",
@@ -152,7 +152,12 @@ mod tests {
                     } else {
                         limited.bundle.max_total_decode_allocation_charges = cap;
                     }
-                    assert_limit(preflight_decode_policy(count, limited), name, minimum, cap);
+                    assert_limit(
+                        &preflight_decode_policy(count, &limited),
+                        name,
+                        minimum,
+                        cap,
+                    );
                 }
             }
         }
@@ -193,7 +198,12 @@ mod tests {
                     } else {
                         limited.total_decode = decode;
                     }
-                    assert_limit(preflight_decode_policy(count, limited), name, minimum, cap);
+                    assert_limit(
+                        &preflight_decode_policy(count, &limited),
+                        name,
+                        minimum,
+                        cap,
+                    );
                 }
             }
         }
@@ -202,11 +212,11 @@ mod tests {
     #[test]
     fn decode_policy_rejects_empty_or_overflowing_cumulative_shapes() {
         assert!(matches!(
-            preflight_decode_policy(0, policy(1)),
+            preflight_decode_policy(0, &policy(1)),
             Err(Error::TransferInvariant { .. })
         ));
         assert!(matches!(
-            preflight_decode_policy(usize::MAX / CHILD_ROW_PAYLOAD_BYTES + 1, policy(1)),
+            preflight_decode_policy(usize::MAX / CHILD_ROW_PAYLOAD_BYTES + 1, &policy(1)),
             Err(Error::TransferInvariant { .. })
         ));
     }
@@ -216,12 +226,12 @@ mod tests {
         let raw = norito::encode_canonical(&vec![1_u8]).unwrap();
         let deny = DecodeLimits::new(0, 0, 0, 0, 0);
         let (result, measured) = norito::core::with_decode_limits_measured(deny, || {
-            preflight_decode_policy(1, policy(1))
+            preflight_decode_policy(1, &policy(1))
         });
         result.unwrap();
         assert_eq!(measured.total_allocated_bytes(), 0);
         norito::core::with_decode_limits_scope(deny, || {
-            preflight_decode_policy(1, policy(1)).unwrap();
+            preflight_decode_policy(1, &policy(1)).unwrap();
             assert!(norito::decode_canonical::<Vec<u8>>(&raw).is_err());
         });
         assert_eq!(norito::decode_canonical::<Vec<u8>>(&raw).unwrap(), vec![1]);

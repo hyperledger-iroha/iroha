@@ -8,8 +8,8 @@
 //! shared Solidity contract is the EVM calldata ([`super::evm`]).
 //!
 //! Protobuf fields are written in field order with proto3 defaults omitted, as java-tron and
-//! TronWeb serialize them; `ref_block_bytes` and `ref_block_hash` bind the transaction to a
-//! recent block (TAPoS).
+//! `TronWeb` serialize them; `ref_block_bytes` and `ref_block_hash` bind the transaction to a
+//! recent block (`TAPoS`).
 
 use iroha_sccp::v1::hashes::keccak256;
 use sha2::{Digest as _, Sha256};
@@ -51,7 +51,7 @@ pub fn created_contract_address(tx_id: &[u8; 32], owner: &[u8; 21]) -> [u8; 21] 
     tron_address(&evm)
 }
 
-/// The recent block a transaction references (TAPoS).
+/// The recent block a transaction references (`TAPoS`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TronReferenceBlockV1 {
     /// Block number.

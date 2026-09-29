@@ -26,12 +26,12 @@ impl Capabilities {
         ) -> Result<u32, CudaFailure> {
             let mut value = 0;
             // SAFETY: the initialized scalar has the driver attribute's exact type.
-            checked(unsafe { sys::cuDeviceGetAttribute(&mut value, kind, device) })?;
+            checked(unsafe { sys::cuDeviceGetAttribute(&raw mut value, kind, device) })?;
             u32::try_from(value).map_err(|_| CudaFailure::InvalidRequest)
         }
         let mut total_bytes = 0;
         // SAFETY: initialized usize is the total-memory API's exact out-parameter.
-        checked(unsafe { sys::cuDeviceTotalMem_v2(&mut total_bytes, device) })?;
+        checked(unsafe { sys::cuDeviceTotalMem_v2(&raw mut total_bytes, device) })?;
         let capabilities = Self {
             total_bytes,
             max_threads: attribute(device, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)?,
@@ -90,7 +90,7 @@ impl Capabilities {
         }
         block
             .into_iter()
-            .try_fold(1u32, |threads, dimension| threads.checked_mul(dimension))
+            .try_fold(1u32, u32::checked_mul)
             .is_some_and(|threads| threads <= self.max_threads)
     }
 }

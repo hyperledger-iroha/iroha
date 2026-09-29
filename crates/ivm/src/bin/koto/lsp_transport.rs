@@ -89,17 +89,16 @@ impl State {
                 let version = message
                     .pointer("/params/textDocument/version")
                     .and_then(norito::json::Value::as_i64);
-                if let Some(version) = version {
-                    if self
+                if let Some(version) = version
+                    && self
                         .versions
                         .get(uri)
                         .copied()
                         .flatten()
                         .is_some_and(|old| old >= version)
-                    {
-                        // Drop non-increasing revisions before they can invalidate a newer result.
-                        return Ok(false);
-                    }
+                {
+                    // Drop non-increasing revisions before they can invalidate a newer result.
+                    return Ok(false);
                 }
                 if self.versions.contains_key(uri) || self.versions.len() < MAX_LSP_OPEN_DOCUMENTS {
                     let previous = self.versions.get(uri).copied().flatten();
@@ -143,14 +142,13 @@ impl State {
     }
 
     fn finish(&mut self, pending: &PendingMessage) {
-        if let Some((key, token)) = &pending.request {
-            if self
+        if let Some((key, token)) = &pending.request
+            && self
                 .requests
                 .get(key)
                 .is_some_and(|registered| Arc::ptr_eq(registered, token))
-            {
-                self.requests.remove(key);
-            }
+        {
+            self.requests.remove(key);
         }
     }
 }
@@ -197,10 +195,10 @@ impl Inbox {
             return Err("LSP input dispatcher is closed".to_owned());
         }
         if message.get("method").and_then(norito::json::Value::as_str) == Some("$/cancelRequest") {
-            if let Some(key) = message.pointer("/params/id").and_then(request_key) {
-                if let Some(token) = state.requests.get(&key) {
-                    token.store(true, Ordering::Release);
-                }
+            if let Some(key) = message.pointer("/params/id").and_then(request_key)
+                && let Some(token) = state.requests.get(&key)
+            {
+                token.store(true, Ordering::Release);
             }
             // Unknown or completed IDs create no retained state, and cancellation needs no
             // queue slot, even when analysis has filled the pending request budget.
@@ -289,13 +287,13 @@ impl Inbox {
         if let Some(error) = &state.failure {
             return Err(error.clone());
         }
-        if pending.request.is_some() {
-            if let Some((code, message)) = state.rejection(pending) {
-                state.finish(pending);
-                drop(state);
-                write_lsp_error(output, pending.message.get("id").cloned(), code, message)?;
-                return Ok(true);
-            }
+        if pending.request.is_some()
+            && let Some((code, message)) = state.rejection(pending)
+        {
+            state.finish(pending);
+            drop(state);
+            write_lsp_error(output, pending.message.get("id").cloned(), code, message)?;
+            return Ok(true);
         }
         Ok(false)
     }

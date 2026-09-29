@@ -2190,6 +2190,56 @@ struct TonParsedBlockInfo {
     master_ref: Option<TonBlockIdExtV1>,
 }
 
+/// The predecessors of a `BlockInfo`: one block, or both blocks merged into this one.
+type TonBlkPrevInfo = (
+    Option<TonBlockIdExtV1>,
+    Option<(TonBlockIdExtV1, TonBlockIdExtV1)>,
+);
+
+/// Resolve `prev_ref:^(BlkPrevInfo after_merge)` of a block in `workchain`/`shard`.
+fn ton_parse_prev_ref(
+    boc: &TonBoc,
+    previous_ref_index: usize,
+    workchain: i32,
+    shard: u64,
+    after_merge: bool,
+    after_split: bool,
+) -> Option<TonBlkPrevInfo> {
+    // After a split the predecessor lives in the parent shard; after a merge the two
+    // predecessors live in the child shards, referenced from the `prev_blks_info` cell.
+    if after_merge {
+        let pair = ton_virtual_root_index(boc, previous_ref_index)?;
+        let cell = boc.cells.get(pair)?;
+        let mut pair_reader = TonBitReader::new(cell)?;
+        let left = pair_reader.read_ref()?;
+        let right = pair_reader.read_ref()?;
+        if !pair_reader.exhausted() {
+            return None;
+        }
+        return Some((
+            None,
+            Some((
+                ton_parse_ext_block_ref(boc, left, workchain, ton_shard_child(shard, false)?)?,
+                ton_parse_ext_block_ref(boc, right, workchain, ton_shard_child(shard, true)?)?,
+            )),
+        ));
+    }
+    let previous_shard = if after_split {
+        ton_shard_parent(shard)?
+    } else {
+        shard
+    };
+    Some((
+        Some(ton_parse_ext_block_ref(
+            boc,
+            previous_ref_index,
+            workchain,
+            previous_shard,
+        )?),
+        None,
+    ))
+}
+
 fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBlockInfo> {
     let index = ton_virtual_root_index(boc, cell_index)?;
     let cell = boc.cells.get(index)?;
@@ -2246,40 +2296,14 @@ fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBloc
     if !reader.exhausted() {
         return None;
     }
-    // After a split the predecessor lives in the parent shard; after a merge the two
-    // predecessors live in the child shards, referenced from the `prev_blks_info` cell.
-    let (previous, merged_previous) = if after_merge {
-        let pair = ton_virtual_root_index(boc, previous_ref_index)?;
-        let cell = boc.cells.get(pair)?;
-        let mut pair_reader = TonBitReader::new(cell)?;
-        let left = pair_reader.read_ref()?;
-        let right = pair_reader.read_ref()?;
-        if !pair_reader.exhausted() {
-            return None;
-        }
-        (
-            None,
-            Some((
-                ton_parse_ext_block_ref(boc, left, workchain, ton_shard_child(shard, false)?)?,
-                ton_parse_ext_block_ref(boc, right, workchain, ton_shard_child(shard, true)?)?,
-            )),
-        )
-    } else {
-        let previous_shard = if after_split {
-            ton_shard_parent(shard)?
-        } else {
-            shard
-        };
-        (
-            Some(ton_parse_ext_block_ref(
-                boc,
-                previous_ref_index,
-                workchain,
-                previous_shard,
-            )?),
-            None,
-        )
-    };
+    let (previous, merged_previous) = ton_parse_prev_ref(
+        boc,
+        previous_ref_index,
+        workchain,
+        shard,
+        after_merge,
+        after_split,
+    )?;
     let master_ref = match master_ref_index {
         Some(reference) => Some(ton_parse_ext_block_ref(
             boc,
@@ -4412,6 +4436,53 @@ mod tests {
             }
             assert_eq!(ton_parse_block_info(&malformed, 1), None);
         }
+    }
+
+    #[test]
+    fn prev_ref_resolves_predecessor_shards_across_splits_and_merges() {
+        const LEFT: u64 = 0x4000_0000_0000_0000;
+        const WHOLE: u64 = 0x8000_0000_0000_0000;
+        const RIGHT: u64 = 0xc000_0000_0000_0000;
+        let ext_block_ref = |seqno: u32, hash: u8| {
+            let mut data = (u64::from(seqno) * 1_000).to_be_bytes().to_vec(); // end_lt
+            data.extend_from_slice(&seqno.to_be_bytes());
+            data.extend_from_slice(&[hash; 32]);
+            data.extend_from_slice(&[!hash; 32]);
+            ordinary_cell(data, Vec::new())
+        };
+        let block = |shard: u64, seqno: u32, hash: u8| TonBlockIdExtV1 {
+            workchain: 0,
+            shard,
+            seqno,
+            root_hash: [hash; 32],
+            file_hash: [!hash; 32],
+        };
+        let boc = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                ordinary_cell(Vec::new(), vec![1, 2]),
+                ext_block_ref(9, 0x11),
+                ext_block_ref(8, 0x22),
+            ],
+        };
+        assert_eq!(
+            ton_parse_prev_ref(&boc, 1, 0, LEFT, false, false),
+            Some((Some(block(LEFT, 9, 0x11)), None))
+        );
+        assert_eq!(
+            ton_parse_prev_ref(&boc, 1, 0, LEFT, false, true),
+            Some((Some(block(WHOLE, 9, 0x11)), None))
+        );
+        assert_eq!(
+            ton_parse_prev_ref(&boc, 0, 0, WHOLE, true, false),
+            Some((None, Some((block(LEFT, 9, 0x11), block(RIGHT, 8, 0x22)))))
+        );
+        // The whole-workchain shard has no parent it could have split from.
+        assert_eq!(ton_parse_prev_ref(&boc, 1, 0, WHOLE, false, true), None);
+        // `prev_blks_info` holds exactly the two predecessor references.
+        let mut padded = boc.clone();
+        padded.cells[0] = ordinary_cell(vec![0], vec![1, 2]);
+        assert_eq!(ton_parse_prev_ref(&padded, 0, 0, WHOLE, true, false), None);
     }
 
     #[test]

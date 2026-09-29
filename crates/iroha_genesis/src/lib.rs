@@ -2011,21 +2011,6 @@ impl RawGenesisTransaction {
             .iter()
             .flat_map(|tx| tx.instructions.iter())
     }
-    /// Return the exact Sumeragi v2 context parameters selected by this manifest.
-    #[must_use]
-    pub fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
-        self.sumeragi_v2.clone()
-    }
-    /// Replace the Sumeragi v2 context parameters that will be fingerprinted
-    /// and signed with this manifest.
-    #[must_use]
-    pub fn with_sumeragi_v2_context_parameters(
-        mut self,
-        parameters: SumeragiV2GenesisContextParameters,
-    ) -> Self {
-        self.sumeragi_v2 = parameters;
-        self
-    }
     /// Return the exact networkless KAGEMUSHA mint-finality templates
     /// selected by this manifest.
     #[must_use]
@@ -2612,16 +2597,6 @@ impl GenesisBuilder {
     /// Override the DA proof policy bundle embedded into genesis.
     pub fn with_da_proof_policies(mut self, policies: DaProofPolicyBundle) -> Self {
         self.da_proof_policies = Some(policies);
-        self
-    }
-    /// Select the exact Sumeragi v2 context parameters which will be embedded
-    /// in and signed by genesis.
-    #[must_use]
-    pub fn with_sumeragi_v2_context_parameters(
-        mut self,
-        parameters: SumeragiV2GenesisContextParameters,
-    ) -> Self {
-        self.sumeragi_v2 = Some(parameters);
         self
     }
     /// Select the separately provisioned networkless Pasta roster templates

@@ -612,17 +612,25 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore = "explicit full typed-transfer 65536x342 proving and bounded verification diagnostic"]
-    fn complete_typed_transfer_verifies_after_private_witnesses_are_dropped() {
-        use crate::gadgets::{
-            compact_smt_air::{PATH_LEVELS, PHYSICAL_ROW_COUNT, SmtWitness},
-            compact_trace_columns::smt_row_cells,
-        };
-        let started = std::time::Instant::now();
-        let (rows, claims, mut inputs) = fixture(17);
-        let claim = &claims[0];
-        let mut transcripts = vec![TransferTranscript {
+    struct VerifyOnly<'a>(&'a PublicTransferAir);
+    impl FixedAir for VerifyOnly<'_> {
+        fn schema(&self) -> FixedAirSchema {
+            self.0.schema()
+        }
+        fn statement_bytes(&self) -> &[u8] {
+            self.0.statement_bytes()
+        }
+        fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
+            self.0.evaluate(point, current, next)
+        }
+        fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
+            panic!("verification must not prepare or replay a private transfer trace")
+        }
+    }
+
+    /// Private transcripts of `claim` with default paths awaiting SMT witnesses.
+    fn private_transfer_transcripts(claim: &PublicTransferTranscript) -> Vec<TransferTranscript> {
+        vec![TransferTranscript {
             batch_hash: claim.batch_hash,
             authority_digest: claim.authority_digest,
             poseidon_preimage_digest: claim.poseidon_preimage_digest,
@@ -642,16 +650,20 @@ mod tests {
                     to_smt_witness: TransferSmtWitness::default(),
                 })
                 .collect(),
-        }];
-        let (old_root, new_root) =
-            transfer::attach_transfer_smt_witnesses(&mut transcripts).unwrap();
-        inputs.old_root = old_root;
-        inputs.new_root = new_root;
-        let prepared = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
-        let statements = prepared.compact_statements(&[]).unwrap();
-        let delta = &transcripts[0].deltas[0];
+        }]
+    }
+
+    /// Physical compact SMT trace columns for one witnessed two-update statement.
+    fn physical_smt_columns(
+        delta: &TransferDeltaTranscript,
+        statement: &crate::gadgets::compact_smt_air::PublicStatement,
+    ) -> Vec<Vec<u64>> {
+        use crate::gadgets::{
+            compact_smt_air::{PATH_LEVELS, PHYSICAL_ROW_COUNT, SmtWitness},
+            compact_trace_columns::smt_row_cells,
+        };
         let paths = [&delta.from_smt_witness, &delta.to_smt_witness];
-        for (path, update) in paths.iter().zip(statements[0].updates) {
+        for (path, update) in paths.iter().zip(statement.updates) {
             assert_eq!(path.path_bits.as_slice(), update.path.to_le_bytes());
             assert_eq!(path.siblings.len(), PATH_LEVELS);
         }
@@ -663,7 +675,7 @@ mod tests {
                 })
             })
         });
-        let witness = SmtWitness::from_inputs(&statements[0], &siblings)
+        let witness = SmtWitness::from_inputs(statement, &siblings)
             .unwrap()
             .into_physical();
         let mut columns = (0..COLUMN_COUNT)
@@ -675,6 +687,159 @@ mod tests {
             }
         }
         drop(witness);
+        columns
+    }
+
+    /// Shared-opening conversion and verification results with their timings.
+    struct SharedDiagnostic {
+        shared: super::super::compact_protocol::shared_openings::SharedProof,
+        encoded: Vec<u8>,
+        shared_work: super::super::compact_protocol::shared_openings::SharedVerificationWork,
+        raw_work: super::super::compact_protocol::shared_openings::SharedVerificationWork,
+        shared_conversion: std::time::Duration,
+        shared_verifying: std::time::Duration,
+        raw_verifying: std::time::Duration,
+        facade_verifying: std::time::Duration,
+    }
+
+    /// Convert to shared openings, then verify directly, from raw bytes and via the facade.
+    fn verify_shared_diagnostic(
+        verifier: &VerifyOnly<'_>,
+        prepared: &PreparedPublicTransfers<'_>,
+        proof: &super::super::compact_protocol::CompactProof,
+        limits: VerifyLimits,
+        work: super::super::compact_protocol::VerificationWork,
+    ) -> SharedDiagnostic {
+        let shared_conversion_started = std::time::Instant::now();
+        let shared = super::super::compact_protocol::shared_openings::from_compact(
+            verifier, proof, limits,
+        )
+        .unwrap();
+        let shared_conversion = shared_conversion_started.elapsed();
+        let shared_verifying_started = std::time::Instant::now();
+        let shared_work = super::super::compact_protocol::shared_openings::verify_shared(
+            verifier, &shared, limits,
+        )
+        .unwrap();
+        let shared_verifying = shared_verifying_started.elapsed();
+        let encoded = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::core::to_bytes(&shared).unwrap()
+        };
+        let raw_verifying_started = std::time::Instant::now();
+        let raw_work = super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
+            verifier, &encoded, limits, 64 * 1024 * 1024)
+        .unwrap();
+        let raw_verifying = raw_verifying_started.elapsed();
+        assert_eq!(raw_work, shared_work);
+        let facade_started = std::time::Instant::now();
+        let accepted = super::super::compact_public_api::verify_transfer_with_allocation(
+            prepared,
+            &expected(prepared),
+            &encoded,
+            limits,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        let facade_verifying = facade_started.elapsed();
+        assert_eq!(accepted.public_io(), expected(prepared));
+        assert_eq!(accepted.work(), shared_work);
+        assert!(matches!(
+            super::super::compact_public_api::verify_transfer(
+                prepared,
+                &expected(prepared),
+                &encoded,
+                byte_limit_policy(),
+            ),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_proof_bytes",
+                ..
+            })
+        ));
+        assert_eq!(shared_work.air_evaluations, 375);
+        assert!(shared_work.row_leaves <= 750);
+        assert_eq!(shared_work.terminal_degree_checks, 1);
+        assert_eq!(shared_work.proof_bytes, work.proof_bytes);
+        assert!(shared_work.proof_bytes < norito::encode_canonical(proof).unwrap().len());
+        assert!(matches!(
+            super::super::compact_protocol::shared_openings::verify_shared(
+                verifier,
+                &shared,
+                byte_limit_policy()
+            ),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_proof_bytes",
+                ..
+            })
+        ));
+        SharedDiagnostic {
+            shared,
+            encoded,
+            shared_work,
+            raw_work,
+            shared_conversion,
+            shared_verifying,
+            raw_verifying,
+            facade_verifying,
+        }
+    }
+
+    /// A changed public caller context rejects every proof form and the facade.
+    fn assert_changed_context_rejected(
+        rows: &[StateTransition],
+        claims: &[PublicTransferTranscript],
+        inputs: PublicInputs,
+        proof: &super::super::compact_protocol::CompactProof,
+        diagnostic: &SharedDiagnostic,
+        limits: VerifyLimits,
+    ) {
+        let mut changed_inputs = inputs;
+        changed_inputs.perm_root[31] ^= 1 << 7;
+        let changed = prepare(rows, claims, changed_inputs, ProofSemantics::StateTransition);
+        let changed_air = PublicTransferAir::new(&changed, &expected(&changed)).unwrap();
+        assert!(super::super::compact_protocol::verify(&changed_air, proof, limits).is_err());
+        assert!(
+            super::super::compact_protocol::shared_openings::verify_shared(
+                &changed_air,
+                &diagnostic.shared,
+                limits
+            )
+            .is_err()
+        );
+        assert!(
+            super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
+                &changed_air,
+                &diagnostic.encoded,
+                limits, 64 * 1024 * 1024)
+            .is_err()
+        );
+        assert!(
+            super::super::compact_public_api::verify_transfer_with_allocation(
+                &changed,
+                &expected(&changed),
+                &diagnostic.encoded,
+                limits,
+                64 * 1024 * 1024,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "explicit full typed-transfer 65536x342 proving and bounded verification diagnostic"]
+    fn complete_typed_transfer_verifies_after_private_witnesses_are_dropped() {
+        use sha2::{Digest as _, Sha256};
+        let started = std::time::Instant::now();
+        let (rows, claims, mut inputs) = fixture(17);
+        let mut transcripts = private_transfer_transcripts(&claims[0]);
+        let (old_root, new_root) =
+            transfer::attach_transfer_smt_witnesses(&mut transcripts).unwrap();
+        inputs.old_root = old_root;
+        inputs.new_root = new_root;
+        let prepared = prepare(&rows, &claims, inputs, ProofSemantics::StateTransition);
+        let statements = prepared.compact_statements(&[]).unwrap();
+        let columns = physical_smt_columns(&transcripts[0].deltas[0], &statements[0]);
         drop(transcripts);
         let construction = started.elapsed();
         let air = PublicTransferAir::new(&prepared, &expected(&prepared)).unwrap();
@@ -683,21 +848,6 @@ mod tests {
         let proving = proving_started.elapsed();
         drop(columns);
 
-        struct VerifyOnly<'a>(&'a PublicTransferAir);
-        impl FixedAir for VerifyOnly<'_> {
-            fn schema(&self) -> FixedAirSchema {
-                self.0.schema()
-            }
-            fn statement_bytes(&self) -> &[u8] {
-                self.0.statement_bytes()
-            }
-            fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
-                self.0.evaluate(point, current, next)
-            }
-            fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
-                panic!("verification must not prepare or replay a private transfer trace")
-            }
-        }
         let verifier = VerifyOnly(&air);
         assert!(matches!(
             super::super::compact_protocol::verify(&verifier, &proof, byte_limit_policy()),
@@ -718,108 +868,21 @@ mod tests {
         assert!(work.row_leaves <= 750);
         assert_eq!(work.fri_queries, 375);
         assert_eq!(norito::encode_canonical(&proof).unwrap().len(), 7_791_716);
-        let shared_conversion_started = std::time::Instant::now();
-        let shared = super::super::compact_protocol::shared_openings::from_compact(
-            &verifier, &proof, limits,
-        )
-        .unwrap();
-        let shared_conversion = shared_conversion_started.elapsed();
-        let shared_verifying_started = std::time::Instant::now();
-        let shared_work = super::super::compact_protocol::shared_openings::verify_shared(
-            &verifier, &shared, limits,
-        )
-        .unwrap();
-        let shared_verifying = shared_verifying_started.elapsed();
-        let encoded = {
-            let _canonical =
-                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            norito::core::to_bytes(&shared).unwrap()
-        };
-        let raw_verifying_started = std::time::Instant::now();
-        let raw_work = super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
-            &verifier, &encoded, limits, 64 * 1024 * 1024)
-        .unwrap();
-        let raw_verifying = raw_verifying_started.elapsed();
-        assert_eq!(raw_work, shared_work);
-        let facade_started = std::time::Instant::now();
-        let verified = super::super::compact_public_api::verify_transfer_with_allocation(
-            &prepared,
-            &expected(&prepared),
-            &encoded,
-            limits,
-            64 * 1024 * 1024,
-        )
-        .unwrap();
-        let facade_verifying = facade_started.elapsed();
-        assert_eq!(verified.public_io(), expected(&prepared));
-        assert_eq!(verified.work(), shared_work);
-        assert!(matches!(
-            super::super::compact_public_api::verify_transfer(
-                &prepared,
-                &expected(&prepared),
-                &encoded,
-                byte_limit_policy(),
-            ),
-            Err(Error::VerifierLimitExceeded {
-                limit: "max_proof_bytes",
-                ..
-            })
-        ));
-        assert_eq!(shared_work.air_evaluations, 375);
-        assert!(shared_work.row_leaves <= 750);
-        assert_eq!(shared_work.terminal_degree_checks, 1);
-        assert_eq!(shared_work.proof_bytes, work.proof_bytes);
-        assert!(shared_work.proof_bytes < norito::encode_canonical(&proof).unwrap().len());
-        assert!(matches!(
-            super::super::compact_protocol::shared_openings::verify_shared(
-                &verifier,
-                &shared,
-                byte_limit_policy()
-            ),
-            Err(Error::VerifierLimitExceeded {
-                limit: "max_proof_bytes",
-                ..
-            })
-        ));
-        let mut changed_inputs = inputs;
-        changed_inputs.perm_root[31] ^= 1 << 7;
-        let changed = prepare(
-            &rows,
-            &claims,
-            changed_inputs,
-            ProofSemantics::StateTransition,
-        );
-        let changed_air = PublicTransferAir::new(&changed, &expected(&changed)).unwrap();
-        assert!(super::super::compact_protocol::verify(&changed_air, &proof, limits).is_err());
-        assert!(
-            super::super::compact_protocol::shared_openings::verify_shared(
-                &changed_air,
-                &shared,
-                limits
-            )
-            .is_err()
-        );
-        assert!(
-            super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
-                &changed_air,
-                &encoded,
-                limits, 64 * 1024 * 1024)
-            .is_err()
-        );
-        assert!(
-            super::super::compact_public_api::verify_transfer_with_allocation(
-                &changed,
-                &expected(&changed),
-                &encoded,
-                limits,
-                64 * 1024 * 1024,
-            )
-            .is_err()
-        );
+        let diagnostic = verify_shared_diagnostic(&verifier, &prepared, &proof, limits, work);
+        assert_changed_context_rejected(&rows, &claims, inputs, &proof, &diagnostic, limits);
+        let SharedDiagnostic {
+            encoded,
+            shared_work,
+            raw_work,
+            shared_conversion,
+            shared_verifying,
+            raw_verifying,
+            facade_verifying,
+            ..
+        } = diagnostic;
         // Retain only the public deterministic diagnostic proof, keyed by its
         // exact bytes, for later codec/backend comparisons without reproving.
         // No private witness, signing input or live account data is captured.
-        use sha2::{Digest as _, Sha256};
         let artifact_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/fastpq-production-validation");
         std::fs::create_dir_all(&artifact_dir).unwrap();

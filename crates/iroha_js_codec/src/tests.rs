@@ -24,6 +24,9 @@ use super::*;
 
 const FIXTURE_NETWORK_PREFIX: u16 = 753;
 
+type Encoder = fn(&str, u16) -> CodecResult<Vec<u8>>;
+type Decoder = fn(&[u8], u16) -> CodecResult<String>;
+
 fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
     Value::Object(
         fields
@@ -365,9 +368,9 @@ fn nested_custom_multisig_payload_is_preserved_by_both_encodings() {
     );
 }
 
-fn assert_typed_instruction_roundtrip(instruction: InstructionBox, value: Value) {
-    let input = text(&value);
-    let native_frame = norito::encode_canonical(&instruction).expect("native instruction frame");
+fn assert_typed_instruction_roundtrip(instruction: &InstructionBox, value: &Value) {
+    let input = text(value);
+    let native_frame = norito::encode_canonical(instruction).expect("native instruction frame");
     let native_archive = instruction.encode();
     assert_eq!(
         encode_instruction_frame(&input, FIXTURE_NETWORK_PREFIX).expect("encode typed frame"),
@@ -385,7 +388,7 @@ fn assert_typed_instruction_roundtrip(instruction: InstructionBox, value: Value)
     ] {
         assert_eq!(
             json::from_json::<Value>(&decoded).expect("decoded JSON"),
-            value
+            *value
         );
         assert_eq!(
             encode_instruction_frame(&decoded, FIXTURE_NETWORK_PREFIX)
@@ -398,7 +401,7 @@ fn assert_typed_instruction_roundtrip(instruction: InstructionBox, value: Value)
             native_archive
         );
     }
-    let Value::Object(fields) = &value else {
+    let Value::Object(fields) = value else {
         panic!("instruction envelope");
     };
     let mut extra_envelope = fields.clone();
@@ -458,7 +461,7 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
     ];
     for instruction in instructions {
         let value = instruction_to_json_value(&instruction).expect("deployment JSON");
-        assert_typed_instruction_roundtrip(instruction, value);
+        assert_typed_instruction_roundtrip(&instruction, &value);
     }
     let cancel = object([(
         "CancelSmartContractCodeUpload",
@@ -491,9 +494,8 @@ fn fixture_value(fixture: &Value, name: &str) -> Value {
         .clone()
 }
 
-#[test]
-fn all_browser_game_instruction_families_roundtrip_native_json() {
-    let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
+/// Explicit game catalog payloads assembled from the shared native fixture vectors.
+fn game_fixture_payloads() -> [(&'static str, Value); 14] {
     let fixture: Value = json::from_json(include_str!(
         "../../../javascript/iroha_js/test/fixtures/game-v1-codec.json"
     ))
@@ -505,7 +507,7 @@ fn all_browser_game_instruction_families_roundtrip_native_json() {
     let proof = fixture_value(&fixture, "ExecutionProofEnvelopeV1");
     let mut frontier = commitment.as_object().unwrap().clone();
     frontier.insert("signatures".to_owned(), checkpoint["signatures"].clone());
-    let values = [
+    [
         (
             "OpenGameSessionV1",
             fixture_value(&fixture, "OpenGameSessionV1"),
@@ -579,8 +581,13 @@ fn all_browser_game_instruction_families_roundtrip_native_json() {
             object([("profile_id", proof["profile_id"].clone())]),
         ),
         ("VerifyExecutionProofV1", object([("proof", proof)])),
-    ];
-    for (name, payload) in values {
+    ]
+}
+
+#[test]
+fn all_browser_game_instruction_families_roundtrip_native_json() {
+    let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
+    for (name, payload) in game_fixture_payloads() {
         macro_rules! native_from_catalog {
             ($($variant:ident => $ty:ty,)*) => {
                 match name {
@@ -608,7 +615,7 @@ fn all_browser_game_instruction_families_roundtrip_native_json() {
             RegisterExecutionProofProfileV1 => iroha_data_model::isi::game::RegisterExecutionProofProfileV1,
             VerifyExecutionProofV1 => iroha_data_model::isi::game::VerifyExecutionProofV1,
         };
-        assert_typed_instruction_roundtrip(instruction, object([(name, payload)]));
+        assert_typed_instruction_roundtrip(&instruction, &object([(name, payload)]));
     }
 }
 
@@ -646,7 +653,7 @@ fn all_browser_nft_market_instruction_families_preserve_native_fixture_frames() 
         let instruction: InstructionBox =
             norito::codec::decode_adaptive(&archive).expect("native NFT instruction");
         assert_eq!(instruction.encode(), archive, "{name} native archive");
-        assert_typed_instruction_roundtrip(instruction, object([(name, payload)]));
+        assert_typed_instruction_roundtrip(&instruction, &object([(name, payload)]));
     }
 }
 
@@ -681,7 +688,7 @@ fn browser_kagemusha_top_up_roundtrips_existing_native_identity_fixture() {
     assert_strict_rejection(&Value::String(
         STANDARD.encode(norito::encode_canonical(&instruction).unwrap()),
     ));
-    assert_typed_instruction_roundtrip(instruction, value);
+    assert_typed_instruction_roundtrip(&instruction, &value);
 }
 
 #[test]
@@ -942,8 +949,6 @@ fn typed_registration_respects_selected_context_and_native_error_categories() {
             )]),
         )]))
     };
-    type Encoder = fn(&str, u16) -> CodecResult<Vec<u8>>;
-    type Decoder = fn(&[u8], u16) -> CodecResult<String>;
     let codecs: [(Encoder, Decoder); 2] = [
         (encode_instruction_frame, decode_instruction_frame),
         (encode_instruction_archive, decode_instruction_archive),
@@ -964,28 +969,26 @@ fn typed_registration_respects_selected_context_and_native_error_categories() {
 #[test]
 fn instruction_network_context_is_thread_local() {
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let workers: Vec<_> = [369_u16, 42]
-        .into_iter()
-        .map(|prefix| {
-            let barrier = std::sync::Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                let _outer = ChainDiscriminantGuard::enter(prefix.wrapping_add(10));
-                let source = text(&object([(
-                    "Unregister",
-                    object([(
-                        "Account",
-                        Value::String(account().to_i105_for_discriminant(prefix).unwrap()),
-                    )]),
-                )]));
-                barrier.wait();
-                let bytes = encode_instruction_archive(&source, prefix).unwrap();
-                barrier.wait();
-                assert_eq!(decode_instruction_archive(&bytes, prefix).unwrap(), source);
-                assert_eq!(chain_discriminant(), prefix.wrapping_add(10));
-                bytes
-            })
+    // Spawn every worker before joining any: each waits on the shared barrier.
+    let workers = [369_u16, 42].map(|prefix| {
+        let barrier = std::sync::Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let _outer = ChainDiscriminantGuard::enter(prefix.wrapping_add(10));
+            let source = text(&object([(
+                "Unregister",
+                object([(
+                    "Account",
+                    Value::String(account().to_i105_for_discriminant(prefix).unwrap()),
+                )]),
+            )]));
+            barrier.wait();
+            let bytes = encode_instruction_archive(&source, prefix).unwrap();
+            barrier.wait();
+            assert_eq!(decode_instruction_archive(&bytes, prefix).unwrap(), source);
+            assert_eq!(chain_discriminant(), prefix.wrapping_add(10));
+            bytes
         })
-        .collect();
+    });
     let bytes: Vec<_> = workers
         .into_iter()
         .map(|worker| worker.join().unwrap())

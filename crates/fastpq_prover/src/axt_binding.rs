@@ -25,7 +25,7 @@ use iroha_primitives::numeric::Quantity;
 use norito::{NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
 #[path = "axt_binding/source_occurrence.rs"]
-pub(crate) mod source_occurrence;
+pub mod source_occurrence;
 pub use source_occurrence::set_axt_source_transfer_occurrences;
 /// Metadata key binding the structured AXT FASTPQ payload into the proof trace.
 pub const AXT_FASTPQ_BINDING_METADATA_KEY: &str = "axt_fastpq_binding";
@@ -206,6 +206,10 @@ impl Prover {
     /// does not exactly match it, the batch shape is invalid for the selected
     /// AXT claim, the batch or generated proof exceeds the paired AXT verifier's
     /// default resource limits, or proof generation fails.
+    #[allow(
+        clippy::unused_self,
+        reason = "public `Prover` entry point that downstream crates call on a configured prover"
+    )]
     pub fn prove_axt_bound(
         &self,
         batch: &TransitionBatch,
@@ -1533,7 +1537,7 @@ pub fn validate_axt_public_metadata(
     require_proof_mirror("blob expiry_slot", outer.expiry_slot, expiry)
 }
 
-fn require_proof_mirror<T: PartialEq>(field: &str, actual: T, expected: T) -> Result<()> {
+fn require_proof_mirror<T: PartialEq + Copy>(field: &str, actual: T, expected: T) -> Result<()> {
     if actual != expected {
         return Err(Error::InvalidAxtBinding {
             details: format!("AXT proof {field} does not match proof-bound batch metadata"),

@@ -604,7 +604,7 @@ mod tests {
         }
     }
 
-    fn map_row<F: Copy>(row: Row, map: &mut impl FnMut(u64) -> F) -> Row<F> {
+    fn map_row<F: Copy>(row: &Row, map: &mut impl FnMut(u64) -> F) -> Row<F> {
         PairBaseRow {
             execution_active: map(row.execution_active),
             table_active: map(row.table_active),
@@ -617,7 +617,7 @@ mod tests {
 
     fn lift(rows: &[Row]) -> Vec<Row<GoldilocksFp4V1>> {
         rows.iter()
-            .map(|&row| map_row(row, &mut |value| GoldilocksFp4V1::from_base(value).unwrap()))
+            .map(|row| map_row(row, &mut |value| GoldilocksFp4V1::from_base(value).unwrap()))
             .collect()
     }
 
@@ -894,9 +894,9 @@ mod tests {
         left.before = Unsigned64Witness::from_integer(GOLDILOCKS_MODULUS_V1).packed;
         let mut right = left;
         right.before = Unsigned64Witness::from_integer(0).packed;
-        let mut lift = |value| GoldilocksFp4V1::from_base(value).unwrap();
-        let left = map_tuple(left, &mut lift);
-        let right = map_tuple(right, &mut lift);
+        let mut embed = |value| GoldilocksFp4V1::from_base(value).unwrap();
+        let left = map_tuple(left, &mut embed);
+        let right = map_tuple(right, &mut embed);
         assert_ne!(
             compress_tuple(&left, challenges().compression),
             compress_tuple(&right, challenges().compression)
@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn every_numerator_has_at_most_quadratic_formal_degree() {
-        let row = map_row(fixture([0, 1, 2, 3])[0], &mut |_| Degree(1));
+        let row = map_row(&fixture([0, 1, 2, 3])[0], &mut |_| Degree(1));
         let extension = PairExtensionRow {
             execution_factor: Degree(1),
             table_factor: Degree(1),

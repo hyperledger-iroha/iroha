@@ -106,7 +106,7 @@ fn independent_segment_frame_binds_context_mapping_and_every_ordered_range_word(
         [0_u64, 0, 7_075, 0, 233_475, 3_828_990_000],
         [1, 7_075, 2_213, 233_475, 73_029, 1_197_675_600],
     ];
-    for ordinal in 0..2 {
+    for (plan_context, segment) in plan.contexts.iter().zip(segments) {
         let reference = |context: [u8; 32], mapping: [u8; 32], words: [u64; 6]| {
             let mut hash = Keccak256::new();
             hash.update(b"iroha.zk-ams.v1.global-plane.ordered-two-spool.segment\0");
@@ -117,26 +117,14 @@ fn independent_segment_frame_binds_context_mapping_and_every_ordered_range_word(
             }
             hash.finalize()
         };
-        assert_eq!(
-            plan.contexts[ordinal],
-            reference([0x11; 32], [0x22; 32], segments[ordinal])
-        );
+        assert_eq!(*plan_context, reference([0x11; 32], [0x22; 32], segment));
         for axis in 0..6 {
-            let mut changed = segments[ordinal];
+            let mut changed = segment;
             changed[axis] += 1;
-            assert_ne!(
-                plan.contexts[ordinal],
-                reference([0x11; 32], [0x22; 32], changed)
-            );
+            assert_ne!(*plan_context, reference([0x11; 32], [0x22; 32], changed));
         }
-        assert_ne!(
-            plan.contexts[ordinal],
-            reference([0x12; 32], [0x22; 32], segments[ordinal])
-        );
-        assert_ne!(
-            plan.contexts[ordinal],
-            reference([0x11; 32], [0x23; 32], segments[ordinal])
-        );
+        assert_ne!(*plan_context, reference([0x12; 32], [0x22; 32], segment));
+        assert_ne!(*plan_context, reference([0x11; 32], [0x23; 32], segment));
     }
     assert_ne!(plan.contexts[0], plan.contexts[1]);
     // Independent PyCryptodome Keccak256 fixed-frame vectors.

@@ -976,6 +976,27 @@ impl<'a, V: SccpLcStateView + ?Sized> Sets<'a, V> {
         self.learned.insert(next.set_id, next);
         Ok(())
     }
+
+    /// The delta of an advance: the learned and superseded sets, then `checkpoints` and `head`.
+    fn into_delta(
+        self,
+        checkpoints: Vec<SccpLcCheckpointV1>,
+        head: Option<SccpLcHeadV1>,
+    ) -> SccpLcDeltaV1 {
+        SccpLcDeltaV1 {
+            new_sets: self.learned.into_values().collect(),
+            superseded_sets: self
+                .superseded
+                .into_iter()
+                .map(|(set_id, superseded_at_source_ms)| SccpLcSupersessionV1 {
+                    set_id,
+                    superseded_at_source_ms,
+                })
+                .collect(),
+            checkpoints,
+            head,
+        }
+    }
 }
 
 /// The light client's view of freshness while a call runs.
@@ -1333,23 +1354,14 @@ pub(super) fn apply_advance<V: SccpLcStateView + ?Sized>(
     }
     let moved = ctx.newest != light_client.head.latest_set_id
         || latest_finalized != light_client.head.latest_finalized;
-    Ok(SccpLcDeltaV1 {
-        new_sets: sets.learned.into_values().collect(),
-        superseded_sets: sets
-            .superseded
-            .into_iter()
-            .map(|(set_id, superseded_at_source_ms)| SccpLcSupersessionV1 {
-                set_id,
-                superseded_at_source_ms,
-            })
-            .collect(),
-        checkpoints: recorder.into_vec(),
-        head: moved.then_some(SccpLcHeadV1 {
+    Ok(sets.into_delta(
+        recorder.into_vec(),
+        moved.then_some(SccpLcHeadV1 {
             latest_set_id: ctx.newest,
             latest_finalized,
             last_progress_taira_ms: taira_now_ms,
         }),
-    })
+    ))
 }
 
 /// Verify a `Backfill` segment and return the checkpoint of its first header.
@@ -1678,7 +1690,7 @@ mod tests {
     /// Install a light client from the checkpoint of `epoch` and return the storage and the
     /// Taira time.
     fn installed(chain: &SyntheticParliaChainV1, epoch: u64) -> (SccpLcMemoryStateV1, u64) {
-        let now = chain.time_ms(epoch * 1_000) + 1_000;
+        let now = SyntheticParliaChainV1::time_ms(epoch * 1_000) + 1_000;
         let mut memory = SccpLcMemoryStateV1::new();
         let initial = initialize_light_client_with_profiles(
             &profiles(chain),
@@ -1736,7 +1748,7 @@ mod tests {
         // (21 / 2 + 1) * 16 - 1 = 175.
         assert_eq!(set.valid_from_source_height, 5_176);
         assert_eq!(decode_set(&set).expect("decodes").validators.len(), 21);
-        let stale = chain.time_ms(5_000) + params().ws_bound_ms;
+        let stale = SyntheticParliaChainV1::time_ms(5_000) + params().ws_bound_ms;
         assert!(matches!(
             initialize(&chain, chain.bootstrap_data(5), stale),
             Err(SccpLcError::StaleSigningSet { set_id: 5_000, .. })
@@ -1759,7 +1771,7 @@ mod tests {
     fn unchanged_set_advances_move_the_head_and_are_idempotent() {
         let chain = SyntheticParliaChainV1::new([2; 32], 21, 16);
         let (mut memory, _) = installed(&chain, 5);
-        let now = chain.time_ms(5_400) + 2_000;
+        let now = SyntheticParliaChainV1::time_ms(5_400) + 2_000;
         let step = chain.step(5_397, 5_400, 5_000, None);
         let delta = advance(&chain, &mut memory, vec![step.clone()], now).expect("advances");
         let head = delta.head.expect("moved");
@@ -1788,7 +1800,7 @@ mod tests {
     fn quorum_and_signature_are_enforced() {
         let chain = SyntheticParliaChainV1::new([3; 32], 21, 16);
         let (mut memory, _) = installed(&chain, 5);
-        let now = chain.time_ms(5_400) + 2_000;
+        let now = SyntheticParliaChainV1::time_ms(5_400) + 2_000;
         let mut thin = chain.step(5_400, 5_400, 5_000, None);
         thin.finality.attestation = chain.attestation(5_000, 13, 5_400);
         assert_eq!(
@@ -1820,7 +1832,7 @@ mod tests {
     fn transitions_are_learned_in_order_and_old_sets_need_their_successor() {
         let chain = SyntheticParliaChainV1::new([4; 32], 21, 16).with_transition(7, 1, 24, 8);
         let (mut memory, _) = installed(&chain, 5);
-        let now = chain.time_ms(7_010) + 2_000;
+        let now = SyntheticParliaChainV1::time_ms(7_010) + 2_000;
         let skipping = chain.step(6_990, 7_010, 5_000, None);
         assert_eq!(
             advance(&chain, &mut memory, vec![skipping], now),
@@ -1836,7 +1848,7 @@ mod tests {
         assert_eq!(delta.new_sets[0].valid_from_source_height, 7_176);
         assert_eq!(delta.superseded_sets[0].set_id, 5_000);
         assert_eq!(delta.head.expect("moved").latest_set_id, 7_000);
-        let now = chain.time_ms(7_300) + 2_000;
+        let now = SyntheticParliaChainV1::time_ms(7_300) + 2_000;
         advance(
             &chain,
             &mut memory,
@@ -1883,7 +1895,7 @@ mod tests {
     fn transition_targets_must_precede_the_new_set() {
         let chain = SyntheticParliaChainV1::new([10; 32], 21, 16).with_transition(7, 1, 24, 8);
         let (mut memory, _) = installed(&chain, 5);
-        let now = chain.time_ms(7_200) + 2_000;
+        let now = SyntheticParliaChainV1::time_ms(7_200) + 2_000;
         let late = chain.step(7_000, 7_180, 5_000, None);
         assert_eq!(
             advance(&chain, &mut memory, vec![late], now),
@@ -1900,7 +1912,10 @@ mod tests {
         let (mut memory, now) = installed(&chain, 5);
         let light_client = memory.light_client(NETWORK).expect("installed");
         let deadline = weak_subjectivity_deadline_ms(&light_client);
-        assert_eq!(deadline, chain.time_ms(5_000) + params().ws_bound_ms);
+        assert_eq!(
+            deadline,
+            SyntheticParliaChainV1::time_ms(5_000) + params().ws_bound_ms
+        );
         assert!(!is_aged(&light_client, now));
         assert!(is_aged(&light_client, deadline));
         assert_eq!(
@@ -1939,7 +1954,7 @@ mod tests {
     fn proofs_open_the_receipt_of_a_finalized_block() {
         let (chain, receipt_proof) = burn_chain(6, 5_390);
         let (memory, _) = installed(&chain, 5);
-        let now = chain.time_ms(5_400) + 2_000;
+        let now = SyntheticParliaChainV1::time_ms(5_400) + 2_000;
         let step = chain.step(5_390, 5_400, 5_000, None);
         let proof = BscSourceProofV1 {
             anchor: BscProofAnchorV1::Finality(step.finality),
@@ -2028,7 +2043,7 @@ mod tests {
     fn double_votes_freeze_and_identical_records_do_not() {
         let chain = SyntheticParliaChainV1::new([8; 32], 21, 16);
         let (memory, _) = installed(&chain, 5);
-        let now = chain.time_ms(5_400) + 2_000;
+        let now = SyntheticParliaChainV1::time_ms(5_400) + 2_000;
         let honest = BscLcEvidenceV1 {
             finality: chain.step(5_400, 5_400, 5_000, None).finality,
             headers: vec![chain.header(5_400).rlp],
@@ -2071,7 +2086,7 @@ mod tests {
         let decoded = decode_header(&header.rlp).expect("decodes");
         assert_eq!(decoded.hash, header.hash);
         assert_eq!(decoded.number, 1_000);
-        assert_eq!(decoded.time_ms, chain.time_ms(1_000));
+        assert_eq!(decoded.time_ms, SyntheticParliaChainV1::time_ms(1_000));
         assert_eq!(announced_set(&decoded).expect("roster").validators.len(), 4);
         assert_eq!(decode_header(&[0xc0]), Err(BscLcError::MalformedHeader));
         assert_eq!(

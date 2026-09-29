@@ -4408,14 +4408,14 @@ where
         .try_reserve_exact(CORES_V1)
         .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::ResourceExhausted)?;
     let mut transcript_digests = [[0_u8; DIGEST_BYTES_V1]; CORES_V1];
-    for core in 0..CORES_V1 {
+    for (core, core_digest) in transcript_digests.iter_mut().enumerate() {
         let state = initial_core_transcript_state_v1(&inputs, core)?;
         let mut transcript = CoreProverTranscriptV1::<S>::new_v1(state);
         let witness = build_core_witness_v1::<S, P>(&mut source, core)?;
         build_core_statement_v1::<S>(&inputs, core)?.prove(rng, &mut transcript, witness)?;
         let (proof, transcript_digest) = transcript.finish_v1()?;
         proofs.push(proof);
-        transcript_digests[core] = transcript_digest;
+        *core_digest = transcript_digest;
     }
     drop(source);
     RnsNativeCrossFieldRlweFourCorePendingSealV1::from_parts_v1(

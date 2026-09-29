@@ -382,7 +382,7 @@ fn actual_masked_rows_use_canonical_binding_and_match_materialized_frontiers() {
     use crate::backend::{
         compact_public_columns::COMMITTED_COLUMN_COUNT as WIDTH,
         deep_binding::{Context, Oracle},
-        deep_masked_replay::{MaskedReplayPlan, MaskedTraceReplay, ReplayLimits},
+        deep_masked_replay::MaskedTraceReplay,
     };
     let binding = Context::new(b"row stream actual canonical binding regression").unwrap();
     let source = [3, 5, 7, 11];
@@ -402,26 +402,16 @@ fn actual_masked_rows_use_canonical_binding_and_match_materialized_frontiers() {
         None,
     )
     .unwrap();
-    let mut all = vec![Digest::default(); leaves_count];
-    replay
-        .visit_all(|stripe| {
-            for row in 0..stripe.rows() {
-                let mut cells = [0; WIDTH];
-                stripe.fill_row(row, &mut cells)?;
-                let bytes = cells
-                    .iter()
-                    .flat_map(|value| value.to_le_bytes())
-                    .collect::<Vec<_>>();
-                all[stripe.global_index(row)] = binding
-                    .hash_leaf(Oracle::Row, stripe.global_index(row) as u32, &bytes)
-                    .unwrap();
-            }
-            Ok(())
-        })
-        .unwrap();
+    let all = materialized_row_leaves(&mut replay, &binding, leaves_count);
     let parent = |level: usize, index: usize, left, right| {
         binding
-            .hash_parent(Oracle::Row, level as u32, index as u32, left, right)
+            .hash_parent(
+                Oracle::Row,
+                u32::try_from(level).unwrap(),
+                u32::try_from(index).unwrap(),
+                left,
+                right,
+            )
             .map_err(binding_error)
     };
     let selected = actual
@@ -464,18 +454,60 @@ fn actual_masked_rows_use_canonical_binding_and_match_materialized_frontiers() {
             .collect::<Vec<_>>()
     );
     assert!(binding.tree_frame_bytes(Oracle::Row).unwrap() > WIDTH * 8);
+    assert_full_row_plan_budget(&binding, &mut replay);
+}
+
+/// Hash every replayed row under its canonical row-leaf binding, in natural order.
+fn materialized_row_leaves(
+    replay: &mut crate::backend::deep_masked_replay::MaskedTraceReplay,
+    binding: &crate::backend::deep_binding::Context,
+    leaves_count: usize,
+) -> Vec<Digest> {
+    use crate::backend::{
+        compact_public_columns::COMMITTED_COLUMN_COUNT as WIDTH, deep_binding::Oracle,
+    };
+    let mut all = vec![Digest::default(); leaves_count];
+    replay
+        .visit_all(|stripe| {
+            for row in 0..stripe.rows() {
+                let mut cells = [0; WIDTH];
+                stripe.fill_row(row, &mut cells)?;
+                let bytes = cells
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>();
+                all[stripe.global_index(row)] = binding
+                    .hash_leaf(
+                        Oracle::Row,
+                        u32::try_from(stripe.global_index(row)).unwrap(),
+                        &bytes,
+                    )
+                    .unwrap();
+            }
+            Ok(())
+        })
+        .unwrap();
+    all
+}
+
+/// A complete-domain row plan charges its frames and rejects one byte less.
+fn assert_full_row_plan_budget(
+    binding: &crate::backend::deep_binding::Context,
+    replay: &mut crate::backend::deep_masked_replay::MaskedTraceReplay,
+) {
+    use crate::backend::deep_masked_replay::{MaskedReplayPlan, ReplayLimits};
     let full = MaskedReplayPlan::new(ReplayLimits {
         max_payload_bytes: usize::MAX,
         max_work_units: usize::MAX,
         max_full_passes: 3,
     })
     .unwrap();
-    let plan = RowCommitmentPlan::new(full, &binding, &[], limits()).unwrap();
+    let plan = RowCommitmentPlan::new(full, binding, &[], limits()).unwrap();
     assert!(plan.payload_bytes > full.payload_bytes + 7 * 65_536 * 48);
     assert!(
         RowCommitmentPlan::new(
             full,
-            &binding,
+            binding,
             &[],
             StreamLimits {
                 max_payload_bytes: plan.payload_bytes - 1,
@@ -484,7 +516,7 @@ fn actual_masked_rows_use_canonical_binding_and_match_materialized_frontiers() {
         )
         .is_err()
     );
-    assert!(plan.build(&mut replay, &binding).is_err());
+    assert!(plan.build(replay, binding).is_err());
 }
 
 #[test]

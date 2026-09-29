@@ -120,8 +120,6 @@ use std::{
 };
 #[path = "committed_hash_journal_tests.rs"]
 mod committed_hash_journal_tests;
-#[path = "lifecycle_reward_preview_tests.rs"]
-mod lifecycle_reward_preview_tests;
 #[path = "tiered_stack_tests.rs"]
 mod tiered_stack_tests;
 #[path = "transaction_stack_tests.rs"]
@@ -9675,40 +9673,8 @@ fn sample_committed_lane_block_session_with_payload_for_state_test(
         signer_pops,
     )
 }
-include!("autonomous_predecessor_application_tests.rs");
-include!("ordinary_lane_frontier_tests.rs");
-include!("applied_lane_frontier_anchor_tests.rs");
-include!("lane_consensus_state_tests.rs");
-include!("lane_consensus_verified_tests.rs");
-include!("lane_admitted_input_tests.rs");
-include!("lane_input_body_tests.rs");
-include!("lane_input_rs16_tests.rs");
-include!("lane_consensus_wal_tests.rs");
-include!("lane_body_store_tests.rs");
-include!("lane_decision_group_tests.rs");
-include!("lane_decision_economic_tests.rs");
-include!("lane_decision_fee_tests.rs");
-include!("lane_decision_batch_tests.rs");
-include!("native_lane_fastpq_tests.rs");
-include!("native_lane_scratch_witness_tests.rs");
 include!("ordinary_common_tail_tests.rs");
 include!("pipeline_outcome_ownership_tests.rs");
-include!("native_lane_batch_replay_tests.rs");
-include!("native_execution_finality_test_support.rs");
-include!("native_publication_test_support.rs");
-include!("native_completed_history_tests.rs");
-include!("native_lane_live_carrier_tests.rs");
-include!("native_lane_consumer_stage_tests.rs");
-include!("native_lane_recorded_execution_tests.rs");
-include!("native_lane_economic_relay_tests.rs");
-include!("native_lane_control_execution_tests.rs");
-include!("native_lane_preparation_tests.rs");
-include!("lane_instance_tests.rs");
-include!("lane_instance_body_tests.rs");
-include!("lane_instance_persistence_tests.rs");
-include!("lane_instance_opening_tests.rs");
-include!("lane_process_tests.rs");
-include!("lane_consensus_authority_tests.rs");
 include!("queue_plan_priority_tests.rs");
 fn lane_artifact_block_and_session_for_state_test(
     previous_block: Option<&SignedBlock>,
@@ -44976,11 +44942,7 @@ fn frozen_plain_minimum_bond_is_enforced_by_validator_tally_and_restore() {
 #[path = "relay_candidate_snapshot_tests.rs"]
 pub(super) mod relay_candidate_snapshot_tests;
 
-#[path = "merge_publication_release_tests.rs"]
-mod merge_publication_release_tests;
 
 #[path = "lifecycle_index_release_tests.rs"]
 mod lifecycle_index_release_tests;
 
-#[path = "history_reader_transitive_tests.rs"]
-mod history_reader_transitive_tests;

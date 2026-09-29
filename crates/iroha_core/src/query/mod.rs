@@ -49,32 +49,6 @@ use std::{
     convert::TryFrom,
     num::{NonZeroU64, NonZeroUsize},
 };
-/// Return the number of persisted evidence entries currently stored in WSV.
-pub fn evidence_count(state: &impl WorldStateSnapshot) -> usize {
-    evidence_count_from_world(state.world())
-}
-/// Return the number of persisted evidence entries currently stored in WSV.
-pub fn evidence_count_from_world(world: &impl WorldReadOnly) -> usize {
-    world.consensus_evidence().iter().count()
-}
-/// Snapshot persisted evidence records ordered latest-first.
-pub fn evidence_list_snapshot(state: &impl WorldStateSnapshot) -> Vec<EvidenceRecord> {
-    evidence_list_snapshot_from_world(state.world())
-}
-/// Snapshot persisted evidence records ordered latest-first.
-pub fn evidence_list_snapshot_from_world(world: &impl WorldReadOnly) -> Vec<EvidenceRecord> {
-    let mut records: Vec<_> = world
-        .consensus_evidence()
-        .iter()
-        .map(|(_, record)| record.clone())
-        .collect();
-    records.sort_by(|a, b| {
-        (a.recorded_at_height, a.recorded_at_view, a.recorded_at_ms)
-            .cmp(&(b.recorded_at_height, b.recorded_at_view, b.recorded_at_ms))
-            .reverse()
-    });
-    records
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,19 +58,6 @@ mod tests {
         state::{State, World},
     };
     use std::sync::Arc;
-    #[test]
-    fn evidence_world_helpers_match_state_snapshot_helpers_on_empty_state() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-        let world = state.world_view();
-        let view = state.view();
-        assert_eq!(evidence_count_from_world(&world), evidence_count(&view));
-        assert_eq!(
-            evidence_list_snapshot_from_world(&world),
-            evidence_list_snapshot(&view),
-        );
-    }
     #[test]
     fn next_height_for_state_uses_transaction_storage_height() {
         let kura = Kura::blank_kura_for_testing();
@@ -141,20 +102,6 @@ pub fn insert_verifying_key_record_for_test(
     if !circuit_key.0.trim().is_empty() {
         stx.world.verifying_keys_by_circuit.insert(circuit_key, id);
     }
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit query fixture world overlay");
-}
-/// Insert a consensus evidence record directly into WSV for tests.
-#[cfg(any(test, feature = "iroha-core-tests"))]
-pub fn insert_evidence_record_for_test(state: &mut crate::state::State, record: EvidenceRecord) {
-    let (_, height_u64) = next_height_for_state(state);
-    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let key = crate::sumeragi::v2_evidence::evidence_key(&record.evidence);
-    stx.world.consensus_evidence.insert(key, record);
     stx.apply();
     block
         .commit_world_overlay_for_testing()

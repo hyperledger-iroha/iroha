@@ -51,14 +51,14 @@ fn unequal_chunks_reconstruct_every_coefficient_and_extension_value() {
     assert_eq!(plan.degree_bounds(), [11, 13]);
     assert!(low[11..].iter().all(|&v| v == F::ZERO));
     assert!(high[13..].iter().all(|&v| v == F::ZERO));
-    for index in 0_usize..23 {
+    for (index, &expected) in quotient.iter().enumerate() {
         let a = low.get(index).copied().unwrap_or(F::ZERO);
         let b = index
             .checked_sub(8)
             .and_then(|i| high.get(i))
             .copied()
             .unwrap_or(F::ZERO);
-        assert_eq!(a.add(b), quotient[index]);
+        assert_eq!(a.add(b), expected);
     }
     for x in [
         F::ZERO,

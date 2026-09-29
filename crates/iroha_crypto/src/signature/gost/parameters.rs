@@ -1,6 +1,6 @@
 //! Canonical parameter literals shared by fixed-width arithmetic and signing.
 //!
-//! 256-bit sets retain the CryptoPro A/B/C parameters from RFC 4357 section 11.4;
+//! 256-bit sets retain the `CryptoPro` A/B/C parameters from RFC 4357 section 11.4;
 //! 512-bit sets retain RFC 7836 appendix A.1. Internal Algorithm names and public
 //! encodings use this same owner for both signing and verification.
 
@@ -24,7 +24,7 @@ pub(super) struct CurveConstants {
     pub(super) gy: &'static str,
 }
 
-/// Canonical integers for Algorithm::Gost3410_2012_256ParamSetA.
+/// Canonical integers for `Algorithm::Gost3410_2012_256ParamSetA`.
 pub(super) const PARAM_256_A: CurveConstants = CurveConstants {
     name: "Algorithm::Gost3410_2012_256ParamSetA",
     scalar_len: 32,
@@ -36,7 +36,7 @@ pub(super) const PARAM_256_A: CurveConstants = CurveConstants {
     gy: "8d91e471e0989cda27df505a453f2b7635294f2ddf23e3b122acc99c9e9f1e14",
 };
 
-/// Canonical integers for Algorithm::Gost3410_2012_256ParamSetB.
+/// Canonical integers for `Algorithm::Gost3410_2012_256ParamSetB`.
 pub(super) const PARAM_256_B: CurveConstants = CurveConstants {
     name: "Algorithm::Gost3410_2012_256ParamSetB",
     scalar_len: 32,
@@ -48,7 +48,7 @@ pub(super) const PARAM_256_B: CurveConstants = CurveConstants {
     gy: "3fa8124359f96680b83d1c3eb2c070e5c545c9858d03ecfb744bf8d717717efc",
 };
 
-/// Canonical integers for Algorithm::Gost3410_2012_256ParamSetC.
+/// Canonical integers for `Algorithm::Gost3410_2012_256ParamSetC`.
 pub(super) const PARAM_256_C: CurveConstants = CurveConstants {
     name: "Algorithm::Gost3410_2012_256ParamSetC",
     scalar_len: 32,
@@ -60,7 +60,7 @@ pub(super) const PARAM_256_C: CurveConstants = CurveConstants {
     gy: "41ece55743711a8c3cbf3783cd08c0ee4d4dc440d4641a8f366e550dfdb3bb67",
 };
 
-/// Canonical integers for Algorithm::Gost3410_2012_512ParamSetA.
+/// Canonical integers for `Algorithm::Gost3410_2012_512ParamSetA`.
 pub(super) const PARAM_512_A: CurveConstants = CurveConstants {
     name: "Algorithm::Gost3410_2012_512ParamSetA",
     scalar_len: 64,
@@ -72,7 +72,7 @@ pub(super) const PARAM_512_A: CurveConstants = CurveConstants {
     gy: "7503cfe87a836ae3a61b8816e25450e6ce5e1c93acf1abc1778064fdcbefa921df1626be4fd036e93d75e6a50e3a41e98028fe5fc235f5b889a589cb5215f2a4",
 };
 
-/// Canonical integers for Algorithm::Gost3410_2012_512ParamSetB.
+/// Canonical integers for `Algorithm::Gost3410_2012_512ParamSetB`.
 pub(super) const PARAM_512_B: CurveConstants = CurveConstants {
     name: "Algorithm::Gost3410_2012_512ParamSetB",
     scalar_len: 64,

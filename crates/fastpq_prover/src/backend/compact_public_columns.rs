@@ -53,8 +53,10 @@ const LENGTH_OFFSET: usize = 39;
 const COUNT_OFFSET: usize = 40;
 
 const fn committed_columns() -> [usize; COMMITTED_COLUMN_COUNT] {
-    assert!(COLUMN_COUNT == 342 && PUBLIC_COLUMN_COUNT == 41);
-    assert!(PHYSICAL_ROW_COUNT == 65536 && PHYSICAL_HASH_ROWS == 512 && EXECUTING_ROWS == 408);
+    const {
+        assert!(COLUMN_COUNT == 342 && PUBLIC_COLUMN_COUNT == 41);
+        assert!(PHYSICAL_ROW_COUNT == 65536 && PHYSICAL_HASH_ROWS == 512 && EXECUTING_ROWS == 408);
+    }
     let mut result = [0; COMMITTED_COLUMN_COUNT];
     let mut source = 0;
     let mut public = 0;
@@ -156,6 +158,10 @@ impl<'a> SourceTraceColumns<'a> {
                 value.validate("deep_source_trace", &[column, row])?;
             }
         }
+        #[allow(
+            clippy::needless_range_loop,
+            reason = "`row` indexes each public column; errors stay in row-major order"
+        )]
         for row in 0..PHYSICAL_ROW_COUNT {
             let index = PhysicalRowIndex::new(row).expect("bounded physical row");
             for (&column, expected) in PUBLIC_COLUMNS.iter().zip(base_values(index)) {

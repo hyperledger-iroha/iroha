@@ -428,7 +428,7 @@ mod tests {
         let mut calls = 0;
         let result = RnsNativeQpcsTreeV1::build(parameter(), oracle, &mut budget, |_, _| {
             calls += 1;
-            Err(RnsNativeLeafErrorV1::InvalidPayload)
+            Err(RnsNativeLeafErrorV1::Payload)
         });
         assert!(matches!(result, Err(RnsNativeTreeErrorV1::InvalidSource)));
         assert_eq!(calls, 1);
@@ -551,7 +551,7 @@ mod tests {
         let work = RnsNativeTreeWorkV1::for_oracle(parameter(), oracle).unwrap();
         let mut budget = RnsNativeProofResourceBudgetV1::default();
         let error = RnsNativeQpcsTreeV1::build(parameter(), oracle, &mut budget, |_, _| {
-            Err(RnsNativeLeafErrorV1::InvalidPayload)
+            Err(RnsNativeLeafErrorV1::Payload)
         });
         assert!(matches!(error, Err(RnsNativeTreeErrorV1::InvalidSource)));
         assert_eq!(budget.live_bytes().expect("healthy resource ledger"), 0);

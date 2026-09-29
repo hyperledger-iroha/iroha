@@ -34,7 +34,7 @@ fn fixture(queries: &[usize]) -> DeepProof {
         rows: queries
             .iter()
             .map(|&index| RowOpening {
-                index: index as u32,
+                index: u32::try_from(index).unwrap(),
                 values: RowValues::new(
                     (0..COMMITTED_COLUMN_COUNT)
                         .map(|column| {
@@ -52,7 +52,7 @@ fn fixture(queries: &[usize]) -> DeepProof {
         quotients: queries
             .iter()
             .map(|&index| QuotientMaskOpening {
-                index: index as u32,
+                index: u32::try_from(index).unwrap(),
                 low: fp4(index),
                 high: fp4(index + 1),
                 composition_mask: fp4(index + 2),
@@ -68,7 +68,7 @@ fn fixture(queries: &[usize]) -> DeepProof {
                 groups: plans.round_indices[round]
                     .iter()
                     .map(|&index| FriGroup {
-                        index: index as u32,
+                        index: u32::try_from(index).unwrap(),
                         values: FriValues::new(
                             (0..ARITIES[round]).map(|slot| fp4(index + slot)).collect(),
                         )
@@ -359,7 +359,7 @@ fn fixed_dimensions_sorted_unique_positions_and_minimal_frontiers_are_mandatory(
         match change {
             0 => changed.rows.swap(0, 1),
             1 => changed.rows[1].index = changed.rows[0].index,
-            2 => changed.rows[0].index = LDE_ROWS as u32,
+            2 => changed.rows[0].index = u32::try_from(LDE_ROWS).unwrap(),
             3 => changed.quotients.swap(0, 1),
             _ => changed.quotients[0].index ^= 1,
         }
@@ -373,7 +373,10 @@ fn fixed_dimensions_sorted_unique_positions_and_minimal_frontiers_are_mandatory(
                     changed.rounds[round].groups.pop();
                 }
                 1 => changed.rounds[round].groups.swap(0, 1),
-                2 => changed.rounds[round].groups[0].index = GROUP_LEAVES[round] as u32,
+                2 => {
+                    changed.rounds[round].groups[0].index =
+                        u32::try_from(GROUP_LEAVES[round]).unwrap();
+                }
                 3 => {
                     let wrong_arity = if ARITIES[round] == 4 { 8 } else { 4 };
                     changed.rounds[round].groups[0].values =

@@ -103,11 +103,6 @@ mod model {
         /// This sticky set authenticates transient same-block rotations that the
         /// final policy snapshot alone cannot reconstruct during Kura replay.
         pub axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
-        /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
-        ///
-        /// Every V1 result field is required; this field stays last to make truncated layouts fail
-        /// closed.
-        pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
     }
 }
 pub use self::model::{BlockPayload, BlockResult};
@@ -178,7 +173,6 @@ impl Ord for BlockResult {
             &self.committed_fragment_count,
             &self.fastpq_transcripts,
             &self.axt_envelopes,
-            &self.lane_finality_statements,
             &self.axt_policy_snapshot,
             &self.axt_transitioned_dataspaces,
         )
@@ -188,7 +182,6 @@ impl Ord for BlockResult {
                 &other.committed_fragment_count,
                 &other.fastpq_transcripts,
                 &other.axt_envelopes,
-                &other.lane_finality_statements,
                 &other.axt_policy_snapshot,
                 &other.axt_transitioned_dataspaces,
             ))

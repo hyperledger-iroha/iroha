@@ -7,7 +7,11 @@
 //! `FASTPQ_RESOURCE_OUTPUT_DIR` optionally saves canonical inputs and returned
 //! proofs for these developer tests. One sample is diagnostic, not a latency SLO.
 
-use std::{fs, path::PathBuf, time::Instant};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use fastpq_isi::{
     FASTPQ_CATALOG_V1, FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1, FASTPQ_FINAL_V1, FASTPQ_FINAL_V1_ID,
@@ -26,7 +30,10 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
+    fastpq::{
+        TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
+        TransferTranscript,
+    },
 };
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
@@ -69,8 +76,8 @@ fn transfer_fixture(rows: usize) -> TransitionBatch {
             from_balance_after: Quantity::from(sender_before - amount),
             to_balance_before: Quantity::from(receiver_before),
             to_balance_after: Quantity::from(receiver_before + amount),
-            from_smt_witness: Default::default(),
-            to_smt_witness: Default::default(),
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
         };
         let batch_hash = Hash::new(format!("fastpq-resource-v1/batch/{index:08}"));
         let digest = compute_poseidon_digest(&delta, &batch_hash);
@@ -188,12 +195,44 @@ fn measure_public_cpu(rows: usize) {
     let started = Instant::now();
     let result = prover.prove(&batch);
     let prove_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let mut record = measurement_record(rows, batch_bytes.len(), prove_ms);
+    let unexpected_error = match result {
+        Ok(proof) => {
+            record_returned_proof(&mut record, &batch, &proof, rows, output_dir.as_deref())
+        }
+        Err(Error::VerifierLimitExceeded { limit, actual, max }) => {
+            record.insert("status".into(), norito::json!("rejected_by_default_limit"));
+            record.insert("limit".into(), norito::json!(limit));
+            record.insert("limit_actual".into(), norito::json!(actual));
+            record.insert("limit_max".into(), norito::json!(max));
+            // The public API deliberately does not expose a rejected proof. Do not
+            // replace unknown wire bytes with the verifier's approximate size hint.
+            None
+        }
+        Err(error) => {
+            record.insert("status".into(), norito::json!("unexpected_prove_error"));
+            record.insert("error".into(), norito::json!(error.to_string()));
+            Some(error)
+        }
+    };
+    let encoded = json::to_string(&record).expect("encode compact measurement");
+    println!("{encoded}");
+    if let Some(path) = &output_dir {
+        fs::write(
+            path.join(format!("cpu_{rows}_rows.measurement.json")),
+            encoded,
+        )
+        .expect("write measurement");
+    }
+    assert!(unexpected_error.is_none(), "{unexpected_error:?}");
+}
+
+/// Measurement fields known before verification: fixture size, prove time,
+/// default verifier limits and the complete fixed parameter descriptor.
+fn measurement_record(rows: usize, batch_wire_bytes: usize, prove_ms: f64) -> json::Map {
     let limits = VerifyLimits::default();
     let params = FASTPQ_FINAL_V1;
-    let digest_parameters_sha3 = GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let digest_parameters_sha3 = hex::encode(GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1);
     let record = norito::json!({
         "measurement_version": 2_u64,
         "profile": "state_transition",
@@ -205,7 +244,7 @@ fn measure_public_cpu(rows: usize) {
         "sample_count": 1_u64,
         "prove_includes_self_verification": true,
         "fixture_and_encoding_in_timers": false,
-        "batch_wire_bytes": (batch_bytes.len()),
+        "batch_wire_bytes": batch_wire_bytes,
         "prove_ms": prove_ms,
         "verify_ms": null,
         "proof_wire_bytes": null,
@@ -246,101 +285,87 @@ fn measure_public_cpu(rows: usize) {
             "composition_degree_expansion": FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1,
         },
     });
-    let mut record = record.as_object().expect("measurement object").clone();
-    let mut unexpected_error = None;
-    match result {
-        Ok(proof) => {
-            let started = Instant::now();
-            let verified = verify(&batch, &proof);
-            let verify_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let proof_bytes = to_bytes(&proof).expect("encode returned proof outside timer");
-            let decoded: Proof = norito::decode_from_bytes(&proof_bytes)
-                .expect("decode returned proof outside timer");
-            assert_eq!(
-                decoded, proof,
-                "recorded wire bytes reproduce the returned proof"
-            );
-            record.insert("verify_ms".into(), norito::json!(verify_ms));
-            record.insert("proof_wire_bytes".into(), norito::json!(proof_bytes.len()));
-            record.insert("proof_wire_roundtrip_matches".into(), norito::json!(true));
-            record.insert(
-                "proof_protocol_version".into(),
-                norito::json!(proof.protocol_version),
-            );
-            record.insert(
-                "proof_parameter".into(),
-                norito::json!(proof.parameter.clone()),
-            );
-            record.insert(
-                "lde_domain_size".into(),
-                norito::json!(proof.lde_domain_size),
-            );
-            record.insert("query_count".into(), norito::json!(proof.queries.len()));
-            record.insert(
-                "air_opening_count".into(),
-                norito::json!(proof.air_openings.len()),
-            );
-            record.insert(
-                "fri_query_count".into(),
-                norito::json!(proof.fri_queries.len()),
-            );
-            record.insert("air_alpha_count".into(), norito::json!(proof.alphas.len()));
-            record.insert("fri_beta_count".into(), norito::json!(proof.betas.len()));
-            record.insert(
-                "fri_layer_count".into(),
-                norito::json!(proof.fri_layers.len()),
-            );
-            record.insert(
-                "air_columns".into(),
-                norito::json!(
-                    proof
-                        .air_openings
-                        .first()
-                        .map(|opening| opening.current_row.len())
-                ),
-            );
-            match verified {
-                Ok(()) => {
-                    record.insert("status".into(), norito::json!("accepted"));
-                }
-                Err(error) => {
-                    record.insert("status".into(), norito::json!("unexpected_verify_error"));
-                    record.insert("error".into(), norito::json!(error.to_string()));
-                    unexpected_error = Some(error);
-                }
-            }
-            if let Some(path) = &output_dir {
-                fs::write(
-                    path.join(format!("cpu_{rows}_rows.proof.norito")),
-                    proof_bytes,
-                )
-                .expect("write returned proof");
-            }
-        }
-        Err(Error::VerifierLimitExceeded { limit, actual, max }) => {
-            record.insert("status".into(), norito::json!("rejected_by_default_limit"));
-            record.insert("limit".into(), norito::json!(limit));
-            record.insert("limit_actual".into(), norito::json!(actual));
-            record.insert("limit_max".into(), norito::json!(max));
-            // The public API deliberately does not expose a rejected proof. Do not
-            // replace unknown wire bytes with the verifier's approximate size hint.
+    record.as_object().expect("measurement object").clone()
+}
+
+/// Verify a returned proof outside the prove timer and record its wire facts.
+///
+/// Returns the verifier error, if any, after recording it as unexpected.
+fn record_returned_proof(
+    record: &mut json::Map,
+    batch: &TransitionBatch,
+    proof: &Proof,
+    rows: usize,
+    output_dir: Option<&Path>,
+) -> Option<Error> {
+    let started = Instant::now();
+    let verified = verify(batch, proof);
+    let verify_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let proof_bytes = to_bytes(proof).expect("encode returned proof outside timer");
+    let decoded: Proof =
+        norito::decode_from_bytes(&proof_bytes).expect("decode returned proof outside timer");
+    assert_eq!(
+        decoded, *proof,
+        "recorded wire bytes reproduce the returned proof"
+    );
+    record.insert("verify_ms".into(), norito::json!(verify_ms));
+    record.insert("proof_wire_bytes".into(), norito::json!(proof_bytes.len()));
+    record.insert("proof_wire_roundtrip_matches".into(), norito::json!(true));
+    record.insert(
+        "proof_protocol_version".into(),
+        norito::json!(proof.protocol_version),
+    );
+    record.insert(
+        "proof_parameter".into(),
+        norito::json!(proof.parameter.clone()),
+    );
+    record.insert(
+        "lde_domain_size".into(),
+        norito::json!(proof.lde_domain_size),
+    );
+    record.insert("query_count".into(), norito::json!(proof.queries.len()));
+    record.insert(
+        "air_opening_count".into(),
+        norito::json!(proof.air_openings.len()),
+    );
+    record.insert(
+        "fri_query_count".into(),
+        norito::json!(proof.fri_queries.len()),
+    );
+    record.insert("air_alpha_count".into(), norito::json!(proof.alphas.len()));
+    record.insert("fri_beta_count".into(), norito::json!(proof.betas.len()));
+    record.insert(
+        "fri_layer_count".into(),
+        norito::json!(proof.fri_layers.len()),
+    );
+    record.insert(
+        "air_columns".into(),
+        norito::json!(
+            proof
+                .air_openings
+                .first()
+                .map(|opening| opening.current_row.len())
+        ),
+    );
+    let unexpected_error = match verified {
+        Ok(()) => {
+            record.insert("status".into(), norito::json!("accepted"));
+            None
         }
         Err(error) => {
-            record.insert("status".into(), norito::json!("unexpected_prove_error"));
+            record.insert("status".into(), norito::json!("unexpected_verify_error"));
             record.insert("error".into(), norito::json!(error.to_string()));
-            unexpected_error = Some(error);
+            Some(error)
         }
-    }
-    let encoded = json::to_string(&record).expect("encode compact measurement");
-    println!("{encoded}");
-    if let Some(path) = &output_dir {
+    };
+    if let Some(path) = output_dir {
         fs::write(
-            path.join(format!("cpu_{rows}_rows.measurement.json")),
-            encoded,
+            path.join(format!("cpu_{rows}_rows.proof.norito")),
+            proof_bytes,
         )
-        .expect("write measurement");
+        .expect("write returned proof");
     }
-    assert!(unexpected_error.is_none(), "{unexpected_error:?}");
+    unexpected_error
 }
 
 #[test]

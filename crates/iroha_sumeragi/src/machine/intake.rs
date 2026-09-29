@@ -131,7 +131,7 @@ impl Core {
         if s.echo.is_none()
             && self.any_unanchored()
             && !self.is_local_key(from)
-            && (self.config(&self.tip.height.saturating_add(2)))
+            && (self.config(self.tip.height.saturating_add(2)))
                 .is_some_and(|next| next.committee.contains(from))
         {
             let low = self.probe.get(from).copied().unwrap_or(u64::MAX);
@@ -237,7 +237,7 @@ impl Core {
         if echo.nonce != self.nonce || !self.any_unanchored() {
             return;
         }
-        let Some(next) = self.config(&self.tip.height.saturating_add(2)) else {
+        let Some(next) = self.config(self.tip.height.saturating_add(2)) else {
             return;
         };
         if !next.committee.contains(&echo.key)
@@ -270,7 +270,7 @@ impl Core {
             return;
         }
         let t = self.tip.height;
-        let Some(next) = self.config(&t.saturating_add(2)) else {
+        let Some(next) = self.config(t.saturating_add(2)) else {
             return;
         };
         if self.probe_epoch != Some(next.epoch.id) {
@@ -296,7 +296,7 @@ impl Core {
     fn answer_probe(&mut self, to: &PublicKey, nonce: u64) {
         // The current round height (also while awaiting: the next round's).
         let h = self.tip.height.saturating_add(1);
-        let Some(epoch) = self.config(&h).map(|config| *config.epoch) else {
+        let Some(epoch) = self.config(h).map(|config| *config.epoch) else {
             return;
         };
         if !epoch.contains(h) {

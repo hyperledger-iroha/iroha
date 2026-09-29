@@ -71,36 +71,7 @@ pub(super) fn run_deploy(
         "Preparing the contract, network binding, permissions, and exact fee quotes..."
     });
     if let Some(journal) = args.resume.as_ref().or(args.cancel.as_ref()) {
-        let (workspace, _) = load_selected_workspace(manifest, &args.selection)?;
-        let network = network::select_network(
-            workspace.root(),
-            args.network.as_deref(),
-            args.config.as_deref(),
-            None,
-        )?;
-        let _profile = ChainDiscriminantGuard::enter(network.chain_discriminant);
-        let service =
-            DeploymentService::new(network.load_client()?).map_err(deployment_diagnostic)?;
-        if args.cancel.is_some() {
-            let cancellation = service.cancel(journal).map_err(deployment_diagnostic)?;
-            return Ok(Success {
-                message: format!(
-                    "Cancelled unattempted deployment plan: {}",
-                    journal.display()
-                ),
-                data: object([
-                    ("status", Value::from("cancelled")),
-                    ("journal", Value::from(journal.display().to_string())),
-                    ("cancellation", deployment_json(&cancellation)?),
-                ]),
-            });
-        }
-        let receipt = service
-            .resume(journal, &mut |event| progress(&render_progress(event)))
-            .map_err(|error| {
-                deployment_diagnostic(error).with_context("journal", journal.display().to_string())
-            })?;
-        return receipt_output(&receipt, journal);
+        return recover_deployment(manifest, args, journal, progress);
     }
     let build_args = BuildArgs {
         selection: args.selection.clone(),
@@ -121,8 +92,8 @@ pub(super) fn run_deploy(
     let artifact_bytes = read_selected_artifact(artifact)?;
     let fee_payment = selected_fee_payment(&build.network)?;
     let _profile = ChainDiscriminantGuard::enter(build.network.chain_discriminant);
-    let service =
-        DeploymentService::new(build.network.load_client()?).map_err(deployment_diagnostic)?;
+    let service = DeploymentService::new(build.network.load_client()?)
+        .map_err(|error| deployment_diagnostic(&error))?;
     let slot = deployment_slot(
         build.workspace.root(),
         &build.network.name,
@@ -146,30 +117,12 @@ pub(super) fn run_deploy(
             fee_payment,
             governance_approvers: Vec::new(),
         })
-        .map_err(deployment_diagnostic)?;
-    let hash = prepared
-        .preflight()
-        .transaction_hashes
-        .last()
-        .ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::Internal,
-                "deployment plan contains no atomic commit",
-            )
-        })?;
-    let hash = hash
-        .parse::<iroha::crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>()
-        .map_err(|_| {
-            Diagnostic::new(
-                ErrorCode::Internal,
-                "deployment plan contains an invalid transaction hash",
-            )
-        })?;
-    let journal_id = hex::encode(hash.as_ref());
+        .map_err(|error| deployment_diagnostic(&error))?;
+    let journal_id = plan_journal_id(prepared.preflight())?;
     let journal = slot.join(&journal_id);
     service
         .persist(&prepared, &journal)
-        .map_err(deployment_diagnostic)?;
+        .map_err(|error| deployment_diagnostic(&error))?;
     writer
         .replace(Path::new("active-journal"), journal_id.as_bytes())
         .map_err(atomic_diagnostic)?;
@@ -199,9 +152,70 @@ pub(super) fn run_deploy(
             progress(&render_progress(event))
         })
         .map_err(|error| {
-            deployment_diagnostic(error).with_context("journal", journal.display().to_string())
+            deployment_diagnostic(&error).with_context("journal", journal.display().to_string())
         })?;
     receipt_output(&receipt, &journal)
+}
+
+/// Cancel an unattempted plan, or resume an exact retained deployment journal without
+/// rebuilding or re-signing its transactions.
+fn recover_deployment(
+    manifest: Option<&Path>,
+    args: &DeployArgs,
+    journal: &Path,
+    progress: &mut dyn FnMut(&str),
+) -> CommandResult {
+    let (workspace, _) = load_selected_workspace(manifest, &args.selection)?;
+    let network = network::select_network(
+        workspace.root(),
+        args.network.as_deref(),
+        args.config.as_deref(),
+        None,
+    )?;
+    let _profile = ChainDiscriminantGuard::enter(network.chain_discriminant);
+    let service = DeploymentService::new(network.load_client()?)
+        .map_err(|error| deployment_diagnostic(&error))?;
+    if args.cancel.is_some() {
+        let cancellation = service
+            .cancel(journal)
+            .map_err(|error| deployment_diagnostic(&error))?;
+        return Ok(Success {
+            message: format!(
+                "Cancelled unattempted deployment plan: {}",
+                journal.display()
+            ),
+            data: object([
+                ("status", Value::from("cancelled")),
+                ("journal", Value::from(journal.display().to_string())),
+                ("cancellation", deployment_json(&cancellation)?),
+            ]),
+        });
+    }
+    let receipt = service
+        .resume(journal, &mut |event| progress(&render_progress(event)))
+        .map_err(|error| {
+            deployment_diagnostic(&error).with_context("journal", journal.display().to_string())
+        })?;
+    receipt_output(&receipt, journal)
+}
+
+/// Name the durable journal after the plan's final atomic commit transaction hash.
+fn plan_journal_id(preflight: &DeploymentPreflight) -> Result<String, Diagnostic> {
+    let hash = preflight.transaction_hashes.last().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::Internal,
+            "deployment plan contains no atomic commit",
+        )
+    })?;
+    let hash = hash
+        .parse::<iroha::crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>()
+        .map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::Internal,
+                "deployment plan contains an invalid transaction hash",
+            )
+        })?;
+    Ok(hex::encode(hash.as_ref()))
 }
 
 fn render_progress(event: DeploymentProgress) -> String {
@@ -320,8 +334,10 @@ pub(super) fn run_view(manifest: Option<&Path>, args: &ViewArgs) -> CommandResul
     let _profile = ChainDiscriminantGuard::enter(network.chain_discriminant);
     let config = network.load_client()?;
     let authority = config.account.clone();
-    let client = iroha::blocking::Client::new(config).map_err(view_diagnostic)?;
-    client.refresh_capabilities().map_err(view_diagnostic)?;
+    let client = iroha::blocking::Client::new(config).map_err(|error| view_diagnostic(&error))?;
+    client
+        .refresh_capabilities()
+        .map_err(|error| view_diagnostic(&error))?;
     let result = client
         .client()
         .post_contract_view_json(
@@ -332,7 +348,7 @@ pub(super) fn run_view(manifest: Option<&Path>, args: &ViewArgs) -> CommandResul
             Some(&payload),
             args.gas_limit,
         )
-        .map_err(view_diagnostic)?;
+        .map_err(|error| view_diagnostic(&error))?;
     let rendered = norito::json::to_string_pretty(&result).map_err(|_| {
         Diagnostic::new(
             ErrorCode::Internal,
@@ -354,7 +370,7 @@ pub(super) fn run_view(manifest: Option<&Path>, args: &ViewArgs) -> CommandResul
     })
 }
 
-fn view_diagnostic(error: eyre::Report) -> Diagnostic {
+fn view_diagnostic(error: &eyre::Report) -> Diagnostic {
     Diagnostic::new(ErrorCode::Network, format!("{error:#}"))
 }
 
@@ -468,7 +484,7 @@ fn ensure_previous_terminal(
     if matches!(
         service
             .inspect_journal(&journal)
-            .map_err(deployment_diagnostic)?,
+            .map_err(|error| deployment_diagnostic(&error))?,
         JournalDisposition::Pending { .. }
     ) {
         return Err(Diagnostic::new(
@@ -553,13 +569,13 @@ fn deployment_json<T: norito::json::JsonSerialize + ?Sized>(
     })
 }
 
-fn deployment_diagnostic(error: DeploymentError) -> Diagnostic {
-    if let DeploymentError::Failed(failure) = &error {
+fn deployment_diagnostic(error: &DeploymentError) -> Diagnostic {
+    if let DeploymentError::Failed(failure) = error {
         let details = deployment_json(failure).unwrap_or(Value::Null);
         return Diagnostic::new(ErrorCode::Network, error.to_string())
-            .with_details("The exact transaction is terminal. Correct the reported cause before creating a new deployment.", details);
+            .with_details("The exact transaction is terminal. Correct the reported cause before creating a new deployment.", &details);
     }
-    let code = match &error {
+    let code = match error {
         DeploymentError::Artifact(_) => ErrorCode::PackageInvalid,
         DeploymentError::InvalidRequest(_) => ErrorCode::Usage,
         DeploymentError::Journal(_) => ErrorCode::Io,
@@ -569,7 +585,7 @@ fn deployment_diagnostic(error: DeploymentError) -> Diagnostic {
         | DeploymentError::Readback(_) => ErrorCode::Network,
     };
     let diagnostic = Diagnostic::new(code, error.to_string());
-    match &error {
+    match error {
         DeploymentError::Preflight { source, .. }
         | DeploymentError::Pending { source, .. }
         | DeploymentError::Journal(source)
@@ -622,35 +638,18 @@ mod tests {
         assert!(read_selected_artifact(&artifact).is_err());
     }
 
-    #[test]
-    fn prepared_output_shows_exact_signer_alias_transactions_and_fee_bounds() {
-        use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
-        use iroha_data_model::{
-            NetworkId,
-            account::AccountId,
-            nexus::{FeeDebitSource, FeeSponsorProgramId},
-            permission::Permission,
-            smart_contract::ContractAddress,
-            transaction::{FeeChargeKind, FeeChargeLimit},
-        };
+    /// One-transaction authority-paid plan, built under the caller's active address profile.
+    fn authority_paid_preflight(
+        id: iroha_data_model::NetworkId,
+        authority: &iroha_data_model::account::AccountId,
+        address: &iroha_data_model::smart_contract::ContractAddress,
+        fee: &FeePaymentIntent,
+    ) -> DeploymentPreflight {
+        use iroha::crypto::Hash;
+        use iroha_data_model::{nexus::FeeDebitSource, permission::Permission};
         use iroha_model_base::topology::DataSpaceId;
-        let _profile = ChainDiscriminantGuard::enter(369);
-        let key = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519).expect("test key");
-        let authority = AccountId::new(key.public_key().clone());
-        let id =
-            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"genesis")));
-        let address =
-            ContractAddress::derive(&id, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
-        let fee = FeePaymentIntent::authority(
-            vec![FeeChargeLimit {
-                kind: FeeChargeKind::Nexus,
-                asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().expect("asset"),
-                max_amount: "2".parse().expect("fee"),
-            }],
-            None,
-        );
         let quote = norito::json::from_value(object([
-            ("intent", deployment_json(&fee).expect("intent")),
+            ("intent", deployment_json(fee).expect("intent")),
             (
                 "observation",
                 object([
@@ -689,7 +688,7 @@ mod tests {
         let token: Permission = iroha::executor_data_model::permission::account::CanManageAccountAlias {
             scope: iroha::executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         }.into();
-        let mut preflight = DeploymentPreflight {
+        DeploymentPreflight {
             network_id: id,
             chain_id: "test-chain".to_owned(),
             authority: authority.clone(),
@@ -709,7 +708,36 @@ mod tests {
             observed_block_hash: Hash::new(b"block").to_string(),
             fee_quotes: vec![quote],
             transaction_hashes: vec![Hash::new(b"transaction").to_string()],
+        }
+    }
+
+    #[test]
+    fn prepared_output_shows_exact_signer_alias_transactions_and_fee_bounds() {
+        use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
+        use iroha_data_model::{
+            NetworkId,
+            account::AccountId,
+            nexus::{FeeDebitSource, FeeSponsorProgramId},
+            smart_contract::ContractAddress,
+            transaction::{FeeChargeKind, FeeChargeLimit},
         };
+        use iroha_model_base::topology::DataSpaceId;
+        let _profile = ChainDiscriminantGuard::enter(369);
+        let key = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519).expect("test key");
+        let authority = AccountId::new(key.public_key().clone());
+        let id =
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"genesis")));
+        let address =
+            ContractAddress::derive(&id, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
+        let fee = FeePaymentIntent::authority(
+            vec![FeeChargeLimit {
+                kind: FeeChargeKind::Nexus,
+                asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().expect("asset"),
+                max_amount: "2".parse().expect("fee"),
+            }],
+            None,
+        );
+        let mut preflight = authority_paid_preflight(id, &authority, &address, &fee);
         let signer = authority.to_string();
         let _foreign_profile = ChainDiscriminantGuard::enter(753);
         let human = render_preflight(&preflight);
@@ -756,6 +784,12 @@ mod tests {
         )));
         assert!(!sponsored.contains("Fee payer: transaction authority"));
         assert!(sponsored.contains("at most 2 6TEAJqbb8oEPmLncoNiMRbLEK6tw"));
+        assert_stage_progress_names_exact_transactions(preflight);
+    }
+
+    /// Stage progress names each exact transaction and never conflates submission, recovery,
+    /// application and readback.
+    fn assert_stage_progress_names_exact_transactions(preflight: DeploymentPreflight) {
         let stage = iroha_contract_deploy::DeploymentStage {
             number: 2,
             total: 3,
@@ -901,7 +935,7 @@ mod tests {
             )
             .wrap_err("Torii request failed"),
         };
-        let diagnostic = deployment_diagnostic(error);
+        let diagnostic = deployment_diagnostic(&error);
         for format in [OutputFormat::Human, OutputFormat::Json] {
             let rendered = CommandOutput::failure("deploy", diagnostic.clone())
                 .render(format)
@@ -912,7 +946,7 @@ mod tests {
             assert_ne!(rendered.exit_code(), 0);
         }
         let diagnostic = view_diagnostic(
-            eyre::eyre!("route_unavailable; private_key=secret-value").wrap_err("view failed"),
+            &eyre::eyre!("route_unavailable; private_key=secret-value").wrap_err("view failed"),
         );
         let rendered = CommandOutput::failure("view", diagnostic)
             .render(OutputFormat::Json)

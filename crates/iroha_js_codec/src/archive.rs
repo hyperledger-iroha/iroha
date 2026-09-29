@@ -20,6 +20,12 @@ fn encode_archive(instruction: &InstructionBox) -> CodecResult<Vec<u8>> {
 /// This is a native bare encoding, not a public frame with its header removed.
 /// `network_prefix` selects account admission for this operation only. Ambient
 /// layout flags and the caller's network scope are restored before returning.
+///
+/// # Errors
+///
+/// Returns an error when the JSON is malformed, violates a strict instruction
+/// contract or names an account outside `network_prefix`, or when the instruction
+/// cannot be Norito-encoded.
 pub fn encode_instruction_archive(json_payload: &str, network_prefix: u16) -> CodecResult<Vec<u8>> {
     let _network = ChainDiscriminantGuard::enter(network_prefix);
     let instruction = instruction_from_json(json_payload)?;
@@ -31,6 +37,12 @@ pub fn encode_instruction_archive(json_payload: &str, network_prefix: u16) -> Co
 /// Native resource limits, exact consumption and canonical re-encoding apply before
 /// any instruction is returned. Public frames and trailing bytes are rejected.
 /// Domainless account identities are rendered with the required `network_prefix`.
+///
+/// # Errors
+///
+/// Returns an error when the bytes are not exactly one canonical instruction archive
+/// (including trailing bytes, public frames and decoder panics), or when the decoded
+/// instruction has no strict JSON rendering.
 pub fn decode_instruction_archive(bytes: &[u8], network_prefix: u16) -> CodecResult<String> {
     let _network = ChainDiscriminantGuard::enter(network_prefix);
     // `decode_adaptive` resets its decoder state. Preserve the caller's flags at

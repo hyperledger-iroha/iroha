@@ -574,7 +574,7 @@ fn boundary_proposals_use_only_the_applied_committee() {
         .find(|(_, m)| matches!(m, WireMessage::Proposal(_)))
         .expect("proposal");
     assert!(
-        h.core.config(&2).is_none(),
+        h.core.config(2).is_none(),
         "successor authority awaits the applied boundary"
     );
     assert!(
@@ -749,6 +749,51 @@ fn startup_rejects_bad_input() {
     assert_eq!(
         new(h.init(fresh), local, signers()),
         Err(ConfigError::RebroadcastTooLong)
+    );
+}
+
+/// `check_init` at a committed tip: a hash-consistent tip header of an epoch other than `C_t`'s,
+/// and a tip whose `t + 2` overflows, are refused.
+#[test]
+fn startup_rejects_foreign_tip_epoch_and_height_overflow() {
+    let mut h = H::new(4, pick::set_a(0));
+    h.commit_heights(2);
+    let key = h.signers[0].public_key().clone();
+    let state = RecordState::Present(h.records[&key].clone());
+    let new = |init: Init| {
+        let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
+        Core::new(
+            h.local,
+            init,
+            signers,
+            Box::new(h.v.crypto.clone()),
+            crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            0,
+        )
+        .map(|_| ())
+    };
+    let valid = h.init(vec![(key, state, false)]);
+    assert!(valid.tip.height > valid.genesis_height);
+    assert_eq!(new(valid.clone()), Ok(()));
+    let mut foreign = valid.clone();
+    let header = foreign.tip.header.as_mut().unwrap();
+    header.epoch.epoch += 1;
+    foreign.tip.block_hash = header.hash(&h.v.crypto);
+    assert_eq!(
+        new(foreign),
+        Err(ConfigError::InvalidInit(
+            "noncontiguous authenticated epoch window"
+        ))
+    );
+    let mut overflow = valid;
+    overflow.tip.height = u64::MAX - 1;
+    let header = overflow.tip.header.as_mut().unwrap();
+    header.height = u64::MAX - 1;
+    overflow.tip.block_hash = header.hash(&h.v.crypto);
+    overflow.configs.clear();
+    assert_eq!(
+        new(overflow),
+        Err(ConfigError::InvalidInit("height overflow"))
     );
 }
 

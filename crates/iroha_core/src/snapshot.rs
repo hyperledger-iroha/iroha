@@ -124,15 +124,6 @@ impl SnapshotCaptureError {
         matches!(self, Self::Busy | Self::Changed)
     }
 }
-impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
-    fn from(error: SnapshotCaptureError) -> Self {
-        if error.is_observation_changed() {
-            Self::ExecutionObservationChanged
-        } else {
-            Self::ExecutionStatePublication(error.to_string())
-        }
-    }
-}
 impl From<SnapshotCaptureError> for crate::state::storage_transactions::TransactionsBlockError {
     fn from(error: SnapshotCaptureError) -> Self {
         if error.is_observation_changed() {
@@ -1764,21 +1755,6 @@ impl BoundSnapshotGeneration {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SnapshotPayloadAuthority {
-    NormallySigned,
-    ExactAuditedDigestBypass,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SnapshotBootstrapLineageAuthorityKind {
-    ExactAuditedBoundary,
-    NormallySignedCarriedLineage,
-}
-/// Non-forgeable proof that the snapshot reader authenticated the outer payload.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SnapshotBootstrapLineageAuthority {
-    kind: SnapshotBootstrapLineageAuthorityKind,
-}
 impl SnapshotBootstrapLineageAuthority {
     fn exact_audited_boundary() -> Self {
         Self {
@@ -1797,16 +1773,6 @@ impl SnapshotBootstrapLineageAuthority {
     pub(crate) fn permits_carried_lineage(self) -> bool {
         self.kind == SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage
     }
-}
-/// Authenticated snapshot bootstrap record and the exact signed block-hash vector.
-///
-/// Fields and construction stay private to this module so raw decoded snapshot
-/// bytes cannot authorize provisional Kura mutation.
-#[derive(Clone, Debug)]
-pub(crate) struct AuthenticatedSnapshotBootstrapPayload {
-    record: SnapshotV2BootstrapRecord,
-    block_hashes: Vec<HashOf<BlockHeader>>,
-    authority: SnapshotBootstrapLineageAuthority,
 }
 impl AuthenticatedSnapshotBootstrapPayload {
     fn new(
@@ -4993,121 +4959,9 @@ fn geometry_checkpoint_from_snapshot(
         smart_contract_state,
     })
 }
-type SnapshotLaneGeometryProjection = (
-    iroha_config::parameters::actual::LaneConfig,
-    BTreeMap<LaneId, Hash>,
-    BTreeMap<LaneId, u64>,
-    Hash,
-);
 
-// Both reads belong to one decoded immutable snapshot Cell. None is the MV
-// encoding of an unchanged last block, so its actual H-1 value is current.
-// A changed last block must use its retained undo, never a later State view.
-fn snapshot_lane_geometry_images(
-    runtime: &Cell<SnapshotNexusRuntime>,
-    height: u64,
-    network_id: &NetworkId,
-) -> Result<
-    (
-        SnapshotLaneGeometryProjection,
-        Option<SnapshotLaneGeometryProjection>,
-    ),
-    TryWriteError,
-> {
-    let current = runtime.view();
-    let predecessor = runtime.predecessor_view();
-    let recovery = if height == 0 {
-        None
-    } else {
-        Some(snapshot_lane_geometry_projection(
-            predecessor
-                .get()
-                .as_ref()
-                .unwrap_or_else(|| current.get())
-                .clone(),
-            height - 1,
-            network_id,
-        )?)
-    };
-    Ok((
-        snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?,
-        recovery,
-    ))
-}
 
-#[cfg(test)]
-mod geometry_projection_tests;
 
-// Project each actual MV image independently; restart validation already checks
-// policy and sample-history coherence before this snapshot can become durable.
-fn snapshot_lane_geometry_projection(
-    runtime: SnapshotNexusRuntime,
-    height: u64,
-    network_id: &NetworkId,
-) -> Result<SnapshotLaneGeometryProjection, TryWriteError> {
-    if runtime.version != SnapshotNexusRuntime::VERSION
-        || runtime.autoscale_last_transition_height > height
-        || runtime
-            .autoscale_sample_history
-            .last()
-            .is_some_and(|sample| sample.block_height > height)
-    {
-        return Err(TryWriteError::Serialization(json::Error::Message(
-            "snapshot Nexus runtime version or height cannot prove lane geometry".to_owned(),
-        )));
-    }
-    let lane_count = NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
-        TryWriteError::Serialization(json::Error::Message(
-            "snapshot Nexus lane count is zero".to_owned(),
-        ))
-    })?;
-    let lane_catalog = LaneCatalog::new(lane_count, runtime.lanes).map_err(|error| {
-        TryWriteError::Serialization(json::Error::Message(format!(
-            "snapshot Nexus lane catalog is invalid: {error}"
-        )))
-    })?;
-    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-    let mut lineage = BTreeMap::new();
-    let mut latest_hashes = BTreeSet::new();
-    for entry in runtime.lane_incarnation_lineage {
-        let lineage_entry = LaneIncarnationLineage {
-            generation: entry.generation,
-            incarnation: entry.incarnation,
-            activation_height: entry.activation_height,
-        };
-        if lineage_entry
-            .incarnation
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
-            || lineage_entry.activation_height > height
-            || !latest_hashes.insert(lineage_entry.incarnation)
-            || lineage.insert(entry.lane_id, lineage_entry).is_some()
-        {
-            return Err(TryWriteError::Serialization(json::Error::Message(
-                "snapshot Nexus runtime contains invalid lane incarnation lineage".to_owned(),
-            )));
-        }
-    }
-    let mut incarnations = BTreeMap::new();
-    let mut activation_heights = BTreeMap::new();
-    for lane in lane_catalog.lanes() {
-        let entry = lineage.get(&lane.id).ok_or_else(|| {
-            TryWriteError::Serialization(json::Error::Message(format!(
-                "snapshot Nexus runtime is missing active lane {} lineage",
-                lane.id
-            )))
-        })?;
-        incarnations.insert(lane.id, entry.incarnation);
-        activation_heights.insert(lane.id, entry.activation_height);
-    }
-    Ok((
-        lane_config,
-        incarnations,
-        activation_heights,
-        lane_incarnation_lineage_root(network_id, &lineage),
-    ))
-}
 fn required_snapshot_object_field<'a>(
     object: &'a str,
     field: &str,

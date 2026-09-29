@@ -107,6 +107,13 @@ fn native_error(error: impl core::fmt::Display) -> crate::Error {
 /// CPU needs no device discovery. Unknown completion from an earlier device
 /// call blocks even CPU proving: selecting CPU does not discharge retained
 /// private staging. Failure precedes witness expansion, entropy or transforms.
+#[cfg_attr(
+    not(feature = "fastpq-gpu"),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "only CPU execution exists without `fastpq-gpu`; device builds return errors"
+    )
+)]
 pub fn preflight_last_fields_execution(execution: DigestExecutionV1) -> crate::Result<()> {
     #[cfg(feature = "fastpq-gpu")]
     if crate::gpu::transform_completion_uncertain_v1() {
@@ -900,7 +907,7 @@ mod tests {
             .iter()
             .map(|&len| {
                 (0..len)
-                    .map(|index| ((index * 73 + len) & 255) as u8)
+                    .map(|index| u8::try_from((index * 73 + len) & 255).expect("masked byte"))
                     .collect()
             })
             .collect();

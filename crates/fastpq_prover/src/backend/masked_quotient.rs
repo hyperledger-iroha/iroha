@@ -42,6 +42,11 @@ pub(super) const NUMERATOR_JOBS: usize = 32;
 /// Explicit arithmetic resource policy; this has no production default or wire representation.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive cap and `max_` separates it from the measured \
+              payload bytes and work units that it bounds"
+)]
 pub(super) struct MaskedQuotientLimits {
     /// Simultaneous declared payload bytes, including borrowed inputs for the active phase.
     pub(super) max_payload_bytes: usize,

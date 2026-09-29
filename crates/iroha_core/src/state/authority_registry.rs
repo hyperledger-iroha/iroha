@@ -293,8 +293,6 @@ pub(crate) const STATE_FIELDS: &[Field] = state::STATE_FIELDS;
 pub(crate) const WORLD_FIELDS: &[Field] = world::WORLD_FIELDS;
 
 #[cfg(test)]
-mod merge_codec_tests;
-#[cfg(test)]
 mod runtime_codec_tests;
 #[cfg(test)]
 mod tests;

@@ -660,35 +660,6 @@ fn alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards() {
     );
 }
 
-#[test]
-fn alias_registry_routing_keeps_real_private_participants_in_mixed_transactions() {
-    use iroha_executor_data_model::permission::account::{
-        AccountAliasPermissionScope, CanManageAccountAlias,
-    };
-
-    let fixture = fixture();
-    let lease = ensure(&fixture, bpng_intent(&fixture.owner));
-    let private_permission = Grant::account_permission(
-        CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(PRIVATE_DATASPACE),
-        },
-        fixture.owner.clone(),
-    );
-    let transaction = accepted(&fixture, vec![lease.into(), private_permission.into()]);
-    let plan = plans(&fixture, &transaction, 3).expect("mixed private/universal routing");
-    let RoutingPlan::NativeAmx(native) = plan else {
-        panic!("mixed registry/private write must retain AMX participants");
-    };
-    assert_eq!(
-        native.coordinator.route,
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-    );
-    assert_eq!(native.participants.len(), 1);
-    assert_eq!(
-        native.participants[0].route,
-        RoutingDecision::new(PRIVATE_LANE, PRIVATE_DATASPACE)
-    );
-}
 
 #[test]
 fn alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap() {

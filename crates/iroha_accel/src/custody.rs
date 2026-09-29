@@ -2,7 +2,7 @@
 
 /// Exact-stream state. A native failure never acts as completion evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Phase {
+pub enum Phase {
     Prepared,
     Pending,
     Complete,

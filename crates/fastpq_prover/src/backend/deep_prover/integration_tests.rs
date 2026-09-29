@@ -6,6 +6,11 @@ use crate::backend::{
     merkle_multiproof::{MultiproofLimits, MultiproofPlan},
 };
 
+/// Narrow one small fixture position or level to its `u32` wire field.
+fn narrow_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixture position fits u32")
+}
+
 fn coefficient_limits() -> CoefficientLimits {
     CoefficientLimits {
         max_payload_bytes: usize::MAX,
@@ -78,7 +83,9 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
                             .to_le_bytes()
                     })
                     .collect::<Vec<_>>();
-                binding.hash_leaf(oracle, index as u32, &payload).unwrap()
+                binding
+                    .hash_leaf(oracle, narrow_u32(index), &payload)
+                    .unwrap()
             })
             .collect::<Vec<_>>(),
     ];
@@ -91,7 +98,13 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
             .enumerate()
             .map(|(index, pair)| {
                 binding
-                    .hash_parent(oracle, level as u32, index as u32, pair[0], pair[1])
+                    .hash_parent(
+                        oracle,
+                        narrow_u32(level),
+                        narrow_u32(index),
+                        pair[0],
+                        pair[1],
+                    )
                     .unwrap()
             })
             .collect();
@@ -114,7 +127,7 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
             siblings,
             |level, index, left, right| {
                 context
-                    .hash_parent(oracle, level as u32, index as u32, left, right)
+                    .hash_parent(oracle, narrow_u32(level), narrow_u32(index), left, right)
                     .map_err(binding_error)
             },
         )
@@ -177,7 +190,13 @@ fn streamed_terminal_binds_every_linear_value_and_requires_its_duplicate_parent(
     let verify = |root, leaf| {
         plan.verify_with(root, &[leaf], &[], |level, index, left, right| {
             binding
-                .hash_parent(Oracle::Terminal, level as u32, index as u32, left, right)
+                .hash_parent(
+                    Oracle::Terminal,
+                    narrow_u32(level),
+                    narrow_u32(index),
+                    left,
+                    right,
+                )
                 .map_err(binding_error)
         })
     };

@@ -1646,9 +1646,10 @@ exports = []
             matches!(collect_local_members(&workspace, &selected), Err(GraphErrorV1::LocalGraphInvalid(reason)) if reason.contains("repeats dependency alias"))
         );
         let aliases = |path: &str| {
-            (0..MUSUBI_MAX_DEPENDENCIES_V1)
-                .map(|index| format!("a{index:03} = {{ path = \"{path}\" }}\n"))
-                .collect::<String>()
+            (0..MUSUBI_MAX_DEPENDENCIES_V1).fold(String::new(), |mut aliases, index| {
+                let _ = writeln!(aliases, "a{index:03} = {{ path = \"{path}\" }}");
+                aliases
+            })
         };
         write(
             &temp.path().join("Musubi.toml"),

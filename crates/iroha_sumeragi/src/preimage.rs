@@ -147,7 +147,7 @@ pub fn block_hash_preimage(header: &BlockHeader) -> Vec<u8> {
     put_keys(&mut out, &header.skipped_leaders);
     // MS46: control bytes disappear from every signature rooted in this header hash.
     if !cfg!(sumeragi_mutation = "MS46") {
-        out.extend_from_slice(&(header.control_witness.len() as u32).to_be_bytes());
+        put_len32(&mut out, header.control_witness.len());
         out.extend_from_slice(header.control_witness.as_slice());
     }
     out.push(bit(header.attest));
@@ -198,6 +198,7 @@ pub fn prop_preimage(
 
 /// `vote_preimage(kind, h, v, bh, R, a) = TAG_SIG ‖ kind ‖ I ‖ E ‖ be64(h) ‖ be64(v) ‖ bh ‖ R ‖
 /// bit(a)` (§3.3), with `a` the block's attestation flag (§3.7).
+#[allow(clippy::too_many_arguments, reason = "one per §3.3 layout field")]
 pub fn vote_preimage(
     kind: VoteKind,
     instance: &Hash32,
@@ -272,14 +273,14 @@ impl AttestationStatement {
     #[must_use]
     pub fn parse(bytes: &[u8]) -> Option<Self> {
         const TAIL: usize = 32 + 8 + 32 + 8 + 32 + 32;
-        let mut rest = bytes.strip_prefix(TAG_SIG)?.strip_prefix(&[KIND_ATTEST])?;
-        if rest.len() != TAIL {
-            return None;
-        }
         fn take<const N: usize>(rest: &mut &[u8]) -> Option<[u8; N]> {
             let (value, tail) = rest.split_at_checked(N)?;
             *rest = tail;
             value.try_into().ok()
+        }
+        let mut rest = bytes.strip_prefix(TAG_SIG)?.strip_prefix(&[KIND_ATTEST])?;
+        if rest.len() != TAIL {
+            return None;
         }
         Some(Self {
             instance: Hash32(take(&mut rest)?),
@@ -566,6 +567,11 @@ mod tests {
         }
     }
 
+    /// `hex(I ‖ E)` of the golden vectors: instance `h(0x11)` in the test epoch.
+    fn instance_epoch_hex() -> String {
+        format!("{}0000000000000000{}", "11".repeat(32), "e0".repeat(32))
+    }
+
     #[test]
     fn tag_constants() {
         assert_eq!(TAG_SIG, b"sumeragi/sig");
@@ -615,59 +621,27 @@ mod tests {
 
     #[test]
     fn golden_signing_preimages() {
-        let prop = prop_preimage(
-            &h(0x11),
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            2,
-            &h(0x22),
-            &h(0x44),
-        );
+        let epoch = &crate::testing::TEST_EPOCH.id;
+        let ie = instance_epoch_hex();
+        let prop = prop_preimage(&h(0x11), epoch, 7, 2, &h(0x22), &h(0x44));
         assert_eq!(
             hex(&prop),
             format!(
-                "{}01{}{:016x}{:016x}{}{}",
+                "{}01{ie}{:016x}{:016x}{}{}",
                 hex(TAG_SIG),
-                format!("{}0000000000000000{}", "11".repeat(32), "e0".repeat(32)),
                 7,
                 2,
                 "22".repeat(32),
                 "44".repeat(32)
             )
         );
-        let prepare = vote_preimage(
-            VoteKind::Prepare,
-            &h(0x11),
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            2,
-            &h(0x22),
-            &h(0x33),
-            false,
-        );
-        let commit = vote_preimage(
-            VoteKind::Commit,
-            &h(0x11),
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            2,
-            &h(0x22),
-            &h(0x33),
-            false,
-        );
-        let flagged = vote_preimage(
-            VoteKind::Commit,
-            &h(0x11),
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            2,
-            &h(0x22),
-            &h(0x33),
-            true,
-        );
+        let vote =
+            |kind, attest| vote_preimage(kind, &h(0x11), epoch, 7, 2, &h(0x22), &h(0x33), attest);
+        let prepare = vote(VoteKind::Prepare, false);
+        let commit = vote(VoteKind::Commit, false);
+        let flagged = vote(VoteKind::Commit, true);
         let expected_tail = format!(
-            "{}{:016x}{:016x}{}{}",
-            format!("{}0000000000000000{}", "11".repeat(32), "e0".repeat(32)),
+            "{ie}{:016x}{:016x}{}{}",
             7,
             2,
             "22".repeat(32),
@@ -682,38 +656,14 @@ mod tests {
             hex(&flagged),
             format!("{}03{expected_tail}01", hex(TAG_SIG))
         );
+        let tmo = |hq| tmo_preimage(&h(0x11), epoch, 7, 2, hq);
         assert_eq!(
-            hex(&tmo_preimage(
-                &h(0x11),
-                &crate::testing::TEST_EPOCH.id,
-                7,
-                2,
-                None
-            )),
-            format!(
-                "{}04{}{:016x}{:016x}00",
-                hex(TAG_SIG),
-                format!("{}0000000000000000{}", "11".repeat(32), "e0".repeat(32)),
-                7,
-                2
-            )
+            hex(&tmo(None)),
+            format!("{}04{ie}{:016x}{:016x}00", hex(TAG_SIG), 7, 2)
         );
         assert_eq!(
-            hex(&tmo_preimage(
-                &h(0x11),
-                &crate::testing::TEST_EPOCH.id,
-                7,
-                2,
-                Some(1)
-            )),
-            format!(
-                "{}04{}{:016x}{:016x}01{:016x}",
-                hex(TAG_SIG),
-                format!("{}0000000000000000{}", "11".repeat(32), "e0".repeat(32)),
-                7,
-                2,
-                1
-            )
+            hex(&tmo(Some(1))),
+            format!("{}04{ie}{:016x}{:016x}01{:016x}", hex(TAG_SIG), 7, 2, 1)
         );
         // SHA-256 digests of the preimages (independent Python implementation).
         let crypto = FakeCrypto::new();
@@ -734,15 +684,7 @@ mod tests {
             "81933fd9209a684f2a70dd1f419e041a0269260a443c54d6fc861094d6ddbc70"
         );
         assert_eq!(
-            crypto
-                .hash(&tmo_preimage(
-                    &h(0x11),
-                    &crate::testing::TEST_EPOCH.id,
-                    7,
-                    2,
-                    Some(1)
-                ))
-                .to_string(),
+            crypto.hash(&tmo(Some(1))).to_string(),
             "62b8c5fa3f8a852a7de9f3df85e826ff5fa5fee776e0c87ae7e556f76dfb6937"
         );
     }
@@ -804,7 +746,7 @@ mod tests {
             format!(
                 "{}06{}{:016x}{}{}",
                 hex(TAG_SIG),
-                format!("{}0000000000000000{}", "11".repeat(32), "e0".repeat(32)),
+                instance_epoch_hex(),
                 7,
                 "22".repeat(32),
                 "33".repeat(32)
@@ -874,7 +816,7 @@ mod tests {
         let expected = format!(
             "{}{}{:016x}{:016x}{}{}{}{:08x}{:08x}00000002{}{}{}{}0000000000",
             hex(TAG_BLOCK),
-            format!("{}0000000000000000{}", "11".repeat(32), "e0".repeat(32)),
+            instance_epoch_hex(),
             7,
             2,
             "44".repeat(32),
@@ -936,7 +878,7 @@ mod tests {
         assert!(!body_ok(&crypto, &wrong_len));
         // Every header field is bound by the hash.
         let base = block_hash(&crypto, &golden_header());
-        let variants = [
+        let variants = vec![
             BlockHeader {
                 instance: h(0x12),
                 ..golden_header()
@@ -1179,116 +1121,43 @@ mod tests {
     #[test]
     fn instance_height_view_separate_domains() {
         // SR16/SR17: instance, height, view, kind and result change every signing preimage.
-        let base = vote_preimage(
-            VoteKind::Prepare,
-            &h(1),
-            &crate::testing::TEST_EPOCH.id,
-            1,
-            1,
-            &h(2),
-            &h(3),
-            false,
-        );
-        assert_ne!(
-            base,
+        let epoch = &crate::testing::TEST_EPOCH.id;
+        // A Prepare/Commit preimage of block `h(2)`; the other fields vary per case.
+        let vote = |kind, instance: u8, height, view, result: u8, attest| {
             vote_preimage(
-                VoteKind::Prepare,
-                &h(9),
-                &crate::testing::TEST_EPOCH.id,
-                1,
-                1,
+                kind,
+                &h(instance),
+                epoch,
+                height,
+                view,
                 &h(2),
-                &h(3),
-                false
+                &h(result),
+                attest,
             )
-        );
+        };
+        let base = vote(VoteKind::Prepare, 1, 1, 1, 3, false);
+        assert_ne!(base, vote(VoteKind::Prepare, 9, 1, 1, 3, false));
+        assert_ne!(base, vote(VoteKind::Prepare, 1, 2, 1, 3, false));
+        assert_ne!(base, vote(VoteKind::Prepare, 1, 1, 2, 3, false));
+        assert_ne!(base, vote(VoteKind::Commit, 1, 1, 1, 3, false));
+        assert_ne!(base, vote(VoteKind::Prepare, 1, 1, 1, 4, false));
         assert_ne!(
             base,
-            vote_preimage(
-                VoteKind::Prepare,
-                &h(1),
-                &crate::testing::TEST_EPOCH.id,
-                2,
-                1,
-                &h(2),
-                &h(3),
-                false
-            )
-        );
-        assert_ne!(
-            base,
-            vote_preimage(
-                VoteKind::Prepare,
-                &h(1),
-                &crate::testing::TEST_EPOCH.id,
-                1,
-                2,
-                &h(2),
-                &h(3),
-                false
-            )
-        );
-        assert_ne!(
-            base,
-            vote_preimage(
-                VoteKind::Commit,
-                &h(1),
-                &crate::testing::TEST_EPOCH.id,
-                1,
-                1,
-                &h(2),
-                &h(3),
-                false
-            )
-        );
-        assert_ne!(
-            base,
-            vote_preimage(
-                VoteKind::Prepare,
-                &h(1),
-                &crate::testing::TEST_EPOCH.id,
-                1,
-                1,
-                &h(2),
-                &h(4),
-                false
-            )
-        );
-        assert_ne!(
-            base,
-            vote_preimage(
-                VoteKind::Prepare,
-                &h(1),
-                &crate::testing::TEST_EPOCH.id,
-                1,
-                1,
-                &h(2),
-                &h(3),
-                true
-            ),
+            vote(VoteKind::Prepare, 1, 1, 1, 3, true),
             "the attestation flag is signed (SR39)"
         );
         assert_ne!(
-            tmo_preimage(&h(1), &crate::testing::TEST_EPOCH.id, 1, 1, None),
-            tmo_preimage(&h(9), &crate::testing::TEST_EPOCH.id, 1, 1, None)
+            tmo_preimage(&h(1), epoch, 1, 1, None),
+            tmo_preimage(&h(9), epoch, 1, 1, None)
         );
         assert_ne!(
-            prop_preimage(&h(1), &crate::testing::TEST_EPOCH.id, 1, 1, &h(2), &h(3)),
-            prop_preimage(&h(9), &crate::testing::TEST_EPOCH.id, 1, 1, &h(2), &h(3))
+            prop_preimage(&h(1), epoch, 1, 1, &h(2), &h(3)),
+            prop_preimage(&h(9), epoch, 1, 1, &h(2), &h(3))
         );
         // Kind bytes keep proposals, votes and timeouts apart.
         assert_ne!(
-            prop_preimage(&h(1), &crate::testing::TEST_EPOCH.id, 1, 1, &h(2), &h(3))[..13],
-            vote_preimage(
-                VoteKind::Prepare,
-                &h(1),
-                &crate::testing::TEST_EPOCH.id,
-                1,
-                1,
-                &h(2),
-                &h(3),
-                false
-            )[..13]
+            prop_preimage(&h(1), epoch, 1, 1, &h(2), &h(3))[..13],
+            vote(VoteKind::Prepare, 1, 1, 1, 3, false)[..13]
         );
     }
 

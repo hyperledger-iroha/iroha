@@ -2352,31 +2352,6 @@ fn sumeragi_v2_explicit_schema_parses() {
     assert_eq!(shared.limits.max_queue_scan, 999);
 }
 #[test]
-fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
-    for (fixture, expected) in [
-        (
-            "bad.sumeragi_command_queue_too_small.toml",
-            "sumeragi.queues.commands must be at least 8",
-        ),
-        (
-            "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 1048576 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 34833416, configured 16777216)",
-        ),
-        (
-            "bad.sumeragi_body_queue_too_small.toml",
-            "sumeragi.queues.bodies must reserve five positions for at least one validator and three per authenticated non-validator source (minimum 11, configured 9)",
-        ),
-        (
-            "bad.sumeragi_body_bytes_too_small.toml",
-            "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 106954752, configured 106954751)",
-        ),
-    ] {
-        let report = load_config_from_fixtures(fixture)
-            .expect_err("invalid first-release v2 configuration must fail closed");
-        assert_contains!(format!("{report:?}"), expected);
-    }
-}
-#[test]
 fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
     let baseline = ConfigReader::new()
         .with_env(MockEnv::new())

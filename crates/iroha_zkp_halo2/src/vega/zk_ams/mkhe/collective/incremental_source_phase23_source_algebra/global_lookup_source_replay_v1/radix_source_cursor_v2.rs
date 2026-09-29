@@ -85,6 +85,10 @@ struct Phase23GlobalLookupRadixSourceCursorV2
     schedule: Option<RadixSourceReadScheduleV2>,
 }
 
+/// Completed replay evidence paired with the finished authenticated read-schedule digest.
+type CompletedSourceReplayV1<R, K, P> =
+    (Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>, [u8; 32]);
+
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     Phase23GlobalLookupRadixSourceCursorV2<R, K, P>
 {
@@ -207,8 +211,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     /// Each consuming invocation requires all `43 * 512` authenticated reads.
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn complete_authenticated_source_replay_v1(
         mut self,
-    ) -> Result<(Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>, [u8; 32]), ZkAmsMkheErrorV1>
-    {
+    ) -> Result<CompletedSourceReplayV1<R, K, P>, ZkAmsMkheErrorV1> {
         let evidence = self
             .evidence
             .take()

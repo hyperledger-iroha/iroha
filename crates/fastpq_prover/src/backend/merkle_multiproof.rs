@@ -116,6 +116,10 @@ impl LevelPrefixHasher {
 }
 
 /// Caller policy checked before allocating a plan or performing node hashes.
+#[allow(
+    clippy::struct_field_names,
+    reason = "the max_ prefix distinguishes these caps from the same-named MultiproofWork counts"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MultiproofLimits {
     /// Maximum supported binary tree depth; a sole leaf uses one hash level.
@@ -643,6 +647,26 @@ mod tests {
         Ok(plan.work())
     }
 
+    /// Hash one candidate parent at `usize` tree coordinates.
+    fn candidate_parent(
+        context: &crate::backend::compact_v1::Context,
+        oracle: crate::backend::compact_v1::Oracle,
+        level: usize,
+        index: usize,
+        left: Digest,
+        right: Digest,
+    ) -> Result<Digest> {
+        context
+            .hash_parent(
+                oracle,
+                u32::try_from(level).unwrap(),
+                u32::try_from(index).unwrap(),
+                left,
+                right,
+            )
+            .map_err(|_| shape("candidate parent hash failed"))
+    }
+
     #[test]
     fn shake_parent_adapter_authenticates_sparse_frontiers_and_terminal_with_exact_work() {
         use crate::backend::compact_v1::{Context, Oracle};
@@ -659,7 +683,9 @@ mod tests {
                 .map(|i| {
                     let mut payload = vec![0; bytes];
                     payload[..8].copy_from_slice(&(i as u64 + 1).to_le_bytes());
-                    context.hash_leaf(oracle, i as u32, &payload).unwrap()
+                    context
+                        .hash_leaf(oracle, u32::try_from(i).unwrap(), &payload)
+                        .unwrap()
                 })
                 .collect();
             if count == 1 {
@@ -674,9 +700,7 @@ mod tests {
                     .chunks_exact(2)
                     .enumerate()
                     .map(|(i, pair)| {
-                        context
-                            .hash_parent(oracle, level as u32, i as u32, pair[0], pair[1])
-                            .unwrap()
+                        candidate_parent(&context, oracle, level, i, pair[0], pair[1]).unwrap()
                     })
                     .collect();
                 levels.push(parents);
@@ -686,9 +710,7 @@ mod tests {
             let siblings = plan
                 .open_with(&levels, |level, index, left, right| {
                     opening_calls += 1;
-                    context
-                        .hash_parent(oracle, level as u32, index as u32, left, right)
-                        .map_err(|_| shape("candidate parent hash failed"))
+                    candidate_parent(&context, oracle, level, index, left, right)
                 })
                 .unwrap();
             assert_eq!(opening_calls, plan.work().parent_hashes);
@@ -708,9 +730,7 @@ mod tests {
                         positions.insert((level, index)),
                         "shared parent was rehashed"
                     );
-                    context
-                        .hash_parent(oracle, level as u32, index as u32, left, right)
-                        .map_err(|_| shape("candidate parent hash failed"))
+                    candidate_parent(&context, oracle, level, index, left, right)
                 })
                 .unwrap();
             assert_eq!(work, plan.work());
@@ -723,9 +743,7 @@ mod tests {
                 };
                 assert!(
                     plan.verify_with(root, &selected, &siblings, |level, index, left, right| {
-                        altered
-                            .hash_parent(role, level as u32, index as u32, left, right)
-                            .map_err(|_| shape("candidate parent hash failed"))
+                        candidate_parent(altered, role, level, index, left, right)
                     })
                     .is_err()
                 );
@@ -744,9 +762,7 @@ mod tests {
                 *value = changed(*value, 5);
                 assert!(
                     plan.verify_with(root, &selected, &siblings, |level, index, left, right| {
-                        context
-                            .hash_parent(oracle, level as u32, index as u32, left, right)
-                            .map_err(|_| shape("candidate parent hash failed"))
+                        candidate_parent(&context, oracle, level, index, left, right)
                     })
                     .is_err()
                 );

@@ -7466,39 +7466,6 @@ impl TransactionResponseHandler {
         }
     }
 }
-/// Decode and validate a `/v1/nexus/lifecycle` status response.
-fn decode_lane_lifecycle_status_response(
-    resp: &Response<Vec<u8>>,
-) -> Result<LaneLifecycleStatusV1> {
-    if resp.status() != StatusCode::OK {
-        return Err(ResponseReport::with_msg(
-            "Unexpected Nexus lane lifecycle status response",
-            resp,
-        )
-        .unwrap_or_else(core::convert::identity)
-        .into());
-    }
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let status = if Client::is_exact_json_content_type(content_type) {
-        norito::json::from_slice::<LaneLifecycleStatusV1>(resp.body())
-            .map_err(|error| eyre!("failed to decode Nexus lane lifecycle status JSON: {error}"))?
-    } else if Client::is_norito_content_type(content_type) {
-        decode_from_bytes::<LaneLifecycleStatusV1>(resp.body())
-            .map_err(|err| eyre!("failed to decode Nexus lane lifecycle status Norito: {err}"))?
-    } else {
-        return Err(eyre!(
-            "failed to decode Nexus lane lifecycle status: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
-        ));
-    };
-    status
-        .validate()
-        .wrap_err("invalid Nexus lane lifecycle status")?;
-    Ok(status)
-}
 fn decode_parameters_response(
     resp: &Response<Vec<u8>>,
 ) -> Result<iroha_data_model::parameter::Parameters> {
@@ -8310,23 +8277,6 @@ impl Client {
         }
         Ok(wire)
     }
-    /// GET `/v1/sumeragi/diagnostics` and return verified cross-lane transfer proofs.
-    ///
-    /// This helper enforces lane relay envelope validation (settlement hash, DA hash, QC subject)
-    /// and rejects duplicate `(lane_id, dataspace_id, block_height)` tuples before returning the
-    /// wrapped proof objects.
-    ///
-    /// # Errors
-    /// Returns an error if the status request fails or if relay envelopes fail validation or deduplication.
-    pub async fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
-        let status = self.get_sumeragi_diagnostics().await?;
-        verify_lane_relay_envelopes(&status.lane_relay_envelopes)?;
-        Ok(status
-            .lane_relay_envelopes
-            .into_iter()
-            .map(CrossLaneTransferProof::new)
-            .collect())
-    }
     /// GET `/v1/nexus/public-lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
     ///
     /// # Errors
@@ -8819,15 +8769,6 @@ mod kagemusha_v1_client_tests {
     }
 }
 #[cfg(test)]
-fn lifecycle_status() -> LaneLifecycleStatusV1 {
-    let catalog = LaneCatalog::default();
-    let incarnations = std::collections::BTreeMap::from([(
-        LaneId::SINGLE,
-        Hash::new(b"client-lifecycle-status-incarnation"),
-    )]);
-    LaneLifecycleStatusV1::new(&catalog, &incarnations, None).expect("valid lifecycle status")
-}
-#[cfg(test)]
 mod status_tests {
     use super::*;
     use iroha_torii_shared::status::{
@@ -8927,87 +8868,6 @@ mod status_tests {
         let error = status::decode_response(resp, WireFormatPreference::NoritoPreferred)
             .expect_err("the canonical status contract requires build metadata");
         assert!(error.to_string().contains("missing field `build`"));
-    }
-    #[test]
-    fn lane_lifecycle_status_decodes_json_and_norito() {
-        for runtime_catalog_hash in [None, Some(Hash::new(b"committed runtime overlay"))] {
-            let mut status = lifecycle_status();
-            status.runtime_catalog_hash = runtime_catalog_hash;
-            let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
-            let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
-            assert_eq!(
-                Client::decode_lane_lifecycle_status_for_test(&response)
-                    .expect("decode lifecycle status JSON"),
-                status
-            );
-            let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
-            let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
-            assert_eq!(
-                Client::decode_lane_lifecycle_status_for_test(&response)
-                    .expect("decode lifecycle status Norito"),
-                status
-            );
-        }
-    }
-    #[test]
-    fn lane_lifecycle_status_rejects_missing_or_empty_runtime_catalog_hash() {
-        let status = lifecycle_status();
-        let mut value = norito::json::to_value(&status).unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .remove("runtime_catalog_hash");
-        let response = mk_response(
-            StatusCode::OK,
-            norito::json::to_vec(&value).unwrap(),
-            Some(APPLICATION_JSON),
-        );
-        let error = Client::decode_lane_lifecycle_status_for_test(&response)
-            .expect_err("old response without runtime hash must fail");
-        assert!(error.to_string().contains("runtime_catalog_hash"));
-        let mut status = status;
-        status.runtime_catalog_hash = Some(Hash::prehashed([0; Hash::LENGTH]));
-        for (body, media_type) in [
-            (norito::json::to_vec(&status).unwrap(), APPLICATION_JSON),
-            (norito::to_bytes(&status).unwrap(), APPLICATION_NORITO),
-        ] {
-            let response = mk_response(StatusCode::OK, body, Some(media_type));
-            let error = Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect_err("empty runtime hash must fail");
-            assert!(format!("{error:#}").contains("empty runtime catalog hash"));
-        }
-    }
-    #[test]
-    fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
-        let mut status = lifecycle_status();
-        status.catalog_hash = Hash::prehashed([0x71; Hash::LENGTH]);
-        let body = norito::json::to_vec(&status).expect("encode forged lifecycle status");
-        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
-        let error = Client::decode_lane_lifecycle_status_for_test(&response)
-            .expect_err("forged lifecycle commitment must fail closed");
-        assert!(
-            format!("{error:#}").contains("catalog hash mismatch"),
-            "unexpected validation error: {error:#}"
-        );
-        let response = mk_response(
-            StatusCode::OK,
-            br#"{"version":1,"nexus_enabled":true}"#.to_vec(),
-            Some(APPLICATION_JSON),
-        );
-        let error = Client::decode_lane_lifecycle_status_for_test(&response)
-            .expect_err("the removed lifecycle field must fail as unknown");
-        assert!(error.to_string().contains("nexus_enabled"));
-    }
-    #[test]
-    fn lane_lifecycle_status_requires_declared_current_media_type() {
-        let status = lifecycle_status();
-        let body = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
-        for content_type in [None, Some("application/json-legacy"), Some("text/json")] {
-            let response = mk_response(StatusCode::OK, body.clone(), content_type);
-            let error = Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect_err("undeclared or noncanonical media type must fail closed");
-            assert!(error.to_string().contains("invalid content-type"));
-        }
     }
 }
 #[cfg(test)]
@@ -10897,54 +10757,6 @@ mod evidence_http_tests {
         assert_contract_read_only_request_authentication(true);
     }
 
-    #[test]
-    fn post_contract_call_rejects_retired_admission_draft_before_signing_or_submission() {
-        let client = client_with_base_url(base_url());
-        let (address, intent, fee_payment, builder) = contract_call_fixture(&client);
-        let retired = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
-        let response_value = prepared_contract_call_response(&intent, &retired);
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&response_value).expect("response"),
-        );
-        for private_key in [None, Some(client.key_pair.private_key())] {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let result = with_mock_http(
-                respond_with(&snapshots, response.clone()),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-                    client.post_contract_call_json_for_test(
-                        &client.account,
-                        private_key,
-                        Some(&address),
-                        None,
-                        "ping",
-                        None,
-                        None,
-                        Some(123),
-                        None,
-                        &fee_payment,
-                        &intent,
-                    )
-                },
-            );
-            let error =
-                result.expect_err("retired public draft must fail before signing or dispatch");
-            assert!(
-                format!("{error:#}").contains("must use Ordinary admission"),
-                "{error:#}"
-            );
-            let requests = snapshots.lock().expect("captured requests");
-            assert_eq!(
-                requests.len(),
-                1,
-                "no transaction submission after rejecting prepare"
-            );
-            assert_eq!(requests[0].url.path(), "/v1/contracts/call");
-        }
-    }
 
     #[test]
     fn post_contract_call_rejects_substituted_operation_receipt() {
@@ -16494,33 +16306,6 @@ impl Client {
                 .header(http::header::ACCEPT, APPLICATION_JSON)
                 .max_response_bytes(SORACLOUD_STATUS_RESPONSE_MAX_BYTES),
         )
-    }
-    /// Fetch the committed Nexus lane catalog, incarnation commitments, and runtime overlay hash.
-    ///
-    /// The runtime hash is an authoritative node read for catalog-transition concurrency checks;
-    /// the lane-only response does not contain the complete overlay needed to recompute it.
-    ///
-    /// # Errors
-    /// Returns an error for non-success responses, malformed JSON/Norito,
-    /// unsupported status versions, non-canonical catalogs, or hash mismatch.
-    pub fn get_lane_lifecycle_status(&self) -> Result<LaneLifecycleStatusV1> {
-        let response = self.send_builder(
-            self.default_request(
-                HttpMethod::GET,
-                join_torii_url(&self.torii_url, torii_uri::NEXUS_LANE_LIFECYCLE),
-            )
-            .header(
-                http::header::ACCEPT,
-                self.wire_format_preference.accept_header(),
-            ),
-        )?;
-        decode_lane_lifecycle_status_response(&response)
-    }
-    #[cfg(test)]
-    fn decode_lane_lifecycle_status_for_test(
-        response: &Response<Vec<u8>>,
-    ) -> Result<LaneLifecycleStatusV1> {
-        decode_lane_lifecycle_status_response(response)
     }
     /// Convenience: fetch recent shielded roots as JSON from the app API `/v1/zk/roots` endpoint.
     /// This is an operator/testing helper and not consensus‑critical.
@@ -25034,14 +24819,6 @@ mod tests {
             valid_until_ms: u64::MAX,
         })
     }
-    fn lifecycle_status_fixture() -> LaneLifecycleStatusV1 {
-        let catalog = LaneCatalog::default();
-        let incarnations = std::collections::BTreeMap::from([(
-            LaneId::SINGLE,
-            Hash::new(b"client-http-lifecycle-incarnation"),
-        )]);
-        LaneLifecycleStatusV1::new(&catalog, &incarnations, None).expect("valid lifecycle status")
-    }
     struct FailingClientRng;
     #[derive(Debug)]
     struct FailingClientRngError;
@@ -26444,72 +26221,6 @@ mod tests {
             store.lock().expect("snapshot store").is_empty(),
             "request substitution must not dispatch submit HTTP"
         );
-    }
-    #[test]
-    fn prepared_account_verifiers_reject_signed_retired_admission() {
-        let mut client = client_with_base_url(base_url());
-        let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
-        let onboarding_request = onboarding.receipt.body.request.clone();
-        let onboarding_signed = client
-            .verify_account_onboarding_prepared_transaction(
-                &onboarding_request,
-                &onboarding,
-                &onboarding.receipt,
-                &onboarding.binding,
-                &onboarding.fee_payment,
-            )
-            .expect("canonical prepared onboarding uses Ordinary");
-        let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
-            .expect("onboarding fixture signer");
-        let retired_onboarding =
-            TransactionBuilder::from_payload(onboarding_signed.payload().clone())
-                .expect("rebuild onboarding payload")
-                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-                .sign(onboarding_signer.private_key());
-        replace_onboarding_prepared_transaction(
-            &mut onboarding,
-            &retired_onboarding,
-            &onboarding_signer,
-        );
-        let onboarding_error = client
-            .verify_account_onboarding_prepared_transaction(
-                &onboarding_request,
-                &onboarding,
-                &onboarding.receipt,
-                &onboarding.binding,
-                &onboarding.fee_payment,
-            )
-            .expect_err("signed retired onboarding must fail verification");
-        assert!(onboarding_error.to_string().contains("Ordinary admission"));
-
-        let mut faucet = faucet_prepared_signature_fixture(&mut client);
-        let policy = faucet_policy_fixture();
-        let faucet_signed = client
-            .verify_account_faucet_prepared_transaction(
-                &faucet,
-                &faucet.claim,
-                &faucet.binding,
-                &faucet.fee_payment,
-                &policy,
-            )
-            .expect("canonical prepared faucet uses Ordinary");
-        let faucet_signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
-            .expect("faucet fixture signer");
-        let retired_faucet = TransactionBuilder::from_payload(faucet_signed.payload().clone())
-            .expect("rebuild faucet payload")
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-            .sign(faucet_signer.private_key());
-        replace_faucet_prepared_transaction(&mut faucet, &retired_faucet, &faucet_signer);
-        let faucet_error = client
-            .verify_account_faucet_prepared_transaction(
-                &faucet,
-                &faucet.claim,
-                &faucet.binding,
-                &faucet.fee_payment,
-                &policy,
-            )
-            .expect_err("signed retired faucet payout must fail verification");
-        assert!(faucet_error.to_string().contains("Ordinary admission"));
     }
     #[test]
     fn prepared_transaction_verifiers_reject_an_independent_fee_substitution() {
@@ -29002,60 +28713,6 @@ mod tests {
         )
         .0
     }
-    fn request_cross_lane_transfer_proofs(
-        status: &SumeragiDiagnosticsStatus,
-        content_type: &'static str,
-        context: &'static str,
-    ) -> Result<Vec<CrossLaneTransferProof>> {
-        let client = client_with_base_url(base_url());
-        capture_request(
-            encoded_sumeragi_diagnostics_response(status, content_type, context),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                crate::blocking::Client::from_client(client)?.get_cross_lane_transfer_proofs()
-            },
-        )
-        .0
-    }
-    fn make_lane_relay_for_status(
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        block_height: u64,
-        timestamp_ms: u64,
-    ) -> LaneRelayEnvelope {
-        let settlement = LaneBlockCommitment {
-            block_height,
-            lane_id,
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-            dataspace_id,
-            tx_count: 1,
-            total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-            total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-            swap_metadata: None,
-            receipts: vec![LaneSettlementReceipt {
-                source_id: [0x22; 32],
-                local_amount: "0.00001".parse().expect("valid settlement quantity"),
-                xor_due: "0.000005".parse().expect("valid settlement quantity"),
-                xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-                xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-                timestamp_ms,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let block_header = BlockHeader::new(
-            NonZeroU64::new(block_height).expect("nonzero height"),
-            None,
-            None,
-            timestamp_ms,
-            0,
-        );
-        LaneRelayEnvelope::new(block_header, None, settlement, 0).expect("lane relay")
-    }
     fn config_factory() -> Config {
         let (account_id, key_pair) = gen_account_in("wonderland");
         Config {
@@ -30476,27 +30133,6 @@ mod tests {
         assert_eq!(payload["lane_id"].as_u64(), Some(7));
         assert_eq!(snapshot.url.path(), "/v1/nexus/public-lanes/7/validators");
         assert_eq!(snapshot.url.query(), None);
-    }
-    #[test]
-    fn get_lane_lifecycle_status_requests_typed_negotiated_snapshot() {
-        let client = client_with_base_url(base_url());
-        let expected = lifecycle_status_fixture();
-        let body = norito::json::to_string(&expected).expect("lifecycle status JSON");
-        let (actual, snapshot) =
-            capture_request(json_response(StatusCode::OK, &body), |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                client.get_lane_lifecycle_status()
-            });
-        let actual = actual.expect("lifecycle status request succeeds");
-        assert_eq!(actual, expected);
-        assert_eq!(snapshot.url.path(), torii_uri::NEXUS_LANE_LIFECYCLE);
-        assert!(snapshot.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("accept")
-                && value == client.wire_format_preference.accept_header()
-        }));
     }
     #[test]
     fn get_public_lane_stake_filters_validator() {
@@ -32989,160 +32625,6 @@ mod tests {
         }
     }
     #[test]
-    fn get_sumeragi_diagnostics_verifies_lane_relay_envelopes() {
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        assert_eq!(status.lane_relay_envelopes, vec![relay_envelope]);
-        let decoded =
-            request_sumeragi_diagnostics(&status, APPLICATION_NORITO, "encode status payload")
-                .expect("decode sumeragi status");
-        assert_eq!(decoded.lane_settlement_commitments.len(), 1);
-        assert_eq!(decoded.lane_relay_envelopes.len(), 1);
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let mut tampered = relay_envelope;
-        tampered.settlement_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xFF; Hash::LENGTH]));
-        status.lane_relay_envelopes = vec![tampered];
-        let result =
-            request_sumeragi_diagnostics(&status, APPLICATION_NORITO, "encode status payload");
-        assert!(result.is_err(), "tampered relay should be rejected");
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_malformed_autonomous_execution() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
-        status.autonomous_lane_executions = vec![SumeragiAutonomousLaneExecution {
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-autonomous-incarnation"),
-            lane_block_height: 1,
-            lane_block_view: 0,
-            proposal_height: 1,
-            proposal_view: Some(0),
-            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
-            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
-            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
-            proposal_hash: None,
-            descriptor_hash: None,
-            executable_payload_hash: None,
-            source_bundle_hash: None,
-            merge_entry_hash: None,
-            application_block_height: None,
-            application_block_hash: None,
-            reservation_count: 1,
-            transaction_count: 1,
-            highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
-            stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
-            ),
-        }];
-        let error = request_sumeragi_diagnostics(
-            &status,
-            APPLICATION_NORITO,
-            "encode malformed autonomous diagnostics",
-        )
-        .expect_err("malformed autonomous execution must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid autonomous lane diagnostics payload")
-        );
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
-        let row = SumeragiAutonomousLaneExecution {
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-autonomous-incarnation"),
-            lane_block_height: 1,
-            lane_block_view: 0,
-            proposal_height: 1,
-            proposal_view: None,
-            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
-            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
-            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
-            proposal_hash: None,
-            descriptor_hash: None,
-            executable_payload_hash: None,
-            source_bundle_hash: None,
-            merge_entry_hash: None,
-            application_block_height: None,
-            application_block_hash: None,
-            reservation_count: 1,
-            transaction_count: 1,
-            highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
-            stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
-            ),
-        };
-        row.validate()
-            .expect("Queue-only client fixture must honestly omit proposal view and final hashes");
-        status.autonomous_lane_executions = vec![row, row];
-        let error = request_sumeragi_diagnostics(
-            &status,
-            APPLICATION_NORITO,
-            "encode duplicate autonomous diagnostics",
-        )
-        .expect_err("duplicate autonomous execution identity must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid autonomous lane diagnostics payload")
-        );
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container() {
-        let malformed_receipt = |settlement: &LaneBlockCommitment| NativeAmxReceipt {
-            version: 2,
-            source_id: [0xA5; Hash::LENGTH],
-            network_id: test_network_id(),
-            plan_digest: Hash::new(b"client-native-amx-plan"),
-            lane_id: settlement.lane_id,
-            dataspace_id: settlement.dataspace_id,
-            lane_incarnation: settlement.lane_incarnation,
-            authority_context_height: 12,
-            lane_block_height: settlement.block_height,
-            lane_block_view: 1,
-            coordinator_proposal_hash: Hash::new(b"client-native-amx-proposal"),
-            legs: Vec::new(),
-        };
-        let (mut direct, _) = sample_sumeragi_status_with_relay();
-        let receipt = malformed_receipt(&direct.lane_settlement_commitments[0]);
-        direct.lane_settlement_commitments[0]
-            .native_amx_receipts
-            .push(receipt);
-        let error = request_sumeragi_diagnostics(
-            &direct,
-            APPLICATION_NORITO,
-            "encode malformed direct settlement",
-        )
-        .expect_err("malformed direct Native AMX receipt must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid Native AMX receipt diagnostics payload")
-        );
-        let (mut relayed, _) = sample_sumeragi_status_with_relay();
-        let receipt = malformed_receipt(&relayed.lane_relay_envelopes[0].settlement_commitment);
-        relayed.lane_relay_envelopes[0]
-            .settlement_commitment
-            .native_amx_receipts
-            .push(receipt);
-        let error = request_sumeragi_diagnostics(
-            &relayed,
-            APPLICATION_NORITO,
-            "encode malformed relay settlement",
-        )
-        .expect_err("malformed relayed Native AMX receipt must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid Native AMX receipt diagnostics payload")
-        );
-    }
-    #[test]
     fn get_sumeragi_diagnostics_rejects_malformed_json_payload() {
         let client = client_with_base_url(base_url());
         let (result, _) = capture_request(
@@ -33243,42 +32725,6 @@ mod tests {
         }
     }
     #[test]
-    fn get_cross_lane_transfer_proofs_returns_verified_envelopes() {
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 1);
-        assert_eq!(proofs[0].envelope(), &relay_envelope);
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_json_status_payload() {
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_JSON,
-            "encode status payload as json",
-        )
-        .expect("decode lane relays from json payload");
-        assert_eq!(proofs.len(), 1);
-        assert_eq!(proofs[0].envelope(), &relay_envelope);
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_returns_empty_for_empty_envelopes() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
-        status.lane_relay_envelopes = Vec::new();
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("empty relay list should decode");
-        assert!(proofs.is_empty(), "expected no cross-lane proofs");
-    }
-    #[test]
     fn get_cross_lane_transfer_proofs_rejects_duplicate_keys() {
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
@@ -33294,113 +32740,6 @@ mod tests {
         );
     }
     #[test]
-    fn get_cross_lane_transfer_proofs_rejects_duplicate_keys_from_json_payload() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_JSON,
-            "encode status payload as json",
-        )
-        .expect_err("duplicate json relay tuples should be rejected");
-        assert!(
-            err.to_string().contains("duplicate relay envelope"),
-            "expected duplicate detection error, got {err:?}"
-        );
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_distinct_dataspaces_on_same_lane_and_height() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            relay_envelope.lane_id,
-            DataSpaceId::new(relay_envelope.dataspace_id.as_u64() + 1),
-            relay_envelope.block_height,
-            1_700_000_100_000,
-        );
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert!(
-            proofs
-                .iter()
-                .any(|proof| proof.envelope() == &relay_envelope)
-        );
-        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_distinct_lanes_on_same_dataspace_and_height() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            LaneId::new(relay_envelope.lane_id.as_u32() + 1),
-            relay_envelope.dataspace_id,
-            relay_envelope.block_height,
-            1_700_000_105_000,
-        );
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert!(
-            proofs
-                .iter()
-                .any(|proof| proof.envelope() == &relay_envelope)
-        );
-        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_preserves_envelope_order() {
-        let (mut status, first) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            LaneId::new(first.lane_id.as_u32() + 2),
-            DataSpaceId::new(first.dataspace_id.as_u64() + 3),
-            first.block_height + 4,
-            1_700_000_115_000,
-        );
-        status.lane_relay_envelopes = vec![second.clone(), first.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode ordered lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert_eq!(proofs[0].envelope(), &second, "first proof order mismatch");
-        assert_eq!(proofs[1].envelope(), &first, "second proof order mismatch");
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_same_lane_dataspace_across_heights() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            relay_envelope.lane_id,
-            relay_envelope.dataspace_id,
-            relay_envelope.block_height + 1,
-            1_700_000_110_000,
-        );
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert!(
-            proofs
-                .iter()
-                .any(|proof| proof.envelope() == &relay_envelope)
-        );
-        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
-    }
-    #[test]
     fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error() {
         let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
         let mut tampered_duplicate = relay_envelope.clone();
@@ -33413,30 +32752,6 @@ mod tests {
             "encode status payload",
         )
         .expect_err("invalid relay must be rejected");
-        let message = err.to_string();
-        assert!(
-            message.contains("Invalid lane relay envelope in status payload"),
-            "unexpected error message: {message}"
-        );
-        assert!(
-            !message.contains("duplicate relay envelope"),
-            "duplicate detection should not run before relay verification: {message}"
-        );
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error_from_json_payload()
-     {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let mut tampered_duplicate = relay_envelope.clone();
-        tampered_duplicate.settlement_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
-        status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_JSON,
-            "encode status payload as json",
-        )
-        .expect_err("invalid json relay must be rejected");
         let message = err.to_string();
         assert!(
             message.contains("Invalid lane relay envelope in status payload"),
@@ -34093,65 +33408,6 @@ mod tests {
         account
             .sign_transaction(payload)
             .expect("sign SoraFS transaction")
-    }
-    #[test]
-    fn sorafs_native_transaction_routes_reject_ordinary_intent_before_http() {
-        use iroha_data_model::isi::sorafs::{
-            RequestSorafsReserveMovement, SubmitSorafsModerationCommit, SubmitSorafsRepairTask,
-        };
-
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
-        with_mock_http(responder, |mock_transport| {
-            let client = client_with_base_url(base_url()).with_test_http_transport(mock_transport);
-            let repair = build_transaction(
-                &client,
-                [SubmitSorafsRepairTask::new([0x51; 32], vec![0x01])],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let moderation = build_transaction(
-                &client,
-                [SubmitSorafsModerationCommit::new(vec![0x01])],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let reserve = build_transaction(
-                &client,
-                [RequestSorafsReserveMovement::new(
-                    [0x62; 32],
-                    iroha_data_model::sorafs::capacity::ProviderId::new([0x64; 32]),
-                    iroha_data_model::sorafs::reserve::ReserveMovementKindV1::TopUp,
-                    "1".parse().expect("reserve quantity"),
-                    1,
-                    [0x65; 32],
-                )],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            for transaction in [&repair, &moderation, &reserve] {
-                assert_eq!(
-                    transaction.admission_intent(),
-                    TransactionAdmissionIntent::Ordinary
-                );
-            }
-            for result in [
-                client.post_sorafs_repair_report(&repair),
-                client.post_sorafs_moderation_ballot_commit(&moderation),
-                client.post_sorafs_reserve_top_up(&reserve),
-            ] {
-                let error = result.expect_err("ordinary SoraFS intent must fail locally");
-                assert!(
-                    error
-                        .to_string()
-                        .contains("requires QueuePlanSynced admission")
-                );
-            }
-        });
-        assert!(
-            store.lock().expect("snapshot store").is_empty(),
-            "invalid signed intent must not trigger capability lookup or command HTTP"
-        );
     }
     macro_rules! assert_sorafs_routes {
         ($($route:expr => $path:expr),+ $(,)?) => {

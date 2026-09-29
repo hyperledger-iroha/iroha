@@ -29,6 +29,7 @@ use iroha_primitives::json::Json;
 use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -84,8 +85,10 @@ pub enum DeploymentError {
         source: eyre::Report,
     },
     /// Authoritative global state proves that this exact attempted transaction failed permanently.
+    ///
+    /// The evidence is boxed to keep every `DeploymentResult` small.
     #[error("deployment step `{}` hash {} failed: {}", .0.step, .0.hash, .0.proof)]
-    Failed(#[source] DeploymentFailure),
+    Failed(#[source] Box<DeploymentFailure>),
     /// Applied transaction evidence and current authenticated contract reads disagree.
     #[error("deployment readback failed: {0}")]
     Readback(#[source] eyre::Report),
@@ -126,7 +129,7 @@ pub enum JournalDisposition {
     /// An exact attempted step is conclusively rejected or expired in authoritative state.
     Failed(DeploymentFailure),
     /// Exact commit and all retained finalized evidence have been verified.
-    Completed(DeploymentReceipt),
+    Completed(Box<DeploymentReceipt>),
     /// A fully unattempted exact plan was durably abandoned locally.
     Cancelled(DeploymentCancellation),
 }
@@ -318,20 +321,7 @@ impl DeploymentService {
     pub fn prepare(&self, request: &DeploymentRequest) -> DeploymentResult<PreparedDeployment> {
         let _address_profile =
             ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        if request.artifact.is_empty() || request.artifact.len() > MAX_DEPLOYMENT_ARTIFACT_BYTES {
-            return Err(DeploymentError::Artifact(format!(
-                "expected 1..={MAX_DEPLOYMENT_ARTIFACT_BYTES} immutable bytes"
-            )));
-        }
-        if !request.governance_approvers.is_empty() {
-            return Err(DeploymentError::InvalidRequest("governance approval identities are not approval evidence; protected deployments require the native authenticated governance workflow".to_owned()));
-        }
-        request
-            .fee_payment
-            .validate()
-            .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))?;
-        let verified = ivm_artifact_admission::verify_contract_artifact(&request.artifact)
-            .map_err(|error| DeploymentError::Artifact(error.to_string()))?;
+        let verified = verify_request(request)?;
         self.client
             .refresh_capabilities()
             .map_err(|source| preflight_error("network compatibility", source))?;
@@ -362,53 +352,11 @@ impl DeploymentService {
             .manifest
             .try_signed(&self.config.key_pair)
             .map_err(|error| preflight_error("contract manifest signature", eyre!(error)))?;
-        let metadata = deployment_transaction_metadata(&address, &[])
-            .map_err(|source| preflight_error("native attribution", source))?;
-        let signing = TransactionSigningContext {
-            network_id: self.config.network_id.clone(),
-            authority: &self.config.account,
-            private_key: self.config.key_pair.private_key(),
-            transaction_ttl: Some(self.config.transaction_ttl),
-            fee_payment: &request.fee_payment,
-            metadata: &metadata,
-        };
-        let upload =
-            build_native_upload_transaction_plan(&signing, verified.code_hash, &request.artifact)
-                .map_err(|source| preflight_error("native upload plan", source))?;
-        debug_assert_eq!(upload.chunk_count as usize, upload.pre_stage.len() + 1);
-        let mut uploads = upload.pre_stage;
-        uploads.push(upload.finalize);
-        let register = signing
-            .sign([InstructionBox::from(RegisterSmartContractCode { manifest })])
-            .map_err(|source| preflight_error("manifest registration", source))?;
-        let commit = build_commit_deployment_transaction(
-            &signing,
-            state.deploy_nonce,
-            address.clone(),
-            verified.code_hash,
-            request.alias.clone(),
-            state.previous_contract_address.clone(),
-        )
-        .map_err(|source| preflight_error("atomic deployment commit", source))?;
-        let sequence = deployment_transaction_sequence(false, uploads, register, commit);
-        let mut transactions = Vec::with_capacity(sequence.len());
-        let mut quotes = Vec::with_capacity(sequence.len());
-        for (name, _, draft) in sequence {
-            let (signed, quote) =
-                quote_and_resign_transaction(&self.client, &draft, &request.fee_payment)
-                    .map_err(|source| preflight_error("exact transaction fee quote", source))?;
-            transactions.push(TransactionRecord {
-                name,
-                hash: signed.hash().to_string(),
-                norito_hex: hex::encode(signed.encode_versioned()),
-            });
-            quotes.push(quote);
-        }
-        self.client
-            .check_funding(&Default::default(), &quotes)
-            .map_err(|source| preflight_error("cumulative deployment funding", source))?;
+        let sequence =
+            self.sign_native_sequence(request, manifest, verified.code_hash, &state, &address)?;
+        let (transactions, quotes) = self.quote_transactions(sequence, &request.fee_payment)?;
         let preflight = DeploymentPreflight {
-            network_id: self.config.network_id.clone(),
+            network_id: self.config.network_id,
             chain_id: self.config.chain.to_string(),
             authority: self.config.account.clone(),
             authorization,
@@ -640,6 +588,113 @@ impl DeploymentService {
             alias: preflight.contract_alias.clone(),
             address: preflight.contract_address.clone(),
         });
+        let (readback_block_height, readback_block_hash) = self.read_back(record, &commit)?;
+        let receipt = DeploymentReceipt {
+            version: 1,
+            network_id: preflight.network_id,
+            chain_id: preflight.chain_id.clone(),
+            chain_discriminant: preflight.chain_discriminant,
+            authority: preflight.authority.clone(),
+            contract_alias: preflight.contract_alias.clone(),
+            contract_address: preflight.contract_address.clone(),
+            contract_subject_account: preflight.contract_address.subject_id(),
+            dataspace_id: preflight.dataspace_id,
+            code_hash: preflight.code_hash,
+            abi_hash: preflight.abi_hash,
+            commit,
+            stages,
+            readback_block_height,
+            readback_block_hash,
+            stored_artifact_matches: true,
+        };
+        if let Some(retained) =
+            retained_receipt(record, journal).map_err(DeploymentError::Journal)?
+        {
+            if retained.stages != receipt.stages {
+                return Err(DeploymentError::Readback(eyre!(
+                    "retained completed stages disagree with exact-hash recovery"
+                )));
+            }
+            return Ok(retained);
+        }
+        journal
+            .put_exact(RECEIPT_FILE_NAME, &receipt)
+            .map_err(DeploymentError::Journal)?;
+        Ok(receipt)
+    }
+    /// Sign the exact native upload, manifest-registration, and atomic commit drafts in order.
+    fn sign_native_sequence(
+        &self,
+        request: &DeploymentRequest,
+        manifest: iroha::data_model::smart_contract::manifest::ContractManifest,
+        code_hash: Hash,
+        state: &ValidatedContractDeploymentState,
+        address: &ContractAddress,
+    ) -> DeploymentResult<Vec<(String, String, SignedTransaction)>> {
+        let metadata = deployment_transaction_metadata(address, &[])
+            .map_err(|source| preflight_error("native attribution", source))?;
+        let signing = TransactionSigningContext {
+            network_id: self.config.network_id,
+            authority: &self.config.account,
+            private_key: self.config.key_pair.private_key(),
+            transaction_ttl: Some(self.config.transaction_ttl),
+            fee_payment: &request.fee_payment,
+            metadata: &metadata,
+        };
+        let upload = build_native_upload_transaction_plan(&signing, code_hash, &request.artifact)
+            .map_err(|source| preflight_error("native upload plan", source))?;
+        debug_assert_eq!(upload.chunk_count as usize, upload.pre_stage.len() + 1);
+        let mut uploads = upload.pre_stage;
+        uploads.push(upload.finalize);
+        let register = signing
+            .sign([InstructionBox::from(RegisterSmartContractCode { manifest })])
+            .map_err(|source| preflight_error("manifest registration", source))?;
+        let commit = build_commit_deployment_transaction(
+            &signing,
+            state.deploy_nonce,
+            address.clone(),
+            code_hash,
+            request.alias.clone(),
+            state.previous_contract_address.clone(),
+        )
+        .map_err(|source| preflight_error("atomic deployment commit", source))?;
+        Ok(deployment_transaction_sequence(
+            false, uploads, register, commit,
+        ))
+    }
+    /// Quote and re-sign every exact draft in order, then check cumulative funding.
+    fn quote_transactions(
+        &self,
+        sequence: Vec<(String, String, SignedTransaction)>,
+        fee_payment: &FeePaymentIntent,
+    ) -> DeploymentResult<(Vec<TransactionRecord>, Vec<FeeQuoteResponse>)> {
+        let mut transactions = Vec::with_capacity(sequence.len());
+        let mut quotes = Vec::with_capacity(sequence.len());
+        for (name, _, draft) in sequence {
+            let (signed, quote) =
+                quote_and_resign_transaction(&self.client, &draft, fee_payment)
+                    .map_err(|source| preflight_error("exact transaction fee quote", source))?;
+            transactions.push(TransactionRecord {
+                name,
+                hash: signed.hash().to_string(),
+                norito_hex: hex::encode(signed.encode_versioned()),
+            });
+            quotes.push(quote);
+        }
+        self.client
+            .check_funding(&BTreeMap::default(), &quotes)
+            .map_err(|source| preflight_error("cumulative deployment funding", source))?;
+        Ok((transactions, quotes))
+    }
+    /// Authenticate the post-commit alias, nonce, dataspace, height, and stored artifact bytes.
+    ///
+    /// Returns the authenticated readback block height and block hash.
+    fn read_back(
+        &self,
+        record: &PlanRecord,
+        commit: &AppliedEvidence,
+    ) -> DeploymentResult<(u64, String)> {
+        let preflight = &record.preflight;
         let state = read_contract_deployment_state(
             &self.client,
             &self.config.account,
@@ -678,43 +733,30 @@ impl DeploymentService {
                 "stored contract code/ABI identity disagrees with the deployment"
             )));
         }
-        let receipt = DeploymentReceipt {
-            version: 1,
-            network_id: preflight.network_id.clone(),
-            chain_id: preflight.chain_id.clone(),
-            chain_discriminant: preflight.chain_discriminant,
-            authority: preflight.authority.clone(),
-            contract_alias: preflight.contract_alias.clone(),
-            contract_address: preflight.contract_address.clone(),
-            contract_subject_account: preflight.contract_address.subject_id(),
-            dataspace_id: preflight.dataspace_id,
-            code_hash: preflight.code_hash,
-            abi_hash: preflight.abi_hash,
-            commit,
-            stages,
-            readback_block_height: height,
-            readback_block_hash: state.snapshot.observed_block_hash,
-            stored_artifact_matches: true,
-        };
-        if let Some(retained) =
-            retained_receipt(record, journal).map_err(DeploymentError::Journal)?
-        {
-            if retained.stages != receipt.stages {
-                return Err(DeploymentError::Readback(eyre!(
-                    "retained completed stages disagree with exact-hash recovery"
-                )));
-            }
-            return Ok(retained);
-        } else {
-            journal
-                .put_exact(RECEIPT_FILE_NAME, &receipt)
-                .map_err(DeploymentError::Journal)?;
-        }
-        Ok(receipt)
+        Ok((height, state.snapshot.observed_block_hash))
     }
     fn validate_plan(&self, record: &PlanRecord) -> DeploymentResult<()> {
         validate_plan(record, &self.config)
     }
+}
+/// Check fixed request bounds and verify the immutable artifact before any network access.
+fn verify_request(
+    request: &DeploymentRequest,
+) -> DeploymentResult<ivm_artifact_admission::VerifiedContractArtifact> {
+    if request.artifact.is_empty() || request.artifact.len() > MAX_DEPLOYMENT_ARTIFACT_BYTES {
+        return Err(DeploymentError::Artifact(format!(
+            "expected 1..={MAX_DEPLOYMENT_ARTIFACT_BYTES} immutable bytes"
+        )));
+    }
+    if !request.governance_approvers.is_empty() {
+        return Err(DeploymentError::InvalidRequest("governance approval identities are not approval evidence; protected deployments require the native authenticated governance workflow".to_owned()));
+    }
+    request
+        .fee_payment
+        .validate()
+        .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))?;
+    ivm_artifact_admission::verify_contract_artifact(&request.artifact)
+        .map_err(|error| DeploymentError::Artifact(error.to_string()))
 }
 fn preflight_error(operation: &'static str, source: eyre::Report) -> DeploymentError {
     DeploymentError::Preflight { operation, source }
@@ -876,7 +918,9 @@ fn record_step_failure(
             journal.put_exact(&format!("failed-{index:04}.json"), &failure)?;
             Ok(failure)
         })();
-        return result.map_or_else(DeploymentError::Journal, DeploymentError::Failed);
+        return result.map_or_else(DeploymentError::Journal, |failure| {
+            DeploymentError::Failed(Box::new(failure))
+        });
     }
     DeploymentError::Pending {
         step: step.name.clone(),
@@ -896,7 +940,7 @@ fn inspect_read_record<T: DeploymentTransport>(
         return Ok(JournalDisposition::Cancelled(cancellation));
     }
     if let Some(receipt) = verify_completed_record(record, journal, transport)? {
-        return Ok(JournalDisposition::Completed(receipt));
+        return Ok(JournalDisposition::Completed(Box::new(receipt)));
     }
     inspect_transactions(record, journal, transport)
 }
@@ -997,7 +1041,7 @@ fn inspect_transactions<T: DeploymentTransport>(
                                 )));
                             }
                         }
-                        Ok(JournalDisposition::Failed(failure))
+                        Ok(JournalDisposition::Failed(*failure))
                     }
                     DeploymentError::Pending { step, hash, .. } => {
                         Ok(JournalDisposition::Pending {

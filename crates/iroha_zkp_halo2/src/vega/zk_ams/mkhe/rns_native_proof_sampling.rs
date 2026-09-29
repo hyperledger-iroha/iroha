@@ -311,9 +311,11 @@ fn derive_nonzero_distinct_with_v1(
 ) -> Result<u64, RnsNativeProofSamplingErrorV1> {
     for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
         if let Some(value) = sample(attempt)?
-            && value != 0 && !used.contains(&value) {
-                return Ok(value);
-            }
+            && value != 0
+            && !used.contains(&value)
+        {
+            return Ok(value);
+        }
     }
     Err(RnsNativeProofSamplingErrorV1::AttemptsExhausted)
 }
@@ -775,8 +777,8 @@ mod tests {
             let mut expected = None;
             for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
                 let mut values = [None; 2];
-                for component in 0..2 {
-                    axes[component_index] = component as u8;
+                for (component, value) in (0_u8..).zip(values.iter_mut()) {
+                    axes[component_index] = component;
                     let output = context
                         .hash(
                             RnsNativeProofHashRoleV1::Transcript,
@@ -791,13 +793,14 @@ mod tests {
                         .unwrap();
                     let word = output.words()[0];
                     let limit = FIELD_MODULUS - FIELD_MODULUS % modulus;
-                    values[component] = (word < limit).then_some(word % modulus);
+                    *value = (word < limit).then_some(word % modulus);
                 }
                 if let [Some(c0), Some(c1)] = values
-                    && (c0 != 0 || c1 != 0) {
-                        expected = Some(Fq2V1 { c0, c1 });
-                        break;
-                    }
+                    && (c0 != 0 || c1 != 0)
+                {
+                    expected = Some(Fq2V1 { c0, c1 });
+                    break;
+                }
             }
             let actual = derive_fq2_challenge_v1(&context, seed, coordinate).unwrap();
             assert_eq!(Some(actual), expected);

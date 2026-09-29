@@ -263,8 +263,10 @@ fn exact_chunk_boundary_uses_one_final_transaction() -> Result<()> {
 fn multi_mib_upload_plan_is_bounded_ordered_and_stable() -> Result<()> {
     let key_pair = deployment_key_fixture();
     let authority = AccountId::of(key_pair.public_key().clone());
-    let code = (0..(3 * 1024 * 1024 + 17))
-        .map(|index| (index % 251) as u8)
+    // Byte `index` is `index % 251`, produced without a narrowing cast.
+    let code = (0..=250_u8)
+        .cycle()
+        .take(3 * 1024 * 1024 + 17)
         .collect::<Vec<_>>();
     let network_id = test_network_id();
     let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(

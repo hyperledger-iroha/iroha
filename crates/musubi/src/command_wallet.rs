@@ -239,23 +239,24 @@ pub(super) fn open_store(
         .map(Path::to_path_buf)
         .map_or_else(|| default_wallet_dir().map_err(wallet_error), Ok)?;
     let current = std::env::current_dir().map_err(wallet_error)?;
-    let project = if let Some(manifest) = manifest {
-        {
+    let project = manifest.map_or_else(
+        || {
+            current
+                .ancestors()
+                .find(|ancestor| {
+                    ancestor.join("Musubi.toml").exists() || ancestor.join(".git").exists()
+                })
+                .map(Path::to_path_buf)
+        },
+        |manifest| {
             let absolute = if manifest.is_absolute() {
                 manifest.to_path_buf()
             } else {
                 current.join(manifest)
             };
             absolute.parent().map(Path::to_path_buf)
-        }
-    } else {
-        current
-            .ancestors()
-            .find(|ancestor| {
-                ancestor.join("Musubi.toml").exists() || ancestor.join(".git").exists()
-            })
-            .map(Path::to_path_buf)
-    };
+        },
+    );
     WalletStore::open(&root, project.as_deref()).map_err(wallet_error)
 }
 
@@ -754,7 +755,7 @@ fn operation_output(
             format!("wallet operation is {}", report.status.as_str()),
         )
         .with_help(next)
-        .with_details(message, report.data));
+        .with_details(message, &report.data));
     }
     Ok(Success {
         message,

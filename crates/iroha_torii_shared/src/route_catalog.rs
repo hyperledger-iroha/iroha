@@ -1535,30 +1535,6 @@ pub mod core {
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI);
-    /// Read the current Nexus lane lifecycle commitment.
-    pub const NEXUS_LIFECYCLE_GET: RouteDescriptor = RouteDescriptor::new(
-        "nexus.lifecycle.read",
-        HttpMethod::Get,
-        "/v1/nexus/lifecycle",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Read one frozen validator committee attempt and its finality attachments.
-    pub const NEXUS_VALIDATOR_COMMITTEE_GET: RouteDescriptor = RouteDescriptor::new(
-        "nexus.validator_committee.read",
-        HttpMethod::Get,
-        "/v1/nexus/validator-committee",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
     /// Prepare exact staking monetary inputs without submitting a transaction.
     pub const NEXUS_STAKING_PREPARATION_POST: RouteDescriptor = RouteDescriptor::new(
         "nexus.staking.prepare",
@@ -1576,30 +1552,6 @@ pub mod core {
         "ledger.headers",
         HttpMethod::Get,
         "/v1/ledger/headers",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Read a ledger execution-state root with exact Sumeragi-v2 finality.
-    pub const LEDGER_STATE_ROOT: RouteDescriptor = RouteDescriptor::new(
-        "ledger.state_root",
-        HttpMethod::Get,
-        "/v1/ledger/state/{height}",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Read exact Sumeragi-v2 ledger execution-state finality.
-    pub const LEDGER_STATE_PROOF: RouteDescriptor = RouteDescriptor::new(
-        "ledger.state_proof",
-        HttpMethod::Get,
-        "/v1/ledger/state-proof/{height}",
         ApiSurface::Public,
         Listener::Torii,
         RouteEffect::ReadOnly,
@@ -2630,12 +2582,6 @@ pub mod sumeragi {
             reason: "SSE transport endpoint; stream contract is not an ordinary resource",
         })
     }
-    /// Count persisted consensus evidence records as an authenticated operator.
-    pub const EVIDENCE_COUNT: RouteDescriptor =
-        operator_get("sumeragi.evidence.count", "/v1/sumeragi/evidence/count");
-    /// List persisted consensus evidence records as an authenticated operator.
-    pub const EVIDENCE_LIST: RouteDescriptor =
-        operator_get("sumeragi.evidence.list", "/v1/sumeragi/evidence");
     /// Read the authoritative Sumeragi status snapshot as an authenticated operator.
     pub const STATUS: RouteDescriptor =
         telemetry_operator_get("sumeragi.status.read", "/v1/sumeragi/status");

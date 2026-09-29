@@ -388,7 +388,7 @@ mod tests {
                 for (operation, expected) in [
                     (IntBinaryOperation::Min, left.min(right)),
                     (IntBinaryOperation::Max, left.max(right)),
-                    (IntBinaryOperation::Mean, (left + right) / 2),
+                    (IntBinaryOperation::Mean, i64::midpoint(left, right)),
                 ] {
                     assert_eq!(
                         operation.evaluate(&lhs, &rhs).unwrap(),

@@ -93,7 +93,7 @@ fn det_s44_boundary_waits_for_original_application() {
     assert_eq!(h.core.applied, 2);
     assert_eq!(h.core.tip.height, 3);
     assert!(h.core.awaiting);
-    assert!(h.core.config(&4).is_none());
+    assert!(h.core.config(4).is_none());
     let signed = h.log.len();
     h.tick(60_000);
     assert_eq!(
@@ -130,7 +130,7 @@ fn det_s44_lag_two_cannot_install_next_epoch_early() {
     h.fire(event);
     assert_eq!(h.core.halted, Some(HaltReason::DriverAnomaly));
     assert_eq!(h.core.applied, 1);
-    assert!(h.core.config(&4).is_none());
+    assert!(h.core.config(4).is_none());
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn boundary_restart_never_installs_unapplied_authority() {
     h.restart();
     assert_eq!(h.core.applied, 2);
     assert_eq!(h.height(), 3);
-    assert!(h.core.config(&4).is_none());
+    assert!(h.core.config(4).is_none());
     let from = h.others(1, &[])[0];
     h.deliver(from, WireMessage::Qc(certificate));
     assert_eq!(h.core.tip.height, 3);
@@ -311,22 +311,22 @@ fn boundary_certificates_remain_attested_before_cache_hits() {
     let good = h.block(0, b"boundary");
     let mut bad = good.clone();
     bad.header.attest = false;
-    let good_qc = h.qc_q(VoteKind::Prepare, 0, &good);
-    let bad_qc = h.qc_q(VoteKind::Prepare, 0, &bad);
+    let good_pqc = h.qc_q(VoteKind::Prepare, 0, &good);
+    let bad_pqc = h.qc_q(VoteKind::Prepare, 0, &bad);
     let entries = |qc: &Qc| {
         (0..3)
             .map(|index| (index, Some(qc.clone())))
             .collect::<Vec<_>>()
     };
-    let good_tc = h.tc(0, &entries(&good_qc));
-    let bad_tc = h.tc(0, &entries(&bad_qc));
-    assert!(!h.core.verify_qc_cached(&bad_qc));
+    let good_tc = h.tc(0, &entries(&good_pqc));
+    let bad_tc = h.tc(0, &entries(&bad_pqc));
+    assert!(!h.core.verify_qc_cached(&bad_pqc));
     assert!(!h.core.verify_tc_cached(&bad_tc));
     // Even a populated verification cache cannot bypass installed context/boundary checks.
-    h.core.cert_cache.insert(bad_qc.digest(&h.v.crypto));
+    h.core.cert_cache.insert(bad_pqc.digest(&h.v.crypto));
     h.core.cert_cache.insert(bad_tc.digest(&h.v.crypto));
-    assert!(!h.core.verify_qc_cached(&bad_qc));
+    assert!(!h.core.verify_qc_cached(&bad_pqc));
     assert!(!h.core.verify_tc_cached(&bad_tc));
-    assert!(h.core.verify_qc_cached(&good_qc));
+    assert!(h.core.verify_qc_cached(&good_pqc));
     assert!(h.core.verify_tc_cached(&good_tc));
 }

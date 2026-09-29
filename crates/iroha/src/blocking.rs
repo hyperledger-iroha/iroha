@@ -428,28 +428,6 @@ impl Client {
         self.submit_transaction_and_wait(&transaction)
     }
 
-    /// Submit a lane lifecycle update and wait for `Applied` finality.
-    ///
-    /// # Errors
-    /// Returns status validation, building, submission, finality, or
-    /// [`BlockingCallError`] failures.
-    pub fn submit_lane_lifecycle(
-        &self,
-        plan: LaneLifecyclePlan,
-    ) -> Result<HashOf<SignedTransaction>> {
-        reject_inside_async_runtime()?;
-        let status = self.inner.get_lane_lifecycle_status()?;
-        let catalog = status
-            .validate()
-            .wrap_err("invalid Nexus lane lifecycle status")?;
-        let parameter = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
-            .wrap_err("failed to bind Nexus lane incarnation commitments")?
-            .into_custom_parameter();
-        self.submit(
-            SetParameter::new(Parameter::Custom(parameter)),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-    }
 
     /// Verify and submit one alias setup plan, then wait for `Applied` finality.
     ///
@@ -973,6 +951,8 @@ mod tests {
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let (progress_tx, progress_rx) = mpsc::channel();
         let (dropped_tx, dropped_rx) = mpsc::channel();
+        // The async block deliberately hands the spawned task's handle out of `block_on`.
+        #[allow(clippy::async_yields_async)]
         let task = client
             .runtime
             .block_on(async move {

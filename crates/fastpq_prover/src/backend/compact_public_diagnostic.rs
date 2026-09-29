@@ -242,50 +242,62 @@ fn complete_candidate_axt_facade_drops_private_data_before_verification() {
         ))
         .is_err()
     );
-    assert!(verify_axt_transfer(&prepared, &expected, context(&fixture), &bytes, limits).is_err());
-    let ordinary = fixture.prepare(ProofSemantics::StateTransition);
-    assert!(
-        verify_transfer_with_allocation(
-            &ordinary,
-            &fixture.expected(&ordinary),
-            &bytes,
-            limits,
-            64 * 1024 * 1024
-        )
-        .is_err()
-    );
-    let mut changed = context(&fixture);
-    changed.remote_spend_claims = None;
-    assert!(
-        verify_axt_transfer_with_allocation(
-            &prepared,
-            &expected,
-            changed,
-            &bytes,
-            limits,
-            64 * 1024 * 1024
-        )
-        .is_err()
-    );
-    let mut corrupt = bytes.clone();
-    let last = corrupt.len() - 1;
-    corrupt[last] ^= 1;
-    assert!(
-        verify_axt_transfer_with_allocation(
-            &prepared,
-            &expected,
-            context(&fixture),
-            &corrupt,
-            limits,
-            64 * 1024 * 1024
-        )
-        .is_err()
-    );
+    assert_single_axt_rejections(&fixture, &prepared, &expected, &bytes, limits);
     eprintln!(
         "candidate_axt_proving={proving:?}; raw_facade_verifying={verifying:?}; work={:?}; decode_allocation_charges={charges}; total={:?}; public_fixture_artifact={}; production_security_qualified=false",
         result.work(),
         started.elapsed(),
         retain_public_frame("axt-single", &bytes)
+    );
+}
+
+/// Reject one valid AXT frame under a default budget, the ordinary route,
+/// omitted remote preimages and a corrupted final byte.
+fn assert_single_axt_rejections(
+    fixture: &Fixture,
+    prepared: &PreparedPublicTransfers<'_>,
+    expected: &PublicIO,
+    bytes: &[u8],
+    limits: VerifyLimits,
+) {
+    assert!(verify_axt_transfer(prepared, expected, context(fixture), bytes, limits).is_err());
+    let ordinary = fixture.prepare(ProofSemantics::StateTransition);
+    assert!(
+        verify_transfer_with_allocation(
+            &ordinary,
+            &fixture.expected(&ordinary),
+            bytes,
+            limits,
+            64 * 1024 * 1024
+        )
+        .is_err()
+    );
+    let mut changed = context(fixture);
+    changed.remote_spend_claims = None;
+    assert!(
+        verify_axt_transfer_with_allocation(
+            prepared,
+            expected,
+            changed,
+            bytes,
+            limits,
+            64 * 1024 * 1024
+        )
+        .is_err()
+    );
+    let mut corrupt = bytes.to_vec();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    assert!(
+        verify_axt_transfer_with_allocation(
+            prepared,
+            expected,
+            context(fixture),
+            &corrupt,
+            limits,
+            64 * 1024 * 1024
+        )
+        .is_err()
     );
 }
 
@@ -299,89 +311,12 @@ fn complete_candidate_bundle(axt: bool) {
         ProofSemantics::StateTransition
     };
     let limits = policy(2);
-    let mut proving_seconds = Vec::new();
-    let bytes = {
-        let prepared = fixture.prepare(semantics);
-        let expected = fixture.expected(&prepared);
-        let context_limits = BatchContextLimits {
-            max_segments: 2,
-            max_total_statement_bytes: limits.max_total_statement_bytes,
-        };
-        let mut frames = Vec::new();
-        if axt {
-            let batch = AxtTransferBatch::new(
-                &prepared,
-                &expected,
-                &roots,
-                context(&fixture),
-                context_limits,
-            )
-            .unwrap();
-            for (ordinal, columns) in columns.into_iter().enumerate() {
-                let relation = batch.segment(ordinal).unwrap();
-                let start = std::time::Instant::now();
-                let proof = prove_shared(
-                    &relation,
-                    &columns,
-                    VerifyLimits {
-                        max_proof_bytes: 16 * 1024 * 1024,
-                        ..limits.segment
-                    },
-                )
-                .unwrap();
-                proving_seconds.push(start.elapsed().as_secs_f64());
-                drop(columns);
-                frames.push(norito::encode_canonical(&proof).unwrap());
-                eprintln!(
-                    "candidate AXT segment {ordinal} proved in {}s",
-                    proving_seconds[ordinal]
-                );
-            }
-            bundle::encode_axt_wire(
-                &AxtBundleWire {
-                    version: 1,
-                    intermediate_roots: roots,
-                    segments: frames,
-                },
-                2,
-                limits,
-            )
-            .unwrap()
-        } else {
-            let batch =
-                PublicTransferBatch::new(&prepared, &expected, &roots, context_limits).unwrap();
-            for (ordinal, columns) in columns.into_iter().enumerate() {
-                let relation = batch.segment(ordinal).unwrap();
-                let start = std::time::Instant::now();
-                let proof = prove_shared(
-                    &relation,
-                    &columns,
-                    VerifyLimits {
-                        max_proof_bytes: 16 * 1024 * 1024,
-                        ..limits.segment
-                    },
-                )
-                .unwrap();
-                proving_seconds.push(start.elapsed().as_secs_f64());
-                drop(columns);
-                frames.push(norito::encode_canonical(&proof).unwrap());
-                eprintln!(
-                    "candidate ordinary segment {ordinal} proved in {}s",
-                    proving_seconds[ordinal]
-                );
-            }
-            bundle::encode_wire(
-                &BundleWire {
-                    version: 1,
-                    intermediate_roots: roots,
-                    segments: frames,
-                },
-                2,
-                limits,
-            )
-            .unwrap()
-        }
-        // Prover relations, columns, trees, opening DTOs and carrier DTOs all drop.
+    // Prover relations, columns, trees, opening DTOs and carrier DTOs all drop
+    // inside the proving helper, before any verification starts.
+    let (bytes, proving_seconds) = if axt {
+        prove_axt_bundle(&fixture, roots, columns, limits)
+    } else {
+        prove_ordinary_bundle(&fixture, roots, columns, limits)
     };
     let prepared = fixture.prepare(semantics);
     let expected = fixture.expected(&prepared);
@@ -420,20 +355,170 @@ fn complete_candidate_bundle(axt: bool) {
     assert_eq!(result.work().terminal_degree_checks, 2);
     assert_eq!(result.wire_bytes(), bytes.len());
     assert!(charges < limits.max_total_decode_allocation_charges);
+    assert_bundle_budget_boundaries(&bytes, limits, charges, &result, &verify);
+    let (roots, frames) = assert_bundle_tampering_rejected(axt, &bytes, limits, &verify);
+    if axt {
+        assert!(
+            bundle::verify_axt_transfer_bundle(
+                &prepared,
+                &expected,
+                context(&fixture),
+                &bytes,
+                limits
+            )
+            .is_err()
+        );
+        assert_retagged_as_ordinary_rejected(&fixture, roots, frames, limits);
+    } else {
+        assert!(bundle::verify_transfer_bundle(&prepared, &expected, &bytes, limits).is_err());
+        assert_retagged_as_axt_rejected(&fixture, roots, frames, limits);
+    }
+    let label = if axt {
+        "axt-two-delta"
+    } else {
+        "ordinary-two-delta"
+    };
+    eprintln!(
+        "candidate_bundle={label}; proving_seconds={proving_seconds:?}; raw_verifying={verifying:?}; outer_bytes={}; public_statement_bytes={}; work={:?}; decode_allocation_charges={charges}; total={:?}; public_fixture_artifact={}; production_security_qualified=false",
+        bytes.len(),
+        result.statement_bytes(),
+        result.work(),
+        started.elapsed(),
+        retain_public_frame(label, &bytes)
+    );
+}
+
+/// Prove every AXT segment, dropping each segment's columns once proved.
+///
+/// Returns the canonical AXT carrier and each segment's proving seconds.
+fn prove_axt_bundle(
+    fixture: &Fixture,
+    roots: Vec<[u8; 32]>,
+    columns: Vec<Columns>,
+    limits: BundleLimits,
+) -> (Vec<u8>, Vec<f64>) {
+    let mut proving_seconds = Vec::new();
+    let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
+    let expected = fixture.expected(&prepared);
+    let context_limits = BatchContextLimits {
+        max_segments: 2,
+        max_total_statement_bytes: limits.max_total_statement_bytes,
+    };
+    let mut frames = Vec::new();
+    let batch = AxtTransferBatch::new(
+        &prepared,
+        &expected,
+        &roots,
+        context(fixture),
+        context_limits,
+    )
+    .unwrap();
+    for (ordinal, columns) in columns.into_iter().enumerate() {
+        let relation = batch.segment(ordinal).unwrap();
+        let start = std::time::Instant::now();
+        let proof = prove_shared(
+            &relation,
+            &columns,
+            VerifyLimits {
+                max_proof_bytes: 16 * 1024 * 1024,
+                ..limits.segment
+            },
+        )
+        .unwrap();
+        proving_seconds.push(start.elapsed().as_secs_f64());
+        drop(columns);
+        frames.push(norito::encode_canonical(&proof).unwrap());
+        eprintln!(
+            "candidate AXT segment {ordinal} proved in {}s",
+            proving_seconds[ordinal]
+        );
+    }
+    let bytes = bundle::encode_axt_wire(
+        &AxtBundleWire {
+            version: 1,
+            intermediate_roots: roots,
+            segments: frames,
+        },
+        2,
+        limits,
+    )
+    .unwrap();
+    (bytes, proving_seconds)
+}
+
+/// Prove every ordinary segment, dropping each segment's columns once proved.
+///
+/// Returns the canonical ordinary carrier and each segment's proving seconds.
+fn prove_ordinary_bundle(
+    fixture: &Fixture,
+    roots: Vec<[u8; 32]>,
+    columns: Vec<Columns>,
+    limits: BundleLimits,
+) -> (Vec<u8>, Vec<f64>) {
+    let mut proving_seconds = Vec::new();
+    let prepared = fixture.prepare(ProofSemantics::StateTransition);
+    let expected = fixture.expected(&prepared);
+    let context_limits = BatchContextLimits {
+        max_segments: 2,
+        max_total_statement_bytes: limits.max_total_statement_bytes,
+    };
+    let mut frames = Vec::new();
+    let batch = PublicTransferBatch::new(&prepared, &expected, &roots, context_limits).unwrap();
+    for (ordinal, columns) in columns.into_iter().enumerate() {
+        let relation = batch.segment(ordinal).unwrap();
+        let start = std::time::Instant::now();
+        let proof = prove_shared(
+            &relation,
+            &columns,
+            VerifyLimits {
+                max_proof_bytes: 16 * 1024 * 1024,
+                ..limits.segment
+            },
+        )
+        .unwrap();
+        proving_seconds.push(start.elapsed().as_secs_f64());
+        drop(columns);
+        frames.push(norito::encode_canonical(&proof).unwrap());
+        eprintln!(
+            "candidate ordinary segment {ordinal} proved in {}s",
+            proving_seconds[ordinal]
+        );
+    }
+    let bytes = bundle::encode_wire(
+        &BundleWire {
+            version: 1,
+            intermediate_roots: roots,
+            segments: frames,
+        },
+        2,
+        limits,
+    )
+    .unwrap();
+    (bytes, proving_seconds)
+}
+
+/// The measured charge is an exact cumulative boundary; query and default ceilings reject.
+fn assert_bundle_budget_boundaries(
+    bytes: &[u8],
+    limits: BundleLimits,
+    charges: usize,
+    result: &bundle::VerifiedBundle,
+    verify: &impl Fn(&[u8], BundleLimits) -> Result<bundle::VerifiedBundle>,
+) {
     assert_eq!(
         verify(
-            &bytes,
+            bytes,
             BundleLimits {
                 max_total_decode_allocation_charges: charges,
                 ..limits
             }
         )
         .unwrap(),
-        result
+        *result
     );
     assert!(
         verify(
-            &bytes,
+            bytes,
             BundleLimits {
                 max_total_decode_allocation_charges: charges - 1,
                 ..limits
@@ -443,7 +528,7 @@ fn complete_candidate_bundle(axt: bool) {
     );
     assert!(matches!(
         verify(
-            &bytes,
+            bytes,
             BundleLimits {
                 max_total_queries: 749,
                 ..limits
@@ -454,14 +539,24 @@ fn complete_candidate_bundle(axt: bool) {
             ..
         })
     ));
-    assert!(verify(&bytes, BundleLimits::default()).is_err());
-    // Preserve the nominal carrier while substituting order, root linkage and
-    // an invalid final child after a valid prefix. Every case rejects completely.
+    assert!(verify(bytes, BundleLimits::default()).is_err());
+}
+
+/// Preserve the nominal carrier while substituting order, root linkage and
+/// an invalid final child after a valid prefix. Every case rejects completely.
+///
+/// Returns the decoded intermediate roots and child frames for retagging.
+fn assert_bundle_tampering_rejected(
+    axt: bool,
+    bytes: &[u8],
+    limits: BundleLimits,
+    verify: &impl Fn(&[u8], BundleLimits) -> Result<bundle::VerifiedBundle>,
+) -> (Vec<[u8; 32]>, Vec<Vec<u8>>) {
     let (roots, frames) = if axt {
-        let w: AxtBundleWire = norito::decode_canonical(&bytes).unwrap();
+        let w: AxtBundleWire = norito::decode_canonical(bytes).unwrap();
         (w.intermediate_roots, w.segments)
     } else {
-        let w: BundleWire = norito::decode_canonical(&bytes).unwrap();
+        let w: BundleWire = norito::decode_canonical(bytes).unwrap();
         (w.intermediate_roots, w.segments)
     };
     for kind in 0..5 {
@@ -500,75 +595,67 @@ fn complete_candidate_bundle(axt: bool) {
             "candidate bundle tamper {kind}"
         );
     }
-    if axt {
-        assert!(
-            bundle::verify_axt_transfer_bundle(
-                &prepared,
-                &expected,
-                context(&fixture),
-                &bytes,
-                limits
-            )
-            .is_err()
-        );
-        let ordinary = fixture.prepare(ProofSemantics::StateTransition);
-        let retagged = bundle::encode_wire(
-            &BundleWire {
-                version: 1,
-                intermediate_roots: roots,
-                segments: frames,
-            },
-            2,
+    (roots, frames)
+}
+
+/// Valid AXT children re-encoded in the ordinary carrier fail the ordinary route.
+fn assert_retagged_as_ordinary_rejected(
+    fixture: &Fixture,
+    roots: Vec<[u8; 32]>,
+    frames: Vec<Vec<u8>>,
+    limits: BundleLimits,
+) {
+    let ordinary = fixture.prepare(ProofSemantics::StateTransition);
+    let retagged = bundle::encode_wire(
+        &BundleWire {
+            version: 1,
+            intermediate_roots: roots,
+            segments: frames,
+        },
+        2,
+        limits,
+    )
+    .unwrap();
+    assert!(
+        bundle::verify_transfer_bundle_with_allocation(
+            &ordinary,
+            &fixture.expected(&ordinary),
+            &retagged,
             limits,
+            64 * 1024 * 1024
         )
-        .unwrap();
-        assert!(
-            bundle::verify_transfer_bundle_with_allocation(
-                &ordinary,
-                &fixture.expected(&ordinary),
-                &retagged,
-                limits,
-                64 * 1024 * 1024
-            )
-            .is_err()
-        );
-    } else {
-        assert!(bundle::verify_transfer_bundle(&prepared, &expected, &bytes, limits).is_err());
-        let axt_prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-        let retagged = bundle::encode_axt_wire(
-            &AxtBundleWire {
-                version: 1,
-                intermediate_roots: roots,
-                segments: frames,
-            },
-            2,
+        .is_err()
+    );
+}
+
+/// Valid ordinary children re-encoded in the AXT carrier fail the AXT route.
+fn assert_retagged_as_axt_rejected(
+    fixture: &Fixture,
+    roots: Vec<[u8; 32]>,
+    frames: Vec<Vec<u8>>,
+    limits: BundleLimits,
+) {
+    let axt_prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
+    let retagged = bundle::encode_axt_wire(
+        &AxtBundleWire {
+            version: 1,
+            intermediate_roots: roots,
+            segments: frames,
+        },
+        2,
+        limits,
+    )
+    .unwrap();
+    assert!(
+        bundle::verify_axt_transfer_bundle_with_allocation(
+            &axt_prepared,
+            &fixture.expected(&axt_prepared),
+            context(fixture),
+            &retagged,
             limits,
+            64 * 1024 * 1024
         )
-        .unwrap();
-        assert!(
-            bundle::verify_axt_transfer_bundle_with_allocation(
-                &axt_prepared,
-                &fixture.expected(&axt_prepared),
-                context(&fixture),
-                &retagged,
-                limits,
-                64 * 1024 * 1024
-            )
-            .is_err()
-        );
-    }
-    let label = if axt {
-        "axt-two-delta"
-    } else {
-        "ordinary-two-delta"
-    };
-    eprintln!(
-        "candidate_bundle={label}; proving_seconds={proving_seconds:?}; raw_verifying={verifying:?}; outer_bytes={}; public_statement_bytes={}; work={:?}; decode_allocation_charges={charges}; total={:?}; public_fixture_artifact={}; production_security_qualified=false",
-        bytes.len(),
-        result.statement_bytes(),
-        result.work(),
-        started.elapsed(),
-        retain_public_frame(label, &bytes)
+        .is_err()
     );
 }
 

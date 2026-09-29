@@ -67,6 +67,11 @@ pub(super) enum BindingError {
 
 type Result<T> = std::result::Result<T, BindingError>;
 
+/// Convert a fixed DEEP geometry constant to its canonical `u32` context field.
+pub(super) fn fixed_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixed DEEP geometry constant fits u32")
+}
+
 /// Ordinal of one indivisible verifier message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Round(u8);
@@ -219,19 +224,19 @@ impl Context {
         let encoded = norito::encode_canonical(&StatementContext {
             relation: identity.to_owned(),
             layout: LAYOUT_ID.to_owned(),
-            trace_rows: TRACE_ROWS as u32,
-            lde_rows: LDE_ROWS as u32,
-            columns: COMMITTED_COLUMN_COUNT as u32,
-            constraints: CONSTRAINTS as u32,
+            trace_rows: fixed_u32(TRACE_ROWS),
+            lde_rows: fixed_u32(LDE_ROWS),
+            columns: fixed_u32(COMMITTED_COLUMN_COUNT),
+            constraints: fixed_u32(CONSTRAINTS),
             modulus: MODULUS,
             extension_nonresidue: 7,
             lde_root: LDE_ROOT,
             coset_offset: COSET_OFFSET,
-            fri_arities: FRI_ARITIES.map(|v| v as u32),
-            fri_lengths: FRI_LENGTHS.map(|v| v as u32),
-            fri_degrees: FRI_DEGREES.map(|v| v as u32),
-            query_count: QUERY_COUNT as u32,
-            query_candidates: QUERY_CANDIDATES as u32,
+            fri_arities: FRI_ARITIES.map(fixed_u32),
+            fri_lengths: FRI_LENGTHS.map(fixed_u32),
+            fri_degrees: FRI_DEGREES.map(fixed_u32),
+            query_count: fixed_u32(QUERY_COUNT),
+            query_candidates: fixed_u32(QUERY_CANDIDATES),
             statement: statement.to_vec(),
         })?;
         Ok(Self {
@@ -330,6 +335,24 @@ impl Context {
             48,
             BodyFields::Two(&left.to_le_bytes(), &right.to_le_bytes()),
         ))?)
+    }
+
+    /// Hash one parent addressed by in-memory `usize` tree coordinates.
+    ///
+    /// No fixed tree has a level or index beyond `u32`; such coordinates are
+    /// rejected with the same shape error as every other invalid position.
+    pub(super) fn hash_parent_at(
+        &self,
+        oracle: Oracle,
+        level: usize,
+        index: usize,
+        left: Digest,
+        right: Digest,
+    ) -> Result<Digest> {
+        let (Ok(level), Ok(index)) = (u32::try_from(level), u32::try_from(index)) else {
+            return Err(BindingError::Shape);
+        };
+        self.hash_parent(oracle, level, index, left, right)
     }
 
     /// Prepare a complete parent; use the same strict shape checks as verification.
@@ -438,7 +461,8 @@ fn decode(round: Round, raw: &[u8]) -> Result<Message> {
             if candidate >= limit {
                 continue;
             }
-            let index = (candidate % LDE_ROWS as u64) as u32;
+            let index = u32::try_from(candidate % LDE_ROWS as u64)
+                .expect("query index reduced below LDE_ROWS fits u32");
             match queries.binary_search(&index) {
                 Ok(_) => {}
                 Err(at) => queries.insert(at, index),

@@ -3,15 +3,19 @@
 const P: u64 = 0xffff_ffff_0000_0001;
 
 pub fn add(left: u64, right: u64) -> u64 {
-    ((u128::from(left) + u128::from(right)) % u128::from(P)) as u64
+    narrow_residue((u128::from(left) + u128::from(right)) % u128::from(P))
 }
 
 pub fn sub(left: u64, right: u64) -> u64 {
-    ((u128::from(left) + u128::from(P) - u128::from(right)) % u128::from(P)) as u64
+    narrow_residue((u128::from(left) + u128::from(P) - u128::from(right)) % u128::from(P))
 }
 
 pub fn mul(left: u64, right: u64) -> u64 {
-    (u128::from(left) * u128::from(right) % u128::from(P)) as u64
+    narrow_residue(u128::from(left) * u128::from(right) % u128::from(P))
+}
+
+fn narrow_residue(value: u128) -> u64 {
+    u64::try_from(value).expect("a residue modulo P fits u64")
 }
 
 pub fn power(mut value: u64, mut exponent: usize) -> u64 {

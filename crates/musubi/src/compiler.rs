@@ -335,7 +335,7 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
     Ok(interface_digest)
 }
 /// Canonical commitment stating that a source package declares no reusable library interface.
-pub(crate) fn contract_only_interface_digest() -> MusubiContentDigestV1 {
+pub fn contract_only_interface_digest() -> MusubiContentDigestV1 {
     MusubiContentDigestV1::new(
         *iroha::crypto::Hash::new(b"musubi-contract-only-interface-v1\0").as_ref(),
     )
@@ -1317,23 +1317,8 @@ dep = { package = "deps.sora/dep", version = "^1.0.0" }
                 if reason.contains("typed interface disagrees with its exact lock digest")
         ));
     }
-    #[test]
-    fn named_contract_targets_keep_one_source_and_artifact_while_tests_expand_directories() {
-        let temp = TempDir::new().expect("temporary directory");
-        write_clean_library(temp.path());
-        for (path, source) in [
-            ("contracts/z.ko", "seiyaku Z { hajimari() {} }"),
-            ("contracts/nested/a.ko", "seiyaku A { hajimari() {} }"),
-            ("contracts/readme.txt", "ignored"),
-            ("tests/nested/z.ko", "seiyaku ZTests { #[test] fn z() {} }"),
-            ("tests/a.ko", "seiyaku ATests { #[test] fn a() {} }"),
-            ("tests/readme.txt", "ignored"),
-        ] {
-            let path = temp.path().join(path);
-            fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
-            fs::write(path, source).expect("fixture source");
-        }
-        let manifest = r#"manifest-version = 1
+    /// Package declaring two named contract files and one recursively expanded test directory.
+    const NAMED_TARGETS_MANIFEST: &str = r#"manifest-version = 1
 [package]
 namespace = "apps.sora"
 name = "demo"
@@ -1353,6 +1338,27 @@ path = "contracts/z.ko"
 name = "tests"
 path = "tests"
 "#;
+    /// Write the library plus nested contract and test sources beside ignored non-source files.
+    fn write_named_target_fixtures(root: &std::path::Path) {
+        write_clean_library(root);
+        for (path, source) in [
+            ("contracts/z.ko", "seiyaku Z { hajimari() {} }"),
+            ("contracts/nested/a.ko", "seiyaku A { hajimari() {} }"),
+            ("contracts/readme.txt", "ignored"),
+            ("tests/nested/z.ko", "seiyaku ZTests { #[test] fn z() {} }"),
+            ("tests/a.ko", "seiyaku ATests { #[test] fn a() {} }"),
+            ("tests/readme.txt", "ignored"),
+        ] {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+            fs::write(path, source).expect("fixture source");
+        }
+    }
+    #[test]
+    fn named_contract_targets_keep_one_source_and_artifact_while_tests_expand_directories() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_named_target_fixtures(temp.path());
+        let manifest = NAMED_TARGETS_MANIFEST;
         let lock = clean_verification_lock();
         let mut layout = PackageLayout::new(temp.path());
         layout.set_library("src");

@@ -404,15 +404,14 @@ mod tests {
         counter: [u64; 2],
         final_block: bool,
     ) -> [u64; 8] {
-        fn g(v: &mut [u64; 16], [a, b, c, d]: [usize; 4], words: [u64; 2]) {
-            let mask = u128::from(u64::MAX);
+        fn g(state: &mut [u64; 16], [a, b, c, d]: [usize; 4], words: [u64; 2]) {
             for (word, [r_d, r_b]) in words.into_iter().zip([[32, 24], [16, 63]]) {
-                v[a] = ((u128::from(v[a]) + u128::from(v[b]) + u128::from(word)) & mask) as u64;
-                let xor_d = v[d] ^ v[a];
-                v[d] = xor_d.rotate_right(r_d);
-                v[c] = ((u128::from(v[c]) + u128::from(v[d])) & mask) as u64;
-                let xor_b = v[b] ^ v[c];
-                v[b] = xor_b.rotate_right(r_b);
+                state[a] = state[a].wrapping_add(state[b]).wrapping_add(word);
+                let xor_d = state[d] ^ state[a];
+                state[d] = xor_d.rotate_right(r_d);
+                state[c] = state[c].wrapping_add(state[d]);
+                let xor_b = state[b] ^ state[c];
+                state[b] = xor_b.rotate_right(r_b);
             }
         }
         let mut v = [0; 16];

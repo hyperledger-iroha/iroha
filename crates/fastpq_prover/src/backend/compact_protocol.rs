@@ -155,7 +155,6 @@ struct CompactQuery {
 /// Measured successful verification work; no counter depends on a private trace.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg(test)]
 pub(super) struct VerificationWork {
     /// Exact canonical framed proof bytes, counted before cryptographic hashing.
     pub(super) proof_bytes: usize,
@@ -444,6 +443,60 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     )?;
     let mut transcript = binding.transcript(relation, geometry, trace.rows.root())?;
     let mixing = transcript.columns()?;
+    let (mixed, mixed_tree) = commit_mixed_oracle(trace, &mixing)?;
+    let alphas = transcript.alphas(mixed_tree.root())?;
+    let (quotients, quotient_tree) = commit_quotient_oracle(relation, trace, &alphas)?;
+    let joint = transcript.joint(quotient_tree.root())?;
+    let (mut fri, indices) = fold_protocol_layers(
+        &joint.values(&quotients, &mixed)?,
+        geometry,
+        binding,
+        &mut transcript,
+    )?;
+    let chains = fri.open_query_chains(&indices, FASTPQ_FINAL_V1.fri.arity)?;
+    let opening_indices: Vec<_> = indices
+        .iter()
+        .flat_map(|&index| [index, next_index(index, geometry.lde_rows)])
+        .collect();
+    // A fourth pass visits only stripes containing selected rows. Move these
+    // owned rows directly into the repeated opening DTO without another copy.
+    let mut opening_rows = trace.replay.selected_rows(&opening_indices)?.into_iter();
+    let mut queries = Vec::with_capacity(indices.len());
+    for (index, fri) in indices.into_iter().zip(chains) {
+        let next_index = next_index(index, geometry.lde_rows);
+        queries.push(CompactQuery {
+            index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
+            current: opening_rows
+                .next()
+                .ok_or_else(|| shape("missing replayed current row"))?,
+            next: opening_rows
+                .next()
+                .ok_or_else(|| shape("missing replayed next row"))?,
+            current_path: trace.rows.path(index)?,
+            next_path: trace.rows.path(next_index)?,
+            mixed: mixed[index],
+            mixed_path: mixed_tree.path(index)?,
+            quotient: quotients[index],
+            quotient_path: quotient_tree.path(index)?,
+            fri,
+        });
+    }
+    Ok(CompactProof {
+        row_root: trace.rows.root().into(),
+        mixed_root: mixed_tree.root().into(),
+        quotient_root: quotient_tree.root().into(),
+        fri_roots: fri.roots.into_iter().map(WireDigest::from).collect(),
+        queries,
+    })
+}
+
+/// Mix every committed row with the column coefficients and commit the mixed oracle.
+#[cfg(test)]
+fn commit_mixed_oracle(
+    trace: &PreparedTrace,
+    mixing: &[GoldilocksFp4V1],
+) -> Result<(Vec<GoldilocksFp4V1>, CommittedTree)> {
+    let binding = &trace.binding;
     #[cfg(test)]
     let phase_started = {
         eprintln!("fastpq_test_prover phase=mixed_values start");
@@ -456,7 +509,7 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
                 .map(|index| {
                     Ok(stripe
                         .columns()
-                        .zip(&mixing)
+                        .zip(mixing)
                         .fold(GoldilocksFp4V1::ZERO, |sum, (column, coefficient)| {
                             sum.add(coefficient.mul_base(column[index]))
                         }))
@@ -498,7 +551,18 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
         phase_started.elapsed()
     );
     drop(mixed_leaves);
-    let alphas = transcript.alphas(mixed_tree.root())?;
+    Ok((mixed, mixed_tree))
+}
+
+/// Evaluate the weighted constraint quotient on every LDE row and commit it.
+#[cfg(test)]
+fn commit_quotient_oracle(
+    relation: &impl FixedAir,
+    trace: &PreparedTrace,
+    alphas: &[GoldilocksFp4V1],
+) -> Result<(Vec<GoldilocksFp4V1>, CommittedTree)> {
+    let geometry = &trace.geometry;
+    let binding = &trace.binding;
     #[cfg(test)]
     let phase_started = {
         eprintln!("fastpq_test_prover phase=quotient_preparation start");
@@ -528,7 +592,7 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
                     stripe.fill_row((row + 1) % geometry.schema.trace_rows, &mut next);
                     let index = stripe.global_index(row);
                     let residues = evaluate(index, geometry.domain.point(index), &current, &next)?;
-                    Ok(combine(&residues, &alphas)?.mul_base(weights.weights_at(index)?.all_rows))
+                    Ok(combine(&residues, alphas)?.mul_base(weights.weights_at(index)?.all_rows))
                 })
                 .collect()
         })?;
@@ -568,48 +632,7 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
         phase_started.elapsed()
     );
     drop(quotient_leaves);
-    let joint = transcript.joint(quotient_tree.root())?;
-    let (mut fri, indices) = fold_protocol_layers(
-        &joint.values(&quotients, &mixed)?,
-        geometry,
-        binding,
-        &mut transcript,
-    )?;
-    let chains = fri.open_query_chains(&indices, FASTPQ_FINAL_V1.fri.arity)?;
-    let opening_indices: Vec<_> = indices
-        .iter()
-        .flat_map(|&index| [index, next_index(index, geometry.lde_rows)])
-        .collect();
-    // A fourth pass visits only stripes containing selected rows. Move these
-    // owned rows directly into the repeated opening DTO without another copy.
-    let mut opening_rows = trace.replay.selected_rows(&opening_indices)?.into_iter();
-    let mut queries = Vec::with_capacity(indices.len());
-    for (index, fri) in indices.into_iter().zip(chains) {
-        let next_index = next_index(index, geometry.lde_rows);
-        queries.push(CompactQuery {
-            index: index as u32,
-            current: opening_rows
-                .next()
-                .ok_or_else(|| shape("missing replayed current row"))?,
-            next: opening_rows
-                .next()
-                .ok_or_else(|| shape("missing replayed next row"))?,
-            current_path: trace.rows.path(index)?,
-            next_path: trace.rows.path(next_index)?,
-            mixed: mixed[index],
-            mixed_path: mixed_tree.path(index)?,
-            quotient: quotients[index],
-            quotient_path: quotient_tree.path(index)?,
-            fri,
-        });
-    }
-    Ok(CompactProof {
-        row_root: trace.rows.root().into(),
-        mixed_root: mixed_tree.root().into(),
-        quotient_root: quotient_tree.root().into(),
-        fri_roots: fri.roots.into_iter().map(WireDigest::from).collect(),
-        queries,
-    })
+    Ok((quotients, quotient_tree))
 }
 
 // The fixed binding owns every commitment and transcript message; the FRI
@@ -649,7 +672,10 @@ fn fold_protocol_layers(
                 .collect();
             results.into_iter().collect::<Result<Vec<Digest>>>()?
         };
-        let tree = binding.tree(&leaves, MerkleTreeRoleV1::Fri(round as u32))?;
+        let role = MerkleTreeRoleV1::Fri(
+            u32::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?,
+        );
+        let tree = binding.tree(&leaves, role)?;
         let root = tree.root();
         opening_levels.push(tree.levels);
         roots.push(root);
@@ -677,7 +703,10 @@ fn fold_protocol_layers(
         std::time::Instant::now()
     };
     let terminal_leaf = binding.fri(final_round, 0, &current)?;
-    let tree = binding.tree(&[terminal_leaf], MerkleTreeRoleV1::Fri(final_round as u32))?;
+    let role = MerkleTreeRoleV1::Fri(
+        u32::try_from(final_round).map_err(|_| Error::QueryIndexOverflow { index: final_round })?,
+    );
+    let tree = binding.tree(&[terminal_leaf], role)?;
     let root = tree.root();
     opening_levels.push(tree.levels);
     roots.push(root);
@@ -771,70 +800,7 @@ fn preflight(
     }
     let path_depth = geometry.lde_rows.ilog2() as usize;
     for query in &proof.queries {
-        if query.index as usize >= geometry.lde_rows
-            || query.current.len() != geometry.schema.width
-            || query.next.len() != geometry.schema.width
-        {
-            return Err(shape(
-                "compact opening has another exact index or row width",
-            ));
-        }
-        for path in [
-            &query.current_path,
-            &query.next_path,
-            &query.mixed_path,
-            &query.quotient_path,
-        ] {
-            check_limit("max_query_path_len", path.len(), limits.max_query_path_len)?;
-            if path.len() != path_depth {
-                return Err(shape("compact oracle opening has another path depth"));
-            }
-        }
-        check_limit(
-            "max_fri_layers",
-            query.fri.rounds.len(),
-            limits.max_fri_layers,
-        )?;
-        if query.fri.rounds.len() + 1 != geometry.fri_lengths.len() {
-            return Err(shape("compact FRI opening has another fold count"));
-        }
-        for (round, opening) in query.fri.rounds.iter().enumerate() {
-            check_limit(
-                "max_fri_round_values",
-                opening.values.len(),
-                limits.max_fri_round_values,
-            )?;
-            check_limit(
-                "max_query_path_len",
-                opening.merkle_path.len(),
-                limits.max_query_path_len,
-            )?;
-            if opening.values.len() != 2
-                || opening.merkle_path.len() != (geometry.fri_lengths[round] / 2).ilog2() as usize
-            {
-                return Err(shape(
-                    "compact FRI group has another exact width or path depth",
-                ));
-            }
-        }
-        check_limit(
-            "max_fri_round_values",
-            query.fri.final_values.len(),
-            limits.max_fri_round_values,
-        )?;
-        check_limit(
-            "max_query_path_len",
-            query.fri.final_merkle_path.len(),
-            limits.max_query_path_len,
-        )?;
-        if query.fri.final_values.len()
-            != *geometry.fri_lengths.last().expect("nonempty FRI geometry")
-            || query.fri.final_merkle_path.len() != 1
-        {
-            return Err(shape(
-                "compact FRI terminal must open its complete four-value leaf",
-            ));
-        }
+        check_query_shape(query, limits, geometry, path_depth)?;
     }
     // Count the exact canonical framed encoding with a counting sink, not an
     // allocation based on an untrusted size hint. All enclosing lengths and
@@ -843,24 +809,105 @@ fn preflight(
     let bytes = norito::core::encoded_frame_len(proof)?;
     check_limit("max_proof_bytes", bytes, limits.max_proof_bytes)?;
     for (position, query) in proof.queries.iter().enumerate() {
-        for (side, row) in [&query.current, &query.next].into_iter().enumerate() {
-            for (column, &value) in row.iter().enumerate() {
-                canonical_base(value, "compact_opening_row", &[position, side, column])?;
-            }
-        }
-        canonical_extension(query.mixed, &[position, 0])?;
-        canonical_extension(query.quotient, &[position, 1])?;
-        for (round, opening) in query.fri.rounds.iter().enumerate() {
-            for (value, &field) in opening.values.iter().enumerate() {
-                canonical_extension(field, &[position, round, value])?;
-            }
-            canonical_extension(opening.folded_value, &[position, round, 2])?;
-        }
-        for (value, &field) in query.fri.final_values.iter().enumerate() {
-            canonical_extension(field, &[position, geometry.fri_lengths.len(), value])?;
-        }
+        check_canonical_query(position, query, geometry)?;
     }
     Ok(bytes)
+}
+
+/// Bound every repeated opening dimension of one query before any hashing.
+#[cfg(test)]
+fn check_query_shape(
+    query: &CompactQuery,
+    limits: VerifyLimits,
+    geometry: &Geometry,
+    path_depth: usize,
+) -> Result<()> {
+    if query.index as usize >= geometry.lde_rows
+        || query.current.len() != geometry.schema.width
+        || query.next.len() != geometry.schema.width
+    {
+        return Err(shape(
+            "compact opening has another exact index or row width",
+        ));
+    }
+    for path in [
+        &query.current_path,
+        &query.next_path,
+        &query.mixed_path,
+        &query.quotient_path,
+    ] {
+        check_limit("max_query_path_len", path.len(), limits.max_query_path_len)?;
+        if path.len() != path_depth {
+            return Err(shape("compact oracle opening has another path depth"));
+        }
+    }
+    check_limit(
+        "max_fri_layers",
+        query.fri.rounds.len(),
+        limits.max_fri_layers,
+    )?;
+    if query.fri.rounds.len() + 1 != geometry.fri_lengths.len() {
+        return Err(shape("compact FRI opening has another fold count"));
+    }
+    for (round, opening) in query.fri.rounds.iter().enumerate() {
+        check_limit(
+            "max_fri_round_values",
+            opening.values.len(),
+            limits.max_fri_round_values,
+        )?;
+        check_limit(
+            "max_query_path_len",
+            opening.merkle_path.len(),
+            limits.max_query_path_len,
+        )?;
+        if opening.values.len() != 2
+            || opening.merkle_path.len() != (geometry.fri_lengths[round] / 2).ilog2() as usize
+        {
+            return Err(shape(
+                "compact FRI group has another exact width or path depth",
+            ));
+        }
+    }
+    check_limit(
+        "max_fri_round_values",
+        query.fri.final_values.len(),
+        limits.max_fri_round_values,
+    )?;
+    check_limit(
+        "max_query_path_len",
+        query.fri.final_merkle_path.len(),
+        limits.max_query_path_len,
+    )?;
+    if query.fri.final_values.len() != *geometry.fri_lengths.last().expect("nonempty FRI geometry")
+        || query.fri.final_merkle_path.len() != 1
+    {
+        return Err(shape(
+            "compact FRI terminal must open its complete four-value leaf",
+        ));
+    }
+    Ok(())
+}
+
+/// Reject any noncanonical base or extension value opened by one query.
+#[cfg(test)]
+fn check_canonical_query(position: usize, query: &CompactQuery, geometry: &Geometry) -> Result<()> {
+    for (side, row) in [&query.current, &query.next].into_iter().enumerate() {
+        for (column, &value) in row.iter().enumerate() {
+            canonical_base(value, "compact_opening_row", &[position, side, column])?;
+        }
+    }
+    canonical_extension(query.mixed, &[position, 0])?;
+    canonical_extension(query.quotient, &[position, 1])?;
+    for (round, opening) in query.fri.rounds.iter().enumerate() {
+        for (value, &field) in opening.values.iter().enumerate() {
+            canonical_extension(field, &[position, round, value])?;
+        }
+        canonical_extension(opening.folded_value, &[position, round, 2])?;
+    }
+    for (value, &field) in query.fri.final_values.iter().enumerate() {
+        canonical_extension(field, &[position, geometry.fri_lengths.len(), value])?;
+    }
+    Ok(())
 }
 #[cfg(test)]
 fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4V1> {
@@ -956,7 +1003,7 @@ impl HashDigestAir {
         &self,
         point: u64,
         digest: &[u64; 8],
-        hash: super::compact_hash_quotient::HashNumerators<u64>,
+        hash: &super::compact_hash_quotient::HashNumerators<u64>,
     ) -> Result<Vec<u64>> {
         canonical_base(point, "compact_public_digest_point", &[])?;
         let mask = if point == self.export_point {
@@ -970,8 +1017,8 @@ impl HashDigestAir {
             super::mul_mod(numerator, super::field_inverse(denominator))
         };
         let mut residues = Vec::with_capacity(688);
-        residues.extend(hash.local);
-        residues.extend(hash.transitions);
+        residues.extend_from_slice(&hash.local);
+        residues.extend_from_slice(&hash.transitions);
         residues.extend(
             digest
                 .iter()
@@ -1003,7 +1050,7 @@ impl FixedAir for HashDigestAir {
         self.finish_residues(
             point,
             &current.digest,
-            self.ledger.evaluate(point, &current, &next)?,
+            &self.ledger.evaluate(point, &current, &next)?,
         )
     }
 
@@ -1031,7 +1078,7 @@ impl PreparedAir for PreparedHashDigest<'_> {
             let hash = self
                 .cycle
                 .evaluate_with_scratch(index, &current, &next, &mut scratch)?;
-            self.relation.finish_residues(point, &current.digest, hash)
+            self.relation.finish_residues(point, &current.digest, &hash)
         })
     }
 }
@@ -1114,7 +1161,7 @@ mod tests {
                 mixed_root: digest,
                 quotient_root: digest,
                 fri_roots: vec![digest; geometry.fri_lengths.len()],
-                queries: (0..profile::QUERY_COUNT as u32)
+                queries: (0..u32::try_from(profile::QUERY_COUNT).unwrap())
                     .map(|index| CompactQuery {
                         index,
                         current: vec![0; width],
@@ -1131,7 +1178,7 @@ mod tests {
                                 .iter()
                                 .enumerate()
                                 .map(|(round, &length)| crate::proof::FriRoundOpening {
-                                    round: round as u32,
+                                    round: u32::try_from(round).unwrap(),
                                     index: 0,
                                     values: vec![GoldilocksFp4V1::ZERO; 2],
                                     folded_value: GoldilocksFp4V1::ZERO,
@@ -1529,6 +1576,12 @@ mod tests {
     #[test]
     fn resource_shapes_and_all_fp4_coefficients_are_rejected_before_hashing() {
         let base = &fixture().compact;
+        assert_malformed_shapes_rejected_before_hashing(base);
+        assert_noncanonical_values_rejected_before_hashing(base);
+        assert_exact_resource_limits_rejected_before_hashing(base);
+    }
+
+    fn assert_malformed_shapes_rejected_before_hashing(base: &CompactProof) {
         for malformed in 0..8 {
             let mut proof = base.clone();
             match malformed {
@@ -1557,6 +1610,9 @@ mod tests {
                 diagnostic_limits(),
             );
         }
+    }
+
+    fn assert_noncanonical_values_rejected_before_hashing(base: &CompactProof) {
         for side in 0..2 {
             for column in [0, 31, 80, 272, 300, 309, 310, 341] {
                 let mut proof = base.clone();
@@ -1594,6 +1650,9 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn assert_exact_resource_limits_rejected_before_hashing(base: &CompactProof) {
         let relation = FixedColumnsAir {
             public: fixture().digest,
         };

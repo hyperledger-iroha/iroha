@@ -774,6 +774,10 @@ fn parse_targets(
             required_value(table, "path", &path_location)?,
             &path_location,
         )?;
+        #[expect(
+            clippy::case_sensitive_file_extension_comparisons,
+            reason = "portable Musubi contract targets require the canonical lowercase .ko suffix"
+        )]
         if field == "contract" && !path.as_str().ends_with(".ko") {
             return Err(ManifestError::new(
                 ManifestErrorKind::InvalidField,

@@ -1,13 +1,4 @@
 //! Consensus-related data model DTOs for on-chain persistence.
-pub use crate::block::consensus::{
-    CertPhase, SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus,
-    SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-    SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
-    SumeragiPeerKeyPolicyStatus, SumeragiQcStatus, SumeragiRoundGapStatus,
-    SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
-    SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
-    SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-};
 /// Canonical Sumeragi v2 wire types.
 pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;
@@ -133,11 +124,6 @@ pub struct NposConsensusEffects {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub finalized_global_beacon_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
-    /// Fully validated Sumeragi v2 equivocation evidence admitted by this
-    /// signed block in canonical evidence-key order.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub v2_evidence_admissions: Vec<crate::block::consensus::SumeragiV2EquivocationEvidence>,
     /// Penalty and marker actions applied by this block.
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
@@ -147,9 +133,7 @@ impl NposConsensusEffects {
     /// Returns true when the bundle carries no committed state changes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.finalized_global_beacon_pulse.is_none()
-            && self.v2_evidence_admissions.is_empty()
-            && self.penalty_actions.is_empty()
+        self.finalized_global_beacon_pulse.is_none() && self.penalty_actions.is_empty()
     }
 }
 impl Ord for NposConsensusEffects {

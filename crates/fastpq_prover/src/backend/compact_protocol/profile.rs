@@ -73,10 +73,10 @@ impl Binding {
         )?;
         let context = StatementContext {
             relation: geometry.schema.identity.to_owned(),
-            trace_rows: geometry.schema.trace_rows as u32,
-            lde_rows: geometry.lde_rows as u32,
-            width: geometry.schema.width as u32,
-            constraints: geometry.schema.constraints as u32,
+            trace_rows: context_u32(geometry.schema.trace_rows)?,
+            lde_rows: context_u32(geometry.lde_rows)?,
+            width: context_u32(geometry.schema.width)?,
+            constraints: context_u32(geometry.schema.constraints)?,
             base_modulus: GOLDILOCKS_MODULUS,
             extension_nonresidue: 7,
             lde_root: FASTPQ_FINAL_V1.lde_root,
@@ -87,7 +87,7 @@ impl Binding {
             folds: 17,
             terminal_values: 4,
             terminal_degree: 1,
-            queries: QUERY_COUNT as u32,
+            queries: context_u32(QUERY_COUNT)?,
             statement: relation.statement_bytes().to_vec(),
         };
         // The context cap applies to the complete canonical frame, including
@@ -251,6 +251,11 @@ fn coordinate(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::QueryIndexOverflow { index: value })
 }
 
+/// Narrow one fixed context dimension; `check_geometry` pins each far below `u32::MAX`.
+fn context_u32(value: usize) -> Result<u32> {
+    u32::try_from(value).map_err(|_| shape("compact V1 context dimension exceeds u32"))
+}
+
 fn fri_oracle(round: usize) -> Result<compact::Oracle> {
     let round = u8::try_from(round).map_err(|_| shape("candidate FRI ordinal overflows"))?;
     if round > 17 {
@@ -269,7 +274,7 @@ fn oracle(role: MerkleTreeRoleV1) -> Result<compact::Oracle> {
     }
 }
 
-fn candidate_error(error: compact::CandidateError) -> Error {
+fn candidate_error(error: impl std::fmt::Display) -> Error {
     Error::InvalidTraceShape {
         details: format!("six-lane compact V1: {error}"),
     }
@@ -541,7 +546,7 @@ mod tests {
         let geometry = Geometry::new(&air).unwrap();
         let binding = Binding::new(&air, &geometry).unwrap();
         for (round, count, width) in [(9, 512, 2), (15, 8, 2), (16, 4, 2), (17, 1, 4)] {
-            let role = MerkleTreeRoleV1::Fri(round as u32);
+            let role = MerkleTreeRoleV1::Fri(u32::try_from(round).unwrap());
             let leaves: Vec<_> = (0..count)
                 .map(|i| {
                     binding

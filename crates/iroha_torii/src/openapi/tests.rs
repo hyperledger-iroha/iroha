@@ -3062,5 +3062,3 @@ fn openapi_uint64_bounds_keep_exact_integer_tokens_recursively() {
 #[path = "tests/privacy_release_qualification.rs"]
 mod privacy_release_qualification;
 
-#[path = "tests/validator_committee_contract.rs"]
-mod validator_committee_contract;

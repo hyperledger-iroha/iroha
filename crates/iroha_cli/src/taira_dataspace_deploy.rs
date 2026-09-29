@@ -548,31 +548,6 @@ impl PlanV1 {
     }
 }
 
-fn transition(
-    manifest: &ManifestV1,
-    baseline: &LaneLifecycleStatusV1,
-) -> Result<NexusCatalogTransitionV1> {
-    baseline.validate()?;
-    require(
-        !baseline.lanes.iter().any(|lane| {
-            lane.id == manifest.lane.id
-                || lane.alias == manifest.lane.alias
-                || lane.dataspace_id == manifest.lane.dataspace_id
-        }),
-        "new dataspace or lane is already present; this first-release plan cannot overwrite it",
-    )?;
-    let value = NexusCatalogTransitionV1 {
-        version: NexusCatalogTransitionV1::VERSION,
-        expected_catalog_hash: baseline.catalog_hash,
-        expected_incarnation_root: baseline.incarnation_root,
-        expected_runtime_catalog_hash: baseline.runtime_catalog_hash,
-        dataspace_additions: vec![manifest.dataspace.clone()],
-        lane_additions: vec![manifest.lane.clone()],
-        manifest_additions: vec![manifest.lane_manifest.clone()],
-    };
-    value.validate_structure()?;
-    Ok(value)
-}
 
 fn overlay(
     parameters: &Parameters,

@@ -42,7 +42,7 @@ pub enum DeploymentProgress {
     },
 }
 
-pub(super) fn stage(record: &PlanRecord, index: usize) -> DeploymentStage {
+pub fn stage(record: &PlanRecord, index: usize) -> DeploymentStage {
     let transaction = &record.transactions[index];
     DeploymentStage {
         number: index + 1,

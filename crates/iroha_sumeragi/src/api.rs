@@ -297,6 +297,7 @@ pub enum Event {
 
 /// Actions returned by `Core::handle`, executed by the driver in order (O1).
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(clippy::large_enum_variant, reason = "driver takes blocks by value")]
 pub enum Action {
     /// Durably write the safety record (a barrier for later effects, O2).
     PersistSafety(Box<SafetyRecord>),

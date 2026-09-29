@@ -113,6 +113,10 @@ impl Blake2bGWitness<u64> {
     /// Native witness generation is not a validity decision. Verification must
     /// enforce [`constraint_residues`] and bind these explicit inputs/outputs.
     #[must_use]
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "`a`, `b`, `c`, `d`, `x` and `y` are the RFC 7693 G-function operand names"
+    )]
     pub fn from_inputs([a, b, c, d]: [u64; 4], [x, y]: [u64; 2]) -> Self {
         let a_sum_0 = a.wrapping_add(b);
         let a_0 = a_sum_0.wrapping_add(x);
@@ -221,27 +225,27 @@ mod tests {
     use super::*;
     use crate::{GOLDILOCKS_MODULUS_V1, GoldilocksFp4V1};
 
-    fn decode(word: BitWord64) -> u64 {
+    fn decode(word: &BitWord64) -> u64 {
         word.bits
             .iter()
             .enumerate()
             .fold(0, |value, (bit, &set)| value | (set << bit))
     }
 
-    fn decode_registers(registers: GRegisters) -> [u64; 4] {
-        [registers.a, registers.b, registers.c, registers.d].map(decode)
+    fn decode_registers(registers: &GRegisters) -> [u64; 4] {
+        [&registers.a, &registers.b, &registers.c, &registers.d].map(decode)
     }
 
     // Independent integer reference: one u128 three-word sum per half, and an
     // explicit shift/or rotation instead of the witness generator's operations.
     fn reference(mut words: [u64; 4], message: [u64; 2]) -> [u64; 4] {
-        let mask = u128::from(u64::MAX);
+        let low_word =
+            |sum: u128| u64::try_from(sum & u128::from(u64::MAX)).expect("masked sum fits u64");
         let rotate = |word: u64, count| word.rotate_right(count);
         for (word, [d_rotation, b_rotation]) in message.into_iter().zip([[32, 24], [16, 63]]) {
-            words[0] =
-                ((u128::from(words[0]) + u128::from(words[1]) + u128::from(word)) & mask) as u64;
+            words[0] = low_word(u128::from(words[0]) + u128::from(words[1]) + u128::from(word));
             words[3] = rotate(words[3] ^ words[0], d_rotation);
-            words[2] = ((u128::from(words[2]) + u128::from(words[3])) & mask) as u64;
+            words[2] = low_word(u128::from(words[2]) + u128::from(words[3]));
             words[1] = rotate(words[1] ^ words[2], b_rotation);
         }
         words
@@ -253,44 +257,51 @@ mod tests {
         residues.iter().all(|&value| value == 0)
     }
 
-    fn map_word<F: Copy>(word: BitWord64, map: &mut impl FnMut(u64) -> F) -> BitWord64<F> {
+    fn map_word<F: Copy>(word: &BitWord64, map: &mut impl FnMut(u64) -> F) -> BitWord64<F> {
         BitWord64 {
             bits: word.bits.map(map),
         }
     }
 
     fn map_registers<F: Copy>(
-        registers: GRegisters,
+        registers: &GRegisters,
         map: &mut impl FnMut(u64) -> F,
     ) -> GRegisters<F> {
         GRegisters {
-            a: map_word(registers.a, map),
-            b: map_word(registers.b, map),
-            c: map_word(registers.c, map),
-            d: map_word(registers.d, map),
+            a: map_word(&registers.a, map),
+            b: map_word(&registers.b, map),
+            c: map_word(&registers.c, map),
+            d: map_word(&registers.d, map),
         }
     }
 
+    /// Map every witness cell in its fixed canonical order.
     fn map_witness<F: Copy>(
-        witness: Blake2bGWitness,
+        witness: &Blake2bGWitness,
         mut map: impl FnMut(u64) -> F,
     ) -> Blake2bGWitness<F> {
         Blake2bGWitness {
-            inputs: map_registers(witness.inputs, &mut map),
-            message: witness.message.map(|word| map_word(word, &mut map)),
-            outputs: map_registers(witness.outputs, &mut map),
-            additions: witness.additions.map(|add| Add64Witness {
-                left: map_word(add.left, &mut map),
-                right: map_word(add.right, &mut map),
-                output: map_word(add.output, &mut map),
+            inputs: map_registers(&witness.inputs, &mut map),
+            message: witness
+                .message
+                .each_ref()
+                .map(|word| map_word(word, &mut map)),
+            outputs: map_registers(&witness.outputs, &mut map),
+            additions: witness.additions.each_ref().map(|add| Add64Witness {
+                left: map_word(&add.left, &mut map),
+                right: map_word(&add.right, &mut map),
+                output: map_word(&add.output, &mut map),
                 carry_32: map(add.carry_32),
                 carry_64: map(add.carry_64),
             }),
-            xor_rotations: witness.xor_rotations.map(|xor| XorRotate64Witness {
-                left: map_word(xor.left, &mut map),
-                right: map_word(xor.right, &mut map),
-                output: map_word(xor.output, &mut map),
-            }),
+            xor_rotations: witness
+                .xor_rotations
+                .each_ref()
+                .map(|xor| XorRotate64Witness {
+                    left: map_word(&xor.left, &mut map),
+                    right: map_word(&xor.right, &mut map),
+                    output: map_word(&xor.output, &mut map),
+                }),
         }
     }
 
@@ -319,10 +330,10 @@ mod tests {
                 let inputs = [left, right, !left, left.rotate_left(17)];
                 let message = [right, !right];
                 let witness = Blake2bGWitness::from_inputs(inputs, message);
-                assert_eq!(decode_registers(witness.inputs), inputs);
-                assert_eq!(witness.message.map(decode), message);
+                assert_eq!(decode_registers(&witness.inputs), inputs);
+                assert_eq!(witness.message.each_ref().map(decode), message);
                 assert_eq!(
-                    decode_registers(witness.outputs),
+                    decode_registers(&witness.outputs),
                     reference(inputs, message)
                 );
                 assert!(valid(1, &witness), "boundary {inputs:?}, {message:?}");
@@ -340,7 +351,7 @@ mod tests {
             let message = [values[4], values[5]];
             let witness = Blake2bGWitness::from_inputs(inputs, message);
             assert_eq!(
-                decode_registers(witness.outputs),
+                decode_registers(&witness.outputs),
                 reference(inputs, message)
             );
             assert!(valid(1, &witness));
@@ -353,7 +364,7 @@ mod tests {
         assert!(valid(1, &original));
         for cell in 0..WITNESS_CELL_COUNT {
             let mut index = 0;
-            let changed = map_witness(original, |value| {
+            let changed = map_witness(&original, |value| {
                 let next = if index == cell { value ^ 1 } else { value };
                 index += 1;
                 next
@@ -370,7 +381,7 @@ mod tests {
             let mut changed = original;
             let old = changed.additions[index];
             changed.additions[index] =
-                Add64Witness::from_operands(decode(old.left).wrapping_add(1), decode(old.right));
+                Add64Witness::from_operands(decode(&old.left).wrapping_add(1), decode(&old.right));
             assert!(
                 arx64_air::add_residues(1, &changed.additions[index])
                     .iter()
@@ -382,8 +393,8 @@ mod tests {
             let mut changed = original;
             let old = changed.xor_rotations[index];
             changed.xor_rotations[index] = XorRotate64Witness::from_operands(
-                decode(old.left) ^ 1,
-                decode(old.right),
+                decode(&old.left) ^ 1,
+                decode(&old.right),
                 rotation,
             );
             assert!(
@@ -406,7 +417,7 @@ mod tests {
         assert!(!valid(2, &inactive), "non-Boolean selector must fail");
         for cell in 0..WITNESS_CELL_COUNT {
             let mut index = 0;
-            let changed = map_witness(inactive, |value| {
+            let changed = map_witness(&inactive, |value| {
                 let next = if index == cell { 1 } else { value };
                 index += 1;
                 next
@@ -417,12 +428,12 @@ mod tests {
 
     #[test]
     fn base_and_extension_evaluators_agree_on_non_boolean_openings() {
-        let mut cell = 0;
-        let invalid = map_witness(sample(), |value| {
+        let mut cell = 0_u64;
+        let invalid = map_witness(&sample(), |value| {
             cell += 1;
-            value + (cell % 7) as u64
+            value + cell % 7
         });
-        let extension = map_witness(invalid, |value| GoldilocksFp4V1::from_base(value).unwrap());
+        let extension = map_witness(&invalid, |value| GoldilocksFp4V1::from_base(value).unwrap());
         let base = constraint_residues(2, &invalid);
         assert!(base.iter().any(|&value| value != 0));
         assert_eq!(
@@ -455,7 +466,7 @@ mod tests {
 
     #[test]
     fn all_operation_numerators_are_quadratic_and_all_links_are_linear() {
-        let witness = map_witness(sample(), |_| Degree(1));
+        let witness = map_witness(&sample(), |_| Degree(1));
         let residues = constraint_residues(Degree(1), &witness);
         assert_eq!(residues.len(), CONSTRAINT_COUNT);
         assert_eq!(

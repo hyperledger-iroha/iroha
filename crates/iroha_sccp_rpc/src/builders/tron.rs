@@ -346,9 +346,9 @@ impl TronBuilder {
             .filter(|block| block.header.timestamp <= end)
         {
             let signed = Self::signed(block)?;
-            let signer = header_signer(&signed.raw_data, &signed.witness_signature)
+            let signing_address = header_signer(&signed.raw_data, &signed.witness_signature)
                 .map_err(|error| BuildError::Inconsistent(format!("TRON header: {error}")))?;
-            witnesses.insert(block.header.witness_address, signer);
+            witnesses.insert(block.header.witness_address, signing_address);
         }
         Ok(TronWitnessSetV1 {
             period,

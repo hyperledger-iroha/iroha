@@ -92,6 +92,7 @@ impl ResultWitness {
     ///
     /// # Errors
     /// Every refusal returns the same original buffer, without copying, resizing or dropping it.
+    #[allow(clippy::result_large_err, reason = "a refusal must not allocate")]
     pub fn from_charged(
         bytes: ChargedBuffer<u8>,
         budget: &AllocationBudget,

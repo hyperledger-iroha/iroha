@@ -91,7 +91,7 @@ fn oracle(trace: &[&[u64]], quotient: [&[F]; 2], pair: OodPair, lambda: F) -> Ve
     result
 }
 
-fn assert_shape<T>(result: Result<T>) {
+fn assert_shape<T>(result: &Result<T>) {
     assert!(matches!(result, Err(Error::InvalidTraceShape { .. })));
 }
 
@@ -125,14 +125,14 @@ fn explicit_chunks_are_borrowed_and_never_reduced_or_truncated() {
         }
     }
     let oversized = vec![F::ZERO; DEGREE_BOUND + 1];
-    assert_shape(DeepPolynomialSource::new(&trace, [&oversized, &[]], &mask));
-    assert_shape(DeepPolynomialSource::new(&trace, [&[], &oversized], &mask));
-    assert_shape(DeepPolynomialSource::new(
+    assert_shape(&DeepPolynomialSource::new(&trace, [&oversized, &[]], &mask));
+    assert_shape(&DeepPolynomialSource::new(&trace, [&[], &oversized], &mask));
+    assert_shape(&DeepPolynomialSource::new(
         &trace,
         [&[], &[]],
         &mask[..DEGREE_BOUND - 1],
     ));
-    assert_shape(DeepPolynomialSource::new(&trace, [&[], &[]], &oversized));
+    assert_shape(&DeepPolynomialSource::new(&trace, [&[], &[]], &oversized));
 }
 
 #[test]
@@ -289,7 +289,7 @@ fn complete_source_shapes_and_coordinates_are_checked_before_preparation() {
         COMMITTED_COLUMN_COUNT + 1,
         342,
     ] {
-        assert_shape(DeepPolynomialSource::new(
+        assert_shape(&DeepPolynomialSource::new(
             &vec![&[][..]; width],
             [&[], &[]],
             &mask,
@@ -298,7 +298,7 @@ fn complete_source_shapes_and_coordinates_are_checked_before_preparation() {
     let oversized = vec![0; DEGREE_BOUND + 1];
     let mut trace = empty;
     trace[COMMITTED_COLUMN_COUNT - 1] = &oversized;
-    assert_shape(DeepPolynomialSource::new(&trace, [&[], &[]], &mask));
+    assert_shape(&DeepPolynomialSource::new(&trace, [&[], &[]], &mask));
     let mut boundary = vec![0; DEGREE_BOUND];
     boundary[DEGREE_BOUND - 1] = GOLDILOCKS_MODULUS;
     trace[COMMITTED_COLUMN_COUNT - 1] = &boundary;
@@ -380,7 +380,7 @@ fn linear_division_checks_complete_remainders_and_preserves_zero_padding() {
             }
             let mut changed = product.clone();
             changed[0] = changed[0].add(dense(61));
-            assert_shape(divide_linear_exact(&mut changed, point));
+            assert_shape(&divide_linear_exact(&mut changed, point));
             divide_linear_exact(&mut product, point).unwrap();
             assert_eq!(&product[..length], expected);
             assert_eq!(product[length], F::ZERO);
@@ -397,12 +397,12 @@ fn either_trace_remainder_and_quotient_remainder_abort_before_returning_coeffici
     for row in 0..2 {
         let mut prepared = source.prepare(points());
         prepared.trace_answers[row][0] = dense(71);
-        assert_shape(prepared.compose(lambda, WORKSPACE_BYTES));
+        assert_shape(&prepared.compose(lambda, WORKSPACE_BYTES));
     }
     for part in 0..2 {
         let mut prepared = source.prepare(points());
         prepared.quotient_answers[part] = dense(73);
-        assert_shape(prepared.compose(lambda, WORKSPACE_BYTES));
+        assert_shape(&prepared.compose(lambda, WORKSPACE_BYTES));
     }
 }
 

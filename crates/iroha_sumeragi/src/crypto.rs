@@ -47,6 +47,7 @@ pub trait Crypto {
 
 /// An [`Attestor`]'s answer for one statement (§3.7 A2).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant, reason = "transient `Attestor` result")]
 pub enum AttestOutcome {
     /// The attestation bytes: the same for the same inputs.
     Attested(CommitAttestation),
@@ -1403,56 +1404,25 @@ mod tests {
     #[test]
     fn timeouts_verify() {
         let v = validators(4);
+        let epoch = &crate::testing::TEST_EPOCH.id;
+        let verify = |t: &TimeoutVote| verify_timeout(&v.crypto, &I, epoch, &v.committee, t);
         let pqc = v.qc(VoteKind::Prepare, &I, 9, 1, &h(2), &h(3), &[0, 1, 2]);
         let t = v.timeout(3, &I, 9, 2, Some(pqc.clone()));
-        assert_eq!(
-            verify_timeout(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                &t
-            ),
-            Ok(())
-        );
+        assert_eq!(verify(&t), Ok(()));
         let none = v.timeout(3, &I, 9, 2, None);
-        assert_eq!(
-            verify_timeout(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                &none
-            ),
-            Ok(())
-        );
+        assert_eq!(verify(&none), Ok(()));
         // hq is signed: swapping the carried QC for none (or another view) breaks the signature.
         assert_eq!(
-            verify_timeout(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                &TimeoutVote {
-                    high_pqc: None,
-                    ..t.clone()
-                }
-            ),
+            verify(&TimeoutVote {
+                high_pqc: None,
+                ..t.clone()
+            }),
             Err(CertError::BadSignature)
         );
         // Carried QC of a higher view than the timeout.
         let future = v.qc(VoteKind::Prepare, &I, 9, 3, &h(2), &h(3), &[0, 1, 2]);
         let t_future = v.timeout(3, &I, 9, 2, Some(future));
-        assert_eq!(
-            verify_timeout(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                &t_future
-            ),
-            Err(CertError::HqAboveView)
-        );
+        assert_eq!(verify(&t_future), Err(CertError::HqAboveView));
         // Carried QC of another height, kind or instance.
         for wrong in [
             v.qc(VoteKind::Commit, &I, 9, 1, &h(2), &h(3), &[0, 1, 2]),
@@ -1460,16 +1430,7 @@ mod tests {
             v.qc(VoteKind::Prepare, &J, 9, 1, &h(2), &h(3), &[0, 1, 2]),
         ] {
             let t_wrong = v.timeout(3, &I, 9, 2, Some(wrong));
-            assert_eq!(
-                verify_timeout(
-                    &v.crypto,
-                    &I,
-                    &crate::testing::TEST_EPOCH.id,
-                    &v.committee,
-                    &t_wrong
-                ),
-                Err(CertError::HighQcMismatch)
-            );
+            assert_eq!(verify(&t_wrong), Err(CertError::HighQcMismatch));
         }
         // Carried QC that does not verify: signature-only check passes, full check fails.
         let forged = Qc {
@@ -1478,33 +1439,12 @@ mod tests {
         };
         let t_forged = v.timeout(3, &I, 9, 2, Some(forged));
         assert_eq!(
-            verify_timeout_signature(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                &t_forged
-            ),
+            verify_timeout_signature(&v.crypto, &I, epoch, &v.committee, &t_forged),
             Ok(())
         );
+        assert_eq!(verify(&t_forged), Err(CertError::HighQcInvalid));
         assert_eq!(
-            verify_timeout(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                &t_forged
-            ),
-            Err(CertError::HighQcInvalid)
-        );
-        assert_eq!(
-            verify_timeout(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                &TimeoutVote { signer: 9, ..none }
-            ),
+            verify(&TimeoutVote { signer: 9, ..none }),
             Err(CertError::SignerOutOfRange)
         );
     }
@@ -1528,95 +1468,31 @@ mod tests {
         };
         let parent = v.qc(VoteKind::Commit, &I, 8, 0, &h(1), &h(2), &[0, 1, 2]);
         let p = v.proposal(2, &I, 9, 0, header, None, Some(parent), Some(vec![]));
-        let (bh, ad) = verify_proposal_signature(
-            &v.crypto,
-            &I,
-            &crate::testing::TEST_EPOCH.id,
-            &v.committee,
-            2,
-            &p,
-        )
-        .unwrap();
+        let verify = |instance: &Hash32, leader: ValidatorIndex, p: &Proposal| {
+            let epoch = &crate::testing::TEST_EPOCH.id;
+            verify_proposal_signature(&v.crypto, instance, epoch, &v.committee, leader, p)
+        };
+        let (bh, ad) = verify(&I, 2, &p).unwrap();
         assert_eq!(bh, p.block_hash(&v.crypto));
         assert_eq!(ad, p.att_digest(&v.crypto));
         // Not the leader's key.
-        assert_eq!(
-            verify_proposal_signature(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                1,
-                &p
-            ),
-            Err(CertError::BadSignature)
-        );
-        assert_eq!(
-            verify_proposal_signature(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                7,
-                &p
-            ),
-            Err(CertError::SignerOutOfRange)
-        );
-        assert_eq!(
-            verify_proposal_signature(
-                &v.crypto,
-                &J,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                2,
-                &p
-            ),
-            Err(CertError::WrongInstance)
-        );
+        assert_eq!(verify(&I, 1, &p), Err(CertError::BadSignature));
+        assert_eq!(verify(&I, 7, &p), Err(CertError::SignerOutOfRange));
+        assert_eq!(verify(&J, 2, &p), Err(CertError::WrongInstance));
         // The payload is unsigned: stripping it keeps the signature valid.
         let stripped = Proposal {
             payload: None,
             ..p.clone()
         };
-        assert!(
-            verify_proposal_signature(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                2,
-                &stripped
-            )
-            .is_ok()
-        );
+        assert!(verify(&I, 2, &stripped).is_ok());
         // The attachments are signed: stripping the parent QC breaks it.
         let tampered = Proposal {
             parent_qc: None,
             ..p.clone()
         };
-        assert_eq!(
-            verify_proposal_signature(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                2,
-                &tampered
-            ),
-            Err(CertError::BadSignature)
-        );
+        assert_eq!(verify(&I, 2, &tampered), Err(CertError::BadSignature));
         let tampered = Proposal { view: 1, ..p };
-        assert_eq!(
-            verify_proposal_signature(
-                &v.crypto,
-                &I,
-                &crate::testing::TEST_EPOCH.id,
-                &v.committee,
-                2,
-                &tampered
-            ),
-            Err(CertError::BadSignature)
-        );
+        assert_eq!(verify(&I, 2, &tampered), Err(CertError::BadSignature));
     }
 
     #[test]

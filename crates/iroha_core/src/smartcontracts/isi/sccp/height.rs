@@ -83,27 +83,6 @@ pub enum SccpHeightInputsError {
 }
 
 impl SccpHeightInputsV1 {
-    /// Build the inputs of a Sumeragi v2 frozen height context.
-    #[must_use]
-    pub fn from_height_context(context: &HeightContext) -> Self {
-        let validators = |roster: &[iroha_data_model::block::consensus_v2::ValidatorPower]| {
-            roster
-                .iter()
-                .map(|member| member.validator.clone())
-                .collect::<Vec<_>>()
-        };
-        Self {
-            mode: context.mode,
-            height: context.height,
-            epoch: context.epoch,
-            epoch_end_height: context.epoch_end_height,
-            roster: validators(&context.roster),
-            next_roster: context
-                .next_epoch_snapshot
-                .as_ref()
-                .map(|snapshot| validators(&snapshot.roster)),
-        }
-    }
 
     /// Build the inputs of `height` from the Sumeragi core's lag-2 schedule in `world`.
     ///

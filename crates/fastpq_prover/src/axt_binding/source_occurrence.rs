@@ -136,7 +136,7 @@ fn validate_occurrences(
 }
 
 /// Validate exact claimed occurrences against the complete public transfer statement.
-pub(crate) fn validate_public_occurrences(
+pub(super) fn validate_public_occurrences(
     binding: &AxtFastpqBinding,
     transcripts: &[FastpqPublicTransferTranscriptV1],
     claims: &[AxtRemoteSpendClaimV1],
@@ -319,44 +319,9 @@ fn validate_one(
     Ok(())
 }
 
+/// Build fixture occurrences that bind each claim to its first unused matching delta.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn occurrence(source_tx_index: u32) -> AxtSourceTransferOccurrenceV1 {
-        AxtSourceTransferOccurrenceV1 {
-            source_tx_commitment: [1; 32],
-            source_success_receipt_digest: [2; 32],
-            source_tx_index,
-            transcript_index: 0,
-            delta_index: 0,
-            pair_ordinal: 0,
-            transfer_digest: [3; 32],
-            remote_spend_claim_commitment: [4; 32],
-        }
-    }
-
-    #[test]
-    fn claimed_source_index_is_uniform_and_matches_finalized_wires_when_available() {
-        let first = occurrence(2);
-        assert!(validate_claimed_source_tx_index(&[first, first], None).is_ok());
-        assert!(validate_claimed_source_tx_index(&[first, first], Some(2)).is_ok());
-        assert!(matches!(
-            validate_claimed_source_tx_index(&[first, occurrence(3)], None),
-            Err(Error::InvalidAxtBinding { details })
-                if details.contains("disagree on source transaction index")
-        ));
-        assert!(matches!(
-            validate_claimed_source_tx_index(&[first], Some(3)),
-            Err(Error::InvalidAxtBinding { details })
-                if details.contains("differs from finalized wires")
-        ));
-        assert!(validate_claimed_source_tx_index(&[], None).is_err());
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn test_occurrences(
+pub fn test_occurrences(
     transcripts: &[FastpqPublicTransferTranscriptV1],
     claims: &[AxtRemoteSpendClaimV1],
 ) -> Vec<AxtSourceTransferOccurrenceV1> {
@@ -391,13 +356,49 @@ pub(crate) fn test_occurrences(
                 source_success_receipt_digest: [0x51; 32],
                 source_tx_commitment: (*hash).into(),
                 source_tx_index: 0,
-                transcript_index: *ti as u32,
-                delta_index: *di as u32,
-                pair_ordinal: ordinal as u32,
+                transcript_index: u32::try_from(*ti).expect("fixture transcript index fits u32"),
+                delta_index: u32::try_from(*di).expect("fixture delta index fits u32"),
+                pair_ordinal: u32::try_from(ordinal).expect("fixture pair ordinal fits u32"),
                 transfer_digest: axt_source_transfer_digest_v1(delta),
                 remote_spend_claim_commitment:
                     iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1(claim),
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn occurrence(source_tx_index: u32) -> AxtSourceTransferOccurrenceV1 {
+        AxtSourceTransferOccurrenceV1 {
+            source_tx_commitment: [1; 32],
+            source_success_receipt_digest: [2; 32],
+            source_tx_index,
+            transcript_index: 0,
+            delta_index: 0,
+            pair_ordinal: 0,
+            transfer_digest: [3; 32],
+            remote_spend_claim_commitment: [4; 32],
+        }
+    }
+
+    #[test]
+    fn claimed_source_index_is_uniform_and_matches_finalized_wires_when_available() {
+        let first = occurrence(2);
+        assert!(validate_claimed_source_tx_index(&[first, first], None).is_ok());
+        assert!(validate_claimed_source_tx_index(&[first, first], Some(2)).is_ok());
+        assert!(matches!(
+            validate_claimed_source_tx_index(&[first, occurrence(3)], None),
+            Err(Error::InvalidAxtBinding { details })
+                if details.contains("disagree on source transaction index")
+        ));
+        assert!(matches!(
+            validate_claimed_source_tx_index(&[first], Some(3)),
+            Err(Error::InvalidAxtBinding { details })
+                if details.contains("differs from finalized wires")
+        ));
+        assert!(validate_claimed_source_tx_index(&[], None).is_err());
+    }
 }

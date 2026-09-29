@@ -170,6 +170,7 @@ impl Topology {
 
     /// Compute the topology of `height` for `committee = C_h` (§2.1): permutation from the
     /// authenticated epoch, committee and instance, `D_h` from the committed headers of the window.
+    #[allow(clippy::too_many_arguments, reason = "the §2.1 perm and `D_h` inputs")]
     pub fn compute(
         crypto: &dyn Crypto,
         instance: &Hash32,

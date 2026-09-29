@@ -3542,15 +3542,12 @@ mod tests {
         validate_checkpoint(&checkpoint, policy).unwrap();
         assert_eq!(checkpoint.records.len(), 1);
         assert_eq!(norito::to_bytes(&checkpoint).unwrap(), bytes);
-        for (frame, identity) in [(
-            bytes.as_slice(),
-            "sorafs_node::pdp_provider::PdpProviderCheckpointV1",
-        )] {
-            assert_eq!(
-                norito::core::Header::read(frame).unwrap().schema,
-                norito::core::schema_hash_for_name(identity)
-            );
-        }
+        assert_eq!(
+            norito::core::Header::read(bytes.as_slice()).unwrap().schema,
+            norito::core::schema_hash_for_name(
+                "sorafs_node::pdp_provider::PdpProviderCheckpointV1"
+            )
+        );
         drop(protocol);
         drop(
             PdpProviderProtocol::open(policy, directory.path())

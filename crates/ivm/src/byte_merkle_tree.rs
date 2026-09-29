@@ -447,10 +447,10 @@ impl ByteMerkleTree {
                 block[56..64].copy_from_slice(&bit_len_be);
                 blocks.push(block);
             }
-            if let Some(digests) = crate::vector::metal_sha256_leaves(&blocks) {
-                if digests.len() == leaves_count {
-                    return Self::from_leaf_digests(&digests, chunk);
-                }
+            if let Some(digests) = crate::vector::metal_sha256_leaves(&blocks)
+                && digests.len() == leaves_count
+            {
+                return Self::from_leaf_digests(&digests, chunk);
             }
         }
         // CUDA keeps generated padded chunks and complete output in owned host storage.

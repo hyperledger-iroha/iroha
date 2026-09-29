@@ -1,7 +1,7 @@
 //! Synchronous origin-context binding with restoration armed before switching.
 
 /// Private native adapter. No asynchronous ownership or native handle creation.
-pub(crate) trait ContextDriver {
+pub trait ContextDriver {
     type Handle: Copy;
     type Error;
     fn current(&self) -> Result<Self::Handle, Self::Error>;
@@ -10,16 +10,12 @@ pub(crate) trait ContextDriver {
 
 /// Preserve thread context even when a failing switch has changed it already.
 /// No allocation occurs, and error/unwind cleanup conservatively quarantines.
-pub(crate) fn with_context<D: ContextDriver, T>(
+pub fn with_context<D: ContextDriver, T>(
     driver: &D,
     target: D::Handle,
     quarantine: impl Fn(),
     body: impl FnOnce() -> Result<T, D::Error>,
 ) -> Result<T, D::Error> {
-    let previous = driver.current().map_err(|error| {
-        quarantine();
-        error
-    })?;
     struct Restore<'a, D: ContextDriver, Q: Fn()> {
         driver: &'a D,
         previous: D::Handle,
@@ -35,6 +31,7 @@ pub(crate) fn with_context<D: ContextDriver, T>(
             }
         }
     }
+    let previous = driver.current().inspect_err(|_| quarantine())?;
     let mut restore = Restore {
         driver,
         previous,

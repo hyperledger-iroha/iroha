@@ -106,7 +106,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::{Zeroize as _, Zeroizing};
-mod scaling;
 
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
@@ -440,15 +439,6 @@ const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-tra
 const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:streaming-identity:v1|";
 const MINT_FINALITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:mint-finality-private:v1|";
 const MINT_FINALITY_SEED_DIRECTORY: &str = "mint-finality-signers";
-/// Serialized reducer command queue capacity for generated localnets.
-const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
-/// Certified-body and block-sync outer-ingress capacity for generated localnets.
-///
-/// This inherits the production 5N+3H geometry at the protocol's maximum
-/// validator roster: five owners per validator and three per authenticated
-/// non-validator source. Identityless ingress owns no partition.
-const LOCALNET_SUMERAGI_QUEUE_BODIES: usize =
-    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
 /// Authenticated non-validator fair-ingress lanes for generated localnets.
 const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
@@ -460,13 +450,6 @@ const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
 /// separately by the configured fair-ingress source population.
 const LOCALNET_MAX_TOTAL_CONNECTIONS: usize =
     MAX_VALIDATORS_PER_HEIGHT - 1 + LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES;
-/// Per-source canonical outer-ingress wire bytes for generated localnets.
-const LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES: usize =
-    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-/// Payload-chunk ingress and orphan-buffer capacity for generated localnets.
-const LOCALNET_SUMERAGI_QUEUE_CHUNKS: usize = 4_096;
-/// Reconstructed bodies waiting for reducer delivery in generated localnets.
-const LOCALNET_SUMERAGI_QUEUE_READY_BODIES: usize = 256;
 /// Capacity for the inbound P2P subscriber queue in localnet configs.
 const LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP: usize = 16_384;
 /// Delay outbound P2P dials at startup to avoid connection refused spam in localnet.
@@ -487,25 +470,6 @@ const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BURST: u32 = 600;
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: u32 = 268_435_456; // 256 MiB
 /// Default critical consensus ingress bytes burst cap for localnet.
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512 MiB
-fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
-    // The shared geometry rejects rosters above the protocol maximum and rosters that are not an
-    // exact 3f+1 committee before any capacity arithmetic. Localnets have no committee ingress
-    // class, so every validator and authenticated source owns exactly one partition.
-    let geometry = iroha_config::profile::sumeragi_v2_ingress_geometry(
-        iroha_config::profile::SumeragiV2IngressInputs {
-            validators: validator_count,
-            queue_commands: LOCALNET_SUMERAGI_QUEUE_COMMANDS,
-            queue_bodies: LOCALNET_SUMERAGI_QUEUE_BODIES,
-            authenticated_non_validator_sources:
-                LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-            committee_sources: 0,
-            max_total_connections: LOCALNET_MAX_TOTAL_CONNECTIONS,
-            body_source_bytes: LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
-        },
-    )
-    .wrap_err("localnet Sumeragi ingress geometry is inadmissible")?;
-    Ok(geometry.body_bytes)
-}
 /// Transaction gossip cadence for 1s localnet pipelines (ms).
 const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
 /// Transaction gossip resend ticks for 1s localnet pipelines.
@@ -554,12 +518,6 @@ const LOCALNET_QUEUE_CAPACITY: usize = 20_000;
 /// count-based rejection before the byte guard engages; larger values preallocate
 /// fixed queue slots that sit mostly empty under the byte budget.
 const LOCALNET_PERF_QUEUE_CAPACITY: usize = 4_096;
-/// Runtime proposal cap used by perf-profile localnets.
-///
-/// The on-chain block parameter remains 10k for throughput targets, but local
-/// development nodes should not assemble thousand-transaction RS16 proposals
-/// while the queue is saturated.
-const LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS: usize = 256;
 /// Default transaction TTL in the queue for localnet (ms).
 const LOCALNET_QUEUE_TTL_MS: u64 = 600_000;
 /// Default lane TEU capacity for localnet scheduling (raises per-block budget).
@@ -568,8 +526,6 @@ const LOCALNET_LANE_TEU_CAPACITY: u32 = 50_000_000;
 const LOCALNET_IVM_GAS_LIMIT_PER_BLOCK: u64 = 50_000_000;
 /// Default IVM gas price for localnet fee assets.
 const LOCALNET_IVM_GAS_UNITS_PER_GAS: u64 = 1;
-/// Default multiplier for proposal queue scan budgets on localnet.
-const LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER: usize = 4;
 /// Default Torii tx rate limit (per authority) for localnet.
 const LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC: u32 = 1_000_000;
 /// Default Torii tx burst limit (per authority) for localnet.

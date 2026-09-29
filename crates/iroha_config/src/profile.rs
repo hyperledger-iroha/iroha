@@ -27,7 +27,6 @@ use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr, time::Duratio
 use thiserror::Error;
 
 pub mod canonical;
-pub mod geometry;
 
 pub use canonical::{
     CanonicalEntryV1, CanonicalLeafV1, CanonicalPathSegmentV1, CanonicalTableV1,
@@ -897,46 +896,6 @@ impl Profile {
         Ok(derived)
     }
 
-    fn check_sumeragi(&self, geometry: &DerivedGeometryV1) -> Result<(), ProfileError> {
-        let validators = to_usize(geometry.validators);
-        let sumeragi_error = |message: String| ProfileError::Sumeragi {
-            profile: self.id,
-            validators,
-            message,
-        };
-        let mut sumeragi = self
-            .static_config
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .cloned()
-            .unwrap_or_default();
-        if let Some(derived) = self
-            .derived_config(geometry)
-            .remove("sumeragi")
-            .and_then(|value| value.as_table().cloned())
-        {
-            deep_merge(&mut sumeragi, derived);
-        }
-        let parsed = ConfigReader::new()
-            .without_env()
-            .with_toml_source(TomlSource::new(
-                PathBuf::from(format!("<profile {} derive({validators})>", self.id)),
-                sumeragi,
-            ))
-            .read_and_complete::<user::Sumeragi>()
-            .map_err(|report| sumeragi_error(format!("{report:?}")))?
-            .parse_section()
-            .map_err(|report| sumeragi_error(format!("{report:?}")))?;
-        let config: actual::SumeragiV2Config = parsed
-            .v2_config(
-                self.genesis_recipe.block_cadence(),
-                self.genesis_recipe.consensus_mode(),
-            )
-            .map_err(|error| sumeragi_error(error.to_string()))?;
-        config
-            .validate_ingress_roster_capacity(validators)
-            .map_err(|error| sumeragi_error(error.to_string()))
-    }
 
     /// Node-configuration fragment produced by `derive(n)`.
     #[must_use]

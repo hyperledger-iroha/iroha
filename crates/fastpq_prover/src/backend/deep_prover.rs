@@ -13,7 +13,7 @@ use rand::TryCryptoRng;
 
 use super::{
     compact_public_columns::COMMITTED_COLUMN_COUNT,
-    deep_binding::{BindingError, Context, Message, Oracle, Transcript},
+    deep_binding::{Context, Message, Oracle, Transcript},
     deep_coefficient_commitment::{CoefficientCommitment, CoefficientCommitmentPlan},
     deep_coefficient_replay::{
         CoefficientLimits, CoefficientReplay, CoefficientReplayPlan, fold_coefficients,
@@ -26,7 +26,7 @@ use super::{
         MaskedReplayPlan, MaskedTraceReplay, ReplayLimits, TRACE_MASK_COEFFICIENTS,
     },
     deep_node_cache::{CommittedNodes, NodeCachePlan, PendingNodes, opening_payload_bytes},
-    deep_polynomial::{DeepPolynomialSource, WORKSPACE_BYTES},
+    deep_polynomial::{DeepPolynomial, DeepPolynomialSource, WORKSPACE_BYTES},
     deep_proof::{
         self, DeepProof, FriGroup, FriRound, FriValues, OodAnswers, OpeningPlans,
         QuotientMaskOpening,
@@ -113,159 +113,18 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             .collect::<Result<Vec<_>>>()?
             .try_into().expect("five fixed coefficient layers");
         let terminal = CoefficientReplayPlan::terminal(coefficient_limits)?;
-        let stream = stream_limits(limits);
-        let queries = maximal_queries();
-        let openings = OpeningPlans::new(&queries)?;
-        let row = RowCommitmentPlan::new(replay, &binding, &queries, stream)?;
-        let paired = CoefficientCommitmentPlan::new(
-            coefficient,
+        let AttemptCharges {
+            payload_bytes,
+            work_units,
+            hash_calls,
+        } = attempt_charges(
             &binding,
-            Oracle::QuotientAndMask,
-            &queries,
-            stream,
-        )?;
-        let mut coefficient_peak = paired.payload_bytes;
-        let mut tree_hashes = mul(2, 2 * LDE_ROWS - 1)?;
-        let mut cache_payload = 0;
-        let mut cache_work = 0;
-        let mut opening_payload = 0;
-        for oracle in [
-            Oracle::Row,
-            Oracle::QuotientAndMask,
-            Oracle::Fri(0),
-            Oracle::Fri(1),
-            Oracle::Fri(2),
-            Oracle::Fri(3),
-            Oracle::Fri(4),
-        ] {
-            let plan = NodeCachePlan::new(oracle)?;
-            cache_payload = add(cache_payload, plan.payload_bytes)?;
-            cache_work = add(cache_work, plan.work_units)?;
-            opening_payload = opening_payload.max(opening_payload_bytes(oracle)?);
-        }
-
-        // The five-slot retained FRI cache Vec and the two scalar cache
-        // owners are included explicitly. Also sum every pending owner even
-        // though pending/completed phases cannot all coexist. Context clones
-        // share the pre-existing immutable Arc prefix rather than its payload.
-        let cache_owners = mul(
-            7,
-            add(
-                size_of::<CommittedNodes<'static>>(),
-                size_of::<PendingNodes>(),
-            )?,
-        )?;
-        cache_payload = add(cache_payload, cache_owners)?;
-        cache_work = add(cache_work, mul(cache_owners, 8)?)?;
-        let mut coefficient_work = mul(2, coefficient.work_units)?;
-        for (round, &layer) in fri.iter().enumerate() {
-            let commitment = CoefficientCommitmentPlan::new(
-                layer,
-                &binding,
-                Oracle::Fri(round as u8),
-                &openings.round_indices[round],
-                stream,
-            )?;
-            coefficient_peak = coefficient_peak.max(commitment.payload_bytes);
-            tree_hashes = add(
-                tree_hashes,
-                add(commitment.leaf_hashes, commitment.parent_hashes)?,
-            )?;
-            coefficient_work = add(coefficient_work, mul(2, layer.work_units)?)?;
-        }
-        let terminal_commitment =
-            CoefficientCommitmentPlan::new(terminal, &binding, Oracle::Terminal, &[], stream)?;
-        coefficient_peak = coefficient_peak.max(terminal_commitment.payload_bytes);
-        tree_hashes = add(tree_hashes, 2)?;
-        coefficient_work = add(coefficient_work, terminal.work_units)?;
-        // Retain both blinded chunks (each conservatively <2N) and every FRI
-        // coefficient vector until final queries. No full-domain oracle survives.
-        let retained_coefficients = mul(
-            2 * FRI_DEGREES[0] + FRI_DEGREES.iter().sum::<usize>(),
-            F::BYTES,
-        )?;
-        let active = quotient
-            .payload_bytes
-            .max(row.payload_bytes)
-            .max(add(replay.payload_bytes, coefficient_peak)?);
-        // The proof's bounded decode charge dominates its DTO's cells/Vec owners,
-        // canonical output, frontier-plan storage and public transcript buffers.
-        // Charge three separate allowances rather than relying on their lifetimes.
-        // A second Context is created only by the independent final self-check.
-        let public_and_codec = add(
-            mul(
-                2,
-                binding
-                    .maximum_retained_payload_bytes()
-                    .map_err(binding_error)?,
-            )?,
-            mul(3, deep_proof::MAX_ALLOCATION_CHARGES)?,
-        )?;
-        let payload_bytes = add(
-            add(active, add(cache_payload, opening_payload)?)?,
-            add(
-                retained_coefficients,
-                add(WORKSPACE_BYTES, public_and_codec)?,
-            )?,
-        )?;
-        // Horner OOD answers, coefficient batching/divisions/folds, selected row
-        // packing and oracle packing all have fixed extents. These are structural
-        // field/byte work units, separate from the explicit hash-call budget.
-        let polynomial_work = mul(
-            32,
-            add(
-                mul(COMMITTED_COLUMN_COUNT, TRACE_ROWS + TRACE_MASK_COEFFICIENTS)?,
-                FRI_DEGREES.iter().sum(),
-            )?,
-        )?;
-        let packing_work = mul(2 * LDE_ROWS, 8 * COMMITTED_COLUMN_COUNT + 3 * F::BYTES)?;
-        // A second complete quotient work allowance safely covers the bounded
-        // independent verifier/AIR check; it performs no quotient FFT or replay.
-        let work_units = add(
-            add(
-                mul(2, quotient.work_units)?,
-                add(cache_work, mul(opening_payload, 8)?)?,
-            )?,
-            add(coefficient_work, add(polynomial_work, packing_work)?)?,
-        )?;
-        let verifier_tree_hashes = add(
-            mul(2, add(QUERY_COUNT, openings.initial.work().parent_hashes)?)?,
-            add(
-                openings
-                    .rounds
-                    .iter()
-                    .map(|p| p.work().queried_leaves + p.work().parent_hashes)
-                    .sum(),
-                2,
-            )?,
-        )?;
-        // Cached openings regenerate queried leaves and leaf-level siblings,
-        // then reconstruct each original root once before DTO publication.
-        let opening_hashes = |plan: &super::merkle_multiproof::MultiproofPlan| -> Result<usize> {
-            add(
-                plan.work().queried_leaves
-                    + plan
-                        .sibling_positions()
-                        .iter()
-                        .filter(|p| p.level == 0)
-                        .count(),
-                plan.work().parent_hashes,
-            )
-        };
-        let mut cached_opening_hashes = mul(2, opening_hashes(&openings.initial)?)?;
-        for plan in &openings.rounds {
-            cached_opening_hashes = add(cached_opening_hashes, opening_hashes(plan)?)?;
-        }
-        // 637 whole-tape blocks, nine chain commits and one OOD hash per side.
-        let hash_calls = add(
-            crate::digest384_batch::MAX_PREFLIGHT_HASH_CALLS,
-            add(
-                tree_hashes,
-                add(
-                    cached_opening_hashes,
-                    add(verifier_tree_hashes, 2 * (637 + 9 + 1))?,
-                )?,
-            )?,
+            replay,
+            &quotient,
+            coefficient,
+            &fri,
+            terminal,
+            limits,
         )?;
         limit(
             "max_deep_producer_payload_bytes",
@@ -333,192 +192,542 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         if replay.plan() != replay_plan {
             return Err(invalid("DEEP producer replay plan drift"));
         }
-        let mut row_commitment = RowCommitmentPlan::new(replay_plan, &binding, &[], stream)?
-            .commit(&mut replay, &binding)?;
-        let row_root = row_commitment.root;
-        let row_cache = row_commitment
-            .cache
-            .take()
-            .ok_or_else(|| invalid("row root has no complete node cache"))?
-            .bind(&binding, Oracle::Row, row_root)?;
-        transcript
-            .commit_root(Oracle::Row, row_root)
-            .map_err(binding_error)?;
+        let (row_root, row_cache) =
+            commit_row_oracle(replay_plan, &binding, &mut replay, stream, &mut transcript)?;
         let alphas = fields(&mut transcript, CONSTRAINTS)?;
         let quotient = quotient_plan.build(&mut replay, &alphas)?;
         let chunks = quotient.chunks();
-        let mut quotient_commitment = commit(
+        let (quotient_root, quotient_cache) = commit_quotient_oracle(
             coefficient,
             &binding,
-            Oracle::QuotientAndMask,
-            &[],
             &[chunks[0], chunks[1], replay.composition_mask()],
             stream,
+            &mut transcript,
         )?;
-        let quotient_root = quotient_commitment.root;
-        let quotient_cache = quotient_commitment
-            .cache
-            .take()
-            .ok_or_else(|| invalid("quotient root has no complete node cache"))?
-            .bind(&binding, Oracle::QuotientAndMask, quotient_root)?;
-        transcript
-            .commit_root(Oracle::QuotientAndMask, quotient_root)
-            .map_err(binding_error)?;
-        let z = fields(&mut transcript, 1)?[0];
-        let prepared = DeepPolynomialSource::from_replay(&replay, chunks)?
-            .prepare(OodPair::new(z, geometry.trace_generator())?);
-        let answers = prepared.trace_answers();
-        let ood = OodAnswers {
-            current: answers[0].to_vec(),
-            next: answers[1].to_vec(),
-            quotient: prepared.quotient_answers().to_vec(),
-        };
-        geometry.check_ood(
-            relation.deep_relation(),
-            &alphas,
-            z,
-            &ood.current,
-            &ood.next,
-            &ood.quotient,
-        )?;
-        transcript
-            .commit_ood(&ood.current, &ood.next, &ood.quotient)
-            .map_err(binding_error)?;
-        let lambda = fields(&mut transcript, 1)?[0];
-        let composition = prepared.compose(lambda, WORKSPACE_BYTES)?;
-        drop(prepared);
-        let mut roots = Vec::with_capacity(6);
-        let mut fri_caches = Vec::with_capacity(5);
-        let mut folded: Vec<SecretPolynomial<F>> = Vec::with_capacity(5);
-        for (round, &plan) in fri.iter().enumerate() {
-            let source = if round == 0 {
-                composition.coefficients()
-            } else {
-                &folded[round - 1]
-            };
-            let oracle = Oracle::Fri(round as u8);
-            let mut committed = commit(plan, &binding, oracle, &[], &[source], stream)?;
-            let root = committed.root;
-            fri_caches.push(
-                committed
-                    .cache
-                    .take()
-                    .ok_or_else(|| invalid("FRI root has no complete node cache"))?
-                    .bind(&binding, oracle, root)?,
-            );
-            roots.push(root);
-            transcript
-                .commit_root(oracle, root)
-                .map_err(binding_error)?;
-            let beta = fields(&mut transcript, 1)?[0];
-            folded.push(fold_coefficients(
-                round,
-                source,
-                beta,
-                limits.max_payload_bytes,
-            )?);
-        }
-        let terminal_commitment = commit(
-            terminal,
+        let (ood, composition) =
+            commit_ood_composition(relation, &geometry, &replay, chunks, &alphas, &mut transcript)?;
+        let fri_layers = commit_fri_layers(
             &binding,
-            Oracle::Terminal,
-            &[],
-            &[&folded[4]],
+            &fri,
+            terminal,
+            &composition,
+            &mut transcript,
             stream,
+            limits.max_payload_bytes,
         )?;
-        roots.push(terminal_commitment.root);
-        transcript
-            .commit_root(Oracle::Terminal, terminal_commitment.root)
-            .map_err(binding_error)?;
-        let Message::Queries(queries) = transcript.challenge().map_err(binding_error)? else {
-            return Err(invalid(
-                "DEEP producer final message has no complete queries",
-            ));
-        };
-        let queries: Vec<usize> = queries.into_iter().map(|v| v as usize).collect();
+        let queries = query_challenge(&mut transcript)?;
         let plans = OpeningPlans::new(&queries)?;
         let row = open_cached_rows(row_cache, &mut replay, &queries, limits.digest_execution)?;
         same_root(row_root, row.root)?;
-        let paired = open(
+        let (quotients, quotient_siblings) = open_quotient_masks(
             quotient_cache,
             coefficient,
             &queries,
             &[chunks[0], chunks[1], replay.composition_mask()],
+            quotient_root,
             limits.digest_execution,
         )?;
-        same_root(quotient_root, paired.root)?;
-        let quotients = queries
-            .iter()
-            .zip(paired.openings())
-            .map(|(&index, values)| QuotientMaskOpening {
-                index: index as u32,
-                low: values[0],
-                high: values[1],
-                composition_mask: values[2],
-            })
-            .collect();
-        let mut rounds = Vec::with_capacity(5);
-        for ((round, &plan), cache) in fri.iter().enumerate().zip(fri_caches) {
-            let source = if round == 0 {
-                composition.coefficients()
-            } else {
-                &folded[round - 1]
-            };
-            let opened = open(
-                cache,
-                plan,
-                &plans.round_indices[round],
-                &[source],
-                limits.digest_execution,
-            )?;
-            same_root(roots[round], opened.root)?;
-            let groups = plans.round_indices[round]
-                .iter()
-                .zip(opened.openings())
-                .map(|(&index, values)| {
-                    Ok(FriGroup {
-                        index: index as u32,
-                        values: FriValues::new(values.to_vec())?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            rounds.push(FriRound {
-                groups,
-                siblings: opened.siblings.into_iter().map(Into::into).collect(),
-            });
-        }
+        let rounds = open_fri_rounds(
+            &fri,
+            fri_layers.caches,
+            &composition,
+            &fri_layers.folded,
+            &fri_layers.roots,
+            &plans,
+            limits.digest_execution,
+        )?;
         let proof = DeepProof {
             row_root: row_root.into(),
             quotient_root: quotient_root.into(),
-            fri_roots: roots.into_iter().map(Into::into).collect(),
+            fri_roots: fri_layers.roots.into_iter().map(Into::into).collect(),
             ood,
             rows: row.rows,
             quotients,
             row_siblings: row.siblings.into_iter().map(Into::into).collect(),
-            quotient_siblings: paired.siblings.into_iter().map(Into::into).collect(),
+            quotient_siblings: quotient_siblings.into_iter().map(Into::into).collect(),
             rounds,
-            terminal: terminal_commitment.terminal()?.to_vec(),
+            terminal: fri_layers.terminal.terminal()?.to_vec(),
         };
         deep_proof::preflight(&proof, &queries)?;
         let bytes = encode_bounded(&proof, limits.max_proof_bytes)?;
         // Erase all private coefficient owners before the independent decoder and
         // AIR verifier run. Only intentional proof disclosures survive this point.
-        drop(folded);
+        drop(fri_layers.folded);
         drop(composition);
         drop(quotient);
         drop(replay);
-        deep_engine::verify_committed(
-            relation,
-            &bytes,
-            VerifyLimits {
-                max_batch_bytes: relation.statement_bytes().len(),
-                max_proof_bytes: limits.max_proof_bytes,
-                ..VerifyLimits::default()
-            },
-            deep_proof::MAX_ALLOCATION_CHARGES,
-        )?;
+        self_check(relation, &bytes, limits.max_proof_bytes)?;
         Ok(bytes)
     }
+}
+
+/// Commit the masked row oracle and bind its root before any constraint challenge.
+fn commit_row_oracle<'b>(
+    plan: MaskedReplayPlan,
+    binding: &'b Context,
+    replay: &mut MaskedTraceReplay,
+    stream: StreamLimits,
+    transcript: &mut Transcript,
+) -> Result<(Digest, CommittedNodes<'b>)> {
+    let mut row_commitment =
+        RowCommitmentPlan::new(plan, binding, &[], stream)?.commit(replay, binding)?;
+    let row_root = row_commitment.root;
+    let row_cache = row_commitment
+        .cache
+        .take()
+        .ok_or_else(|| invalid("row root has no complete node cache"))?
+        .bind(binding, Oracle::Row, row_root)?;
+    transcript
+        .commit_root(Oracle::Row, row_root)
+        .map_err(binding_error)?;
+    Ok((row_root, row_cache))
+}
+
+/// Commit both quotient chunks and the composition mask, then bind their root.
+fn commit_quotient_oracle<'b>(
+    coefficient: CoefficientReplayPlan,
+    binding: &'b Context,
+    sources: &[&[F]],
+    stream: StreamLimits,
+    transcript: &mut Transcript,
+) -> Result<(Digest, CommittedNodes<'b>)> {
+    let mut quotient_commitment = commit(
+        coefficient,
+        binding,
+        Oracle::QuotientAndMask,
+        &[],
+        sources,
+        stream,
+    )?;
+    let quotient_root = quotient_commitment.root;
+    let quotient_cache = quotient_commitment
+        .cache
+        .take()
+        .ok_or_else(|| invalid("quotient root has no complete node cache"))?
+        .bind(binding, Oracle::QuotientAndMask, quotient_root)?;
+    transcript
+        .commit_root(Oracle::QuotientAndMask, quotient_root)
+        .map_err(binding_error)?;
+    Ok((quotient_root, quotient_cache))
+}
+
+/// Bind the checked OOD answers after z, then compose R with the lambda challenge.
+fn commit_ood_composition<R: DeepRelation>(
+    relation: &R,
+    geometry: &DeepGeometry,
+    replay: &MaskedTraceReplay,
+    chunks: [&[F]; 2],
+    alphas: &[F],
+    transcript: &mut Transcript,
+) -> Result<(OodAnswers, DeepPolynomial)> {
+    let z = fields(transcript, 1)?[0];
+    let prepared = DeepPolynomialSource::from_replay(replay, chunks)?
+        .prepare(OodPair::new(z, geometry.trace_generator())?);
+    let answers = prepared.trace_answers();
+    let ood = OodAnswers {
+        current: answers[0].to_vec(),
+        next: answers[1].to_vec(),
+        quotient: prepared.quotient_answers().to_vec(),
+    };
+    geometry.check_ood(
+        relation.deep_relation(),
+        alphas,
+        z,
+        &ood.current,
+        &ood.next,
+        &ood.quotient,
+    )?;
+    transcript
+        .commit_ood(&ood.current, &ood.next, &ood.quotient)
+        .map_err(binding_error)?;
+    let lambda = fields(transcript, 1)?[0];
+    let composition = prepared.compose(lambda, WORKSPACE_BYTES)?;
+    Ok((ood, composition))
+}
+
+/// Committed FRI roots, bound node caches, private folded layers and terminal.
+struct CommittedFri<'b> {
+    roots: Vec<Digest>,
+    caches: Vec<CommittedNodes<'b>>,
+    folded: Vec<SecretPolynomial<F>>,
+    terminal: CoefficientCommitment,
+}
+
+/// Commit each FRI layer before its beta and fold it, then commit the terminal.
+fn commit_fri_layers<'b>(
+    binding: &'b Context,
+    fri: &[CoefficientReplayPlan; 5],
+    terminal: CoefficientReplayPlan,
+    composition: &DeepPolynomial,
+    transcript: &mut Transcript,
+    stream: StreamLimits,
+    max_payload_bytes: usize,
+) -> Result<CommittedFri<'b>> {
+    let mut roots = Vec::with_capacity(6);
+    let mut caches = Vec::with_capacity(5);
+    let mut folded: Vec<SecretPolynomial<F>> = Vec::with_capacity(5);
+    for ((round, &plan), ordinal) in fri.iter().enumerate().zip(0_u8..) {
+        let source = if round == 0 {
+            composition.coefficients()
+        } else {
+            &folded[round - 1]
+        };
+        let oracle = Oracle::Fri(ordinal);
+        let mut committed = commit(plan, binding, oracle, &[], &[source], stream)?;
+        let root = committed.root;
+        caches.push(
+            committed
+                .cache
+                .take()
+                .ok_or_else(|| invalid("FRI root has no complete node cache"))?
+                .bind(binding, oracle, root)?,
+        );
+        roots.push(root);
+        transcript
+            .commit_root(oracle, root)
+            .map_err(binding_error)?;
+        let beta = fields(transcript, 1)?[0];
+        folded.push(fold_coefficients(round, source, beta, max_payload_bytes)?);
+    }
+    let terminal_commitment = commit(
+        terminal,
+        binding,
+        Oracle::Terminal,
+        &[],
+        &[&folded[4]],
+        stream,
+    )?;
+    roots.push(terminal_commitment.root);
+    transcript
+        .commit_root(Oracle::Terminal, terminal_commitment.root)
+        .map_err(binding_error)?;
+    Ok(CommittedFri {
+        roots,
+        caches,
+        folded,
+        terminal: terminal_commitment,
+    })
+}
+
+/// Take the complete final query set once every root has been bound.
+fn query_challenge(transcript: &mut Transcript) -> Result<Vec<usize>> {
+    let Message::Queries(queries) = transcript.challenge().map_err(binding_error)? else {
+        return Err(invalid(
+            "DEEP producer final message has no complete queries",
+        ));
+    };
+    Ok(queries.into_iter().map(|v| v as usize).collect())
+}
+
+/// Open the paired quotient cache at every query, in query order.
+fn open_quotient_masks(
+    cache: CommittedNodes<'_>,
+    coefficient: CoefficientReplayPlan,
+    queries: &[usize],
+    sources: &[&[F]],
+    root: Digest,
+    execution: DigestExecutionV1,
+) -> Result<(Vec<QuotientMaskOpening>, Vec<Digest>)> {
+    let paired = open(cache, coefficient, queries, sources, execution)?;
+    same_root(root, paired.root)?;
+    let quotients = queries
+        .iter()
+        .zip(paired.openings())
+        .map(|(&index, values)| {
+            Ok(QuotientMaskOpening {
+                index: opening_index(index)?,
+                low: values[0],
+                high: values[1],
+                composition_mask: values[2],
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((quotients, paired.siblings))
+}
+
+/// Open every retained FRI cache at its derived group indices.
+fn open_fri_rounds(
+    fri: &[CoefficientReplayPlan; 5],
+    caches: Vec<CommittedNodes<'_>>,
+    composition: &DeepPolynomial,
+    folded: &[SecretPolynomial<F>],
+    roots: &[Digest],
+    plans: &OpeningPlans,
+    execution: DigestExecutionV1,
+) -> Result<Vec<FriRound>> {
+    let mut rounds = Vec::with_capacity(5);
+    for ((round, &plan), cache) in fri.iter().enumerate().zip(caches) {
+        let source = if round == 0 {
+            composition.coefficients()
+        } else {
+            &folded[round - 1]
+        };
+        let opened = open(
+            cache,
+            plan,
+            &plans.round_indices[round],
+            &[source],
+            execution,
+        )?;
+        same_root(roots[round], opened.root)?;
+        let groups = plans.round_indices[round]
+            .iter()
+            .zip(opened.openings())
+            .map(|(&index, values)| {
+                Ok(FriGroup {
+                    index: opening_index(index)?,
+                    values: FriValues::new(values.to_vec())?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        rounds.push(FriRound {
+            groups,
+            siblings: opened.siblings.into_iter().map(Into::into).collect(),
+        });
+    }
+    Ok(rounds)
+}
+
+/// Narrow one opened LDE or FRI group index to its `u32` proof field.
+fn opening_index(index: usize) -> Result<u32> {
+    u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })
+}
+
+/// Decode and verify the exact encoded proof with the independent bounded verifier.
+fn self_check<R: DeepRelation>(relation: &R, bytes: &[u8], max_proof_bytes: usize) -> Result<()> {
+    deep_engine::verify_committed(
+        relation,
+        bytes,
+        VerifyLimits {
+            max_batch_bytes: relation.statement_bytes().len(),
+            max_proof_bytes,
+            ..VerifyLimits::default()
+        },
+        deep_proof::MAX_ALLOCATION_CHARGES,
+    )?;
+    Ok(())
+}
+
+/// Conservative checked payload, work and hash-call charges of one attempt.
+struct AttemptCharges {
+    payload_bytes: usize,
+    work_units: usize,
+    hash_calls: usize,
+}
+
+/// Charge every phase of one attempt from its fixed plans, before private work.
+fn attempt_charges(
+    binding: &Context,
+    replay: MaskedReplayPlan,
+    quotient: &DeepQuotientPlan<'_>,
+    coefficient: CoefficientReplayPlan,
+    fri: &[CoefficientReplayPlan; 5],
+    terminal: CoefficientReplayPlan,
+    limits: ConstructionLimits,
+) -> Result<AttemptCharges> {
+    let stream = stream_limits(limits);
+    let queries = maximal_queries();
+    let openings = OpeningPlans::new(&queries)?;
+    let row = RowCommitmentPlan::new(replay, binding, &queries, stream)?;
+    let paired = CoefficientCommitmentPlan::new(
+        coefficient,
+        binding,
+        Oracle::QuotientAndMask,
+        &queries,
+        stream,
+    )?;
+    let (cache_payload, cache_work, opening_payload) = node_cache_charges()?;
+    let commitments = coefficient_commitment_charges(
+        binding,
+        &openings,
+        stream,
+        coefficient,
+        fri,
+        terminal,
+        paired.payload_bytes,
+    )?;
+    // Retain both blinded chunks (each conservatively <2N) and every FRI
+    // coefficient vector until final queries. No full-domain oracle survives.
+    let retained_coefficients = mul(
+        2 * FRI_DEGREES[0] + FRI_DEGREES.iter().sum::<usize>(),
+        F::BYTES,
+    )?;
+    let active = quotient
+        .payload_bytes
+        .max(row.payload_bytes)
+        .max(add(replay.payload_bytes, commitments.peak_payload_bytes)?);
+    // The proof's bounded decode charge dominates its DTO's cells/Vec owners,
+    // canonical output, frontier-plan storage and public transcript buffers.
+    // Charge three separate allowances rather than relying on their lifetimes.
+    // A second Context is created only by the independent final self-check.
+    let public_and_codec = add(
+        mul(
+            2,
+            binding
+                .maximum_retained_payload_bytes()
+                .map_err(binding_error)?,
+        )?,
+        mul(3, deep_proof::MAX_ALLOCATION_CHARGES)?,
+    )?;
+    let payload_bytes = add(
+        add(active, add(cache_payload, opening_payload)?)?,
+        add(
+            retained_coefficients,
+            add(WORKSPACE_BYTES, public_and_codec)?,
+        )?,
+    )?;
+    // Horner OOD answers, coefficient batching/divisions/folds, selected row
+    // packing and oracle packing all have fixed extents. These are structural
+    // field/byte work units, separate from the explicit hash-call budget.
+    let polynomial_work = mul(
+        32,
+        add(
+            mul(COMMITTED_COLUMN_COUNT, TRACE_ROWS + TRACE_MASK_COEFFICIENTS)?,
+            FRI_DEGREES.iter().sum(),
+        )?,
+    )?;
+    let packing_work = mul(2 * LDE_ROWS, 8 * COMMITTED_COLUMN_COUNT + 3 * F::BYTES)?;
+    // A second complete quotient work allowance safely covers the bounded
+    // independent verifier/AIR check; it performs no quotient FFT or replay.
+    let work_units = add(
+        add(
+            mul(2, quotient.work_units)?,
+            add(cache_work, mul(opening_payload, 8)?)?,
+        )?,
+        add(commitments.work_units, add(polynomial_work, packing_work)?)?,
+    )?;
+    let hash_calls = hash_call_charges(&openings, commitments.tree_hashes)?;
+    Ok(AttemptCharges {
+        payload_bytes,
+        work_units,
+        hash_calls,
+    })
+}
+
+/// Checked payload and work of every node cache, plus the largest opening payload.
+fn node_cache_charges() -> Result<(usize, usize, usize)> {
+    let mut cache_payload = 0;
+    let mut cache_work = 0;
+    let mut opening_payload = 0;
+    for oracle in [
+        Oracle::Row,
+        Oracle::QuotientAndMask,
+        Oracle::Fri(0),
+        Oracle::Fri(1),
+        Oracle::Fri(2),
+        Oracle::Fri(3),
+        Oracle::Fri(4),
+    ] {
+        let plan = NodeCachePlan::new(oracle)?;
+        cache_payload = add(cache_payload, plan.payload_bytes)?;
+        cache_work = add(cache_work, plan.work_units)?;
+        opening_payload = opening_payload.max(opening_payload_bytes(oracle)?);
+    }
+
+    // The five-slot retained FRI cache Vec and the two scalar cache
+    // owners are included explicitly. Also sum every pending owner even
+    // though pending/completed phases cannot all coexist. Context clones
+    // share the pre-existing immutable Arc prefix rather than its payload.
+    let cache_owners = mul(
+        7,
+        add(
+            size_of::<CommittedNodes<'static>>(),
+            size_of::<PendingNodes>(),
+        )?,
+    )?;
+    cache_payload = add(cache_payload, cache_owners)?;
+    cache_work = add(cache_work, mul(cache_owners, 8)?)?;
+    Ok((cache_payload, cache_work, opening_payload))
+}
+
+/// Peak active payload, tree hashes and work of every coefficient commitment.
+struct CoefficientCharges {
+    peak_payload_bytes: usize,
+    tree_hashes: usize,
+    work_units: usize,
+}
+
+/// Charge the paired, five FRI and terminal coefficient commitments.
+fn coefficient_commitment_charges(
+    binding: &Context,
+    openings: &OpeningPlans,
+    stream: StreamLimits,
+    coefficient: CoefficientReplayPlan,
+    fri: &[CoefficientReplayPlan; 5],
+    terminal: CoefficientReplayPlan,
+    paired_payload_bytes: usize,
+) -> Result<CoefficientCharges> {
+    let mut coefficient_peak = paired_payload_bytes;
+    let mut tree_hashes = mul(2, 2 * LDE_ROWS - 1)?;
+    let mut coefficient_work = mul(2, coefficient.work_units)?;
+    for ((round, &layer), ordinal) in fri.iter().enumerate().zip(0_u8..) {
+        let commitment = CoefficientCommitmentPlan::new(
+            layer,
+            binding,
+            Oracle::Fri(ordinal),
+            &openings.round_indices[round],
+            stream,
+        )?;
+        coefficient_peak = coefficient_peak.max(commitment.payload_bytes);
+        tree_hashes = add(
+            tree_hashes,
+            add(commitment.leaf_hashes, commitment.parent_hashes)?,
+        )?;
+        coefficient_work = add(coefficient_work, mul(2, layer.work_units)?)?;
+    }
+    let terminal_commitment =
+        CoefficientCommitmentPlan::new(terminal, binding, Oracle::Terminal, &[], stream)?;
+    coefficient_peak = coefficient_peak.max(terminal_commitment.payload_bytes);
+    tree_hashes = add(tree_hashes, 2)?;
+    coefficient_work = add(coefficient_work, terminal.work_units)?;
+    Ok(CoefficientCharges {
+        peak_payload_bytes: coefficient_peak,
+        tree_hashes,
+        work_units: coefficient_work,
+    })
+}
+
+/// Charge every committed tree, cached opening and verifier hash of one attempt.
+fn hash_call_charges(openings: &OpeningPlans, tree_hashes: usize) -> Result<usize> {
+    let verifier_tree_hashes = add(
+        mul(2, add(QUERY_COUNT, openings.initial.work().parent_hashes)?)?,
+        add(
+            openings
+                .rounds
+                .iter()
+                .map(|p| p.work().queried_leaves + p.work().parent_hashes)
+                .sum(),
+            2,
+        )?,
+    )?;
+    // Cached openings regenerate queried leaves and leaf-level siblings,
+    // then reconstruct each original root once before DTO publication.
+    let opening_hashes = |plan: &super::merkle_multiproof::MultiproofPlan| -> Result<usize> {
+        add(
+            plan.work().queried_leaves
+                + plan
+                    .sibling_positions()
+                    .iter()
+                    .filter(|p| p.level == 0)
+                    .count(),
+            plan.work().parent_hashes,
+        )
+    };
+    let mut cached_opening_hashes = mul(2, opening_hashes(&openings.initial)?)?;
+    for plan in &openings.rounds {
+        cached_opening_hashes = add(cached_opening_hashes, opening_hashes(plan)?)?;
+    }
+    // 637 whole-tape blocks, nine chain commits and one OOD hash per side.
+    add(
+        crate::digest384_batch::MAX_PREFLIGHT_HASH_CALLS,
+        add(
+            tree_hashes,
+            add(
+                cached_opening_hashes,
+                add(verifier_tree_hashes, 2 * (637 + 9 + 1))?,
+            )?,
+        )?,
+    )
 }
 
 fn commit(
@@ -606,7 +815,7 @@ fn limit(name: &'static str, actual: usize, max: usize) -> Result<()> {
     }
     Ok(())
 }
-fn binding_error(error: BindingError) -> Error {
+fn binding_error(error: impl std::fmt::Display) -> Error {
     invalid_owned(format!("DEEP producer binding: {error}"))
 }
 fn invalid(details: &'static str) -> Error {

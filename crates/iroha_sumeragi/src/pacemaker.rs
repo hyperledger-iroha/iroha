@@ -26,6 +26,7 @@ pub const LOCAL_DELAY_NOMINAL: Millis = 50;
 /// Extra frame budget over `max_block_bytes`: the certificate/header allowance plus the
 /// complete bounded control frame, one result witness, compact shares, and worst-case member
 /// key/TC overhead up to the generic core committee bound (§9.4, O10).
+#[allow(clippy::cast_possible_truncation, reason = "const operands ≤ 64 KiB")]
 pub const FRAME_OVERHEAD: u32 = 64 * 1024
     + crate::message::MAX_RESULT_WITNESS_BYTES as u32
     + crate::types::MAX_COMMITTEE_SIZE as u32
@@ -938,6 +939,24 @@ mod tests {
             ),
             Err(ConfigError::PayloadRetryIntervalZero)
         );
+    }
+
+    /// The narrowing casts of `FRAME_OVERHEAD` are lossless: the value matches its `u64` sum.
+    #[test]
+    fn frame_overhead_is_exact() {
+        let operands =
+            crate::message::MAX_ATTESTATION_SIGNATURE_BYTES + crate::types::MAX_PUBLIC_KEY_LEN + 64;
+        let exact = [
+            64 * 1024,
+            crate::message::MAX_RESULT_WITNESS_BYTES,
+            crate::types::MAX_COMMITTEE_SIZE * operands,
+            crate::types::MAX_CONTROL_WITNESS_BYTES,
+            32,
+        ]
+        .map(|bytes| u64::try_from(bytes).expect("usize fits u64"))
+        .iter()
+        .sum::<u64>();
+        assert_eq!(u64::from(FRAME_OVERHEAD), exact);
     }
 
     #[test]

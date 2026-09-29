@@ -25,6 +25,13 @@ pub enum DigestExecutionV1 {
 ///
 /// # Errors
 /// Returns bounded-allocation, readiness, quarantine or device errors without CPU substitution.
+#[cfg_attr(
+    not(feature = "fastpq-gpu"),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "only the CPU-only build is infallible; the fastpq-gpu device arm returns errors"
+    )
+)]
 pub fn execute_digest384_frames_v1(
     frames: &[GoldilocksDigest384FrameV1<'_>],
     execution: DigestExecutionV1,

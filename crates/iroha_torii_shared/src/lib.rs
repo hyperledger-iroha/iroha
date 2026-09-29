@@ -55,8 +55,6 @@ pub mod sorafs_moderation_api;
 pub mod status;
 /// Canonical subscription preparation, query and draft records.
 pub mod subscriptions;
-/// Canonical response envelopes for the Sumeragi evidence audit API.
-pub mod sumeragi_evidence_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 /// Response header binding a hosted Soracloud response to the served service name.
@@ -469,10 +467,6 @@ pub mod uri {
     pub const READYZ: &str = "/readyz";
     /// URI used to fetch a window of block headers (newest first, optional `from`/`limit`).
     pub const LEDGER_HEADERS: &str = "/v1/ledger/headers";
-    /// URI used to fetch exact v2 finality carrying the post-state root for a block height.
-    pub const LEDGER_STATE_ROOT: &str = "/v1/ledger/state/{height}";
-    /// URI used to fetch the exact v2 state-finality carrier for a block height.
-    pub const LEDGER_STATE_PROOF: &str = "/v1/ledger/state-proof/{height}";
     /// URI used to fetch the exact canonical executed block wire for a finalized height.
     pub const LEDGER_EXECUTED_BLOCK_WIRE: &str = "/v1/ledger/block/{height}";
     /// URI used to fetch Merkle proofs for a transaction entrypoint within a block.

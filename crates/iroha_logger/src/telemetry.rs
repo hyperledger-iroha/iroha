@@ -67,7 +67,7 @@ impl Fields {
         let value = if is_normalized_sensitive_field(&normalized_field_name(name)) {
             Value::from(REDACTED_PLACEHOLDER)
         } else {
-            sanitize_non_sensitive_value(name, value())
+            sanitize_non_sensitive_value(value())
         };
         self.0.push((name, value));
     }
@@ -200,10 +200,10 @@ fn sanitize_value(field_name: &str, value: Value) -> Value {
     if is_normalized_sensitive_field(&normalized_field_name(field_name)) {
         return Value::from(REDACTED_PLACEHOLDER);
     }
-    sanitize_non_sensitive_value(field_name, value)
+    sanitize_non_sensitive_value(value)
 }
 
-fn sanitize_non_sensitive_value(field_name: &str, value: Value) -> Value {
+fn sanitize_non_sensitive_value(value: Value) -> Value {
     match value {
         Value::String(mut raw) => {
             if raw.len() > MAX_FIELD_LENGTH {
@@ -219,7 +219,7 @@ fn sanitize_non_sensitive_value(field_name: &str, value: Value) -> Value {
         Value::Array(values) => Value::Array(
             values
                 .into_iter()
-                .map(|inner| sanitize_non_sensitive_value(field_name, inner))
+                .map(sanitize_non_sensitive_value)
                 .collect(),
         ),
         Value::Object(map) => Value::Object(
@@ -285,7 +285,7 @@ fn normalize_field_name(field_name: &str) -> String {
             if is_upper {
                 let prev_is_alnum = previous.is_some_and(|prev: char| prev.is_ascii_alphanumeric());
                 let prev_is_upper = previous.is_some_and(|prev: char| prev.is_ascii_uppercase());
-                let next_is_lower = chars.peek().is_some_and(|next| next.is_ascii_lowercase());
+                let next_is_lower = chars.peek().is_some_and(char::is_ascii_lowercase);
                 if ((prev_is_alnum && !prev_is_upper) || (prev_is_upper && next_is_lower))
                     && !normalized.ends_with('_')
                 {

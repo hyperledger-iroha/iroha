@@ -36,6 +36,16 @@ fn canonical_frames_roundtrip_all_scales_and_ignore_ambient_layout() {
 
 #[test]
 fn canonical_decoder_rejects_wrong_schema_domain_and_framing() {
+    #[derive(NoritoSerialize, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "fastpq_prover::gadgets::public_transfer_statement::quantity::tests::canonical_decoder_rejects_wrong_schema_domain_and_framing::OtherValue",
+        frame = "fastpq_prover::public_transfer::OtherQuantityValueV1"
+    )]
+    struct OtherValue {
+        scale: u32,
+        limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS],
+    }
+
     let units = FastpqQuantityUnits::from_quantity(&Quantity::one(), 0).unwrap();
     let encoded = encode_quantity_units_v1(&units).unwrap();
     for length in [0, 1, 8, encoded.len() - 1] {
@@ -54,15 +64,6 @@ fn canonical_decoder_rejects_wrong_schema_domain_and_framing() {
     ] {
         let invalid = norito::encode_canonical(&QuantityValueV1 { scale, limbs }).unwrap();
         assert!(decode_quantity_units_v1(&invalid).is_err());
-    }
-    #[derive(NoritoSerialize, norito::NoritoSchema)]
-    #[norito_schema(
-        name = "fastpq_prover::gadgets::public_transfer_statement::quantity::tests::canonical_decoder_rejects_wrong_schema_domain_and_framing::OtherValue",
-        frame = "fastpq_prover::public_transfer::OtherQuantityValueV1"
-    )]
-    struct OtherValue {
-        scale: u32,
-        limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS],
     }
     let other = norito::encode_canonical(&OtherValue {
         scale: 0,

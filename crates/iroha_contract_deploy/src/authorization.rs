@@ -19,7 +19,7 @@ pub struct DeploymentAuthorization {
     pub manage_alias_permission: Permission,
 }
 
-pub(super) fn verify_account(client: &Client, authority: &AccountId) -> Result<()> {
+pub fn verify_account(client: &Client, authority: &AccountId) -> Result<()> {
     let account = client.client().get_account_read(authority)
         .wrap_err("deployment authority must already be registered and funded; acquire or use an owned alias namespace before deployment")?;
     if account.account_id != *authority {
@@ -30,7 +30,7 @@ pub(super) fn verify_account(client: &Client, authority: &AccountId) -> Result<(
     Ok(())
 }
 
-pub(super) fn read_authorization(
+pub fn read_authorization(
     client: &Client,
     authority: &AccountId,
     alias: &ContractAlias,
@@ -43,7 +43,7 @@ pub(super) fn read_authorization(
     )
 }
 
-pub(super) fn read_effective_permissions(
+pub fn read_effective_permissions(
     client: &Client,
     authority: &AccountId,
 ) -> Result<BTreeSet<Permission>> {
@@ -176,7 +176,7 @@ fn match_permissions(
     })
 }
 
-pub(super) fn validate_authorization(
+pub fn validate_authorization(
     evidence: &DeploymentAuthorization,
     alias: &ContractAlias,
     dataspace_id: DataSpaceId,

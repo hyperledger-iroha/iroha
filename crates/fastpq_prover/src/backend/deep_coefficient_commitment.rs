@@ -10,7 +10,7 @@
 
 use super::{
     deep_binding::{BindingError, Context, Oracle},
-    deep_coefficient_replay::{CoefficientReplay, CoefficientReplayPlan},
+    deep_coefficient_replay::{CoefficientReplay, CoefficientReplayPlan, CoefficientStripe},
     deep_geometry::{FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, QUERY_COUNT},
     deep_node_cache::{CommittedNodes, CompletedNodes, NodeCachePlan},
     deep_striped_merkle::{StreamLimits, StripedMerklePlan},
@@ -158,7 +158,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
         let mut selected = SecretPolynomial::zeroed(self.retained)?;
         let parent = |level: usize, index: usize, left, right| {
             binding
-                .hash_parent(self.oracle, level as u32, index as u32, left, right)
+                .hash_parent_at(self.oracle, level, index, left, right)
                 .map_err(binding_error)
         };
         let batch_parent = |level, indices: &[usize], left: &[[u64; 6]], right: &mut [[u64; 6]]| {
@@ -200,26 +200,14 @@ impl<'a> CoefficientCommitmentPlan<'a> {
                 for start in (0..rows).step_by(capacity) {
                     let count = (rows - start).min(capacity);
                     let mut indices = [0; super::deep_leaf_batch::CAPACITY];
-                    for (offset, packed) in bytes[..count * self.fields * F::BYTES]
-                        .chunks_exact_mut(self.fields * F::BYTES)
-                        .enumerate()
-                    {
-                        let row = start + offset;
-                        let index = stripe.global_index(row);
-                        indices[offset] = index;
-                        if self.oracle == Oracle::QuotientAndMask {
-                            for (column, value) in values.iter_mut().enumerate() {
-                                *value = stripe.value(column, row)?;
-                            }
-                        } else {
-                            stripe.fiber(row, &mut values)?;
-                        }
-                        pack(&values, packed)?;
-                        if let Ok(position) = self.queries.binary_search(&index) {
-                            selected[position * self.fields..(position + 1) * self.fields]
-                                .copy_from_slice(&values);
-                        }
-                    }
+                    self.pack_rows(
+                        &stripe,
+                        start,
+                        &mut indices[..count],
+                        &mut bytes,
+                        &mut values,
+                        &mut selected,
+                    )?;
                     super::deep_leaf_batch::hash(
                         binding,
                         self.oracle,
@@ -247,6 +235,43 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             selected,
             fields: self.fields,
         })
+    }
+
+    /// Pack one bounded batch of consecutive stripe rows starting at `start`.
+    ///
+    /// Writes each row's tree index into `indices`, its canonical leaf into the
+    /// matching `bytes` prefix and every queried row's fields into `selected`.
+    fn pack_rows(
+        &self,
+        stripe: &CoefficientStripe<'_>,
+        start: usize,
+        indices: &mut [usize],
+        bytes: &mut [u8],
+        values: &mut [F],
+        selected: &mut [F],
+    ) -> Result<()> {
+        let leaf_bytes = self.fields * F::BYTES;
+        for (offset, packed) in bytes[..indices.len() * leaf_bytes]
+            .chunks_exact_mut(leaf_bytes)
+            .enumerate()
+        {
+            let row = start + offset;
+            let index = stripe.global_index(row);
+            indices[offset] = index;
+            if self.oracle == Oracle::QuotientAndMask {
+                for (column, value) in values.iter_mut().enumerate() {
+                    *value = stripe.value(column, row)?;
+                }
+            } else {
+                stripe.fiber(row, values)?;
+            }
+            pack(values, packed)?;
+            if let Ok(position) = self.queries.binary_search(&index) {
+                selected[position * self.fields..(position + 1) * self.fields]
+                    .copy_from_slice(values);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -338,6 +363,10 @@ fn pack(values: &[F], output: &mut [u8]) -> Result<()> {
     }
     Ok(())
 }
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "`map_err` adapter; the sibling test module passes it point-free"
+)]
 fn binding_error(error: BindingError) -> Error {
     Error::InvalidTraceShape {
         details: format!("DEEP coefficient commitment: {error}"),

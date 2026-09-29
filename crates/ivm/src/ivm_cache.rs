@@ -569,6 +569,57 @@ fn configure_limits_locked(limits: CacheLimits) {
         max_decoded_ops: denormalize(normalized.max_decoded_ops),
     });
 }
+/// Snapshot of cache limits. Zero bytes disables retention; zero ops is unlimited.
+pub fn cache_limits() -> CacheLimits {
+    current_cache_limits_snapshot()
+}
+/// RAII guard that restores previous cache limits when dropped.
+pub struct CacheLimitsGuard {
+    previous: CacheLimits,
+    _claim: CacheLimitsGuardClaim,
+    _configuration: ReentrantMutexGuard<'static, ()>,
+}
+struct CacheLimitsGuardClaim;
+impl CacheLimitsGuardClaim {
+    fn acquire() -> Self {
+        CACHE_LIMITS_GUARD_ACTIVE.with(|active| {
+            assert!(
+                !active.replace(true),
+                "nested CacheLimitsGuard overrides on one thread are unsupported"
+            );
+        });
+        Self
+    }
+}
+impl Drop for CacheLimitsGuardClaim {
+    fn drop(&mut self) {
+        CACHE_LIMITS_GUARD_ACTIVE.with(|active| active.set(false));
+    }
+}
+impl CacheLimitsGuard {
+    /// Apply new cache limits for the lifetime of the guard.
+    ///
+    /// Other cache-limit writers and guards wait until this guard is dropped.
+    /// Constructing a second guard on the same thread panics before changing
+    /// the active limits; ordinary cache writers remain reentrant.
+    pub fn new(limits: CacheLimits) -> Self {
+        let claim = CacheLimitsGuardClaim::acquire();
+        let configuration = lock_cache_configuration();
+        let previous = current_cache_limits_snapshot();
+        configure_limits_locked(limits);
+        Self {
+            previous,
+            _claim: claim,
+            _configuration: configuration,
+        }
+    }
+}
+impl Drop for CacheLimitsGuard {
+    fn drop(&mut self) {
+        configure_limits_locked(self.previous);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,55 +862,5 @@ mod tests {
 
         drop(outer);
         assert_eq!(cache_limits(), baseline);
-    }
-}
-/// Snapshot of cache limits. Zero bytes disables retention; zero ops is unlimited.
-pub fn cache_limits() -> CacheLimits {
-    current_cache_limits_snapshot()
-}
-/// RAII guard that restores previous cache limits when dropped.
-pub struct CacheLimitsGuard {
-    previous: CacheLimits,
-    _claim: CacheLimitsGuardClaim,
-    _configuration: ReentrantMutexGuard<'static, ()>,
-}
-struct CacheLimitsGuardClaim;
-impl CacheLimitsGuardClaim {
-    fn acquire() -> Self {
-        CACHE_LIMITS_GUARD_ACTIVE.with(|active| {
-            assert!(
-                !active.replace(true),
-                "nested CacheLimitsGuard overrides on one thread are unsupported"
-            );
-        });
-        Self
-    }
-}
-impl Drop for CacheLimitsGuardClaim {
-    fn drop(&mut self) {
-        CACHE_LIMITS_GUARD_ACTIVE.with(|active| active.set(false));
-    }
-}
-impl CacheLimitsGuard {
-    /// Apply new cache limits for the lifetime of the guard.
-    ///
-    /// Other cache-limit writers and guards wait until this guard is dropped.
-    /// Constructing a second guard on the same thread panics before changing
-    /// the active limits; ordinary cache writers remain reentrant.
-    pub fn new(limits: CacheLimits) -> Self {
-        let claim = CacheLimitsGuardClaim::acquire();
-        let configuration = lock_cache_configuration();
-        let previous = current_cache_limits_snapshot();
-        configure_limits_locked(limits);
-        Self {
-            previous,
-            _claim: claim,
-            _configuration: configuration,
-        }
-    }
-}
-impl Drop for CacheLimitsGuard {
-    fn drop(&mut self) {
-        configure_limits_locked(self.previous);
     }
 }

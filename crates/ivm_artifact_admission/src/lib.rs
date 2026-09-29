@@ -672,6 +672,8 @@ mod tests {
         norito::to_bytes(descriptor).expect("encode canonical AXT descriptor")
     }
     fn contract_artifact_with_state_type(ty: EmbeddedStateType) -> Vec<u8> {
+        use ivm_abi::{encoding::wide as enc, instruction::wide};
+
         let entrypoint = EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Kotoage,
@@ -711,7 +713,6 @@ mod tests {
         };
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&interface.encode_section());
-        use ivm_abi::{encoding::wide as enc, instruction::wide};
         for word in [
             enc::encode_store(wide::memory::STORE64, 12, 0, 0),
             enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),

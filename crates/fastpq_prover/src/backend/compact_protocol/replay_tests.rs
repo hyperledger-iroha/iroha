@@ -15,6 +15,11 @@ use crate::{
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
 
+/// Narrow one small fixture position or level to its `u32` wire field.
+fn narrow_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixture position fits u32")
+}
+
 fn source(rows: usize, width: usize) -> Vec<Vec<u64>> {
     (0..width)
         .map(|column| {
@@ -243,7 +248,7 @@ fn replay_rejects_invalid_geometry_cells_and_selections_and_stops_on_error() {
 fn leaf(context: &Context, index: usize, row: &[u64]) -> Digest {
     let bytes: Vec<_> = row.iter().flat_map(|value| value.to_le_bytes()).collect();
     context
-        .hash_leaf(Oracle::Row, index as u32, &bytes)
+        .hash_leaf(Oracle::Row, narrow_u32(index), &bytes)
         .unwrap()
 }
 
@@ -255,7 +260,13 @@ fn parent(
     right: Digest,
 ) -> Result<Digest> {
     context
-        .hash_parent(Oracle::Row, level as u32, index as u32, left, right)
+        .hash_parent(
+            Oracle::Row,
+            narrow_u32(level),
+            narrow_u32(index),
+            left,
+            right,
+        )
         .map_err(|_| shape("test parent failed"))
 }
 

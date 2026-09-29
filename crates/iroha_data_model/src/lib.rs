@@ -119,8 +119,6 @@ pub mod kagemusha;
 pub mod kaigi;
 /// Log-level and severity utilities.
 pub mod level;
-/// Merge-ledger data structures.
-pub mod merge;
 /// Ministry transparency/governance payload types.
 pub mod ministry;
 /// Musubi package registry data types for Kotodama source packages.
@@ -334,11 +332,9 @@ pub mod prelude {
             FeeSponsorProgram, FeeSponsorProgramActivation, FeeSponsorProgramId,
             FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
             FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVault,
-            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig,
-            LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
-            LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
-            LaneRelayEnvelopeRef, LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
-            LaneVisibilityParseError, VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord,
+            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig, LaneStorageProfile,
+            LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
+            VerifiedFeeSponsorVaultAllocation,
         },
         nft::prelude::*,
         parameter::prelude::*,

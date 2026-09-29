@@ -339,16 +339,17 @@ mod tests {
     #[derive(IntoSchema)]
     struct ClosurePeer;
 
-    #[test]
-    fn metadata_closure_checks_every_stored_reference_slot() {
-        use core::any::TypeId;
+    /// One metadata value per stored-reference shape, paired with the type ids
+    /// it references (in slot order) using `byte` and `word` as referents.
+    fn stored_reference_slot_cases(
+        byte: core::any::TypeId,
+        word: core::any::TypeId,
+    ) -> Vec<(Metadata, Vec<core::any::TypeId>)> {
         use iroha_schema::{
             ArrayMeta, BitmapMeta, Declaration, EnumMeta, EnumVariant, FixedMeta, MapMeta,
             NamedFieldsMeta, ResultMeta, UnnamedFieldsMeta, VecMeta,
         };
-        let byte = TypeId::of::<u8>();
-        let word = TypeId::of::<u16>();
-        let cases = [
+        vec![
             (
                 Metadata::Struct(NamedFieldsMeta {
                     declarations: vec![
@@ -423,9 +424,16 @@ mod tests {
                 }),
                 vec![byte],
             ),
-        ];
+        ]
+    }
+
+    #[test]
+    fn metadata_closure_checks_every_stored_reference_slot() {
+        use core::any::TypeId;
+        let byte = TypeId::of::<u8>();
+        let word = TypeId::of::<u16>();
         let owner = <ClosureRoot as iroha_schema::TypeId>::id();
-        for (metadata, expected) in cases {
+        for (metadata, expected) in stored_reference_slot_cases(byte, word) {
             let mut schemas = MetaMap::new();
             schemas.insert::<ClosureRoot>(metadata);
             let missing = find_missing_schema_references(&schemas);

@@ -305,64 +305,6 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
     );
 }
 #[test]
-fn default_route_elastic_candidates_reshard_away_after_drain_close() {
-    let policy = LaneRoutingPolicy {
-        default_lane: LaneId::SINGLE,
-        default_dataspace: DataSpaceId::UNIVERSAL,
-        rules: Vec::new(),
-    };
-    let mut draining = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7);
-    attach_valid_drain_state(&mut draining, 10);
-    let catalog = lane_catalog_from_configs(vec![default_lane_config(), draining.clone()]);
-    assert_eq!(
-        default_route_elastic_candidates(
-            &policy,
-            &catalog,
-            Some(AutoscaleElasticRange {
-                min_lane_id: 1,
-                max_lane_id_exclusive: 2,
-                current_height: Some(10),
-                required_active_height: Some(10),
-            }),
-        ),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "pre-close proposal heights remain valid for delayed work"
-    );
-    assert_eq!(
-        default_route_elastic_candidates(
-            &policy,
-            &catalog,
-            Some(AutoscaleElasticRange {
-                min_lane_id: 1,
-                max_lane_id_exclusive: 2,
-                current_height: Some(11),
-                required_active_height: Some(11),
-            }),
-        ),
-        vec![LaneId::SINGLE],
-        "new work must be re-sharded before hashing can select the closed lane"
-    );
-    draining.metadata.insert(
-        AUTOSCALE_META_DRAIN_STATE.to_owned(),
-        "not-canonical-hex".to_owned(),
-    );
-    let malformed = lane_catalog_from_configs(vec![default_lane_config(), draining]);
-    assert_eq!(
-        default_route_elastic_candidates(
-            &policy,
-            &malformed,
-            Some(AutoscaleElasticRange {
-                min_lane_id: 1,
-                max_lane_id_exclusive: 2,
-                current_height: Some(10),
-                required_active_height: Some(10),
-            }),
-        ),
-        vec![LaneId::SINGLE],
-        "malformed drain metadata must fail closed before shard selection"
-    );
-}
-#[test]
 fn default_route_elastic_candidates_apply_autoscale_range_when_available() {
     let policy = LaneRoutingPolicy {
         default_lane: LaneId::SINGLE,

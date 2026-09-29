@@ -1215,6 +1215,24 @@ impl<T> DerefMut for FixedAllocationValue<T> {
 }
 
 #[cfg(test)]
+pub(crate) struct TestMemoryBudget(MemoryBudget);
+#[cfg(test)]
+impl TestMemoryBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self(MemoryBudget::new(limit))
+    }
+    pub(crate) fn stats(&self) -> MemoryStats {
+        self.0.stats()
+    }
+    pub(crate) fn set_limit(&self, limit: usize) {
+        self.0.set_limit(limit);
+    }
+    pub(crate) fn empty_rows<T>(&self) -> OwnedVec<T> {
+        OwnedVec::try_with_capacity_in_budget(0, &self.0).expect("empty rows allocate no backing")
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1253,6 +1271,10 @@ mod tests {
     fn filled_copy_prepays_vec_box_overlap_and_refunds_after_unwind() {
         #[derive(Copy)]
         struct PanicOnClone(u8);
+        #[allow(
+            clippy::non_canonical_clone_impl,
+            reason = "the panicking clone deliberately unwinds the filled copy to prove the budget refund"
+        )]
         impl Clone for PanicOnClone {
             fn clone(&self) -> Self {
                 let _ = self.0;
@@ -1825,23 +1847,5 @@ mod tests {
         assert!(budget.stats().peak_reserved_bytes >= final_bytes + 3 * std::mem::size_of::<u64>());
         drop(owner);
         assert_eq!(budget.stats().active_bytes, 0);
-    }
-}
-
-#[cfg(test)]
-pub(crate) struct TestMemoryBudget(MemoryBudget);
-#[cfg(test)]
-impl TestMemoryBudget {
-    pub(crate) fn new(limit: usize) -> Self {
-        Self(MemoryBudget::new(limit))
-    }
-    pub(crate) fn stats(&self) -> MemoryStats {
-        self.0.stats()
-    }
-    pub(crate) fn set_limit(&self, limit: usize) {
-        self.0.set_limit(limit);
-    }
-    pub(crate) fn empty_rows<T>(&self) -> OwnedVec<T> {
-        OwnedVec::try_with_capacity_in_budget(0, &self.0).expect("empty rows allocate no backing")
     }
 }

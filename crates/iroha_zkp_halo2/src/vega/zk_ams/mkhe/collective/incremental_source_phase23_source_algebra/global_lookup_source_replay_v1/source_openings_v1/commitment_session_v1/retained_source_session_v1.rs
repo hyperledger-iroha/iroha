@@ -17,6 +17,10 @@ struct PreparedQMaskKernelV1<R> {
     source: RnsNativeStoredPlaneReplayV1<R>,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the sole per-session phase owner moves in place; boxing the low-digit assembly would allocate on every prepared-digit commit"
+)]
 enum RetainedSourcePhaseV1<R> {
     SourceComplete(GlobalLookupCommitmentSessionV1<R, SourceOpeningCompleteStageV1>),
     ExistingLow(RnsNativeExistingRadixCandidateAssemblyV1<R>),

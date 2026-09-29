@@ -632,11 +632,11 @@ mod tests {
     #[test]
     fn complete_column_tree_matches_independent_framing_for_empty_odd_and_parallel_shapes() {
         let params = CANONICAL_PARAMETER_SETS[0];
-        for count in [0, 1, 2, 3, 7, 65] {
+        for count in [0_u64, 1, 2, 3, 7, 65] {
             let columns: Vec<_> = (0..count)
                 .map(|index| TraceColumn {
                     name: format!("col_{index:02}"),
-                    values: vec![index as u64, index as u64 + 1],
+                    values: vec![index, index + 1],
                 })
                 .collect();
             let mut expected: Vec<_> = columns
@@ -692,7 +692,7 @@ mod tests {
                 "column count {count}"
             );
             let rows = 2_u64.to_le_bytes();
-            let count_bytes = (count as u64).to_le_bytes();
+            let count_bytes = count.to_le_bytes();
             let expected_commitment: GoldilocksDigest384V1 = independent_hash(
                 b"final-commitment",
                 0,

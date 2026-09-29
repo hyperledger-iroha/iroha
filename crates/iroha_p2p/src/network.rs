@@ -10514,8 +10514,8 @@ mod accept_stream_tests {
         cap_violations: F,
         oversized_diagnostic: &'static str,
     ) where
-        T: Pload + message::ClassifyTopic,
-        F: Fn() -> u64,
+        T: Pload + message::ClassifyTopic + Sync,
+        F: Fn() -> u64 + Send,
     {
         let key_pair = test_node_key_pair();
         let Some((mut network, std_listener)) =
@@ -12016,7 +12016,7 @@ impl<T: Pload, E: Enc> Drop for NetworkBase<T, E> {
         let _ = self.cancel_all_reply_route_tenures();
     }
 }
-impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
+impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
     fn update_soranet_handshake_config(
         &mut self,
         handshake: ActualSoranetHandshake,

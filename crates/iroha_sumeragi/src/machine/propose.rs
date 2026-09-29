@@ -193,7 +193,7 @@ impl Core {
         &mut self,
         req: u64,
         context: ControlWitnessContext,
-        witness: ControlWitness,
+        witness: &ControlWitness,
         attest: bool,
     ) {
         if self.awaiting {
@@ -225,7 +225,7 @@ impl Core {
         {
             return;
         }
-        fresh.control = Some((witness, attest));
+        fresh.control = Some((*witness, attest));
         self.finish_fresh_build();
     }
 
@@ -246,7 +246,7 @@ impl Core {
         let (control, control_attest) =
             fresh.control.take().expect("exact source control response");
         self.build = Build::Idle;
-        self.propose_fresh(payload, payload_attest || control_attest, control);
+        self.propose_fresh(payload, payload_attest || control_attest, &control);
     }
 
     /// On `PayloadReady{req}` (§6.10): wake the eligible leader's empty-build wait at any
@@ -281,7 +281,7 @@ impl Core {
 
     /// Build and send a fresh block (§6.10 rule 3) with the builder's application flag `attest`
     /// (§3.7 A1).
-    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool, control_witness: ControlWitness) {
+    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool, control_witness: &ControlWitness) {
         let Some(me) = self.leader_eligible() else {
             self.build = Build::Idle;
             return;
@@ -314,7 +314,7 @@ impl Core {
             skipped_leaders: self
                 .topo
                 .skipped_leader_keys(&self.cfg.committee, self.view),
-            control_witness,
+            control_witness: *control_witness,
             attest,
         };
         self.propose_block(Block { header, payload }, justify);

@@ -182,6 +182,11 @@ mod tests {
         layers
     }
 
+    /// Merkle role of one fixture FRI layer; fixture round counts are tiny.
+    fn fri_role(round: usize) -> MerkleTreeRoleV1 {
+        MerkleTreeRoleV1::Fri(u32::try_from(round).expect("fixture FRI round fits u32"))
+    }
+
     fn layer_leaves(values: &[Vec<GoldilocksFp4V1>]) -> Vec<Vec<GoldilocksDigest384V1>> {
         values
             .iter()
@@ -220,7 +225,7 @@ mod tests {
                 assert_eq!(opened.index as usize, index);
                 assert_eq!(opened.values, expected_values);
                 assert_eq!(opened.folded_value, values[round + 1][leaf_index]);
-                let role = MerkleTreeRoleV1::Fri(round as u32);
+                let role = fri_role(round);
                 let canonical = merkle_paths_for_leaf_indices(
                     &leaves[round],
                     &[leaf_index],
@@ -253,7 +258,7 @@ mod tests {
             let canonical = merkle_paths_for_leaf_indices(
                 &leaves[final_round],
                 &[0],
-                MerkleTreeRoleV1::Fri(final_round as u32),
+                fri_role(final_round),
                 ExecutionMode::Cpu,
             )
             .unwrap()
@@ -314,7 +319,7 @@ mod tests {
                         let canonical = merkle_paths_for_leaf_indices(
                             layer,
                             &[leaf_index],
-                            MerkleTreeRoleV1::Fri(round as u32),
+                            fri_role(round),
                             ExecutionMode::Cpu,
                         )
                         .unwrap()
@@ -357,12 +362,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(round, layer)| {
-                build_merkle_levels_with_mode(
-                    layer,
-                    MerkleTreeRoleV1::Fri(round as u32),
-                    ExecutionMode::Cpu,
-                )
-                .unwrap()
+                build_merkle_levels_with_mode(layer, fri_role(round), ExecutionMode::Cpu).unwrap()
             })
             .collect::<Vec<_>>();
         let padded_lengths = levels.iter().map(|tree| tree[0].len()).collect::<Vec<_>>();
@@ -374,7 +374,7 @@ mod tests {
                 let canonical = merkle_paths_for_leaf_indices(
                     layer,
                     &indices,
-                    MerkleTreeRoleV1::Fri(round as u32),
+                    fri_role(round),
                     ExecutionMode::Cpu,
                 )
                 .unwrap();

@@ -88,6 +88,15 @@ impl ProcessResources {
     /// Reserve and initialize an escaping host result from the original process
     /// envelope, without needing a native driver or an in-flight device attempt.
     /// CPU fallback and foreign-runtime copying retain this same allocation owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostOutputError::InvalidLayout`](crate::HostOutputError::InvalidLayout)
+    /// when `len` values of `T` do not form a valid layout,
+    /// [`HostOutputError::Capacity`](crate::HostOutputError::Capacity) when the
+    /// original host pool cannot fund them, and
+    /// [`HostOutputError::Allocation`](crate::HostOutputError::Allocation) when
+    /// the allocator refuses the already reserved backing storage.
     pub fn try_host_output<T: Copy + Default>(
         &self,
         len: usize,
@@ -103,6 +112,12 @@ impl ProcessResources {
     /// Allocate one page-aligned backing region from this original process owner.
     /// The same physical allocation is admitted against both applicable host and
     /// device ceilings. Alignment and rounded capacity are checked before admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`UnifiedBufferError`](crate::UnifiedBufferError) from
+    /// [`UnifiedBuffer`](crate::UnifiedBuffer) allocation: an invalid layout, an
+    /// exhausted host or device ceiling, or an allocator refusal.
     pub fn try_unified_buffer(
         &self,
         len: usize,

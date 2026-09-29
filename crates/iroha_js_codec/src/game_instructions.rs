@@ -71,9 +71,10 @@ fn manifest(value: &GameManifestV1) -> CodecResult<()> {
         return Err(invalid("Game manifest bounds must be positive"));
     }
     if let GameAccessV1::Invite(key) = &value.access
-        && key.algorithm() != Algorithm::Ed25519 {
-            return Err(invalid("game invitation key must use Ed25519"));
-        }
+        && key.algorithm() != Algorithm::Ed25519
+    {
+        return Err(invalid("game invitation key must use Ed25519"));
+    }
     bounded_bytes(
         &value.application_parameters,
         MAX_OPAQUE_BYTES,
@@ -180,6 +181,10 @@ fn verify(value: &VerifyExecutionProofV1) -> CodecResult<()> {
     proof(&value.proof)
 }
 
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "fills the `fn(&T) -> CodecResult<()>` validator slot of `instruction_catalog!`"
+)]
 fn no_additional_wire_fields<T>(_: &T) -> CodecResult<()> {
     Ok(())
 }

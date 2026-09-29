@@ -49,6 +49,10 @@ pub(super) struct SharedVerifier {
 #[cfg(test)]
 impl SharedVerifier {
     /// Fixed query count; no artifact or caller policy can change geometry.
+    #[allow(
+        clippy::unused_self,
+        reason = "asked of a verifier value; tests pin that its policy never changes it"
+    )]
     pub(super) const fn queries(self) -> usize {
         375
     }
@@ -89,6 +93,10 @@ pub(super) struct DeepVerifier {
 
 impl DeepVerifier {
     /// Fixed query count; neither the carrier nor caller can choose a profile.
+    #[allow(
+        clippy::unused_self,
+        reason = "bundle preflight asks the verifier it holds; policy never changes it"
+    )]
     pub(super) const fn queries(self) -> usize {
         super::deep_geometry::QUERY_COUNT
     }
@@ -198,6 +206,10 @@ fn verify_transfer_with<V: CompactTransferValue>(
 /// mirror checks. The returned result cannot authorize handles or source roots;
 /// the surrounding caller retains those obligations and post-proof ABI checks.
 #[cfg(test)]
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` context contract of its sibling-module callers"
+)]
 pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -208,7 +220,7 @@ pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
     verify_axt_transfer_with(
         prepared,
         expected,
-        context,
+        &context,
         proof_bytes,
         limits,
         SharedVerifier {
@@ -221,7 +233,7 @@ pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
 fn verify_axt_transfer_with<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
-    context: AxtVerificationContext<'_>,
+    context: &AxtVerificationContext<'_>,
     proof_bytes: &[u8],
     limits: VerifyLimits,
     verifier: SharedVerifier,
@@ -267,6 +279,10 @@ pub(super) fn verify_transfer_with_allocation<V: CompactTransferValue>(
 /// Verify candidate AXT bytes with every original binding, mirror and remote preimage.
 /// Successful mathematical verification grants no source-state authority or finality.
 #[cfg(test)]
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` context contract of its sibling-module callers"
+)]
 pub(super) fn verify_axt_transfer_with_allocation<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -278,7 +294,7 @@ pub(super) fn verify_axt_transfer_with_allocation<V: CompactTransferValue>(
     verify_axt_transfer_with(
         prepared,
         expected,
-        context,
+        &context,
         proof_bytes,
         limits,
         SharedVerifier {
@@ -624,21 +640,6 @@ mod tests {
     #[test]
     #[ignore = "explicit full AXT 65536x342 proving and raw facade verification diagnostic"]
     fn complete_axt_transfer_verifies_after_private_witnesses_are_dropped() {
-        use crate::{
-            backend::{
-                compact_axt_context::encode_context,
-                compact_protocol::{self, FixedAir, shared_openings},
-            },
-            gadgets::{
-                compact_smt_air::{COLUMN_COUNT, PATH_LEVELS, PHYSICAL_ROW_COUNT, SmtWitness},
-                compact_trace_columns::smt_row_cells,
-                public_transfer_statement::{PublicTransferLimits, public_claims_from_transcripts},
-                transfer::attach_transfer_smt_witnesses,
-            },
-        };
-        use iroha_data_model::fastpq::{
-            TransferDeltaTranscript, TransferSmtWitness, TransferTranscript,
-        };
         use sha2::{Digest as _, Sha256};
 
         let _canonical =
@@ -647,138 +648,14 @@ mod tests {
         assert_eq!(fixture.remote.as_ref().unwrap().len(), 1);
         assert_eq!(fixture.binding.remote_spend_intent_commitments.len(), 1);
         let construction_started = std::time::Instant::now();
-        let columns = {
-            let mut transcripts = {
-                let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-                assert_eq!(prepared.claims().len(), 1);
-                let claim = &prepared.claims()[0];
-                assert_eq!(claim.deltas.len(), 1);
-                vec![TransferTranscript {
-                    batch_hash: claim.batch_hash,
-                    authority_digest: claim.authority_digest,
-                    poseidon_preimage_digest: claim.poseidon_preimage_digest,
-                    deltas: claim
-                        .deltas
-                        .iter()
-                        .map(|delta| TransferDeltaTranscript {
-                            from_account: delta.from_account.clone(),
-                            to_account: delta.to_account.clone(),
-                            asset_definition: delta.asset_definition.clone(),
-                            amount: delta.amount.clone(),
-                            from_balance_before: delta.from_balance_before.clone(),
-                            from_balance_after: delta.from_balance_after.clone(),
-                            to_balance_before: delta.to_balance_before.clone(),
-                            to_balance_after: delta.to_balance_after.clone(),
-                            from_smt_witness: TransferSmtWitness::default(),
-                            to_smt_witness: TransferSmtWitness::default(),
-                        })
-                        .collect(),
-                }]
-            };
-            let (old_root, new_root) = attach_transfer_smt_witnesses(&mut transcripts).unwrap();
-            assert_ne!(old_root, new_root);
-            fixture.set_touched_roots(old_root, new_root);
-            let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-            // Attaching paths must preserve all original public quantities,
-            // authority/batch identities and the Poseidon preimage digest.
-            assert_eq!(
-                public_claims_from_transcripts(&transcripts, PublicTransferLimits::default())
-                    .unwrap()
-                    .as_slice(),
-                prepared.claims()
-            );
-            let expected = fixture.expected(&prepared);
-            assert_eq!(expected.old_root, old_root);
-            assert_eq!(expected.new_root, new_root);
-            let statements = prepared.compact_statements(&[]).unwrap();
-            assert_eq!(statements.len(), 1);
-            let delta = &transcripts[0].deltas[0];
-            let paths = [&delta.from_smt_witness, &delta.to_smt_witness];
-            for (path, update) in paths.iter().zip(statements[0].updates) {
-                assert_eq!(path.path_bits.as_slice(), update.path.to_le_bytes());
-                assert_eq!(path.siblings.len(), PATH_LEVELS);
-            }
-            let siblings = core::array::from_fn(|update| {
-                core::array::from_fn(|level| {
-                    let bytes = paths[update].siblings[level];
-                    core::array::from_fn(|limb| {
-                        u32::from_le_bytes(bytes[4 * limb..4 * limb + 4].try_into().unwrap())
-                    })
-                })
-            });
-            let witness = SmtWitness::from_inputs(&statements[0], &siblings)
-                .unwrap()
-                .into_physical();
-            let mut columns = (0..COLUMN_COUNT)
-                .map(|_| Vec::with_capacity(PHYSICAL_ROW_COUNT))
-                .collect::<Vec<_>>();
-            for row in witness.rows() {
-                for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-                    column.push(value);
-                }
-            }
-            // Every private path, witness and witness-bearing transcript is
-            // scoped here. Only exact prover columns leave this block.
-            columns
-        };
+        let columns = private_axt_prover_columns(&mut fixture);
         let construction = construction_started.elapsed();
         let limits = VerifyLimits {
             max_proof_bytes: 16 * 1024 * 1024,
             ..final_test_limits()
         };
-        let (encoded, typed_bytes, proving, conversion) = {
-            let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-            let expected = fixture.expected(&prepared);
-            let air = AxtTransferAir::new(
-                &prepared,
-                &expected,
-                &fixture.binding,
-                fixture.metadata(),
-                fixture.outer,
-                fixture.remote.as_deref(),
-            )
-            .unwrap();
-            assert_eq!(
-                air.schema().identity,
-                "fastpq:compact:v1:axt-public-transfer:v1:342cols:923slots:65536rows"
-            );
-            assert_ne!(
-                air.schema().identity,
-                PublicTransferAir::new(&prepared, &expected)
-                    .unwrap()
-                    .schema()
-                    .identity
-            );
-            assert_eq!(
-                air.statement_bytes(),
-                encode_context(
-                    &prepared,
-                    &expected,
-                    &fixture.binding,
-                    fixture.metadata(),
-                    fixture.outer,
-                    fixture.remote.as_deref(),
-                )
-                .unwrap()
-            );
-            let proving_started = std::time::Instant::now();
-            let proof = compact_protocol::prove(&air, &columns).unwrap();
-            let proving = proving_started.elapsed();
-            drop(columns);
-            let typed_bytes = norito::core::encoded_frame_len(&proof).unwrap();
-            let conversion_started = std::time::Instant::now();
-            let shared = shared_openings::from_compact(&air, &proof, limits).unwrap();
-            let encoded = norito::core::to_bytes(&shared).unwrap();
-            assert_eq!(
-                encoded.len(),
-                norito::core::encoded_frame_len(&shared).unwrap()
-            );
-            let conversion = conversion_started.elapsed();
-            // Proving AIR, typed proof, shared DTO and public preparation also
-            // leave scope. The facade receives only original public facts and
-            // one canonical raw frame, never a retained prover/verifier object.
-            (encoded, typed_bytes, proving, conversion)
-        };
+        let (encoded, typed_bytes, proving, conversion) =
+            prove_shared_axt_frame(&fixture, columns, limits);
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&prepared);
         assert!(encoded.len() > final_test_limits().max_proof_bytes);
@@ -809,6 +686,189 @@ mod tests {
             verified
         };
         let verifying = verifying_started.elapsed();
+        let work = assert_verified_axt_work(&verified, expected, encoded.len());
+
+        // All negative controls reuse this public frame and run after private
+        // proving material has gone out of scope.
+        assert_axt_negative_controls(&fixture, &prepared, expected, &encoded, limits);
+
+        // Retain only this deterministic public-fixture proof, keyed by exact
+        // bytes. No private-input files, signing material or live state are retained.
+        let artifact_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/fastpq-production-validation");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let artifact = artifact_dir.join(format!(
+            "compact-shared-axt-transfer-{}.bin",
+            hex::encode(Sha256::digest(&encoded))
+        ));
+        std::fs::write(&artifact, &encoded).unwrap();
+        eprintln!(
+            "compact_axt_construction={construction:?}; proving={proving:?}; shared_conversion={conversion:?}; raw_facade_verifying={verifying:?}; typed_bytes={typed_bytes}; work={work:?}; default_admitted=false; diagnostic_limit={}; production_security_qualified=false; public_fixture_artifact={}",
+            limits.max_proof_bytes,
+            artifact.display()
+        );
+    }
+
+    /// Attach genuine SMT paths to the remote AXT fixture and build its prover columns.
+    ///
+    /// Every private path, witness and witness-bearing transcript is scoped
+    /// here. Only exact prover columns leave this function.
+    fn private_axt_prover_columns(fixture: &mut Fixture) -> Vec<Vec<u64>> {
+        use crate::gadgets::{
+            compact_smt_air::{COLUMN_COUNT, PATH_LEVELS, PHYSICAL_ROW_COUNT, SmtWitness},
+            compact_trace_columns::smt_row_cells,
+            public_transfer_statement::{PublicTransferLimits, public_claims_from_transcripts},
+            transfer::attach_transfer_smt_witnesses,
+        };
+        use iroha_data_model::fastpq::{
+            TransferDeltaTranscript, TransferSmtWitness, TransferTranscript,
+        };
+
+        let mut transcripts = {
+            let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
+            assert_eq!(prepared.claims().len(), 1);
+            let claim = &prepared.claims()[0];
+            assert_eq!(claim.deltas.len(), 1);
+            vec![TransferTranscript {
+                batch_hash: claim.batch_hash,
+                authority_digest: claim.authority_digest,
+                poseidon_preimage_digest: claim.poseidon_preimage_digest,
+                deltas: claim
+                    .deltas
+                    .iter()
+                    .map(|delta| TransferDeltaTranscript {
+                        from_account: delta.from_account.clone(),
+                        to_account: delta.to_account.clone(),
+                        asset_definition: delta.asset_definition.clone(),
+                        amount: delta.amount.clone(),
+                        from_balance_before: delta.from_balance_before.clone(),
+                        from_balance_after: delta.from_balance_after.clone(),
+                        to_balance_before: delta.to_balance_before.clone(),
+                        to_balance_after: delta.to_balance_after.clone(),
+                        from_smt_witness: TransferSmtWitness::default(),
+                        to_smt_witness: TransferSmtWitness::default(),
+                    })
+                    .collect(),
+            }]
+        };
+        let (old_root, new_root) = attach_transfer_smt_witnesses(&mut transcripts).unwrap();
+        assert_ne!(old_root, new_root);
+        fixture.set_touched_roots(old_root, new_root);
+        let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
+        // Attaching paths must preserve all original public quantities,
+        // authority/batch identities and the Poseidon preimage digest.
+        assert_eq!(
+            public_claims_from_transcripts(&transcripts, PublicTransferLimits::default())
+                .unwrap()
+                .as_slice(),
+            prepared.claims()
+        );
+        let expected = fixture.expected(&prepared);
+        assert_eq!(expected.old_root, old_root);
+        assert_eq!(expected.new_root, new_root);
+        let statements = prepared.compact_statements(&[]).unwrap();
+        assert_eq!(statements.len(), 1);
+        let delta = &transcripts[0].deltas[0];
+        let paths = [&delta.from_smt_witness, &delta.to_smt_witness];
+        for (path, update) in paths.iter().zip(statements[0].updates) {
+            assert_eq!(path.path_bits.as_slice(), update.path.to_le_bytes());
+            assert_eq!(path.siblings.len(), PATH_LEVELS);
+        }
+        let siblings = core::array::from_fn(|update| {
+            core::array::from_fn(|level| {
+                let bytes = paths[update].siblings[level];
+                core::array::from_fn(|limb| {
+                    u32::from_le_bytes(bytes[4 * limb..4 * limb + 4].try_into().unwrap())
+                })
+            })
+        });
+        let witness = SmtWitness::from_inputs(&statements[0], &siblings)
+            .unwrap()
+            .into_physical();
+        let mut columns = (0..COLUMN_COUNT)
+            .map(|_| Vec::with_capacity(PHYSICAL_ROW_COUNT))
+            .collect::<Vec<_>>();
+        for row in witness.rows() {
+            for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
+                column.push(value);
+            }
+        }
+        columns
+    }
+
+    /// Prove the fixture's AXT relation and convert it to one canonical shared frame.
+    ///
+    /// Proving AIR, typed proof, shared DTO and public preparation all leave
+    /// scope on return. The facade receives only original public facts and
+    /// one canonical raw frame, never a retained prover/verifier object.
+    fn prove_shared_axt_frame(
+        fixture: &Fixture,
+        columns: Vec<Vec<u64>>,
+        limits: VerifyLimits,
+    ) -> (Vec<u8>, usize, std::time::Duration, std::time::Duration) {
+        use crate::backend::{
+            compact_axt_context::encode_context,
+            compact_protocol::{self, FixedAir, shared_openings},
+        };
+
+        let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
+        let expected = fixture.expected(&prepared);
+        let air = AxtTransferAir::new(
+            &prepared,
+            &expected,
+            &fixture.binding,
+            fixture.metadata(),
+            fixture.outer,
+            fixture.remote.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(
+            air.schema().identity,
+            "fastpq:compact:v1:axt-public-transfer:v1:342cols:923slots:65536rows"
+        );
+        assert_ne!(
+            air.schema().identity,
+            PublicTransferAir::new(&prepared, &expected)
+                .unwrap()
+                .schema()
+                .identity
+        );
+        assert_eq!(
+            air.statement_bytes(),
+            encode_context(
+                &prepared,
+                &expected,
+                &fixture.binding,
+                fixture.metadata(),
+                fixture.outer,
+                fixture.remote.as_deref(),
+            )
+            .unwrap()
+        );
+        let proving_started = std::time::Instant::now();
+        let proof = compact_protocol::prove(&air, &columns).unwrap();
+        let proving = proving_started.elapsed();
+        drop(columns);
+        let typed_bytes = norito::core::encoded_frame_len(&proof).unwrap();
+        let conversion_started = std::time::Instant::now();
+        let shared = shared_openings::from_compact(&air, &proof, limits).unwrap();
+        let encoded = norito::core::to_bytes(&shared).unwrap();
+        assert_eq!(
+            encoded.len(),
+            norito::core::encoded_frame_len(&shared).unwrap()
+        );
+        let conversion = conversion_started.elapsed();
+        (encoded, typed_bytes, proving, conversion)
+    }
+
+    /// Check the verified public result and its measured bounded opening work.
+    fn assert_verified_axt_work(
+        verified: &VerifiedPublicTransfer,
+        expected: PublicIO,
+        proof_bytes: usize,
+    ) -> SharedVerificationWork {
+        use crate::gadgets::compact_smt_air::PHYSICAL_ROW_COUNT;
+
         let work = verified.work();
         let queries = 375;
         assert_eq!(
@@ -819,7 +879,7 @@ mod tests {
             queries
         );
         assert_eq!(verified.public_io(), expected);
-        assert_eq!(work.proof_bytes, encoded.len());
+        assert_eq!(work.proof_bytes, proof_bytes);
         assert_eq!(work.transcripts, 1);
         assert_eq!(work.air_evaluations, queries);
         assert!((queries..=2 * queries).contains(&work.row_leaves));
@@ -839,43 +899,51 @@ mod tests {
         }
         assert!((1..=fri_leaf_bound).contains(&work.fri_leaves));
         assert!((1..=parent_bound).contains(&work.parent_hashes));
+        work
+    }
 
-        // All negative controls reuse this public frame and run after private
-        // proving material has gone out of scope.
+    /// Reject changed public inputs, context, profile and framing for one valid frame.
+    fn assert_axt_negative_controls(
+        fixture: &Fixture,
+        prepared: &PreparedPublicTransfers<'_>,
+        expected: PublicIO,
+        encoded: &[u8],
+        limits: VerifyLimits,
+    ) {
         let mut changed_expected = expected;
         changed_expected.slot ^= 1;
         assert!(matches!(
             verify_axt_transfer(
-                &prepared,
+                prepared,
                 &changed_expected,
-                context(&fixture),
-                &encoded,
+                context(fixture),
+                encoded,
                 limits
             ),
             Err(Error::PublicIoMismatch {
                 field: "compact_public_io"
             })
         ));
-        let mut changed_context = context(&fixture);
+        let mut changed_context = context(fixture);
         changed_context.mirrors.manifest_root[0] ^= 1;
         assert!(matches!(
-            verify_axt_transfer(&prepared, &expected, changed_context, &encoded, limits),
+            verify_axt_transfer(prepared, &expected, changed_context, encoded, limits),
             Err(Error::InvalidAxtBinding { .. })
         ));
-        let mut changed_context = context(&fixture);
+        let mut changed_context = context(fixture);
         changed_context.remote_spend_claims = None;
         assert!(matches!(
-            verify_axt_transfer(&prepared, &expected, changed_context, &encoded, limits),
+            verify_axt_transfer(prepared, &expected, changed_context, encoded, limits),
             Err(Error::MissingMetadata { .. })
         ));
         let mut binding = fixture.binding.clone();
         binding.source_receipt_id.push_str("-different");
-        let mut changed_context = context(&fixture);
+        let mut changed_context = context(fixture);
         changed_context.binding = &binding;
         // This context is independently well formed, so failure must come from
         // binding the complete proof transcript to the original public context.
         AxtTransferAir::new(
-            &prepared,
+            prepared,
             &expected,
             &binding,
             fixture.metadata(),
@@ -884,7 +952,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            verify_axt_transfer(&prepared, &expected, changed_context, &encoded, limits).is_err()
+            verify_axt_transfer(prepared, &expected, changed_context, encoded, limits).is_err()
         );
         let mut changed_fixture = fixture.clone();
         let mut changed_root = expected.new_root;
@@ -906,45 +974,29 @@ mod tests {
                 &changed,
                 &changed_io,
                 context(&changed_fixture),
-                &encoded,
+                encoded,
                 limits,
             )
             .is_err()
         );
         assert!(matches!(
-            verify_transfer(&prepared, &expected, &encoded, limits),
+            verify_transfer(prepared, &expected, encoded, limits),
             Err(Error::InvalidProofSemantics { .. })
         ));
         let ordinary = fixture.prepare(ProofSemantics::StateTransition);
         let ordinary_io = fixture.expected(&ordinary);
         assert!(matches!(
-            verify_axt_transfer(&ordinary, &ordinary_io, context(&fixture), &encoded, limits),
+            verify_axt_transfer(&ordinary, &ordinary_io, context(fixture), encoded, limits),
             Err(Error::InvalidProofSemantics { .. })
         ));
-        assert!(verify_transfer(&ordinary, &ordinary_io, &encoded, limits).is_err());
-        let mut trailing = encoded.clone();
+        assert!(verify_transfer(&ordinary, &ordinary_io, encoded, limits).is_err());
+        let mut trailing = encoded.to_vec();
         trailing.push(0);
         assert!(matches!(
-            verify_axt_transfer(&prepared, &expected, context(&fixture), &trailing, limits),
+            verify_axt_transfer(prepared, &expected, context(fixture), &trailing, limits),
             Err(Error::Encode(_))
         ));
         drop(trailing);
-
-        // Retain only this deterministic public-fixture proof, keyed by exact
-        // bytes. No private-input files, signing material or live state are retained.
-        let artifact_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/fastpq-production-validation");
-        std::fs::create_dir_all(&artifact_dir).unwrap();
-        let artifact = artifact_dir.join(format!(
-            "compact-shared-axt-transfer-{}.bin",
-            hex::encode(Sha256::digest(&encoded))
-        ));
-        std::fs::write(&artifact, &encoded).unwrap();
-        eprintln!(
-            "compact_axt_construction={construction:?}; proving={proving:?}; shared_conversion={conversion:?}; raw_facade_verifying={verifying:?}; typed_bytes={typed_bytes}; work={work:?}; default_admitted=false; diagnostic_limit={}; production_security_qualified=false; public_fixture_artifact={}",
-            limits.max_proof_bytes,
-            artifact.display()
-        );
     }
 
     fn final_limits() -> VerifyLimits {
@@ -953,6 +1005,40 @@ mod tests {
             max_queries: 375,
             ..final_test_limits()
         }
+    }
+
+    /// Final limits with exactly one public-resource ceiling exceeded, and its name.
+    fn exceeded_final_limits() -> [(VerifyLimits, &'static str); 4] {
+        [
+            (
+                VerifyLimits {
+                    max_transitions: 1,
+                    ..final_limits()
+                },
+                "max_transitions",
+            ),
+            (
+                VerifyLimits {
+                    max_batch_bytes: 0,
+                    ..final_limits()
+                },
+                "max_batch_bytes",
+            ),
+            (
+                VerifyLimits {
+                    max_air_row_values: 341,
+                    ..final_limits()
+                },
+                "max_air_row_values",
+            ),
+            (
+                VerifyLimits {
+                    max_queries: 374,
+                    ..final_limits()
+                },
+                "max_queries",
+            ),
+        ]
     }
 
     #[test]
@@ -1010,36 +1096,7 @@ mod tests {
             ProofSemantics::AxtTransferClaim,
         ] {
             let prepared = fixture.prepare(semantics);
-            for (limits, required_error) in [
-                (
-                    VerifyLimits {
-                        max_transitions: 1,
-                        ..final_limits()
-                    },
-                    "max_transitions",
-                ),
-                (
-                    VerifyLimits {
-                        max_batch_bytes: 0,
-                        ..final_limits()
-                    },
-                    "max_batch_bytes",
-                ),
-                (
-                    VerifyLimits {
-                        max_air_row_values: 341,
-                        ..final_limits()
-                    },
-                    "max_air_row_values",
-                ),
-                (
-                    VerifyLimits {
-                        max_queries: 374,
-                        ..final_limits()
-                    },
-                    "max_queries",
-                ),
-            ] {
+            for (limits, required_error) in exceeded_final_limits() {
                 let result = if semantics == ProofSemantics::StateTransition {
                     verify_transfer_with_allocation(
                         &prepared,

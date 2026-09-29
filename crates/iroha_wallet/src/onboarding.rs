@@ -297,7 +297,7 @@ fn prepare_onboarding(
     let (request_id, deadline) = options.identity(current_unix_ms()?)?;
     let journal = Journal::create(path)?;
     let client = operation_client(config, options.timeout_secs)?;
-    let receipt = client.plan_account_onboarding(&request, &token)?;
+    let receipt = client.plan_account_onboarding(&request, token)?;
     verify_trusted_issuer(&receipt, &issuer)?;
     let binding = PreparedOperationBindingV1::onboarding(
         &receipt,
@@ -309,7 +309,7 @@ fn prepare_onboarding(
         &receipt,
         &binding,
         &requested_fee,
-        &token,
+        token,
     )?;
     let (response, fee_payment) = match response {
         AccountOnboardingPrepareResponseV1::Prepared(prepared) => {
@@ -509,7 +509,12 @@ fn run_saved_operation(
         before.status = "Pending";
     }
     if !submit || before.status != "Absent" {
-        return report(&journal, &operation, before.status, before.evidence);
+        return report(
+            &journal,
+            &operation,
+            before.status,
+            before.evidence.as_ref(),
+        );
     }
     if current_unix_ms()? >= operation.binding.execution_expires_at_unix_ms {
         return report(&journal, &operation, "Expired", None);
@@ -528,7 +533,7 @@ fn run_saved_operation(
                     &onboarding.request,
                     prepared,
                     &operation.fee_payment,
-                    &token,
+                    token,
                 )
             }
             OnboardingResponseV1::ProofRequired(_) => {
@@ -555,7 +560,7 @@ fn run_saved_operation(
             &journal,
             &operation,
             observation.status,
-            observation.evidence,
+            observation.evidence.as_ref(),
         ),
         _ => report(&journal, &operation, "Pending", None),
     }
@@ -636,7 +641,7 @@ fn report(
     journal: &Journal,
     operation: &OperationJournalV1,
     status: &str,
-    evidence: Option<Value>,
+    evidence: Option<&Value>,
 ) -> Result<OperationReport> {
     let transaction_hash = match &operation.operation {
         OperationV1::Onboarding(onboarding) => match &onboarding.response {

@@ -2375,7 +2375,7 @@ pub use openssl_provider::{OpenSslProvider, OpenSslProviderError};
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview OpenSSL-backed implementations for SM primitives.
 pub mod openssl_sm {
-    use super::{OpenSslProvider, Sm3Digest};
+    use super::OpenSslProvider;
     use openssl::{
         cipher::{Cipher, CipherRef},
         cipher_ctx::CipherCtx,

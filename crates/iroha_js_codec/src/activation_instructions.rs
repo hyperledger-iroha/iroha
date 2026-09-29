@@ -36,9 +36,11 @@ fn fields(value: Value, names: &[&str], context: &str) -> CodecResult<json::Map>
 }
 
 fn model<T: JsonDeserialize + JsonSerialize>(value: Value, context: &str) -> CodecResult<T> {
+    // Keep the submitted spelling for the canonical check; decoding consumes `value`.
+    let submitted = value.clone();
     let parsed: T =
-        json::from_value(value.clone()).map_err(|error| invalid(format!("{context}: {error}")))?;
-    if render(&parsed)? != value {
+        json::from_value(value).map_err(|error| invalid(format!("{context}: {error}")))?;
+    if render(&parsed)? != submitted {
         return Err(invalid(format!(
             "{context} must use its exact canonical native JSON spelling"
         )));
@@ -67,6 +69,11 @@ fn revision(value: Value, context: &str) -> CodecResult<u64> {
     Ok(number)
 }
 
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    clippy::unnecessary_wraps,
+    reason = "`activation_contracts!` calls every field renderer as `fn(&T) -> CodecResult<Value>`"
+)]
 fn render_revision(value: &u64) -> CodecResult<Value> {
     Ok(Value::String(value.to_string()))
 }

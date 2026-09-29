@@ -385,8 +385,6 @@ mod bounded_authority;
 mod callback_journal;
 mod canonical_history;
 mod carrier_da_effects;
-mod carrier_geometry_preparation;
-mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_source_admission;
 mod committed_hash_journal;
@@ -57638,7 +57636,6 @@ mod range_bounds {
 mod account_identity_restore;
 mod account_scope_restore;
 mod alias_index_restore;
-mod fee_settlement_markers;
 mod ownership_index_restore;
 pub(crate) mod sccp_snapshot_state;
 pub(crate) mod snapshot_service_state;

@@ -1169,6 +1169,33 @@ pub mod compact_fri_support {
     }
 }
 
+/// Check the opened initial index and every round/layer count before any hashing.
+fn check_fri_query_shape(
+    fri_query: &FriQueryOpening,
+    query_pos: usize,
+    initial_index: usize,
+    fri_layers: &[GoldilocksDigest384V1],
+    betas: &[GoldilocksFp4V1],
+    fri_layer_lengths: &[usize],
+) -> Result<()> {
+    if usize::try_from(fri_query.initial_index).ok() != Some(initial_index) {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
+    if fri_query.rounds.len() != betas.len() {
+        return Err(Error::FriChallengeLengthMismatch {
+            expected: betas.len(),
+            actual: fri_query.rounds.len(),
+        });
+    }
+    if fri_layers.len() != betas.len() + 1 || fri_layer_lengths.len() != fri_layers.len() {
+        return Err(Error::FriLayerLengthMismatch {
+            expected: betas.len() + 1,
+            actual: fri_layers.len(),
+        });
+    }
+    Ok(())
+}
+
 fn verify_fri_query_chain(
     merkle_cache: &mut backend::MerkleNodeCache,
     fri_query: &FriQueryOpening,
@@ -1189,21 +1216,14 @@ fn verify_fri_query_chain(
     if arity == 0 {
         return Err(Error::FriArity(0));
     }
-    if usize::try_from(fri_query.initial_index).ok() != Some(initial_index) {
-        return Err(Error::QueryMismatch { index: query_pos });
-    }
-    if fri_query.rounds.len() != betas.len() {
-        return Err(Error::FriChallengeLengthMismatch {
-            expected: betas.len(),
-            actual: fri_query.rounds.len(),
-        });
-    }
-    if fri_layers.len() != betas.len() + 1 || fri_layer_lengths.len() != fri_layers.len() {
-        return Err(Error::FriLayerLengthMismatch {
-            expected: betas.len() + 1,
-            actual: fri_layers.len(),
-        });
-    }
+    check_fri_query_shape(
+        fri_query,
+        query_pos,
+        initial_index,
+        fri_layers,
+        betas,
+        fri_layer_lengths,
+    )?;
     let mut index = initial_index;
     ensure_canonical_fp4(initial_value, "fri_initial_value", &[query_pos])?;
     let mut value = initial_value;
@@ -1334,12 +1354,12 @@ fn verify_fri_final_opening(
 }
 fn expected_fri_layer_lengths(
     domain_size: usize,
-    arity: u32,
+    requested_arity: u32,
     max_reductions: u32,
 ) -> Result<Vec<usize>> {
-    let arity = usize::try_from(arity).map_err(|_| Error::FriArity(arity))?;
+    let arity = usize::try_from(requested_arity).map_err(|_| Error::FriArity(requested_arity))?;
     if arity != 2 {
-        return Err(Error::FriArity(arity as u32));
+        return Err(Error::FriArity(requested_arity));
     }
     if !domain_size.is_power_of_two() {
         return Err(Error::FriDomainSize {
@@ -2302,7 +2322,7 @@ mod tests {
         let query_count = domain.min(fastpq_isi::FASTPQ_FINAL_V1.fri.queries as usize);
         let chunk = domain.min(backend::lde_chunk_size(2).unwrap());
         proof.parameter = fastpq_isi::FASTPQ_FINAL_V1_ID.into();
-        proof.lde_domain_size = domain as u32;
+        proof.lde_domain_size = u32::try_from(domain).expect("sample LDE domain fits u32");
         proof.alphas = vec![fp4(0); AIR_COMPOSITION_ALPHA_COUNT];
         proof.betas = vec![fp4(0); rounds];
         proof.fri_layers = vec![zero; rounds + 1];
@@ -2332,7 +2352,7 @@ mod tests {
                 initial_index: 0,
                 rounds: (0..rounds)
                     .map(|round| FriRoundOpening {
-                        round: round as u32,
+                        round: u32::try_from(round).expect("sample FRI round fits u32"),
                         index: 0,
                         values: vec![fp4(0); 2],
                         folded_value: fp4(0),

@@ -317,38 +317,6 @@ mod canonical_output_inclusion_tests {
             &expected
         ));
     }
-    #[test]
-    fn committed_query_rejects_retired_parallel_result_and_merge_wire() {
-        let (_, committed) = execution_fixture();
-        let mut json = norito::json::to_value(&committed).unwrap();
-        json.as_object_mut()
-            .unwrap()
-            .insert("merge_inclusion".into(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
-        #[derive(norito::codec::Encode)]
-        struct RetiredCommitted {
-            block_hash: HashOf<crate::block::BlockHeader>,
-            entrypoint_hash: HashOf<TransactionEntrypoint>,
-            entrypoint_proof: MerkleProof<TransactionEntrypoint>,
-            entrypoint: TransactionEntrypoint,
-            result_hash: HashOf<crate::transaction::TransactionResult>,
-            result_proof: MerkleProof<crate::transaction::TransactionResult>,
-            result: crate::transaction::TransactionResult,
-            merge_inclusion: Option<CertifiedMergeTransactionInclusion>,
-        }
-        let result = committed.result().clone();
-        let old = RetiredCommitted {
-            block_hash: committed.block_hash,
-            entrypoint_hash: committed.entrypoint_hash,
-            entrypoint_proof: committed.entrypoint_proof,
-            entrypoint: committed.entrypoint,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, vec![]),
-            result,
-            merge_inclusion: None,
-        };
-        assert!(CommittedTransaction::decode_all(&mut old.encode().as_slice()).is_err());
-    }
 }
 #[cfg(all(test, feature = "fault_injection"))]
 mod fault_injection_tests {

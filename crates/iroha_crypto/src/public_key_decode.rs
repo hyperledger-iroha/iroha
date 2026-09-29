@@ -14,7 +14,7 @@ fn invalid_key() -> Error {
     }
 }
 
-pub(super) fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
+pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
     let valid = match algorithm {
         Algorithm::Ed25519 => {
             signature::ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)

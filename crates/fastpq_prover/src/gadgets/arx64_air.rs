@@ -75,14 +75,14 @@ impl Add64Witness<u64> {
     /// Generate the exact sum and both carries using native integer arithmetic.
     #[must_use]
     pub fn from_operands(left: u64, right: u64) -> Self {
-        let wide_sum = u128::from(left) + u128::from(right);
+        let (sum, carry_64) = left.overflowing_add(right);
         let low_sum = (left & u64::from(u32::MAX)) + (right & u64::from(u32::MAX));
         Self {
             left: BitWord64::from_integer(left),
             right: BitWord64::from_integer(right),
-            output: BitWord64::from_integer(wide_sum as u64),
+            output: BitWord64::from_integer(sum),
             carry_32: low_sum >> 32,
-            carry_64: (wide_sum >> 64) as u64,
+            carry_64: u64::from(carry_64),
         }
     }
 }
@@ -433,17 +433,18 @@ mod tests {
         // A third finite difference vanishes for every quadratic, including
         // at non-Boolean openings where accidental selector gates add degree.
         fn third_difference<const N: usize>(samples: [[u64; N]; 4]) {
-            for column in 0..N {
-                let difference = IntegerAirField::sub(
-                    samples[3][column],
-                    IntegerAirField::mul(3_u64, samples[2][column]),
-                );
-                let difference = IntegerAirField::add(
-                    difference,
-                    IntegerAirField::mul(3_u64, samples[1][column]),
-                );
+            let [first, second, third, fourth] = samples;
+            for (column, (((s0, s1), s2), s3)) in first
+                .into_iter()
+                .zip(second)
+                .zip(third)
+                .zip(fourth)
+                .enumerate()
+            {
+                let difference = IntegerAirField::sub(s3, IntegerAirField::mul(3_u64, s2));
+                let difference = IntegerAirField::add(difference, IntegerAirField::mul(3_u64, s1));
                 assert_eq!(
-                    IntegerAirField::sub(difference, samples[0][column]),
+                    IntegerAirField::sub(difference, s0),
                     0,
                     "cubic numerator at column {column}"
                 );

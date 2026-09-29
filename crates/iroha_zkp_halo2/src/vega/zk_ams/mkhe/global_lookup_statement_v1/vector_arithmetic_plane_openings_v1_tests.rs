@@ -350,9 +350,9 @@ fn source_context_is_ordered_nonzero_and_swap_hostile() {
 #[test]
 fn exact_replay_purposes_authorize_only_required_multi_use() {
     let purposes = [
-        PlaneOpeningReplayPurposeV1::Statement3Inputs,
-        PlaneOpeningReplayPurposeV1::Statement5Inputs,
-        PlaneOpeningReplayPurposeV1::Statement8Inputs,
+        PlaneOpeningReplayPurposeV1::Statement3,
+        PlaneOpeningReplayPurposeV1::Statement5,
+        PlaneOpeningReplayPurposeV1::Statement8,
     ];
     let counts = purposes.map(|p| replay_plane_count_v1(p).unwrap());
     assert_eq!(counts, [688, 6880, 2064]);
@@ -379,9 +379,9 @@ fn every_permit_is_one_shot_and_full_consumption_releases_no_authority() {
     let before = TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst);
     let (mut owner, context) = test_owner_v1([0x7a; 32]);
     for purpose in [
-        PlaneOpeningReplayPurposeV1::Statement5Inputs,
-        PlaneOpeningReplayPurposeV1::Statement8Inputs,
-        PlaneOpeningReplayPurposeV1::Statement3Inputs,
+        PlaneOpeningReplayPurposeV1::Statement5,
+        PlaneOpeningReplayPurposeV1::Statement8,
+        PlaneOpeningReplayPurposeV1::Statement3,
     ] {
         owner = complete_purpose_v1(owner, context, purpose);
     }
@@ -396,7 +396,7 @@ fn wrong_order_context_duplicate_and_incomplete_replays_fail_closed() {
     let before = TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst);
     let (owner, context) = test_owner_v1([0x81; 32]);
     let mut replay = owner
-        .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, context)
+        .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3, context)
         .unwrap();
     assert_eq!(
         replay.absorb_next_authenticated_plane_v1(1),
@@ -411,19 +411,15 @@ fn wrong_order_context_duplicate_and_incomplete_replays_fail_closed() {
     let (owner, _) = test_owner_v1([0x82; 32]);
     assert!(
         owner
-            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, [0xff; 32])
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3, [0xff; 32])
             .is_err()
     );
 
     let (owner, context) = test_owner_v1([0x83; 32]);
-    let owner = complete_purpose_v1(
-        owner,
-        context,
-        PlaneOpeningReplayPurposeV1::Statement3Inputs,
-    );
+    let owner = complete_purpose_v1(owner, context, PlaneOpeningReplayPurposeV1::Statement3);
     assert!(
         owner
-            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, context)
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3, context)
             .is_err()
     );
 
@@ -445,7 +441,7 @@ fn owner_zeroizes_on_unwind_and_record_context_tampering() {
     owner.live.as_mut().unwrap().record.context_digest = [0x93; 32];
     assert!(
         owner
-            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement8Inputs, context)
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement8, context)
             .is_err()
     );
     assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) >= before + 2);

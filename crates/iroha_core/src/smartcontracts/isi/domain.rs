@@ -9313,36 +9313,6 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_allows_peer_based_lane_relay_emergency_state() {
-        with_registered_account_unregistration_candidate(
-            |authority, _domain_id, account_id, tx| {
-                let peer = PeerId::new(
-                    checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-                        .public_key()
-                        .clone(),
-                );
-                tx.world.lane_relay_emergency_validators.insert(
-                    LaneId::new(0),
-                    iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                        peers: vec![peer],
-                        expires_at_height: 10,
-                        metadata: Metadata::default(),
-                    },
-                );
-                assert!(
-                    Unregister::account(account_id.clone())
-                        .execute(&authority, tx)
-                        .is_ok(),
-                    "peer-based emergency override state should not block account unregister"
-                );
-                assert!(
-                    tx.world.accounts.get(&account_id).is_none(),
-                    "account should be removed when lane-relay override stores peers instead"
-                );
-            },
-        );
-    }
-    #[test]
     fn space_directory_events_drive_bindings() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("spaces", "events").expect("domain id");

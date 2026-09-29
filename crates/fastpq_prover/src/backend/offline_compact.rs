@@ -345,13 +345,18 @@ pub enum ProvingError {
 /// # Errors
 /// Returns `Busy` for concurrent production, or rejects inconsistent public
 /// facts, exceeded work/output limits, invalid roots or final verification failure.
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "stable public entry point: `VerificationLimits` is a `Copy` policy value that \
+              downstream crates and the documented example pass by value"
+)]
 pub fn prove_quantity_ordinary_artifact(
     statement: &FastpqPublicTransferStatementV1,
     expected: ExpectedStatement,
     proving: ProvingLimits,
     verification: VerificationLimits,
 ) -> Result<Vec<u8>, ProvingError> {
-    super::compact_quantity_producer::prove(statement, expected, None, proving, verification)
+    super::compact_quantity_producer::prove(statement, expected, None, proving, &verification)
 }
 
 /// Produce a canonical AXT quantity bundle with complete independent AXT context.
@@ -364,6 +369,11 @@ pub fn prove_quantity_ordinary_artifact(
 /// # Errors
 /// Returns `Busy` for concurrent production, or rejects public/AXT mismatches,
 /// exceeded work/output limits, invalid roots or final verification failure.
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "stable public entry point: `VerificationLimits` is a `Copy` policy value that \
+              downstream crates and the documented example pass by value"
+)]
 pub fn prove_quantity_axt_artifact(
     statement: &FastpqPublicTransferStatementV1,
     expected: ExpectedStatement,
@@ -376,7 +386,7 @@ pub fn prove_quantity_axt_artifact(
         expected,
         Some(context),
         proving,
-        verification,
+        &verification,
     )
 }
 
@@ -510,6 +520,11 @@ pub fn quantity_profile_id() -> FastpqCompactProfileIdV1 {
 /// Rejects canonical transport or policy failures, mismatched expected inputs,
 /// mismatched complete statement digest, invalid public facts, zero/malformed
 /// bundles, or any invalid child.
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "stable public entry point: `VerificationLimits` is a `Copy` policy value that \
+              downstream crates and the documented example pass by value"
+)]
 pub fn verify_quantity_ordinary_artifact(
     bytes: &[u8],
     expected: ExpectedStatement,
@@ -534,6 +549,11 @@ pub fn verify_quantity_ordinary_artifact(
 /// Rejects canonical transport or policy failures, any caller-context mismatch,
 /// mismatched complete statement digest, invalid public/AXT facts, or any missing,
 /// malformed or invalid child.
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "stable public entry point: `VerificationLimits` is a `Copy` policy value that \
+              downstream crates and the documented example pass by value"
+)]
 pub fn verify_quantity_axt_artifact(
     bytes: &[u8],
     expected: ExpectedStatement,

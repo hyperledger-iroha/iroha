@@ -106,13 +106,14 @@ pub(super) fn preflight_context<V: CompactTransferValue>(
     let max_bytes = VerifyLimits::default().max_batch_bytes;
     check_limit(prepared.work().public_bytes, limits.max_public_bytes)?;
     if let Some(claims) = remote_spend_claims
-        && claims.len() > limits.max_deltas {
-            return Err(Error::VerifierLimitExceeded {
-                limit: "max_compact_axt_remote_claims",
-                actual: claims.len(),
-                max: limits.max_deltas,
-            });
-        }
+        && claims.len() > limits.max_deltas
+    {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_compact_axt_remote_claims",
+            actual: claims.len(),
+            max: limits.max_deltas,
+        });
+    }
     // Bound variable-count containers in O(1) before the counting serializer
     // walks their elements. These are conservative raw payload lower bounds;
     // the exact canonical framed count remains mandatory below.
@@ -159,11 +160,12 @@ pub(super) fn preflight_context<V: CompactTransferValue>(
 }
 
 fn checked_sum(left: usize, right: usize) -> Result<usize> {
-    left.checked_add(right).ok_or(Error::VerifierLimitExceeded {
-        limit: "max_compact_axt_context_bytes",
-        actual: usize::MAX,
-        max: VerifyLimits::default().max_batch_bytes,
-    })
+    left.checked_add(right)
+        .ok_or_else(|| Error::VerifierLimitExceeded {
+            limit: "max_compact_axt_context_bytes",
+            actual: usize::MAX,
+            max: VerifyLimits::default().max_batch_bytes,
+        })
 }
 
 fn check_limit(actual: usize, max: usize) -> Result<()> {
@@ -218,83 +220,103 @@ pub(super) mod tests {
         pub(in crate::backend) occurrences: Vec<AxtSourceTransferOccurrenceV1>,
     }
 
+    /// Single public transfer delta shared by every AXT context fixture.
+    fn fixture_delta() -> PublicTransferDelta {
+        PublicTransferDelta {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            amount: Quantity::from(35_u64),
+            from_balance_before: Quantity::from(100_u64),
+            from_balance_after: Quantity::from(65_u64),
+            to_balance_before: Quantity::from(200_u64),
+            to_balance_after: Quantity::from(235_u64),
+        }
+    }
+
+    /// Public transcript whose digest uses only its original public preimage fields.
+    fn fixture_transcript(
+        delta: &PublicTransferDelta,
+        batch_hash: Hash,
+    ) -> PublicTransferTranscript {
+        let mut hasher = PoseidonByteHasher::new();
+        delta.from_account.encode_to(&mut hasher);
+        delta.to_account.encode_to(&mut hasher);
+        delta.asset_definition.encode_to(&mut hasher);
+        delta.amount.encode_to(&mut hasher);
+        hasher.update(batch_hash.as_ref());
+        PublicTransferTranscript {
+            batch_hash,
+            authority_digest: Hash::new(b"caller-authenticated execution authority"),
+            poseidon_preimage_digest: Some(Hash::prehashed(hasher.finalize())),
+            deltas: vec![delta.clone()],
+        }
+    }
+
+    /// Key-ordered sender and receiver balance transitions for `delta`.
+    fn fixture_rows(delta: &PublicTransferDelta) -> Vec<StateTransition> {
+        let mut rows: Vec<_> = [
+            (&delta.from_account, 100_u64, 65_u64),
+            (&delta.to_account, 200_u64, 235_u64),
+        ]
+        .into_iter()
+        .map(|(account, before, after)| {
+            StateTransition::new(
+                iroha_data_model::fastpq::transfer_balance_key(&delta.asset_definition, account)
+                    .unwrap(),
+                before.to_le_bytes().to_vec(),
+                after.to_le_bytes().to_vec(),
+                OperationKind::Transfer,
+            )
+        })
+        .collect();
+        rows.sort_by(|left, right| left.key.cmp(&right.key));
+        rows
+    }
+
+    /// Canonical outer AXT binding for the fixture transfer.
+    fn fixture_binding(delta: &PublicTransferDelta, batch_hash: &Hash) -> AxtFastpqBinding {
+        AxtFastpqBinding {
+            parameter: DEFAULT_PARAMETER.into(),
+            source_dsid: 7,
+            source_dataspace: "source".into(),
+            source_receipt_id: "receipt-1".into(),
+            source_tx_commitment: hex::encode(batch_hash.as_ref()),
+            claim_type: "tx_predicate".into(),
+            claim_digest: hex::encode([2; 32]),
+            witness_commitment: hex::encode([3; 32]),
+            policy_commitment: hex::encode([4; 32]),
+            verified_effect_type: "transfer".into(),
+            corridor: "corridor".into(),
+            verifier_id: "fastpq".into(),
+            verifier_version: "v1".into(),
+            target_dsids: vec![9],
+            effect_binding: Some(AxtEffectBinding {
+                destination_domain: None,
+                destination_account_id: None,
+                vault_account_id: None,
+                issuance_account_id: None,
+                source_asset_definition_id: Some(delta.asset_definition.to_string()),
+                destination_asset_definition_id: None,
+                source_amount_i64: None,
+                destination_amount_i64: None,
+            }),
+            remote_spend_intent_commitments: vec![],
+        }
+    }
+
     impl Fixture {
         pub(in crate::backend) fn new(remote: bool) -> Self {
-            let delta = PublicTransferDelta {
-                from_account: (*ALICE_ID).clone(),
-                to_account: (*BOB_ID).clone(),
-                asset_definition: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                ),
-                amount: Quantity::from(35_u64),
-                from_balance_before: Quantity::from(100_u64),
-                from_balance_after: Quantity::from(65_u64),
-                to_balance_before: Quantity::from(200_u64),
-                to_balance_after: Quantity::from(235_u64),
-            };
+            let delta = fixture_delta();
             let batch_hash = Hash::new(b"compact AXT public entry");
-            // Fixture digest uses only its original public preimage fields.
-            let mut hasher = PoseidonByteHasher::new();
-            delta.from_account.encode_to(&mut hasher);
-            delta.to_account.encode_to(&mut hasher);
-            delta.asset_definition.encode_to(&mut hasher);
-            delta.amount.encode_to(&mut hasher);
-            hasher.update(batch_hash.as_ref());
-            let transcript = PublicTransferTranscript {
-                batch_hash,
-                authority_digest: Hash::new(b"caller-authenticated execution authority"),
-                poseidon_preimage_digest: Some(Hash::prehashed(hasher.finalize())),
-                deltas: vec![delta.clone()],
-            };
-            let mut rows: Vec<_> = [
-                (&delta.from_account, 100_u64, 65_u64),
-                (&delta.to_account, 200_u64, 235_u64),
-            ]
-            .into_iter()
-            .map(|(account, before, after)| {
-                StateTransition::new(
-                    iroha_data_model::fastpq::transfer_balance_key(
-                        &delta.asset_definition,
-                        account,
-                    )
-                    .unwrap(),
-                    before.to_le_bytes().to_vec(),
-                    after.to_le_bytes().to_vec(),
-                    OperationKind::Transfer,
-                )
-            })
-            .collect();
-            rows.sort_by(|left, right| left.key.cmp(&right.key));
+            let transcript = fixture_transcript(&delta, batch_hash);
+            let rows = fixture_rows(&delta);
             let mut dsid = [0; 16];
             dsid[..8].copy_from_slice(&7_u64.to_le_bytes());
-            let binding = AxtFastpqBinding {
-                parameter: DEFAULT_PARAMETER.into(),
-                source_dsid: 7,
-                source_dataspace: "source".into(),
-                source_receipt_id: "receipt-1".into(),
-                source_tx_commitment: hex::encode(batch_hash.as_ref()),
-                claim_type: "tx_predicate".into(),
-                claim_digest: hex::encode([2; 32]),
-                witness_commitment: hex::encode([3; 32]),
-                policy_commitment: hex::encode([4; 32]),
-                verified_effect_type: "transfer".into(),
-                corridor: "corridor".into(),
-                verifier_id: "fastpq".into(),
-                verifier_version: "v1".into(),
-                target_dsids: vec![9],
-                effect_binding: Some(AxtEffectBinding {
-                    destination_domain: None,
-                    destination_account_id: None,
-                    vault_account_id: None,
-                    issuance_account_id: None,
-                    source_asset_definition_id: Some(delta.asset_definition.to_string()),
-                    destination_asset_definition_id: None,
-                    source_amount_i64: None,
-                    destination_amount_i64: None,
-                }),
-                remote_spend_intent_commitments: vec![],
-            };
+            let binding = fixture_binding(&delta, &batch_hash);
             let mut fixture = Self {
                 rows,
                 claims: vec![transcript],

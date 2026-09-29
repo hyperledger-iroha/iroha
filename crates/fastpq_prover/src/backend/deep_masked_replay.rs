@@ -38,6 +38,10 @@ pub(super) const TRACE_MASK_COEFFICIENTS: usize = 2 * (QUERY_COUNT + F::COEFFICI
 pub(super) const QUOTIENT_MASK_COEFFICIENTS: usize = QUERY_COUNT + 1;
 
 /// Explicit local payload/work policy; not consensus parameters or a proof field.
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive maximum, named like the crate's other `*Limits` policies"
+)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ReplayLimits {
     pub(super) max_payload_bytes: usize,

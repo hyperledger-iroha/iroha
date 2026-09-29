@@ -832,6 +832,10 @@ fn collect_package_sources(
         collector.collect_selector(path, SelectionShape::Directory)?;
     }
     for path in &layout.contracts {
+        #[expect(
+            clippy::case_sensitive_file_extension_comparisons,
+            reason = "portable Musubi contract sources require the canonical lowercase .ko suffix"
+        )]
         if !path
             .file_name()
             .and_then(|name| name.to_str())

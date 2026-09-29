@@ -80,6 +80,15 @@ impl<T> DerefMut for HostOutput<T> {
     }
 }
 
+impl<T: std::fmt::Debug> std::fmt::Debug for HostOutput<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("HostOutput")
+            .field(&self.as_slice())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,14 +123,5 @@ mod tests {
         drop(empty);
         drop(reservation);
         assert_eq!(budget.reserved_bytes(), 0);
-    }
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for HostOutput<T> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_tuple("HostOutput")
-            .field(&self.as_slice())
-            .finish()
     }
 }

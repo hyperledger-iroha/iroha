@@ -111,9 +111,9 @@ fn axt_fields(
     )
 }
 
-fn assert_limit(result: Result<impl std::fmt::Debug>, name: &str, actual: usize, max: usize) {
+fn assert_limit(result: &Result<impl std::fmt::Debug>, name: &str, actual: usize, max: usize) {
     assert!(
-        matches!(result, Err(Error::VerifierLimitExceeded { limit, actual: got, max: cap })
+        matches!(*result, Err(Error::VerifierLimitExceeded { limit, actual: got, max: cap })
         if limit == name && got == actual && cap == max)
     );
 }
@@ -223,7 +223,7 @@ fn complete_statement_caps_are_inclusive_and_fail_before_public_preparation() {
             _ => unreachable!(),
         }
         assert_limit(
-            check_statement(&statement, expected, limited_work, limited),
+            &check_statement(&statement, expected, limited_work, limited),
             name,
             actual,
             cap,
@@ -243,7 +243,7 @@ fn masked_replay_work_budget_rejects_before_statement_digest_or_private_rows() {
         let mut limits = proving();
         limits.max_segment_work_units = cap;
         assert_limit(
-            check_statement(&statement, expected, limits, policy()),
+            &check_statement(&statement, expected, limits, policy()),
             "max_compact_prover_segment_work_units",
             minimum,
             cap,
@@ -293,7 +293,7 @@ fn impossible_decoder_budget_rejects_before_statement_digest_work() {
     let mut limited = policy();
     limited.max_segment_decode_allocation_charges = 0;
     assert_limit(
-        check_statement(&statement, expected, proving(), limited),
+        &check_statement(&statement, expected, proving(), limited),
         "max_compact_producer_segment_decode_allocation_charges",
         QUERY_COUNT
             * crate::backend::compact_public_columns::COMMITTED_COLUMN_COUNT
@@ -343,7 +343,7 @@ fn fixed_shape_and_carrier_policy_reject_before_statement_digest_work() {
             _ => unreachable!(),
         }
         assert_limit(
-            check_statement(&statement, expected, proving(), limited),
+            &check_statement(&statement, expected, proving(), limited),
             name,
             minimum,
             cap,
@@ -392,7 +392,7 @@ fn artifact_byte_preflight_and_final_encoding_keep_inclusive_bounds() {
                 }
                 _ => limited.transport.max_wire_bytes -= 1,
             }
-            assert_limit(artifact.preflight(2, limited), name, actual, actual - 1);
+            assert_limit(&artifact.preflight(2, limited), name, actual, actual - 1);
         }
         let bytes = Artifact::new(&statement, axt)
             .finish(vec![1, 2, 3], policy())
@@ -408,7 +408,7 @@ fn artifact_byte_preflight_and_final_encoding_keep_inclusive_bounds() {
         );
         exact.transport.max_wire_bytes -= 1;
         assert_limit(
-            Artifact::new(&statement, axt).finish(vec![1, 2, 3], exact),
+            &Artifact::new(&statement, axt).finish(vec![1, 2, 3], exact),
             "max_compact_producer_artifact_bytes",
             bytes.len(),
             bytes.len() - 1,
@@ -728,9 +728,9 @@ fn raw_bundle_frame(wire: &BundleWire, is_axt: bool) -> Vec<u8> {
     }
 }
 
-fn assert_deep_context_rejected(error: crate::offline_compact::VerificationError) {
+fn assert_deep_context_rejected(error: &crate::offline_compact::VerificationError) {
     assert!(
-        matches!(&error,
+        matches!(error,
             crate::offline_compact::VerificationError::Verify(Error::InvalidTraceShape { details })
             if details == "DEEP out-of-domain AIR quotient identity does not hold"
                 || details == "DEEP opening positions differ from the exact derived query set"
@@ -777,6 +777,595 @@ fn assert_valid_public_context(
     .unwrap();
 }
 
+/// One captured artifact, its decoded bundle and its independent fixture expectations.
+struct CapturedArtifact<'a> {
+    is_axt: bool,
+    statement: &'a FastpqPublicTransferStatementV1,
+    expected: ExpectedStatement,
+    context: ExpectedAxtContext<'a>,
+    bytes: Vec<u8>,
+    frame: Vec<u8>,
+    wire: BundleWire,
+}
+
+impl CapturedArtifact<'_> {
+    /// Verify `raw` against `expected` through the matching public entry point.
+    fn verify(
+        &self,
+        raw: &[u8],
+        expected: ExpectedStatement,
+    ) -> std::result::Result<
+        crate::offline_compact::VerifiedArtifact,
+        crate::offline_compact::VerificationError,
+    > {
+        if self.is_axt {
+            verify_quantity_axt_artifact(raw, expected, self.context, policy())
+        } else {
+            verify_quantity_ordinary_artifact(raw, expected, policy())
+        }
+    }
+
+    /// Verify `raw` against the fixture expectation under explicit caller limits.
+    fn verify_limits(
+        &self,
+        raw: &[u8],
+        limits: &VerificationLimits,
+    ) -> std::result::Result<
+        crate::offline_compact::VerifiedArtifact,
+        crate::offline_compact::VerificationError,
+    > {
+        if self.is_axt {
+            verify_quantity_axt_artifact(raw, self.expected, self.context, *limits)
+        } else {
+            verify_quantity_ordinary_artifact(raw, self.expected, *limits)
+        }
+    }
+
+}
+
+/// Decode the outer artifact and its inner bundle under the fixed transport policy.
+fn decode_captured_bundle(
+    bytes: &[u8],
+    is_axt: bool,
+    statement: &FastpqPublicTransferStatementV1,
+    profile: FastpqCompactProfileIdV1,
+) -> (Vec<u8>, BundleWire) {
+    let frame = if is_axt {
+        let artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
+            bytes,
+            profile,
+            policy().transport,
+        )
+        .unwrap();
+        assert_eq!(&artifact.statement, statement);
+        artifact.bundle_frame
+    } else {
+        let artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
+            bytes,
+            profile,
+            policy().transport,
+        )
+        .unwrap();
+        assert_eq!(&artifact.statement, statement);
+        artifact.bundle_frame
+    };
+    let wire: BundleWire = if is_axt {
+        let wire: AxtBundleWire =
+            norito::decode_canonical_with_limits(&frame, policy().total_decode).unwrap();
+        BundleWire {
+            version: wire.version,
+            intermediate_roots: wire.intermediate_roots,
+            segments: wire.segments,
+        }
+    } else {
+        norito::decode_canonical_with_limits(&frame, policy().total_decode).unwrap()
+    };
+    (frame, wire)
+}
+
+/// The verified summary and canonical identity describe exactly these bytes.
+fn assert_captured_identity(
+    captured: &CapturedArtifact<'_>,
+    verified: &crate::offline_compact::VerifiedArtifact,
+    profile: FastpqCompactProfileIdV1,
+) {
+    let (bytes, frame, wire) = (&captured.bytes, &captured.frame, &captured.wire);
+    let expected = captured.expected;
+    assert_eq!(verified.expected_statement(), expected);
+    assert_eq!(verified.segments(), 2);
+    assert_eq!(wire.segments.len(), 2);
+    assert_eq!(verified.work().air_evaluations, 2);
+    assert_eq!(verified.work().terminal_degree_checks, 2);
+    assert_eq!(verified.work().transcripts, 2);
+    assert_eq!(verified.bundle_frame_bytes(), frame.len());
+    assert_eq!(
+        verified.work().proof_bytes,
+        wire.segments.iter().map(Vec::len).sum::<usize>()
+    );
+    let identity = verified.identity();
+    assert_eq!(identity.profile_id, profile);
+    assert_eq!(
+        identity.proof_kind,
+        if captured.is_axt {
+            FastpqProofKindV1::AxtCompact
+        } else {
+            FastpqProofKindV1::OrdinaryCompact
+        }
+    );
+    assert_eq!(
+        identity.public_statement_digest,
+        expected.public_statement_digest
+    );
+    assert_eq!(identity.artifact_digest, <[u8; 32]>::from(Hash::new(bytes)));
+    assert_eq!(
+        identity.inner_bundle_digest,
+        <[u8; 32]>::from(Hash::new(frame))
+    );
+    assert_eq!(identity.artifact_bytes, u64::try_from(bytes.len()).unwrap());
+    assert_ne!(identity.artifact_digest, identity.inner_bundle_digest);
+    let FastpqCommitmentDescriptionV1::OrderedCompactAir(roots) = &identity.commitments else {
+        panic!("quantity artifact must retain complete ordered AIR commitments")
+    };
+    assert_eq!(roots.segment_count, 2);
+    assert_eq!(roots.segment_air_row_roots.len(), 2);
+    assert_eq!(roots.segment_air_row_roots, verified.air_row_roots());
+    assert_eq!(
+        norito::decode_canonical::<FastpqArtifactIdentityDescriptionV1>(
+            &norito::encode_canonical(identity).unwrap()
+        )
+        .unwrap(),
+        *identity
+    );
+
+    let mut wrong = expected;
+    wrong.public_statement_digest[0] ^= 1;
+    assert!(matches!(
+        captured.verify(bytes, wrong),
+        Err(crate::offline_compact::VerificationError::Verify(
+            Error::PublicIoMismatch {
+                field: "compact_artifact_public_statement_digest"
+            }
+        ))
+    ));
+    wrong = expected;
+    wrong.inputs.old_root[0] ^= 1;
+    assert!(matches!(
+        captured.verify(bytes, wrong),
+        Err(crate::offline_compact::VerificationError::Verify(
+            Error::PublicIoMismatch {
+                field: "compact_model_public_io"
+            }
+        ))
+    ));
+}
+
+/// Every decoded child contributes exactly its leaves and parent hashes.
+fn assert_captured_child_work(
+    captured: &CapturedArtifact<'_>,
+    verified: &crate::offline_compact::VerifiedArtifact,
+) {
+    let (bytes, frame, wire) = (&captured.bytes, &captured.frame, &captured.wire);
+    assert_eq!(verified.work().row_leaves, 2 * QUERY_COUNT);
+    assert_eq!(verified.work().oracle_leaves, 2 * QUERY_COUNT);
+    assert!(frame.len() <= 1024 * 1024);
+    assert!(bytes.len() <= 1024 * 1024);
+    let mut observed_roots = Vec::new();
+    let mut fri_leaves = 0;
+    let mut parent_hashes = 0;
+    for child in &wire.segments {
+        assert!(child.len() <= 512 * 1024);
+        let proof = crate::backend::deep_proof::decode_with_allocation(
+            child,
+            512 * 1024,
+            policy().max_segment_decode_allocation_charges,
+        )
+        .unwrap();
+        observed_roots.push(proof.row_root);
+        fri_leaves += proof
+            .rounds
+            .iter()
+            .map(|round| round.groups.len())
+            .sum::<usize>()
+            + 1;
+        // Each binary multiproof reconstructs leaves + frontier - 1 parents;
+        // the sole terminal leaf has one required duplicate-child parent.
+        parent_hashes += proof.rows.len() + proof.row_siblings.len() - 1
+            + proof.quotients.len()
+            + proof.quotient_siblings.len()
+            - 1
+            + proof
+                .rounds
+                .iter()
+                .map(|round| round.groups.len() + round.siblings.len() - 1)
+                .sum::<usize>()
+            + 1;
+    }
+    assert_eq!(observed_roots, verified.air_row_roots());
+    assert_eq!(verified.work().fri_leaves, fri_leaves);
+    assert_eq!(verified.work().parent_hashes, parent_hashes);
+    assert_ne!(wire.intermediate_roots[0], captured.expected.inputs.old_root);
+    assert_ne!(wire.intermediate_roots[0], captured.expected.inputs.new_root);
+    assert_valid_public_context(
+        captured.statement,
+        captured.expected,
+        captured.is_axt.then_some(captured.context),
+        &wire.intermediate_roots,
+    );
+}
+
+/// Inclusive cumulative outer/child charges and elements remain in force
+/// even inside a stricter caller scope. No child can reset that scope.
+fn assert_captured_decode_scopes(
+    captured: &CapturedArtifact<'_>,
+    verified: &crate::offline_compact::VerifiedArtifact,
+) {
+    let bytes = &captured.bytes;
+    let (measured, usage) = norito::core::with_decode_limits_measured(policy().total_decode, || {
+        captured.verify_limits(bytes, &policy())
+    });
+    assert_eq!(&measured.unwrap(), verified);
+    assert!(usage.total_allocated_bytes() > captured.frame.len());
+    let mut exact = policy();
+    exact.total_decode = DecodeLimits::new(
+        20 * 1024 * 1024,
+        20 * 1024 * 1024,
+        usage.total_elements(),
+        usage.total_allocated_bytes(),
+        32,
+    );
+    assert_eq!(&captured.verify_limits(bytes, &exact).unwrap(), verified);
+    for (elements, allocation) in [
+        (usage.total_elements() - 1, usage.total_allocated_bytes()),
+        (usage.total_elements(), usage.total_allocated_bytes() - 1),
+    ] {
+        let mut low = exact;
+        low.total_decode =
+            DecodeLimits::new(20 * 1024 * 1024, 20 * 1024 * 1024, elements, allocation, 32);
+        assert!(captured.verify_limits(bytes, &low).is_err());
+        assert!(
+            norito::core::with_decode_limits_scope(low.total_decode, || captured
+                .verify_limits(bytes, &policy()))
+            .is_err()
+        );
+    }
+}
+
+/// The internal raw-bundle verifier agrees with the public artifact summary.
+fn assert_captured_raw_bundle(
+    captured: &CapturedArtifact<'_>,
+    verified: &crate::offline_compact::VerifiedArtifact,
+) {
+    let (is_axt, expected, context) = (captured.is_axt, captured.expected, captured.context);
+    let (bytes, frame) = (&captured.bytes, &captured.frame);
+    let (raw_result, bundle_usage) = with_prepared_quantity_statement(
+        captured.statement,
+        &expected.internal(),
+        if is_axt {
+            ProofSemantics::AxtTransferClaim
+        } else {
+            ProofSemantics::StateTransition
+        },
+        policy().public_statement,
+        |prepared| {
+            Ok(norito::core::with_decode_limits_measured(
+                policy().total_decode,
+                || {
+                    if is_axt {
+                        compact_bundle::verify_axt_transfer_bundle_with_allocation(
+                            prepared,
+                            &expected.internal(),
+                            context.internal(),
+                            frame,
+                            policy().bundle.internal(),
+                            policy().max_segment_decode_allocation_charges,
+                        )
+                    } else {
+                        compact_bundle::verify_transfer_bundle_with_allocation(
+                            prepared,
+                            &expected.internal(),
+                            frame,
+                            policy().bundle.internal(),
+                            policy().max_segment_decode_allocation_charges,
+                        )
+                    }
+                },
+            ))
+        },
+    )
+    .unwrap();
+    let raw_result = raw_result.unwrap();
+    assert_internal_artifact_matches_public(
+        bytes,
+        is_axt,
+        expected,
+        context,
+        verified,
+        &raw_result,
+    );
+    assert_eq!(raw_result.public_io(), expected.internal());
+    assert_eq!(raw_result.row_roots(), verified.air_row_roots());
+    assert_eq!(raw_result.statement_bytes(), verified.statement_bytes());
+    assert_eq!(raw_result.wire_bytes(), verified.bundle_frame_bytes());
+    let raw_work = raw_result.work();
+    assert_eq!(
+        verified.work(),
+        crate::offline_compact::VerificationWork {
+            proof_bytes: raw_work.proof_bytes,
+            transcripts: raw_work.transcripts,
+            row_leaves: raw_work.row_leaves,
+            oracle_leaves: raw_work.oracle_leaves,
+            fri_leaves: raw_work.fri_leaves,
+            parent_hashes: raw_work.parent_hashes,
+            air_evaluations: raw_work.air_evaluations,
+            terminal_degree_checks: raw_work.terminal_degree_checks,
+        }
+    );
+    let mut exact_bundle = policy();
+    exact_bundle.bundle.max_total_decode_allocation_charges = bundle_usage.total_allocated_bytes();
+    assert_eq!(&captured.verify_limits(bytes, &exact_bundle).unwrap(), verified);
+    exact_bundle.bundle.max_total_decode_allocation_charges -= 1;
+    assert!(captured.verify_limits(bytes, &exact_bundle).is_err());
+}
+
+/// Every inclusive bundle policy boundary rejects one unit below the artifact.
+fn assert_captured_bundle_boundaries(
+    captured: &CapturedArtifact<'_>,
+    verified: &crate::offline_compact::VerifiedArtifact,
+) {
+    let (bytes, frame, wire) = (&captured.bytes, &captured.frame, &captured.wire);
+    for boundary in 0..5 {
+        let mut low = policy();
+        match boundary {
+            0 => low.bundle.max_segments = 1,
+            1 => low.bundle.max_total_queries = 2 * QUERY_COUNT - 1,
+            2 => low.bundle.max_total_statement_bytes = verified.statement_bytes() - 1,
+            3 => low.bundle.max_wire_bytes = frame.len() - 1,
+            4 => {
+                low.bundle.segment.max_proof_bytes =
+                    wire.segments.iter().map(Vec::len).max().unwrap() - 1
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            captured.verify_limits(bytes, &low).is_err(),
+            "inclusive policy boundary {boundary}"
+        );
+    }
+    let mut no_child_allocation = policy();
+    no_child_allocation.max_segment_decode_allocation_charges = 0;
+    assert!(
+        captured
+            .verify_limits(bytes, &no_child_allocation)
+            .is_err()
+    );
+    let mut one_child = policy();
+    one_child.bundle.max_segments = 1;
+    assert!(captured.verify_limits(bytes, &one_child).is_err());
+}
+
+/// Re-encode valid transports so failures exercise the child/context
+/// checks, not a damaged outer checksum. Exact-count errors still reject
+/// the complete bundle; no successfully checked prefix is returned.
+fn assert_captured_bundle_mutations_rejected(captured: &CapturedArtifact<'_>) {
+    let (is_axt, expected) = (captured.is_axt, captured.expected);
+    let (bytes, frame, wire) = (&captured.bytes, &captured.frame, &captured.wire);
+    for mutation in 0..7 {
+        let mut changed = wire.clone();
+        match mutation {
+            0 => changed.segments.swap(0, 1),
+            1 => changed.segments[1] = changed.segments[0].clone(),
+            2 => {
+                changed.segments.pop();
+            }
+            // A short extra carrier keeps this malformed count within the
+            // enclosing byte cap; count rejection precedes child decoding.
+            3 => changed.segments.push(vec![0]),
+            4 => changed.intermediate_roots[0][0] ^= 1,
+            5 => {
+                let last = changed.segments[1].len() - 1;
+                changed.segments[1][last] ^= 1;
+            }
+            6 => {
+                assert!(changed.segments[0].pop().is_some());
+            }
+            _ => unreachable!(),
+        }
+        if mutation == 4 {
+            assert_valid_public_context(
+                captured.statement,
+                expected,
+                is_axt.then_some(captured.context),
+                &changed.intermediate_roots,
+            );
+        }
+        let changed = Artifact::new(captured.statement, is_axt.then_some(captured.context))
+            .finish(raw_bundle_frame(&changed, is_axt), policy())
+            .unwrap();
+        let error = captured.verify(&changed, expected).unwrap_err();
+        if matches!(mutation, 0 | 1 | 4) {
+            assert_deep_context_rejected(&error);
+        } else if matches!(mutation, 2 | 3) {
+            assert!(matches!(
+                error,
+                crate::offline_compact::VerificationError::Verify(Error::InvalidTraceShape { details })
+                    if details == "compact bundle segment/root count mismatch"
+            ));
+        } else if mutation == 6 {
+            assert!(matches!(
+                error,
+                crate::offline_compact::VerificationError::Verify(Error::Encode(_))
+            ));
+        }
+    }
+    let mut corrupted_artifact = bytes.clone();
+    *corrupted_artifact.last_mut().unwrap() ^= 1;
+    assert!(captured.verify(&corrupted_artifact, expected).is_err());
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(captured.verify(&trailing, expected).is_err());
+    let mut trailing_bundle = frame.clone();
+    trailing_bundle.push(0);
+    let trailing = Artifact::new(captured.statement, is_axt.then_some(captured.context))
+        .finish(trailing_bundle, policy())
+        .unwrap();
+    assert!(captured.verify(&trailing, expected).is_err());
+}
+
+/// Change both the advertisement and independent expectation together:
+/// these remain valid public statements and must fail proof binding.
+fn assert_captured_changed_statements_rejected(captured: &CapturedArtifact<'_>) {
+    for change_authority in [false, true] {
+        let mut changed_statement = captured.statement.clone();
+        if change_authority {
+            changed_statement.transcripts[1].authority_digest =
+                Hash::new(b"different second occurrence authority");
+        } else {
+            changed_statement.public_inputs.perm_root[0] ^= 1;
+        }
+        let changed_expected = self::expected(&changed_statement);
+        assert_valid_public_context(
+            &changed_statement,
+            changed_expected,
+            captured.is_axt.then_some(captured.context),
+            &captured.wire.intermediate_roots,
+        );
+        let changed = Artifact::new(&changed_statement, captured.is_axt.then_some(captured.context))
+            .finish(captured.frame.clone(), policy())
+            .unwrap();
+        assert_deep_context_rejected(&captured.verify(&changed, changed_expected).unwrap_err());
+    }
+}
+
+/// Changed AXT metadata, remote claims or mirrors reject the unchanged proof.
+fn assert_captured_axt_contexts_rejected(
+    captured: &CapturedArtifact<'_>,
+    metadata: &FastpqAxtPublicMetadataV1,
+    mirrors: FastpqAxtPreProofMirrorsV1,
+) {
+    use iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1;
+    let (statement, expected, context) = (captured.statement, captured.expected, captured.context);
+    let remote = context.remote_spend_claims.unwrap();
+    assert_eq!(remote.len(), 2);
+    assert_ne!(remote[0].handle_replay_key, remote[1].handle_replay_key);
+    assert_eq!(remote[0].effective_amount, remote[1].effective_amount);
+    assert_eq!(remote[0].from, remote[1].from);
+    assert_eq!(remote[0].to, remote[1].to);
+    let mut changed_metadata = metadata.clone();
+    changed_metadata.manifest_root[0] ^= 1;
+    let changed_metadata_context = ExpectedAxtContext {
+        metadata: &changed_metadata,
+        mirrors: FastpqAxtPreProofMirrorsV1 {
+            manifest_root: changed_metadata.manifest_root,
+            ..mirrors
+        },
+        ..context
+    };
+    let mut changed_remote = remote.to_vec();
+    changed_remote[0].handle_replay_key.handle_era = 17;
+    changed_remote.sort_by_key(compute_remote_spend_claim_commitment_v1);
+    let mut changed_binding = (*context.binding).clone();
+    changed_binding.remote_spend_intent_commitments = changed_remote
+        .iter()
+        .map(compute_remote_spend_claim_commitment_v1)
+        .collect();
+    let changed_remote_context = ExpectedAxtContext {
+        binding: &changed_binding,
+        remote_spend_claims: Some(&changed_remote),
+        ..context
+    };
+    for changed_context in [changed_metadata_context, changed_remote_context] {
+        assert_valid_public_context(
+            statement,
+            expected,
+            Some(changed_context),
+            &captured.wire.intermediate_roots,
+        );
+        let changed = Artifact::new(statement, Some(changed_context))
+            .finish(captured.frame.clone(), policy())
+            .unwrap();
+        assert_deep_context_rejected(
+            &verify_quantity_axt_artifact(&changed, expected, changed_context, policy())
+                .unwrap_err(),
+        );
+    }
+    let mut omitted_remote = remote.to_vec();
+    omitted_remote.pop();
+    let mut omitted_binding = (*context.binding).clone();
+    omitted_binding.remote_spend_intent_commitments = omitted_remote
+        .iter()
+        .map(compute_remote_spend_claim_commitment_v1)
+        .collect();
+    let omitted = ExpectedAxtContext {
+        binding: &omitted_binding,
+        remote_spend_claims: Some(&omitted_remote),
+        ..context
+    };
+    let changed = Artifact::new(statement, Some(omitted))
+        .finish(captured.frame.clone(), policy())
+        .unwrap();
+    assert!(
+        matches!(verify_quantity_axt_artifact(&changed, expected, omitted, policy()),
+        Err(crate::offline_compact::VerificationError::Verify(Error::InvalidAxtBinding { details }))
+        if details.contains("one-for-one"))
+    );
+    let missing = ExpectedAxtContext {
+        remote_spend_claims: None,
+        ..context
+    };
+    let changed = Artifact::new(statement, Some(missing))
+        .finish(captured.frame.clone(), policy())
+        .unwrap();
+    assert!(matches!(
+        verify_quantity_axt_artifact(&changed, expected, missing, policy()),
+        Err(crate::offline_compact::VerificationError::Verify(
+            Error::MissingMetadata { .. }
+        ))
+    ));
+    let mut wrong_mirrors = mirrors;
+    wrong_mirrors.manifest_root[0] ^= 1;
+    let wrong = ExpectedAxtContext {
+        mirrors: wrong_mirrors,
+        ..context
+    };
+    let changed = Artifact::new(statement, Some(wrong))
+        .finish(captured.frame.clone(), policy())
+        .unwrap();
+    assert!(matches!(
+        verify_quantity_axt_artifact(&changed, expected, wrong, policy()),
+        Err(crate::offline_compact::VerificationError::Verify(
+            Error::InvalidAxtBinding { .. }
+        ))
+    ));
+}
+
+/// Retag both enclosing transports while leaving authenticated children
+/// intact: the distinct ordinary/AXT relation identity still rejects.
+fn assert_captured_retag_rejected(captured: &CapturedArtifact<'_>) {
+    let (statement, expected, context) = (captured.statement, captured.expected, captured.context);
+    let opposite = !captured.is_axt;
+    assert_valid_public_context(
+        statement,
+        expected,
+        opposite.then_some(context),
+        &captured.wire.intermediate_roots,
+    );
+    let retagged = Artifact::new(statement, opposite.then_some(context))
+        .finish(raw_bundle_frame(&captured.wire, opposite), policy())
+        .unwrap();
+    let error = if opposite {
+        verify_quantity_axt_artifact(&retagged, expected, context, policy())
+    } else {
+        verify_quantity_ordinary_artifact(&retagged, expected, policy())
+    }
+    .unwrap_err();
+    assert_deep_context_rejected(&error);
+    if captured.is_axt {
+        assert!(verify_quantity_ordinary_artifact(&captured.bytes, expected, policy()).is_err());
+    } else {
+        assert!(verify_quantity_axt_artifact(&captured.bytes, expected, context, policy()).is_err());
+    }
+}
+
 #[test]
 #[ignore = "read-only complete artifacts supplied by FASTPQ_TEST_ORDINARY_ARTIFACT and FASTPQ_TEST_AXT_ARTIFACT"]
 fn captured_public_producer_artifacts_verify_against_independent_fixture() {
@@ -815,503 +1404,36 @@ fn captured_public_producer_artifacts_verify_against_independent_fixture() {
             verified
         };
         let elapsed = started.elapsed();
-        let frame = if is_axt {
-            let artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
-                &bytes,
-                profile,
-                policy().transport,
-            )
-            .unwrap();
-            assert_eq!(artifact.statement, statement);
-            artifact.bundle_frame
-        } else {
-            let artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
-                &bytes,
-                profile,
-                policy().transport,
-            )
-            .unwrap();
-            assert_eq!(artifact.statement, statement);
-            artifact.bundle_frame
-        };
-        let wire: BundleWire = if is_axt {
-            let wire: AxtBundleWire =
-                norito::decode_canonical_with_limits(&frame, policy().total_decode).unwrap();
-            BundleWire {
-                version: wire.version,
-                intermediate_roots: wire.intermediate_roots,
-                segments: wire.segments,
-            }
-        } else {
-            norito::decode_canonical_with_limits(&frame, policy().total_decode).unwrap()
-        };
-        assert_eq!(verified.expected_statement(), expected);
-        assert_eq!(verified.segments(), 2);
-        assert_eq!(wire.segments.len(), 2);
-        assert_eq!(verified.work().air_evaluations, 2);
-        assert_eq!(verified.work().terminal_degree_checks, 2);
-        assert_eq!(verified.work().transcripts, 2);
-        assert_eq!(verified.bundle_frame_bytes(), frame.len());
-        assert_eq!(
-            verified.work().proof_bytes,
-            wire.segments.iter().map(Vec::len).sum::<usize>()
-        );
-        let identity = verified.identity();
-        assert_eq!(identity.profile_id, profile);
-        assert_eq!(
-            identity.proof_kind,
-            if is_axt {
-                FastpqProofKindV1::AxtCompact
-            } else {
-                FastpqProofKindV1::OrdinaryCompact
-            }
-        );
-        assert_eq!(
-            identity.public_statement_digest,
-            expected.public_statement_digest
-        );
-        assert_eq!(
-            identity.artifact_digest,
-            <[u8; 32]>::from(Hash::new(&bytes))
-        );
-        assert_eq!(
-            identity.inner_bundle_digest,
-            <[u8; 32]>::from(Hash::new(&frame))
-        );
-        assert_eq!(identity.artifact_bytes, u64::try_from(bytes.len()).unwrap());
-        assert_ne!(identity.artifact_digest, identity.inner_bundle_digest);
-        let FastpqCommitmentDescriptionV1::OrderedCompactAir(roots) = &identity.commitments else {
-            panic!("quantity artifact must retain complete ordered AIR commitments")
-        };
-        assert_eq!(roots.segment_count, 2);
-        assert_eq!(roots.segment_air_row_roots.len(), 2);
-        assert_eq!(roots.segment_air_row_roots, verified.air_row_roots());
-        assert_eq!(
-            norito::decode_canonical::<FastpqArtifactIdentityDescriptionV1>(
-                &norito::encode_canonical(identity).unwrap()
-            )
-            .unwrap(),
-            *identity
-        );
-
-        let mut wrong = expected;
-        wrong.public_statement_digest[0] ^= 1;
-        assert!(matches!(
-            verify(&bytes, wrong),
-            Err(crate::offline_compact::VerificationError::Verify(
-                Error::PublicIoMismatch {
-                    field: "compact_artifact_public_statement_digest"
-                }
-            ))
-        ));
-        wrong = expected;
-        wrong.inputs.old_root[0] ^= 1;
-        assert!(matches!(
-            verify(&bytes, wrong),
-            Err(crate::offline_compact::VerificationError::Verify(
-                Error::PublicIoMismatch {
-                    field: "compact_model_public_io"
-                }
-            ))
-        ));
-
-        // Preserve the complete raw-bundle acceptance, ordering, root-chain,
-        // context and resource assertions through the normal public entry point.
-        assert_eq!(verified.work().row_leaves, 2 * QUERY_COUNT);
-        assert_eq!(verified.work().oracle_leaves, 2 * QUERY_COUNT);
-        assert!(frame.len() <= 1024 * 1024);
-        assert!(bytes.len() <= 1024 * 1024);
-        let mut observed_roots = Vec::new();
-        let mut fri_leaves = 0;
-        let mut parent_hashes = 0;
-        for child in &wire.segments {
-            assert!(child.len() <= 512 * 1024);
-            let proof = crate::backend::deep_proof::decode_with_allocation(
-                child,
-                512 * 1024,
-                policy().max_segment_decode_allocation_charges,
-            )
-            .unwrap();
-            observed_roots.push(proof.row_root);
-            fri_leaves += proof
-                .rounds
-                .iter()
-                .map(|round| round.groups.len())
-                .sum::<usize>()
-                + 1;
-            // Each binary multiproof reconstructs leaves + frontier - 1 parents;
-            // the sole terminal leaf has one required duplicate-child parent.
-            parent_hashes += proof.rows.len() + proof.row_siblings.len() - 1
-                + proof.quotients.len()
-                + proof.quotient_siblings.len()
-                - 1
-                + proof
-                    .rounds
-                    .iter()
-                    .map(|round| round.groups.len() + round.siblings.len() - 1)
-                    .sum::<usize>()
-                + 1;
-        }
-        assert_eq!(observed_roots, verified.air_row_roots());
-        assert_eq!(verified.work().fri_leaves, fri_leaves);
-        assert_eq!(verified.work().parent_hashes, parent_hashes);
-        assert_ne!(wire.intermediate_roots[0], expected.inputs.old_root);
-        assert_ne!(wire.intermediate_roots[0], expected.inputs.new_root);
-        assert_valid_public_context(
-            &statement,
-            expected,
-            is_axt.then_some(context),
-            &wire.intermediate_roots,
-        );
-
-        let verify_limits = |raw: &[u8], limits| {
-            if is_axt {
-                verify_quantity_axt_artifact(raw, expected, context, limits)
-            } else {
-                verify_quantity_ordinary_artifact(raw, expected, limits)
-            }
-        };
-        // Inclusive cumulative outer/child charges and elements remain in force
-        // even inside a stricter caller scope. No child can reset that scope.
-        let (measured, usage) =
-            norito::core::with_decode_limits_measured(policy().total_decode, || {
-                verify_limits(&bytes, policy())
-            });
-        assert_eq!(measured.unwrap(), verified);
-        assert!(usage.total_allocated_bytes() > frame.len());
-        let mut exact = policy();
-        exact.total_decode = DecodeLimits::new(
-            20 * 1024 * 1024,
-            20 * 1024 * 1024,
-            usage.total_elements(),
-            usage.total_allocated_bytes(),
-            32,
-        );
-        assert_eq!(verify_limits(&bytes, exact).unwrap(), verified);
-        for (elements, allocation) in [
-            (usage.total_elements() - 1, usage.total_allocated_bytes()),
-            (usage.total_elements(), usage.total_allocated_bytes() - 1),
-        ] {
-            let mut low = exact;
-            low.total_decode =
-                DecodeLimits::new(20 * 1024 * 1024, 20 * 1024 * 1024, elements, allocation, 32);
-            assert!(verify_limits(&bytes, low).is_err());
-            assert!(
-                norito::core::with_decode_limits_scope(low.total_decode, || verify_limits(
-                    &bytes,
-                    policy()
-                ))
-                .is_err()
-            );
-        }
-        let (raw_result, bundle_usage) = with_prepared_quantity_statement(
-            &statement,
-            &expected.internal(),
-            if is_axt {
-                ProofSemantics::AxtTransferClaim
-            } else {
-                ProofSemantics::StateTransition
-            },
-            policy().public_statement,
-            |prepared| {
-                Ok(norito::core::with_decode_limits_measured(
-                    policy().total_decode,
-                    || {
-                        if is_axt {
-                            compact_bundle::verify_axt_transfer_bundle_with_allocation(
-                                prepared,
-                                &expected.internal(),
-                                context.internal(),
-                                &frame,
-                                policy().bundle.internal(),
-                                policy().max_segment_decode_allocation_charges,
-                            )
-                        } else {
-                            compact_bundle::verify_transfer_bundle_with_allocation(
-                                prepared,
-                                &expected.internal(),
-                                &frame,
-                                policy().bundle.internal(),
-                                policy().max_segment_decode_allocation_charges,
-                            )
-                        }
-                    },
-                ))
-            },
-        )
-        .unwrap();
-        let raw_result = raw_result.unwrap();
-        assert_internal_artifact_matches_public(
-            &bytes,
+        let (frame, wire) = decode_captured_bundle(&bytes, is_axt, &statement, profile);
+        let captured = CapturedArtifact {
             is_axt,
+            statement: &statement,
             expected,
             context,
-            &verified,
-            &raw_result,
-        );
-        assert_eq!(raw_result.public_io(), expected.internal());
-        assert_eq!(raw_result.row_roots(), verified.air_row_roots());
-        assert_eq!(raw_result.statement_bytes(), verified.statement_bytes());
-        assert_eq!(raw_result.wire_bytes(), verified.bundle_frame_bytes());
-        let raw_work = raw_result.work();
-        assert_eq!(
-            verified.work(),
-            crate::offline_compact::VerificationWork {
-                proof_bytes: raw_work.proof_bytes,
-                transcripts: raw_work.transcripts,
-                row_leaves: raw_work.row_leaves,
-                oracle_leaves: raw_work.oracle_leaves,
-                fri_leaves: raw_work.fri_leaves,
-                parent_hashes: raw_work.parent_hashes,
-                air_evaluations: raw_work.air_evaluations,
-                terminal_degree_checks: raw_work.terminal_degree_checks,
-            }
-        );
-        let mut exact_bundle = policy();
-        exact_bundle.bundle.max_total_decode_allocation_charges =
-            bundle_usage.total_allocated_bytes();
-        assert_eq!(verify_limits(&bytes, exact_bundle).unwrap(), verified);
-        exact_bundle.bundle.max_total_decode_allocation_charges -= 1;
-        assert!(verify_limits(&bytes, exact_bundle).is_err());
-
-        for boundary in 0..5 {
-            let mut low = policy();
-            match boundary {
-                0 => low.bundle.max_segments = 1,
-                1 => low.bundle.max_total_queries = 2 * QUERY_COUNT - 1,
-                2 => low.bundle.max_total_statement_bytes = verified.statement_bytes() - 1,
-                3 => low.bundle.max_wire_bytes = frame.len() - 1,
-                4 => {
-                    low.bundle.segment.max_proof_bytes =
-                        wire.segments.iter().map(Vec::len).max().unwrap() - 1
-                }
-                _ => unreachable!(),
-            }
-            assert!(
-                verify_limits(&bytes, low).is_err(),
-                "inclusive policy boundary {boundary}"
-            );
-        }
-        let mut no_child_allocation = policy();
-        no_child_allocation.max_segment_decode_allocation_charges = 0;
-        assert!(verify_limits(&bytes, no_child_allocation).is_err());
-        let mut one_child = policy();
-        one_child.bundle.max_segments = 1;
-        assert!(verify_limits(&bytes, one_child).is_err());
-
-        // Re-encode valid transports so failures exercise the child/context
-        // checks, not a damaged outer checksum. Exact-count errors still reject
-        // the complete bundle; no successfully checked prefix is returned.
-        for mutation in 0..7 {
-            let mut changed = wire.clone();
-            match mutation {
-                0 => changed.segments.swap(0, 1),
-                1 => changed.segments[1] = changed.segments[0].clone(),
-                2 => {
-                    changed.segments.pop();
-                }
-                // A short extra carrier keeps this malformed count within the
-                // enclosing byte cap; count rejection precedes child decoding.
-                3 => changed.segments.push(vec![0]),
-                4 => changed.intermediate_roots[0][0] ^= 1,
-                5 => {
-                    let last = changed.segments[1].len() - 1;
-                    changed.segments[1][last] ^= 1;
-                }
-                6 => {
-                    assert!(changed.segments[0].pop().is_some());
-                }
-                _ => unreachable!(),
-            }
-            if mutation == 4 {
-                assert_valid_public_context(
-                    &statement,
-                    expected,
-                    is_axt.then_some(context),
-                    &changed.intermediate_roots,
-                );
-            }
-            let changed = Artifact::new(&statement, is_axt.then_some(context))
-                .finish(raw_bundle_frame(&changed, is_axt), policy())
-                .unwrap();
-            let error = verify(&changed, expected).unwrap_err();
-            if matches!(mutation, 0 | 1 | 4) {
-                assert_deep_context_rejected(error);
-            } else if matches!(mutation, 2 | 3) {
-                assert!(matches!(
-                    error,
-                    crate::offline_compact::VerificationError::Verify(Error::InvalidTraceShape { details })
-                        if details == "compact bundle segment/root count mismatch"
-                ));
-            } else if mutation == 6 {
-                assert!(matches!(
-                    error,
-                    crate::offline_compact::VerificationError::Verify(Error::Encode(_))
-                ));
-            }
-        }
-        let mut corrupted_artifact = bytes.clone();
-        *corrupted_artifact.last_mut().unwrap() ^= 1;
-        assert!(verify(&corrupted_artifact, expected).is_err());
-        let mut trailing = bytes.clone();
-        trailing.push(0);
-        assert!(verify(&trailing, expected).is_err());
-        let mut trailing_bundle = frame.clone();
-        trailing_bundle.push(0);
-        let trailing = Artifact::new(&statement, is_axt.then_some(context))
-            .finish(trailing_bundle, policy())
-            .unwrap();
-        assert!(verify(&trailing, expected).is_err());
-
-        // Change both the advertisement and independent expectation together:
-        // these remain valid public statements and must fail proof binding.
-        for change_authority in [false, true] {
-            let mut changed_statement = statement.clone();
-            if change_authority {
-                changed_statement.transcripts[1].authority_digest =
-                    Hash::new(b"different second occurrence authority");
-            } else {
-                changed_statement.public_inputs.perm_root[0] ^= 1;
-            }
-            let changed_expected = self::expected(&changed_statement);
-            assert_valid_public_context(
-                &changed_statement,
-                changed_expected,
-                is_axt.then_some(context),
-                &wire.intermediate_roots,
-            );
-            let changed = Artifact::new(&changed_statement, is_axt.then_some(context))
-                .finish(frame.clone(), policy())
-                .unwrap();
-            assert_deep_context_rejected(verify(&changed, changed_expected).unwrap_err());
-        }
-
+            bytes,
+            frame,
+            wire,
+        };
+        assert_captured_identity(&captured, &verified, profile);
+        // Preserve the complete raw-bundle acceptance, ordering, root-chain,
+        // context and resource assertions through the normal public entry point.
+        assert_captured_child_work(&captured, &verified);
+        assert_captured_decode_scopes(&captured, &verified);
+        assert_captured_raw_bundle(&captured, &verified);
+        assert_captured_bundle_boundaries(&captured, &verified);
+        assert_captured_bundle_mutations_rejected(&captured);
+        assert_captured_changed_statements_rejected(&captured);
         if is_axt {
-            use iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1;
-            let remote = context.remote_spend_claims.unwrap();
-            assert_eq!(remote.len(), 2);
-            assert_ne!(remote[0].handle_replay_key, remote[1].handle_replay_key);
-            assert_eq!(remote[0].effective_amount, remote[1].effective_amount);
-            assert_eq!(remote[0].from, remote[1].from);
-            assert_eq!(remote[0].to, remote[1].to);
-            let mut changed_metadata = metadata.clone();
-            changed_metadata.manifest_root[0] ^= 1;
-            let changed_metadata_context = ExpectedAxtContext {
-                metadata: &changed_metadata,
-                mirrors: FastpqAxtPreProofMirrorsV1 {
-                    manifest_root: changed_metadata.manifest_root,
-                    ..mirrors
-                },
-                ..context
-            };
-            let mut changed_remote = remote.to_vec();
-            changed_remote[0].handle_replay_key.handle_era = 17;
-            changed_remote.sort_by_key(compute_remote_spend_claim_commitment_v1);
-            let mut changed_binding = (*context.binding).clone();
-            changed_binding.remote_spend_intent_commitments = changed_remote
-                .iter()
-                .map(compute_remote_spend_claim_commitment_v1)
-                .collect();
-            let changed_remote_context = ExpectedAxtContext {
-                binding: &changed_binding,
-                remote_spend_claims: Some(&changed_remote),
-                ..context
-            };
-            for changed_context in [changed_metadata_context, changed_remote_context] {
-                assert_valid_public_context(
-                    &statement,
-                    expected,
-                    Some(changed_context),
-                    &wire.intermediate_roots,
-                );
-                let changed = Artifact::new(&statement, Some(changed_context))
-                    .finish(frame.clone(), policy())
-                    .unwrap();
-                assert_deep_context_rejected(
-                    verify_quantity_axt_artifact(&changed, expected, changed_context, policy())
-                        .unwrap_err(),
-                );
-            }
-            let mut omitted_remote = remote.to_vec();
-            omitted_remote.pop();
-            let mut omitted_binding = (*context.binding).clone();
-            omitted_binding.remote_spend_intent_commitments = omitted_remote
-                .iter()
-                .map(compute_remote_spend_claim_commitment_v1)
-                .collect();
-            let omitted = ExpectedAxtContext {
-                binding: &omitted_binding,
-                remote_spend_claims: Some(&omitted_remote),
-                ..context
-            };
-            let changed = Artifact::new(&statement, Some(omitted))
-                .finish(frame.clone(), policy())
-                .unwrap();
-            assert!(
-                matches!(verify_quantity_axt_artifact(&changed, expected, omitted, policy()),
-                Err(crate::offline_compact::VerificationError::Verify(Error::InvalidAxtBinding { details }))
-                if details.contains("one-for-one"))
-            );
-            let missing = ExpectedAxtContext {
-                remote_spend_claims: None,
-                ..context
-            };
-            let changed = Artifact::new(&statement, Some(missing))
-                .finish(frame.clone(), policy())
-                .unwrap();
-            assert!(matches!(
-                verify_quantity_axt_artifact(&changed, expected, missing, policy()),
-                Err(crate::offline_compact::VerificationError::Verify(
-                    Error::MissingMetadata { .. }
-                ))
-            ));
-            let mut wrong_mirrors = mirrors;
-            wrong_mirrors.manifest_root[0] ^= 1;
-            let wrong = ExpectedAxtContext {
-                mirrors: wrong_mirrors,
-                ..context
-            };
-            let changed = Artifact::new(&statement, Some(wrong))
-                .finish(frame.clone(), policy())
-                .unwrap();
-            assert!(matches!(
-                verify_quantity_axt_artifact(&changed, expected, wrong, policy()),
-                Err(crate::offline_compact::VerificationError::Verify(
-                    Error::InvalidAxtBinding { .. }
-                ))
-            ));
+            assert_captured_axt_contexts_rejected(&captured, &metadata, mirrors);
         }
-        // Retag both enclosing transports while leaving authenticated children
-        // intact: the distinct ordinary/AXT relation identity still rejects.
-        let opposite = !is_axt;
-        assert_valid_public_context(
-            &statement,
-            expected,
-            opposite.then_some(context),
-            &wire.intermediate_roots,
-        );
-        let retagged = Artifact::new(&statement, opposite.then_some(context))
-            .finish(raw_bundle_frame(&wire, opposite), policy())
-            .unwrap();
-        let error = if opposite {
-            verify_quantity_axt_artifact(&retagged, expected, context, policy())
-        } else {
-            verify_quantity_ordinary_artifact(&retagged, expected, policy())
-        }
-        .unwrap_err();
-        assert_deep_context_rejected(error);
-        if is_axt {
-            assert!(verify_quantity_ordinary_artifact(&bytes, expected, policy()).is_err());
-        } else {
-            assert!(verify_quantity_axt_artifact(&bytes, expected, context, policy()).is_err());
-        }
+        assert_captured_retag_rejected(&captured);
 
         eprintln!(
             "captured_quantity_artifact={variable}; bytes={}; sha256={:x}; bundle_frame_bytes={}; segment_bytes={:?}; independent_verification={elapsed:?}; work={:?}",
-            bytes.len(),
-            Sha256::digest(&bytes),
-            frame.len(),
-            wire.segments.iter().map(Vec::len).collect::<Vec<_>>(),
+            captured.bytes.len(),
+            Sha256::digest(&captured.bytes),
+            captured.frame.len(),
+            captured.wire.segments.iter().map(Vec::len).collect::<Vec<_>>(),
             verified.work()
         );
     }

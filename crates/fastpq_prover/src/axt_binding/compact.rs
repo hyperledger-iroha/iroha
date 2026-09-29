@@ -215,7 +215,9 @@ pub(super) fn verify_envelope(
         expiry_slot,
     };
     let mut metadata = metadata(&binding, mirrors)?;
-    metadata.source_transfer_occurrences = artifact.metadata.source_transfer_occurrences.clone();
+    metadata
+        .source_transfer_occurrences
+        .clone_from(&artifact.metadata.source_transfer_occurrences);
     let source_success_receipt_digest = source_occurrence::validate_public_occurrences(
         &binding,
         &artifact.statement.transcripts,

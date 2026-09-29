@@ -102,6 +102,13 @@ static INSTALL: Mutex<()> = Mutex::new(());
 impl CudaProcess {
     /// Install the one registry, or update admission on that same owner.
     /// Required finite inputs have no implicit unlimited or free-memory default.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] when a reload would grow the
+    /// original record capacity or the record layout is not representable, and
+    /// [`CudaFailure::Capacity`] when the metadata budget cannot fund the fixed
+    /// record backing.
     pub fn install(limits: RegistryLimits) -> Result<&'static Self, CudaFailure> {
         let _installation = INSTALL.lock();
         if let Some(process) = PROCESS.get() {
@@ -140,6 +147,11 @@ impl CudaProcess {
     }
 
     /// Apply ceilings to the original pools. No driver reset or cache replacement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] when `limits.devices` exceeds the
+    /// original record capacity; the current limits are then left unchanged.
     pub fn reconfigure(&self, limits: RegistryLimits) -> Result<(), CudaFailure> {
         if limits.devices > self.capacity {
             return Err(CudaFailure::InvalidRequest);
@@ -153,6 +165,14 @@ impl CudaProcess {
     /// Probe ordinals independently without allocating an unbounded device list.
     /// A transient absent driver is retried after thirty seconds; quarantined UUID
     /// records are never replaced by a new handle to the same primary context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::Busy`] while another caller holds the inventory,
+    /// [`CudaFailure::Unavailable`] when the driver cannot be initialized,
+    /// [`CudaFailure::Driver`] when the device count or driver version query
+    /// fails, and [`CudaFailure::InvalidRequest`] when the driver reports a
+    /// negative device count. A failing ordinal is skipped instead.
     pub fn discover(&self) -> Result<usize, CudaFailure> {
         let mut inventory = self.inventory.try_lock().ok_or(CudaFailure::Busy)?;
         let now = Instant::now();
@@ -169,8 +189,8 @@ impl CudaProcess {
         let mut version = 0;
         // SAFETY: the runtime-loaded driver writes only these initialized scalars.
         unsafe {
-            checked(sys::cuDeviceGetCount(&mut count))?;
-            checked(sys::cuDriverGetVersion(&mut version))?;
+            checked(sys::cuDeviceGetCount(&raw mut count))?;
+            checked(sys::cuDriverGetVersion(&raw mut version))?;
         }
         let limits = *self.limits.lock();
         let count = u32::try_from(count).map_err(|_| CudaFailure::InvalidRequest)?;
@@ -269,6 +289,11 @@ impl CudaProcess {
     /// Admit exact consumer-owned policy metadata from the shared original pool.
     /// The consumer must bind it to charged allocation owners before construction.
     /// No allocation, wait, driver operation, or additional pool is created here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::Capacity`] when the metadata budget cannot fund
+    /// `layout`.
     pub fn reserve_consumer_metadata(
         &self,
         layout: Layout,
@@ -311,6 +336,10 @@ impl CudaProcess {
     }
 
     /// Nonblocking count snapshot for admission; contention selects local fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::Busy`] while another caller holds the inventory.
     pub fn try_record_count(&self) -> Result<usize, CudaFailure> {
         Ok(self
             .inventory
@@ -337,13 +366,14 @@ fn discover_identity(ordinal: i32, driver_version: i32) -> Option<(sys::CUdevice
     let mut uuid = sys::CUuuid::default();
     // SAFETY: initialized scalar/UUID out-parameters have the exact driver layout.
     unsafe {
-        checked(sys::cuDeviceGet(&mut device, ordinal)).ok()?;
-        checked(sys::cuDeviceGetUuid_v2(&mut uuid, device)).ok()?;
+        checked(sys::cuDeviceGet(&raw mut device, ordinal)).ok()?;
+        checked(sys::cuDeviceGetUuid_v2(&raw mut uuid, device)).ok()?;
     }
     Some((
         device,
         DeviceIdentity {
-            uuid: uuid.bytes.map(|byte| byte as u8),
+            // `c_char` signedness differs by target; keep each UUID byte's exact bits.
+            uuid: uuid.bytes.map(|byte| u8::from_ne_bytes(byte.to_ne_bytes())),
             driver_version,
         },
     ))
@@ -374,7 +404,7 @@ impl Primary {
         let mut context = self.native.lock();
         // SAFETY: installed guarded primary owner retains this exact handle even
         // on an error which writes an output; no implicit lossy Context drop runs.
-        let result = unsafe { sys::cuDevicePrimaryCtxRetain(&mut *context, self.device) };
+        let result = unsafe { sys::cuDevicePrimaryCtxRetain(&raw mut *context, self.device) };
         if checked(result).is_err() || context.is_null() {
             self.health.quarantine(true);
         }
@@ -391,10 +421,6 @@ impl Primary {
         &self,
         body: impl FnOnce() -> Result<T, CudaFailure>,
     ) -> Result<T, CudaFailure> {
-        let target = *self.native.lock();
-        if target.is_null() {
-            return Err(CudaFailure::Quarantined);
-        }
         struct Driver;
         impl crate::context_binding::ContextDriver for Driver {
             type Handle = sys::CUcontext;
@@ -403,7 +429,7 @@ impl Primary {
                 let mut previous = ptr::null_mut();
                 // SAFETY: initialized exact-layout synchronous out-parameter.
                 unsafe {
-                    checked(sys::cuCtxGetCurrent(&mut previous))?;
+                    checked(sys::cuCtxGetCurrent(&raw mut previous))?;
                 }
                 Ok(previous)
             }
@@ -411,6 +437,10 @@ impl Primary {
                 // SAFETY: handle is this guarded origin or a captured thread context.
                 unsafe { checked(sys::cuCtxSetCurrent(handle)) }
             }
+        }
+        let target = *self.native.lock();
+        if target.is_null() {
+            return Err(CudaFailure::Quarantined);
         }
         crate::context_binding::with_context(&Driver, target, || self.health.quarantine(true), body)
     }
@@ -502,7 +532,7 @@ impl CudaDevice<'_> {
             // SAFETY: immutable, admitted, NUL-terminated PTX remains alive for
             // the complete driver load; successful handle custody is installed.
             checked(unsafe {
-                sys::cuModuleLoadData(&mut *handle, artifact.bytes().as_ptr().cast::<c_void>())
+                sys::cuModuleLoadData(&raw mut *handle, artifact.bytes().as_ptr().cast::<c_void>())
             })
         })?;
         cache.push_reserved(module.clone());
@@ -531,7 +561,7 @@ impl Drop for ModuleOwner {
             }
             return;
         }
-        let _gate = self.primary.gate.lock();
+        let gate = self.primary.gate.lock();
         if self.primary.health.uncertain() {
             return;
         }
@@ -545,7 +575,7 @@ impl Drop for ModuleOwner {
             return;
         }
         *self.handle.get_mut() = ptr::null_mut();
-        drop(_gate);
+        drop(gate);
         // SAFETY: native child is gone before its parent and original count refund.
         unsafe {
             ManuallyDrop::drop(&mut self.slot);

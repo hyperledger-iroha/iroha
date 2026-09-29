@@ -114,21 +114,24 @@ impl<'a> PublicTablePolynomial<'a> {
             }
         }
         let generator = FixedTraceDomain::new(params, trace_rows)?.generator;
-        let points = if let Some(positions) = positions {
-            positions
-                .iter()
-                .map(|&row| field_pow(generator, row as u64))
-                .collect()
-        } else {
-            let mut point = 1;
-            (0..rows.len())
-                .map(|_| {
-                    let current = point;
-                    point = mul_mod(point, generator);
-                    current
-                })
-                .collect()
-        };
+        let points = positions.map_or_else(
+            || {
+                let mut point = 1;
+                (0..rows.len())
+                    .map(|_| {
+                        let current = point;
+                        point = mul_mod(point, generator);
+                        current
+                    })
+                    .collect()
+            },
+            |positions| {
+                positions
+                    .iter()
+                    .map(|&row| field_pow(generator, row as u64))
+                    .collect()
+            },
+        );
         Ok(Self {
             rows,
             width,
@@ -297,7 +300,7 @@ mod tests {
             for row in 0..order {
                 assert_eq!(
                     public.evaluate(point).unwrap(),
-                    rows.get(row).cloned().unwrap_or(vec![0; 2])
+                    rows.get(row).cloned().unwrap_or_else(|| vec![0; 2])
                 );
                 point = mul_mod(point, generator);
             }

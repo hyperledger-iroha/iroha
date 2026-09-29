@@ -620,9 +620,9 @@ mod tests {
             let mut malformed = row_body[values.clone()].to_vec();
             malformed.resize(length, 0);
             let changed_row = replace_field(row_body, 1, &malformed);
-            let rows_body = &payload[rows.clone()];
-            let mut changed_rows = rows_body[..8].to_vec();
-            changed_rows.extend(replace_field(&rows_body[8..], 0, &changed_row));
+            let encoded_rows = &payload[rows.clone()];
+            let mut changed_rows = encoded_rows[..8].to_vec();
+            changed_rows.extend(replace_field(&encoded_rows[8..], 0, &changed_row));
             let changed = replace_field(&payload, 4, &changed_rows);
             let error = assert_before_transcript(&frame(&changed), diagnostic_limits());
             assert!(matches!(
@@ -689,13 +689,13 @@ mod tests {
             fri_roots: vec![WireDigest::default(); geometry.fri_lengths.len()],
             rows: (0..rows)
                 .map(|index| SharedRow {
-                    index: index as u32,
+                    index: u32::try_from(index).expect("sizing row index fits u32"),
                     values: RowValues::zero(),
                 })
                 .collect(),
             queries: (0..queries)
                 .map(|index| SharedQuery {
-                    index: index as u32,
+                    index: u32::try_from(index).expect("sizing query index fits u32"),
                     mixed: GoldilocksFp4V1::ZERO,
                     quotient: GoldilocksFp4V1::ZERO,
                 })
@@ -711,7 +711,7 @@ mod tests {
                     SharedRound {
                         groups: (0..groups)
                             .map(|index| SharedGroup {
-                                index: index as u32,
+                                index: u32::try_from(index).expect("sizing group index fits u32"),
                                 values: [GoldilocksFp4V1::ZERO; 2],
                             })
                             .collect(),
@@ -831,14 +831,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fixed_row_shared_schema_rejects_all_prior_frames() {
-        let shape_policy = VerifyLimits {
-            max_proof_bytes: 8 * 1024 * 1024,
-            ..candidate_limits()
-        };
+    /// Encode `expected` under every retired shared-proof frame, returning the
+    /// `(canonical bytes, header-flag payload)` pair of each frame in order.
+    fn retired_frame_encodings(expected: &SharedProof) -> [(Vec<u8>, Vec<u8>); 2] {
         macro_rules! retired_frame {
-            ($name:ident, $schema:literal) => {
+            ($name:ident, $schema:literal) => {{
                 #[derive(NoritoSerialize, norito::NoritoSchema)]
                 #[norito_schema(name = $schema)]
                 struct $name {
@@ -854,16 +851,43 @@ mod tests {
                     rounds: Vec<SharedRound>,
                     terminal_values: Vec<GoldilocksFp4V1>,
                 }
-            };
+                let retired = $name {
+                    row_root: expected.row_root,
+                    mixed_root: expected.mixed_root,
+                    quotient_root: expected.quotient_root,
+                    fri_roots: expected.fri_roots.clone(),
+                    rows: expected.rows.clone(),
+                    queries: expected.queries.clone(),
+                    row_siblings: expected.row_siblings.clone(),
+                    mixed_siblings: expected.mixed_siblings.clone(),
+                    quotient_siblings: expected.quotient_siblings.clone(),
+                    rounds: expected.rounds.clone(),
+                    terminal_values: expected.terminal_values.clone(),
+                };
+                (
+                    norito::encode_canonical(&retired).unwrap(),
+                    norito::codec::encode_with_header_flags(&retired).0,
+                )
+            }};
         }
-        retired_frame!(
-            RetiredPrototype,
-            "fastpq_prover::compact_prototype::SharedProofV1"
-        );
-        retired_frame!(
-            RetiredShake,
-            "fastpq_prover::compact_candidate::ShakeSharedProofV1"
-        );
+        [
+            retired_frame!(
+                RetiredPrototype,
+                "fastpq_prover::compact_prototype::SharedProofV1"
+            ),
+            retired_frame!(
+                RetiredShake,
+                "fastpq_prover::compact_candidate::ShakeSharedProofV1"
+            ),
+        ]
+    }
+
+    #[test]
+    fn fixed_row_shared_schema_rejects_all_prior_frames() {
+        let shape_policy = VerifyLimits {
+            max_proof_bytes: 8 * 1024 * 1024,
+            ..candidate_limits()
+        };
         let geometry = Geometry::new(&CandidateShape).unwrap();
         let expected = largest_shape(&geometry);
         let row_pointer = expected.rows.as_ptr();
@@ -886,42 +910,7 @@ mod tests {
             norito::decode_canonical::<SharedProof>(&previous_variable_rows),
             Err(norito::Error::SchemaMismatch)
         ));
-        let old_prototype = RetiredPrototype {
-            row_root: expected.row_root,
-            mixed_root: expected.mixed_root,
-            quotient_root: expected.quotient_root,
-            fri_roots: expected.fri_roots.clone(),
-            rows: expected.rows.clone(),
-            queries: expected.queries.clone(),
-            row_siblings: expected.row_siblings.clone(),
-            mixed_siblings: expected.mixed_siblings.clone(),
-            quotient_siblings: expected.quotient_siblings.clone(),
-            rounds: expected.rounds.clone(),
-            terminal_values: expected.terminal_values.clone(),
-        };
-        let old_shake = RetiredShake {
-            row_root: expected.row_root,
-            mixed_root: expected.mixed_root,
-            quotient_root: expected.quotient_root,
-            fri_roots: expected.fri_roots.clone(),
-            rows: expected.rows.clone(),
-            queries: expected.queries.clone(),
-            row_siblings: expected.row_siblings.clone(),
-            mixed_siblings: expected.mixed_siblings.clone(),
-            quotient_siblings: expected.quotient_siblings.clone(),
-            rounds: expected.rounds.clone(),
-            terminal_values: expected.terminal_values.clone(),
-        };
-        for (old_bytes, old_payload) in [
-            (
-                norito::encode_canonical(&old_prototype).unwrap(),
-                norito::codec::encode_with_header_flags(&old_prototype).0,
-            ),
-            (
-                norito::encode_canonical(&old_shake).unwrap(),
-                norito::codec::encode_with_header_flags(&old_shake).0,
-            ),
-        ] {
+        for (old_bytes, old_payload) in retired_frame_encodings(&expected) {
             assert_eq!(old_payload, payload);
             assert_eq!(old_bytes.len(), bytes.len());
             assert!(norito::decode_canonical::<SharedProof>(&old_bytes).is_err());
@@ -1001,10 +990,10 @@ mod tests {
             &geometry,
             4_326_227,
             candidate_limits(),
-            123456,
+            123_456,
         )
         .unwrap();
-        assert_eq!(budget.max_total_allocated_bytes(), 123456);
+        assert_eq!(budget.max_total_allocated_bytes(), 123_456);
         assert_eq!(budget.max_sequence_elements(), 750 * 19);
         // Complete row scalars are inline arrays; only the outer rows and
         // remaining dynamic opening tables consume sequence-element charges.

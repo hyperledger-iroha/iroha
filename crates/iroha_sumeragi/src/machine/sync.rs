@@ -118,7 +118,7 @@ impl Core {
             self.sync.add_source(from);
             return;
         }
-        if self.config(&c.height).is_some() {
+        if self.config(c.height).is_some() {
             if self.verify_qc_cached(c) {
                 self.sync.verified = c.height;
                 self.sync.add_source(from);
@@ -340,7 +340,7 @@ impl Core {
             #[cfg(not(sumeragi_mutation = "MS15"))]
             let committee = &self.cfg.committee;
             #[cfg(sumeragi_mutation = "MS15")]
-            let committee = &(self.config(&self.tip.height).unwrap_or(&self.cfg)).committee;
+            let committee = &(self.config(self.tip.height).unwrap_or(&self.cfg)).committee;
             let verified = self
                 .cert_cache
                 .contains(&entry.commit_qc.digest(&*self.crypto))

@@ -158,12 +158,12 @@ impl Drop for DirectoryV1 {
 fn boundary_snapshot_v1(directory: &DirectoryV1) -> ConfidentialSpoolSnapshotV1 {
     let layout = ConfidentialSpoolLayoutV1::new_v1(3, 16_384, [0x41; 32]).unwrap();
     let mut writer = ConfidentialSpoolWriterV1::create_in_v1(&directory.0, layout).unwrap();
-    for lane in 0..3 {
+    for lane in 0_u8..3 {
         let mut packed = packed_chunk_v1(0);
         for (index, byte) in packed.as_mut_slice_v1().iter_mut().enumerate() {
-            *byte = BOUNDARY_PACKED_V1[boundary_case_v1(index)][lane];
+            *byte = BOUNDARY_PACKED_V1[boundary_case_v1(index)][usize::from(lane)];
         }
-        writer.write_slot_v1(lane as u64, packed).unwrap();
+        writer.write_slot_v1(u64::from(lane), packed).unwrap();
     }
     writer.seal_v1().unwrap()
 }

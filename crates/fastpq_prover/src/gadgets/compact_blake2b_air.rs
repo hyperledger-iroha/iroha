@@ -188,16 +188,16 @@ fn limbs<const N: usize, const M: usize>(words: &[u64; N]) -> [u64; M] {
     core::array::from_fn(|limb| (words[limb / 2] >> (32 * (limb % 2))) & u64::from(u32::MAX))
 }
 
-fn fused_schedule(index: usize) -> (usize, usize, usize, Option<usize>, usize) {
+fn fused_schedule(index: usize) -> (usize, usize, usize, Option<usize>, u32) {
     let step = index - 7;
-    let g = step / 4;
+    let invocation = step / 4;
     let phase = step % 4;
-    let [a, b, c, d] = REGISTERS[g % 8];
-    let sigma = SIGMA[(g / 8) % 10];
+    let [a, b, c, d] = REGISTERS[invocation % 8];
+    let sigma = SIGMA[(invocation / 8) % 10];
     match phase {
-        0 => (a, b, d, Some(sigma[2 * (g % 8)]), 32),
+        0 => (a, b, d, Some(sigma[2 * (invocation % 8)]), 32),
         1 => (c, d, b, None, 24),
-        2 => (a, b, d, Some(sigma[2 * (g % 8) + 1]), 16),
+        2 => (a, b, d, Some(sigma[2 * (invocation % 8) + 1]), 16),
         _ => (c, d, b, None, 63),
     }
 }
@@ -266,9 +266,9 @@ impl CompactHashWitness<u64> {
                         + (extra & u64::from(u32::MAX));
                     let carries = [low >> 32, (wide >> 64) as u64];
                     row.carries = core::array::from_fn(|bit| (carries[bit / 2] >> (bit % 2)) & 1);
-                    let sum = wide as u64;
+                    let sum = v[sum_reg].wrapping_add(v[add_reg]).wrapping_add(extra);
                     let old = v[xor_reg];
-                    let output = (old ^ sum).rotate_right(rotation as u32);
+                    let output = (old ^ sum).rotate_right(rotation);
                     row.bits = [word_bits(sum), word_bits(old), word_bits(output)];
                     v[sum_reg] = sum;
                     v[xor_reg] = output;
@@ -305,11 +305,12 @@ fn packed_half<F: IntegerAirField>(bits: &[F; 64], half: usize) -> F {
     pack(&bits[32 * half..32 * half + 32])
 }
 fn fixed_limb<F: IntegerAirField>(word: u64, half: usize, active: F) -> F {
-    F::from_u32((word >> (32 * half)) as u32).mul(active)
+    let limb = (word >> (32 * half)) & u64::from(u32::MAX);
+    F::from_u32(u32::try_from(limb).expect("masked to one 32-bit limb")).mul(active)
 }
-fn xor_bits<F: IntegerAirField>(out: &mut Vec<F>, row: &CompactRow<F>, rotation: usize) {
+fn xor_bits<F: IntegerAirField>(out: &mut Vec<F>, row: &CompactRow<F>, rotation: u32) {
     for bit in 0..64 {
-        let source = (bit + rotation) % 64;
+        let source = (bit + rotation as usize) % 64;
         let a = row.bits[0][source];
         let b = row.bits[1][source];
         let product = a.mul(b);
@@ -364,65 +365,14 @@ pub fn local_residues<F: IntegerAirField>(
         );
     }
     match i {
-        0..6 => {
-            for byte in 0..24 {
-                if byte > 0 {
-                    out.push(row.present[byte].mul(active.sub(row.present[byte - 1])));
-                }
-                for bit in 0..8 {
-                    let value = row.bits[byte / 8][8 * (byte % 8) + bit];
-                    out.push(value.mul(value.sub(row.present[byte])));
-                }
-            }
-            for slot in 0..3 {
-                if 3 * i + slot < 16 {
-                    for half in 0..2 {
-                        out.push(
-                            packed_half(&row.bits[slot], half)
-                                .sub(row.message[2 * (3 * i + slot) + half]),
-                        );
-                    }
-                } else {
-                    out.extend(row.bits[slot]);
-                }
-            }
-            if i == 5 {
-                out.extend_from_slice(&row.present[8..]);
-                out.push(row.byte_len.sub(row.prefix_count));
-            }
-        }
+        0..6 => push_import_residues(&mut out, active, i, row),
         6 => {
             out.push(row.byte_len.sub(pack(&row.bits[0][..8])));
             out.extend_from_slice(&row.bits[0][8..]);
             out.extend(row.bits[1]);
             out.extend(row.bits[2]);
         }
-        7..391 => {
-            let (sum_reg, add_reg, xor_reg, msg, rotation) = fused_schedule(i);
-            let radix = F::from_u32(u32::MAX).add(F::ONE);
-            let c0 = row.carries[0].add(row.carries[1].add(row.carries[1]));
-            let c1 = row.carries[2].add(row.carries[3].add(row.carries[3]));
-            if msg.is_none() {
-                out.push(row.carries[1]);
-                out.push(row.carries[3]);
-            }
-            for half in 0..2 {
-                let extra = msg
-                    .map_or(F::ZERO, |word| row.message[2 * word + half]);
-                let mut value = row.working[2 * sum_reg + half]
-                    .add(row.working[2 * add_reg + half])
-                    .add(extra)
-                    .sub(packed_half(&row.bits[0], half));
-                if half == 0 {
-                    value = value.sub(radix.mul(c0));
-                } else {
-                    value = value.add(c0).sub(radix.mul(c1));
-                }
-                out.push(value);
-                out.push(packed_half(&row.bits[1], half).sub(row.working[2 * xor_reg + half]));
-            }
-            xor_bits(&mut out, row, rotation);
-        }
+        7..391 => push_fused_residues(&mut out, i, row),
         391..407 => {
             let feed = i - 391;
             let word = feed / 2;
@@ -450,6 +400,66 @@ pub fn local_residues<F: IntegerAirField>(
         }
     }
     out
+}
+
+/// Byte-presence, bit-decomposition and message-limb residues of import rows 0..6.
+fn push_import_residues<F: IntegerAirField>(
+    out: &mut Vec<F>,
+    active: F,
+    i: usize,
+    row: &CompactRow<F>,
+) {
+    for byte in 0..24 {
+        if byte > 0 {
+            out.push(row.present[byte].mul(active.sub(row.present[byte - 1])));
+        }
+        for bit in 0..8 {
+            let value = row.bits[byte / 8][8 * (byte % 8) + bit];
+            out.push(value.mul(value.sub(row.present[byte])));
+        }
+    }
+    for slot in 0..3 {
+        if 3 * i + slot < 16 {
+            for half in 0..2 {
+                out.push(
+                    packed_half(&row.bits[slot], half).sub(row.message[2 * (3 * i + slot) + half]),
+                );
+            }
+        } else {
+            out.extend(row.bits[slot]);
+        }
+    }
+    if i == 5 {
+        out.extend_from_slice(&row.present[8..]);
+        out.push(row.byte_len.sub(row.prefix_count));
+    }
+}
+
+/// Carried 64-bit addition and XOR-rotation residues of fused G rows 7..391.
+fn push_fused_residues<F: IntegerAirField>(out: &mut Vec<F>, i: usize, row: &CompactRow<F>) {
+    let (sum_reg, add_reg, xor_reg, msg, rotation) = fused_schedule(i);
+    let radix = F::from_u32(u32::MAX).add(F::ONE);
+    let c0 = row.carries[0].add(row.carries[1].add(row.carries[1]));
+    let c1 = row.carries[2].add(row.carries[3].add(row.carries[3]));
+    if msg.is_none() {
+        out.push(row.carries[1]);
+        out.push(row.carries[3]);
+    }
+    for half in 0..2 {
+        let extra = msg.map_or(F::ZERO, |word| row.message[2 * word + half]);
+        let mut value = row.working[2 * sum_reg + half]
+            .add(row.working[2 * add_reg + half])
+            .add(extra)
+            .sub(packed_half(&row.bits[0], half));
+        if half == 0 {
+            value = value.sub(radix.mul(c0));
+        } else {
+            value = value.add(c0).sub(radix.mul(c1));
+        }
+        out.push(value);
+        out.push(packed_half(&row.bits[1], half).sub(row.working[2 * xor_reg + half]));
+    }
+    xor_bits(out, row, rotation);
 }
 
 /// Exact adjacent-row copies/updates; returns `None` on the final export row.
@@ -550,7 +560,7 @@ mod tests {
 
     fn digest(witness: &CompactHashWitness) -> [u8; 32] {
         let output = &witness.rows()[407].digest;
-        core::array::from_fn(|byte| (output[byte / 4] >> (8 * (byte % 4))) as u8)
+        core::array::from_fn(|byte| output[byte / 4].to_le_bytes()[byte % 4])
     }
 
     fn map_row<F: Copy>(row: &CompactRow, mut map: impl FnMut(u64) -> F) -> CompactRow<F> {
@@ -619,9 +629,13 @@ mod tests {
 
     #[test]
     fn complete_compact_hash_matches_native_boundary_and_seeded_messages() {
-        for length in [0, 1, 7, 8, 23, 24, 31, 32, 63, 64, 83, 119, 120, 127, 128] {
-            for seed in [0, 255] {
-                let bytes: Vec<_> = (0..length).map(|i| ((i * 73 + seed) % 256) as u8).collect();
+        for length in [
+            0_u8, 1, 7, 8, 23, 24, 31, 32, 63, 64, 83, 119, 120, 127, 128,
+        ] {
+            for seed in [0_u8, 255] {
+                let bytes: Vec<_> = (0..length)
+                    .map(|i| i.wrapping_mul(73).wrapping_add(seed))
+                    .collect();
                 let witness = CompactHashWitness::from_bytes(&bytes).unwrap();
                 assert!(valid(1, &witness), "length {length}, seed {seed}");
                 assert_eq!(digest(&witness), *iroha_crypto::Hash::new(&bytes).as_ref());

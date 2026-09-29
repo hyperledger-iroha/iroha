@@ -79,7 +79,9 @@ pub(super) fn payload_bytes(binding: &Context, oracle: Oracle, leaf_bytes: usize
                     + size_of::<PreparedHashFrame>()
                     + size_of::<Result<Digest384LastFieldJob<'_>>>()
                     + size_of::<Digest384LastFieldJob<'_>>(),
-                binding.tree_frame_bytes(oracle).map_err(binding_error)?,
+                binding
+                    .tree_frame_bytes(oracle)
+                    .map_err(|error| binding_error(&error))?,
             )?,
         )?,
     )?;
@@ -194,7 +196,7 @@ pub(super) fn hash(
                 u32::try_from(index).map_err(|_| invalid("DEEP leaf batch index exceeds u32"))?;
             *output = binding
                 .hash_leaf(oracle, index, bytes)
-                .map_err(binding_error)?
+                .map_err(|error| binding_error(&error))?
                 .words();
             Ok(())
         })
@@ -204,7 +206,7 @@ pub(super) fn hash(
     }
     Ok(())
 }
-fn binding_error(error: BindingError) -> Error {
+fn binding_error(error: &BindingError) -> Error {
     Error::InvalidTraceShape {
         details: format!("DEEP leaf batch: {error}"),
     }
@@ -268,7 +270,13 @@ mod tests {
         let frames = (0..=CAPACITY)
             .map(|index| {
                 binding
-                    .prepare_parent(Oracle::Row, 1, (CAPACITY - index) as u32, left, right)
+                    .prepare_parent(
+                        Oracle::Row,
+                        1,
+                        u32::try_from(CAPACITY - index).unwrap(),
+                        left,
+                        right,
+                    )
                     .unwrap()
             })
             .collect::<Vec<_>>();
@@ -290,7 +298,13 @@ mod tests {
                             output.iter().zip(streamed.iter()).enumerate()
                         {
                             let expected = binding
-                                .hash_parent(Oracle::Row, 1, (CAPACITY - index) as u32, left, right)
+                                .hash_parent(
+                                    Oracle::Row,
+                                    1,
+                                    u32::try_from(CAPACITY - index).unwrap(),
+                                    left,
+                                    right,
+                                )
                                 .unwrap();
                             assert_eq!(words, expected.words());
                             assert_eq!(*digest, expected);
@@ -348,7 +362,11 @@ mod tests {
                     assert_eq!(
                         Digest::new(words).unwrap(),
                         binding
-                            .hash_leaf(Oracle::QuotientAndMask, index as u32, bytes)
+                            .hash_leaf(
+                                Oracle::QuotientAndMask,
+                                u32::try_from(index).unwrap(),
+                                bytes
+                            )
                             .unwrap()
                     );
                 }
@@ -361,7 +379,11 @@ mod tests {
                 assert_eq!(
                     Digest::new(words).unwrap(),
                     binding
-                        .hash_leaf(Oracle::QuotientAndMask, index as u32, bytes)
+                        .hash_leaf(
+                            Oracle::QuotientAndMask,
+                            u32::try_from(index).unwrap(),
+                            bytes
+                        )
                         .unwrap()
                 );
             }
@@ -412,7 +434,7 @@ mod tests {
                 &binding,
                 Oracle::QuotientAndMask,
                 &[0; CAPACITY + 1],
-                &[0; (CAPACITY + 1) * 96],
+                &vec![0; (CAPACITY + 1) * 96],
                 96,
                 &mut outputs,
                 DigestExecutionV1::Cpu,
@@ -446,19 +468,18 @@ mod tests {
         ] {
             let (_, _, leaves, width) = oracle.shape().unwrap();
             for index in [0, leaves - 1] {
+                let leaf_index = u32::try_from(index).unwrap();
                 let payload: Vec<_> = (0..width / 8)
                     .flat_map(|i| (i as u64 + 1).to_le_bytes())
                     .collect();
-                let prepared = binding
-                    .prepare_leaf(oracle, index as u32, &payload)
-                    .unwrap();
+                let prepared = binding.prepare_leaf(oracle, leaf_index, &payload).unwrap();
                 assert_eq!(prepared.job().unwrap().prefix().received_len(), 0);
                 assert!(
                     prepared.job().unwrap().final_field().len() <= MAX_PREPARED_HASH_FRAME_BYTES
                 );
                 assert_eq!(
                     prepared.hash_cpu().unwrap(),
-                    binding.hash_leaf(oracle, index as u32, &payload).unwrap()
+                    binding.hash_leaf(oracle, leaf_index, &payload).unwrap()
                 );
                 let mut output = [[0; 6]];
                 hash(
@@ -474,19 +495,19 @@ mod tests {
                 assert_eq!(output[0], prepared.hash_cpu().unwrap().words());
                 assert!(
                     binding
-                        .prepare_leaf(oracle, leaves as u32, &payload)
+                        .prepare_leaf(oracle, u32::try_from(leaves).unwrap(), &payload)
                         .is_err()
                 );
                 assert!(
                     binding
-                        .prepare_leaf(oracle, index as u32, &payload[..width - 1])
+                        .prepare_leaf(oracle, leaf_index, &payload[..width - 1])
                         .is_err()
                 );
                 let mut malformed = payload;
                 malformed[..8].copy_from_slice(&GOLDILOCKS_MODULUS.to_le_bytes());
                 assert!(
                     binding
-                        .prepare_leaf(oracle, index as u32, &malformed)
+                        .prepare_leaf(oracle, leaf_index, &malformed)
                         .is_err()
                 );
                 assert!(

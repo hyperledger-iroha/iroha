@@ -105,8 +105,11 @@ fn rewrite_interface(
         let literal_start = rewritten.len();
         rewritten.extend_from_slice(&artifact[section.start..section.data_end]);
         let padding = (4 - (rewritten.len() - parsed.header_len) % 4) % 4;
-        rewritten[literal_start + 8..literal_start + 12]
-            .copy_from_slice(&(padding as u32).to_le_bytes());
+        rewritten[literal_start + 8..literal_start + 12].copy_from_slice(
+            &u32::try_from(padding)
+                .expect("literal padding is below four bytes")
+                .to_le_bytes(),
+        );
         rewritten.resize(rewritten.len() + padding, 0);
     } else {
         assert_eq!(

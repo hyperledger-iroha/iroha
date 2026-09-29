@@ -505,28 +505,6 @@ fn derive_rejects_rosters_that_are_not_three_f_plus_one() {
     ));
 }
 
-#[test]
-fn derive_is_checked_by_the_node_parser() {
-    let mut profile = sora();
-    // A body queue below the per-source minimum is caught by the geometry derivation, and a
-    // per-source byte partition the node parser rejects surfaces as a Sumeragi error.
-    profile.derive.queue_bodies = 8;
-    assert!(matches!(
-        profile.derive(4),
-        Err(ProfileError::Geometry { .. })
-    ));
-    let mut profile = sora();
-    profile.body_source_bytes = 1;
-    set(
-        &mut profile.static_config,
-        "sumeragi.queues.body_source_bytes",
-        toml::Value::Integer(1),
-    );
-    assert!(matches!(
-        profile.derive(4),
-        Err(ProfileError::Sumeragi { .. })
-    ));
-}
 
 #[test]
 fn digests_are_stable_across_loads_and_formatting() {

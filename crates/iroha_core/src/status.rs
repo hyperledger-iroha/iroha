@@ -63,8 +63,6 @@ static PIPELINE_EXECUTION: OnceLock<Mutex<PipelineExecutionSnapshot>> = OnceLock
 static DATASPACE_ACTIVITY: OnceLock<Mutex<Vec<DataspaceActivitySnapshot>>> = OnceLock::new();
 static LANE_COMMITMENTS: OnceLock<Mutex<Vec<LaneCommitmentSnapshot>>> = OnceLock::new();
 static DATASPACE_COMMITMENTS: OnceLock<Mutex<Vec<DataspaceCommitmentSnapshot>>> = OnceLock::new();
-static LANE_SETTLEMENT_COMMITMENTS: OnceLock<Mutex<Vec<LaneBlockCommitment>>> = OnceLock::new();
-static LANE_RELAY_ENVELOPES: OnceLock<Mutex<Vec<LaneRelayEnvelope>>> = OnceLock::new();
 static LANE_GOVERNANCE: OnceLock<Mutex<Vec<LaneGovernanceSnapshot>>> = OnceLock::new();
 static NEXUS_FEE_STATUS: OnceLock<Mutex<NexusFeeSnapshot>> = OnceLock::new();
 #[derive(Debug, Default)]
@@ -176,9 +174,6 @@ static TX_QUEUE_SATURATED_BY_COUNT: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_BYTES: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_AGE: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
-const LANE_RELAY_ENVELOPES_CAP: usize = 64;
-pub(crate) const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
-pub(crate) const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
 /// Actor responsible for paying a Nexus fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NexusFeePayer {
@@ -669,133 +664,6 @@ pub struct DataspaceCommitmentSnapshot {
     pub teu_total: u64,
     /// Block hash identifying the commitment.
     pub block_hash: HashOf<BlockHeader>,
-}
-/// Execution readiness for a certified lane-local block awaiting canonical merge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommittedLaneBlockExecutionStatus {
-    /// The block has proposal/prepare/commit certificates, but no executable lane payload yet.
-    AwaitingExecutablePayload,
-    /// Accepted entrypoints are locally recoverable, but merge execution is not prepared yet.
-    PayloadAvailableAwaitingExecutor,
-    /// Accepted entrypoints have been durably recovered for canonical merge application.
-    PayloadRecoveredAwaitingStateApplication,
-    /// Recovered entrypoints passed execution preflight at the current canonical WSV base.
-    PayloadPreflightedAwaitingStateApplication,
-    /// Recovered entrypoints produced at least one rejection during execution preflight.
-    PayloadPreflightRejectedAwaitingStateApplication,
-    /// Canonical application receipt disagrees with durable execution preflight results.
-    ApplicationReceiptConflictsWithPreflight,
-    /// This lane block cannot execute until its certified predecessor is applied.
-    AwaitingPredecessorApplication,
-    /// Accepted entrypoints already have canonical committed results recorded locally.
-    StateAppliedByCanonicalBlock,
-}
-impl CommittedLaneBlockExecutionStatus {
-    /// Stable operator-facing label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AwaitingExecutablePayload => COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
-            Self::PayloadAvailableAwaitingExecutor => {
-                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR
-            }
-            Self::PayloadRecoveredAwaitingStateApplication => {
-                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION
-            }
-            Self::PayloadPreflightedAwaitingStateApplication => {
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
-            }
-            Self::PayloadPreflightRejectedAwaitingStateApplication => {
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION
-            }
-            Self::ApplicationReceiptConflictsWithPreflight => {
-                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT
-            }
-            Self::AwaitingPredecessorApplication => {
-                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION
-            }
-            Self::StateAppliedByCanonicalBlock => {
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
-            }
-        }
-    }
-    /// Whether the committed lane block can be handed to a standalone executor.
-    #[must_use]
-    pub const fn executable_payload_available(self) -> bool {
-        match self {
-            Self::AwaitingExecutablePayload => false,
-            Self::PayloadAvailableAwaitingExecutor
-            | Self::PayloadRecoveredAwaitingStateApplication
-            | Self::PayloadPreflightedAwaitingStateApplication
-            | Self::StateAppliedByCanonicalBlock => true,
-            Self::ApplicationReceiptConflictsWithPreflight
-            | Self::PayloadPreflightRejectedAwaitingStateApplication
-            | Self::AwaitingPredecessorApplication => false,
-        }
-    }
-}
-/// Standalone lane-local block that has proposal, prepare QC, and commit QC.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommittedLaneBlockSnapshot {
-    /// Lane whose local block is committed.
-    pub lane_id: LaneId,
-    /// Dataspace bound to the committed lane-local block.
-    pub dataspace_id: DataSpaceId,
-    /// Lane-local block height.
-    pub lane_block_height: u64,
-    /// Lane-local consensus view.
-    pub lane_block_view: u64,
-    /// Stable hash of the standalone lane block descriptor.
-    pub descriptor_hash: Hash,
-    /// Stable hash of the standalone lane block proposal.
-    pub proposal_hash: Hash,
-    /// Execution readiness of the certified standalone lane-local block.
-    pub execution_status: CommittedLaneBlockExecutionStatus,
-    /// Proposal artifact committed by the QCs.
-    pub proposal: LaneBlockProposalV1,
-    /// Prepare QC for the proposal.
-    pub prepare_qc: LaneBlockQcV1,
-    /// Commit QC for the proposal.
-    pub commit_qc: LaneBlockQcV1,
-}
-impl CommittedLaneBlockSnapshot {
-    /// Build an operator snapshot from one fully validated committed lane session.
-    pub(crate) fn from_committed_session_with_execution_status(
-        session: &crate::lane_consensus::CommittedLaneBlockSession,
-        execution_status: CommittedLaneBlockExecutionStatus,
-    ) -> Self {
-        let descriptor = &session.proposal.descriptor;
-        Self {
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_view: descriptor.lane_block_view,
-            descriptor_hash: descriptor.descriptor_hash,
-            proposal_hash: session.proposal.proposal_hash,
-            execution_status,
-            proposal: session.proposal.clone(),
-            prepare_qc: session.prepare_qc.clone(),
-            commit_qc: session.commit_qc.clone(),
-        }
-    }
-    /// Whether the committed lane block has enough payload material for execution.
-    #[must_use]
-    pub const fn executable_payload_available(&self) -> bool {
-        self.execution_status.executable_payload_available()
-    }
-}
-/// Bounded lane diagnostics reconstructed from current State and durable Kura evidence.
-///
-/// This snapshot intentionally excludes adapter/session caches so a restarted peer reports
-/// the same durable lane identities as an uninterrupted peer.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DurableLaneDiagnosticsSnapshot {
-    /// Latest canonical payload ownership for each active lane route.
-    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
-    /// Certified lane blocks and their durable execution readiness.
-    pub committed_lane_blocks: Vec<CommittedLaneBlockSnapshot>,
-    /// Durable certified-session summaries.
-    pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
 }
 /// Governance manifest snapshot for a lane.
 #[derive(Clone, Debug, Default)]
@@ -1290,42 +1158,6 @@ pub(crate) fn peer_key_policy_reject_snapshot_for_tests() -> (u64, Option<&'stat
     );
     (total, last_reason)
 }
-/// Worker-loop queue identifiers used by the remaining async adapter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorkerQueueKind {
-    /// Vote-related messages.
-    Votes,
-    /// Block payload messages.
-    BlockPayload,
-    /// Fallback block/control messages.
-    Blocks,
-    /// Consensus control-flow messages.
-    Consensus,
-    /// Lane relay envelopes.
-    LaneRelay,
-    /// Background post requests.
-    Background,
-}
-static WORKER_QUEUE_DEPTHS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
-static WORKER_QUEUE_DROPS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
-const fn worker_queue_index(kind: WorkerQueueKind) -> usize {
-    match kind {
-        WorkerQueueKind::Votes => 0,
-        WorkerQueueKind::BlockPayload => 1,
-        WorkerQueueKind::Blocks => 2,
-        WorkerQueueKind::Consensus => 3,
-        WorkerQueueKind::LaneRelay => 4,
-        WorkerQueueKind::Background => 5,
-    }
-}
-/// Record an enqueue for the given adapter queue.
-pub fn record_worker_queue_enqueue(kind: WorkerQueueKind) {
-    WORKER_QUEUE_DEPTHS[worker_queue_index(kind)].fetch_add(1, Ordering::Relaxed);
-}
-/// Record a dropped enqueue for the given adapter queue.
-pub fn record_worker_queue_drop(kind: WorkerQueueKind) {
-    WORKER_QUEUE_DROPS[worker_queue_index(kind)].fetch_add(1, Ordering::Relaxed);
-}
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// Count a duplicate transaction skipped by gossip.
 pub fn inc_gossip_duplicate_known_skipped() {
@@ -1346,90 +1178,6 @@ fn lane_commitments_slot() -> &'static Mutex<Vec<LaneCommitmentSnapshot>> {
 fn dataspace_commitments_slot() -> &'static Mutex<Vec<DataspaceCommitmentSnapshot>> {
     DATASPACE_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
-fn lane_settlement_commitments_slot() -> &'static Mutex<Vec<LaneBlockCommitment>> {
-    LANE_SETTLEMENT_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn lane_relay_envelopes_slot() -> &'static Mutex<Vec<LaneRelayEnvelope>> {
-    LANE_RELAY_ENVELOPES.get_or_init(|| Mutex::new(Vec::new()))
-}
-type LaneRelayKey = (
-    iroha_model_base::topology::LaneId,
-    iroha_model_base::topology::DataSpaceId,
-    Hash,
-    u64,
-);
-fn lane_relay_key(envelope: &LaneRelayEnvelope) -> LaneRelayKey {
-    (
-        envelope.lane_id,
-        envelope.dataspace_id,
-        envelope.lane_incarnation,
-        envelope.block_height,
-    )
-}
-fn record_relay_error(err: &LaneRelayError) {
-    if let Some(metrics) = metrics::global() {
-        metrics
-            .lane_relay_invalid_total
-            .with_label_values(&[err.as_label()])
-            .inc();
-    }
-}
-fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: LaneRelayEnvelope) {
-    match envelope.verify().and_then(|()| {
-        if envelope.fastpq_proof.is_some() {
-            envelope.validate_fastpq_proof_metadata()
-        } else {
-            Ok(())
-        }
-    }) {
-        Ok(()) => {}
-        Err(err) => {
-            record_relay_error(&err);
-            iroha_logger::warn!(
-                lane_id = %envelope.lane_id,
-                dataspace_id = %envelope.dataspace_id,
-                block_height = envelope.block_height,
-                error_kind = err.as_label(),
-                error = %err,
-                "dropping lane relay envelope with failed structural verification"
-            );
-            return;
-        }
-    }
-    let key = lane_relay_key(&envelope);
-    if let Some(existing) = storage
-        .iter()
-        .position(|candidate| lane_relay_key(candidate) == key)
-    {
-        if !storage[existing].same_finality_effect(&envelope) {
-            let err = LaneRelayError::ConflictingRelay {
-                lane: envelope.lane_id,
-                height: envelope.block_height,
-            };
-            record_relay_error(&err);
-            iroha_logger::warn!(
-                lane_id = %envelope.lane_id,
-                dataspace_id = %envelope.dataspace_id,
-                block_height = envelope.block_height,
-                error_kind = err.as_label(),
-                "dropping conflicting lane relay envelope for finalized coordinates"
-            );
-            return;
-        }
-        if storage[existing].has_merge_admission_material()
-            && !envelope.has_merge_admission_material()
-        {
-            return;
-        }
-        storage[existing] = envelope;
-    } else {
-        storage.push(envelope);
-        if storage.len() > LANE_RELAY_ENVELOPES_CAP {
-            let drain = storage.len() - LANE_RELAY_ENVELOPES_CAP;
-            storage.drain(0..drain);
-        }
-    }
-}
 #[cfg(any(test, feature = "iroha-core-tests"))]
 /// Replace the aggregated lane/dataspace commitment snapshots used by Nexus diagnostics.
 pub fn set_lane_commitments(
@@ -1448,30 +1196,6 @@ pub fn set_lane_commitments(
         );
         *guard = dataspace_entries;
     }
-}
-/// Replace the aggregated lane settlement commitments used by Nexus diagnostics.
-pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
-    let mut guard = lock_operator_status_slot(
-        lane_settlement_commitments_slot(),
-        "lane settlement commitments snapshot",
-    );
-    *guard = entries;
-}
-#[cfg(test)]
-/// Replace the stored lane relay envelopes captured during block sealing.
-pub fn set_lane_relay_envelopes(entries: Vec<LaneRelayEnvelope>) {
-    let mut guard =
-        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
-    guard.clear();
-    for envelope in entries {
-        upsert_lane_relay_envelope(&mut guard, envelope);
-    }
-}
-/// Append a single validated lane relay envelope to the cached snapshot.
-pub fn push_lane_relay_envelope(envelope: LaneRelayEnvelope) {
-    let mut guard =
-        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
-    upsert_lane_relay_envelope(&mut guard, envelope);
 }
 /// Remove lane-scoped operator status snapshots for lanes whose runtime state was reset.
 pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
@@ -1532,17 +1256,6 @@ fn dataspace_commitments_snapshot() -> Vec<DataspaceCommitmentSnapshot> {
         "dataspace commitments snapshot",
     )
     .clone()
-}
-fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
-    lock_operator_status_slot(
-        lane_settlement_commitments_slot(),
-        "lane settlement commitments snapshot",
-    )
-    .clone()
-}
-/// Return the cached lane relay envelopes used by Nexus diagnostics.
-pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
-    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
 }
 fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
     LANE_GOVERNANCE.get_or_init(|| Mutex::new(Vec::new()))

@@ -104,7 +104,7 @@ impl Core {
             let config_height = t.saturating_add(1);
             #[cfg(sumeragi_mutation = "MS15")]
             let config_height = t;
-            let Some(config) = self.config(&config_height) else {
+            let Some(config) = self.config(config_height) else {
                 return self.halt(HaltReason::SafetyRecordInconsistent);
             };
             match check_recommit(
@@ -520,14 +520,11 @@ fn check_init(init: &Init, crypto: &dyn Crypto) -> Result<(), ConfigError> {
             .find(|(h, _)| *h == height)
             .map(|(_, slot)| slot)
     };
-    let next_height = tip
-        .height
-        .checked_add(1)
-        .ok_or(ConfigError::InvalidInit("height overflow"))?;
-    let later_height = tip
-        .height
-        .checked_add(2)
-        .ok_or(ConfigError::InvalidInit("height overflow"))?;
+    let (Some(next_height), Some(later_height)) =
+        (tip.height.checked_add(1), tip.height.checked_add(2))
+    else {
+        return Err(ConfigError::InvalidInit("height overflow"));
+    };
     let first = get(next_height)
         .and_then(ConfigSlot::ready)
         .ok_or(ConfigError::MissingConfig(next_height))?;
@@ -541,10 +538,7 @@ fn check_init(init: &Init, crypto: &dyn Crypto) -> Result<(), ConfigError> {
             .and_then(ConfigSlot::ready)
             .ok_or(ConfigError::MissingConfig(tip.height))?;
         if !current.epoch.contains(tip.height)
-            || tip
-                .header
-                .as_ref()
-                .is_none_or(|header| header.epoch != current.epoch.id)
+            || tip.header.as_ref().map(|header| header.epoch) != Some(current.epoch.id)
             || (current.epoch.contains(next_height) && !first.same_authority(current))
             || (!current.epoch.contains(next_height) && !first.follows(current))
         {

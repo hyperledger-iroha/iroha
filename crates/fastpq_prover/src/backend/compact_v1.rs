@@ -103,11 +103,10 @@ impl Round {
     /// Fixed whole raw-tape length, including unused samples and suffix bytes.
     pub(super) const fn tape_bytes(self) -> usize {
         match self.0 {
-            1 => 48,
+            1 | 5..=21 => 48,
             2 => 10_944,
             3 => 29_568,
             4 => 96,
-            5..=21 => 48,
             22 => QUERY_TAPE_BYTES,
             _ => unreachable!(),
         }
@@ -399,12 +398,12 @@ impl Context {
         if role == H_ROLE
             && phase == H_PHASE
             && usize::from(round) < H_CACHE_ROUNDS
-            && level < H_CACHE_LEVELS as u32
+            && (level as usize) < H_CACHE_LEVELS
         {
             Ok(usize::from(round) * H_CACHE_LEVELS + level as usize)
         } else if role == G_ROLE
             && phase == G_PHASE
-            && (1..=G_CACHE_ROUNDS as u8).contains(&round)
+            && (1..=G_CACHE_ROUNDS).contains(&usize::from(round))
             && level == 0
         {
             Ok(H_CACHE_ROUNDS * H_CACHE_LEVELS + usize::from(round - 1))
@@ -435,7 +434,7 @@ impl Context {
                     usize::from(round) * LEVELS + level as usize
                 } else if role == G_ROLE
                     && phase == G_PHASE
-                    && (1..=ROUNDS as u8).contains(&round)
+                    && (1..=ROUNDS).contains(&usize::from(round))
                     && level == 0
                 {
                     ROUNDS * LEVELS + usize::from(round - 1)
@@ -735,7 +734,8 @@ fn decode_message(round: Round, raw: &[u8]) -> Result<Message> {
             if candidate >= rejection_limit {
                 continue;
             }
-            let value = (candidate % u64::from(LDE_ROWS)) as u32;
+            let value = u32::try_from(candidate % u64::from(LDE_ROWS))
+                .expect("a residue modulo the u32 row count fits u32");
             match indices.binary_search(&value) {
                 Ok(_) => {}
                 Err(position) => indices.insert(position, value),
@@ -872,7 +872,9 @@ mod tests {
     fn private_frame_storage_is_exact_guarded_and_preserves_canonical_bytes() {
         let context = Context::new(b"private framing erasure regression").unwrap();
         for bytes in [0, 1, 96, 301 * 8, 342 * 8, 4096] {
-            let payload: Vec<u8> = (0..bytes).map(|i| (i % 251) as u8).collect();
+            let payload: Vec<u8> = (0..bytes)
+                .map(|i| u8::try_from(i % 251).expect("residue modulo 251 fits u8"))
+                .collect();
             for fields in [
                 BodyFields::One(&payload),
                 BodyFields::Two(&payload, b"other"),
@@ -915,8 +917,16 @@ mod tests {
                 100
             );
             // The maximum includes every reachable slot before any cache entry exists.
-            let rounds = if deep { 10 } else { H_CACHE_ROUNDS as u8 };
-            let depth = if deep { 23 } else { H_CACHE_LEVELS as u32 - 1 };
+            let rounds = if deep {
+                10
+            } else {
+                u8::try_from(H_CACHE_ROUNDS).expect("H cache rounds fit u8")
+            };
+            let depth = if deep {
+                23
+            } else {
+                u32::try_from(H_CACHE_LEVELS).expect("H cache levels fit u32") - 1
+            };
             for round in 0..rounds {
                 for level in 0..=depth {
                     context
@@ -924,7 +934,12 @@ mod tests {
                         .unwrap();
                 }
             }
-            for round in 1..=if deep { 10 } else { G_CACHE_ROUNDS as u8 } {
+            let g_rounds = if deep {
+                10
+            } else {
+                u8::try_from(G_CACHE_ROUNDS).expect("G cache rounds fit u8")
+            };
+            for round in 1..=g_rounds {
                 context
                     .digest(G_ROLE, G_PHASE, round, 0, 0, b"public")
                     .unwrap();
@@ -1440,7 +1455,8 @@ mod tests {
         for flags in valid_layouts() {
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
             for len in [0, 1, 7, 8, 48, 119, 120, 127, 128, 2736, 29_568] {
-                let bytes: Vec<u8> = (0..len).map(|index| index as u8).collect();
+                // The byte pattern is the index modulo 256.
+                let bytes: Vec<u8> = (0..=u8::MAX).cycle().take(len).collect();
                 let byte_field = ByteField(&bytes);
                 let mut actual = Vec::new();
                 let mut expected = Vec::new();
@@ -1475,6 +1491,108 @@ mod tests {
         }
     }
 
+    /// Independently declared oracle coordinates of one borrowed-frame case.
+    #[derive(Clone, Copy)]
+    struct BorrowedShape {
+        oracle: Oracle,
+        role: u8,
+        round: u8,
+        leaves: u32,
+    }
+
+    /// Check borrowed leaf frames at both boundary positions against owned hashing.
+    fn assert_borrowed_leaf_frames(context: &Context, shape: BorrowedShape, payload: &[u8]) {
+        let BorrowedShape {
+            oracle,
+            role,
+            round,
+            leaves,
+        } = shape;
+        for position in [0, leaves - 1] {
+            let frame = context.frame(
+                1,
+                role,
+                round,
+                0,
+                position,
+                H_OUTPUT_BYTES,
+                BodyFields::One(payload),
+            );
+            let BodyFields::One(borrowed) = frame.fields else {
+                unreachable!()
+            };
+            assert!(std::ptr::eq(borrowed, payload));
+            assert_owned_body_bytes(&frame);
+            let reference = OwnedBodyReference {
+                kind: 1,
+                oracle: role,
+                round,
+                level: 0,
+                position,
+                output_bytes: 48,
+                fields: vec![payload.to_vec()],
+            };
+            assert_eq!(
+                context.hash_leaf(oracle, position, payload).unwrap(),
+                one_shot_owned_h(context, &reference),
+                "leaf {oracle:?}, position {position}"
+            );
+        }
+    }
+
+    /// Check borrowed parent frames at the first and deepest levels against owned hashing.
+    fn assert_borrowed_parent_frames(
+        context: &Context,
+        shape: BorrowedShape,
+        left_digest: Digest,
+        right_digest: Digest,
+    ) {
+        let BorrowedShape {
+            oracle,
+            role,
+            round,
+            leaves,
+        } = shape;
+        let left = left_digest.to_le_bytes();
+        for level in [1, leaves.ilog2().max(1)] {
+            // Every nonterminal case uses unequal children, and the sole
+            // terminal parent uses the required duplicate child.
+            let second_digest = if leaves == 1 {
+                left_digest
+            } else {
+                right_digest
+            };
+            let second = second_digest.to_le_bytes();
+            for position in [0, (leaves >> level).max(1) - 1] {
+                assert_owned_body_bytes(&context.frame(
+                    2,
+                    role,
+                    round,
+                    level,
+                    position,
+                    H_OUTPUT_BYTES,
+                    BodyFields::Two(&left, &second),
+                ));
+                let reference = OwnedBodyReference {
+                    kind: 2,
+                    oracle: role,
+                    round,
+                    level,
+                    position,
+                    output_bytes: 48,
+                    fields: vec![left.to_vec(), second.to_vec()],
+                };
+                assert_eq!(
+                    context
+                        .hash_parent(oracle, level, position, left_digest, second_digest)
+                        .unwrap(),
+                    one_shot_owned_h(context, &reference),
+                    "parent {oracle:?}, level {level}, position {position}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn borrowed_body_frames_preserve_every_canonical_shape_and_identity() {
         assert_eq!(
@@ -1493,7 +1611,7 @@ mod tests {
         // Independently declare expected coordinates and payload lengths rather
         // than deriving them from the dispatcher's Oracle::shape implementation.
         let oracles = [
-            (Oracle::Row, 1, 0, 524_288_u32, 342 * 8),
+            (Oracle::Row, 1, 0, 524_288_u32, 342 * 8_u32),
             (Oracle::Mixed, 2, 0, 524_288, 32),
             (Oracle::Quotient, 3, 0, 524_288, 32),
         ]
@@ -1511,78 +1629,19 @@ mod tests {
                     let word = if column == 0 {
                         MODULUS - 1
                     } else {
-                        column as u64
+                        u64::from(column)
                     };
                     word.to_le_bytes()
                 })
                 .collect();
-            for position in [0, leaves - 1] {
-                let frame = context.frame(
-                    1,
-                    role,
-                    round,
-                    0,
-                    position,
-                    H_OUTPUT_BYTES,
-                    BodyFields::One(&payload),
-                );
-                let BodyFields::One(borrowed) = frame.fields else {
-                    unreachable!()
-                };
-                assert!(std::ptr::eq(borrowed, payload.as_slice()));
-                assert_owned_body_bytes(&frame);
-                let reference = OwnedBodyReference {
-                    kind: 1,
-                    oracle: role,
-                    round,
-                    level: 0,
-                    position,
-                    output_bytes: 48,
-                    fields: vec![payload.clone()],
-                };
-                assert_eq!(
-                    context.hash_leaf(oracle, position, &payload).unwrap(),
-                    one_shot_owned_h(&context, &reference),
-                    "leaf {oracle:?}, position {position}"
-                );
-            }
-            for level in [1, leaves.ilog2().max(1)] {
-                // Every nonterminal case uses unequal children, and the sole
-                // terminal parent uses the required duplicate child.
-                let second_digest = if leaves == 1 {
-                    left_digest
-                } else {
-                    right_digest
-                };
-                let second = second_digest.to_le_bytes();
-                for position in [0, (leaves >> level).max(1) - 1] {
-                    assert_owned_body_bytes(&context.frame(
-                        2,
-                        role,
-                        round,
-                        level,
-                        position,
-                        H_OUTPUT_BYTES,
-                        BodyFields::Two(&left, &second),
-                    ));
-                    let reference = OwnedBodyReference {
-                        kind: 2,
-                        oracle: role,
-                        round,
-                        level,
-                        position,
-                        output_bytes: 48,
-                        fields: vec![left.to_vec(), second.to_vec()],
-                    };
-                    assert_eq!(
-                        context
-                            .hash_parent(oracle, level, position, left_digest, second_digest)
-                            .unwrap(),
-                        one_shot_owned_h(&context, &reference),
-                        "parent {oracle:?}, level {level}, position {position}"
-                    );
-                }
-            }
+            let shape = BorrowedShape {
+                oracle,
+                role,
+                round,
+                leaves,
+            };
+            assert_borrowed_leaf_frames(&context, shape, &payload);
+            assert_borrowed_parent_frames(&context, shape, left_digest, right_digest);
         }
         for ordinal in 1..=22 {
             let round = Round::new(ordinal).unwrap();

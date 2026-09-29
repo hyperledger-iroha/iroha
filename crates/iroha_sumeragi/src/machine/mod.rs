@@ -453,7 +453,7 @@ impl Core {
                 witness,
                 attest,
             } => {
-                self.on_control_witness_built(req, context, witness, attest);
+                self.on_control_witness_built(req, context, &witness, attest);
             }
             Event::ApplicationControlBuilt { message } => {
                 self.on_application_control_built(message)
@@ -690,7 +690,7 @@ impl Core {
             .filter_map(|index| self.member_key(*index))
             .filter(|key| !self.is_local_key(key))
             .collect();
-        if joiners && let Some(next) = self.config(&self.height.saturating_add(1)) {
+        if joiners && let Some(next) = self.config(self.height.saturating_add(1)) {
             out.extend(
                 next.committee
                     .members()
@@ -773,15 +773,15 @@ impl Core {
     // ---- certificate verification with the cache (§6.1 rule 5) ---------------------------
 
     /// Installed authority only. A pending epoch never supplies voters or leader randomness.
-    fn config(&self, height: &u64) -> Option<&HeightConfig> {
+    fn config(&self, height: u64) -> Option<&HeightConfig> {
         self.configs
-            .get(height)
+            .get(&height)
             .and_then(crate::types::ConfigSlot::ready)
     }
 
     /// Verify a QC under `C_{qc.height}` (SR15), using and filling the cache.
     fn verify_qc_cached(&mut self, qc: &Qc) -> bool {
-        let Some(active) = self.config(&qc.height) else {
+        let Some(active) = self.config(qc.height) else {
             return false;
         };
         if qc.epoch != active.epoch.id
@@ -798,7 +798,7 @@ impl Core {
         let config_height = qc.height;
         #[cfg(sumeragi_mutation = "MS15")]
         let config_height = self.tip.height;
-        let Some(config) = self.config(&config_height) else {
+        let Some(config) = self.config(config_height) else {
             return false;
         };
         let ok = verify_qc(
@@ -871,7 +871,7 @@ impl Core {
 
     /// Keys of a certificate's signers in `C_h` (want sources).
     fn signer_keys(&self, qc: &Qc) -> Vec<PublicKey> {
-        self.config(&qc.height)
+        self.config(qc.height)
             .and_then(|config| config.committee.keys_of(&qc.signers))
             .map(|keys| keys.into_iter().cloned().collect())
             .unwrap_or_default()

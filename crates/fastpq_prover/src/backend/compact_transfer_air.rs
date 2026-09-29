@@ -935,7 +935,8 @@ mod tests {
 
     /// Prover-test-only complete witness; this native fixture is never a verifier input.
     fn physical_fixture() -> (PublicStatement, PhysicalSmtWitness) {
-        let siblings = core::array::from_fn(|level| digest((level + 17) as u8));
+        let siblings =
+            core::array::from_fn(|level| digest(u8::try_from(level + 17).expect("fixture seed")));
         let path = 0xa59c_71e3;
         let first = digest(1);
         let second = digest(2);
@@ -984,6 +985,7 @@ mod tests {
     #[test]
     #[ignore = "explicit complete Fp4 public polynomial preparation and actual AIR point oracle"]
     fn full_polynomial_preparation_matches_existing_air_at_cycle_boundaries() {
+        use super::super::masked_quotient::{NUMERATOR_JOBS, evaluate_parallel_rows};
         let air = CompactTransferAir::new(&statement(), None).unwrap();
         let domain = PolynomialDomain::new(
             262_144,
@@ -1002,7 +1004,7 @@ mod tests {
         });
         let next = current.map(|value| value.add(GoldilocksFp4V1::new([13, 17, 19, 23]).unwrap()));
         for index in [0, 1, 2047, 2048, 262_143] {
-            let mut output = [GoldilocksFp4V1::ZERO; CONSTRAINT_COUNT];
+            let mut output = vec![GoldilocksFp4V1::ZERO; CONSTRAINT_COUNT];
             evaluator
                 .evaluate_into(index, &current, &next, &mut output)
                 .unwrap();
@@ -1015,7 +1017,6 @@ mod tests {
         // Reuse the real production range scheduler and immutable cache at
         // phase-cycle, trace rotation and final-domain boundaries. The expected
         // weighted rows come from the independent uncached AIR point evaluator.
-        use super::super::masked_quotient::{NUMERATOR_JOBS, evaluate_parallel_rows};
         let indices = [0, 1, 3, 4, 2047, 2048, 65_535, 65_536, 262_142, 262_143];
         let alpha = core::array::from_fn::<_, CONSTRAINT_COUNT, _>(|slot| {
             GoldilocksFp4V1::new([slot as u64 + 1, 3, 5, 7]).unwrap()
@@ -1058,7 +1059,7 @@ mod tests {
             .unwrap();
             assert_eq!(&*output, &expected);
         }
-        let mut output = [GoldilocksFp4V1::ONE; CONSTRAINT_COUNT];
+        let mut output = vec![GoldilocksFp4V1::ONE; CONSTRAINT_COUNT];
         assert!(
             evaluator
                 .evaluate_into(domain.rows(), &current, &next, &mut output)
@@ -1085,17 +1086,18 @@ mod tests {
         assert!(output.iter().all(|&value| value == GoldilocksFp4V1::ONE));
     }
 
-    #[test]
-    #[ignore = "explicit full 65536x342 masked Fp4 numerator/quotient diagnostic; several GiB, no PCS qualification"]
-    fn complete_masked_numerator_divides_exactly_and_matches_actual_air() {
+    /// Deterministic masked trace of the physical fixture with explicit arithmetic limits.
+    fn prepared_masked_fixture(
+        witness: PhysicalSmtWitness,
+    ) -> (
+        super::super::masked_quotient::PreparedMaskedTrace,
+        super::super::masked_quotient::MaskedQuotientLimits,
+    ) {
         use super::super::{
             coefficient_masking::MaskingShape,
-            masked_quotient::{MaskedQuotientLimits, MaskedQuotientPlan, PreparedMaskedTrace},
-            secret_polynomial::SecretPolynomial,
+            masked_quotient::{MaskedQuotientLimits, PreparedMaskedTrace},
         };
         type F = GoldilocksFp4V1;
-        let (statement, witness) = physical_fixture();
-        let air = CompactTransferAir::new(&statement, None).unwrap();
         let mut trace: Vec<SecretPolynomial<F>> = (0..COLUMN_COUNT)
             .map(|_| SecretPolynomial::zeroed(PHYSICAL_ROW_COUNT).unwrap())
             .collect();
@@ -1133,6 +1135,18 @@ mod tests {
         .unwrap();
         drop(trace_refs);
         drop(trace);
+        (prepared, limits)
+    }
+
+    /// Every geometry, payload, work and alpha-shape bound rejects before building.
+    fn assert_masked_plan_bounds(
+        air: &CompactTransferAir,
+        prepared: &super::super::masked_quotient::PreparedMaskedTrace,
+        offset: GoldilocksFp4V1,
+        limits: super::super::masked_quotient::MaskedQuotientLimits,
+    ) {
+        use super::super::masked_quotient::{MaskedQuotientLimits, MaskedQuotientPlan};
+        type F = GoldilocksFp4V1;
         assert!(
             prepared
                 .degree_bounds()
@@ -1141,22 +1155,16 @@ mod tests {
         );
         assert_eq!(prepared.column(0).unwrap().len(), PHYSICAL_ROW_COUNT + 1);
         assert!(prepared.column(COLUMN_COUNT).is_err());
-        let offset = F::new([2, 3, 5, 7]).unwrap();
-        assert!(
-            MaskedQuotientPlan::new(&air, &prepared, 131_072, offset, 131_072, limits).is_err()
-        );
-        assert!(
-            MaskedQuotientPlan::new(&air, &prepared, 262_144, F::ONE, 131_072, limits).is_err()
-        );
-        assert!(MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 1, limits).is_err());
-        let plan =
-            MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 131_072, limits).unwrap();
+        assert!(MaskedQuotientPlan::new(air, prepared, 131_072, offset, 131_072, limits).is_err());
+        assert!(MaskedQuotientPlan::new(air, prepared, 262_144, F::ONE, 131_072, limits).is_err());
+        assert!(MaskedQuotientPlan::new(air, prepared, 262_144, offset, 1, limits).is_err());
+        let plan = MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
         let bytes = plan.payload_bytes();
         let work = plan.work_units();
         assert!(
             MaskedQuotientPlan::new(
-                &air,
-                &prepared,
+                air,
+                prepared,
                 262_144,
                 offset,
                 131_072,
@@ -1169,8 +1177,8 @@ mod tests {
         );
         assert!(
             MaskedQuotientPlan::new(
-                &air,
-                &prepared,
+                air,
+                prepared,
                 262_144,
                 offset,
                 131_072,
@@ -1181,12 +1189,23 @@ mod tests {
             )
             .is_err()
         );
-        assert!(plan.build(&[F::ONE; 922]).is_err());
-        let plan =
-            MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 131_072, limits).unwrap();
-        let mut alpha = [F::ONE; CONSTRAINT_COUNT];
+        assert!(plan.build(&vec![F::ONE; 922]).is_err());
+        let plan = MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
+        let mut alpha = vec![F::ONE; CONSTRAINT_COUNT];
         alpha[922] = F::from_coefficients_unchecked_for_test([0, 0, GOLDILOCKS_MODULUS, 0]);
         assert!(plan.build(&alpha).is_err());
+    }
+
+    #[test]
+    #[ignore = "explicit full 65536x342 masked Fp4 numerator/quotient diagnostic; several GiB, no PCS qualification"]
+    fn complete_masked_numerator_divides_exactly_and_matches_actual_air() {
+        use super::super::masked_quotient::MaskedQuotientPlan;
+        type F = GoldilocksFp4V1;
+        let (statement, witness) = physical_fixture();
+        let air = CompactTransferAir::new(&statement, None).unwrap();
+        let (prepared, limits) = prepared_masked_fixture(witness);
+        let offset = F::new([2, 3, 5, 7]).unwrap();
+        assert_masked_plan_bounds(&air, &prepared, offset, limits);
         let alpha: Vec<_> = (0..CONSTRAINT_COUNT)
             .map(|i| F::new([i as u64 + 1, 47, 53, 59]).unwrap())
             .collect();

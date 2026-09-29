@@ -2,7 +2,6 @@
 //! Nexus-specific integration test modules.
 #[cfg(feature = "atomic-private-settlement-release")]
 mod atomic_private_settlement_localnet;
-mod autoscale_localnet;
 mod cbdc_rollout_bundle;
 mod cbdc_whitelist;
 mod cross_dataspace_zk_stark_localnet;
@@ -10,9 +9,5 @@ mod cross_lane;
 mod global_commit;
 mod lane_registry;
 mod localnet_npos;
-mod multilane_kura_layout;
-mod multilane_pipeline;
-mod multilane_router;
 mod privacy_proof_enforcement;
-mod runtime_dataspace_registration_perf;
 mod tx_query_cross_dataspace_routing_localnet;

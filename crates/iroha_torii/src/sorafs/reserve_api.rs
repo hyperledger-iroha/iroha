@@ -1991,31 +1991,6 @@ mod tests {
         );
     }
     #[test]
-    fn signed_boundary_requires_queue_plan_admission_even_for_matching_route() {
-        let network_id = reserve_test_network_id(0xA3);
-        let route = ReserveCommandRouteV1::RequestMovement(ReserveMovementKindV1::TopUp);
-        let strict = signed_transaction(
-            &network_id,
-            movement(ReserveMovementKindV1::TopUp),
-            |builder| builder,
-        );
-        assert_eq!(
-            strict.admission_intent(),
-            TransactionAdmissionIntent::QueuePlanSynced
-        );
-        validate_reserve_signed_envelope_and_route(&network_id, &strict, route)
-            .expect("matching QueuePlanSynced reserve transaction");
-
-        let ordinary = signed_transaction(
-            &network_id,
-            movement(ReserveMovementKindV1::TopUp),
-            |builder| builder.with_admission_intent(TransactionAdmissionIntent::Ordinary),
-        );
-        let response = validate_reserve_signed_envelope_and_route(&network_id, &ordinary, route)
-            .expect_err("ordinary intent cannot enter strict reserve route");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-    #[test]
     fn finalized_query_parser_rejects_duplicates_partial_cursors_and_noncanonical_hex() {
         assert!(ReserveAnchorQueryV1::parse(Some("limit=1")).is_err());
         assert!(

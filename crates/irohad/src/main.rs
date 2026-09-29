@@ -1028,23 +1028,6 @@ fn snapshot_failure_allows_empty_state_fallback(
 ) -> bool {
     !emergency_fast && !provisional_imported_prefix && snapshot_read_error_is_recoverable(error)
 }
-fn preflight_empty_state_snapshot_fallback(
-    kura: &Kura,
-    network_id: &NetworkId,
-    configured_lane_catalog: &iroha_data_model::nexus::LaneCatalog,
-) -> ReportResult<(), StartError> {
-    State::preflight_configured_primary_geometry_replay(
-        kura,
-        network_id,
-        configured_lane_catalog,
-    )
-    .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-    .map_err(|report| {
-        report.attach(
-            "cannot rebuild from an empty state because retained Kura geometry no longer reaches the configured-primary replay floor",
-        )
-    })
-}
 mod snapshot_restore_policy;
 use snapshot_restore_policy::snapshot_read_error_is_recoverable_for_bootstrap;
 
@@ -1572,43 +1555,6 @@ mod snapshot_read_error_tests {
             false,
             true,
         ));
-    }
-    #[test]
-    fn empty_state_fallback_preflight_propagates_geometry_failure_as_kura_start_error() {
-        const FALLBACK_CONTEXT: &str = "cannot rebuild from an empty state because retained Kura \
-            geometry no longer reaches the configured-primary replay floor";
-        let kura = Kura::blank_kura_for_testing();
-        let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x33));
-        let catalog = iroha_data_model::nexus::LaneCatalog::default();
-        // The real empty-store fixture now authenticates this baseline. Model
-        // its loss explicitly; the preflight must not repair it during refusal.
-        let journal = kura.store_root().join("lane_geometry_journal.norito");
-        let baseline = std::fs::read(&journal).expect("fresh authenticated baseline journal");
-        assert!(!baseline.is_empty());
-        preflight_empty_state_snapshot_fallback(kura.as_ref(), &network_id, &catalog)
-            .expect("the original configured-primary replay floor is retained");
-        assert_eq!(std::fs::read(&journal).unwrap(), baseline);
-        std::fs::remove_file(&journal).expect("remove only this fixture's baseline journal");
-        let error = preflight_empty_state_snapshot_fallback(kura.as_ref(), &network_id, &catalog)
-            .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
-        assert!(
-            !journal.exists(),
-            "read-only preflight must not recreate the missing baseline"
-        );
-        assert!(matches!(error.current_context(), StartError::InitKura));
-        assert!(
-            error.frames().any(|frame| {
-                frame
-                    .downcast_ref::<&str>()
-                    .is_some_and(|context| *context == FALLBACK_CONTEXT)
-            }),
-            "fallback rejection must retain its startup-boundary attachment: {error:?}"
-        );
-        let rendered = format!("{error:#}");
-        assert!(
-            rendered.contains("no authenticated Kura catalog baseline"),
-            "fallback rejection must retain the exact geometry cause: {rendered}"
-        );
     }
     #[test]
     fn disabled_snapshot_mode_skips_restore() {
@@ -9356,78 +9302,8 @@ fn consensus_caps_from_genesis(
     ))
 }
 
-fn authenticated_maximum_validator_roster_len(
-    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-    permissioned_roster_len: usize,
-    npos_max_validators: Option<u32>,
-) -> Result<usize, String> {
-    match mode {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
-            Ok(permissioned_roster_len)
-        }
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
-            let maximum = npos_max_validators.ok_or_else(|| {
-                "authenticated NPoS state is missing signed election parameters".to_owned()
-            })?;
-            let maximum = usize::try_from(maximum).map_err(|_| {
-                "authenticated NPoS maximum validator roster does not fit this platform".to_owned()
-            })?;
-            if !iroha_data_model::block::consensus_v2::is_valid_committee_size(maximum) {
-                return Err(
-                    "authenticated NPoS maximum validator roster is not a bounded 3f + 1 committee"
-                        .to_owned(),
-                );
-            }
-            Ok(maximum)
-        }
-    }
-}
 
-fn validate_authenticated_sumeragi_ingress_geometry(
-    sumeragi: &iroha_config::parameters::actual::Sumeragi,
-    block_cadence: Duration,
-    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-    maximum_validator_roster_len: usize,
-) -> Result<(), String> {
-    sumeragi
-        .v2_config(block_cadence, mode)
-        .map_err(|error| format!("invalid authenticated Sumeragi v2 configuration: {error}"))?
-        .validate_ingress_roster_capacity(maximum_validator_roster_len)
-        .map_err(|error| {
-            format!(
-                "Sumeragi v2 ingress cannot admit the authenticated maximum roster of {maximum_validator_roster_len} validators: {error}"
-            )
-        })
-}
 
-#[cfg(test)]
-mod authenticated_sumeragi_ingress_geometry_tests {
-    use super::*;
-
-    #[test]
-    fn permissioned_capacity_uses_the_frozen_roster() {
-        assert_eq!(
-            authenticated_maximum_validator_roster_len(
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-                4,
-                None,
-            ),
-            Ok(4)
-        );
-    }
-
-    #[test]
-    fn npos_capacity_uses_the_signed_ceiling() {
-        assert_eq!(
-            authenticated_maximum_validator_roster_len(
-                iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
-                4,
-                Some(31),
-            ),
-            Ok(31)
-        );
-    }
-}
 fn signed_v2_genesis_context_metadata(
     genesis: &GenesisBlock,
 ) -> core::result::Result<
@@ -11626,52 +11502,6 @@ mod tests {
                 },
             );
         }
-        fn genesis_staging_state_for_test(
-            config: &Config,
-            genesis: &GenesisBlock,
-        ) -> (DisposableValidationRoot, State, Arc<Kura>) {
-            let validation_root = DisposableValidationRoot::create()
-                .expect("allocate disposable fixture validation storage");
-            let kura = open_disposable_validation_kura(config, &validation_root)
-                .expect("open fixture Kura with current configured geometry");
-            let authority = AccountId::new(config.genesis.public_key.clone());
-            let mut world = World::with(
-                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
-                [Account::new(authority.clone()).build(&authority)],
-                [],
-            );
-            iroha_core::sns::seed_genesis_alias_bootstrap(
-                &mut world,
-                &genesis.0,
-                &config.nexus.dataspace_catalog,
-            );
-            let mut state = State::try_new_with_chain_and_network_id(
-                mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes),
-                world,
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                config.common.chain.clone(),
-                NetworkId::from_genesis_hash(genesis.0.hash()),
-                #[cfg(feature = "telemetry")]
-                StateTelemetry::default(),
-            )
-            .expect("initialize fixture world with its signed genesis identity");
-            install_zk_config_before_kura_replay(&mut state, config)
-                .expect("fixture ZK policy must be valid");
-            apply_state_runtime_config_before_snapshot_auth(&mut state, config)
-                .expect("fixture execution policy must be valid");
-            let baseline = freeze_lane_manifests_for_startup_replay(&config.nexus)
-                .expect("fixture configured manifest baseline");
-            let startup_policies = install_lane_policies_for_startup_replay(
-                &mut state,
-                config.nexus.clone(),
-                &baseline,
-            )
-            .expect("fixture lane policies must be ready before publishing geometry");
-            apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
-                .expect("fixture Nexus geometry must be valid");
-            (validation_root, state, kura)
-        }
         fn sign_configured_genesis_for_test(
             genesis: RawGenesisTransaction,
             genesis_authority: &KeyPair,
@@ -11691,66 +11521,6 @@ mod tests {
                     )),
                 )
                 .expect("sign genesis fixture with configured DA and confidential policies")
-        }
-        fn staged_context_hashes_for_test(
-            genesis: &RawGenesisTransaction,
-            genesis_authority: &KeyPair,
-            config: &Config,
-        ) -> (Hash, Hash) {
-            let provisional =
-                sign_configured_genesis_for_test(genesis.clone(), genesis_authority, config);
-            let authority = AccountId::new(genesis_authority.public_key().clone());
-            let voters = iroha_core::sumeragi::startup::genesis_committee_peers(&provisional.0)
-                .expect("provisional fixture voting roster");
-            let topology = Topology::new(voters);
-            let (mode, _) =
-                signed_v2_genesis_context_metadata(&provisional).expect("signed v2 metadata");
-            let (_validation_root, state, _kura) =
-                genesis_staging_state_for_test(config, &provisional);
-            let (_valid, staged) = ValidBlock::validate_signed_genesis(
-                provisional.0,
-                &topology,
-                &authority,
-                &TimeSource::new_system(),
-                &state,
-                mode,
-            )
-            .unpack(|_| {})
-            .unwrap_or_else(|(block, error)| {
-                let transaction_errors = (0..block.network_entrypoint_count())
-                    .filter_map(|index| {
-                        block
-                            .network_output_at(u32::try_from(index).ok()?)
-                            .and_then(|(_, output)| output.result.as_ref().err())
-                            .map(|reason| format!("transaction[{index}]: {reason:?}"))
-                    })
-                    .collect::<Vec<_>>();
-                panic!(
-                    "provisional genesis fixture must stage before context binding: {error}; {}",
-                    transaction_errors.join("; ")
-                );
-            });
-            (
-                iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged),
-                iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
-                    .expect("derive staged execution-policy identity"),
-            )
-        }
-        fn bind_staged_context_for_test(
-            genesis: RawGenesisTransaction,
-            genesis_authority: &KeyPair,
-            config: &Config,
-        ) -> GenesisBlock {
-            let (nexus_amx_hash, execution_policy_hash) =
-                staged_context_hashes_for_test(&genesis, genesis_authority, config);
-            let mut parameters = genesis.sumeragi_v2_context_parameters();
-            parameters.nexus_amx_context_hash = nexus_amx_hash.into();
-            parameters.execution_policy_hash = execution_policy_hash.into();
-            sign_configured_genesis_for_test(
-                genesis.with_sumeragi_v2_context_parameters(parameters),
-                genesis_authority,
-                config,
-            )
         }
         #[test]
         fn manifest_crypto_matches_config() {
@@ -11960,85 +11730,6 @@ mod tests {
                      it: {error:?}; transaction results: {results:?}"
                 );
             }
-        }
-        #[test]
-        fn fresh_v2_genesis_staging_does_not_commit_state_or_kura() {
-            let _registry_guard = instruction_registry_test_guard();
-            iroha_genesis::init_instruction_registry();
-            let chain_id = ChainId::from("fresh-v2-genesis-staging-test");
-            let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
-                b"fresh-v2-genesis-authority".to_vec(),
-                Algorithm::Ed25519,
-            )
-            .expect("deterministic genesis authority");
-            let voter_keys = (0_u8..4)
-                .map(|index| {
-                    iroha_crypto::KeyPair::try_from_seed(
-                        vec![0x70 + index; 32],
-                        Algorithm::BlsNormal,
-                    )
-                    .expect("deterministic BLS voter")
-                })
-                .collect::<Vec<_>>();
-            let topology = voter_keys
-                .iter()
-                .map(|key| {
-                    let pop =
-                        iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("BLS PoP");
-                    GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
-                })
-                .collect::<Vec<_>>();
-            let raw_genesis = complete_test_genesis_builder_for_topology(
-                GenesisBuilder::new_without_executor(chain_id.clone(), "."),
-                topology,
-            )
-            .build_raw()
-            .expect("build complete fresh v2 genesis staging manifest");
-            let authority_id = AccountId::new(genesis_authority.public_key().clone());
-            let mut config = sample_config();
-            config.common.chain = chain_id.clone();
-            config.genesis.public_key = genesis_authority.public_key().clone();
-            if !config
-                .crypto
-                .allowed_signing
-                .contains(&Algorithm::BlsNormal)
-            {
-                config.crypto.allowed_signing.push(Algorithm::BlsNormal);
-            }
-            let genesis = bind_staged_context_for_test(raw_genesis, &genesis_authority, &config);
-            let (_validation_root, state, _kura) =
-                genesis_staging_state_for_test(&config, &genesis);
-            let voters = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis.0)
-                .expect("signed voting roster");
-            let topology = Topology::new(voters);
-            let before_height = state.committed_height();
-            let before_hashes = state.committed_block_hashes_snapshot();
-            let (mode, _signed_parameters) =
-                signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
-            let (_valid, staged) = ValidBlock::validate_signed_genesis(
-                genesis.0.clone(),
-                &topology,
-                &authority_id,
-                &TimeSource::new_system(),
-                &state,
-                mode,
-            )
-            .unpack(|_| {})
-            .expect("genesis executes in staging overlay");
-            let bootstrap = iroha_core::sumeragi::freeze_staged_genesis_v2(&genesis, &staged, mode)
-                .expect("freeze staged height context");
-            assert_eq!(bootstrap.context().height, 1);
-            assert_eq!(bootstrap.context().roster.len(), voter_keys.len());
-            assert!(
-                bootstrap
-                    .context()
-                    .roster
-                    .iter()
-                    .all(|entry| entry.power == 1)
-            );
-            drop(staged);
-            assert_eq!(state.committed_height(), before_height);
-            assert_eq!(state.committed_block_hashes_snapshot(), before_hashes);
         }
         struct LocalSemanticGenesisFixture {
             config: Config,
