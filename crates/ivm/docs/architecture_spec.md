@@ -182,14 +182,52 @@ charges until final backing destruction; shrinking either budget does not refund
 live storage. Standalone local Memory uses its existing retention owners and
 never becomes a fallback for a refused State-owned allocation.
 
-Read-log growth/read snapshots, full worker snapshot admission, hardware scratch
-and complete nested-execution admission remain open execution-memory gates. The
-write-log subset of worker copies is funded from the original pool even when the
-worker's other private copies still use local accounting. No gas formula changes;
+Full worker snapshot admission, hardware scratch and complete nested-execution
+admission remain open execution-memory gates. The read/write-log subsets of
+worker copies are funded from the original pool even when the worker's other
+private copies still use local accounting. No gas formula changes;
 Core preserves resource deferrals as operational outcomes before rejected-work
 fee accounting. The direct VM can contain attempted work when an opcode defers,
 so callers must follow the existing attempt rollback/retry boundary rather than
 resume it as though the failed attempt were a successful instruction.
+
+### Read-log allocation custody
+
+Reads use a specific row owner. State-owned Memory reserves the complete next
+row array from its original finite execution pool before allocation, diagnostic
+publication or caller output. The old array stays charged while its initialized
+ranges are copied to the replacement. Diagnostic refusal discards that replacement
+and leaves the old rows, capacity and output unchanged. Successful publication
+installs the complete next history before destroying the old backing. Appends
+within existing capacity and clear/reset retain the same prepaid array.
+
+`Memory::try_read_log_snapshot` replaces the raw-vector read snapshot directly.
+Its immutable result owns an independent exact copy and exposes only a borrowed
+range slice. Snapshot creation and explicit fallible cloning reserve from the
+same original pool; template copying partitions the original prepaid parent
+lease after an identity check. Each backing keeps both execution and retention
+charges until actual deallocation. Shared outer borrowers add no duplicate row
+charge, and budget shrink or eviction cannot refund live backing.
+
+Memory defers allocation-release callbacks until the read-log mutex has released,
+including diagnostic refusal and unwind. Invalid address/alignment errors still
+precede row admission. Ordinary guest loads, unprepared instruction fetches and
+trusted call-result reads retain their existing tracking rules; quote-only
+inspection and prepared diagnostic fetches remain separate. Allocation refusal
+uses the existing operational deferral and attempt rollback boundary, without
+changing gas schedules or transaction validity. TLV/numeric decoders and signature
+preflight/verification retain the complete operational error instead of reporting
+malformed input or a false verification decision. INPUT cursor reconstruction
+performs its tracked scan fallibly and publishes the valid-prefix cursor only
+after the scan completes; admission failure cannot silently truncate that prefix.
+Kotodama test invocation propagates operational failures before rejection matching,
+and the outer test runner reports an execution failure rather than a contract
+rejection. Deterministic semantic decoder errors retain their existing mappings.
+
+Private-memory write cleanup still requires a separate admission/error-propagation
+cut: byte-wise scrub can exhaust write-row credit, and its existing boolean result
+is erased by reset or mapped to PrivacyViolation by mode/load transitions. This
+read-owner change does not close that gate or the remaining active-memory owners.
 
 ## Fixed canonical memory Merkle nodes
 

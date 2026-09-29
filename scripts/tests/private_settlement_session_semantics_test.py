@@ -29,7 +29,7 @@ class SemanticControls(unittest.TestCase):
         self.vector = self.fixture.result()
         self.result = {**{key: self.request[key] for key in ('version', 'protocol', 'request_id',
             'invocation_nonce', 'commit', 'participants')}, 'request_sha256': self.row['request']['sha256'],
-            'mandatory_signed_rs16_da_rbc': True, 'authenticated_message_control': True,
+            'mandatory_signed_rs16_da_rbc': True, 'authenticated_private_settlement_route_control': True,
             'signed_rs16_da_observations': semantics.runner.minimum_signed_rs16_da_observations(self.request['participants']),
             'process_inventory': [], 'payload': {
                 'economic_vector_sha256': self.vector['economic_vector_sha256'],

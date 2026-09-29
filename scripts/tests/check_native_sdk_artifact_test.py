@@ -324,12 +324,12 @@ def test_python_probe_disables_bytecode_in_its_actual_isolated_child(tmp_path: P
         "assert sys.flags.isolated == 1\n"
         "assert sys.dont_write_bytecode\n"
         "def connect_norito_bridge_abi_version():\n"
-        "    return 24\n",
+        "    return 25\n",
         encoding="utf-8",
     )
     assert MODULE.probe_python_abi(
         artifact, ("connect_norito_bridge_abi_version",)
-    ) == 24
+    ) == 25
     assert not (tmp_path / "__pycache__").exists()
 
 
@@ -363,7 +363,9 @@ def test_retired_abi23_manifest_and_schema_are_rejected() -> None:
     }
     MODULE.validate_manifest(manifest)
     for field, retired, expected in (
-        ("bridge_abi_version", 23, "must be exactly 24"),
+        ("bridge_abi_version", 23, "must be exactly 25"),
+        ("bridge_abi_version", 24, "must be exactly 25"),
+        ("schema", "iroha.native-sdk-abi24-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi23-artifact.v1", "schema is unsupported"),
     ):
         stale = {**manifest, field: retired}
@@ -413,3 +415,17 @@ def test_csharp_wallet_inventory_matches_actual_native_imports() -> None:
                 assert missing in str(error)
             else:
                 raise AssertionError(f"C# artifact without {missing} was accepted")
+
+
+def test_retired_abi24_privacy_export_marker_is_rejected() -> None:
+    """A scalar-anchor bridge marker cannot qualify the checkpoint ABI."""
+    marker = "iroha_privacy_abi24_compiled_profile_catalog_v1"
+    assert MODULE.STALE_PRIVACY_ABI_MARKER_RE.search(marker)
+    try:
+        MODULE.validate_privacy_c_exports(
+            [marker, *MODULE.APPROVED_PRIVACY_C_EXPORTS], require_exact=False
+        )
+    except MODULE.ArtifactContractError as error:
+        assert "stale privacy/bridge ABI marker" in str(error)
+    else:
+        raise AssertionError("retired ABI-24 privacy export marker was accepted")

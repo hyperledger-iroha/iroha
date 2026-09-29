@@ -10,7 +10,10 @@ pub(super) const PROGRAM_CONTEXT: &str = "iroha.ram_lfe.bfv_program.secret_tape.
 // Both fields are length-framed by the canonical Norito encoder. Borrowing the
 // secret avoids constructing a second, uncleared preimage allocation.
 #[derive(Encode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_crypto::ram_lfe::PolicySecretInputV1")]
+#[norito_schema(
+    name = "iroha_crypto::ram_lfe::PolicySecretInputV1",
+    frame = "iroha_crypto::ram_lfe::PolicySecretInputV1"
+)]
 struct PolicySecretInputV1<'a> {
     backend: RamLfeBackend,
     secret: &'a [u8],
@@ -50,8 +53,8 @@ mod tests {
     fn commitment_binds_backend_secret_and_length() {
         let backends = [
             RamLfeBackend::HkdfSha3_512PrfV1,
-            RamLfeBackend::BfvAffineSha3_256V1,
-            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeBackend::BfvAffineV1,
+            RamLfeBackend::BfvProgrammedV1,
         ];
         let mut commitments = std::collections::BTreeSet::new();
         for backend in backends {
@@ -65,7 +68,7 @@ mod tests {
 
     #[test]
     fn commitment_enforces_secret_boundaries() {
-        let backend = RamLfeBackend::BfvProgrammedSha3_256V1;
+        let backend = RamLfeBackend::BfvProgrammedV1;
         assert_eq!(commit(backend, b""), Err(RamLfeError::EmptySecret));
         assert!(commit(backend, b"x").is_ok());
         assert!(commit(backend, &vec![0x5a; RAM_LFE_SECRET_MAX_BYTES]).is_ok());
@@ -78,7 +81,7 @@ mod tests {
     #[test]
     fn canonical_commitment_binds_context_and_ignores_ambient_layout() {
         let input = PolicySecretInputV1 {
-            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            backend: RamLfeBackend::BfvProgrammedV1,
             secret: b"canonical-secret",
         };
         let expected = commit_canonical(CONTEXT, &input).expect("canonical commitment");

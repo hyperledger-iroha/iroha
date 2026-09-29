@@ -158,56 +158,22 @@ fn default_snapshot_decode_depth_matches_norito() {
     );
 }
 #[test]
-fn snapshot_bootstrap_policy_parses_only_complete_exact_authority() {
-    let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
-    let mut table = base_table();
-    let snapshot = table
-        .entry("snapshot")
-        .or_insert_with(|| Value::Table(Table::new()))
-        .as_table_mut()
-        .expect("snapshot table");
-    let mut bootstrap = Table::new();
-    bootstrap.insert("enabled".into(), Value::Boolean(true));
-    bootstrap.insert("audited_sha256".into(), Value::String(digest.to_owned()));
-    bootstrap.insert("audited_height".into(), Value::Integer(42));
-    snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
-    let actual = load_root(table);
-    assert!(actual.snapshot.bootstrap.authorizes(digest, 42));
-}
-#[test]
-fn snapshot_bootstrap_policy_rejects_partial_or_invalid_authority() {
-    for bootstrap in [
-        {
-            let mut value = Table::new();
-            value.insert("enabled".into(), Value::Boolean(true));
-            value.insert("audited_height".into(), Value::Integer(42));
-            value
-        },
-        {
-            let mut value = Table::new();
-            value.insert("enabled".into(), Value::Boolean(true));
-            value.insert("audited_sha256".into(), Value::String("AA".repeat(32)));
-            value.insert("audited_height".into(), Value::Integer(42));
-            value
-        },
-        {
-            let mut value = Table::new();
-            value.insert("enabled".into(), Value::Boolean(false));
-            value.insert("audited_sha256".into(), Value::String("00".repeat(32)));
-            value.insert("audited_height".into(), Value::Integer(42));
-            value
-        },
-    ] {
+fn snapshot_rejects_retired_bootstrap_authority() {
+    for enabled in [false, true] {
         let mut table = base_table();
         let snapshot = table
             .entry("snapshot")
             .or_insert_with(|| Value::Table(Table::new()))
             .as_table_mut()
             .expect("snapshot table");
+        let mut bootstrap = Table::new();
+        bootstrap.insert("enabled".into(), Value::Boolean(enabled));
+        bootstrap.insert("audited_sha256".into(), Value::String("ab".repeat(32)));
+        bootstrap.insert("audited_height".into(), Value::Integer(42));
         snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
         assert!(
             actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-            "invalid snapshot bootstrap authority must fail configuration parsing"
+            "retired snapshot authority must fail configuration parsing"
         );
     }
 }
@@ -298,23 +264,38 @@ fn kura_fastpq_artifact_policy_checks_overflow_probe_and_temporary_slot_geometry
 #[test]
 fn membership_storage_limits_are_finite_file_configured_and_independent() {
     let actual = load_root(base_table());
-    assert_eq!(actual.kura.membership_storage, defaults::kura::MEMBERSHIP_STORAGE_POLICY);
+    assert_eq!(
+        actual.kura.membership_storage,
+        defaults::kura::MEMBERSHIP_STORAGE_POLICY
+    );
     for field in ["max_bytes", "memory_bytes"] {
         for value in [0, 4096] {
             let mut table = base_table();
-            table.entry("kura").or_insert_with(|| Value::Table(Table::new()))
-                .as_table_mut().expect("kura table")
-                .entry("membership_storage").or_insert_with(|| Value::Table(Table::new()))
-                .as_table_mut().expect("membership policy")
+            table
+                .entry("kura")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("kura table")
+                .entry("membership_storage")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("membership policy")
                 .insert(field.into(), Value::Integer(value));
             let loaded = actual::Root::from_toml_source(TomlSource::inline(table));
-            if value == 0 { assert!(loaded.is_err(), "zero must never select unlimited storage"); }
-            else {
+            if value == 0 {
+                assert!(loaded.is_err(), "zero must never select unlimited storage");
+            } else {
                 let loaded = loaded.expect("explicit finite membership policy");
-                let actual = if field == "max_bytes" { loaded.kura.membership_storage.max_bytes.get() }
-                    else { loaded.kura.membership_storage.memory_bytes.get() as u64 };
+                let actual = if field == "max_bytes" {
+                    loaded.kura.membership_storage.max_bytes.get()
+                } else {
+                    loaded.kura.membership_storage.memory_bytes.get() as u64
+                };
                 assert_eq!(actual, 4096);
-                assert_eq!(loaded.kura.block_hash_history_bytes.get(), defaults::kura::BLOCK_HASH_HISTORY_BYTES.get());
+                assert_eq!(
+                    loaded.kura.block_hash_history_bytes.get(),
+                    defaults::kura::BLOCK_HASH_HISTORY_BYTES.get()
+                );
             }
         }
     }

@@ -388,7 +388,7 @@ impl KagemushaOutgoingPublicInputsV1 {
     }
 }
 
-/// Canonical preimage shared by Core and the ABI-24 sender bridge.
+/// Canonical preimage shared by Core and the ABI-25 sender bridge.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingPublicInputPreimageV1",

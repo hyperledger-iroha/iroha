@@ -166,11 +166,23 @@ fn complete_comparison_proposal() -> SignedBlock {
 
     let key = KeyPair::try_from_seed(vec![0x4c; 32], Algorithm::Ed25519).unwrap();
     let input = TransactionEntrypoint::from(comparison_transaction(&key));
-    let context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+    let mut context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
         input.hash(),
         LaneId::new(7),
         DataSpaceId::new(2),
     )]);
+    context.lane_merge = Some(crate::sumeragi_lanes::SumeragiLaneMergeSection {
+        merges: vec![crate::sumeragi_lanes::SumeragiLaneMerge {
+            lane: LaneId::new(7),
+            incarnation: [1; 32],
+            from: 1,
+            to: 3,
+            tip_hash: [2; 32],
+            tip_result: [3; 32],
+        }],
+        time_floor_ms: 901,
+        merged_count: 0,
+    });
     let mut proposal = plain_signed_block();
     proposal.payload.external_entrypoints = vec![input];
     proposal.payload.execution_context = Some(context);
@@ -558,6 +570,43 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
 }
 
 #[test]
+fn checked_resultless_comparison_binds_complete_native_lane_merge() {
+    let original = complete_comparison_proposal();
+    // These representation fixtures exercise exact wire identity. Cryptographic
+    // lane authentication is checked independently before execution in Core.
+    for mutation in 0..7 {
+        let mut changed = original.clone();
+        let section = changed
+            .payload
+            .execution_context
+            .as_mut()
+            .unwrap()
+            .lane_merge
+            .as_mut()
+            .unwrap();
+        match mutation {
+            0 => section.merges[0].lane = iroha_model_base::topology::LaneId::new(8),
+            1 => section.merges[0].incarnation[0] ^= 1,
+            2 => section.merges[0].from += 1,
+            3 => section.merges[0].to += 1,
+            4 => section.merges[0].tip_hash[0] ^= 1,
+            5 => section.merges[0].tip_result[0] ^= 1,
+            _ => section.time_floor_ms += 1,
+        }
+        assert_ne!(original.lane_merge(), changed.lane_merge());
+        assert_eq!(
+            original.checked_resultless_payload_len().unwrap(),
+            changed.checked_resultless_payload_len().unwrap()
+        );
+        assert_checked_comparison_matches_wire(&original, &changed);
+        assert!(
+            !original.checked_resultless_proposal_eq(&changed).unwrap(),
+            "native lane merge mutation {mutation}"
+        );
+    }
+}
+
+#[test]
 fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
     use crate::consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
@@ -574,7 +623,7 @@ fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
         session_id: [1; 32],
         roster_hash: [2; 32],
         transcript_hash: [3; 32],
-        context: GlobalThresholdBeaconPulseContextV1 {
+        context: crate::consensus::GlobalThresholdBeaconPulseContextV1 {
             instance: [7; 32],
             epoch: 0,
             epoch_context_id: [8; 32],

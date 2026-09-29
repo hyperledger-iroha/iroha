@@ -1325,7 +1325,15 @@ available. An exact cached readback response is replayed only after a fresh,
 read-only check of that current finalized target and admitted endpoint; the
 historical response bytes are unchanged. This uses State's committed-world
 ownership; a complete State-root
-witness is still a separate gate. These adapters do not install a listener.
+witness is still a separate gate. The shared provider-attestation and replication-order
+binding helpers retain static model rejection reasons while borrowing the same
+World rows. Instruction callers materialize the same invariant diagnostic only
+at their completed-result boundary; current-provider reads retain their existing
+semantic `None` behavior. This removes helper diagnostic allocations, not the
+ordinary signature caches, backend/codec error allocations, or their outstanding
+State execution-pool custody. A future local resource refusal must propagate as
+a typed deferral through every consumer and cannot become unavailable evidence.
+These adapters do not install a listener.
 Effectful provider coordination, independent replica readbacks, live council
 admission refresh, qualified receipt-signer custody, and stock activation
 still gate production publication. A deployment may inject the daemon's

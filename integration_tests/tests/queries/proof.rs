@@ -19,9 +19,9 @@ mod proof_fixtures;
 use iroha_data_model::zk::OpenVerifyEnvelope;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+use proof_fixtures::confidential_attachment;
 #[cfg(feature = "zk-stark")]
-use proof_fixtures::rejected_replay_binding_attachment;
-use proof_fixtures::replay_binding_attachment;
+use proof_fixtures::rejected_confidential_attachment;
 use std::{thread::sleep, time::Duration};
 fn active_vk_record(
     circuit_id: &str,
@@ -53,7 +53,7 @@ fn halo2_attachment_and_registration(
     statement: &str,
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    replay_binding_attachment(statement, vk_name)
+    confidential_attachment(statement, vk_name)
 }
 #[cfg(feature = "zk-stark")]
 fn rejected_stark_attachment_and_registration(
@@ -168,7 +168,7 @@ fn proof_query_scenarios() -> Result<()> {
     let (find_attachment, find_vk) = halo2_attachment_and_registration("query-find", "query_vk");
     let (backend_attachment, _) = halo2_attachment_and_registration("query-backend", "query_vk");
     let (verified_attachment, _) = halo2_attachment_and_registration("query-status", "query_vk");
-    let rejected_attachment = rejected_replay_binding_attachment("query-rejected", "query_vk");
+    let rejected_attachment = rejected_confidential_attachment("query-rejected", "query_vk");
     let (stark_backend_attachment, stark_backend_vk) =
         rejected_stark_attachment_and_registration("query_stark_vk");
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
@@ -329,8 +329,50 @@ fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> V
 }
 #[test]
 fn halo2_attachment_statement_changes_proof_hash() {
+    use iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1;
+
     let a = halo2_attachment("statement-a");
     let b = halo2_attachment("statement-b");
+    let inputs = |attachment: &ProofAttachment| {
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_canonical(&attachment.proof.bytes).expect("canonical proof envelope");
+        let carrier = &envelope.proof_bytes;
+        assert_eq!(&carrier[..8], b"ZK1\0PROF");
+        let native_length = u32::from_le_bytes(carrier[8..12].try_into().unwrap()) as usize;
+        let public = &carrier[12 + native_length..];
+        assert_eq!(&public[..4], b"I10P");
+        let length = u32::from_le_bytes(public[4..8].try_into().unwrap()) as usize;
+        assert_eq!(public.len(), 8 + length, "exact public-input TLV extent");
+        let columns = u32::from_le_bytes(public[8..12].try_into().unwrap()) as usize;
+        let rows = u32::from_le_bytes(public[12..16].try_into().unwrap()) as usize;
+        assert_eq!(
+            columns,
+            CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1.len()
+        );
+        assert_eq!(rows, 1);
+        assert_eq!(length, 8 + columns * 32);
+        public[16..]
+            .chunks_exact(32)
+            .map(|value| <[u8; 32]>::try_from(value).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let inputs_a = inputs(&a);
+    let inputs_b = inputs(&b);
+    for (column, name) in CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1
+        .iter()
+        .enumerate()
+    {
+        // The network also domains the active spend nullifier. The absent
+        // second input remains zero and all note/tree/asset fields stay fixed.
+        if matches!(*name, "network_tag" | "nullifier_0") {
+            assert_ne!(
+                inputs_a[column], inputs_b[column],
+                "{name} must bind the network"
+            );
+        } else {
+            assert_eq!(inputs_a[column], inputs_b[column], "{name} must stay fixed");
+        }
+    }
     let hash_a = iroha_core::zk::hash_proof(&a.proof);
     let hash_b = iroha_core::zk::hash_proof(&b.proof);
     assert_ne!(
@@ -342,11 +384,11 @@ fn halo2_attachment_statement_changes_proof_hash() {
 #[test]
 fn halo2_attachment_circuit_changes_proof_hash() {
     let (attachment, registration) =
-        replay_binding_attachment("circuit-identity", "circuit_identity_vk");
+        confidential_attachment("circuit-identity", "circuit_identity_vk");
     let mut envelope: OpenVerifyEnvelope =
-        norito::decode_canonical(&attachment.proof.bytes).expect("canonical replay envelope");
+        norito::decode_canonical(&attachment.proof.bytes).expect("canonical confidential envelope");
     envelope.circuit_id =
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID.into();
+        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.into();
     let relabelled = iroha::data_model::proof::ProofBox::new(
         attachment.proof.backend.clone(),
         norito::encode_canonical(&envelope).expect("canonical relabelled envelope"),
@@ -362,6 +404,6 @@ fn halo2_attachment_circuit_changes_proof_hash() {
             &relabelled,
             registration.record.key.as_ref(),
         ),
-        "changing the circuit identity must not make the replay proof valid for another relation"
+        "changing the circuit identity must not make the confidential proof valid for another relation"
     );
 }

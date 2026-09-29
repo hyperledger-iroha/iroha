@@ -1037,7 +1037,7 @@ async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
     )
     .sign(keypair.private_key());
     let queue_len = app.queue.active_len();
-    let error = submit_signed_transaction_for_ingress_queue_plan_certified(
+    let error = submit_signed_transaction_for_ingress(
         Arc::clone(&app),
         HeaderMap::new(),
         None,
@@ -1105,7 +1105,6 @@ async fn prepared_contract_call_requires_canonical_ingress_before_success() {
         AccountId::new(key.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .try_sign(key.private_key())
     .expect("sign exact ingress fixture");
     let queue_len = app.queue.active_len();
@@ -1142,9 +1141,9 @@ async fn contract_call_submission_preserves_rejected_and_ambiguous_responses() {
         StatusCode::SERVICE_UNAVAILABLE,
     ] {
         let body = if status == StatusCode::SERVICE_UNAVAILABLE {
-            "{\"code\":\"queue_plan_admission_outcome_unknown\"}"
+            "{\"code\":\"route_unavailable\"}"
         } else {
-            "{\"code\":\"queue_plan_admission_intent_mismatch\"}"
+            "{\"code\":\"routing_plan_mismatch\"}"
         };
         let admitted = AxResponse::builder()
             .status(status)

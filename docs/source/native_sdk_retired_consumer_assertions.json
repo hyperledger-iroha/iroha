@@ -1,0 +1,1223 @@
+{
+  "schema": "iroha.native_sdk.retired_consumer_assertions.v1",
+  "purpose": "source review inventory; not release evidence or a compatibility format",
+  "python": [
+    {
+      "path": "python/iroha_torii_client/tests/exact_certificate_cardinality_test.py",
+      "name": "test_committed_lane_block_rejects_nonexact_certificate_cardinality",
+      "original_sha256": "49f097334641a4fdd525f0a7c4e0455496ee268bbad5cc098c3c4735ce9cdee6",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/exact_certificate_cardinality_test.py",
+      "name": "test_committed_lane_block_rejects_retired_direct_wsv_status",
+      "original_sha256": "a74889c7ed9a182c9d020261c9387c6fa518caaea9db3c697da6ebf8ad8c6123",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/exact_certificate_cardinality_test.py",
+      "name": "test_execution_commitment_preserves_exact_lane_finality_manifest",
+      "original_sha256": "5c5b38150168ae24665ccc481287bfbb7a7147aeaa9a93ac7efdb9d35a72eaae",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/exact_certificate_cardinality_test.py",
+      "name": "test_execution_commitment_rejects_noncanonical_lane_finality_manifest",
+      "original_sha256": "780070019b432344247aace7c838c1b138e86cf4b98e11064f9923b7c7d261a3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_native_amx_participant_settlement.py",
+      "name": "test_native_participant_settlement_retains_fifo_and_zero_route_coordinates",
+      "original_sha256": "1fddc047c72ac0daee9a19b06bbb9930a9e019048b2fd8f1bd54803407434934",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_native_amx_participant_settlement.py",
+      "name": "test_native_participant_settlement_rejects_every_retired_field",
+      "original_sha256": "3a0ee2f70d2f5b42ffcc812ab07e59e47b02776d0890f1a48e8825a73e46abb8",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_native_amx_participant_settlement.py",
+      "name": "test_native_participant_settlement_rejects_invalid_identity",
+      "original_sha256": "c427d249b88ad274fd8fb51500338031b73bd5f68d1e49b53b24a49f6be7f1d8",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_native_amx_participant_settlement.py",
+      "name": "test_native_participant_settlement_exact_boundaries_and_required_fields",
+      "original_sha256": "58234dced6a41e0e8bee7f7ca5125152961657ef8951143edb96a54d91f52052",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_native_amx_participant_settlement.py",
+      "name": "test_native_participant_settlement_requires_and_binds_native_history_link",
+      "original_sha256": "d3b243e161ac1ce00bbf36a8c48da103ea133a75d1883fa438764a14895b2d2f",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_parses_authoritative_reducer_state",
+      "original_sha256": "11d0ccfad4eb040093d6f28ab6e627551370dfbf40f4ba18dc5295c7f970cb16",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_preserves_qc_selective_transaction_commitments",
+      "original_sha256": "1d20d76b04fdd955cb24c3e2a499f4dd0569b1619aea3635aa557c90906fb845",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_requires_explicit_selective_commitment_slots",
+      "original_sha256": "3d0938b7c1cad4b38fafd93f20613f2017f083bf5e16282b6f2fe2ac5ea7697a",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_rejects_selective_commitment_count_mismatch",
+      "original_sha256": "000b450419bb22c617de1859e6387ce6e1b5892f39432812cd48635e8708b9b3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_rejects_selective_commitment_invalid_root",
+      "original_sha256": "b6d1c67b273a68ffc5b31afecedb7b2bfc05e38455676bcbbab96f82cfd559e9",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_selective_tree_types_are_public_v1_models",
+      "original_sha256": "7aab3a3f598ac61eb9760df992190c2a9644186d1d5c3d69b89606a4dd4dbe9c",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_rejects_sent_outbound_stage",
+      "original_sha256": "901b4c573d555b9175fbb29609e1dbbdcf12fbbd8bab9cf004897754336054c6",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_diagnostics_parse_separately_from_authoritative_status",
+      "original_sha256": "8b70697ef36eb8af2b3f49f74a3c81fb60a8d0c87b852a36c2899916d5ac7ccf",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_typed_endpoint_methods_reject_swapped_sumeragi_payloads",
+      "original_sha256": "393abf8f42dafb4e293a8ebd0881ea2b8ed33968b3c99f34c43f440c33c2f140",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_qc_reference_preserves_execution_commitment",
+      "original_sha256": "0da98742fbb49eb061aa9a360076d0a97176b2bf907479f1e78b6f6ddca1fcb6",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_qc_reference_rejects_retired_top_up_anchor_fields",
+      "original_sha256": "42e9c36df6f358a9046ff8e11a6a21ba2d017777e1a3decc326b3a33a2fa11af",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_qc_response_uses_only_authoritative_v2_prepare_references",
+      "original_sha256": "267e1e14a9a6553acd85a3d53bca0d13ae0ef579b9080cc15ee41d6190bb6c60",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_qc_response_rejects_pre_release_snapshot_shape",
+      "original_sha256": "5e972f321805b9f7d77baa8e2cf71b9b483909ca64244e1c8cb00cdd664dc49c",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_qc_response_requires_both_nullable_slots",
+      "original_sha256": "09c3c658eb6d57122af68bca8cd59d410e43359c6ac0ded6858b775d2bd85d20",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_execution_commitment_accepts_nonempty_native_manifest",
+      "original_sha256": "3eede7c7b5ec3a40c50cbd81e980043d25d2cd1670c198ec4d299c2a23e82f27",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_execution_commitment_requires_exact_lane_finality_manifest",
+      "original_sha256": "a07194e2363537bee8757248e6e2ed6e5c8f0d48eb1fb5e9b272b5fa869506b9",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_execution_commitment_requires_exact_merge_carrier_projection",
+      "original_sha256": "89d6d81f9f1da7b334449a18c3a47e96cb0675386a84a2b74b23e738d76b9e17",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_execution_commitment_requires_exact_executed_wire_len",
+      "original_sha256": "f27a55ed2b1dbbb0acaccd7df9c51f9229a6fafbcd044cfb4358f12e062fb777",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_execution_commitment_rejects_invalid_native_manifest",
+      "original_sha256": "93c28d83f94a1a2170481e698f7ba9ec169d4ffb2e4cb63fec82dc007deb2a98",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_allows_genesis_without_optional_certificates",
+      "original_sha256": "98ab7398122e370f870476f8a6280c55ea1f9ef0fdd319a80b99793fa0fbb568",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_allows_authenticated_bootstrap_without_commit_details",
+      "original_sha256": "6997e38056e5eb3ceed09b812c319aee53e24edc600927b0b059ae0f5281912c",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_allows_subject_without_parent_hash",
+      "original_sha256": "ba9da9e076602e9421ba1c6ab7faf2a1d8255e778d32c0d2b9af8aeed5ef2547",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_retired_global_sumeragi_rbc_and_telemetry_surfaces_are_absent",
+      "original_sha256": "09c957e1f1a0e403d57b4189e69d0ddf022144dccca273672a83b25cfa952d98",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "name": "test_status_rejects_malformed_or_legacy_state",
+      "original_sha256": "4b2fcb02d53fb051039089e285dbf333afda5cd05e93a8c3ee2db7a0fcf0a7bf",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_participant_settlement_test.py",
+      "name": "test_native_participant_settlement_model_freezes_fifo_without_economic_fields",
+      "original_sha256": "9404884bced3b840fb31618c2b117bf38c7d486871c74b7dbb36fa2a5879c0dc",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_participant_settlement_test.py",
+      "name": "test_native_participant_settlement_model_requires_nullable_history_link",
+      "original_sha256": "f06605e10cffb64f2caeb3bf16dce3077c1c3a4867fd7bf899e9f6bf9fe9ac66",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_commitment_preserves_exact_native_amx_and_fee_evidence",
+      "original_sha256": "b6ead43a510042c574f35e5730e9668e5f5b03983a2faadac78c4f3a8b190b77",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_keeps_global_round_and_coordinator_views_independent",
+      "original_sha256": "f2ffdbef8f4ffa62a25570e331ea7df292d3346f054820658554bc25066f21ee",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_rejects_unordered_qc_validator_set",
+      "original_sha256": "c4cfabc1ff750494f5c5d9eb1c8f0d6332d60f9d3c03f2aefab984aa0d0da4c6",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_accepts_first_participant_lane_block_predecessor_shape",
+      "original_sha256": "dbbdc1314b0f7420f3da2aa15d349e69c27fb4c36ebda67f87924bb9824ef6fa",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_accepts_mixed_role_proposal_without_current_entrypoint",
+      "original_sha256": "347c6415b713c456258200230ee413a5f00df93c46d1c00d83d9e5addfe4fdb5",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_preserves_fifo_sources_in_all_participant_roles",
+      "original_sha256": "b8623c186ba27d8d0310a0cfafb30f96780e6f4b9a9c6108765febef67eada85",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_accepts_route_local_participant_source_subgroups",
+      "original_sha256": "353e9ba0ebab980172e25b6717b7e68efa680b31589c2893e823b70b9611a0b8",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_participant_source_order_misaligned_with_proposal",
+      "original_sha256": "44cac4319309b4f9a8fe4937b7103307f9cd6b7b26154192e61215d55390ec6c",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_present_entrypoint_group_alignment_drift",
+      "original_sha256": "58b6dc6c089a004368a82595d2bdae22cff13fcc1927510ce530907f6ea82912",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_same_route_coordinator_identity_drift",
+      "original_sha256": "6608aa4d08aec95ddbb1b2dffd1d50e1b40b9dea2ebbebe3a09bfc70cba82c6c",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_outer_source_order_misaligned_with_same_route_leg",
+      "original_sha256": "5166d0a616327a5b2445510b7724d31447c049329f47f6fb36682a2ceab39d20",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_outer_source_group_overflow_before_decode",
+      "original_sha256": "c5023ed55d86799a3a76c06dbd5a8a7da4dce48e9cf2f645bcf243a9dbf9dde0",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_participant_group_different_from_outer_group",
+      "original_sha256": "defc44bd0b5c4158dc6f1144815b446c003874a6bd46588c4c4ca48f0a3fc0e3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_participant_finality_tampering",
+      "original_sha256": "e73da34bb801e863c275221e64e166f8824d74e745708f9de7cfac71dad557a9",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_commitment_accepts_canonical_maximum_total_and_tagged_swap_enums",
+      "original_sha256": "72a7538727181f09235056607d7f4163cbd3862be9023942e12e176ab2c6e2e9",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_commitment_rejects_noncanonical_quantity_wire_values",
+      "original_sha256": "52af730e27b0e42e3e068d5551716e0d8e72896be1c94efab073bf67c0ff2e99",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_settlement_quantities_preserve_canonical_fractional_values",
+      "original_sha256": "868f87418a0da9751bd120ee05e752212c397c520348e42e5b426bd2ec52b6e0",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_settlement_rejects_lossy_or_noncanonical_quantities",
+      "original_sha256": "41f1a6a882fa2f33b7a4e045378d1745a2c7811d9d84b85f7c3bda9409e9e529",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_settlement_rejects_retired_total_fields",
+      "original_sha256": "76aa005bf3104c913a428646daaced3a45d818603c01f58ece6dc3376f1ad367",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_settlement_rejects_retired_receipt_fields",
+      "original_sha256": "c5d7d804247c3bed787df9dea9111fd4f5dcef9eee171839ebb0f6c5559b0a03",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_relay_preserves_the_exact_embedded_native_amx_receipt",
+      "original_sha256": "5b1c2c02fd9db7cacab855d198d56c6301c8de0ba49d20f4cba8481603685bab",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_malformed_or_mismatched_evidence",
+      "original_sha256": "b8b888d3bdd48eed0c52c2b1f9547ab99d23b3f98113a14794b47697050207ef",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_duplicate_participant_legs",
+      "original_sha256": "7444d1b4565f92295b7910dd046e18d56a41e4b67926109ce5f13ab661d8bb2f",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_native_amx_parser_rejects_participant_leg_overflow_before_decode",
+      "original_sha256": "9e39ecbc2c164dddc0b564b59a780d4cb97f818a07cbbb7966c69577babea34f",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_nexus_fee_parser_rejects_lossy_or_inconsistent_values",
+      "original_sha256": "bb849ad470b48d99aa4493805d20fe62cecc7a8f123b619d64242a3a338ddbd3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_commitment_rejects_unknown_nested_wire_fields",
+      "original_sha256": "00e67f6b290472773ec8471f63b58cf4165f7bb404c3cb515bdc9fa9d190a507",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_status_models_test.py",
+      "name": "test_lane_relay_parser_rejects_coordinate_or_hash_tampering",
+      "original_sha256": "9bd4ad44d612441abe3a8d49f460f6f2205bcd098ffe146d701aede2fb628bc2",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+      "name": "test_grouped_native_amx_v2_golden_fixture",
+      "original_sha256": "46ec6d0b8b486d97ede93e28b32da216e4fef3e9888aed55d1ba2feb06d22539",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+      "name": "test_grouped_native_amx_v2_requires_canonical_swap_metadata",
+      "original_sha256": "e3805fb733b15e2cc989f39ccf0aa094a661a330c0241b9486f7516bca39b247",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+      "name": "test_grouped_native_amx_v2_owns_immutable_checked_participant_settlement",
+      "original_sha256": "3ee5feea36694ad199ac24d07360a3b34648d3b7cb2931184332791d96a062eb",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+      "name": "test_grouped_native_amx_v2_rejects_noncanonical_validator_peer_ids",
+      "original_sha256": "c5abe07eb17d4963ef13b80ff4269d05205df2e849887f3d9150ddfe429fc584",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+      "name": "test_native_amx_source_and_entrypoint_domains_are_distinct_public_types",
+      "original_sha256": "d673a2fe34ef17df81065bc7e55f2fb8dda95d2aff78b2eb9d13b4d56ab25935",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+      "name": "test_grouped_native_amx_v2_corpus_includes_required_controls",
+      "original_sha256": "8fa6a31b6c6f07ec38d55bb3b421327e9a88b6196255b718be469eaa7c230df3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+      "name": "test_grouped_native_amx_v2_negative_corpus",
+      "original_sha256": "b9e03012a040564999fdc223bff9ab7d366f2ad03b355462c256ea652f13e8f3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_sumeragi_v2_status_payload",
+      "original_sha256": "bc44621d55ec1656dc8f56e7760c0d0edbb998f6ace71fac81251f0ca27d70d9",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_sumeragi_diagnostics_payload",
+      "original_sha256": "ddb88871ca2f3e1d803ed2353eaff9d93a9956ca6502372579509e63c74659ae",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_native_amx_participant_application_payload",
+      "original_sha256": "c85ab43dca25a6dbbf4094dc5a7af386a96b265b8dd2f6a9c3783572d3759741",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_set_native_amx_application_without_block",
+      "original_sha256": "a5c2ea79025f8d8cc82f6d36c52b51702ea7cdde1e4e84ec074a3e3000caa5a2",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_seal_native_amx_receipt_payload",
+      "original_sha256": "66a99054d02e2bfa68d28db24f9180dae19bdf3b3ad9cd647076fe746221a72b",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_native_amx_receipt_payload",
+      "original_sha256": "0b7719c55daaae97c40626caf6645bcdd9e22f4ff307629d8173b17798c60d58",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_native_amx_receipt_group",
+      "original_sha256": "5aa5125811c9f8b12679bd4b08ddc98e3083de62b8661aa74ac539f31a199c50",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_get_sumeragi_status",
+      "original_sha256": "8494d0d8ed2241adfe696c07d4a9db9877cfa7a20a3e22fb24a61d3b7c65946e",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "_get_sumeragi_diagnostics",
+      "original_sha256": "763e7a1a56ab75985b5cd4f9584419f0335f0f6796328f8e5811e8bc8409e054",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_parses_authoritative_v2_snapshot",
+      "original_sha256": "31bade51f94bca626d56a56571c9d55954b8d9f43e300fcf08d4d39aeae8a5f7",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_requires_exact_transaction_tree_commitments",
+      "original_sha256": "38226b179586d09d3a5c88f5369b6307c0a6963c5b403f484954b38d1b96e148",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_parses_and_validates_beacon_horizon",
+      "original_sha256": "826de8aafa1a2f207393078c18aa324fc3805713ecfae1b94f28d033716c7260",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_rejects_sent_outbound_stage",
+      "original_sha256": "ec90926297ebf473a1f321b837742e23539f5f7ccedb996964c63b12039fcbd4",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_accepts_nonempty_native_manifest",
+      "original_sha256": "435e5ef1a757aa7c563f75683abd4b1e6c0b21f87e8a5fcf7c1e8dfd763bccc0",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_rejects_invalid_native_manifest",
+      "original_sha256": "ef8162f02ffb9ed610ef521fffcceb74b83f3beeff510a8ba9850178fd9d5c52",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_requires_exact_merge_carrier_projection",
+      "original_sha256": "dc50eee6f457bb29f025b0543c52bd0ac8c9aa7601ef8cf0d2185ce615455669",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_requires_exact_executed_wire_len",
+      "original_sha256": "9729d4eb482ad2a3e2b003494a298e8fdf5fc010c83abb4d2218a02ff521f4cb",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_preserves_exact_proposal_rounds",
+      "original_sha256": "29c2c16b47258f84d0e14dd076976066c7983d0e3a298dd07e799c506417d36d",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_enforces_vote_quorum_proposal_geometry",
+      "original_sha256": "3f9a6471ef812156ab8477371136f92b22259f252d1dd8731e79a412b7a4cce2",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_enforces_outbound_intent_proposal_geometry",
+      "original_sha256": "bb0198a854a7fe2b6d582584bd37e1ccad3ac8b23bf5837aa56df972421001ba",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker",
+      "original_sha256": "4e45254fbb9303282ff7cb7082fc4d4f1a4e3485ae911a2ee94a05e9e0f47c54",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_accepts_successor_activation_pending_liveness_blocker",
+      "original_sha256": "40746d9f4254657779ed4cf212c921a7cb49d0a15a648bb279bafef60c3db845",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason",
+      "original_sha256": "a425d629aa73418615afc83afc54ea4c7486ce61fcbb6fde72ac9ec5968e377f",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound",
+      "original_sha256": "7a3a3eaceff8fbfa6602e0e3b32ed17fa34a505ea3ba091058bbc395125091eb",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_accepts_all_ten_liveness_queue_kinds",
+      "original_sha256": "0f38b97f7b5d5bfa5e2151789fe149b3ef5fd14f0863962fa7bdc7403047b37e",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_rejects_operational_diagnostics_fields",
+      "original_sha256": "1931eba0374b8e4fea6added74af82122f17def4de5c74ba968644069cee6bb4",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_sumeragi_endpoint_methods_reject_swapped_payload_contracts",
+      "original_sha256": "a75e51e70fbcef4e0adc1d172e849aabdca3b48787b8b67e1e570d0b7fbe2975",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipts",
+      "original_sha256": "e01395c1547fad4692386c5309728c7f28943afb2ba46f8aab6b270b8c7df658",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_accepts_first_native_amx_participant_block",
+      "original_sha256": "af89c6eb3217db70247a553f4f758b284089faa2b5116eab3fd289ed01c56cc7",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_accepts_mixed_role_proposal_without_current_entrypoint",
+      "original_sha256": "ebcf6e3806675281ee83497b418b93c2bc3c58817487e4b5779c6e4f3db9a5e4",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_native_amx_group_shape_drift",
+      "original_sha256": "d85e180da3e1d5c765f7f1cc564b26f2f5a4a82e1ed37dd8c0fc13ed6228eb1b",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_same_route_native_identity_drift",
+      "original_sha256": "183b45169da6c70855e60ea588036650f867a6a9c7076ed2af6ccbb0adf963c0",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_keeps_global_and_coordinator_views_independent",
+      "original_sha256": "b463aca5295a09139ec85eee71f43da2ba102bea9a56e4d519983e93e03c7f92",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_unordered_native_qc_validator_set",
+      "original_sha256": "84de388dce920082a684871c4f92e7d20bbc57b67b889b71ed18a19835090721",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence",
+      "original_sha256": "ef3d52759524d76e44b0a9eb1b329a1b937f0e411cadff07717301441e814133",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_accepts_native_application_state_geometry",
+      "original_sha256": "54f92a80279efcd58557e80ad07d66c1e9556fc8ee9e37176fef279906e455e0",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_invalid_native_application_shapes",
+      "original_sha256": "f94a3a9fe77f7d20546894a8f39136ebf1ed019fa0ed9bcab2f643316965b18e",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_enforces_native_application_bound_and_order",
+      "original_sha256": "4971e562921a0c184a08dd9c92a5a12fa4195cce029523db55908102c3063cfe",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict",
+      "original_sha256": "cd869ca8dd14f9ec13d4d8662cf2f74a035eea4c2de384a247828fd0df8bac96",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_requires_provisional_identity_hashes",
+      "original_sha256": "80c8162225c3d9b40cdcae3fb25c42fd3fa9fa4e17fb18cee8bb8911d7afed6b",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_enforces_reservation_only_geometry",
+      "original_sha256": "3c870fb9427eb767c09a432a7272a0c9f6d2342a371cbef9eb7a5590ada70fb0",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_enforces_finalized_identity_pair_and_order",
+      "original_sha256": "972893d6b6c8350187bba428ce40412a8f0794b7b368ed2132bc59ad1545755d",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_parses_npos_epoch_and_byte_seed",
+      "original_sha256": "ff650b533674d39ee91e515fa59cb725a973f626ab5fa018d53e6e969b36d331",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tampering",
+      "original_sha256": "d50935e4da5cf16812a6097eaa3c8dc29cc0207263c49f6c9a24c8df275beed6",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_noncanonical_quantity_json",
+      "original_sha256": "3250f965ba9f99685b36e649083ee5c89476ab5cb9cc8355362a9f624c584b84",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_preserves_exact_quantity_boundaries",
+      "original_sha256": "e4848981c6ac77dab4f58f1e4780e2c0c244bbb235d7b2ffb22fc097b2fc3198",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_retired_settlement_fields",
+      "original_sha256": "865a0b6ed3eeab9b074de3d99c4e4c48a2480c7fa90d1898c04d335d123d5349",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_retired_settlement_receipt_fields",
+      "original_sha256": "208f20d478051e4201a95d4fcfba8eab7ca9305b6ae3ed4886620933e0dc5cdc",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_noncanonical_fixed_hex_and_nested_unknown_fields",
+      "original_sha256": "a750ce487cfa02243f1596d90f18899c6fc3fbe7ba5c3ee8f380200215996a4c",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_nested_receipt_coordinate_and_qc_tampering",
+      "original_sha256": "5a5ee020f8d52af3f0ecb8a6ab95cf598ab989135700c94a62dec7b1fb03e932",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_bounded_vector_overflow_before_nested_decode",
+      "original_sha256": "1c6801bdf160e0183cdd928f4c2cef84c167084dc7cefa0cf8af075f3b2e5976",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering",
+      "original_sha256": "dec3c70889f7f4123dc0e9bf8324f099c5dd9923a1dea6d548f3df29e8283a79",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details",
+      "original_sha256": "b711019611b480d899f6d5026e96330d53ae581a331620b444d9bb2035f6ed26",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_rejects_impossible_queue_bounds",
+      "original_sha256": "a84730c79da4ab08fd06529f91f4fd28b298fe77cabea1e8c322648330b7737c",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_diagnostics_requires_all_canonical_lane_arrays",
+      "original_sha256": "4fbb3a2da666b2c34c897454df6cc8939cf9bca2b32e301d93126c76921c9ae3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_qc_parses_authoritative_v2_references",
+      "original_sha256": "7390225f25b37673e15f3b8aa0d46fa7e6d42e6068393bcfbf7c6a27971dd920",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_qc_rejects_pre_release_snapshot_shape",
+      "original_sha256": "68d4d4e8632398511d87effb4387e250264c3d680c343a3e9a571dd240991887",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_torii_client/tests/test_client.py",
+      "name": "test_get_sumeragi_qc_requires_both_nullable_slots",
+      "original_sha256": "916b95f8bfa4dc8b3d4711a54f02eff3a1dc24bb19b1d0683c35ad7919403096",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/test_sumeragi_parsing.py",
+      "name": "test_sumeragi_lane_relay_envelope_parses_qc_payload",
+      "original_sha256": "c92a2bc24b31883cb8b353bfb76f936af1e7e953c80a801a26c4805404adbe6e",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    },
+    {
+      "path": "python/iroha_python/tests/test_sumeragi_parsing.py",
+      "name": "test_sumeragi_status_parses_commit_qc_and_quorum",
+      "original_sha256": "f9762b410ae2abbc73afca469a9b5a301123847219608fab578ea065d3abc1b3",
+      "reason": "retired global V2 status/QC or grouped application DTO; native applicable obligations remain open until actual capture parity"
+    }
+  ],
+  "javascript": [
+    {
+      "path": "javascript/iroha_js/test/toriiClient.test.js",
+      "spans": [
+        {
+          "start": 1028,
+          "end": 1101,
+          "name": "__sumeragiNativeAmxTestHelpers",
+          "original_sha256": "3cb2b8b6c3be6e3810fc435de82b501d56a51eeb4e6b7bffc1112eeb977a09c3"
+        },
+        {
+          "start": 6926,
+          "end": 7114,
+          "name": "nativeAmxGroupedFixture",
+          "original_sha256": "e84980e462df134b8d10f5de49be362f6a57e56e6fefaed04bb70e0c73111105"
+        },
+        {
+          "start": 7115,
+          "end": 7276,
+          "name": "nativeAmxValidatorSet",
+          "original_sha256": "3d680764d1f1c8b5cb39a0a55ea61dcc0c40ee35deaceef59a3d57bf6d34adc3"
+        },
+        {
+          "start": 26253,
+          "end": 26468,
+          "name": "createSumeragiV2Subject",
+          "original_sha256": "bf4957b59739723482a2764a5a9b2b63196daf4fd887cf243276779987cda018"
+        },
+        {
+          "start": 26470,
+          "end": 30736,
+          "name": "createSumeragiV2StatusPayload",
+          "original_sha256": "cca4a6d7daaea1b6f6bc7cd50b4cc5219282a161475a6376562b74d7d614b45d"
+        },
+        {
+          "start": 30738,
+          "end": 32234,
+          "name": "createSumeragiDiagnosticsPayload",
+          "original_sha256": "62ad60f102a64fbb2b75f45ba99b7d87884593f2575b60086659b4080ffe8f0f"
+        },
+        {
+          "start": 34528,
+          "end": 35504,
+          "name": "sealNativeAmxLegFixture",
+          "original_sha256": "dc61dd31ed0aae873cd4c43e5e0d2a9a46508d8f085a917e9143c5153e31953b"
+        },
+        {
+          "start": 35506,
+          "end": 36131,
+          "name": "sealNativeAmxReceiptFixture",
+          "original_sha256": "d6fadad4f66e3e47c9991ff92a0e720e8fb52fdd213c0d22a18fdbd4d1367cd1"
+        },
+        {
+          "start": 36133,
+          "end": 40257,
+          "name": "createNativeAmxReceiptFixture",
+          "original_sha256": "6e78b8ed88f9e5f7c5251c67973699cd6aa806bf66ab539bfbb8593c1c9fac20"
+        },
+        {
+          "start": 40259,
+          "end": 40432,
+          "name": "createNativeAmxReceiptGroup",
+          "original_sha256": "19c0a360b999bf3afcb2da46a6634ea94073453052a45f9c74632886cb05cd96"
+        },
+        {
+          "start": 369562,
+          "end": 370134,
+          "name": "getSumeragiStatus fetches the flattened v2 payload without rewriting it",
+          "original_sha256": "d1c05c39eea0bfc230d89a80aca345abb72a7c60f5181b336ba86b1c724c7e30"
+        },
+        {
+          "start": 370136,
+          "end": 371130,
+          "name": "typed Sumeragi endpoints reject swapped status and diagnostics payloads",
+          "original_sha256": "2de028e97dd5363529c7cbd16df5e884897a3db6b7d9c7143812cd12e8646521"
+        },
+        {
+          "start": 372835,
+          "end": 375355,
+          "name": "getSumeragiStatusTyped preserves exact u64 tokens from the raw HTTP body",
+          "original_sha256": "6f604b4b87aafa413cf3dee59ed07e2ef5a6d51fc316fad5ac6872f795962595"
+        },
+        {
+          "start": 375357,
+          "end": 377573,
+          "name": "getSumeragiDiagnosticsTyped preserves Native application u64 boundaries",
+          "original_sha256": "bf6e6d735d6eb18d57db565b6d9bebef4612d7d64881c3d217c7bc8898f462da"
+        },
+        {
+          "start": 377575,
+          "end": 383009,
+          "name": "getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt identities",
+          "original_sha256": "77025823a5ed5a4e300d044d95ebdc5f780fffe231f1760bc725dea7f060156c"
+        },
+        {
+          "start": 383011,
+          "end": 384733,
+          "name": "getSumeragiDiagnosticsTyped rejects non-u64 Native integer spellings",
+          "original_sha256": "d3b7fec8a4e5bbb70a49501f6de003e1c542b0b82a80d7cb2d2e71eff731e7fd"
+        },
+        {
+          "start": 384735,
+          "end": 385950,
+          "name": "typed Sumeragi JSON rejects duplicate keys, trailing input, and oversized bodies",
+          "original_sha256": "ee9e87df067a0a3282abaca858c3600a6df7ce631c15230158e8f364c4119ac3"
+        },
+        {
+          "start": 385952,
+          "end": 388837,
+          "name": "getSumeragiDiagnosticsTyped parses bounded native application evidence and enforces state geometry",
+          "original_sha256": "f6d4dd134a3ee086c999d5b72681bf07fbbc08bed11a4b636608d107c2f90671"
+        },
+        {
+          "start": 388839,
+          "end": 389260,
+          "name": "getSumeragiDiagnosticsTyped rejects native application evidence above the server bound",
+          "original_sha256": "2f030ae7e8002b6dd81f38bcac2e49c72ba4bb07eb46602e1ce4a6af70cba97a"
+        },
+        {
+          "start": 389262,
+          "end": 389622,
+          "name": "getSumeragiDiagnosticsTyped requires the autonomous execution vector",
+          "original_sha256": "1a591d4e7ab2ecd8bb51442e27dcc580c44369bff68272d30ca3d8e60a1aaea1"
+        },
+        {
+          "start": 389624,
+          "end": 391101,
+          "name": "getSumeragiDiagnosticsTyped parses autonomous execution stages and explicit conflict",
+          "original_sha256": "f77c91b1c8eea25bc3f41f5fe93bfb627fa15a6bd26e8ace6516d5ac5cc8f188"
+        },
+        {
+          "start": 391103,
+          "end": 391955,
+          "name": "getSumeragiDiagnosticsTyped requires exact provisional identity hashes",
+          "original_sha256": "4f7a6edaf524b6ad1f1b749a43a9b9f2689b0fa4c739fe6ddc21c392aab611f7"
+        },
+        {
+          "start": 391957,
+          "end": 394558,
+          "name": "getSumeragiDiagnosticsTyped enforces reservation-only geometry",
+          "original_sha256": "2f94b8408b28c4e4063b8a8415ca15cca7f4acd8ecf0dd048fd108fff5e1bb8d"
+        },
+        {
+          "start": 394560,
+          "end": 396469,
+          "name": "getSumeragiDiagnosticsTyped pairs finalized identity and orders by provisional identity",
+          "original_sha256": "4992346b0eea99a4f90678fcd54135dcf05b9170b7577e0bf3a98a8a93efb67b"
+        },
+        {
+          "start": 397267,
+          "end": 399206,
+          "name": "getSumeragiStatusTyped validates and normalizes authoritative v2 status",
+          "original_sha256": "291de67ab7bdf9eeca15acf85dae23a694931c104ca7dec0236c94206bfa5347"
+        },
+        {
+          "start": 399208,
+          "end": 401331,
+          "name": "getSumeragiStatusTyped parses and validates the signed beacon horizon",
+          "original_sha256": "cd2a690f1dfb00d3ec74d9c2feb55dcc73c8848c2938c31f32e2d6d9f9b71eb1"
+        },
+        {
+          "start": 401333,
+          "end": 401722,
+          "name": "getSumeragiStatusTyped rejects sent as an outbound intent stage",
+          "original_sha256": "95b7a69a49567de6378e9f28078b1d3f8ec8eb8edeabbb0736cb43c5c23e2736"
+        },
+        {
+          "start": 401724,
+          "end": 402456,
+          "name": "getSumeragiStatusTyped accepts a non-empty Native AMX application manifest",
+          "original_sha256": "f598b41cdfaf0d72d74bb9a7b61afa616fdef368ceecbee082a6019ee825ac66"
+        },
+        {
+          "start": 402458,
+          "end": 403618,
+          "name": "getSumeragiStatusTyped rejects invalid Native AMX application manifests",
+          "original_sha256": "285827949521f8b8bc877cf86b64b567130dd3260dd49f117b329f23208ba8bd"
+        },
+        {
+          "start": 403620,
+          "end": 405652,
+          "name": "getSumeragiStatusTyped requires exact lane-finality and merge projections",
+          "original_sha256": "f72c12c11046aac0494fe796c4f479d6a837bcf9560f010f07f21d2a5b954e7f"
+        },
+        {
+          "start": 405654,
+          "end": 408157,
+          "name": "getSumeragiStatusTyped requires exact transaction input and output trees",
+          "original_sha256": "9314f057bbfdf125e268556aefcecc005ae11d84eaa9a4c154caa1dc3b1f9283"
+        },
+        {
+          "start": 408159,
+          "end": 409377,
+          "name": "getSumeragiStatusTyped accepts aggregate top-up commitments beyond the retired cap",
+          "original_sha256": "2067c48d5292f5661aa08e9e5b80e2a57fc7b4ff3b78a7500a84c6d9950f1a01"
+        },
+        {
+          "start": 409379,
+          "end": 411643,
+          "name": "package distribution requires a nullable exact V1 merge carrier projection",
+          "original_sha256": "c256141b97c6c6e894d32efc5e4aead9e011132db2fe5d5b221612ec9a4855f8"
+        },
+        {
+          "start": 411645,
+          "end": 412804,
+          "name": "getSumeragiStatusTyped requires an exact executed block wire length",
+          "original_sha256": "a3012210e52ffd11ef320682e8f1f27ec64213724891c03dca57e035a0bb74f2"
+        },
+        {
+          "start": 414418,
+          "end": 416774,
+          "name": "getSumeragiStatusTyped preserves exact proposal rounds",
+          "original_sha256": "612f9244d44df14c04eee46dd241596b904c56b7c07d8d0fc03ae6d8ea9aac16"
+        },
+        {
+          "start": 416776,
+          "end": 418397,
+          "name": "getSumeragiStatusTyped enforces vote-quorum proposal geometry",
+          "original_sha256": "f5e3d3037454063b498e715dbc95bcd09fa3611ef301422d1cf11985fac410a7"
+        },
+        {
+          "start": 418399,
+          "end": 420407,
+          "name": "getSumeragiStatusTyped enforces outbound-intent proposal geometry",
+          "original_sha256": "970cfbec81d94453fc6d4d927b398e9e57a62e79cb915440c8f15bf423da7b2d"
+        },
+        {
+          "start": 420409,
+          "end": 420792,
+          "name": "getSumeragiStatusTyped accepts the local-control liveness blocker",
+          "original_sha256": "78d60ac12e02dfaab7f7fd101a4e4eb6922c3c98408ecf0747cfe801e08920e8"
+        },
+        {
+          "start": 420794,
+          "end": 421209,
+          "name": "getSumeragiStatusTyped accepts the successor-activation liveness blocker",
+          "original_sha256": "d677c5ad892c7c9f0ef55de251cbbe52a9518514b3eaacc553b798d61bc5863e"
+        },
+        {
+          "start": 421211,
+          "end": 421710,
+          "name": "getSumeragiStatusTyped accepts the unsafe-proposal ignore reason",
+          "original_sha256": "ae52083b9013d0e4354375eef0f4f0536e3b6913547f15f0525b6a1a182f3fa9"
+        },
+        {
+          "start": 421712,
+          "end": 422695,
+          "name": "getSumeragiStatusTyped accepts all twelve ignore reasons at the bound",
+          "original_sha256": "22f32f305dc0073183cfce4e1ba2a111749d6b981ca21fcf917cbf2156edded7"
+        },
+        {
+          "start": 422697,
+          "end": 424807,
+          "name": "getSumeragiStatusTyped rejects unsupported protocol and invalid frozen contexts",
+          "original_sha256": "075e40363cf909bc4738caab6e3b2ee82b7aa26fef7c96d0dbd37733b1605e1d"
+        },
+        {
+          "start": 424809,
+          "end": 427056,
+          "name": "getSumeragiStatusTyped rejects malformed liveness diagnostics",
+          "original_sha256": "c90bce53771e8d08c80c74e997be472ae21b9f1462974866464d1d42d7b07337"
+        },
+        {
+          "start": 427855,
+          "end": 431575,
+          "name": "getSumeragiStatusTyped rejects inconsistent or under-quorum commits",
+          "original_sha256": "38c0164d3acae0582c38c4ecf86636910b423294d68b6fe8844af9d17916a404"
+        },
+        {
+          "start": 431577,
+          "end": 432181,
+          "name": "getSumeragiDiagnosticsTyped rejects impossible queue snapshots",
+          "original_sha256": "f60f872c8dbcd35d42c75c7cf7cb86e0844a6bd075bf287de1b89e8266ffbbd6"
+        },
+        {
+          "start": 432183,
+          "end": 432727,
+          "name": "getSumeragiDiagnosticsTyped requires every canonical lane array",
+          "original_sha256": "d2d7d4d7ee26d69813864e28bda13295340135764e497b20342eb0d576813e0c"
+        },
+        {
+          "start": 432729,
+          "end": 434436,
+          "name": "getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipts",
+          "original_sha256": "ec9c58c03afec8ec4f4e92d98f7e0a64d1bef552f86c0de358f9fda465ed24c0"
+        },
+        {
+          "start": 434438,
+          "end": 435563,
+          "name": "getSumeragiDiagnosticsTyped preserves FIFO native AMX order and route-local participant groups",
+          "original_sha256": "63f0710386fb1847d49944232f32f8a6e59ef23c7ad0d765da40c45c86efb215"
+        },
+        {
+          "start": 435565,
+          "end": 436933,
+          "name": "getSumeragiDiagnosticsTyped accepts the canonical first participant-lane block",
+          "original_sha256": "d7c9f2f10dad375037f593b7387200f6f21ac7663f72a7908ed5903e91de6f4a"
+        },
+        {
+          "start": 436935,
+          "end": 437790,
+          "name": "getSumeragiDiagnosticsTyped accepts mixed-role proposals without the current entrypoint",
+          "original_sha256": "7fe5ccce29d21e7106c8e760191ee94ad822be7402806bddaa411a3bc04346dd"
+        },
+        {
+          "start": 437792,
+          "end": 438693,
+          "name": "getSumeragiDiagnosticsTyped keeps global and coordinator views independent",
+          "original_sha256": "5862e0ad32101918042d9f8cb7219525bd5887feb15e632d63129c382a2b10fd"
+        },
+        {
+          "start": 438695,
+          "end": 439307,
+          "name": "getSumeragiDiagnosticsTyped rejects unordered native QC validators",
+          "original_sha256": "991e65e1cf7ebe4d250ce0e85b670b277a915befda372baba333e4adb4f203e8"
+        },
+        {
+          "start": 439309,
+          "end": 439986,
+          "name": "getSumeragiDiagnosticsTyped rejects invalid and identity BLS-Normal validators",
+          "original_sha256": "831806a720cba08e2c09d4b1f68b16238220a25649c3ce681982b25f0b05fba4"
+        },
+        {
+          "start": 439988,
+          "end": 443580,
+          "name": "getSumeragiDiagnosticsTyped rejects participant-finality tampering",
+          "original_sha256": "02b57bd1773fb5492b2d4b9f32918bb8fe81137b37852657511030862e2b3c57"
+        },
+        {
+          "start": 443582,
+          "end": 446517,
+          "name": "getSumeragiDiagnosticsTyped rejects non-canonical settlement scalars and nested fields",
+          "original_sha256": "9cb5913b199b61f4df1d29b2b95cd13862760095efd02e9a040c4d809ed3159f"
+        },
+        {
+          "start": 446519,
+          "end": 448401,
+          "name": "getSumeragiDiagnosticsTyped rejects nested receipt identity and QC tampering",
+          "original_sha256": "174294d6df861d0a10e4e2efbba29da149d391ab1e5201eb0bf5a7d93df74db6"
+        },
+        {
+          "start": 448403,
+          "end": 449492,
+          "name": "getSumeragiDiagnosticsTyped enforces bounded lane observability before nested decode",
+          "original_sha256": "34c90e86188592043e82d236ac2fd3dadff3ffe75e3a153fc74bf3413fe400c8"
+        },
+        {
+          "start": 449494,
+          "end": 452537,
+          "name": "getSumeragiDiagnosticsTyped rejects adversarial lane evidence",
+          "original_sha256": "42f31b43876c825db304dec9fc7cd4d0089b2acfdf6c28780def1ef91efded54"
+        },
+        {
+          "start": 452538,
+          "end": 453495,
+          "name": "Sumeragi snapshot endpoints reject unsupported option fields",
+          "original_sha256": "cd7b0afb86af26b8ff9c9d4a5a974cd2ef35f6db8ba1d776e688047ef48525b9"
+        },
+        {
+          "start": 453497,
+          "end": 454459,
+          "name": "getSumeragiQc fetches canonical v2 PrepareQC references",
+          "original_sha256": "00a4a37183aa60f3552d3c78609b048948e63cd979656b68ae5ebeb85ef8b1b3"
+        },
+        {
+          "start": 454461,
+          "end": 455011,
+          "name": "getSumeragiQc rejects the pre-release snapshot shape",
+          "original_sha256": "982eb7333e8033e5029e0d8475dd60e5ed49fe6523a2202ce3a923275046bddd"
+        },
+        {
+          "start": 455013,
+          "end": 455431,
+          "name": "getSumeragiQc requires both nullable v2 slots",
+          "original_sha256": "c915b24bf2a63d7924337f396b1b04720ac1775720add683c9bbdc3e91907fdb"
+        }
+      ]
+    },
+    {
+      "path": "javascript/iroha_js/test/toriiBrowserClient.test.js",
+      "spans": [
+        {
+          "start": 771,
+          "end": 887,
+          "name": "browserSumeragiDiagnosticsFixture,browserSumeragiStatusFixture",
+          "original_sha256": "311bcf93f980dc035e09fb0d7b3a5e63992a01cafb046adf75ccfb92117aaac4"
+        },
+        {
+          "start": 82013,
+          "end": 84031,
+          "name": "ToriiBrowserClient typed Sumeragi methods use fixed JSON routes and preserve u64 tokens",
+          "original_sha256": "473e28530dbd30eae58abdd0dc6bf8d185fa8e8048bc730680e21dcbf5f744a6"
+        },
+        {
+          "start": 84033,
+          "end": 85583,
+          "name": "ToriiBrowserClient typed Sumeragi methods reject ambiguous JSON and non-JSON media",
+          "original_sha256": "ac0ffc92a7253c944acc86f7d1b0744e5302c5b109483fff6d8b86b9d50ea55c"
+        },
+        {
+          "start": 85585,
+          "end": 86452,
+          "name": "ToriiBrowserClient typed Sumeragi methods enforce endpoint-specific byte bounds",
+          "original_sha256": "a385a796252a4b66f7068dace107b73e904a97ff37b24d0546e4ab2c5a8e8bbb"
+        },
+        {
+          "start": 86454,
+          "end": 87210,
+          "name": "ToriiBrowserClient keeps raw and typed Sumeragi methods distinct",
+          "original_sha256": "19cb3cbbad1459609c9971cd038774026842294ec22be55130f384061f7ec042"
+        }
+      ]
+    },
+    {
+      "path": "javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js",
+      "entire_file_sha256": "f9062b231eab65718ad4617e9e7f54abddfba1a6489e325eb3059fb7e7e5f221"
+    },
+    {
+      "path": "javascript/iroha_js/test/sumeragiTransactionTreeCommitment.test.js",
+      "entire_file_sha256": "64b9030671bedf4d43aa93e168bfc39e35d804851c50063d019df16361384f4f"
+    },
+    {
+      "path": "javascript/iroha_js/test/nativeAmxParticipantSettlement.test.js",
+      "entire_file_sha256": "66a6495488e297ac449f407cb35a48b5baf14230f9675970fc20b46ad3eef035"
+    },
+    {
+      "path": "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
+      "entire_file_sha256": "43a39b2913996f65134b9433cc8eadb1cee16ce0fedfcc72c12c437d722105bc"
+    },
+    {
+      "path": "javascript/iroha_js/test/sumeragiBrowserFixtures.js",
+      "entire_file_sha256": "8afa2b9783f61a67fe6238da32dbfa1ce12e45b18f5dfcbb0a6aba69b8378108"
+    }
+  ],
+  "active_obligations": [
+    "exact authorized committee and quorum",
+    "complete network/generation/epoch context",
+    "original funded execution and immutable output identities",
+    "FIFO source and participant binding",
+    "bounded receipt and proof work",
+    "cross-dataspace atomic execution (S6)"
+  ],
+  "qualification": "open: require genuine native capture parity; protocol-8 JSON observation tests do not discharge finality or S6"
+}

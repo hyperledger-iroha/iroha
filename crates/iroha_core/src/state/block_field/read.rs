@@ -20,7 +20,7 @@ impl<B: OriginalPublicationBlock> BlockField<B> {
     }
 }
 
-impl<V: Value> CellField<'_, V> {
+impl<V: Value, C: Send + Sync + 'static> CellField<'_, V, C> {
     /// Borrow the exact original successor without acquiring a current view.
     pub fn get(&self) -> &V {
         match self.read_phase() {
@@ -50,6 +50,14 @@ impl<V: Value> CellField<'_, V> {
         match self.read_phase() {
             ReadPhase::Executing(block) => block.touched_value(),
             ReadPhase::Frozen(original) => original.touched_value(),
+        }
+    }
+
+    /// Compare the exact executing or frozen original owner without reacquiring it.
+    pub fn belongs_to(&self, target: &mv::cell::Cell<V, C>) -> bool {
+        match self.read_phase() {
+            ReadPhase::Executing(block) => block.belongs_to(target),
+            ReadPhase::Frozen(original) => original.belongs_to(target),
         }
     }
 

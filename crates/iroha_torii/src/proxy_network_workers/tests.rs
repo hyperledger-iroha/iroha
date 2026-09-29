@@ -22,7 +22,7 @@ async fn serve_until_shutdown(shutdown: ShutdownSignal) -> std::io::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn blocked_publication_keeps_response_delivery_running() {
+async fn blocked_admission_keeps_response_delivery_running() {
     let shutdown = ShutdownSignal::new();
     let (input_tx, input_rx) = mpsc::channel(1);
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -30,7 +30,7 @@ async fn blocked_publication_keeps_response_delivery_running() {
     let (response_tx, response_rx) = oneshot::channel();
     input_tx.send(()).await.unwrap();
     let mut entered_tx = Some(entered_tx);
-    let publication = tokio::spawn(run_work(
+    let admission = tokio::spawn(run_work(
         input_rx,
         shutdown.clone(),
         runtime().unwrap(),
@@ -38,7 +38,7 @@ async fn blocked_publication_keeps_response_delivery_running() {
             entered_tx.take().unwrap().send(()).unwrap();
             release_rx
                 .recv_timeout(Duration::from_secs(2))
-                .expect("response task must execute while publication blocks");
+                .expect("response task must execute while admission blocks");
             std::future::ready(())
         },
     ));
@@ -58,8 +58,8 @@ async fn blocked_publication_keeps_response_delivery_running() {
     shutdown.send();
     let workers = vec![
         ToriiCriticalWorker {
-            name: "publication",
-            task: publication,
+            name: "admission",
+            task: admission,
         },
         ToriiCriticalWorker {
             name: "response",
@@ -319,7 +319,6 @@ async fn response_dispatch_ignores_full_admission_queues_and_separate_proxy_slot
         keypair.public_key().clone(),
     );
     let (requests, request_rx) = mpsc::channel(1);
-    let (publications, publication_rx) = mpsc::channel(1);
     let route = iroha_core::queue::RoutingDecision::new(
         iroha_model_base::topology::LaneId::SINGLE,
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -343,7 +342,6 @@ async fn response_dispatch_ignores_full_admission_queues_and_separate_proxy_slot
         &app,
         &network,
         &requests,
-        &publications,
         PeerMessage::new(peer.clone(), request_payload, bytes),
     )
     .await;
@@ -353,24 +351,6 @@ async fn response_dispatch_ignores_full_admission_queues_and_separate_proxy_slot
         app.torii_proxy_receiver_memory_inflight.available_permits(),
         0
     );
-    // This deliberately unvalidated publication only fills the bounded queue;
-    // no physical persistence worker is started by this dispatcher test.
-    let publication_payload = iroha_core::NetworkMessage::QueuePlanAdmissionPublication(Arc::new(
-        QueuePlanAdmissionPublicationV1 {
-            schema_version: 1,
-            certificate: vec![0; 8],
-        },
-    ));
-    let bytes = norito::to_bytes(&publication_payload).unwrap().len();
-    dispatch(
-        &app,
-        &network,
-        &requests,
-        &publications,
-        PeerMessage::new(peer.clone(), publication_payload, bytes),
-    )
-    .await;
-    assert_eq!(publications.capacity(), 0);
     let request_id = Hash::new(b"independent-response");
     let (response_tx, response_rx) = oneshot::channel();
     let _waiter = crate::register_torii_proxy_pending_waiter(
@@ -378,7 +358,6 @@ async fn response_dispatch_ignores_full_admission_queues_and_separate_proxy_slot
         (request_id, peer.id().clone()),
         response_tx,
         usize::MAX,
-        false,
     );
     let expected = ToriiProxyHttpResponseV1 {
         status_code: 202,
@@ -397,7 +376,6 @@ async fn response_dispatch_ignores_full_admission_queues_and_separate_proxy_slot
             &app,
             &network,
             &requests,
-            &publications,
             PeerMessage::new(peer, response, bytes),
         ),
     )
@@ -405,14 +383,12 @@ async fn response_dispatch_ignores_full_admission_queues_and_separate_proxy_slot
     .unwrap();
     assert_eq!(response_rx.await.unwrap(), expected);
     assert_eq!(requests.capacity(), 0);
-    assert_eq!(publications.capacity(), 0);
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
     assert_eq!(
         app.torii_proxy_receiver_memory_inflight.available_permits(),
         0
     );
     drop(request_rx);
-    drop(publication_rx);
     assert_eq!(
         app.torii_proxy_receiver_memory_inflight.available_permits(),
         1

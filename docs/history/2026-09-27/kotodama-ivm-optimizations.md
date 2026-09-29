@@ -603,3 +603,65 @@ AXT finalized authority and durable spends, complete active memory funding,
 production Musubi publication, signed hardware artifacts and exact-candidate
 network/hardware/release qualification remain open. Production proof and AXT
 admission do not become enabled by these component results.
+
+
+### September 29 combined ownership and qualification follow-up
+
+The write-log candidate 3 passes 201 IVM and four Crypto geometry tests with no
+ignored controls and all 6,306 captured sources unchanged
+(`a22ac89653111587df62c4ae825b11ebdce293dc2df87f7716abf3af73c5242e`).
+Its previous interrupted and source-drifted runs remain separate failed evidence.
+Crypto run 10 passes 635 selected default tests with two existing fixture-generator
+ignores, 13 no-PQC controls and 16 GOST-only controls; run 11 passes five doctests.
+OpenSSL smoke output still reports unavailable SM4-GCM/CCM providers, so positive
+Rust summaries cannot close that provider gate. Strict Clippy exposed private
+MV type complexity, documentation/private-module lints and one decoder-test
+borrow; narrow fixes preserve algorithms and assertions. The feature-matrix
+recheck remains separately recorded rather than relabeling earlier failures.
+
+The shared acceleration owner passes all 30 tests. The combined run stops on a
+configuration test accessing a private model field, followed by unrelated Core
+source drift. The test now constructs the same canonical asset through its public
+literal parser. Core's earlier six TON helper documentation/Copy errors have an
+equivalent concurrent repair. A subsequent direct engineering Core test build
+reaches Core but fails on test includes for the removed `sumeragi/v2_apply.rs`
+and `state/queue_plan_priority_tests.rs`. Retired implementations are not restored.
+Repeated whole-candidate captures also refuse concurrent documentation/config/SDK
+changes; their failures are retained. Focused engineering observations do not
+replace unchanged-candidate acceptance.
+
+The four-file phase preparation cut consumes one source-bound snapshot for each
+signer Check phase, preserving the existing signed check, Queue submission,
+finalized verification, authority checks and deadlines. Independent source review
+accepts the cut, and eight actual-capture/mutation controls are registered; current
+runtime evidence is still missing. The finite read-log successor remains staged:
+independent review found operational failures converted to invalid TLV, false
+signature results, truncated INPUT scans and nested return decode errors. The
+consumer correction extends through contract lookup, executor output and VRF
+allocation. No incomplete cut is described as allocation closure.
+
+
+The OpenSSL follow-up removes dependency-private `ossl300` branches that were
+never enabled in `iroha_crypto`, directly using the pinned OpenSSL 3 provider.
+SM3 and SM4 smoke baselines now disable the provider while computing the Rust
+oracle, preventing self-comparison. Run 16 passes 72 SM, 37 GOST (one existing
+fixture-generator ignore), six smoke, 11 allocation and nine decoder tests, plus
+six shell controls, with no provider-skip diagnostics. Run 17 passes strict,
+dependency-inclusive Clippy for default, OpenSSL, no-PQC and GOST-only builds,
+and the codec guard. The reduced build's derivation API retains one exact
+conditional lint expectation because only disabled algorithm variants can fail.
+The newly reachable SM4 native-error path still needs canonical fallback and
+quarantine before complete backend-failure parity can be claimed.
+
+The target-aware 26-file packaging cut is applied with exact guards. Canonical,
+Docker and Nix daemon producers select the target's backend and require the
+independently reviewed CUDA public fingerprint; the single V1 prebuilt record
+binds resolved production IVM features and the exact source bundle identity.
+Retired records are rejected. All 160 applied packaging controls pass with
+Python 3.12 throughout child tools; the first attempt retains 29 environmental
+failures caused by the system Python lacking TOML support. The staged policy
+and pipeline checks add 27 and two passes respectively, without pretending to
+be actual Nix/Docker/Cargo release builds. The whole-candidate trusted source
+seal is intentionally unchanged. Qualified signed PTX, signer identity,
+hardware counters/parity/performance and frozen-source release evidence remain
+open (`9fca177b212471a228e1f9be3a53d5f91a4075e8ecaba2eb63d71c50869d4453`).

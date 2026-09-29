@@ -7,7 +7,7 @@ func ramLfeExecuteResponseJSON(
     outputCiphertext: String = "C0FFEE",
     outputHash: String = String(repeating: "44", count: 32),
     associatedDataHash: String = String(repeating: "55", count: 32),
-    backend: String = "bfv-programmed-sha3-256-v1",
+    backend: String = "bfv-programmed-v1",
     verificationMode: String = "signed"
 ) -> Data {
     """
@@ -26,7 +26,7 @@ func ramLfeExecuteResponseJSON(
         "payload":{
           "program_id":"identifier_lookup_retail",
           "program_digest":"\(String(repeating: "11", count: 32))",
-          "backend":"bfv-programmed-sha3-256-v1",
+          "backend":"bfv-programmed-v1",
           "verification_mode":"signed",
           "output_hash":"\(String(repeating: "22", count: 32))",
           "associated_data_hash":"\(String(repeating: "33", count: 32))",
@@ -37,19 +37,6 @@ func ramLfeExecuteResponseJSON(
           "kind":"signed",
           "signature":"\(String(repeating: "aa", count: 64))"
         }
-      },
-      "output_opening":{
-        "payload":{
-          "program_id":"identifier_lookup_retail",
-          "input_ciphertext_hash":"\(String(repeating: "ab", count: 32))",
-          "output_ciphertext_hash":"\(String(repeating: "bb", count: 32))",
-          "parameter_digest":"\(String(repeating: "cd", count: 32))",
-          "evaluation_key_digest":"\(String(repeating: "dd", count: 32))",
-          "opened_output_hash":"\(String(repeating: "ee", count: 32))",
-          "opened_at_ms":42,
-          "expires_at_ms":142
-        },
-        "signature":"\(String(repeating: "ff", count: 64))"
       }
     }
     """.data(using: .utf8)!
@@ -57,7 +44,7 @@ func ramLfeExecuteResponseJSON(
 
 func ramLfeReceiptVerifyResponseJSON(
     programId: String = "identifier_lookup_retail",
-    backend: String = "bfv-programmed-sha3-256-v1",
+    backend: String = "bfv-programmed-v1",
     verificationMode: String = "signed",
     outputHash: String = String(repeating: "44", count: 32),
     associatedDataHash: String = String(repeating: "55", count: 32)

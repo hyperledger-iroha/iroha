@@ -772,14 +772,12 @@ fn bind_staged_context(
         )
         .into());
     }
-    if metadata.wire_protocol_version
-        != u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)
-    {
+    if metadata.wire_protocol_version != u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION) {
         return Err(format!(
             "staged {} genesis advertised {}, expected protocol v{}",
             spec.slug,
             metadata.wire_protocol_version,
-            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION
+            iroha_data_model::sumeragi::PROTOCOL_VERSION
         )
         .into());
     }

@@ -17,14 +17,12 @@ const NETWORK_ID = NetworkId.parse(
 );
 
 function minimallyShapedInput(overrides = {}) {
-  const context = Buffer.alloc(32);
-  context[31] = 1;
   const expectedEntryHash = Buffer.alloc(32);
   expectedEntryHash[31] = 1;
   return {
     version: 1,
     networkId: NETWORK_ID,
-    trustedContextId: context,
+    trustedCheckpointNorito: Buffer.of(1),
     expectedEntryHash,
     finalityProofNorito: Buffer.of(1),
     executedBlockWire: Buffer.of(1),
@@ -36,7 +34,7 @@ function minimallyShapedInput(overrides = {}) {
 test("authenticated BlockProofs exports keep root and browser manifests aligned", () => {
   assert.equal(AUTHENTICATED_BLOCK_PROOFS_VERSION_V1, 1);
   assert.equal(AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1, 32 * 1024 * 1024);
-  assert.equal(AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1, 9 * 1024 * 1024);
+  assert.equal(AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1, 36 * 1024 * 1024);
   assert.equal(AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1, 16 * 1024 * 1024);
   for (const runtime of [root, browser]) {
     assert.equal(typeof runtime.verifyAuthenticatedBlockProofsV1, "function");
@@ -114,19 +112,18 @@ test("node wrapper snapshots exact enumerable data fields without invoking acces
   );
 });
 
-test("node wrapper enforces the marked exact context id and closed archive bounds", async () => {
+test("node wrapper enforces checkpoint and archive bounds plus exact marked entry hashes", async () => {
   await assert.rejects(
-    verifyAuthenticatedBlockProofsV1(
-      minimallyShapedInput({ trustedContextId: Buffer.alloc(31) }),
-    ),
-    /exactly 32 bytes/u,
+    verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ trustedCheckpointNorito: Buffer.alloc(0) })),
+    /trustedCheckpointNorito must contain/u,
   );
   await assert.rejects(
-    verifyAuthenticatedBlockProofsV1(
-      minimallyShapedInput({ trustedContextId: Buffer.alloc(32) }),
-    ),
-    /marker bit/u,
+    verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ trustedCheckpointNorito: Buffer.alloc(68 * 1024 * 1024 + 1) })),
+    /trustedCheckpointNorito must contain/u,
   );
+  for (const field of ["trustedContextId", "previousFinalityProofNorito"]) {
+    await assert.rejects(verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ [field]: Buffer.of(1) })), /unknown field/u);
+  }
   await assert.rejects(
     verifyAuthenticatedBlockProofsV1(
       minimallyShapedInput({ expectedEntryHash: Buffer.alloc(31) }),
@@ -143,17 +140,17 @@ test("node wrapper enforces the marked exact context id and closed archive bound
     verifyAuthenticatedBlockProofsV1(
       minimallyShapedInput({ finalityProofNorito: Buffer.alloc(0) }),
     ),
-    /must contain 1\.\.9437184 bytes/u,
+    /must contain 1\.\.37748736 bytes/u,
   );
   await assert.rejects(
     verifyAuthenticatedBlockProofsV1(
       minimallyShapedInput({
-        previousFinalityProofNorito: Buffer.alloc(
+        finalityProofNorito: Buffer.alloc(
           AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1 + 1,
         ),
       }),
     ),
-    /previousFinalityProofNorito must contain/u,
+    /finalityProofNorito must contain/u,
   );
 });
 
@@ -163,14 +160,13 @@ test("node wrapper rejects shared memory at every authenticated byte boundary", 
     return;
   }
   for (const field of [
-    "trustedContextId",
+    "trustedCheckpointNorito",
     "expectedEntryHash",
-    "previousFinalityProofNorito",
     "finalityProofNorito",
     "executedBlockWire",
     "blockProofsNorito",
   ]) {
-    const fixedHashField = field === "trustedContextId" || field === "expectedEntryHash";
+    const fixedHashField = field === "expectedEntryHash";
     const bytes = new Uint8Array(new SharedArrayBuffer(fixedHashField ? 32 : 1));
     if (fixedHashField) bytes[31] = 1;
     await assert.rejects(

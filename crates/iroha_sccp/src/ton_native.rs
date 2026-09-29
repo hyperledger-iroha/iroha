@@ -445,9 +445,8 @@ fn validate_validator_config(config: &TonValidatorConfigV1) -> Option<()> {
     Some(())
 }
 
-/// TL serialization of a `tonNode.blockIdExt` (constructor, root hash and file hash) as signed
-/// by TON validators.
-pub(crate) fn ton_block_id_tl_bytes(block: TonBlockIdExtV1) -> Vec<u8> {
+/// Serialize the boxed TL block identifier from its root and file hashes.
+pub fn ton_block_id_tl_bytes(block: TonBlockIdExtV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(68);
     push_u32_le(&mut out, TON_BLOCK_ID_TL_CONSTRUCTOR);
     out.extend_from_slice(&block.root_hash);
@@ -725,7 +724,7 @@ struct TonPrunedBranch {
 
 /// Level mask, hashes and depths of a cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TonComputedCell {
+pub struct TonComputedCell {
     pub(crate) mask: u8,
     pub(crate) hashes: [H256; 4],
     pub(crate) depths: [u16; 4],
@@ -752,9 +751,8 @@ fn ton_read_sized_uint(bytes: &[u8], cursor: &mut usize, size: usize) -> Option<
     Some(value)
 }
 
-/// Bit length of a cell's data from its `d2` descriptor, or `None` when the data bytes or
-/// completion tag do not match the descriptor.
-pub(crate) fn ton_cell_serialized_bit_len(data_descriptor: u8, data: &[u8]) -> Option<usize> {
+/// Read the payload bit length, rejecting inconsistent descriptors or terminator bits.
+pub fn ton_cell_serialized_bit_len(data_descriptor: u8, data: &[u8]) -> Option<usize> {
     if data_descriptor & 1 == 0 {
         let byte_len = usize::from(data_descriptor) / 2;
         return (byte_len == data.len()).then_some(byte_len.checked_mul(8)?);
@@ -979,7 +977,8 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
     clippy::too_many_lines,
     reason = "one linear canonical BoC header and cell-table parser"
 )]
-pub(crate) fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
+/// Parse a bounded TON bag of cells, rejecting malformed headers, cells and references.
+pub fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     if bytes.len() < 6 || bytes.len() > TON_MAX_BOC_BYTES || bytes.get(..4)? != TON_BOC_MAGIC {
         return None;
     }
@@ -1164,8 +1163,8 @@ fn ton_reject_duplicate_subgraphs(boc: &TonBoc) -> Option<()> {
     Some(())
 }
 
-/// Encode the subgraph reachable from `root` as a canonical single-root `BoC`.
-pub(crate) fn encode_canonical_ton_boc(boc: &TonBoc, root: usize) -> Option<Vec<u8>> {
+/// Encode the selected root in canonical cell order, rejecting invalid or duplicate subgraphs.
+pub fn encode_canonical_ton_boc(boc: &TonBoc, root: usize) -> Option<Vec<u8>> {
     let order = ton_canonical_cell_order(boc, root)?;
     ton_reject_duplicate_subgraphs(boc)?;
     let mut canonical_index = vec![usize::MAX; boc.cells.len()];
@@ -1328,7 +1327,8 @@ fn ton_boc_child_for_hash_level(
     clippy::too_many_lines,
     reason = "one bottom-up pass computing every level hash and depth per cell"
 )]
-pub(crate) fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
+/// Compute the level hashes and depths of every cell, rejecting invalid cell structure.
+pub fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
     let empty = TonComputedCell {
         mask: 0,
         hashes: [[0_u8; 32]; 4],

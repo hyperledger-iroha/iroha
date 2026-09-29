@@ -157,17 +157,12 @@ impl MusubiPublicationPinOutboxHighWaterReaderV1 {
             .copied()
             .ok_or(Invalid)?;
         let tip_block = view.kura().get_block(tip_number).ok_or(Invalid)?;
-        let tip_finality = view
-            .kura()
-            .v2_finality_artifact(tip_height_u64)
-            .map_err(|_| Invalid)?
-            .ok_or(Invalid)?;
         if !validate_finalized_block_wire(
+            view,
             &self.network_id,
             tip_height_u64,
             tip_hash,
             &tip_block,
-            &tip_finality,
         ) {
             return Err(Invalid);
         }
@@ -193,17 +188,12 @@ impl MusubiPublicationPinOutboxHighWaterReaderV1 {
                     .copied()
                     .ok_or(Invalid)?;
                 let block = view.kura().get_block(height).ok_or(Invalid)?;
-                let finality = view
-                    .kura()
-                    .v2_finality_artifact(record.recorded_at_height)
-                    .map_err(|_| Invalid)?
-                    .ok_or(Invalid)?;
                 if !validate_finalized_block_wire(
+                    view,
                     &self.network_id,
                     record.recorded_at_height,
                     canonical_hash,
                     &block,
-                    &finality,
                 ) || !validate_advance_transaction(record, &block)
                 {
                     return Err(Invalid);

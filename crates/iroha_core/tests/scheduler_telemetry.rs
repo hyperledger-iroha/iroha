@@ -3,8 +3,8 @@
 //! Checks canonical execution and explicit lane telemetry projections.
 #![allow(unused_imports)]
 use iroha_config::parameters::actual::{
-    LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusEndorsement,
-    NexusFees, NexusRelayWorker, NexusStaking, NexusStorage,
+    LaneCompliance, LaneConfig as RuntimeLaneConfig, NexusEndorsement, NexusFees, NexusRelayWorker,
+    NexusStaking, NexusStorage,
 };
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
@@ -68,10 +68,9 @@ fn canonical_execution_does_not_populate_retired_dag_metrics() {
     state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
-    let network_id = *state.network_id_ref();
+    let mut chain = crate::block::tests::component_chain(state);
+    let state = Arc::clone(chain.state());
+    let network_id = chain.network_id();
     // Build 3 txs with trivial conflicts to force at least two layers:
     // 1) Mint to Alice (independent)
     // 2) Transfer from Alice to Bob (depends on 1)
@@ -111,25 +110,13 @@ fn canonical_execution_does_not_populate_retired_dag_metrics() {
         iroha_primitives::json::Json::new("v"),
     )])
     .sign(carol_keypair.private_key());
-    let acc: Vec<_> = vec![tx1, tx2, tx3]
-        .into_iter()
-        .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
-        .collect();
-    let new_block = BlockBuilder::new(acc)
-        .chain(0, Some(&genesis))
-        .sign(alice_keypair.private_key())
-        .unpack(|_| {});
-    let mut sb = state.block(new_block.header());
-    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
+    chain.commit(vec![tx1, tx2, tx3]);
+    let cb = chain.committed(chain.height());
     assert!(
-        cb.as_ref()
+        cb.block()
             .output_results()
             .all(|result| result.as_ref().is_ok())
     );
-    state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("publish canonical transaction outputs");
     assert_eq!(state.view().height(), 2);
     // The sole execution owner serializes canonical outputs. DAG scheduling
     // counters must not pretend that detached scheduling ran on this path.
@@ -634,7 +621,6 @@ fn nexus_config_diff_counter_and_event_emitted() {
         endorsement: NexusEndorsement::default(),
         axt: NexusAxt::default(),
         atomic_private_settlement: Default::default(),
-        lane_relay_emergency: LaneRelayEmergency::default(),
         lane_config: RuntimeLaneConfig::from_catalog(&lane_catalog),
         configured_lane_catalog: lane_catalog.clone(),
         lane_catalog,

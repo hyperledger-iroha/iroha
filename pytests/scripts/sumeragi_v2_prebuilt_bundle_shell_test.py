@@ -82,9 +82,6 @@ run_cargo() {{
   [[ "${{1-}}" == build ]]
   mkdir -p -- "$CARGO_TARGET_DIR/release"
   case " $* " in
-    *" -p irohad "*" --features test-network-message-control "*)
-      output="$CARGO_TARGET_DIR/release/iroha3d"
-      ;;
     *" -p irohad "*)
       output="$CARGO_TARGET_DIR/release/iroha3d"
       ;;
@@ -146,7 +143,6 @@ printf '%s\\n' \
   "$IROHA_TEST_TARGET_DIR" \
   "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256" \
   "$TEST_NETWORK_BIN_IROHAD" \
-  "$TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL" \
   "$TEST_NETWORK_BIN_IROHA" \
   "$KAGAMI_BIN" \
   "$TEST_NETWORK_BIN_IROHAD_TAIRA"
@@ -155,7 +151,7 @@ printf '%s\\n' \
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert len(lines) == 7
+    assert len(lines) == 6
     bundle = Path(lines[0])
     assert bundle != inherited_target
     assert bundle.parent == (
@@ -168,12 +164,11 @@ printf '%s\\n' \
     assert len(lines[1]) == 64
     assert lines[2:] == [
         str(bundle / "release" / "iroha3d"),
-        str(bundle / "message-control" / "release" / "iroha3d"),
         str(bundle / "release" / "iroha"),
         str(bundle / "release" / "kagami"),
         str(bundle / "release" / "iroha3d_taira"),
     ]
-    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 4
+    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 3
     assert "--bin iroha3d --bin iroha3d_taira" in build_log.read_text().splitlines()[0]
     assert (bundle / "release/iroha3d_taira").read_bytes() != (bundle / "release/iroha3d").read_bytes()
 
@@ -205,7 +200,7 @@ printf '%s\\n' "$first_bundle" "$first_anchor"
 
     assert result.returncode == 0, result.stderr
     assert len(result.stdout.splitlines()) == 2
-    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 4
+    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 3
     assert "inherited release prebuilt manifest" in result.stderr
 
 
@@ -233,7 +228,7 @@ printf '%s\\n' "$first_bundle" "$IROHA_TEST_TARGET_DIR"
     assert result.returncode == 0, result.stderr
     first, second = result.stdout.splitlines()
     assert first != second
-    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 8
+    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 6
 
 
 def test_creation_ignores_repository_target_symlink_authority(
@@ -264,7 +259,7 @@ printf '%s\\n' "$IROHA_TEST_TARGET_DIR"
     )
     assert (repo / "target").is_symlink()
     assert not list(workspace_target.iterdir())
-    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 4
+    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 3
 
 
 def test_failed_build_cannot_fall_through_to_bundle_publication(
@@ -327,7 +322,7 @@ sumeragi_v2_ensure_source_bound_localnet_binaries \
     )
 
     assert result.returncode != 0
-    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 4
+    assert len(build_log.read_text(encoding="utf-8").splitlines()) == 3
     programs = (
         Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
         / "sumeragi-v2-release"

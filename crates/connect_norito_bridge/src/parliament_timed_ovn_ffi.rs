@@ -6,7 +6,7 @@
 //! registration secret, and returns only public registration or masked-ballot
 //! records. Before the seed is read, the bridge authenticates a terminal
 //! checkpoint-to-tip proof against an independently configured network,
-//! checkpoint context, and ballot attempt. Intermediate pages can only advance
+//! complete canonical checkpoint, and ballot attempt. Intermediate pages can only advance
 //! the caller's durable checkpoint; a terminal page additionally replay-validates
 //! the Core archive and requires its compact binding to equal the authenticated
 //! leaf before any seed-bearing operation is allowed.
@@ -33,6 +33,7 @@ use iroha_data_model::{
     account::{AccountAddress, AccountId},
     block::BlockHeader,
     governance::types::{BallotAttemptId, parliament_ballot_participant_hash_v1},
+    sumeragi_finality::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint},
 };
 use iroha_torii_shared::parliament_api::{
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
@@ -51,8 +52,8 @@ pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1: usize = 32;
 /// Maximum canonical proof response accepted at the wallet boundary.
 pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1: usize =
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1;
-/// Exact fixed width of one authenticated casting-proof page promotion result.
-pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1: usize = 41;
+/// Fixed diagnostic metadata width, never a sufficient checkpoint or promotion.
+pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1: usize = 41;
 
 const REGISTRATION_RNG_DOMAIN_V1: &[u8] =
     b"iroha.connect.parliament.timed-ovn.registration-rng.v1\0";
@@ -318,19 +319,52 @@ fn parse_wallet_authority(authority: &str) -> Result<AccountId, BridgeError> {
         .map_err(|_| BridgeError::Authority)
 }
 
+// Only public data is allocated; no output is published until both allocations succeed.
+unsafe fn write_record_and_checkpoint(
+    out_record: *mut *mut c_uchar,
+    out_record_len: *mut c_ulong,
+    record: &[u8],
+    out_checkpoint: *mut *mut c_uchar,
+    out_checkpoint_len: *mut c_ulong,
+    checkpoint: &[u8],
+) -> Result<(), BridgeError> {
+    if out_record == out_checkpoint || out_record_len == out_checkpoint_len {
+        return Err(BridgeError::ParliamentTimedOvn);
+    }
+    let mut record_ptr = ptr::null_mut();
+    let mut record_len = 0;
+    let mut checkpoint_ptr = ptr::null_mut();
+    let mut checkpoint_len = 0;
+    unsafe { write_bytes_bridge(&mut record_ptr, &mut record_len, record)? };
+    if let Err(error) =
+        unsafe { write_bytes_bridge(&mut checkpoint_ptr, &mut checkpoint_len, checkpoint) }
+    {
+        unsafe { libc::free(record_ptr.cast()) };
+        return Err(error);
+    }
+    unsafe {
+        *out_record = record_ptr;
+        *out_record_len = record_len;
+        *out_checkpoint = checkpoint_ptr;
+        *out_checkpoint_len = checkpoint_len;
+    }
+    Ok(())
+}
+
 pub(super) struct VerifiedCastingProofPageV1 {
     evaluated_block_height: u64,
     evaluated_context_id: [u8; 32],
     more_available: bool,
-    casting_context: Option<ValidatedParliamentTimedOvnCastingContextArchiveV1>,
+    pub(super) casting_context: Option<ValidatedParliamentTimedOvnCastingContextArchiveV1>,
+    pub(super) promoted_checkpoint: Vec<u8>,
 }
 
 impl VerifiedCastingProofPageV1 {
-    pub(super) fn canonical_result_bytes_v1(
+    pub(super) fn diagnostic_summary_bytes_v1(
         &self,
-    ) -> [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1] {
+    ) -> [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1] {
         let mut result =
-            [0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1];
+            [0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1];
         result[..8].copy_from_slice(&self.evaluated_block_height.to_be_bytes());
         result[8..40].copy_from_slice(&self.evaluated_context_id);
         result[40] = u8::from(self.more_available);
@@ -341,19 +375,20 @@ impl VerifiedCastingProofPageV1 {
 pub(super) fn verified_casting_proof_page_v1(
     proof_response_bytes: &[u8],
     network_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
+    trusted_checkpoint_bytes: &[u8],
     expected_ballot_attempt_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
 ) -> Result<VerifiedCastingProofPageV1, BridgeError> {
     if proof_response_bytes.is_empty()
         || proof_response_bytes.len()
             > CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1
-        || trusted_checkpoint_height == 0
         || network_id.iter().all(|byte| *byte == 0)
         || network_id[network_id.len() - 1] & 1 == 0
     {
         return Err(BridgeError::ParliamentTimedOvn);
     }
+    let trusted_checkpoint = SumeragiFinalityCheckpoint::decode_canonical(trusted_checkpoint_bytes)
+        .map_err(|_| BridgeError::ParliamentTimedOvn)?;
+    let trusted_checkpoint_height = trusted_checkpoint.height();
     let response: ParliamentTimedOvnCastingProofResponseV1 = norito::decode_canonical_with_limits(
         proof_response_bytes,
         public_proof_decode_limits(proof_response_bytes.len()),
@@ -368,13 +403,8 @@ pub(super) fn verified_casting_proof_page_v1(
         Hash::prehashed(network_id),
     ));
     let expected_ballot_attempt_id = BallotAttemptId::new(expected_ballot_attempt_id);
-    let binding = response
-        .verify_consensus_page_against(
-            network_id,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
-            expected_ballot_attempt_id,
-        )
+    let (binding, promoted_checkpoint) = response
+        .verify_consensus_page_against(network_id, &trusted_checkpoint, expected_ballot_attempt_id)
         .map_err(|_| BridgeError::ParliamentTimedOvn)?;
     let casting_context = match binding {
         None => {
@@ -400,27 +430,31 @@ pub(super) fn verified_casting_proof_page_v1(
     };
     Ok(VerifiedCastingProofPageV1 {
         evaluated_block_height: response.evaluated_block_height,
-        evaluated_context_id: *response.evaluated_context_id.0.as_ref(),
+        evaluated_context_id: *response.evaluated_context_id.as_ref(),
+        promoted_checkpoint: promoted_checkpoint
+            .encode_canonical()
+            .map_err(|_| BridgeError::ParliamentTimedOvn)?,
         more_available: response.more_available,
         casting_context,
     })
 }
 
-pub(super) fn verified_casting_context_from_proof_v1(
+pub(super) fn verified_terminal_casting_proof_v1(
     proof_response_bytes: &[u8],
     network_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
+    trusted_checkpoint_bytes: &[u8],
     expected_ballot_attempt_id: [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1],
-) -> Result<ValidatedParliamentTimedOvnCastingContextArchiveV1, BridgeError> {
-    verified_casting_proof_page_v1(
+) -> Result<VerifiedCastingProofPageV1, BridgeError> {
+    let page = verified_casting_proof_page_v1(
         proof_response_bytes,
         network_id,
-        trusted_checkpoint_height,
-        trusted_checkpoint_context_id,
+        trusted_checkpoint_bytes,
         expected_ballot_attempt_id,
-    )
-    .and_then(|page| page.casting_context.ok_or(BridgeError::ParliamentTimedOvn))
+    )?;
+    if page.casting_context.is_none() {
+        return Err(BridgeError::ParliamentTimedOvn);
+    }
+    Ok(page)
 }
 
 pub(super) fn registration_from_verified_context_v1(
@@ -544,42 +578,47 @@ unsafe fn reset_output(
 
 /// Verify one bounded consensus-authenticated casting-proof page without reading a seed.
 ///
-/// On success `out_page_result` receives exactly 41 canonical bytes: the
+/// On success `out_page_result` receives exactly 41 diagnostic bytes: the
 /// evaluated height as big-endian `u64`, the 32-byte evaluated context id, and
 /// a final canonical `0`/`1` `more_available` byte. Intermediate pages contain
 /// no casting archive and can only promote the caller's durable checkpoint;
 /// terminal pages additionally replay and bind the complete casting archive.
+/// `out_checkpoint` owns the complete canonical promoted checkpoint; the caller
+/// must release it with `connect_norito_free`. The summary alone grants no authority.
 ///
 /// # Safety
 ///
 /// Every non-null pointer must address the declared number of readable or
-/// writable bytes for the duration of this call. The exact 41-byte output must
-/// not overlap any input storage.
+/// writable bytes for the duration of this call. All output slots must be
+/// distinct and must not overlap any input storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
     proof_response_norito_ptr: *const c_uchar,
     proof_response_norito_len: c_ulong,
     network_id_ptr: *const c_uchar,
     network_id_len: c_ulong,
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id_ptr: *const c_uchar,
-    trusted_checkpoint_context_id_len: c_ulong,
+    trusted_checkpoint_norito_ptr: *const c_uchar,
+    trusted_checkpoint_norito_len: c_ulong,
     expected_ballot_attempt_id_ptr: *const c_uchar,
     expected_ballot_attempt_id_len: c_ulong,
     out_page_result_ptr: *mut c_uchar,
     out_page_result_len: c_ulong,
+    out_checkpoint_ptr: *mut *mut c_uchar,
+    out_checkpoint_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| -> Result<(), BridgeError> {
+        unsafe { reset_output(out_checkpoint_ptr, out_checkpoint_len)? };
         if out_page_result_ptr.is_null()
             || out_page_result_len
-                != CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 as c_ulong
+                != CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1
+                    as c_ulong
         {
             return Err(BridgeError::ParliamentTimedOvn);
         }
         let output = unsafe {
             slice::from_raw_parts_mut(
                 out_page_result_ptr,
-                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1,
             )
         };
         output.fill(0);
@@ -591,10 +630,11 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proo
             )?
         };
         let network_id = unsafe { trust_anchor_from_input(network_id_ptr, network_id_len)? };
-        let checkpoint_context = unsafe {
-            trust_anchor_from_input(
-                trusted_checkpoint_context_id_ptr,
-                trusted_checkpoint_context_id_len,
+        let checkpoint = unsafe {
+            input_bytes(
+                trusted_checkpoint_norito_ptr,
+                trusted_checkpoint_norito_len,
+                MAX_FINALITY_CHECKPOINT_BYTES,
             )?
         };
         let expected_ballot = unsafe {
@@ -606,17 +646,25 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proo
         let page = verified_casting_proof_page_v1(
             proof_response,
             network_id,
-            trusted_checkpoint_height,
-            checkpoint_context,
+            checkpoint,
             expected_ballot,
         )?;
-        output.copy_from_slice(&page.canonical_result_bytes_v1());
+        unsafe {
+            write_bytes_bridge(
+                out_checkpoint_ptr,
+                out_checkpoint_len,
+                &page.promoted_checkpoint,
+            )?
+        };
+        output.copy_from_slice(&page.diagnostic_summary_bytes_v1());
         Ok(())
     })();
     result.map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Verify one terminal consensus-authenticated casting response without reading a seed.
+/// Verify one terminal casting response and return its complete promoted checkpoint.
+///
+/// The output must be released with `connect_norito_free`; no seed is read.
 ///
 /// # Safety
 ///
@@ -628,13 +676,15 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proo
     proof_response_norito_len: c_ulong,
     network_id_ptr: *const c_uchar,
     network_id_len: c_ulong,
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id_ptr: *const c_uchar,
-    trusted_checkpoint_context_id_len: c_ulong,
+    trusted_checkpoint_norito_ptr: *const c_uchar,
+    trusted_checkpoint_norito_len: c_ulong,
     expected_ballot_attempt_id_ptr: *const c_uchar,
     expected_ballot_attempt_id_len: c_ulong,
+    out_checkpoint_ptr: *mut *mut c_uchar,
+    out_checkpoint_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| -> Result<(), BridgeError> {
+        unsafe { reset_output(out_checkpoint_ptr, out_checkpoint_len)? };
         let proof_response = unsafe {
             input_bytes(
                 proof_response_norito_ptr,
@@ -643,10 +693,11 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proo
             )?
         };
         let network_id = unsafe { trust_anchor_from_input(network_id_ptr, network_id_len)? };
-        let checkpoint_context = unsafe {
-            trust_anchor_from_input(
-                trusted_checkpoint_context_id_ptr,
-                trusted_checkpoint_context_id_len,
+        let checkpoint = unsafe {
+            input_bytes(
+                trusted_checkpoint_norito_ptr,
+                trusted_checkpoint_norito_len,
+                MAX_FINALITY_CHECKPOINT_BYTES,
             )?
         };
         let expected_ballot = unsafe {
@@ -655,14 +706,19 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proo
                 expected_ballot_attempt_id_len,
             )?
         };
-        verified_casting_context_from_proof_v1(
+        let page = verified_terminal_casting_proof_v1(
             proof_response,
             network_id,
-            trusted_checkpoint_height,
-            checkpoint_context,
+            checkpoint,
             expected_ballot,
         )?;
-        Ok(())
+        unsafe {
+            write_bytes_bridge(
+                out_checkpoint_ptr,
+                out_checkpoint_len,
+                &page.promoted_checkpoint,
+            )
+        }
     })();
     result.map_or_else(BridgeError::code, |()| 0)
 }
@@ -672,12 +728,12 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_verify_casting_proo
 ///
 /// The proof is canonical-decoded, finality/witness/membership verified, and
 /// its Core archive replayed and rebound before `keystore_seed` is read. The
-/// output is public and must be released with `connect_norito_free`.
+/// outputs are public and must be released with `connect_norito_free`.
 ///
 /// # Safety
 ///
 /// Every non-null pointer must address the declared number of readable or
-/// writable bytes for the duration of this call. The two output slots must be
+/// writable bytes for the duration of this call. All output slots must be
 /// distinct and must not overlap any input storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_registration_from_proof_v1(
@@ -685,9 +741,8 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_registration_from_p
     proof_response_norito_len: c_ulong,
     network_id_ptr: *const c_uchar,
     network_id_len: c_ulong,
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id_ptr: *const c_uchar,
-    trusted_checkpoint_context_id_len: c_ulong,
+    trusted_checkpoint_norito_ptr: *const c_uchar,
+    trusted_checkpoint_norito_len: c_ulong,
     expected_ballot_attempt_id_ptr: *const c_uchar,
     expected_ballot_attempt_id_len: c_ulong,
     authority_ptr: *const c_char,
@@ -696,8 +751,11 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_registration_from_p
     keystore_seed_len: c_ulong,
     out_registration_ptr: *mut *mut c_uchar,
     out_registration_len: *mut c_ulong,
+    out_checkpoint_ptr: *mut *mut c_uchar,
+    out_checkpoint_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| -> Result<(), BridgeError> {
+        unsafe { reset_output(out_checkpoint_ptr, out_checkpoint_len)? };
         unsafe { reset_output(out_registration_ptr, out_registration_len)? };
         let proof_response = unsafe {
             input_bytes(
@@ -707,10 +765,11 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_registration_from_p
             )?
         };
         let network_id = unsafe { trust_anchor_from_input(network_id_ptr, network_id_len)? };
-        let checkpoint_context = unsafe {
-            trust_anchor_from_input(
-                trusted_checkpoint_context_id_ptr,
-                trusted_checkpoint_context_id_len,
+        let checkpoint = unsafe {
+            input_bytes(
+                trusted_checkpoint_norito_ptr,
+                trusted_checkpoint_norito_len,
+                MAX_FINALITY_CHECKPOINT_BYTES,
             )?
         };
         let expected_ballot = unsafe {
@@ -719,18 +778,30 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_registration_from_p
                 expected_ballot_attempt_id_len,
             )?
         };
-        let casting_context = verified_casting_context_from_proof_v1(
+        let page = verified_terminal_casting_proof_v1(
             proof_response,
             network_id,
-            trusted_checkpoint_height,
-            checkpoint_context,
+            checkpoint,
             expected_ballot,
         )?;
+        let casting_context = page
+            .casting_context
+            .as_ref()
+            .ok_or(BridgeError::ParliamentTimedOvn)?;
         let authority = unsafe { authority_from_input(authority_ptr, authority_len)? };
         // Seed access is intentionally last, after every public proof and archive gate.
         let root_seed = unsafe { seed_from_input(keystore_seed_ptr, keystore_seed_len)? };
-        let registration = registration_record_from_seed(&casting_context, &authority, &root_seed)?;
-        unsafe { write_bytes_bridge(out_registration_ptr, out_registration_len, &registration) }
+        let registration = registration_record_from_seed(casting_context, &authority, &root_seed)?;
+        unsafe {
+            write_record_and_checkpoint(
+                out_registration_ptr,
+                out_registration_len,
+                &registration,
+                out_checkpoint_ptr,
+                out_checkpoint_len,
+                &page.promoted_checkpoint,
+            )
+        }
     })();
     result.map_or_else(BridgeError::code, |()| 0)
 }
@@ -747,7 +818,7 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_registration_from_p
 /// # Safety
 ///
 /// Every non-null pointer must address the declared number of readable or
-/// writable bytes for the duration of this call. The two output slots must be
+/// writable bytes for the duration of this call. All output slots must be
 /// distinct and must not overlap any input storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_ballot_from_proof_v1(
@@ -755,9 +826,8 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_ballot_from_proof_v
     proof_response_norito_len: c_ulong,
     network_id_ptr: *const c_uchar,
     network_id_len: c_ulong,
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id_ptr: *const c_uchar,
-    trusted_checkpoint_context_id_len: c_ulong,
+    trusted_checkpoint_norito_ptr: *const c_uchar,
+    trusted_checkpoint_norito_len: c_ulong,
     expected_ballot_attempt_id_ptr: *const c_uchar,
     expected_ballot_attempt_id_len: c_ulong,
     authority_ptr: *const c_char,
@@ -767,8 +837,11 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_ballot_from_proof_v
     choice: u8,
     out_ballot_ptr: *mut *mut c_uchar,
     out_ballot_len: *mut c_ulong,
+    out_checkpoint_ptr: *mut *mut c_uchar,
+    out_checkpoint_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| -> Result<(), BridgeError> {
+        unsafe { reset_output(out_checkpoint_ptr, out_checkpoint_len)? };
         unsafe { reset_output(out_ballot_ptr, out_ballot_len)? };
         let choice = match choice {
             0 => TimedOvnChoiceV1::Aye,
@@ -784,10 +857,11 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_ballot_from_proof_v
             )?
         };
         let network_id = unsafe { trust_anchor_from_input(network_id_ptr, network_id_len)? };
-        let checkpoint_context = unsafe {
-            trust_anchor_from_input(
-                trusted_checkpoint_context_id_ptr,
-                trusted_checkpoint_context_id_len,
+        let checkpoint = unsafe {
+            input_bytes(
+                trusted_checkpoint_norito_ptr,
+                trusted_checkpoint_norito_len,
+                MAX_FINALITY_CHECKPOINT_BYTES,
             )?
         };
         let expected_ballot = unsafe {
@@ -796,18 +870,30 @@ pub unsafe extern "C" fn connect_norito_parliament_timed_ovn_ballot_from_proof_v
                 expected_ballot_attempt_id_len,
             )?
         };
-        let casting_context = verified_casting_context_from_proof_v1(
+        let page = verified_terminal_casting_proof_v1(
             proof_response,
             network_id,
-            trusted_checkpoint_height,
-            checkpoint_context,
+            checkpoint,
             expected_ballot,
         )?;
+        let casting_context = page
+            .casting_context
+            .as_ref()
+            .ok_or(BridgeError::ParliamentTimedOvn)?;
         let authority = unsafe { authority_from_input(authority_ptr, authority_len)? };
         // Seed access is intentionally last, after every public proof and archive gate.
         let root_seed = unsafe { seed_from_input(keystore_seed_ptr, keystore_seed_len)? };
-        let ballot = ballot_record_from_seed(&casting_context, &authority, &root_seed, choice)?;
-        unsafe { write_bytes_bridge(out_ballot_ptr, out_ballot_len, &ballot) }
+        let ballot = ballot_record_from_seed(casting_context, &authority, &root_seed, choice)?;
+        unsafe {
+            write_record_and_checkpoint(
+                out_ballot_ptr,
+                out_ballot_len,
+                &ballot,
+                out_checkpoint_ptr,
+                out_checkpoint_len,
+                &page.promoted_checkpoint,
+            )
+        }
     })();
     result.map_or_else(BridgeError::code, |()| 0)
 }
@@ -824,32 +910,39 @@ mod tests {
         },
     };
     use iroha_crypto::{
-        Algorithm, Hash, HashOf, KeyPair, MerkleTree, Signature,
+        Algorithm, Hash, HashOf, KeyPair, MerkleTree,
         threshold_bls::{
             AdaptiveThresholdBlsParameters, DasRenDealerSecret, ThresholdBlsSession,
             TleReleasePurpose,
         },
     };
     use iroha_data_model::{
-        block::consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PayloadEncoding, QuorumCertificate,
-            ValidatorPower, finality::V2FinalityArtifact,
+        block::{
+            CommitCertificate,
+            builder::BlockBuilder,
+            consensus::{ExecKv, ExecWitness},
+            decode_versioned_signed_block,
         },
-        bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
         parliament_casting::{
             PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
             PARLIAMENT_TIMED_OVN_CASTING_WITNESS_SIBLINGS_V1,
             ParliamentTimedOvnCastingContextMembershipProofV1,
             ParliamentTimedOvnCastingSnapshotCommitmentV1, ParliamentTimedOvnCastingWitnessProofV1,
         },
+        sumeragi_finality::{
+            SUMERAGI_LANE_STATE_WITNESS_KEY, SumeragiFinalityProof, SumeragiLaneStateCommitment,
+        },
+        sumeragi_lanes::SumeragiLaneState,
+        testing::native_finality::NativeFinalityFixture,
     };
-    use iroha_model_base::peer::PeerId;
     use iroha_torii_shared::parliament_api::{
         PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentTimedOvnCastingProofResponseV1,
     };
     use rand::{SeedableRng as _, rngs::StdRng};
-    use std::num::NonZeroU64;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::OnceLock,
+    };
 
     use super::*;
 
@@ -857,10 +950,24 @@ mod tests {
         [byte; 32]
     }
 
+    fn fixture_network() -> [u8; 32] {
+        static NETWORK: OnceLock<[u8; 32]> = OnceLock::new();
+        *NETWORK.get_or_init(|| {
+            *NativeFinalityFixture::start("parliament-wallet-fixture")
+                .network_id()
+                .as_bytes()
+        })
+    }
+
     fn tle_fixture() -> ValidatedTleKeySessionV1 {
-        let session =
-            ThresholdBlsSession::<TleReleasePurpose>::new(binding(1), binding(2), binding(3), 4, 2)
-                .expect("threshold session");
+        let session = ThresholdBlsSession::<TleReleasePurpose>::new(
+            fixture_network(),
+            binding(2),
+            binding(3),
+            4,
+            2,
+        )
+        .expect("threshold session");
         let parameters = AdaptiveThresholdBlsParameters::derive(&session).expect("parameters");
         let mut rng = StdRng::from_seed([31; 32]);
         let dealers = (1_u16..=3)
@@ -903,7 +1010,7 @@ mod tests {
 
     fn open_lifecycle(tle: &ValidatedTleKeySessionV1) -> TimedOvnLifecycleStateV1 {
         let session = TimedOvnSessionPublicV1 {
-            network_id: binding(1),
+            network_id: fixture_network(),
             proposal_content_id: binding(10),
             governance_attempt_id: binding(11),
             body_instance_id: binding(12),
@@ -974,7 +1081,7 @@ mod tests {
         response: ParliamentTimedOvnCastingProofResponseV1,
         network_id: [u8; 32],
         checkpoint_height: u64,
-        checkpoint_context_id: [u8; 32],
+        checkpoint: Vec<u8>,
         ballot_attempt_id: [u8; 32],
     }
 
@@ -984,205 +1091,103 @@ mod tests {
         }
     }
 
-    fn witness_and_root(
+    fn witness_and_writes(
         snapshot: &ParliamentTimedOvnCastingSnapshotCommitmentV1,
-    ) -> (ParliamentTimedOvnCastingWitnessProofV1, Hash) {
-        let value = norito::to_bytes(snapshot).expect("canonical casting snapshot");
-        let witness = ParliamentTimedOvnCastingWitnessProofV1 {
-            key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
-            value,
-            siblings: vec![Hash::new([]); PARLIAMENT_TIMED_OVN_CASTING_WITNESS_SIBLINGS_V1],
+        height: u64,
+    ) -> (ParliamentTimedOvnCastingWitnessProofV1, ExecWitness) {
+        let lane_state = SumeragiLaneStateCommitment::from_state(
+            NativeFinalityFixture::start("parliament-wallet-fixture").network_id(),
+            height,
+            &SumeragiLaneState::default(),
+        )
+        .unwrap();
+        let writes = ExecWitness {
+            writes: vec![
+                ExecKv {
+                    key: SUMERAGI_LANE_STATE_WITNESS_KEY.to_vec(),
+                    value: norito::encode_canonical(&lane_state).unwrap(),
+                },
+                ExecKv {
+                    key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                    value: norito::encode_canonical(snapshot).unwrap(),
+                },
+            ],
+            ..ExecWitness::default()
         };
-        let path = Hash::new(&witness.key);
-        let value_hash = Hash::new(&witness.value);
-        let mut leaf = Vec::with_capacity(1 + 2 * Hash::LENGTH);
-        leaf.push(0);
-        leaf.extend_from_slice(path.as_ref());
-        leaf.extend_from_slice(value_hash.as_ref());
-        let mut root = Hash::new(leaf);
-        for (level, sibling) in witness.siblings.iter().copied().enumerate() {
-            let path_bit = 255_usize.saturating_sub(level);
-            let right = path.as_ref()[path_bit / 8] & (1_u8 << (path_bit % 8)) != 0;
-            let (left, right) = if right {
-                (sibling, root)
-            } else {
-                (root, sibling)
-            };
-            let mut node = Vec::with_capacity(1 + 2 * Hash::LENGTH);
-            node.push(1);
-            node.extend_from_slice(left.as_ref());
-            node.extend_from_slice(right.as_ref());
-            root = Hash::new(node);
+        let empty = Hash::new([]);
+        let mut nodes: BTreeMap<[u8; 32], Hash> = writes
+            .writes
+            .iter()
+            .map(|write| {
+                let path = Hash::new(&write.key);
+                let value = Hash::new(&write.value);
+                (
+                    path.into(),
+                    Hash::new_from_chunks(&[&[0], path.as_ref(), value.as_ref()]),
+                )
+            })
+            .collect();
+        let mut target: [u8; 32] = Hash::new(PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1).into();
+        let mut siblings = Vec::new();
+        for bit in (0..256).rev() {
+            let byte = bit / 8;
+            let mask = 1 << (bit % 8);
+            let mut sibling = target;
+            sibling[byte] ^= mask;
+            siblings.push(nodes.get(&sibling).copied().unwrap_or(empty));
+            let mut parents = BTreeMap::new();
+            for (path, hash) in &nodes {
+                let mut other_path = *path;
+                other_path[byte] ^= mask;
+                let other = nodes.get(&other_path).copied().unwrap_or(empty);
+                let (left, right) = if path[byte] & mask == 0 {
+                    (*hash, other)
+                } else {
+                    (other, *hash)
+                };
+                let mut parent = *path;
+                parent[byte] &= !mask;
+                parents.insert(
+                    parent,
+                    Hash::new_from_chunks(&[&[1], left.as_ref(), right.as_ref()]),
+                );
+            }
+            nodes = parents;
+            target[byte] &= !mask;
         }
-        assert!(witness.verify(root));
-        (witness, root)
+        assert_eq!(
+            siblings.len(),
+            PARLIAMENT_TIMED_OVN_CASTING_WITNESS_SIBLINGS_V1
+        );
+        let proof = ParliamentTimedOvnCastingWitnessProofV1 {
+            key: writes.writes[1].key.clone(),
+            value: writes.writes[1].value.clone(),
+            siblings,
+        };
+        assert!(proof.verify(*nodes.values().next().unwrap()));
+        (proof, writes)
     }
 
+    // Genuine native three-of-four BLS certificates over explicit synthetic outputs.
+    // These portable FFI tests do not execute World or qualify monetary custody.
     fn finality_chain(
-        network_id: NetworkId,
         tip_height: u64,
-        tip_ordinary_writes_root: Hash,
-    ) -> Vec<BridgeFinalityProof> {
-        let mut keys = (0_u8..4)
-            .map(|index| {
-                KeyPair::try_from_seed(
-                    vec![0xD0_u8.saturating_add(index); 32],
-                    Algorithm::BlsNormal,
-                )
-                .expect("derive deterministic Parliament validator")
-            })
-            .collect::<Vec<_>>();
-        keys.sort_by(|left, right| {
-            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-        });
-        let roster = keys
-            .iter()
-            .map(|key| ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let quorum = DualQuorum::from_roster(&roster).expect("valid Parliament validator roster");
-        let kagemusha_mint_finality_authority =
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
-                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                network_id,
-                generation: 0,
-                validators: roster
-                    .iter()
-                    .enumerate()
-                    .map(|(index, validator)| {
-                        iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                            &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small fixture roster")); 32],
-                            0,
-                            validator.validator.clone(),
-                        )
-                        .expect("derive deterministic mint-finality fixture keys")
-                    })
-                    .collect(),
-            };
-        let kagemusha_mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&kagemusha_mint_finality_authority, 100)
-            .expect("derive mint-finality fixture roster ID");
-        let pops = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("derive Parliament validator PoP")
-            })
-            .collect::<Vec<_>>();
-        let mut proofs = Vec::with_capacity(usize::try_from(tip_height).expect("small test tip"));
-        for height in 1..=tip_height {
-            let parent = proofs
-                .last()
-                .map(|proof: &BridgeFinalityProof| &proof.finality_artifact);
-            let mut timestamp = 1_900_000_000_000_u64 + height;
-            let header = loop {
-                let candidate = BlockHeader::new(
-                    NonZeroU64::new(height).expect("nonzero Parliament proof height"),
-                    parent.map(|artifact| artifact.block_hash),
-                    None,
-                    timestamp,
-                    0,
-                );
-                if height != tip_height || candidate.hash().as_ref()[31] & 1 == 1 {
-                    break candidate;
-                }
-                timestamp = timestamp.checked_add(1).expect("test timestamp space");
-            };
-            let mut context = HeightContext {
-                network_id,
-                protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-                height,
-                epoch: 0,
-                epoch_end_height: 100,
-                next_epoch_snapshot: None,
-                mode: ConsensusMode::Npos,
-                parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()),
-                snapshot_bootstrap: None,
-                quorum,
-                roster: roster.clone(),
-                kagemusha_mint_finality_authorization,
-                kagemusha_mint_finality_authority: kagemusha_mint_finality_authority.clone(),
-                nexus_amx_context_hash: Hash::new(b"Parliament casting proof test nexus"),
-                execution_policy_hash: Hash::new(b"Parliament casting proof test policy"),
-                da_layout: DataAvailabilityLayout {
-                    encoding: PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_024,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 4_096,
-                    max_chunk_count: 8,
-                },
-                leader_seed: [0x5A; 32],
-            };
-            if height == 1 {
-                while context.id().0.as_ref()[31] & 1 == 0 {
-                    context.leader_seed[0] = context.leader_seed[0]
-                        .checked_add(1)
-                        .expect("canonical checkpoint fixture search");
-                }
-            }
-            let subject = BlockSubject {
-                parent_block_hash: header.prev_block_hash(),
-                block_hash: header.hash(),
-                payload_hash: Hash::new(b"Parliament casting proof test payload"),
-            };
-            let round = ConsensusRound {
-                context_id: context.id(),
-                height,
-                view: 0,
-            };
-            let ordinary_writes_root = if height == tip_height {
-                tip_ordinary_writes_root
+        tip_writes: &ExecWitness,
+    ) -> (Vec<SumeragiFinalityProof>, SumeragiFinalityCheckpoint) {
+        let mut fixture = NativeFinalityFixture::start("parliament-wallet-fixture");
+        let checkpoint = fixture.checkpoint();
+        let mut proofs = vec![fixture.genesis_proof().clone()];
+        for height in 2..=tip_height {
+            let mut block = BlockBuilder::new(fixture.next_header()).build(BTreeSet::new());
+            NativeFinalityFixture::install_network_results(&mut block, vec![]);
+            let proof = if height == tip_height {
+                fixture.certify_with_witness(block, tip_writes)
             } else {
-                Hash::new(height.to_be_bytes())
+                fixture.certify(block)
             };
-            let execution_commitment =
-                ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new(b"Parliament casting parent state"),
-                    Hash::new(b"Parliament casting post state"),
-                    ordinary_writes_root,
-                    1,
-                    Hash::new(b"Parliament casting executed wire"),
-                );
-            let mut commit_qc = QuorumCertificate {
-                round,
-                proposal_round: round,
-                phase: GlobalPhase::Commit,
-                subject,
-                execution_commitment,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![1],
-            };
-            let preimage = commit_qc
-                .signer_preimage(&context, 0)
-                .expect("valid Parliament finality signer preimage");
-            let signatures = commit_qc
-                .signers
-                .iter()
-                .map(|index| {
-                    Signature::try_new(
-                        keys[usize::try_from(*index).expect("validator index")].private_key(),
-                        &preimage,
-                    )
-                    .expect("sign Parliament finality vote")
-                    .payload()
-                    .to_vec()
-                })
-                .collect::<Vec<_>>();
-            commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
-                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-            )
-            .expect("aggregate Parliament finality votes");
-            let artifact = V2FinalityArtifact::new(context, subject, commit_qc, pops.clone());
-            artifact.verify().expect("Parliament finality artifact");
-            proofs.push(BridgeFinalityProof {
-                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-                block_header: header,
-                finality_artifact: artifact,
-            });
+            proofs.push(proof);
         }
-        proofs
+        (proofs, checkpoint)
     }
 
     fn casting_proof_fixture(
@@ -1204,18 +1209,29 @@ mod tests {
         let membership = ParliamentTimedOvnCastingContextMembershipProofV1::new(
             tree.get_proof(0).expect("single casting leaf proof"),
         );
-        let (witness, ordinary_writes_root) = witness_and_root(&snapshot);
+        let (witness, writes) = witness_and_writes(&snapshot, binding.evaluated_height);
         let network_id_bytes = binding.network_id;
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(network_id_bytes)),
-        );
-        let finality_chain =
-            finality_chain(network_id, binding.evaluated_height, ordinary_writes_root);
-        let first = finality_chain.first().expect("checkpoint proof");
+        assert_eq!(network_id_bytes, fixture_network());
+        let (finality_chain, checkpoint) = finality_chain(binding.evaluated_height, &writes);
         let tip = finality_chain.last().expect("evaluated proof");
-        let checkpoint_context_id = *first.finality_artifact.context_id().0.as_ref();
-        let evaluated_context_id = tip.finality_artifact.context_id();
-        let evaluated_block_hash = hex::encode(tip.finality_artifact.block_hash.as_ref());
+        let verified = iroha_data_model::sumeragi_finality::verify_checkpoint_page(
+            checkpoint.network_id(),
+            &checkpoint,
+            &finality_chain,
+            64,
+            CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+        )
+        .unwrap();
+        let evaluated_context_id = verified.tip().context_id();
+        let evaluated_block_hash = hex::encode(tip.block_header.hash().as_ref());
+        assert!(
+            witness.verify(
+                tip.decode_checked()
+                    .unwrap()
+                    .execution()
+                    .ordinary_writes_root
+            )
+        );
         let response = ParliamentTimedOvnCastingProofResponseV1 {
             version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
             casting_context_archive: Some(
@@ -1237,8 +1253,8 @@ mod tests {
         CastingProofFixture {
             response,
             network_id: network_id_bytes,
-            checkpoint_height: 1,
-            checkpoint_context_id,
+            checkpoint_height: checkpoint.height(),
+            checkpoint: checkpoint.encode_canonical().unwrap(),
             ballot_attempt_id: *binding.ballot_attempt_id.as_bytes(),
         }
     }
@@ -1257,26 +1273,49 @@ mod tests {
         anchor: &CastingProofFixture,
     ) -> (
         c_int,
-        [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1],
+        [u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1],
+        Vec<u8>,
     ) {
         let mut output =
-            [0xA5_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1];
+            [0xA5_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1];
+        let mut checkpoint_output = ptr::null_mut();
+        let mut checkpoint_output_len = 0;
         let status = unsafe {
             connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
                 proof_response.as_ptr(),
                 proof_response.len() as c_ulong,
                 anchor.network_id.as_ptr(),
                 anchor.network_id.len() as c_ulong,
-                anchor.checkpoint_height,
-                anchor.checkpoint_context_id.as_ptr(),
-                anchor.checkpoint_context_id.len() as c_ulong,
+                anchor.checkpoint.as_ptr(),
+                anchor.checkpoint.len() as c_ulong,
                 anchor.ballot_attempt_id.as_ptr(),
                 anchor.ballot_attempt_id.len() as c_ulong,
                 output.as_mut_ptr(),
                 output.len() as c_ulong,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
-        (status, output)
+        let checkpoint = if status == 0 {
+            assert!(!checkpoint_output.is_null());
+            let bytes =
+                unsafe { slice::from_raw_parts(checkpoint_output, checkpoint_output_len as usize) }
+                    .to_vec();
+            crate::connect_norito_free(checkpoint_output);
+            assert_eq!(
+                SumeragiFinalityCheckpoint::decode_canonical(&bytes)
+                    .unwrap()
+                    .encode_canonical()
+                    .unwrap(),
+                bytes
+            );
+            bytes
+        } else {
+            assert!(checkpoint_output.is_null());
+            assert_eq!(checkpoint_output_len, 0);
+            Vec::new()
+        };
+        (status, output, checkpoint)
     }
 
     fn call_registration_ffi_bytes(
@@ -1288,15 +1327,16 @@ mod tests {
         let authority = authority.to_string();
         let mut output = ptr::null_mut();
         let mut output_len = 1;
+        let mut checkpoint_output = ptr::null_mut();
+        let mut checkpoint_output_len = 0;
         let status = unsafe {
             connect_norito_parliament_timed_ovn_registration_from_proof_v1(
                 proof_response.as_ptr(),
                 proof_response.len() as c_ulong,
                 anchor.network_id.as_ptr(),
                 anchor.network_id.len() as c_ulong,
-                anchor.checkpoint_height,
-                anchor.checkpoint_context_id.as_ptr(),
-                anchor.checkpoint_context_id.len() as c_ulong,
+                anchor.checkpoint.as_ptr(),
+                anchor.checkpoint.len() as c_ulong,
                 anchor.ballot_attempt_id.as_ptr(),
                 anchor.ballot_attempt_id.len() as c_ulong,
                 authority.as_ptr().cast::<c_char>(),
@@ -1305,14 +1345,26 @@ mod tests {
                 seed.len() as c_ulong,
                 &mut output,
                 &mut output_len,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
         if status != 0 {
             assert!(output.is_null());
             assert_eq!(output_len, 0);
+            assert!(checkpoint_output.is_null());
+            assert_eq!(checkpoint_output_len, 0);
             return Err(status);
         }
         assert!(!output.is_null());
+        assert!(!checkpoint_output.is_null());
+        let checkpoint_bytes =
+            unsafe { slice::from_raw_parts(checkpoint_output, checkpoint_output_len as usize) }
+                .to_vec();
+        let promoted = SumeragiFinalityCheckpoint::decode_canonical(&checkpoint_bytes).unwrap();
+        assert_eq!(promoted.network_id().as_bytes(), &fixture_network());
+        assert_eq!(promoted.encode_canonical().unwrap(), checkpoint_bytes);
+        crate::connect_norito_free(checkpoint_output);
         let bytes = unsafe { std::slice::from_raw_parts(output, output_len as usize) }.to_vec();
         crate::connect_norito_free(output);
         Ok(bytes)
@@ -1329,15 +1381,16 @@ mod tests {
         let authority = authority.to_string();
         let mut output = ptr::null_mut();
         let mut output_len = 1;
+        let mut checkpoint_output = ptr::null_mut();
+        let mut checkpoint_output_len = 0;
         let status = unsafe {
             connect_norito_parliament_timed_ovn_ballot_from_proof_v1(
                 proof_response.as_ptr(),
                 proof_response.len() as c_ulong,
                 fixture.network_id.as_ptr(),
                 fixture.network_id.len() as c_ulong,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id.as_ptr(),
-                fixture.checkpoint_context_id.len() as c_ulong,
+                fixture.checkpoint.as_ptr(),
+                fixture.checkpoint.len() as c_ulong,
                 fixture.ballot_attempt_id.as_ptr(),
                 fixture.ballot_attempt_id.len() as c_ulong,
                 authority.as_ptr().cast::<c_char>(),
@@ -1347,14 +1400,26 @@ mod tests {
                 choice,
                 &mut output,
                 &mut output_len,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
         if status != 0 {
             assert!(output.is_null());
             assert_eq!(output_len, 0);
+            assert!(checkpoint_output.is_null());
+            assert_eq!(checkpoint_output_len, 0);
             return Err(status);
         }
         assert!(!output.is_null());
+        assert!(!checkpoint_output.is_null());
+        let checkpoint_bytes =
+            unsafe { slice::from_raw_parts(checkpoint_output, checkpoint_output_len as usize) }
+                .to_vec();
+        let promoted = SumeragiFinalityCheckpoint::decode_canonical(&checkpoint_bytes).unwrap();
+        assert_eq!(promoted.network_id().as_bytes(), &fixture_network());
+        assert_eq!(promoted.encode_canonical().unwrap(), checkpoint_bytes);
+        crate::connect_norito_free(checkpoint_output);
         let bytes = unsafe { std::slice::from_raw_parts(output, output_len as usize) }.to_vec();
         crate::connect_norito_free(output);
         Ok(bytes)
@@ -1528,14 +1593,8 @@ mod tests {
         let lifecycle = open_lifecycle(&tle);
         let context = casting_context(&lifecycle, &tle);
         let fixture = casting_proof_fixture(&context);
-        let verify = |bytes: &[u8], network, checkpoint_context, ballot| {
-            verified_casting_context_from_proof_v1(
-                bytes,
-                network,
-                fixture.checkpoint_height,
-                checkpoint_context,
-                ballot,
-            )
+        let verify = |bytes: &[u8], network, checkpoint: &[u8], ballot| {
+            verified_terminal_casting_proof_v1(bytes, network, checkpoint, ballot)
         };
 
         let fixture_network = NetworkId::from_genesis_hash(
@@ -1545,8 +1604,7 @@ mod tests {
             .response
             .verify_consensus_page_against(
                 fixture_network,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id,
+                &SumeragiFinalityCheckpoint::decode_canonical(&fixture.checkpoint).unwrap(),
                 BallotAttemptId::new(fixture.ballot_attempt_id),
             )
             .expect("portable terminal consensus proof");
@@ -1578,7 +1636,7 @@ mod tests {
             verify(
                 &fixture.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_ok()
@@ -1588,7 +1646,7 @@ mod tests {
             verify(
                 &fixture.canonical_bytes(),
                 [0_u8; 32],
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1597,25 +1655,25 @@ mod tests {
         let terminal_page = verified_casting_proof_page_v1(
             &fixture.canonical_bytes(),
             fixture.network_id,
-            fixture.checkpoint_height,
-            fixture.checkpoint_context_id,
+            &fixture.checkpoint,
             fixture.ballot_attempt_id,
         )
         .expect("authenticated terminal page");
-        let terminal_result = terminal_page.canonical_result_bytes_v1();
+        let terminal_result = terminal_page.diagnostic_summary_bytes_v1();
         assert_eq!(
             u64::from_be_bytes(terminal_result[..8].try_into().expect("height bytes")),
             fixture.response.evaluated_block_height
         );
         assert_eq!(
             &terminal_result[8..40],
-            fixture.response.evaluated_context_id.0.as_ref()
+            fixture.response.evaluated_context_id.as_ref()
         );
         assert_eq!(terminal_result[40], 0);
-        let (terminal_status, ffi_terminal_result) =
+        let (terminal_status, ffi_terminal_result, ffi_terminal_checkpoint) =
             call_page_ffi(&fixture.canonical_bytes(), &fixture);
         assert_eq!(terminal_status, 0);
         assert_eq!(ffi_terminal_result, terminal_result);
+        assert_eq!(ffi_terminal_checkpoint, terminal_page.promoted_checkpoint);
         let mut normalized_network_alias = fixture.network_id;
         normalized_network_alias[31] &= !1;
         assert_ne!(normalized_network_alias, fixture.network_id);
@@ -1623,7 +1681,7 @@ mod tests {
             verify(
                 &fixture.canonical_bytes(),
                 normalized_network_alias,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1635,26 +1693,31 @@ mod tests {
             verify(
                 &malformed,
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
         );
 
         let mut fake_chain = fixture.clone();
-        fake_chain
-            .response
-            .finality_chain
-            .last_mut()
-            .expect("finality tip")
-            .finality_artifact
-            .commit_qc
-            .aggregate_signature[0] ^= 0x80;
+        let bad_tip = fake_chain.response.finality_chain.last_mut().unwrap();
+        let mut bad_block = decode_versioned_signed_block(&bad_tip.block_wire).unwrap();
+        let certificate = bad_block.commit_certificate().unwrap();
+        let mut qc = certificate.commit_qc().to_vec();
+        let last = qc.last_mut().unwrap();
+        *last ^= 0x80;
+        let bad_certificate = CommitCertificate::from_untrusted_parts(
+            certificate.consensus_header().to_vec(),
+            qc,
+            certificate.result_preimage().to_vec(),
+        );
+        bad_block.set_commit_certificate(Some(bad_certificate));
+        bad_tip.block_wire = bad_block.encode_wire().unwrap();
         assert!(
             verify(
                 &fake_chain.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1666,18 +1729,19 @@ mod tests {
             verify(
                 &fixture.canonical_bytes(),
                 wrong_network,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
         );
-        let mut wrong_context = fixture.checkpoint_context_id;
-        wrong_context[0] ^= 0x40;
+        let mut wrong_checkpoint = fixture.checkpoint.clone();
+        let last = wrong_checkpoint.last_mut().unwrap();
+        *last ^= 0x40;
         assert!(
             verify(
                 &fixture.canonical_bytes(),
                 fixture.network_id,
-                wrong_context,
+                &wrong_checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1688,7 +1752,7 @@ mod tests {
             verify(
                 &fixture.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 wrong_ballot,
             )
             .is_err()
@@ -1708,51 +1772,49 @@ mod tests {
         let intermediate_page = verified_casting_proof_page_v1(
             &intermediate.canonical_bytes(),
             fixture.network_id,
-            fixture.checkpoint_height,
-            fixture.checkpoint_context_id,
+            &fixture.checkpoint,
             fixture.ballot_attempt_id,
         )
         .expect("authenticated intermediate checkpoint promotion");
-        let intermediate_result = intermediate_page.canonical_result_bytes_v1();
+        let intermediate_result = intermediate_page.diagnostic_summary_bytes_v1();
         assert_eq!(intermediate_result[40], 1);
         assert_eq!(
             &intermediate_result[8..40],
-            fixture.response.evaluated_context_id.0.as_ref()
+            fixture.response.evaluated_context_id.as_ref()
         );
-        let (intermediate_status, ffi_intermediate_result) =
+        let (intermediate_status, ffi_intermediate_result, ffi_intermediate_checkpoint) =
             call_page_ffi(&intermediate.canonical_bytes(), &fixture);
         assert_eq!(intermediate_status, 0);
         assert_eq!(ffi_intermediate_result, intermediate_result);
+        assert_eq!(
+            ffi_intermediate_checkpoint,
+            intermediate_page.promoted_checkpoint
+        );
         assert!(
             verify(
                 &intermediate.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
         );
 
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(fixture.network_id)),
-        );
         let mut nonadvancing = fixture.clone();
-        nonadvancing.response.finality_chain = finality_chain(
-            network_id,
-            fixture.checkpoint_height,
-            Hash::new(b"unused root"),
-        );
-        let nonadvancing_tip = nonadvancing
-            .response
-            .finality_chain
-            .last()
-            .expect("single checkpoint proof");
-        let nonadvancing_context_id = nonadvancing_tip.finality_artifact.context_id();
-        let nonadvancing_block_hash = nonadvancing_tip.finality_artifact.block_hash;
-        assert_eq!(
-            nonadvancing_context_id.0.as_ref(),
-            &fixture.checkpoint_context_id
-        );
+        nonadvancing.response.finality_chain.truncate(1);
+        let nonadvancing_tip = nonadvancing.response.finality_chain.last().unwrap();
+        let selected = SumeragiFinalityCheckpoint::decode_canonical(&fixture.checkpoint).unwrap();
+        let nonadvancing_context_id =
+            iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier::from_trusted_checkpoint(
+                &selected,
+                &selected.network_id(),
+                selected.chain_id(),
+            )
+            .unwrap()
+            .verify_retained_decision(nonadvancing_tip)
+            .unwrap()
+            .context_id();
+        let nonadvancing_block_hash = nonadvancing_tip.block_header.hash();
         nonadvancing.response.evaluated_block_height = fixture.checkpoint_height;
         nonadvancing.response.evaluated_context_id = nonadvancing_context_id;
         nonadvancing.response.evaluated_block_hash = hex::encode(nonadvancing_block_hash.as_ref());
@@ -1769,8 +1831,7 @@ mod tests {
             verified_casting_proof_page_v1(
                 &nonadvancing.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1778,32 +1839,39 @@ mod tests {
 
         let mut malformed_page = fixture.canonical_bytes();
         malformed_page.push(0);
-        let (malformed_status, malformed_output) = call_page_ffi(&malformed_page, &fixture);
+        let (malformed_status, malformed_output, malformed_checkpoint) =
+            call_page_ffi(&malformed_page, &fixture);
         assert_eq!(malformed_status, BridgeError::ParliamentTimedOvn.code());
+        assert!(malformed_checkpoint.is_empty());
         assert_eq!(
             malformed_output,
-            [0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1]
+            [0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1]
         );
         let mut short_output =
-            [0xA5_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 - 1];
+            [0xA5_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1 - 1];
         let canonical_page = fixture.canonical_bytes();
+        let mut checkpoint_output = ptr::null_mut();
+        let mut checkpoint_output_len = 0;
         let short_status = unsafe {
             connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
                 canonical_page.as_ptr(),
                 canonical_page.len() as c_ulong,
                 fixture.network_id.as_ptr(),
                 fixture.network_id.len() as c_ulong,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id.as_ptr(),
-                fixture.checkpoint_context_id.len() as c_ulong,
+                fixture.checkpoint.as_ptr(),
+                fixture.checkpoint.len() as c_ulong,
                 fixture.ballot_attempt_id.as_ptr(),
                 fixture.ballot_attempt_id.len() as c_ulong,
                 short_output.as_mut_ptr(),
                 short_output.len() as c_ulong,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
         assert_eq!(short_status, BridgeError::ParliamentTimedOvn.code());
         assert_eq!(short_output, [0xA5_u8; 40]);
+        assert!(checkpoint_output.is_null());
+        assert_eq!(checkpoint_output_len, 0);
 
         let mut binding_tampering = fixture.clone();
         binding_tampering
@@ -1816,7 +1884,7 @@ mod tests {
             verify(
                 &binding_tampering.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1840,7 +1908,7 @@ mod tests {
             verify(
                 &membership_tampering.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1857,7 +1925,7 @@ mod tests {
             verify(
                 &witness_tampering.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
             )
             .is_err()
@@ -1884,8 +1952,81 @@ mod tests {
             verify(
                 &archive_substitution.canonical_bytes(),
                 fixture.network_id,
-                fixture.checkpoint_context_id,
+                &fixture.checkpoint,
                 fixture.ballot_attempt_id,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn complete_checkpoint_promotes_across_ffi_and_resumes_terminal_verification() {
+        let tle = tle_fixture();
+        let context = casting_context(&open_lifecycle(&tle), &tle);
+        let fixture = casting_proof_fixture(&context);
+        let mut intermediate = fixture.clone();
+        intermediate.response.more_available = true;
+        intermediate.response.observed_ledger_tip_height += 1;
+        intermediate.response.casting_context_archive = None;
+        intermediate.response.casting_context_binding = None;
+        intermediate.response.context_membership_proof = None;
+        intermediate.response.casting_witness = None;
+        let (status, summary, promoted) = call_page_ffi(&intermediate.canonical_bytes(), &fixture);
+        assert_eq!(status, 0);
+        assert_eq!(summary[40], 1);
+        let mut terminal = fixture.clone();
+        terminal.response.finality_chain =
+            vec![fixture.response.finality_chain.last().unwrap().clone()];
+        terminal.checkpoint = promoted.clone();
+        let bytes = terminal.canonical_bytes();
+        let mut output = ptr::null_mut();
+        let mut length = 0;
+        let status = unsafe {
+            connect_norito_parliament_timed_ovn_verify_casting_proof_v1(
+                bytes.as_ptr(),
+                bytes.len() as c_ulong,
+                terminal.network_id.as_ptr(),
+                32,
+                terminal.checkpoint.as_ptr(),
+                terminal.checkpoint.len() as c_ulong,
+                terminal.ballot_attempt_id.as_ptr(),
+                32,
+                &mut output,
+                &mut length,
+            )
+        };
+        assert_eq!(status, 0);
+        assert!(!output.is_null());
+        let returned = unsafe { slice::from_raw_parts(output, length as usize) }.to_vec();
+        crate::connect_norito_free(output);
+        assert_eq!(returned, promoted);
+        // A diagnostic summary is not a canonical checkpoint and cannot resume finality.
+        assert!(
+            verified_terminal_casting_proof_v1(
+                &bytes,
+                terminal.network_id,
+                &summary,
+                terminal.ballot_attempt_id
+            )
+            .is_err()
+        );
+        let mut truncated = promoted.clone();
+        truncated.pop();
+        assert!(
+            verified_terminal_casting_proof_v1(
+                &bytes,
+                terminal.network_id,
+                &truncated,
+                terminal.ballot_attempt_id
+            )
+            .is_err()
+        );
+        assert!(
+            verified_terminal_casting_proof_v1(
+                &bytes,
+                terminal.network_id,
+                &[],
+                terminal.ballot_attempt_id
             )
             .is_err()
         );
@@ -1902,15 +2043,16 @@ mod tests {
         let authority = account(77).to_string();
         let mut output = ptr::null_mut();
         let mut output_len = 99;
+        let mut checkpoint_output = ptr::null_mut();
+        let mut checkpoint_output_len = 0;
         let status = unsafe {
             connect_norito_parliament_timed_ovn_registration_from_proof_v1(
                 malformed.as_ptr(),
                 malformed.len() as c_ulong,
                 fixture.network_id.as_ptr(),
                 fixture.network_id.len() as c_ulong,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id.as_ptr(),
-                fixture.checkpoint_context_id.len() as c_ulong,
+                fixture.checkpoint.as_ptr(),
+                fixture.checkpoint.len() as c_ulong,
                 fixture.ballot_attempt_id.as_ptr(),
                 fixture.ballot_attempt_id.len() as c_ulong,
                 authority.as_ptr().cast::<c_char>(),
@@ -1919,11 +2061,15 @@ mod tests {
                 CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 as c_ulong,
                 &mut output,
                 &mut output_len,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
         assert_eq!(status, BridgeError::ParliamentTimedOvn.code());
         assert!(output.is_null());
         assert_eq!(output_len, 0);
+        assert!(checkpoint_output.is_null());
+        assert_eq!(checkpoint_output_len, 0);
 
         output = ptr::null_mut();
         output_len = 99;
@@ -1933,9 +2079,8 @@ mod tests {
                 malformed.len() as c_ulong,
                 fixture.network_id.as_ptr(),
                 fixture.network_id.len() as c_ulong,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id.as_ptr(),
-                fixture.checkpoint_context_id.len() as c_ulong,
+                fixture.checkpoint.as_ptr(),
+                fixture.checkpoint.len() as c_ulong,
                 fixture.ballot_attempt_id.as_ptr(),
                 fixture.ballot_attempt_id.len() as c_ulong,
                 authority.as_ptr().cast::<c_char>(),
@@ -1945,11 +2090,15 @@ mod tests {
                 0,
                 &mut output,
                 &mut output_len,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
         assert_eq!(status, BridgeError::ParliamentTimedOvn.code());
         assert!(output.is_null());
         assert_eq!(output_len, 0);
+        assert!(checkpoint_output.is_null());
+        assert_eq!(checkpoint_output_len, 0);
     }
 
     #[test]
@@ -1980,15 +2129,16 @@ mod tests {
         let authority_string = authority.to_string();
         let mut output = 1_usize as *mut c_uchar;
         let mut output_len = 7;
+        let mut checkpoint_output = ptr::null_mut();
+        let mut checkpoint_output_len = 0;
         let status = unsafe {
             connect_norito_parliament_timed_ovn_registration_from_proof_v1(
                 ptr::null(),
                 canonical.len() as c_ulong,
                 fixture.network_id.as_ptr(),
                 fixture.network_id.len() as c_ulong,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id.as_ptr(),
-                fixture.checkpoint_context_id.len() as c_ulong,
+                fixture.checkpoint.as_ptr(),
+                fixture.checkpoint.len() as c_ulong,
                 fixture.ballot_attempt_id.as_ptr(),
                 fixture.ballot_attempt_id.len() as c_ulong,
                 authority_string.as_ptr().cast::<c_char>(),
@@ -1997,11 +2147,15 @@ mod tests {
                 seed.len() as c_ulong,
                 &mut output,
                 &mut output_len,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
         assert_eq!(status, BridgeError::NullPtr.code());
         assert!(output.is_null());
         assert_eq!(output_len, 0);
+        assert!(checkpoint_output.is_null());
+        assert_eq!(checkpoint_output_len, 0);
 
         let status = unsafe {
             connect_norito_parliament_timed_ovn_registration_from_proof_v1(
@@ -2009,9 +2163,8 @@ mod tests {
                 canonical.len() as c_ulong,
                 fixture.network_id.as_ptr(),
                 fixture.network_id.len() as c_ulong,
-                fixture.checkpoint_height,
-                fixture.checkpoint_context_id.as_ptr(),
-                fixture.checkpoint_context_id.len() as c_ulong,
+                fixture.checkpoint.as_ptr(),
+                fixture.checkpoint.len() as c_ulong,
                 fixture.ballot_attempt_id.as_ptr(),
                 fixture.ballot_attempt_id.len() as c_ulong,
                 authority_string.as_ptr().cast::<c_char>(),
@@ -2020,6 +2173,8 @@ mod tests {
                 seed.len() as c_ulong,
                 ptr::null_mut(),
                 &mut output_len,
+                &mut checkpoint_output,
+                &mut checkpoint_output_len,
             )
         };
         assert_eq!(status, BridgeError::NullPtr.code());

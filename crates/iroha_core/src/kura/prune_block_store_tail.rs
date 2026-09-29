@@ -1,4 +1,11 @@
 // Included at `kura` module scope; keep the extracted methods on `BlockStore`.
+// Physical crash-injection boundaries for trimming only the uncommitted tail.
+// The durable block count is the retained authority; no retired ledger intent participates.
+const PRUNE_STAGE_BLOCK_MARKER: usize = 2;
+const PRUNE_STAGE_BLOCK_INDEX: usize = 3;
+const PRUNE_STAGE_BLOCK_HASHES: usize = 4;
+const PRUNE_STAGE_BLOCK_DATA: usize = 5;
+const PRUNE_STAGE_DA_SIDECARS: usize = 6;
 impl BlockStore {
     /// Prune the block storage to the given height
     ///
@@ -32,8 +39,7 @@ impl BlockStore {
         let logical_count = self.read_index_count_from_len()?;
         let durable_count = self.read_durable_index_count()?;
         let pruned_index_count = height.min(logical_count).min(durable_count);
-        // The current prune marker is the sole forward-recovery authority and
-        // is published before any destructive work.
+        // Publish the original durable block count before trimming an uncommitted suffix.
         self.publish_commit_marker(pruned_index_count)?;
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_MARKER);
         {
@@ -72,12 +78,6 @@ impl BlockStore {
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_DA_SIDECARS);
         self.commit_marker_pending = None;
         self.commit_marker_count = pruned_index_count;
-        if self
-            .read_verified_snapshot_tail_marker()?
-            .is_some_and(|marker| pruned_index_count < marker.snapshot_height)
-        {
-            self.remove_verified_snapshot_tail_marker()?;
-        }
         Ok(())
     }
 }

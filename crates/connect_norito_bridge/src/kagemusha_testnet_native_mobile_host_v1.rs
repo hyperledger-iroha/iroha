@@ -86,8 +86,8 @@ impl KagemushaTestnetNativePinnedMintV1<'_> {
     ///
     /// The native observer independently requires this operation's durable finality pin.
     #[must_use]
-    pub const fn finality_anchor(&self) -> KagemushaFinalityTrustAnchorV1 {
-        self.anchor
+    pub const fn finality_anchor(&self) -> &KagemushaFinalityTrustAnchorV1 {
+        &self.anchor
     }
 }
 

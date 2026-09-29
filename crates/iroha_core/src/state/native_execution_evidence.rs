@@ -4,7 +4,7 @@
 //! complete lane-state proof. No old finality artifact or separately encoded proof is accepted.
 //! Genesis execution remains untrusted until its actual H2 successor is fully verified.
 
-use super::NativeLaneStateProjectionV1;
+use super::NativeExecutionProjectionV1;
 use crate::sumeragi::certified_chain::{CertifiedPrefix, CommittedBlock};
 use iroha_data_model::{NetworkId, block::SignedBlock, sumeragi_lanes::SumeragiLaneState};
 use iroha_model_base::chain::ChainId;
@@ -52,7 +52,7 @@ pub struct NativeExecutionEvidenceVerifier {
     network: NetworkId,
     limits: NativeExecutionEvidenceLimits,
     retained_bytes: u64,
-    pending_genesis: Option<NativeLaneStateProjectionV1>,
+    pending_genesis: Option<NativeExecutionProjectionV1>,
     carriers: BTreeMap<u64, RetainedCarrier>,
     lanes: Option<Arc<SumeragiLaneState>>,
     poisoned: bool,
@@ -149,7 +149,7 @@ impl NativeExecutionEvidenceVerifier {
         block
             .validate_output_merkle_cache()
             .map_err(|error| error.to_string())?;
-        let projection: NativeLaneStateProjectionV1 = norito::decode_canonical_with_limits(
+        let projection: NativeExecutionProjectionV1 = norito::decode_canonical_with_limits(
             context_evidence,
             norito::canonical_decode_limits(context_evidence.len()),
         )
@@ -208,7 +208,7 @@ impl NativeExecutionEvidenceVerifier {
     fn accept_verified(
         &mut self,
         committed: CommittedBlock,
-        evidence: NativeLaneStateProjectionV1,
+        evidence: NativeExecutionProjectionV1,
     ) -> Result<VerifiedNativeExecutionCarrier, String> {
         let block = Arc::clone(committed.block());
         let height = committed.height();

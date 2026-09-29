@@ -80,7 +80,7 @@ fn compile_init_and_run(source: &str) -> IVM {
     vm.set_program_counter(entry_pc("hajimari"))
         .expect("select hajimari entrypoint");
     vm.run().expect("initialize V1 contract");
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     vm.set_gas_limit(u64::MAX);
     vm.set_program_counter(entry_pc("run"))
         .expect("select run entrypoint");

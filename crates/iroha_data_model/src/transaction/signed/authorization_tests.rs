@@ -2,8 +2,8 @@
 
 use super::{
     Executable, FeePaymentIntent, MultisigSignature, MultisigSignatures, SignedTransaction,
-    TransactionAdmissionIntent, TransactionBuilder, TransactionDomain, TransactionSignature,
-    TransactionSignatureError, model, test_network_id,
+    TransactionBuilder, TransactionDomain, TransactionSignature, TransactionSignatureError, model,
+    test_network_id,
 };
 use crate::{
     Level,
@@ -53,7 +53,7 @@ fn empty_multisig_payload(network: u8, policy: MultisigPolicy) -> model::Transac
         time_to_live_ms: None,
         nonce: None,
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        admission_intent: TransactionAdmissionIntent::Ordinary,
+
         metadata: Metadata::default(),
         attachments: None,
     }

@@ -327,7 +327,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
             ]
         };
     }
-    let holders: [(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>); 311] =
+    let holders: [(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>); 310] =
         with_world_overlay_fields!(holders);
     let world = fixture();
     let before = all_images(&world);
@@ -410,7 +410,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
             ]
         };
     }
-    let invalidators: [(&str, fn(&World)); 311] = with_world_overlay_fields!(invalidators);
+    let invalidators: [(&str, fn(&World)); 310] = with_world_overlay_fields!(invalidators);
     let (name, invalidate) = invalidators.last().unwrap();
     assert_eq!(*name, last.name);
     let dropped = Arc::new(AtomicBool::new(false));

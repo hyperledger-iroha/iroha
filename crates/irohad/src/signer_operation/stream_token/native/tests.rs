@@ -111,6 +111,7 @@ fn queue() -> Arc<Queue> {
     ))
 }
 mod checked_reservation;
+mod phase_preparation;
 
 fn source(fixture: &Fixture, queue: Arc<Queue>) -> NativeStreamTokenSourceV1 {
     source_with_timeout(fixture, queue, Duration::from_secs(1))
@@ -470,12 +471,9 @@ fn native_current_authority_disappears_when_its_durable_qc_is_removed() {
 #[test]
 fn native_software_issue_and_recovery_execute_exact_signed_queue_operations() {
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
-    let (directory, storage) = config(&fixture);
+    let (_directory, storage) = config(&fixture);
     let state = fixture.state.clone();
     let queue = queue();
-    queue
-        .install_plan_journal(directory.path().join("queue.to"), 1024 * 1024, true)
-        .unwrap();
     let runtime =
         runtime::build_native_stream_token_runtime_v1(&storage, state.clone(), queue.clone())
             .unwrap()
@@ -557,13 +555,10 @@ fn native_production_issuer_releases_verifiable_cid_token_and_rechecks_revocatio
     // operations and durable 3-of-4 validator finality. It does not qualify the separate HTTP
     // operator authentication or deployment-owned gateway quota/sequencer/reputation services.
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
-    let (directory, mut storage) = config(&fixture);
+    let (_directory, mut storage) = config(&fixture);
     storage.stream_tokens.default_ttl_secs = 60;
     let state = fixture.state.clone();
     let queue = queue();
-    queue
-        .install_plan_journal(directory.path().join("issuer-queue.to"), 1024 * 1024, true)
-        .unwrap();
     let runtime =
         runtime::build_native_stream_token_runtime_v1(&storage, state.clone(), queue.clone())
             .unwrap()

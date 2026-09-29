@@ -51,7 +51,7 @@ def _original(inputs):
              'replayed_workload_lane_count')
     return (inputs.anchors_sha256, inputs.network_id, generation.lane_count,
             tuple(account.account_id for account in generation.accounts),
-            roles[3].primary_block_store, roles[3].primary_merge_log)
+            roles[3].primary_block_store)
 
 
 def _resource_scope(replayed, selected, lanes):
@@ -125,8 +125,8 @@ def build_replay_plan(replayed: ReplayResult, inputs: ReadinessInputs,
     try:
         original = _original(inputs)
         selected, counts = journal_snapshot(plan, original[3])
-        store, merge, reader = _reader_snapshot(stopped)
-        _require(store == str(original[4]) and merge == str(original[5])
+        store, reader = _reader_snapshot(stopped)
+        _require(store == str(original[4])
                  and reader[-1] == os.geteuid(), 'replayed_workload_stopped_geometry')
         journal_bytes = _resource_scope(replayed, selected, original[2])
         signed, applications = replayed.signed_requests, replayed.applied_requests

@@ -555,7 +555,7 @@ public struct ToriiParliamentTimedOvnCastingProofRequestV1: Sendable, Equatable 
 /// Schema- and checksum-admitted response frame passed unchanged to the native wallet bridge.
 ///
 /// Framing admission does not establish consensus validity. Wallets must verify the page with the
-/// external network, checkpoint context, and expected ballot before accessing seed material.
+/// external network, complete canonical checkpoint, and expected ballot before accessing seed material.
 public struct ToriiParliamentTimedOvnCastingProofResponseV1: Sendable, Equatable {
     /// Exact canonical response frame, including its Norito header.
     public let canonicalNorito: Data

@@ -30,10 +30,7 @@ use iroha::{
         asset::{
             AssetBalancePolicy, AssetBalanceScope, AssetDefinition, AssetDefinitionId, AssetId,
         },
-        block::{
-            BlockHeader,
-            consensus::{NativeAmxReceipt, SumeragiDiagnosticsStatus},
-        },
+        block::BlockHeader,
         domain::Domain,
         isi::{
             Grant, GrantBox, InstructionBox, Log, Mint, Register,
@@ -798,14 +795,14 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         })
 }
 
-// EnvFilter matches target prefixes. Keep unselected v2_* siblings at INFO,
+// EnvFilter matches target prefixes. Keep unselected Sumeragi modules at INFO,
 // then enable the exact body-progress adapter and selected runner/worker owners.
 const N3_DIAGNOSTIC_LOG_FILTER: &str = concat!(
     "iroha_torii::queue_plan_admission=debug,",
     "iroha_core::sumeragi::v2=debug,",
-    "iroha_core::sumeragi::v2_=info,",
-    "iroha_core::sumeragi::v2_runner=debug,",
-    "iroha_core::sumeragi::v2_worker=debug",
+    "iroha_core::sumeragi=info,",
+    "iroha_core::sumeragi::driver=debug,",
+    "iroha_core::sumeragi::executor=debug",
 );
 
 fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
@@ -817,7 +814,7 @@ fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
     // observation route used by the release fault campaign. No fault rule is
     // installed by the positive smoke test.
     localnet_builder(shape)
-        .with_consensus_message_control()
+        .with_private_settlement_route_control()
         .with_config_layer(|layer| {
             // This diagnostic-only smoke retains the shared admission filter.
             layer.write(["logger", "filter"], N3_DIAGNOSTIC_LOG_FILTER);
@@ -4471,9 +4468,9 @@ fn n3_diagnostic_logger_filter_parses_and_preserves_info_and_admission() {
     assert_eq!(directives[0], "info", "ordinary node logging stays at INFO");
     assert!(directives.contains(&"iroha_torii::queue_plan_admission=debug"));
     assert!(directives.contains(&"iroha_core::sumeragi::v2=debug"));
-    assert!(directives.contains(&"iroha_core::sumeragi::v2_=info"));
-    assert!(directives.contains(&"iroha_core::sumeragi::v2_runner=debug"));
-    assert!(directives.contains(&"iroha_core::sumeragi::v2_worker=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi=info"));
+    assert!(directives.contains(&"iroha_core::sumeragi::driver=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi::executor=debug"));
 }
 
 #[test]

@@ -43,20 +43,17 @@ use iroha_data_model::{
     },
     asset::{AssetDefinitionId, AssetId, definition::Mintable},
     block::consensus::{SumeragiDiagnosticsStatus, SumeragiLaneGovernance},
-    block::consensus_v2::SumeragiV2Status,
     da::commitment::DaProofScheme,
     events::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
-    nexus::{
-        LaneConfig as LaneMetadata, LaneLifecyclePlan, LaneRelayEnvelope, LaneStorageProfile,
-        LaneVisibility,
-    },
+    nexus::{LaneConfig as LaneMetadata, LaneLifecyclePlan, LaneStorageProfile, LaneVisibility},
     parameter::system::SumeragiConsensusMode,
     prelude::{AccountId, Quantity},
     role::RoleId,
+    sumeragi::SumeragiStatus,
 };
 use iroha_executor_data_model::isi::multisig::MultisigSpec;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -2840,7 +2837,7 @@ impl MochiApp {
         &mut self,
         alias: &str,
         snapshot: Arc<ToriiStatusSnapshot>,
-        sumeragi: Option<Arc<SumeragiV2Status>>,
+        sumeragi: Option<Arc<SumeragiStatus>>,
         sumeragi_diagnostics: Option<Arc<SumeragiDiagnosticsStatus>>,
         metrics: Option<Arc<ToriiMetricsSnapshot>>,
         metrics_error: Option<ToriiErrorInfo>,
@@ -3340,17 +3337,6 @@ impl MochiApp {
                     format!("[{alias}] Pipeline warning"),
                     detail,
                     Color32::from_rgb(230, 190, 90),
-                    base_kind,
-                )
-            }
-            PipelineEventBox::Merge(merge) => {
-                let payload = truncate(&format!("{merge:?}"), 160);
-                let detail = Some(format!("{payload} • raw={raw_len}B"));
-                RenderedEventLine::new(
-                    alias,
-                    format!("[{alias}] Merge ledger entry committed"),
-                    detail,
-                    Color32::from_rgb(170, 150, 240),
                     base_kind,
                 )
             }
@@ -6290,29 +6276,25 @@ impl MochiApp {
                             }
                             ui.label(format!("Peer {alias}"));
                             egui::Grid::new(format!("mochi_lane_status_{alias}"))
-                                .num_columns(8)
+                                .num_columns(6)
                                 .striped(true)
                                 .show(ui, |ui| {
                                     ui.label("Lane");
                                     ui.label("Dataspace");
                                     ui.label("Block");
-                                    ui.label("Relay");
-                                    ui.label("Lag");
                                     ui.label("RBC bytes");
                                     ui.label("DA cursor");
-                                    ui.label("Relay ingest");
+                                    ui.label("Governance manifest");
                                     ui.end_row();
                                     for row in rows {
                                         ui.label(format!("{} ({})", row.lane_id, row.alias));
                                         ui.label(&row.dataspace);
                                         ui.label(row.block_height_label());
-                                        ui.label(row.relay_height_label());
-                                        ui.label(row.relay_lag_label());
                                         ui.label(row.rbc_bytes_label());
                                         ui.label(row.da_cursor_label());
                                         ui.colored_label(
-                                            row.relay_state.color(),
-                                            row.relay_state.label(),
+                                            row.manifest_state.color(),
+                                            row.manifest_state.label(),
                                         );
                                         ui.end_row();
                                     }
@@ -10696,30 +10678,24 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
     snapshot
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelayIngestState {
-    Waiting,
-    MissingFinality,
-    MissingDa,
-    MissingManifest,
+enum LaneManifestState {
+    Unknown,
+    Missing,
     Ready,
 }
-impl RelayIngestState {
+impl LaneManifestState {
     fn label(self) -> &'static str {
         match self {
-            RelayIngestState::Waiting => "waiting",
-            RelayIngestState::MissingFinality => "finality pending",
-            RelayIngestState::MissingDa => "da pending",
-            RelayIngestState::MissingManifest => "manifest pending",
-            RelayIngestState::Ready => "ready",
+            Self::Unknown => "unknown",
+            Self::Missing => "pending",
+            Self::Ready => "ready",
         }
     }
     fn color(self) -> Color32 {
         match self {
-            RelayIngestState::Ready => Color32::from_rgb(80, 160, 80),
-            RelayIngestState::Waiting => Color32::from_gray(150),
-            RelayIngestState::MissingFinality
-            | RelayIngestState::MissingDa
-            | RelayIngestState::MissingManifest => Color32::from_rgb(200, 160, 64),
+            Self::Ready => Color32::from_rgb(80, 160, 80),
+            Self::Unknown => Color32::from_gray(150),
+            Self::Missing => Color32::from_rgb(200, 160, 64),
         }
     }
 }
@@ -10729,26 +10705,14 @@ struct LaneStatusRow {
     alias: String,
     dataspace: String,
     block_height: Option<u64>,
-    relay_height: Option<u64>,
-    relay_lag: Option<u64>,
     rbc_bytes: Option<u64>,
     da_cursor_epoch: Option<u64>,
     da_cursor_sequence: Option<u64>,
-    relay_state: RelayIngestState,
+    manifest_state: LaneManifestState,
 }
 impl LaneStatusRow {
     fn block_height_label(&self) -> String {
         self.block_height
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "—".to_owned())
-    }
-    fn relay_height_label(&self) -> String {
-        self.relay_height
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "—".to_owned())
-    }
-    fn relay_lag_label(&self) -> String {
-        self.relay_lag
             .map(|value| value.to_string())
             .unwrap_or_else(|| "—".to_owned())
     }
@@ -10770,7 +10734,7 @@ struct PeerStatusView {
     last_snapshot: Option<ToriiStatusSnapshot>,
     last_error: Option<StatusError>,
     last_update: Option<Instant>,
-    last_sumeragi: Option<SumeragiV2Status>,
+    last_sumeragi: Option<SumeragiStatus>,
     last_sumeragi_diagnostics: Option<SumeragiDiagnosticsStatus>,
     last_metrics: Option<ToriiMetricsSnapshot>,
     last_metrics_error: Option<StatusError>,
@@ -10779,7 +10743,7 @@ impl PeerStatusView {
     fn record_snapshot(
         &mut self,
         snapshot: ToriiStatusSnapshot,
-        sumeragi: Option<SumeragiV2Status>,
+        sumeragi: Option<SumeragiStatus>,
         sumeragi_diagnostics: Option<SumeragiDiagnosticsStatus>,
         metrics: Option<ToriiMetricsSnapshot>,
         metrics_error: Option<ToriiErrorInfo>,
@@ -10877,19 +10841,22 @@ impl PeerStatusView {
     }
     fn membership_summary(&self) -> Option<String> {
         let sumeragi = self.last_sumeragi.as_ref()?;
-        let restart = if sumeragi.restart_required {
-            " • restart required"
-        } else {
-            ""
-        };
         Some(format!(
-            "Consensus h{} v{} {:?} • leader {} • committed {}{}",
+            "Consensus h{} v{} stage {} • leader {} • committed {} • applied {}{}",
             sumeragi.height,
             sumeragi.view,
-            sumeragi.phase,
-            sumeragi.leader,
-            sumeragi.last_committed_height,
-            restart
+            sumeragi.stage,
+            sumeragi
+                .leader
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "awaiting".to_owned()),
+            sumeragi.committed_height,
+            sumeragi.applied_height,
+            sumeragi
+                .halted
+                .map(|reason| format!(" • halted: {reason:?}"))
+                .unwrap_or_default(),
         ))
     }
     fn sealed_lane_count(&self) -> Option<u32> {
@@ -10962,10 +10929,6 @@ impl PeerStatusView {
         for commitment in &sumeragi.lane_commitments {
             commitments.insert(commitment.lane_id.as_u32(), commitment);
         }
-        let mut relays = BTreeMap::new();
-        for envelope in &sumeragi.lane_relay_envelopes {
-            relays.insert(envelope.lane_id.as_u32(), envelope);
-        }
         let mut governance = BTreeMap::new();
         for entry in &sumeragi.lane_governance {
             governance.insert(entry.lane_id.as_u32(), entry);
@@ -10983,7 +10946,6 @@ impl PeerStatusView {
         }
         let mut lane_ids = catalog.lane_ids();
         lane_ids.extend(commitments.keys().copied());
-        lane_ids.extend(relays.keys().copied());
         lane_ids.extend(governance.keys().copied());
         lane_ids.extend(da_cursors.keys().copied());
         let mut rows = Vec::new();
@@ -10993,78 +10955,32 @@ impl PeerStatusView {
                 .map(|entry| entry.alias.clone())
                 .filter(|alias| !alias.is_empty())
                 .unwrap_or_else(|| catalog.lane_alias(lane_id));
-            let dataspace_id = catalog.lane_dataspace_id(lane_id).or_else(|| {
-                relays
-                    .get(&lane_id)
-                    .and_then(|relay| u32::try_from(relay.dataspace_id.as_u64()).ok())
-            });
-            let dataspace = catalog.dataspace_label(dataspace_id);
+            let dataspace = catalog.dataspace_label(catalog.lane_dataspace_id(lane_id));
             let block_height = commitments.get(&lane_id).map(|entry| entry.block_height);
-            let relay_height = relays.get(&lane_id).map(|entry| entry.block_height);
-            let relay_lag = match (block_height, relay_height) {
-                (Some(block_height), Some(relay_height)) => {
-                    Some(block_height.saturating_sub(relay_height))
-                }
-                _ => None,
-            };
-            let rbc_bytes = commitments
-                .get(&lane_id)
-                .map(|entry| entry.rbc_bytes_total)
-                .or_else(|| relays.get(&lane_id).map(|entry| entry.rbc_bytes_total));
+            let rbc_bytes = commitments.get(&lane_id).map(|entry| entry.rbc_bytes_total);
             let (da_cursor_epoch, da_cursor_sequence) = da_cursors
                 .get(&lane_id)
                 .map(|(epoch, sequence)| (Some(*epoch), Some(*sequence)))
                 .unwrap_or((None, None));
-            let relay_state =
-                Self::relay_state_for_lane(relays.get(&lane_id), governance.get(&lane_id));
+            let manifest_state = match governance.get(&lane_id) {
+                None => LaneManifestState::Unknown,
+                Some(entry) if entry.manifest_required && !entry.manifest_ready => {
+                    LaneManifestState::Missing
+                }
+                Some(_) => LaneManifestState::Ready,
+            };
             rows.push(LaneStatusRow {
                 lane_id,
                 alias,
                 dataspace,
                 block_height,
-                relay_height,
-                relay_lag,
                 rbc_bytes,
                 da_cursor_epoch,
                 da_cursor_sequence,
-                relay_state,
+                manifest_state,
             });
         }
         rows
-    }
-    fn relay_state_for_lane(
-        relay: Option<&&LaneRelayEnvelope>,
-        governance: Option<&&SumeragiLaneGovernance>,
-    ) -> RelayIngestState {
-        if let Some(relay) = relay {
-            if relay.finality_authority.is_none() {
-                return RelayIngestState::MissingFinality;
-            }
-            if relay.da_commitment_hash.is_none() {
-                return RelayIngestState::MissingDa;
-            }
-            if let Some(governance) = governance
-                && governance.manifest_required
-                && !governance.manifest_ready
-            {
-                return RelayIngestState::MissingManifest;
-            }
-            if relay.manifest_root.is_none()
-                && governance
-                    .map(|entry| entry.manifest_required)
-                    .unwrap_or(false)
-            {
-                return RelayIngestState::MissingManifest;
-            }
-            RelayIngestState::Ready
-        } else if governance
-            .map(|entry| entry.manifest_required && !entry.manifest_ready)
-            .unwrap_or(false)
-        {
-            RelayIngestState::MissingManifest
-        } else {
-            RelayIngestState::Waiting
-        }
     }
     fn metrics_error_label(&self) -> Option<(String, Color32)> {
         let error = self.last_metrics_error.as_ref()?;

@@ -95,9 +95,7 @@ use iroha::{
         sorafs::pin_registry::{
             ManifestDigest, ManifestRootCid, PinManifestFinalizedRecordV1, PinStatus, StorageClass,
         },
-        transaction::{
-            Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
-        },
+        transaction::{Executable, FeePaymentIntent, SignedTransaction},
     },
 };
 #[cfg(unix)]
@@ -16474,14 +16472,11 @@ fn prepare_built_sorafs_manifest_registration(
         iroha::data_model::isi::sorafs::RegisterPinManifest::new(built.bytes.clone(), None, None);
     let payload = client
         .account_client()
-        .prepare_transaction(
-            iroha::client::AccountTransactionDraft::new(
-                [InstructionBox::from(instruction)],
-                requested_fee_payment.clone(),
-                binding.metadata(operation)?,
-            )
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-        )
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            [InstructionBox::from(instruction)],
+            requested_fee_payment.clone(),
+            binding.metadata(operation)?,
+        ))
         .wrap_err("failed to build exact SoraFS pin-registration payload")?;
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
@@ -19085,11 +19080,7 @@ impl PreparedSoracloudTransactionV1 {
                 "prepared Soracloud transaction hash does not match its exact wire bytes"
             ));
         }
-        if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-            return Err(eyre!(
-                "prepared Soracloud public submission requires signature-bound QueuePlanSynced admission"
-            ));
-        }
+
         if transaction.fee_payment_intent() != &self.fee_payment {
             return Err(eyre!(
                 "prepared Soracloud transaction fee identity does not match its exact wire bytes"
@@ -19236,14 +19227,11 @@ pub(crate) fn prepare_soracloud_draft_transaction(
     let executable = Executable::Instructions(instructions.into());
     let mut payload = client
         .account_client()
-        .prepare_transaction(
-            iroha::client::AccountTransactionDraft::new(
-                executable,
-                requested_fee_payment.clone(),
-                binding.metadata(operation)?,
-            )
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-        )
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            executable,
+            requested_fee_payment.clone(),
+            binding.metadata(operation)?,
+        ))
         .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })

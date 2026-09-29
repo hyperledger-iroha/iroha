@@ -90,7 +90,6 @@ import {
   stringifyStrictLosslessIntegerJson,
 } from "./strictLosslessJson.js";
 import {
-  SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
 } from "./sumeragiTypedLimits.js";
 import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
@@ -500,27 +499,14 @@ function decodeTransactionReceiptPayload(payload, nativeRuntime) {
 
 const HEADER_SORA_PDP_COMMITMENT = "sora-pdp-commitment";
 
-const EVIDENCE_KIND = "SumeragiV2Equivocation";
-const EVIDENCE_EQUIVOCATION_CLASS_VALUES = new Set([
-  "proposal",
-  "phase_vote",
-  "timeout_vote",
+const EVIDENCE_KIND = "NativeSumeragiEvidence";
+const EVIDENCE_CLASS_VALUES = new Set([
+  "proposal", "phase_vote", "timeout_vote", "invalid_proposal", "conflicting_certificates",
 ]);
 const EVIDENCE_RECORD_FIELDS = Object.freeze([
-  "kind",
-  "class",
-  "height",
-  "view",
-  "epoch",
-  "signer",
-  "context_id",
-  "artifact_hash_1",
-  "artifact_hash_2",
-  "recorded_height",
-  "recorded_view",
-  "recorded_ms",
-  "consensus_admitted_height",
-  "penalty_status",
+  "kind", "class", "instance", "height", "epoch", "context_id", "authority_generation",
+  "offenders", "safety_violation", "native_frame_hash", "recorded_height", "recorded_view",
+  "recorded_ms", "consensus_admitted_height", "penalty_status",
 ]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
@@ -3472,16 +3458,12 @@ export class ToriiClient {
         "validation-fee proof",
       ),
     );
-    const projection = verifyValidationFeeCurrentPolicyProofV1(
+    const { projection, promotedCheckpoint } = verifyValidationFeeCurrentPolicyProofV1(
       proofNorito,
       normalizedBinding,
       normalizedCheckpoint,
       signingContext.chainDiscriminant,
     );
-    const promotedCheckpoint = Object.freeze({
-      height: projection.evaluated_block_height,
-      contextId: projection.evaluated_context_id,
-    });
     return Object.freeze({
       proofNorito,
       projection,
@@ -3532,9 +3514,9 @@ export class ToriiClient {
         { signal: normalizedOptions.signal, canonicalAuth: normalizedOptions.canonicalAuth },
       );
       if (
-        page.projection.evaluated_block_height < checkpoint.height ||
+        page.projection.evaluated_block_height < page.projection.trusted_checkpoint_height ||
         (page.projection.more_available &&
-          page.projection.evaluated_block_height === checkpoint.height)
+          page.projection.evaluated_block_height === page.projection.trusted_checkpoint_height)
       ) {
         rejectError("validation-fee checkpoint promotion did not advance");
       }
@@ -3642,7 +3624,12 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "identifier policy list response",
+      { signal },
+    );
     if (!payload) {
       rejectError("identifier policy list endpoint returned no payload");
     }
@@ -3665,7 +3652,12 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "ram-lfe program policy list response",
+      { signal },
+    );
     if (!payload) {
       rejectError("ram-lfe program policy list endpoint returned no payload");
     }
@@ -7960,7 +7952,7 @@ export class ToriiClient {
 
   /**
    * Fetch Sumeragi consensus status (`GET /v1/sumeragi/status`).
-   * JSON is the authoritative v2 reducer snapshot.
+   * JSON is the native protocol-1 observation; it is not a finality proof.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>}
    */
@@ -7980,7 +7972,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch and fail-closed validate the authoritative Sumeragi v2 status.
+   * Fetch and fail-closed validate the native protocol-1 status.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiSumeragiStatus>}
    */
@@ -8003,80 +7995,6 @@ export class ToriiClient {
     );
     const { parseSumeragiStatusPayload } = await import("./sumeragiTyped.js");
     return parseSumeragiStatusPayload(payload);
-  }
-
-  /**
-   * Fetch Sumeragi operator and lane diagnostics (`GET /v1/sumeragi/diagnostics`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<Record<string, unknown>>}
-   */
-  async getSumeragiDiagnostics(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSumeragiDiagnostics");
-    const response = await this._request("GET", "/v1/sumeragi/diagnostics", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiDiagnostics",
-      ),
-    });
-    await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
-  }
-
-  /**
-   * Fetch and fail-closed validate bounded Sumeragi diagnostics.
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiDiagnostics>}
-   */
-  async getSumeragiDiagnosticsTyped(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiDiagnosticsTyped",
-    );
-    const response = await this._request("GET", "/v1/sumeragi/diagnostics", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiDiagnosticsTyped",
-      ),
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
-      "Sumeragi typed diagnostics",
-      { signal },
-    );
-    const { parseSumeragiDiagnosticsPayload } = await import("./sumeragiTyped.js");
-    return parseSumeragiDiagnosticsPayload(payload);
-  }
-
-  /**
-   * Fetch the authoritative v2 PrepareQC references (`GET /v1/sumeragi/qc`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiV2QcResponse>}
-   */
-  async getSumeragiQc(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSumeragiQc");
-    const response = await this._request("GET", "/v1/sumeragi/qc", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiQc",
-      ),
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
-      "Sumeragi v2 QC response",
-      { signal },
-    );
-    const { parseSumeragiV2QcResponse } = await import("./sumeragiTyped.js");
-    return parseSumeragiV2QcResponse(payload);
   }
 
   /**
@@ -21632,7 +21550,6 @@ async function normalizeContractCallDraftResponse(
     draftIntent,
     localSigningContext,
     "contractCall draft",
-    "ordinary",
   );
   return response;
 }
@@ -22344,7 +22261,7 @@ async function validateUnsignedResponsePayloadBinding(
   draftIntent,
   localSigningContext,
   context,
-  expectedAdmissionIntent,
+
 ) {
   if (draftIntent === null) {
     rejectType(`${context} requires a caller-trusted draftIntent`);
@@ -22359,7 +22276,7 @@ async function validateUnsignedResponsePayloadBinding(
     bindings = inspectCanonicalTransactionPayloadBindings(
       strictDecodeBase64(response.transaction_payload_b64),
       authority,
-      expectedAdmissionIntent,
+
       localSigningContext.chainDiscriminant,
     );
   } catch (error) {
@@ -22419,7 +22336,6 @@ async function validateMultisigResponseRequestBinding(
       draftIntent,
       localSigningContext,
       context,
-      "ordinary",
     );
   }
   return response;
@@ -24791,7 +24707,7 @@ function normalizeRamLfeProgramProfile(payload, context) {
   }
   const dimension = (field, maximum) => {
     const name = `${context}.${field}`;
-    const value = requireBfvUint(record[field], name, { allowZero: false });
+    const value = BigInt(normalizeGovernanceUint64Integer(record[field], name, { allowZero: false }));
     if (value > maximum) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -25276,7 +25192,6 @@ function normalizeRamLfeExecuteResponse(
       "backend",
       "verification_mode",
       "receipt",
-      "output_opening",
     ]),
     context,
   );
@@ -25343,10 +25258,6 @@ function normalizeRamLfeExecuteResponse(
         `${context}.receipt.attestation`,
       ),
     },
-    output_opening: normalizeRamLfeOutputOpening(
-      record.output_opening,
-      `${context}.output_opening`,
-    ),
   };
   const receiptPayload = normalized.receipt.payload;
   const matchingTopLevelFields = [
@@ -25366,30 +25277,6 @@ function normalizeRamLfeExecuteResponse(
         `${context}.${field}`,
       );
     }
-  }
-  const openingPayload = normalized.output_opening.payload;
-  const matchingOpeningFields = [
-    "program_id",
-    "input_ciphertext_hash",
-    "output_ciphertext_hash",
-    "parameter_digest",
-    "evaluation_key_digest",
-  ];
-  for (const field of matchingOpeningFields) {
-    if (openingPayload[field] !== receiptPayload[field]) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.output_opening.payload.${field} does not match ${context}.receipt.payload.${field}`,
-        `${context}.output_opening.payload.${field}`,
-      );
-    }
-  }
-  if (openingPayload.opened_output_hash !== receiptPayload.output_hash) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.output_opening.payload.opened_output_hash does not match ${context}.receipt.payload.output_hash`,
-      `${context}.output_opening.payload.opened_output_hash`,
-    );
   }
   return normalized;
 }
@@ -31011,34 +30898,45 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     rejectRange(`${context}.kind must be ${EVIDENCE_KIND}`);
   }
   const evidenceClass = requireExactNonEmptyString(record.class, `${context}.class`);
-  if (!EVIDENCE_EQUIVOCATION_CLASS_VALUES.has(evidenceClass)) {
-    rejectRange(`${context}.class must be one of ${Array.from(EVIDENCE_EQUIVOCATION_CLASS_VALUES).join(", ")}`);
+  if (!EVIDENCE_CLASS_VALUES.has(evidenceClass)) {
+    rejectRange(`${context}.class must be one of ${Array.from(EVIDENCE_CLASS_VALUES).join(", ")}`);
   }
-  const artifactHash1 = requireSumeragiEvidenceHash(
-    record.artifact_hash_1,
-    `${context}.artifact_hash_1`,
-  );
-  const artifactHash2 = requireSumeragiEvidenceHash(
-    record.artifact_hash_2,
-    `${context}.artifact_hash_2`,
-  );
-  if (artifactHash1 === artifactHash2) {
-    rejectRange(`${context} artifact hashes must identify distinct artifacts`);
+  if (!Array.isArray(record.offenders) || record.offenders.length < 1 || record.offenders.length > 1024) {
+    rejectRange(`${context}.offenders must contain between 1 and 1024 entries`);
   }
+  let previousSigner = -1;
+  const peers = new Set();
+  const offenders = record.offenders.map((value, index) => {
+    const offenderContext = `${context}.offenders[${index}]`;
+    const offender = ensureRecord(value, offenderContext);
+    assertExactSumeragiEvidenceFields(offender, offenderContext, ["signer", "peer_id"]);
+    const signer = requireSumeragiEvidenceUnsigned(offender.signer, `${offenderContext}.signer`, 1023);
+    if (signer <= previousSigner) {
+      rejectRange(`${offenderContext}.signer must increase strictly`);
+    }
+    const peerId = requireExactNonEmptyString(offender.peer_id, `${offenderContext}.peer_id`);
+    // Literal validation does not replace Core's historical signature verification.
+    if (!/^ea0130[0-9A-F]{96}$/u.test(peerId)) {
+      rejectType(`${offenderContext}.peer_id must be a canonical BLS-normal public key`);
+    }
+    if (peers.has(peerId)) {
+      rejectRange(`${offenderContext}.peer_id must be unique`);
+    }
+    peers.add(peerId);
+    previousSigner = signer;
+    return { signer, peer_id: peerId };
+  });
   return {
     kind,
     class: evidenceClass,
+    instance: requireSumeragiEvidenceHash(record.instance, `${context}.instance`),
     height: requireSumeragiEvidenceUnsigned(record.height, `${context}.height`),
-    view: requireSumeragiEvidenceUnsigned(record.view, `${context}.view`),
     epoch: requireSumeragiEvidenceUnsigned(record.epoch, `${context}.epoch`),
-    signer: requireSumeragiEvidenceUnsigned(
-      record.signer,
-      `${context}.signer`,
-      0xffffffff,
-    ),
     context_id: requireSumeragiEvidenceHash(record.context_id, `${context}.context_id`),
-    artifact_hash_1: artifactHash1,
-    artifact_hash_2: artifactHash2,
+    authority_generation: requireSumeragiEvidenceHash(record.authority_generation, `${context}.authority_generation`),
+    offenders,
+    safety_violation: requireExactBoolean(record.safety_violation, `${context}.safety_violation`),
+    native_frame_hash: requireSumeragiEvidenceHash(record.native_frame_hash, `${context}.native_frame_hash`),
     recorded_height: requireSumeragiEvidenceUnsigned(
       record.recorded_height,
       `${context}.recorded_height`,
@@ -32979,9 +32877,9 @@ function identifierBackendTag(raw) {
   switch (tag) {
     case "hkdf-sha3-512-prf-v1":
       return 0;
-    case "bfv-affine-sha3-256-v1":
+    case "bfv-affine-v1":
       return 1;
-    case "bfv-programmed-sha3-256-v1":
+    case "bfv-programmed-v1":
       return 2;
     default:
       rejectError(`unsupported RAM-LFE backend: ${raw}`);

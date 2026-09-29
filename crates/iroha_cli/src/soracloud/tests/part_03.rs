@@ -275,10 +275,7 @@ fn prepared_soracloud_draft_quotes_signed_queue_plan_admission() {
         .decode_and_validate()
         .expect("validate prepared Soracloud mutation");
     assert_eq!(transaction.fee_payment_intent(), &requested);
-    assert_eq!(
-        transaction.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
-    );
+
     let request = server
         .requests()
         .into_iter()
@@ -287,10 +284,6 @@ fn prepared_soracloud_draft_quotes_signed_queue_plan_admission() {
     let quoted: FeeQuoteWireRequest =
         json::from_slice(&request.body).expect("decode mutation fee quote request");
     assert_eq!(quoted.payload, *transaction.payload());
-    assert_eq!(
-        quoted.payload.admission_intent,
-        TransactionAdmissionIntent::QueuePlanSynced
-    );
 }
 
 #[test]
@@ -351,11 +344,7 @@ fn prepared_inrou_pin_preserves_exact_sponsor_fee_identity() {
     let transaction = prepared
         .decode_and_validate()
         .expect("prepared public pin transaction");
-    assert_eq!(
-        transaction.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced,
-        "every prepared pin is submitted through the public transaction API"
-    );
+
     let requests = server.requests();
     let quote_request = requests
         .iter()
@@ -363,32 +352,11 @@ fn prepared_inrou_pin_preserves_exact_sponsor_fee_identity() {
         .expect("exact pin fee-quote request");
     let quoted: FeeQuoteWireRequest =
         json::from_slice(&quote_request.body).expect("decode pin fee-quote request");
-    assert_eq!(
-        quoted.payload.admission_intent,
-        TransactionAdmissionIntent::QueuePlanSynced,
-        "the public admission intent must already be bound during fee quoting"
-    );
-    let ordinary_transaction = iroha::data_model::transaction::TransactionBuilder::from_payload(
-        transaction.payload().clone(),
-    )
-    .expect("reconstruct exact pin payload")
-    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
-    .try_sign(config.key_pair.private_key())
-    .expect("sign genuinely Ordinary pin payload");
-    let mut ordinary = prepared.clone();
-    ordinary.wire = ordinary_transaction
-        .encode_wire_v1()
-        .expect("encode Ordinary pin transaction");
-    ordinary.tx_hash_hex = hex::encode(ordinary_transaction.hash().as_ref());
-    let error = submit_prepared_soracloud_transaction(
-        &config,
-        "://invalid",
-        Instant::now() + Duration::from_secs(1),
-        &ordinary,
-    )
-    .expect_err("Ordinary prepared public submissions must fail before HTTP setup");
-    assert!(error.to_string().contains("QueuePlanSynced"));
-    assert_eq!(server.requests().len(), requests.len());
+
+    assert_eq!(quoted.payload, *transaction.payload());
+    transaction
+        .verify_signature()
+        .expect("canonical prepared signature");
     assert!(prepared.tx_hash_hex.as_bytes().last().is_some_and(|byte| {
         matches!(byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
     }));

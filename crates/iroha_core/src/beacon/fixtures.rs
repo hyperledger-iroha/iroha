@@ -379,7 +379,7 @@ pub(crate) fn prepared_session_and_signers_fixture_v1(
 }
 
 /// Produce providers bound to an exact authenticated test-chain committee.
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn prepared_session_and_signers_fixture_for_keys_v1(
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
     keys: &[iroha_crypto::KeyPair],

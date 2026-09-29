@@ -34,41 +34,26 @@ client = ToriiClient(
 )
 ```
 
-The lightweight client exposes authoritative Sumeragi v2 status separately
-from the general operational-health endpoint:
+The lightweight client validates native protocol-1 observations from
+`GET /v1/sumeragi/status`. Configure an exact-network operator signing context
+before using the authenticated reader:
 
 ```python
-from iroha_torii_client import ToriiClient
-
-client = ToriiClient("http://127.0.0.1:8080")
 status = client.get_sumeragi_status()
-
-print(status.height, status.view, status.phase)
-print(status.height_context.mode, status.height_context.validator_count)
-if status.last_commit_qc is not None:
-    qc = status.last_commit_qc
-    print(qc.signer_count, qc.validator_count, qc.signed_power, qc.total_power)
-
-diagnostics = client.get_sumeragi_diagnostics()
-for block in diagnostics.committed_lane_blocks:
-    print(block["lane_id"], block["lane_block_height"], block["execution_status"])
+print(status.height, status.view, status.stage)
+print(status.committed_height, status.applied_height, status.halted)
 ```
 
-`get_sumeragi_status()` validates the authoritative JSON projection from
-`GET /v1/sumeragi/status`. It rejects non-v2 protocol values, malformed frozen
-height contexts, out-of-range leaders, inconsistent or under-quorum CommitQCs,
-and malformed liveness state. Its typed `liveness` section exposes exact
-partial quorums, durable outbound intents, local-work stages, queue service
-debt, the last tracked reducer transition, and any classified delay.
-
-`get_sumeragi_diagnostics()` separately validates
-`GET /v1/sumeragi/diagnostics`, including bounded lane evidence, queue
-pressure, governance readiness, and Native AMX participant-application
-records. Diagnostics are operational evidence and are not consensus authority.
+The closed schema requires all 21 fields, including explicit nullable keys.
+The parser preserves full unsigned values and validates canonical keys,
+fingerprints, the beacon horizon and native halt details under a 1 MiB response
+bound. The result is immutable operational observation, not a finality proof.
+Retired global QC and grouped diagnostics APIs are removed. Native execution
+capture parity and actual cross-dataspace settlement qualification remain open.
 
 Committed Sumeragi evidence is exposed through the authenticated
 `list_sumeragi_evidence()` and `get_sumeragi_evidence_count()` reads. The
-first-release JSON contract accepts only `SumeragiV2Equivocation` records,
+first-release JSON contract accepts only `NativeSumeragiEvidence` records,
 requires a non-null consensus admission height, and models the penalty state
 as the closed `pending`, `applied`, or `cancelled` union. Missing, extra, and
 retired fields fail closed. Both evidence responses require JSON media types;
@@ -104,8 +89,8 @@ operation ID embedded in its sole `iroha.kagemusha.v1.top_up` instruction. It
 posts the transaction unchanged to `/v1/kagemusha/top-up` and derives the
 lowercase `Idempotency-Key` from that explicit operation ID. There is no
 unsigned-request overload or server-signing path. The transaction must contain
-exactly one payer-authorized top-up instruction and signature-bind
-`QueuePlanSynced`; its embedded request may be up to 16 KiB, while the complete
+exactly one payer-authorized top-up instruction in the canonical nine-field
+payload; its embedded request may be up to 16 KiB, while the complete
 transaction uses Torii's normal signed-transaction ingress limit. Redemption
 continues to submit its canonical typed request archive. Both submission calls
 require the exact operation resource in `Location`: HTTP 202 is accepted only
@@ -385,7 +370,7 @@ frame internally, and returns an opaque, schema-bound Norito response frame.
 The lightweight Python package validates media type, schema, flags, checksum,
 and the 8 MiB response bound only. Before any ballot seed is used,
 pass the response and the independently pinned network ID, checkpoint height,
-checkpoint context ID, and ballot-attempt ID to the ABI-24 native verifier.
+checkpoint context ID, and ballot-attempt ID to the ABI-25 native verifier.
 Python does not claim to verify finality, the ordinary-write witness,
 application membership, or the embedded Core archive. Local partial-release
 requests are deliberately bodyless and their public response is rebound to a
@@ -400,7 +385,7 @@ Requests' environment/netrc credential fallback during preparation.
 The separate `get_parliament_timed_ovn_casting_context_v1(...)` response is a
 node-local diagnostic projection, not a finality proof or authorization
 capability. Its archive must not reach a secret-local operation unless the
-casting-proof response has been verified by the ABI-24 native verifier.
+casting-proof response has been verified by the ABI-25 native verifier.
 
 ## Signed SoraFS orderbook submission
 
@@ -442,6 +427,6 @@ and derives the expected network from its local signing context.
 
 Account identity construction, canonical parsing, and controller checks require the
 separate `iroha-native` wheel (`pip install iroha-torii-client[native]`). These
-operations use its ABI-24 Rust owner for all eleven curves and full weighted
+operations use its ABI-25 Rust owner for all eleven curves and full weighted
 multisig policies. Missing native validation is an explicit error; anonymous HTTP
 transport can operate without loading the native package.

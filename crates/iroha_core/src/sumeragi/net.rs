@@ -192,16 +192,35 @@ impl FrameCaps {
 /// The exact `WireMessage` bytes inside the bare `SumeragiFrame` payload `field` (the value
 /// after the `NetworkMessage` variant and `Arc` boundaries), without copying or decoding.
 fn raw_frame(field: &[u8], flags: u8) -> Result<&[u8], norito::core::Error> {
-    // Both fields (`instance: [u8; 32]`, `frame: Vec<u8>`) are length-prefixed; the `frame`
-    // value is a self-delimiting byte sequence (a fixed u64 count, then the bytes).
-    const FIELDS: usize = 2;
-    let bytes = crate::inbound_struct_field(field, flags, FIELDS, 1)?;
-    if crate::inbound_byte_sequence_wire_len(bytes)? != bytes.len() {
-        return Err(norito::core::Error::LengthMismatch);
+    use norito::core::Error;
+    // The sole native envelope has exactly two length-prefixed fields. Parse
+    // both boundaries before exposing the byte sequence; no retired envelope
+    // decoder or heuristic layout selection participates in admission.
+    let mut remaining = field;
+    let mut frame = None;
+    for index in 0..2 {
+        let (length, prefix) = norito::core::read_len_from_slice_with_flags(remaining, flags)?;
+        let end = prefix.checked_add(length).ok_or(Error::LengthMismatch)?;
+        let value = remaining.get(prefix..end).ok_or(Error::LengthMismatch)?;
+        remaining = remaining.get(end..).ok_or(Error::LengthMismatch)?;
+        if index == 1 {
+            frame = Some(value);
+        }
     }
-    bytes
-        .get(core::mem::size_of::<u64>()..)
-        .ok_or(norito::core::Error::LengthMismatch)
+    if !remaining.is_empty() {
+        return Err(Error::LengthMismatch);
+    }
+    let frame = frame.ok_or(Error::LengthMismatch)?;
+    let count: [u8; 8] = frame
+        .get(..8)
+        .ok_or(Error::LengthMismatch)?
+        .try_into()
+        .map_err(|_| Error::LengthMismatch)?;
+    let count = usize::try_from(u64::from_le_bytes(count)).map_err(|_| Error::LengthMismatch)?;
+    if count.checked_add(8) != Some(frame.len()) {
+        return Err(Error::LengthMismatch);
+    }
+    frame.get(8..).ok_or(Error::LengthMismatch)
 }
 
 /// Raw (pre-decode) P2P topic of a bare `SumeragiFrame` payload: [`frame_class`] of the exact
@@ -994,6 +1013,42 @@ mod tests {
             Topic::ConsensusSafety
         );
         assert!(raw_frame(&field[..field.len() - 1], view.flags()).is_err());
+    }
+
+    #[test]
+    fn raw_native_envelope_rejects_suffix_and_byte_count_substitution() {
+        let network = NetworkMessage::Sumeragi(Arc::new(SumeragiFrame::new(
+            Hash32::ZERO,
+            WireMessage::BlockRequest(BlockRequest {
+                instance: Hash32::ZERO,
+                height: 1,
+                block_hash: Hash32::ZERO,
+            })
+            .encode()
+            .unwrap(),
+        )));
+        let encoded = ncore::to_bytes(&network).unwrap();
+        let view = ncore::from_bytes_view(&encoded).unwrap();
+        let (_, remaining) = crate::inbound_enum_parts(view.as_bytes()).unwrap();
+        let field = crate::inbound_owned_enum_field(remaining, view.flags()).unwrap();
+        let mut suffixed = field.to_vec();
+        suffixed.push(0);
+        assert!(raw_frame(&suffixed, view.flags()).is_err());
+        let (instance_len, prefix_len) =
+            ncore::read_len_from_slice_with_flags(field, view.flags()).unwrap();
+        let frame_field_offset = prefix_len + instance_len;
+        let (_, frame_prefix_len) =
+            ncore::read_len_from_slice_with_flags(&field[frame_field_offset..], view.flags())
+                .unwrap();
+        let count_offset = frame_field_offset + frame_prefix_len;
+        for count in [0_u64, u64::MAX] {
+            let mut changed = field.to_vec();
+            changed[count_offset..count_offset + 8].copy_from_slice(&count.to_le_bytes());
+            assert!(raw_frame(&changed, view.flags()).is_err());
+        }
+        for end in 0..field.len() {
+            assert!(raw_frame(&field[..end], view.flags()).is_err());
+        }
     }
 
     #[test]

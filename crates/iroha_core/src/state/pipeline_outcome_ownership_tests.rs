@@ -2,9 +2,9 @@
 // These overlays do not authorize native or State publication.
 
 #[inline(never)]
-fn pipeline_receipt_fixture(nested: bool) -> (Box<NativeEconomicFixture>, TriggerId, TriggerId) {
+fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, TriggerId, TriggerId) {
     use iroha_data_model::events::pipeline::{BlockEventFilter, BlockStatus};
-    let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], false);
+    let fixture = ordinary_economic_fixture();
     let parent: TriggerId = "pipeline_receipt_parent".parse().unwrap();
     let child: TriggerId = "pipeline_receipt_child".parse().unwrap();
     let mut metadata = iroha_model_base::metadata::Metadata::default();
@@ -43,7 +43,7 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<NativeEconomicFixture>, Trigge
     );
     // Use the actual typed trigger store, as existing pipeline/Time fixtures do.
     // Register before the applying block so its use-time incarnation guard holds.
-    let mut block = fixture.native.state.world.triggers.block();
+    let mut block = fixture.state.world.triggers.block();
     let mut transaction = block.transaction();
     assert!(
         transaction
@@ -72,11 +72,11 @@ fn pipeline_receipt_owned_block(state: &State, header: BlockHeader) -> Box<State
     block
 }
 
-fn pipeline_receipt_carrier(fixture: &NativeEconomicFixture) -> SignedBlock {
-    let base = empty_global_block_after(Some(&fixture.native.block));
+fn pipeline_receipt_carrier(fixture: &OrdinaryEconomicFixture) -> SignedBlock {
+    let base = empty_global_block_after(Some(&fixture.parent));
     let key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
     let mut transaction = TransactionBuilder::new(
-        fixture.native.state.network_id,
+        fixture.state.network_id,
         fixture.source.account().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -93,7 +93,7 @@ fn pipeline_receipt_carrier(fixture: &NativeEconomicFixture) -> SignedBlock {
         .build(BTreeSet::new())
         .canonical_resultless_proposal();
     block.set_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
-        &fixture.native.state.nexus_snapshot(),
+        &fixture.state.nexus_snapshot(),
         block.header().height().get(),
     )));
     block
@@ -106,7 +106,7 @@ fn assert_pipeline_receipt_has_canonical_owner(nested: bool) {
         data::prelude::AssetBatchTransferLegStatus, trigger_completed::TriggerCompletedOutcome,
     };
     let (fixture, parent, child) = pipeline_receipt_fixture(nested);
-    let state = &fixture.native.state;
+    let state = &fixture.state;
     let carrier = pipeline_receipt_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state)
         .expect("stable valid fixture snapshot");

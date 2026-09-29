@@ -1,17 +1,20 @@
 import Foundation
 import CoreFoundation
 
-/// Independently authenticated coordinates. A response lookup hint is never their trust source.
+/// Independently selected full native checkpoint, never derived from a response hint.
+/// Construction checks transport bounds only. Native verification checks its exact network,
+/// canonical encoding and signatures before accepting any finalized result.
 public struct KagemushaFinalityTrustAnchorV1: Equatable, Sendable {
+    public static let maximumCheckpointBytes = 68 * 1024 * 1024
     public let networkID: Data
-    public let blockHeight: UInt64
-    public let heightContextID: Data
+    public let checkpoint: Data
 
-    public init(networkID: Data, blockHeight: UInt64, heightContextID: Data) throws {
+    public init(networkID: Data, checkpoint: Data) throws {
         self.networkID = try reserveFinalityHash(networkID)
-        self.heightContextID = try reserveFinalityHash(heightContextID)
-        guard blockHeight > 0 else { throw KagemushaReserveFinalityError.invalidInput }
-        self.blockHeight = blockHeight
+        guard !checkpoint.isEmpty, checkpoint.count <= Self.maximumCheckpointBytes else {
+            throw KagemushaReserveFinalityError.invalidInput
+        }
+        self.checkpoint = Data(checkpoint)
     }
 }
 
@@ -19,7 +22,7 @@ public struct KagemushaFinalityTrustAnchorV1: Equatable, Sendable {
 public struct KagemushaUntrustedFinalityHintV1: Equatable, Sendable {
     public let networkID: Data
     public let blockHeight: UInt64
-    public let heightContextID: Data
+    public let blockHash: Data
 }
 
 public enum KagemushaReserveFinalityError: Error, Equatable {
@@ -96,7 +99,7 @@ func parseReserveFinalityHint(_ bytes: Data) throws -> KagemushaUntrustedFinalit
     let parsed = try JSONSerialization.jsonObject(with: bytes, options: [.fragmentsAllowed])
     if parsed is NSNull { return nil }
     guard let value = parsed as? [String: Any],
-          Set(value.keys) == ["version", "network_id", "block_height", "height_context_id"],
+          Set(value.keys) == ["version", "network_id", "block_height", "block_hash"],
           let version = value["version"] as? NSNumber,
           CFGetTypeID(version) != CFBooleanGetTypeID(), version.intValue == 1, version.doubleValue == 1,
           let height = value["block_height"] as? String, height.utf8.allSatisfy({ (48...57).contains($0) }),
@@ -116,7 +119,7 @@ func parseReserveFinalityHint(_ bytes: Data) throws -> KagemushaUntrustedFinalit
         return try reserveFinalityHash(bytes)
     }
     return try KagemushaUntrustedFinalityHintV1(
-        networkID: hash("network_id"), blockHeight: number, heightContextID: hash("height_context_id"))
+        networkID: hash("network_id"), blockHeight: number, blockHash: hash("block_hash"))
 }
 
 extension NoritoNativeBridge {
@@ -136,7 +139,7 @@ extension NoritoNativeBridge {
     private typealias ReserveVerifyFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong, UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong, UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
@@ -166,7 +169,7 @@ extension NoritoNativeBridge {
     #endif
 
     func reserveFinalityHint(_ response: Data) throws -> Data {
-        guard !response.isEmpty, response.count <= 16 * 1024 * 1024 else {
+        guard !response.isEmpty, response.count <= 4 * (36 * 1024 * 1024 + 256) else {
             throw KagemushaReserveFinalityError.invalidInput
         }
         #if canImport(Darwin)
@@ -187,7 +190,7 @@ extension NoritoNativeBridge {
 
     func reserveFinalityVerify(_ response: Data, kind: UInt8, request: Data,
         anchor: KagemushaFinalityTrustAnchorV1, maximum: Int) throws -> Data {
-        guard !response.isEmpty, response.count <= 16 * 1024 * 1024,
+        guard !response.isEmpty, response.count <= 4 * (36 * 1024 * 1024 + 256),
               kind <= 1, !request.isEmpty, request.count <= (kind == 0 ? 16 * 1024 : 8 * 1024) else {
             throw KagemushaReserveFinalityError.invalidInput
         }
@@ -201,11 +204,11 @@ extension NoritoNativeBridge {
         let status = response.withUnsafeBytes { response in
             request.withUnsafeBytes { request in
                 anchor.networkID.withUnsafeBytes { network in
-                    anchor.heightContextID.withUnsafeBytes { context in
+                    anchor.checkpoint.withUnsafeBytes { checkpoint in
                         function(response.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(response.count), kind,
                             request.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(request.count),
-                            network.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(network.count), anchor.blockHeight,
-                            context.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(context.count), &output, &length)
+                            network.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(network.count),
+                            checkpoint.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(checkpoint.count), &output, &length)
                     }
                 }
             }

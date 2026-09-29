@@ -1521,7 +1521,14 @@ async fn da_ingest_admission_fails_closed_for_malformed_governed_policy() {
 async fn da_ingest_admission_rejects_wrong_producer_and_epoch() {
     let app = crate::mk_app_state_for_tests();
     let lane_id = LaneId::SINGLE;
-    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let incarnation = app
+        .state
+        .view()
+        .lane_incarnation_at_height(
+            lane_id,
+            u64::try_from(app.state.committed_height()).unwrap() + 1,
+        )
+        .expect("active canonical DA incarnation");
     let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
     seed_da_admission_parameter(&app, policy.into_custom_parameter());
 
@@ -1539,7 +1546,14 @@ async fn da_ingest_admission_rejects_wrong_producer_and_epoch() {
 async fn da_ingest_admission_accepts_current_and_grace_epochs_for_exact_scope() {
     let app = crate::mk_app_state_for_tests();
     let lane_id = LaneId::SINGLE;
-    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let incarnation = app
+        .state
+        .view()
+        .lane_incarnation_at_height(
+            lane_id,
+            u64::try_from(app.state.committed_height()).unwrap() + 1,
+        )
+        .expect("active canonical DA incarnation");
     let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
     seed_da_admission_parameter(&app, policy.into_custom_parameter());
 

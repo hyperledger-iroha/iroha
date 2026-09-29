@@ -6,19 +6,14 @@ use objc2_metal::{
     MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue, MTLComputeCommandEncoder,
     MTLDevice, MTLResourceOptions,
 };
-use std::{
-    cell::Cell,
-    mem::ManuallyDrop,
-    ops::Deref,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{cell::Cell, mem::ManuallyDrop, ops::Deref};
 
 use objc2_metal::{MTLCommandEncoder, MTLComputePipelineState, MTLSize};
 
-static PHYSICAL_UNCERTAIN: AtomicBool = AtomicBool::new(false);
-
 pub(super) fn physical_usable() -> bool {
-    !PHYSICAL_UNCERTAIN.load(Ordering::Acquire)
+    super::metal_policy_enabled()
+        && super::metal_runtime::current_allowed()
+        && super::metal_runtime::current_health().is_some_and(|health| health.usable())
 }
 
 fn owner() -> &'static ProcessResources {
@@ -26,6 +21,7 @@ fn owner() -> &'static ProcessResources {
 }
 
 pub(super) struct MetalBuffer {
+    health: super::metal_owner::HealthLease,
     native: ManuallyDrop<Retained<ProtocolObject<dyn MTLBuffer>>>,
     backing: ManuallyDrop<UnifiedBuffer>,
     pending: Cell<bool>,
@@ -33,8 +29,18 @@ pub(super) struct MetalBuffer {
 }
 
 impl MetalBuffer {
+    pub(super) fn usable(&self) -> bool {
+        self.health.usable()
+            && super::metal_runtime_allowed()
+            && super::metal_runtime::current_health()
+                .is_some_and(|health| mv::allocation::ChargedShared::ptr_eq(&health, &self.health))
+    }
     pub(super) fn allocate(device: &ProtocolObject<dyn MTLDevice>, len: usize) -> Option<Self> {
         if len == 0 || !physical_usable() {
+            return None;
+        }
+        let health = super::metal_runtime::current_health()?;
+        if health.identity() != device.registryID() {
             return None;
         }
         let alignment = objc2_foundation::NSPageSize();
@@ -55,6 +61,7 @@ impl MetalBuffer {
             )
         }?;
         Some(Self {
+            health,
             native: ManuallyDrop::new(native),
             backing: ManuallyDrop::new(backing),
             pending: Cell::new(false),
@@ -149,6 +156,7 @@ impl Drop for PreparedClaims<'_, '_> {
 
 /// Fixed command-owner state; no allocation is needed to retain uncertain work.
 pub(super) struct Command<'a, 'b> {
+    health: super::metal_owner::HealthLease,
     native: ManuallyDrop<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
     _permit: ManuallyDrop<NativeCommandPermit>,
     buffers: &'a [&'b MetalBuffer],
@@ -157,6 +165,15 @@ pub(super) struct Command<'a, 'b> {
     encoding_succeeded: bool,
 }
 impl<'a, 'b> Command<'a, 'b> {
+    pub(super) fn usable(&self) -> bool {
+        self.health.usable()
+            && physical_usable()
+            && super::metal_runtime::current_health()
+                .is_some_and(|health| mv::allocation::ChargedShared::ptr_eq(&health, &self.health))
+    }
+    pub(super) fn quarantine(&self) {
+        self.health.quarantine(false);
+    }
     pub(super) fn prepare(
         queue: &ProtocolObject<dyn MTLCommandQueue>,
         buffers: &'a [&'b MetalBuffer],
@@ -164,11 +181,20 @@ impl<'a, 'b> Command<'a, 'b> {
         if !physical_usable() {
             return None;
         }
+        let health = super::metal_runtime::current_health()?;
+        if health.identity() != queue.device().registryID()
+            || buffers
+                .iter()
+                .any(|buffer| !mv::allocation::ChargedShared::ptr_eq(&health, &buffer.health))
+        {
+            return None;
+        }
         let mut claims = PreparedClaims::acquire(buffers)?;
         let permit = owner().try_native_command()?;
         let native = queue.commandBuffer()?;
         claims.active = false;
         Some(Self {
+            health,
             native: ManuallyDrop::new(native),
             _permit: ManuallyDrop::new(permit),
             buffers,
@@ -183,7 +209,11 @@ impl<'a, 'b> Command<'a, 'b> {
         grid_width: usize,
         threadgroup_width: usize,
     ) -> bool {
-        if self.phase != CommandPhase::Prepared || self.encoder_issued {
+        if self.phase != CommandPhase::Prepared
+            || self.encoder_issued
+            || !self.usable()
+            || pipeline.device().registryID() != self.health.identity()
+        {
             return false;
         }
         self.encoder_issued = true;
@@ -223,6 +253,7 @@ impl<'a, 'b> Command<'a, 'b> {
     }
     pub(super) fn commit(&mut self) -> bool {
         if self.phase != CommandPhase::Prepared
+            || !self.usable()
             || !physical_usable()
             || (self.encoder_issued && !self.encoding_succeeded)
         {
@@ -257,8 +288,7 @@ impl<'a, 'b> Command<'a, 'b> {
     pub(super) fn mark_uncertain(&mut self) {
         if self.phase == CommandPhase::Pending {
             self.phase = CommandPhase::Uncertain;
-            PHYSICAL_UNCERTAIN.store(true, Ordering::Release);
-            super::METAL_DISABLED.store(true, Ordering::SeqCst);
+            self.health.quarantine(true);
         }
     }
 }
@@ -290,12 +320,12 @@ impl Drop for Command<'_, '_> {
 #[cfg(all(test, feature = "metal-hardware-tests"))]
 mod tests {
     use super::*;
-    use objc2_metal::MTLCreateSystemDefaultDevice;
 
     fn isolated(name: &str, control: impl FnOnce()) {
         const CHILD: &str = "IVM_METAL_CUSTODY_CONTROL";
         if std::env::var(CHILD).as_deref() == Ok(name) {
-            control();
+            super::super::with_metal_state(|_| control())
+                .expect("qualified exact Metal device lease");
             return;
         }
         let path = module_path!()
@@ -320,7 +350,7 @@ mod tests {
         isolated(
             "required_metal_buffer_lifetime_and_observed_completion",
             || {
-                let device = MTLCreateSystemDefaultDevice()
+                let device = super::super::with_metal_state(|state| state.device.clone())
                     .expect("Metal buffer qualification requires a physical device");
                 let pool = owner();
                 let before = pool.usage();
@@ -395,7 +425,7 @@ mod tests {
             || {
                 // Run this control in its own process: intentional uncertainty is sticky
                 // and its reservations must remain charged until that process exits.
-                let device = MTLCreateSystemDefaultDevice()
+                let device = super::super::with_metal_state(|state| state.device.clone())
                     .expect("Metal uncertainty qualification requires a physical device");
                 let pool = owner();
                 let before = pool.usage();
@@ -428,7 +458,7 @@ mod tests {
         isolated(
             "required_metal_exclusive_preparation_reentry_and_completion_evidence",
             || {
-                let device = MTLCreateSystemDefaultDevice()
+                let device = super::super::with_metal_state(|state| state.device.clone())
                     .expect("Metal custody qualification requires hardware");
                 let pool = owner();
                 let before = pool.usage();

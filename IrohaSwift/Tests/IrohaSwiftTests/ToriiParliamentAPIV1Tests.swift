@@ -547,7 +547,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         let initialAnchor = try ParliamentTimedOvnCastingTrustAnchorV1(
             networkID: Data(repeating: 0x01, count: 32),
             trustedCheckpointHeight: 7,
-            trustedCheckpointContextID: Data(repeating: 0x11, count: 32),
+            trustedCheckpointNorito: Data(repeating: 0x11, count: 32),
             expectedBallotAttemptID: Data(repeating: 0x55, count: 32)
         )
         let terminal = try await client.requestParliamentTimedOvnCastingProofUntilTerminalV1(
@@ -563,24 +563,26 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
                 case 0:
                     XCTAssertEqual(anchor.trustedCheckpointHeight, 7)
                     XCTAssertEqual(
-                        anchor.trustedCheckpointContextID,
+                        anchor.trustedCheckpointNorito,
                         Data(repeating: 0x11, count: 32)
                     )
                     return try ParliamentTimedOvnCastingProofPageVerificationV1(
                         evaluatedBlockHeight: 70,
                         evaluatedContextID: Data(repeating: 0x22, count: 32),
-                        moreAvailable: true
+                        moreAvailable: true,
+                promotedCheckpointNorito: Data(repeating: 0x22, count: 32)
                     )
                 case 1:
                     XCTAssertEqual(anchor.trustedCheckpointHeight, 70)
                     XCTAssertEqual(
-                        anchor.trustedCheckpointContextID,
+                        anchor.trustedCheckpointNorito,
                         Data(repeating: 0x22, count: 32)
                     )
                     return try ParliamentTimedOvnCastingProofPageVerificationV1(
                         evaluatedBlockHeight: 75,
                         evaluatedContextID: Data(repeating: 0x33, count: 32),
-                        moreAvailable: false
+                        moreAvailable: false,
+                promotedCheckpointNorito: Data(repeating: 0x33, count: 32)
                     )
                 default:
                     XCTFail("unexpected casting-proof page")

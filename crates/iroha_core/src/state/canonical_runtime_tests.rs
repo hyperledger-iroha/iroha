@@ -50,7 +50,6 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
         store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
@@ -59,10 +58,7 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
     };
@@ -99,8 +95,20 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
     }
     .into_state_from_json_str_without_durable_recovery(captured.as_json());
     assert!(unseeded.is_err(), "default Nexus loses the required module");
-    let isolated = super::isolated_state_for_replay_prevalidation(&live, &kura)
-        .expect("configured Nexus survives strict isolated replay construction");
+    let isolated = super::deserialize::KuraSeed {
+        execution_budget: live.ivm_execution_budget(),
+        operation_index_budget: live.world.operation_index_budget().clone(),
+        kura: Arc::clone(&kura),
+        lane_manifests: live.lane_manifests.read().clone(),
+        query_handle: live.query_handle.clone(),
+        #[cfg(feature = "telemetry")]
+        telemetry: Default::default(),
+    }
+    .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
+        captured.as_json(),
+        live.nexus_snapshot(),
+    )
+    .expect("configured Nexus survives strict isolated replay construction");
     assert_eq!(isolated.nexus_snapshot().governance.modules.len(), 1);
     assert_eq!(isolated.committed_height(), 0);
 }

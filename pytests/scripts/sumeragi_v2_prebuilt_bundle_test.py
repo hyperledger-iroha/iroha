@@ -20,11 +20,6 @@ from scripts.sumeragi_v2_prebuilt_bundle import (
 SOURCE_MANIFEST = "a" * 64
 RELATIVE_BINARIES = (
     ("irohad", "release/iroha3d", "default"),
-    (
-        "irohad_message_control",
-        "message-control/release/iroha3d",
-        "message-control",
-    ),
     ("iroha", "release/iroha", "default"),
     ("kagami", "release/kagami", "default"),
     ("irohad_taira", "release/iroha3d_taira", "default"),
@@ -41,16 +36,14 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
     artifact_root.mkdir(mode=0o700)
     source_root = cargo_target / "sumeragi-v2-release" / SOURCE_MANIFEST
     default_cache = source_root / "program-build-cache" / "default"
-    message_cache = source_root / "program-build-cache" / "message-control"
     prepare_cache(
         repo,
         SOURCE_MANIFEST,
         cargo_target,
         default_cache,
-        message_cache,
     )
     for label, relative, cache_name in RELATIVE_BINARIES:
-        cache = default_cache if cache_name == "default" else message_cache
+        cache = default_cache
         source_relative = (
             Path(relative)
             if cache_name == "default"
@@ -81,7 +74,6 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
         cargo_target,
         artifact_root,
         default_cache,
-        message_cache,
         programs,
         cargo_version,
         rustc_version,
@@ -91,7 +83,6 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
         "cargo_target": cargo_target,
         "artifact_root": artifact_root,
         "default_cache": default_cache,
-        "message_cache": message_cache,
         "programs": programs,
         "cargo_version": cargo_version,
         "rustc_version": rustc_version,
@@ -133,7 +124,7 @@ def test_create_publishes_exact_v2_manifest_and_read_only_single_link_bundle(
     assert isinstance(manifest_sha256, str)
 
     fields = _manifest_fields(bundle)
-    assert len(fields) == 29
+    assert len(fields) == 25
     values = dict(fields)
     assert fields[:9] == [
         ("schema_version", "2"),
@@ -196,7 +187,6 @@ def test_create_always_allocates_a_fresh_invocation_bundle(tmp_path: Path) -> No
         Path(fixture["cargo_target"]),
         Path(fixture["artifact_root"]),
         Path(fixture["default_cache"]),
-        Path(fixture["message_cache"]),
         Path(fixture["programs"]),
         Path(fixture["cargo_version"]),
         Path(fixture["rustc_version"]),
@@ -342,39 +332,23 @@ def test_validate_rejects_wrong_published_modes(
 def test_validate_rejects_symlinked_expected_directory(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     bundle = Path(fixture["bundle"])
-    message_control = bundle / "message-control"
-    release = message_control / "release"
-    binary = release / "iroha3d"
-    original_binary = binary.read_bytes()
-    original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
+    release = bundle / "release"
+    retained = bundle / "retained-release"
     bundle.chmod(0o700)
-    message_control.chmod(0o700)
-    release.chmod(0o700)
-    binary.unlink()
-    release.rmdir()
-    release.symlink_to(bundle / "release", target_is_directory=True)
-    message_control.chmod(0o500)
+    release.rename(retained)
+    release.symlink_to(retained, target_is_directory=True)
     bundle.chmod(0o500)
-
     try:
         with pytest.raises(PrebuiltBundleError, match="directory is not real"):
             validate_bundle(
-                Path(fixture["repo"]),
-                SOURCE_MANIFEST,
-                Path(fixture["cargo_target"]),
-                Path(fixture["artifact_root"]),
-                bundle,
-                str(fixture["manifest_sha256"]),
+                Path(fixture["repo"]), SOURCE_MANIFEST,
+                Path(fixture["cargo_target"]), Path(fixture["artifact_root"]),
+                bundle, str(fixture["manifest_sha256"]),
             )
     finally:
         bundle.chmod(0o700)
-        message_control.chmod(0o700)
         release.unlink()
-        release.mkdir()
-        binary.write_bytes(original_binary)
-        binary.chmod(original_binary_mode)
-        release.chmod(0o500)
-        message_control.chmod(0o500)
+        retained.rename(release)
         bundle.chmod(0o500)
 
 
@@ -498,7 +472,6 @@ def test_validate_rejects_cross_bundle_manifest_replay(tmp_path: Path) -> None:
         Path(fixture["cargo_target"]),
         Path(fixture["artifact_root"]),
         Path(fixture["default_cache"]),
-        Path(fixture["message_cache"]),
         Path(fixture["programs"]),
         Path(fixture["cargo_version"]),
         Path(fixture["rustc_version"]),
@@ -569,7 +542,6 @@ def test_create_rejects_malformed_or_non_private_tool_stdout(
                 Path(fixture["cargo_target"]),
                 Path(fixture["artifact_root"]),
                 Path(fixture["default_cache"]),
-                Path(fixture["message_cache"]),
                 Path(fixture["programs"]),
                 cargo_version,
                 Path(fixture["rustc_version"]),
@@ -597,7 +569,6 @@ def test_create_rejects_symlinked_build_output(tmp_path: Path) -> None:
                 Path(fixture["cargo_target"]),
                 Path(fixture["artifact_root"]),
                 Path(fixture["default_cache"]),
-                Path(fixture["message_cache"]),
                 Path(fixture["programs"]),
                 Path(fixture["cargo_version"]),
                 Path(fixture["rustc_version"]),
@@ -608,7 +579,7 @@ def test_create_rejects_symlinked_build_output(tmp_path: Path) -> None:
         output.chmod(original_output_mode)
 
 
-@pytest.mark.parametrize("mutation", ("missing-binary", "old-four-entry-manifest"))
+@pytest.mark.parametrize("mutation", ("missing-binary", "missing-launcher-manifest"))
 def test_production_launcher_is_mandatory_even_with_reanchored_manifest(tmp_path: Path, mutation: str) -> None:
     fixture = _fixture(tmp_path)
     bundle = Path(fixture["bundle"])
@@ -620,7 +591,7 @@ def test_production_launcher_is_mandatory_even_with_reanchored_manifest(tmp_path
     else:
         fields = [(key, value) for key, value in _manifest_fields(bundle)
                   if not key.startswith("irohad_taira_")]
-        assert len(fields) == 25
+        assert len(fields) == 21
         manifest_sha256 = _replace_manifest(bundle, _encode_fields(fields))
     with pytest.raises(PrebuiltBundleError):
         validate_bundle(Path(fixture["repo"]), SOURCE_MANIFEST,

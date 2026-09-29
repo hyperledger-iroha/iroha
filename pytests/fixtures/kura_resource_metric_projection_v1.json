@@ -1,7 +1,7 @@
 {
-  "recorded_utc": "2026-09-08T04:53:48.718397+00:00",
-  "scope": "Frozen private collector projection descriptor for parent sampler implementation; not shipped schema or runtime evidence",
-  "source_sha256": "f0502157ce906cb58ec4638b3057ba782b5f777020264cfc93736cec606fad2b",
+  "recorded_utc": "2026-09-28T17:56:09.197817+00:00",
+  "scope": "Source-derived first-release collector projection descriptor; not runtime or scaling qualification evidence",
+  "source_sha256": "0beee161ebe3c363c6ba42a406b9049df2e5b0f8122a84682261bbe9c2959881",
   "prefix": "iroha_kura_resource_",
   "metric_families": [
     {
@@ -110,24 +110,11 @@
   "family_labels": [
     "resident_canonical",
     "resident_transaction",
-    "resident_merge",
-    "resident_carrier",
-    "resident_replica",
-    "resident_verification",
     "resident_frontier",
     "resident_queue",
     "canonical_index",
     "canonical_hashes",
     "pipeline_index",
-    "ownership_index",
-    "certified_index",
-    "execution_input_index",
-    "execution_preflight_index",
-    "application_receipt_index",
-    "merge_bundle_index",
-    "canonical_replica_index",
-    "merge_carrier_record",
-    "native_latest_record",
     "query_marker_records",
     "evidence_key_records",
     "storage_bytes"
@@ -136,7 +123,7 @@
     "available": 1,
     "status_reason": "available",
     "status_value": 1,
-    "sample_rows": 125,
+    "sample_rows": 60,
     "all_vectors_required": true
   },
   "unavailable": {
@@ -167,8 +154,8 @@
   },
   "represented_entries": "resident_associations_sum + persisted_entries_sum; checked, non-saturating",
   "scope_boundaries": {
-    "index": "represented resident associations plus persisted slots/standalone index records over all 23 families",
-    "storage": "exact Kura-managed nine trees, eleven root files and bounded process-generation quarantine; no delegated Sumeragi WAL/body/certserve or .kura.lock",
+    "index": "represented resident associations plus persisted slots/standalone index records over all 10 current families",
+    "storage": "exact Kura-managed six declared trees and eight fixed root files; no delegated consensus stores or .kura.lock",
     "rss": "not provided; must be observed by external process owner",
     "queue": "ResidentQueue is pipeline/FASTPQ associations, not active transaction queue depth"
   },

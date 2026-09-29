@@ -70,6 +70,21 @@ operation ID to the pre-debit native inbox reservation, then verifies both
 release-authenticated mint proofs. This yields only a native staging capability;
 the credit still needs the qualified Guard staging certificate before `MintFold`.
 
+The circuit-facing mint seal binds the original native consensus instance, full
+epoch-context hash, native block hash, and execution result `R` as raw 32-byte
+values, alongside the complete generation/epoch authorization, network, height,
+committee count, top-up root/count, and optional successor authorization. It does
+not use a retired height-context envelope or a replacement digest of the native
+Commit statement. Both Pasta circuits reconstruct the same signed bytes. The
+release's fixed circuit capacity is 31 validators with exact `3f + 1` geometry
+and `2f + 1` seals; the lower-level native transport capacity does not widen this
+recursive circuit bound. Height one is only an unsigned zero-authority bootstrap
+input and cannot certify a mint or rotation, in either host checks or circuit gates.
+
+Changes to this signed input alter the circuit shape. Release keys and paired
+proofs require actual regeneration and qualification before release; portable
+native QC verification and synthetic fixture outputs do not provide that evidence.
+
 Internal terminal authorization proves the actual persisted state candidate and
 the normalized hardware guard. The compact outer wrapper recursively consumes
 that relation. A peer payment or redemption carries one constant-size paired

@@ -15,9 +15,10 @@ fn require_dispatch<T: std::fmt::Debug + PartialEq>(
     expected: T,
     operation: impl FnOnce() -> T,
 ) {
-    let before = metal_completed_dispatches(kernel);
+    let health = metal_runtime::current_health().expect("physical qualification pin");
+    let before = health.completions(kernel as usize);
     assert_eq!(operation(), expected, "{kernel:?}: scalar parity");
-    let completed = metal_completed_dispatches(kernel).saturating_sub(before);
+    let completed = health.completions(kernel as usize).saturating_sub(before);
     assert!(
         completed > 0,
         "{kernel:?}: no completed production dispatch"
@@ -26,12 +27,51 @@ fn require_dispatch<T: std::fmt::Debug + PartialEq>(
         !metal_disabled(),
         "{kernel:?}: backend quarantined during work"
     );
-    println!("IVM_METAL_RECEIPT kernel={kernel:?} completed_batches={completed}");
+    println!(
+        "IVM_METAL_RECEIPT device={} kernel={kernel:?} completed_batches={completed}",
+        health.identity()
+    );
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn required_metal_hardware_covers_every_production_pipeline() {
+    const CHILD: &str = "IVM_METAL_ALL_DEVICES_CONTROL";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let path = module_path!().split_once("::").expect("crate module").1;
+        let test = format!("{path}::required_metal_hardware_covers_every_production_pipeline");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", &test, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .expect("isolated all-device qualification");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}{stderr}");
+        assert!(
+            output.status.success(),
+            "physical all-device qualification failed"
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed; 0 ignored"),
+            "required control must execute"
+        );
+        return;
+    }
+    let count = metal_runtime::device_slots()
+        .expect("complete allowed physical Metal inventory must have charged records");
+    assert!(
+        count > 0,
+        "required physical Metal device inventory is empty"
+    );
+    for index in 0..count {
+        metal_runtime::with_device_for_qualification(index, || required_on_device(index))
+            .expect("every observed physical device must qualify");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn required_on_device(index: usize) {
     use ed25519_dalek::{Signer as _, SigningKey};
     use sha2::{Digest as _, Sha256};
 
@@ -105,7 +145,12 @@ fn required_metal_hardware_covers_every_production_pipeline() {
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..4)
             .map(|_| {
-                scope.spawn(|| with_metal_state(|state| Retained::as_ptr(&state.queue) as usize))
+                scope.spawn(move || {
+                    metal_runtime::with_device_for_qualification(index, || {
+                        with_metal_state(|state| Retained::as_ptr(&state.queue) as usize)
+                    })
+                    .flatten()
+                })
             })
             .collect();
         for worker in workers {
@@ -281,4 +326,187 @@ fn required_metal_hardware_covers_every_production_pipeline() {
         MetalKernel::ALL.map(metal_completed_dispatches),
         before_disable
     );
+}
+
+/// This separate physical gate requires two GPUs; one-device evidence cannot pass it.
+#[cfg(target_os = "macos")]
+#[test]
+fn required_metal_two_devices_isolate_quarantine() {
+    const CHILD: &str = "IVM_METAL_TWO_DEVICES_CONTROL";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let path = module_path!().split_once("::").expect("crate module").1;
+        let name = format!("{path}::required_metal_two_devices_isolate_quarantine");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", &name, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .expect("isolated two-device qualification");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}{stderr}");
+        assert!(
+            output.status.success(),
+            "two physical GPUs and actual surviving-device dispatch are required"
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed; 0 ignored"),
+            "required control must execute"
+        );
+        return;
+    }
+    assert!(
+        metal_runtime::device_slots().expect("complete physical inventory") >= 2,
+        "two physical Metal devices are required"
+    );
+    // First establish both qualified identities before destructively quarantining one.
+    let first = metal_runtime::with_device_for_qualification(0, || {
+        metal_runtime::current_health().unwrap()
+    })
+    .expect("first physical device");
+    let second = metal_runtime::with_device_for_qualification(1, || {
+        metal_runtime::current_health().unwrap()
+    })
+    .expect("second physical device");
+    assert_ne!(first.identity(), second.identity());
+    let pool = iroha_accel::ProcessResources::get().expect("shared resources");
+    let before = pool.usage();
+    metal_runtime::with_device_for_qualification(0, || {
+        with_metal_state(|state| {
+            let buffer =
+                MetalBuffer::allocate(&state.device, 17).expect("funded uncertain backing");
+            let buffers = [&buffer];
+            let mut command = metal_buffers::Command::prepare(&state.queue, &buffers)
+                .expect("first device command");
+            assert!(command.commit());
+            // No completion was observed. Drop preserves original native custody.
+            drop(command);
+            drop(buffer);
+        })
+        .expect("first device lease");
+    })
+    .expect("destructive first-device control executed");
+    assert!(!first.usable());
+    assert!(second.usable());
+    assert_eq!(pool.usage().in_flight[0], before.in_flight[0] + 1);
+    assert!(pool.usage().unified_bytes[0] > before.unified_bytes[0]);
+    let retained = pool.usage();
+    let config = crate::acceleration_config();
+    crate::set_acceleration_config(crate::AccelerationConfig {
+        max_gpus: Some(0),
+        ..config
+    });
+    assert!(!metal_available());
+    crate::set_acceleration_config(crate::AccelerationConfig {
+        max_gpus: Some(1),
+        ..config
+    });
+    release_metal_state();
+    assert!(
+        !first.usable(),
+        "policy and discovery cannot revive a quarantined identity"
+    );
+    // max_gpus=1 excludes the failed owner from the active count, retaining its debt.
+    metal_runtime::with_device_for_qualification(1, || {
+        require_dispatch(MetalKernel::Add32, Some([5, 5, 5, 5]), || {
+            metal_vadd32([1, 2, 3, 4], [4, 3, 2, 1])
+        });
+    })
+    .expect("healthy second device remains eligible at cap one");
+    assert_eq!(pool.usage().in_flight[0], retained.in_flight[0]);
+    assert_eq!(pool.usage().unified_bytes[0], retained.unified_bytes[0]);
+}
+
+/// Enter each direct AES family without a pre-existing physical TLS binding.
+#[cfg(target_os = "macos")]
+#[test]
+fn required_metal_unbound_aes_keeps_exact_owner_through_copy() {
+    const CHILD: &str = "IVM_METAL_UNBOUND_AES_CONTROL";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let path = module_path!().split_once("::").expect("crate module").1;
+        let name = format!("{path}::required_metal_unbound_aes_keeps_exact_owner_through_copy");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", &name, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .expect("isolated direct AES qualification");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}{stderr}");
+        assert!(
+            output.status.success(),
+            "unbound direct AES APIs must publish native output"
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed; 0 ignored"),
+            "required control must execute"
+        );
+        return;
+    }
+    assert!(metal_runtime::current_health().is_none());
+    let health =
+        with_metal_state(|_| metal_runtime::current_health().expect("qualified physical health"))
+            .expect("physical Metal device required");
+    assert!(
+        metal_runtime::current_health().is_none(),
+        "control must not carry an outer TLS pin"
+    );
+    let states: Vec<[u8; 16]> = (0..128)
+        .map(|index| std::array::from_fn(|byte| (index + byte * 17) as u8))
+        .collect();
+    let keys = [[0x39; 16], [0xA7; 16]];
+    for (decrypt, fused, kernel) in [
+        (false, false, MetalKernel::AesEncBatch),
+        (true, false, MetalKernel::AesDecBatch),
+        (false, true, MetalKernel::AesEncRounds),
+        (true, true, MetalKernel::AesDecRounds),
+    ] {
+        let rounds = &keys[..if fused { 2 } else { 1 }];
+        let expected: Vec<_> = states
+            .iter()
+            .copied()
+            .map(|state| {
+                rounds.iter().copied().fold(state, |block, key| {
+                    if decrypt {
+                        crate::aes::aesdec(block, key)
+                    } else {
+                        crate::aes::aesenc(block, key)
+                    }
+                })
+            })
+            .collect();
+        let before = health.completions(kernel as usize);
+        let mut output = vec![[0xEF; 16]; states.len()];
+        let accepted = match (decrypt, fused) {
+            (false, false) => metal_aesenc_batch_into(&states, keys[0], &mut output),
+            (true, false) => metal_aesdec_batch_into(&states, keys[0], &mut output),
+            (false, true) => metal_aesenc_rounds_batch_into(&states, rounds, &mut output),
+            (true, true) => metal_aesdec_rounds_batch_into(&states, rounds, &mut output),
+        };
+        assert!(
+            accepted,
+            "{kernel:?}: completed unbound into call must accept output"
+        );
+        assert_eq!(output, expected);
+        assert!(metal_runtime::current_health().is_none());
+        assert!(
+            health.completions(kernel as usize) > before,
+            "{kernel:?}: exact physical receipt required"
+        );
+        let before = health.completions(kernel as usize);
+        let mut in_place = states.clone();
+        assert!(
+            metal_aes_batch_in_place(&mut in_place, rounds, decrypt, fused),
+            "{kernel:?}: unbound in-place call must accept output"
+        );
+        assert_eq!(in_place, expected);
+        assert!(metal_runtime::current_health().is_none());
+        assert!(
+            health.completions(kernel as usize) > before,
+            "{kernel:?}: in-place physical receipt required"
+        );
+        println!(
+            "IVM_METAL_UNBOUND_AES_RECEIPT device={} kernel={kernel:?} into_and_in_place=true",
+            health.identity()
+        );
+    }
 }

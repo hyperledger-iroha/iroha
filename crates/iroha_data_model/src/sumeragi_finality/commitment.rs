@@ -152,6 +152,63 @@ pub struct ExecutionCommitment {
     pub transaction_output_commitment: Option<MerkleTreeCommitment<ExecutionOutputV1>>,
 }
 
+/// Protocol bound for the complete executed block wire, including outputs.
+/// Portable proof transports may impose a tighter resource bound.
+pub const MAX_EXECUTED_BLOCK_WIRE_BYTES: u64 = 256 * 1024 * 1024;
+
+impl ExecutionCommitment {
+    /// Validate exact output geometry and the monetary top-up root/count binding.
+    /// This checks shape only; authority requires the complete authenticated native result.
+    ///
+    /// # Errors
+    /// Rejects invalid wire lengths, an output count below the input count, or an inconsistent
+    /// top-up count, root or combined post-state root.
+    pub fn validate(&self) -> Result<(), CommitmentError> {
+        if self.executed_block_wire_len == 0
+            || self.executed_block_wire_len > MAX_EXECUTED_BLOCK_WIRE_BYTES
+        {
+            return Err(CommitmentError::WireLength(self.executed_block_wire_len));
+        }
+        if self.transaction_input_commitment.is_some_and(|inputs| {
+            self.transaction_output_commitment
+                .is_none_or(|outputs| outputs.leaf_count() < inputs.leaf_count())
+        }) {
+            return Err(CommitmentError::InvalidOutputs(
+                "output count is below input count".into(),
+            ));
+        }
+        match (self.kagemusha_top_up_count, self.kagemusha_top_up_root) {
+            (0, None) => Ok(()),
+            (0, Some(_)) | (_, None) => Err(CommitmentError::KagemushaTopUps(
+                "top-up root and count disagree".into(),
+            )),
+            (count, Some(root)) => {
+                if self.post_state_root
+                    != Self::kagemusha_post_state_root(count, self.ordinary_writes_root, root)
+                {
+                    return Err(CommitmentError::KagemushaTopUps(
+                        "combined post-state root differs".into(),
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Derive the existing canonical combined post-state root for a nonempty top-up tree.
+    /// A caller must still authenticate the tree and enforce the offline monetary policy.
+    #[must_use]
+    pub fn kagemusha_post_state_root(count: u32, ordinary: Hash, top_ups: Hash) -> Hash {
+        Hash::new_from_chunks(&[
+            b"iroha:kagemusha:v1:post-state-root",
+            &[0],
+            &count.to_le_bytes(),
+            ordinary.as_ref(),
+            top_ups.as_ref(),
+        ])
+    }
+}
+
 /// The canonical preimage of `R`: exact executed height, execution, complete native schedule
 /// graph and the finalized beacon pulse consumed by this execution, when present.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -210,6 +267,7 @@ impl ExecutionResultCommitment {
     /// # Errors
     /// An inconsistent height, invalid graph, missing required pulse or malformed pulse.
     pub fn validate(&self) -> Result<(), CommitmentError> {
+        self.execution.validate()?;
         if self.height == 0 || self.schedule.height != self.height {
             return Err(CommitmentError::Schedule(
                 "result and schedule heights differ".into(),
@@ -281,13 +339,21 @@ impl ExecutionResultCommitment {
         if preimage.len() > MAX_RESULT_PREIMAGE_BYTES {
             return Err(CommitmentError::PreimageLength(preimage.len()));
         }
+        // Complete epoch/generation records recur in the current, boundary and successor
+        // slots. Their owned key/PoP graphs can exceed four maximum wire lengths even for
+        // ten seats. Byte-array elements in repeated complete credential records also exceed
+        // a fixed 8192-element cap at the supported 31-seat boundary. Use the canonical
+        // input-derived cumulative element and allocation budgets, while retaining the tighter
+        // per-sequence, field and nesting caps. The 64 KiB frame ceiling bounds both budgets;
+        // stricter original caller limits remain in force. This grants no production pool owner.
+        let canonical = norito::canonical_decode_limits(preimage.len());
         let decoded: Self = norito::decode_canonical_with_limits(
             preimage,
             norito::DecodeLimits::new(
                 96,
                 MAX_RESULT_PREIMAGE_BYTES,
-                8192,
-                4 * MAX_RESULT_PREIMAGE_BYTES,
+                canonical.max_total_elements(),
+                canonical.max_total_allocated_bytes(),
                 32,
             ),
         )
@@ -340,3 +406,96 @@ pub enum CommitmentError {
     #[error("encoding: {0}")]
     Encoding(String),
 }
+
+#[cfg(test)]
+mod execution_validation_tests {
+    use super::*;
+    use std::num::NonZeroU64;
+
+    fn execution() -> ExecutionCommitment {
+        ExecutionCommitment {
+            parent_state_root: Hash::new(b"parent"),
+            post_state_root: Hash::new(b"post"),
+            ordinary_writes_root: Hash::new(b"writes"),
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
+            executed_block_wire_len: 1,
+            executed_block_wire_hash: Hash::new(b"wire"),
+            transaction_input_commitment: None,
+            transaction_output_commitment: None,
+        }
+    }
+    #[test]
+    fn monetary_root_count_and_combined_root_are_exact() {
+        let valid = execution();
+        valid.validate().unwrap();
+        let root = Hash::new(b"top-up tree");
+        for (count, root) in [(0, Some(root)), (1, None)] {
+            let mut bad = valid;
+            bad.kagemusha_top_up_count = count;
+            bad.kagemusha_top_up_root = root;
+            assert!(bad.validate().is_err());
+        }
+        let mut funded = valid;
+        funded.kagemusha_top_up_root = Some(root);
+        funded.kagemusha_top_up_count = 2;
+        assert!(funded.validate().is_err());
+        funded.post_state_root =
+            ExecutionCommitment::kagemusha_post_state_root(2, funded.ordinary_writes_root, root);
+        funded.validate().unwrap();
+        let mut changed = funded;
+        changed.kagemusha_top_up_count = 3;
+        assert!(changed.validate().is_err());
+        changed = funded;
+        changed.ordinary_writes_root = Hash::new(b"substituted writes");
+        assert!(changed.validate().is_err());
+        changed = funded;
+        changed.kagemusha_top_up_root = Some(Hash::new(b"substituted top-ups"));
+        assert!(changed.validate().is_err());
+        let mut bytes = b"iroha:kagemusha:v1:post-state-root".to_vec();
+        bytes.push(0);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(funded.ordinary_writes_root.as_ref());
+        bytes.extend_from_slice(root.as_ref());
+        assert_eq!(funded.post_state_root, Hash::new(bytes));
+    }
+    #[test]
+    fn executed_wire_and_output_geometry_are_bounded() {
+        let valid = execution();
+        for length in [0, MAX_EXECUTED_BLOCK_WIRE_BYTES + 1] {
+            let mut bad = valid;
+            bad.executed_block_wire_len = length;
+            assert_eq!(bad.validate(), Err(CommitmentError::WireLength(length)));
+        }
+        let mut geometry = valid;
+        geometry.transaction_input_commitment = Some(MerkleTreeCommitment::new(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"inputs")),
+            NonZeroU64::new(2).unwrap(),
+        ));
+        assert!(geometry.validate().is_err());
+        for count in [1, 2, 3] {
+            geometry.transaction_output_commitment = Some(MerkleTreeCommitment::new(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"outputs")),
+                NonZeroU64::new(count).unwrap(),
+            ));
+            assert_eq!(geometry.validate().is_ok(), count >= 2);
+        }
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn complete_native_result_decode_rejects_inconsistent_monetary_roots() {
+        let fixture = super::super::tests::Fixture::new();
+        let mut commitment = fixture.second.decode_checked().unwrap().commitment;
+        commitment.execution.kagemusha_top_up_count = 1;
+        assert!(commitment.validate().is_err());
+        let frame = norito::encode_canonical(&commitment).unwrap();
+        assert!(matches!(
+            ExecutionResultCommitment::decode(&frame),
+            Err(CommitmentError::KagemushaTopUps(_))
+        ));
+    }
+}
+
+#[cfg(test)]
+#[path = "commitment/decode_budget_tests.rs"]
+mod decode_budget_tests;

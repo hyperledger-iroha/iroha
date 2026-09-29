@@ -43,7 +43,7 @@ def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
         "validators_per_dataspace": 4,
         "quorum": "3-of-4",
         "mandatory_signed_rs16_da_rbc": True,
-        "authenticated_message_control": True,
+        "authenticated_private_settlement_route_control": True,
         "committee_validator_restarts": list(range(participants)),
         "maximum_simultaneously_unavailable_per_committee": 1,
         "quorum_progress_with_one_unavailable": True,
@@ -73,7 +73,7 @@ def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
             {
                 "cut": cut,
                 "control_acknowledged": True,
-                "delayed_delivery": True,
+                "delayed_delivery": cut != "restart_before_global_finality",
                 "healed": True,
                 "converged": True,
                 "partial_visibility_observed": False,
@@ -136,7 +136,7 @@ class PrivateSettlementFaultReportTests(unittest.TestCase):
                 [run for run in complete_matrix() if not (run[0] == 3 and run[1] == 9)]
             )
 
-    def test_unacknowledged_loss_or_missing_crash_boundary_is_rejected(self) -> None:
+    def test_unacknowledged_loss_or_retired_process_cut_is_rejected(self) -> None:
         unacknowledged = run_record(3, 0, 0)
         unacknowledged["loss_trials"][0]["control_acknowledged"] = False  # type: ignore[index]
         with self.assertRaises(MODULE.FaultEvidenceError):
@@ -146,7 +146,7 @@ class PrivateSettlementFaultReportTests(unittest.TestCase):
         with self.assertRaises(MODULE.FaultEvidenceError):
             MODULE.parse_run(undelayed, "fixture")
         missing_crash = run_record(3, 0, 0)
-        missing_crash["crash_recoveries"] = missing_crash["crash_recoveries"][:-1]  # type: ignore[index]
+        missing_crash["crash_recoveries"] = [{"boundary": "sidecar_fsync"}]  # type: ignore[index]
         with self.assertRaises(MODULE.FaultEvidenceError):
             MODULE.parse_run(missing_crash, "fixture")
 

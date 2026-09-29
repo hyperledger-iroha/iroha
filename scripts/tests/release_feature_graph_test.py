@@ -761,13 +761,13 @@ def test_trusted_release_surface_includes_ignored_autoloaded_controls(
 def _nix_test_catalog(checker):
     return checker.WorkspaceCatalog(
         package_features={
-            "irohad": frozenset({"safe"}),
+            "irohad": frozenset({"safe", "ivm-cuda"}),
             "iroha_cli": frozenset(),
             "iroha_kagami": frozenset(),
             "iroha_data_model": frozenset({"test-fixtures"}),
         },
         binaries={
-            "iroha3d": (checker.CargoBinary("irohad", "iroha3d", ()),),
+            "iroha3d": (checker.CargoBinary("irohad", "iroha3d", ("ivm-cuda",)),),
             "iroha": (checker.CargoBinary("iroha_cli", "iroha", ()),),
             "kagami": (checker.CargoBinary("iroha_kagami", "kagami", ()),),
         },
@@ -786,7 +786,7 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
         if target.source.endswith(":packages.iroha3")
     }
     assert iroha3_targets == {
-        ("irohad", "iroha3d", ()),
+        ("irohad", "iroha3d", ("ivm-cuda",)),
         ("iroha_cli", "iroha", ()),
         ("iroha_kagami", "kagami", ()),
     }
@@ -794,7 +794,7 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
         (target.package, target.binary, target.features)
         for target in targets
         if target.source.endswith(":packages.targets")
-    } == {("irohad", "iroha3d", ())}
+    } == {("irohad", "iroha3d", ("ivm-cuda",))}
 
     source = (REPO / checker.NIX_RELEASE_OWNER).read_text(encoding="utf-8")
     helper = tmp_path / checker.NIX_APPIMAGE_OWNER_ROOT / "flake.nix"
@@ -814,7 +814,7 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
     assert any(
         target.source.endswith(":packages.iroha3")
         and target.package == "irohad"
-        and target.features == ("safe",)
+        and target.features == ("ivm-cuda", "safe")
         for target in safe_targets
     )
     assert all(
@@ -1069,7 +1069,7 @@ def test_published_docker_variants_and_feature_overrides_are_derived() -> None:
         "Dockerfile.cross",
     }
     profiling = [
-        invocation for invocation in invocations if invocation.features == ("profiling",)
+        invocation for invocation in invocations if invocation.features == ("irohad/ivm-cuda", "profiling")
     ]
     assert {invocation.dockerfile for invocation in profiling} == {
         "Dockerfile",
@@ -1523,6 +1523,7 @@ def test_canonical_release_prebuilt_boundary_fails_closed(tmp_path: Path) -> Non
     --cargo-profile deploy \\
     --features "$features" \\
     "${provenance_binaries[@]}" \\
+    "${cuda_provenance_args[@]}" \\
     --output-directory "$snapshot"
 )"
 """
@@ -1541,6 +1542,9 @@ for release_environment_name in ${!CARGO_TARGET_@}; do
 done
 export PYTHONNOUSERSITE=1
 release_python=(python3 -I -S "$repo_root/scripts/run_isolated_release_tool.py")
+from release_artifact_contract import release_acceleration_features
+release_acceleration_features(sys.argv[2], filter(None, sys.argv[3].split(",")))
+cuda_provenance_args=(--trusted-cuda-key-sha256 "$trusted_cuda_key_sha256")
 validate_release_source
 validate_release_source
 """
@@ -1917,7 +1921,7 @@ def test_positive_shipping_feature_policy_rejects_dev_and_test_roots() -> None:
 
     rejected_profiles = (
         checker.ShippingProfile("irohad", ("dev-tools",)),
-        checker.ShippingProfile("irohad", ("test-network-message-control",)),
+        checker.ShippingProfile("irohad", ("test-network-private-settlement-route-control",)),
         checker.ShippingProfile("irohad", ("test-network-parliament-signers",)),
         checker.ShippingProfile("iroha_cli", ("cli_integration_harness",)),
         checker.ShippingProfile("new_release_package"),
@@ -1931,14 +1935,50 @@ def test_positive_shipping_feature_policy_rejects_dev_and_test_roots() -> None:
             raise AssertionError(f"unreviewed shipping profile accepted: {profile}")
 
     graph = """irohad feature "daemon"
-irohad feature "test-network-message-control"
+irohad feature "test-network-private-settlement-route-control"
 irohad feature "test-network-parliament-signers"
 """
     assert checker.unauthorized_root_features_in_graph(graph, "irohad") == (
-        "test-network-message-control",
         "test-network-parliament-signers",
+        "test-network-private-settlement-route-control",
     )
 
+
+
+def test_production_acceleration_roots_are_admitted_with_existing_shipping_features() -> None:
+    checker = load_checker()
+    profiles = (
+        checker.ShippingProfile("irohad", ("daemon", "ivm-cuda", "external-software-signer-bin")),
+        checker.ShippingProfile("ivm", ("default", "metal")),
+        checker.ShippingProfile("ivm", ("cuda", "default", "metal")),
+        checker.ShippingProfile("connect_norito_bridge", ("cuda", "privacy-production-enabled")),
+    )
+    checker.validate_shipping_profile_policy(profiles)
+    for profile in profiles:
+        graph = "".join(f'{profile.package} feature "{feature}"\n' for feature in profile.features)
+        assert checker.unauthorized_root_features_in_graph(graph, profile.package) == ()
+
+
+@pytest.mark.parametrize("package,feature", (
+    ("ivm", "cuda-hardware-tests"),
+    ("ivm", "metal-hardware-tests"),
+    ("ivm", "bench"),
+    ("ivm", "dev-tools"),
+    ("ivm", "ivm_zk_tests"),
+    ("ivm", "ivm_vrf_tests"),
+    ("irohad", "accel-cuda"),
+    ("irohad", "test-network-private-settlement-route-control"),
+    ("connect_norito_bridge", "dev-tools"),
+))
+def test_acceleration_admission_does_not_enable_test_or_toolkit_helper_roots(
+    package: str, feature: str,
+) -> None:
+    checker = load_checker()
+    with pytest.raises(RuntimeError, match="shipping feature policy violations"):
+        checker.validate_shipping_profile_policy((checker.ShippingProfile(package, (feature,)),))
+    assert checker.unauthorized_root_features_in_graph(
+        f'{package} feature "{feature}"\n', package
+    ) == (feature,)
 
 def test_kagami_keeps_core_test_surface_out_of_normal_dependencies() -> None:
     with (REPO / "crates" / "iroha_kagami" / "Cargo.toml").open("rb") as source:
@@ -1985,3 +2025,71 @@ def test_release_publishers_depend_on_feature_graph_guard() -> None:
     ):
         workflow = (REPO / relative).read_text(encoding="utf-8")
         assert "python3 -I -S scripts/check_release_feature_graph.py" in workflow
+
+
+@pytest.mark.parametrize("marker", (
+    'includesDaemon = builtins.any (binary: binary.package == "irohad") binaries;',
+    'needsCuda = includesDaemon && (lib.hasInfix "-linux-" targetTriple || lib.hasInfix "-windows-" targetTriple);',
+    'releaseFeatures = lib.unique (features ++ lib.optional needsCuda "irohad/ivm-cuda");',
+    'IVM_CUDA_PTX_MODE = "bundled";',
+    'IVM_CUDA_TRUSTED_KEY_SHA256 = checkedCudaKey;',
+    'builtins.match "[0-9a-f]{64}" cudaTrustedKeySha256 != null',
+    'cudaTrustedKeySha256 != "0000000000000000000000000000000000000000000000000000000000000000"',
+))
+def test_nix_shipping_cannot_omit_target_backend_or_trust_input(marker: str) -> None:
+    checker = load_checker()
+    source = (REPO / checker.NIX_RELEASE_OWNER).read_text()
+    checker._validate_nix_cargo_envelope(source, checker.NIX_RELEASE_OWNER)
+    assert source.count(marker) == 1
+    with pytest.raises(RuntimeError, match="target-qualified acceleration"):
+        checker._validate_nix_cargo_envelope(source.replace(marker, ""), checker.NIX_RELEASE_OWNER)
+
+
+def test_qualified_cargo_release_feature_stays_bound_to_its_package() -> None:
+    checker = load_checker()
+    catalog = checker.WorkspaceCatalog(
+        package_features={"irohad": frozenset({"ivm-cuda"}), "unrelated": frozenset({"ivm-cuda"})},
+        binaries={}, native_libraries={}, workspace_docker_bins=(),
+    )
+    assert checker.declared_feature_owners("irohad/ivm-cuda", catalog) == (("irohad", "ivm-cuda"),)
+    assert set(checker.declared_feature_owners("ivm-cuda", catalog)) == {("irohad", "ivm-cuda"), ("unrelated", "ivm-cuda")}
+    for value in ("missing/ivm-cuda", "irohad/cuda-hardware-tests", "irohad/ivm-cuda/extra", "unknown"):
+        with pytest.raises(RuntimeError, match="no workspace package declares"):
+            checker.declared_feature_owners(value, catalog)
+
+
+@pytest.mark.parametrize("dockerfile", ("Dockerfile", "Dockerfile.cross", "Dockerfile.musl"))
+def test_every_linux_docker_producer_resolves_mandatory_backend(dockerfile: str, tmp_path: Path) -> None:
+    checker = load_checker()
+    names = ("iroha3d", "iroha3d_taira", "sorafs_governance_dag", "iroha", "kagami", "attachment_sanitizer", "sorafs_external_software_signer")
+    catalog = checker.WorkspaceCatalog(
+        package_features={"irohad": frozenset({"ivm-cuda", "external-software-signer-bin", "profiling"})},
+        binaries={name: (checker.CargoBinary("irohad", name, ()),) for name in names},
+        native_libraries={}, workspace_docker_bins=names,
+    )
+    rows = checker.docker_shipping_targets(REPO, catalog, Path(dockerfile))
+    assert rows and all("ivm-cuda" in row.features for row in rows)
+    with pytest.raises(RuntimeError, match="omits mandatory CUDA"):
+        checker.docker_shipping_targets(REPO, catalog, Path(dockerfile), features=("profiling",))
+    source = (REPO / dockerfile).read_text()
+    for marker in ('ENV IVM_CUDA_PTX_MODE=bundled', 'test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64'):
+        (tmp_path / dockerfile).write_text(source.replace(marker, ""))
+        with pytest.raises(RuntimeError, match="signed CUDA build-input"):
+            checker.docker_shipping_targets(tmp_path, catalog, Path(dockerfile))
+
+
+def test_release_workflow_overrides_keep_cuda_and_forward_public_review_input() -> None:
+    checker = load_checker()
+    # Parsing declarations is bounded and does not invoke Cargo or Docker.
+    invocations = checker.docker_publish_invocations(REPO)
+    assert invocations
+    assert {invocation.dockerfile for invocation in invocations} == {"Dockerfile", "Dockerfile.cross", "Dockerfile.musl"}
+    for invocation in invocations:
+        if invocation.features is not None:
+            assert "irohad/ivm-cuda" in invocation.features
+
+
+def test_compose_candidate_build_forwards_the_same_public_trust_input() -> None:
+    source = (REPO / ".github/workflows/pr_docker_compose.yml").read_text()
+    assert source.count("docker/build-push-action@") == 1
+    assert source.count("IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}") == 1

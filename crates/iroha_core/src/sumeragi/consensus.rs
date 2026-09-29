@@ -16,12 +16,12 @@ use iroha_crypto::HashOf;
 use iroha_data_model::block::consensus::{
     ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
 };
-pub use iroha_data_model::block::consensus::{ExecKv, ExecWitness, ValidatorIndex};
+pub use iroha_data_model::block::consensus::{Evidence, ExecKv, ExecWitness, ValidatorIndex};
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
-/// Permissioned Sumeragi v2 handshake and signing-domain tag.
+/// Permissioned Sumeragi v1 handshake and signing-domain tag.
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
-/// NPoS Sumeragi v2 handshake and signing-domain tag.
+/// NPoS Sumeragi v1 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;

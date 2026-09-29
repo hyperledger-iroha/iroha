@@ -105,7 +105,7 @@ where
         .expect("frame invalid fields with the correct schema, length and checksum");
     let view = ncore::from_bytes_view(&frame).expect("authenticate malformed-field frame");
     assert_eq!(view.as_bytes(), bytes);
-    view.decode_exact_with(ncore::decode_field_canonical::<T>)
+    view.decode_exact_with::<T, _, _>(ncore::decode_field_canonical::<T>)
         .expect_err("checked reconstruction must reject invalid fields");
     assert!(norito::decode_canonical::<T>(&frame).is_err());
     let _flags = ncore::DecodeFlagsGuard::enter(flags);

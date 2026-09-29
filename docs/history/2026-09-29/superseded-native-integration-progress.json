@@ -1,0 +1,127 @@
+[
+  {
+    "path": "status.md",
+    "sha256": "295aa23780e28fbf8419a976b4ad7a71a7b99172109613bcbde5b82e4f78cbce",
+    "text": "The current staking integration on `optimizations` has not passed Core compilation. The September 29 locked Core check reached `iroha_core` and failed with 189 errors after retirement of the old consensus module graph, principally unresolved old callers and an accidentally unconditional test module. The latter is repaired; Queue/gossip, Kura, SCCP, telemetry and native evidence closure remain in progress. Historical library, simulator, custody and publication passes are recorded in the [native quorum checkpoint](docs/history/2026-09-27/validator-staking-native-quorum.md) and the [integration record](docs/history/2026-09-29/native-owner-integration.md); they do not qualify this source. Real 4\u21927\u21924 transitions, retained exits, slashing, reward claims, full withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "status.md",
+    "sha256": "dccece25fffde8066fd80ce1d15d168265ab467e2f68ac5f869d20dd8b9260ab",
+    "text": "The integrated production path is `lanes::LaneRunner` with `SumeragiLaneMerge`: lane consensus admits inputs and G executes World once. Original execution, witness and allocation owners are retained through native preparation/publication; complete funding and recovery qualification remain open. The retired Decision/QueuePlan driver and its old State ownership graph are being removed directly, with no compatibility layer. Offchain Torii history now authenticates the native chain against State's captured hashes and charges all source frames and bytes; genesis output requires its actual H2 successor. Push and Explorer use applied State history. Deterministic instruction history still needs its original authenticated native execution tip and cannot depend on local QC availability. S6 cross-dataspace atomic execution remains open. The [September 29 integration record](docs/history/2026-09-29/native-owner-integration.md) preserves exact superseded status prose and current scoped evidence."
+  },
+  {
+    "path": "roadmap.md",
+    "sha256": "028782d9576bd828a55c370a3a74092cc5f1db534c0917afb449c4bd565759fa",
+    "text": "Complete the sole `lanes::LaneRunner`/`SumeragiLaneMerge` production owner. Core/Sumeragi must retain one funded original G execution through validation, certification, durable append, publication and restart. Queue/gossip must retain pending transactions until G applies, without the retired reservation/QueuePlan protocol. Kura must remove obsolete finality, Decision/AMX and autonomous sidecar owners while preserving exact native frame reads, physical custody, DA, bounded resource admission and fail-stop recovery. State must publish an original authenticated native execution tip with its journals for deterministic historical reads; local QC availability cannot affect instructions. Finish native slashable evidence admission and S6 cross-dataspace atomic execution. Preserve current custody, source-bound monetary effects and release/refusal assertions on these actual owners. Qualify silent authors, saturation, authenticated loss/replay, all-seat restart and final-transaction progress on one unchanged four/seven-validator candidate, then pass formal, DA, workspace and SDK gates. Superseded Decision/QueuePlan implementation prose is preserved in the [September 29 integration record](docs/history/2026-09-29/native-owner-integration.md); none of it authorizes a second production path."
+  },
+  {
+    "path": "status.md",
+    "sha256": "cfe4b57421a066619d257c1b730bfc564137d49beff3179a24227c77017ab1b5",
+    "text": "The staking integration on `optimizations` remains unqualified. Core check06 is running after native Queue/gossip/Torii admission, block metadata, SCCP, telemetry, storage fail-stop and State-owned history-tip integration. The preceding Core check failed with 189 unresolved retired-owner errors. Current configuration library tests pass 739 controls; the following integration suite passed 265 and found two stale snapshot/protocol expectations, now corrected with a rerun queued. Two queue hard-cut controls and four isolated native-gate concurrency controls pass. These scoped results do not establish Core or network readiness; the [integration record](docs/history/2026-09-29/native-owner-integration.md) binds evidence and open failures. Real 4\u21927\u21924 transitions, retained exits, slashing, reward claims, full withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "status.md",
+    "sha256": "d4d7d1f986f8b37980246b98479557f72d960ffa5b45fb701c14eddda77bb462",
+    "text": "The integrated production path is `lanes::LaneRunner` with `SumeragiLaneMerge`: lanes certify admission and G executes World once. The ordinary queue retains original inputs until G application; old QueuePlan reservations, gossip certificates and proxy publication owners are removed. BlockResult no longer carries old lane settlement statements, while real scoped direct gas transfers remain. Kura now owns the permanent fail-stop gate shared by global/lane startup, signing steps, workers and sends. A funded current/undo native execution tip is sealed and published with State; deterministic history walks its authenticated parent hashes/results, charging every source frame before reading. Offchain Torii/Push/Explorer readers separately authenticate native prefix certificates. Runtime tests, genesis-only snapshot replay, remaining Kura/SDK owner retirement, complete funding, native evidence and S6 cross-dataspace execution remain open. See the [September 29 integration record](docs/history/2026-09-29/native-owner-integration.md)."
+  },
+  {
+    "path": "status.md",
+    "sha256": "4581cb45df09b8b62f5b416783ea7d0b6009be80da743e62dfecc81a7feda791",
+    "text": "The staking integration on `optimizations` remains unqualified. Core check06 ended with 141 errors after the native owner integrations; charged-cell, restoration, stale caller and registry fixes are applied, with check07 running. Configuration suite03 passes all 1,027 tests with none failed or ignored. The charged-cell original/frozen owner regression, two queue hard-cut controls and four isolated native-gate concurrency controls pass. The canonical nine-field signed transaction layout and production callers are integrated; codec validation and actual Rust-generated SDK fixtures remain in progress. These scoped results do not establish Core or network readiness; the [integration record](docs/history/2026-09-29/native-owner-integration.md) binds evidence and open failures. Real 4\u21927\u21924 transitions, retained exits, slashing, reward claims, full withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "status.md",
+    "sha256": "e1eb323703e0f5d0c5216798c456e91da57876b4c274e599176de56def94fbe8",
+    "text": "The staking integration on `optimizations` remains unqualified. Core check07 ended with 127 errors; subsequent native-path repairs and connected owner retirement are applied, while the real SDK fixture generator still failed in Core (110 errors). The signed-model run then exposed invalid evidence derive attributes; the minimal fix preserves mandatory JSON fields and is applied, with validation pending. Configuration suite03 passed 1,027 tests before the latest configuration retirement; its rerun and current codec tests are not qualified. The legacy-codec guard04 passes. All of this is scoped integration evidence, not release readiness; see the [integration record](docs/history/2026-09-29/native-owner-integration.md). Real 4\u21927\u21924 transitions, retained exits, slashing, reward claims, full withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "roadmap.md",
+    "sha256": "68764f74d9be445e0e8c89c0311ea7fd24da1a10040f129e569f0ccb1e953a8d",
+    "text": "Complete the sole `lanes::LaneRunner`/`SumeragiLaneMerge` production owner. Core/Sumeragi must retain one funded original G execution through validation, certification, durable append, publication and restart. Queue/gossip must retain pending transactions until G applies, without the retired reservation/QueuePlan protocol. Kura must remove obsolete finality, Decision/AMX and autonomous sidecar owners while preserving exact native frame reads, physical custody, DA, bounded resource admission and fail-stop recovery. Qualify the integrated original native execution tip and its same-generation current/undo journals, deterministic reverse historical reads, and native storage fail-stop gate. Finish configured-network restore prevalidation and original signed-genesis snapshot replay; local QC availability cannot affect instructions. Finish native slashable evidence admission and S6 cross-dataspace atomic execution. Preserve current custody, source-bound monetary effects and release/refusal assertions on these actual owners. Qualify silent authors, saturation, authenticated loss/replay, all-seat restart and final-transaction progress on one unchanged four/seven-validator candidate, then pass formal, DA, workspace and SDK gates. Superseded Decision/QueuePlan implementation prose is preserved in the [September 29 integration record](docs/history/2026-09-29/native-owner-integration.md); none of it authorizes a second production path."
+  },
+  {
+    "path": "status.md",
+    "sha256": "e43e861cf6a392fea9a49309ca381e9acc02ebd7380fe082f55019cb76035c89",
+    "text": "The staking integration on `optimizations` remains unqualified. Configuration suite06 passes all 1,027 tests without failures or skips. The current signed-transaction suite07 passes 59, fails two canonical privacy/Vega fixture expectations, and ignores one generator; fixture identity checks and expected hashes remain intact pending genuine exporter output. Core checks08 and09 stopped in shared/model dependencies before Core; their API and enum-lint repairs are integrated, with Core10 and native finality model08 pending. Native Kura/geometry ownership, portable proofs and original historical-write archives are integrated; decoded proof-graph funding, restart and connected consumer migration remain open. The [integration record](docs/history/2026-09-29/native-owner-integration.md) binds scoped receipts. Real 4\u21927\u21924 transitions, retained exits, slashing, reward claims, full withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "status.md",
+    "sha256": "6a9b58b3444cf98f888f6fe6921d5deda39a06f1e72094f4cac2f782ce0c2a64",
+    "text": "The integrated production path is `lanes::LaneRunner` with `SumeragiLaneMerge`: lanes certify admission and G executes World once. The ordinary queue retains original inputs until G application; old QueuePlan reservations, signed admission intent, gossip certificates and proxy publication owners are removed. BlockResult no longer carries old lane settlement statements, while real scoped direct gas transfers remain. Kura owns the permanent fail-stop gate shared by global/lane startup, signing steps, workers and sends. A funded current/undo native execution tip is sealed and published with State; deterministic history walks its authenticated parent hashes/results, charging every source frame before reading. Snapshot restoration checks configured chain and network before typed State construction; genesis-only snapshots require original signed-genesis replay. Offchain Torii/Push/Explorer readers separately authenticate native prefix certificates. The obsolete merge-sidecar transport and CLI input are removed; the inspector projects native outputs and bounded result-preimage claims. Runtime tests, positive-height restart, remaining Kura/SDK owner retirement, complete funding, native evidence and S6 cross-dataspace execution remain open. See the [September 29 integration record](docs/history/2026-09-29/native-owner-integration.md)."
+  },
+  {
+    "path": "docs/source/native_lane_relay_isi_retirement.md",
+    "sha256": "3325c8b762b1d4073161b6f81fb10940d780c55fd92074c4c6f389fb82922f8a",
+    "text": "TODO: remove the remaining read-only relay DTO/query and emergency configuration/World storage\nsurfaces, and complete native cross-dataspace atomic execution (S6). This instruction retirement\nalone does not complete either outcome.\n"
+  },
+  {
+    "path": "status.md",
+    "sha256": "8b98d1e9ff6b9e23ad5212d37989bd72422891b57fcfd0fd680a4d0082159aa5",
+    "text": "The staking integration on `optimizations` remains unqualified. Configuration suite06 passes 1,027 tests; native finality model08 passes 36 and KAGEMUSHA attachment model09 passes six, all without failures or ignored tests. Signed-transaction suite07 passes 59, fails two privacy/Vega fixture expectations and ignores one generator; identity checks and expected hashes remain intact. Core10 reaches Core and fails with 72 errors and 51 warnings; native consumer/storage repairs are being integrated. Positive-height snapshot caches now require original signed-genesis and complete certified-history replay; manifest-only recovery cannot authorize a World. Native proof funding, recovery runtime and connected consumers remain open. The [integration record](docs/history/2026-09-29/native-owner-integration.md) binds scoped receipts. Real 4\u21927\u21924 transitions, retained exits, slashing, reward claims, full withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "status.md",
+    "sha256": "b50aecafb2334dd3ee19f7c6a3608d0381c5adf75884c2d441da6e127fd612d9",
+    "text": "The staking integration on `optimizations` remains unqualified. Configuration suite06 passes 1,027 tests; native finality model08 passes 36 and KAGEMUSHA attachment model09 passes six, all without failures or ignored tests. These precede later consumer changes. Signed-transaction suite07 passes 59, fails two privacy/Vega fixture expectations and ignores one generator; identity checks and expected hashes remain intact. Core10 reports 72 errors; subsequent repairs are integrated. Core11 and12 stop before Core in IVM erasure and bootstrap encoding respectively; both repairs are applied and Core13 is queued. Two independent canonical checkpoint exports agree byte-for-byte; native CLI/client/mobile/deployment consumers are being qualified. Committed snapshot caches require complete original execution replay. The [integration record](docs/history/2026-09-29/native-owner-integration.md) binds scoped receipts. Original-pool proof funding, real 4\u21927\u21924, restart, exits/slashing/rewards/withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "specs/staking_validator_completion.md",
+    "sha256": "5abb0d4fd77452943e836aca1393daa229aef7108c79127ca172676f39644215",
+    "text": "the current full Core check fails on remaining retired-owner callers, and runtime/network qualification remains open"
+  },
+  {
+    "path": "specs/staking_validator_completion.md",
+    "sha256": "db67b856473c55d2ada3fc3dfce1851bfaa7c0c3d156f07b00c52fa1406facd5",
+    "text": "The current Core library check fails on unresolved retired-owner callers; no\nintegrated release gate completion is claimed."
+  },
+  {
+    "path": "specs/staking_validator_completion.md",
+    "sha256": "96e6cecffa57c719da0aedbb18c676c8e3a39d5ec6d1498409048b01b3f8a731",
+    "text": "  compiled in an earlier source cut. The present integrated Core check is not green."
+  },
+  {
+    "path": "status.md",
+    "sha256": "3e84fd3a05159fec0c3ba70e78016de25c0aeb067dceb99701b2877d1c4e8fad",
+    "text": "The staking integration on `optimizations` remains unqualified. Core library check14 passes with 294 warnings after the final two documentation repairs; Core test compilation is queued. Configuration suite06 passes 1,027 tests, native finality model08 passes 36 and KAGEMUSHA attachment model09 passes six; these precede later consumer changes. Signed-transaction suite07 passes 59, fails two privacy/Vega fixture expectations and ignores one generator. Exact preimage recapture is underway; identity checks remain intact. Deployment finality suite01 passes 22 and fails one native result allocation-bound case. Complete-checkpoint C/JNI/Swift/Kotlin and PK2 consumers are integrated, with focused runtime gates pending. Two independent canonical checkpoint exports agree byte-for-byte. Committed snapshot caches require complete original execution replay. The [integration record](docs/history/2026-09-29/native-owner-integration.md) binds scoped receipts. Original-pool proof funding, real 4\u21927\u21924, restart, exits/slashing/rewards/withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "specs/staking_validator_completion.md",
+    "sha256": "dca5ce114658d511872c67c7797defb64e8c6a30e1b9a2d34123b7617049b5f7",
+    "text": "  compiled in an earlier source cut. Integrated Core library check14 now passes,\n  while the unit/integration and unchanged network gates remain open."
+  },
+  {
+    "path": "specs/staking_validator_completion.md",
+    "sha256": "ab8c0aedc6b6678023b6aebf44c87c1b37a6975639381dd38a5fa955ddcbbc9c",
+    "text": "records and their native producer consumers are integrated. Core library\ncompilation passes; this contract does not attest completed rotation."
+  },
+  {
+    "path": "specs/staking_validator_completion.md",
+    "sha256": "dbf274defe3e11d249b062424d153c57cabf1d87974b2c0bec8361184a30e9be",
+    "text": "Generation/authorization, authenticated native epoch graph and pristine E+2 boundary capture are integrated; Core library check14 passes with warnings; unit/integration, runtime and network qualification remain open"
+  },
+  {
+    "path": "specs/staking_validator_completion.md",
+    "sha256": "016d3311dac9fe6d490978b0bcc99a1fef13694ad9991b9b3f7af2bddb1ec066",
+    "text": "Core library check14 now passes with 294 warnings after the integrated owner\nrepairs. Core test compilation, deployment allocation repair and runtime/network\nqualification remain open; no integrated release completion is claimed."
+  },
+  {
+    "path": "status.md",
+    "sha256": "1be6fb186cfe97c99ef104861f474c168adf77317dc2526e6fec6143d5de9514",
+    "text": "The staking integration on `optimizations` remains unqualified. Core library check14 passed before the latest native seal/storage changes; fresh library/test compilation is pending. Mobile bootstrap passes 25 tests and Python OpenAPI controls pass 95 tests plus 19 subtests. The published schema now requires actual signed release scope and hardware-policy fields. Deployment finality suite01 passed 22 and failed one bounded decode case; its repair and a test-closure compile fix await rerun. SCCP and Torii fixtures now consume native certified sources. Both Pasta circuits bind original native instance/context/block/result, requiring fresh release keys and proof qualification. Privacy/Vega capture A passed, while B stopped on a new model-test codec mismatch; no golden was changed. SDK capture also failed compilation. Committed snapshot caches require complete original replay. The [integration record](docs/history/2026-09-29/native-owner-integration.md) records exact attempts. Original-pool proof funding, real 4\u21927\u21924, restart, exits/slashing/rewards/withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "status.md",
+    "sha256": "3746246b41dcc1234eabeded057fba231f8755c88053a654eaafeec3b9ec4074",
+    "text": "The staking integration on `optimizations` remains unqualified. Core library check14 predates the latest native seal/storage changes. Test check02 failed on retired includes and library errors; the current-source repairs and native replacement controls await check03. Mobile bootstrap passes 25 tests and Python OpenAPI controls pass 95 tests plus 19 subtests. Deployment finality suite01 passed 22 and failed one bounded decode case; its repair awaits rerun. Both Pasta circuits now bind original native instance/context/block/result, requiring fresh release keys and proof qualification. Fresh privacy/Vega capture C passed; independent D and SDK capture02 remain pending, with no golden changed. An IVM snapshot test borrow error is repaired but unverified. Ordinary-write decoding now prepays exact original-pool allocations; the remaining proof graphs and backend resources are still open. Snapshot restoration requires complete original replay. The [integration record](docs/history/2026-09-29/native-owner-integration.md) records scoped evidence. Real 4\u21927\u21924, all-seat restart, exits/slashing/rewards/withdrawal, formal/DA/liveness, workspace and SDK gates remain open."
+  },
+  {
+    "path": "roadmap.md",
+    "sha256": "85e3e0d1f3a1a91791c9adb7807477f71673fd77ff83923dd7047354c31926d8",
+    "text": "- Complete current single-route SDK admission qualification: regenerate signed prepared, Swift parity and Nexus fixtures with the native generators, then rerun focused runtime tests against authenticated ABI-24 artifacts. Source and syntax checks alone do not qualify the deployment."
+  },
+  {
+    "path": "roadmap.md",
+    "sha256": "25f84ed608b20314d16b9c700d6af1c82d7a1463eb54c041ec08c4ba586c0f9a",
+    "text": "records the current ABI-24 source and scoped fixture, signer and script results."
+  }
+]

@@ -1,26 +1,12 @@
-//! Consensus inputs of one Taira height for the SCCP post-execution hook (`specs/sccp.md`
-//! §4.3.2). Owner: ws20 (complete); consumed by ws30.
+//! Authenticated native height inputs for the SCCP post-execution roster hook.
 //!
-//! The roster rule needs, for the executing height `h`: the consensus mode, the epoch of `h`
-//! and its last height, the voting roster of `h`, and at an epoch boundary the voting roster
-//! of the next epoch. [`SccpHeightInputsV1`] carries exactly these values and is built from one
-//! of two authenticated sources, both deterministic functions of committed consensus state:
-//!
-//! * a Sumeragi v2 frozen [`HeightContext`] ([`SccpHeightInputsV1::from_height_context`]);
-//! * the lag-2 schedule of the Sumeragi core that `irohad` runs
-//!   ([`SccpHeightInputsV1::from_sumeragi_schedule`]). The schedule is World state advanced
-//!   inside the block's output-seal finalizer before the SCCP hook runs, so it holds the
-//!   committees of `h` and `h + 1`, and its chain parameters carry the epoch length.
-//!
-//! The Sumeragi core has no NPoS election epochs yet (`crate::sumeragi::schedule`: both
-//! consensus modes schedule every live validator key). Its epochs are the fixed-length ones of
-//! `specs/sumeragi.md` §11.7: epoch starts are the heights `s` with
-//! `(s − g − 1) mod epoch_length = 0`, where `g` is the genesis height, and the genesis block
-//! belongs to epoch 0. A committee can change at any height there, not only at epoch starts,
-//! so `roster` is the committee of `h` itself and `next_roster` the committee of `h + 1`.
+//! The original output finalizer advances the World consensus schedule before SCCP reads it.
+//! Each ready slot retains the exact epoch authorization and ordered committee. At an epoch
+//! boundary, the next roster must also be authorized; a pending slot fails closed. Neither
+//! registration state nor unauthenticated staged genesis writes can create voting authority.
 
 use crate::state::WorldReadOnly;
-use iroha_data_model::{block::consensus_v2::HeightContext, parameter::system::ConsensusMode};
+use iroha_data_model::parameter::system::ConsensusMode;
 use iroha_model_base::peer::PeerId;
 
 /// Consensus inputs of one height for the SCCP roster rule (§4.3.2).
@@ -42,12 +28,9 @@ pub struct SccpHeightInputsV1 {
 
 /// Where block validation takes the SCCP height inputs of the block it executes.
 #[derive(Debug, Clone, Copy)]
-pub enum SccpHeightSourceV1<'context> {
-    /// No consensus authority: a component fixture, or a Sumeragi v2 signed genesis, whose
-    /// height-one context is frozen from its staged state after execution.
+pub enum SccpHeightSourceV1 {
+    /// A component execution without independently authenticated consensus authority.
     Unauthenticated,
-    /// The frozen, authenticated Sumeragi v2 height context of the block.
-    V2Context(&'context HeightContext),
     /// The lag-2 schedule of the Sumeragi core, read after the block advanced it.
     SumeragiSchedule {
         /// The chain's genesis height.

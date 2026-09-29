@@ -533,7 +533,7 @@ fn realistic_ram_lfe_email_policy_bundle(
     let program_policy = RamLfeProgramPolicy::new(
         program_id.clone(),
         owner.clone(),
-        RamLfeBackend::BfvProgrammedSha3_256V1,
+        RamLfeBackend::BfvProgrammedV1,
         RamLfeVerificationMode::Signed,
         commitment,
         resolver.public_key().clone(),
@@ -3321,9 +3321,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                             .dataspace_commitments
                             .iter()
                             .any(|commitment| commitment.dataspace_id.as_u64() != 0)
-                        || status.lane_relay_envelopes.iter().any(|relay| {
-                            relay.lane_id.as_u32() != 0 || relay.dataspace_id.as_u64() != 0
-                        })
+
                 });
                 if observed_cross_lane_routing {
                     break;
@@ -3332,7 +3330,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             }
             if !observed_cross_lane_routing {
                 eprintln!(
-                    "cross-lane probes were accepted but no lane commitments or relay envelopes appeared within {:?}; continuing with status-endpoint decode coverage only",
+                    "cross-lane probes were accepted but no native lane or dataspace commitments appeared within {:?}; continuing with status-endpoint decode coverage only",
                     Duration::from_secs(45)
                 );
             }

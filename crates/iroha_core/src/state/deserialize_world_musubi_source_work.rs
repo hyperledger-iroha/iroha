@@ -2,7 +2,8 @@
 //!
 //! This reusable capture prerequisite supplies no table reader or finality token.
 //! Its required limits are local policy; refusals never become transaction gas
-//! or validity. Signature workspaces and model parser allocations remain separate.
+//! or validity. Semantic NFC scratch is prepaid for the complete sequential validation call.
+//! Signature/backend workspaces and nested helper-error ownership remain separate.
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
@@ -51,7 +52,7 @@ pub(in crate::state) enum WorkRefusal {
 #[derive(Debug)]
 pub(in crate::state) enum SourceValidationError {
     Work(WorkRefusal),
-    Attempt(ExecutionAttemptError<json::Error>),
+    Attempt(ExecutionAttemptError<ProjectionRejection>),
 }
 
 impl std::fmt::Display for SourceValidationError {
@@ -89,8 +90,9 @@ enum Operation {
     ResolverValidation,
     ReleaseValidation,
     DirectoryValidation,
+    NamespaceScratchPlan,
 }
-const OPERATION_COUNT: usize = Operation::DirectoryValidation as usize + 1;
+const OPERATION_COUNT: usize = Operation::NamespaceScratchPlan as usize + 1;
 
 struct Plan {
     limits: SourceWorkLimits,
@@ -99,6 +101,7 @@ struct Plan {
     index_entries: u64,
     operations: u64,
     signatures: u64,
+    nfc_scratch_bytes: usize,
     occurrences: [u64; OPERATION_COUNT],
 }
 
@@ -111,9 +114,34 @@ impl Plan {
             index_entries: 0,
             operations: 0,
             signatures: 0,
+            nfc_scratch_bytes: 0,
             occurrences: [0; OPERATION_COUNT],
         }
     }
+    fn with_nfc_scratch<T>(
+        &self,
+        budget: &AllocationBudget,
+        operation: impl FnOnce() -> Result<T, SourceValidationError>,
+    ) -> Result<T, SourceValidationError> {
+        // One peak spans all sequential Name checks and remains live alongside
+        // directory/package scratch. ICU owns and frees each internal buffer
+        // before returning; no normalization storage is retained in the token.
+        let _scratch = if self.nfc_scratch_bytes == 0 {
+            None
+        } else {
+            Some(
+                budget
+                    .try_reserve_bytes(self.nfc_scratch_bytes)
+                    .map_err(|refusal| {
+                        SourceValidationError::Attempt(ExecutionAttemptError::Deferred(
+                            refusal.into(),
+                        ))
+                    })?,
+            )
+        };
+        operation()
+    }
+
     fn add(&mut self, dimension: WorkDimension, count: usize) -> Result<(), WorkRefusal> {
         let count = u64::try_from(count).map_err(|_| WorkRefusal::Overflow(dimension))?;
         let (used, limit) = match dimension {
@@ -232,6 +260,8 @@ fn admit_passes(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<(), WorkR
         (Operation::ResolverValidation, resolver.len()),
         (Operation::ReleaseValidation, resolver.len()),
         (Operation::DirectoryValidation, directory.len()),
+        (Operation::NamespaceScratchPlan, packages.len()),
+        (Operation::NamespaceScratchPlan, directory.len()),
     ] {
         plan.operation(operation, count)?;
     }
@@ -260,6 +290,9 @@ fn admit_source_shapes(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<()
     for (key, row) in packages.iter() {
         plan.shape(SourceShape::PackageId(key))?;
         plan.shape(SourceShape::Package(row))?;
+        plan.nfc_scratch_bytes = plan
+            .nfc_scratch_bytes
+            .max(row.claimed_namespace.validation_scratch_bytes());
     }
     for (key, row) in releases.iter() {
         plan.shape(SourceShape::ReleaseId(key))?;
@@ -272,6 +305,9 @@ fn admit_source_shapes(world: &impl WorldReadOnly, plan: &mut Plan) -> Result<()
     for (key, row) in directory.iter() {
         plan.shape(SourceShape::Selector(key))?;
         plan.shape(SourceShape::Directory(row))?;
+        plan.nfc_scratch_bytes = plan
+            .nfc_scratch_bytes
+            .max(row.selector.namespace.validation_scratch_bytes());
     }
     Ok(())
 }
@@ -353,14 +389,14 @@ pub(in crate::state) mod observation;
 
 /// Validate and retain access to this exact World borrow after source-work admission.
 ///
-/// The returned token binds semantic projection reads only. Crypto/backend/error
+/// The returned token binds semantic projection reads only. Crypto/backend and remaining helper-error
 /// allocation custody and physical State finality remain independent prerequisites.
 /// Original memory refusals retain their pool identity; no reader is registered here.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "TODO: complete crypto/error custody before semantic table-reader registration"
+        reason = "TODO: complete crypto/helper-error custody before semantic table-reader registration"
     )
 )]
 pub(in crate::state) fn validate<'cut, W: observation::MusubiObservationCut>(
@@ -368,17 +404,27 @@ pub(in crate::state) fn validate<'cut, W: observation::MusubiObservationCut>(
     execution_budget: &'cut AllocationBudget,
     limits: SourceWorkLimits,
 ) -> Result<observation::ValidatedMusubiSource<'cut, W>, SourceValidationError> {
-    let _plan = admit(world, limits).map_err(SourceValidationError::Work)?;
-    validate_musubi_live_projection_cut(world, execution_budget)
+    let plan = admit(world, limits).map_err(SourceValidationError::Work)?;
+    plan.with_nfc_scratch(execution_budget, || {
+        validate_musubi_live_projection_cut(world, execution_budget)
+            .map_err(SourceValidationError::Attempt)?;
+        musubi_universal::validate_musubi_universal_projection_cut(
+            world,
+            ProjectionCut::Capture,
+            execution_budget,
+        )
         .map_err(SourceValidationError::Attempt)?;
-    musubi_universal::validate_musubi_universal_projection_cut(world, "capture", execution_budget)
-        .map_err(SourceValidationError::Attempt)?;
-    Ok(observation::ValidatedMusubiSource::new_validated(
-        world,
-        execution_budget,
-    ))
+        Ok(observation::ValidatedMusubiSource::new_validated(
+            world,
+            execution_budget,
+        ))
+    })
 }
 
 #[cfg(test)]
 #[path = "deserialize_world_musubi_source_work_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "deserialize_world_musubi_source_work/nfc_tests.rs"]
+mod nfc_tests;

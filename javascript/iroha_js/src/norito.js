@@ -2351,12 +2351,6 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
       rejectType(`${context}.transaction intent projection changed independent field ${field}`);
     }
   }
-  if (
-    unsignedFields.admission_intent.length !== 4 ||
-    unsignedFields.admission_intent.readUInt32LE(0) !== 0
-  ) {
-    rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO}admission_intent${TEXT_MUST_BE}TransactionAdmissionIntent::Ordinary`);
-  }
   const expectedCreationTime = 1_700_000_000_000n + BigInt(rowIndex);
   if (
     decodeU64Value(

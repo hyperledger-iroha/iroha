@@ -42,7 +42,7 @@ final class KaigiWireJavaConsumerTest {
     final TransactionPayload payload = new TransactionPayload(
         NetworkId.fromBytes(networkBytes), account, 1L, Executable.instructions(boxes),
         1000L, null, FeePaymentIntent.authority(Collections.emptyList()),
-        TransactionAdmissionIntent.ORDINARY, Collections.emptyMap(), null);
+        Collections.emptyMap(), null);
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final byte[] encoded = codec.encodeTransaction(payload);
     assertArrayEquals(encoded, codec.encodeTransaction(codec.decodeTransaction(encoded)));

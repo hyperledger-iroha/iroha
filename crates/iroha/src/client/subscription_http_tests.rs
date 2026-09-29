@@ -30,7 +30,7 @@ use iroha_data_model::{
     },
     transaction::{
         Executable, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, IvmBytecode,
-        TransactionAdmissionIntent, TransactionBuilder, TransactionPayload,
+        TransactionBuilder, TransactionPayload,
     },
     trigger::{
         Trigger,
@@ -727,7 +727,6 @@ async fn payload_drafts_reject_unrequested_fixed_transaction_fields() {
         for (mutation, field) in [
             ("metadata", "metadata"),
             ("attachments", "attachments"),
-            ("admission", "admission_intent"),
             ("sponsor", "fee_payer_and_gas_bound"),
             ("gas", "fee_payer_and_gas_bound"),
         ] {
@@ -754,10 +753,6 @@ async fn payload_drafts_reject_unrequested_fixed_transaction_fields() {
                                 );
                                 payload.attachments =
                                     Some(ProofAttachmentList::try_from(vec![attachment]).unwrap());
-                            }
-                            "admission" => {
-                                payload.admission_intent =
-                                    TransactionAdmissionIntent::QueuePlanSynced;
                             }
                             "sponsor" => {
                                 payload.fee_payment = FeePaymentIntent::sponsor(

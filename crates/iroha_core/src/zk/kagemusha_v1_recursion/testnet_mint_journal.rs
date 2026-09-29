@@ -15,14 +15,18 @@ use super::{KagemushaRecursionErrorV1, KagemushaTestnetStateObservationScopeV1};
 use crate::zk::kagemusha_v1_state::{PrivateJournal, PrivateJournalError, PrivateJournalFormat};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    NetworkId, consensus::v2::HeightContextId, isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
+    NetworkId,
+    isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
+    sumeragi_finality::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint},
 };
 
 // Cover Torii's full canonical status limit plus the paired proof, public inputs, anchor,
 // and Norito framing. Every component is bounded before decode or append. JSON is decoded
 // separately at Torii and has its own larger transport limit.
 const RECORD_MAX_BYTES: usize =
-    iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1 + 1024 * 1024;
+    iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1
+        + MAX_FINALITY_CHECKPOINT_BYTES
+        + 1024 * 1024;
 const STATUS_MAX_BYTES: usize =
     iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1;
 const STATE_PUBLIC_INPUTS_MAX_BYTES: usize = 4 * 1024;
@@ -57,45 +61,44 @@ pub(super) enum Record {
     },
 }
 
-/// Canonical primitive projection of a caller-pinned finality context.
+/// Canonical checkpoint evidence retained from the caller's independently selected anchor.
 ///
-/// The on-disk copy is evidence of what the caller supplied, never a trust source on restart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+/// Decoding or validating this disk copy never grants authority. Replay must obtain and
+/// match the independent verified chain token before verifying the stored status or mint.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_recursion::testnet_mint_journal::JournalAnchor"
 )]
 pub(super) struct JournalAnchor {
     network_id: [u8; 32],
-    block_height: u64,
-    height_context_id: [u8; 32],
-}
-
-impl From<KagemushaFinalityTrustAnchorV1> for JournalAnchor {
-    fn from(value: KagemushaFinalityTrustAnchorV1) -> Self {
-        Self {
-            network_id: *value.network_id.as_bytes(),
-            block_height: value.block_height,
-            height_context_id: *value.height_context_id.0.as_ref(),
-        }
-    }
+    checkpoint: Vec<u8>,
 }
 
 impl JournalAnchor {
+    pub(super) fn capture(
+        value: &KagemushaFinalityTrustAnchorV1,
+    ) -> Result<Self, KagemushaRecursionErrorV1> {
+        value.validate().map_err(|_| invalid_record())?;
+        Ok(Self {
+            network_id: *value.network_id.as_bytes(),
+            checkpoint: value
+                .checkpoint
+                .encode_canonical()
+                .map_err(|_| invalid_record())?,
+        })
+    }
+
     pub(super) fn try_into_anchor(
         self,
     ) -> Result<KagemushaFinalityTrustAnchorV1, KagemushaRecursionErrorV1> {
-        // Hash::prehashed changes the marker bit and could silently choose a different trust
-        // anchor. Parse the exact original bytes instead, rejecting an invalid marker.
+        // Parse exact original network bytes: prehashed would change the marker bit.
         let network: Hash = hex::encode(self.network_id)
-            .parse()
-            .map_err(|_| invalid_record())?;
-        let context: Hash = hex::encode(self.height_context_id)
             .parse()
             .map_err(|_| invalid_record())?;
         let anchor = KagemushaFinalityTrustAnchorV1 {
             network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(network)),
-            block_height: self.block_height,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(context)),
+            checkpoint: SumeragiFinalityCheckpoint::decode_canonical(&self.checkpoint)
+                .map_err(|_| invalid_record())?,
         };
         anchor.validate().map_err(|_| invalid_record())?;
         Ok(anchor)
@@ -176,13 +179,15 @@ fn check_component_bounds(record: &Record) -> Result<(), KagemushaRecursionError
         Record::ObserveFinalizedMint {
             operation_id,
             status,
+            trust_anchor,
             public_inputs,
             proof,
-            ..
         } => {
             *operation_id != [0; 32]
                 && !status.is_empty()
                 && status.len() <= STATUS_MAX_BYTES
+                && !trust_anchor.checkpoint.is_empty()
+                && trust_anchor.checkpoint.len() <= MAX_FINALITY_CHECKPOINT_BYTES
                 && !public_inputs.is_empty()
                 && public_inputs.len() <= STATE_PUBLIC_INPUTS_MAX_BYTES
                 && !proof.is_empty()
@@ -330,8 +335,7 @@ mod tests {
                 status: vec![0; STATUS_MAX_BYTES + 1],
                 trust_anchor: JournalAnchor {
                     network_id: [1; 32],
-                    block_height: 1,
-                    height_context_id: [3; 32],
+                    checkpoint: vec![1],
                 },
                 public_inputs: vec![1],
                 proof: vec![1],
@@ -348,23 +352,28 @@ mod tests {
     }
 
     #[test]
-    fn journal_anchor_roundtrip_preserves_exact_marked_bytes_and_rejects_unmarked() {
-        let anchor = JournalAnchor {
-            network_id: [1; 32],
-            block_height: 7,
-            height_context_id: [3; 32],
+    fn journal_anchor_roundtrip_preserves_exact_checkpoint_and_rejects_foreign_network() {
+        let fixture = iroha_data_model::testing::native_finality::NativeFinalityFixture::new();
+        let selected = KagemushaFinalityTrustAnchorV1 {
+            network_id: fixture.network_id(),
+            checkpoint: fixture.checkpoint(),
         };
-        let reconstructed = anchor.try_into_anchor().unwrap();
-        assert_eq!(JournalAnchor::from(reconstructed), anchor);
+        let anchor = JournalAnchor::capture(&selected).unwrap();
+        let reconstructed = anchor.clone().try_into_anchor().unwrap();
+        assert_eq!(reconstructed, selected);
+        assert_eq!(JournalAnchor::capture(&reconstructed).unwrap(), anchor);
         let unmarked = JournalAnchor {
             network_id: [2; 32],
-            ..anchor
+            ..anchor.clone()
         };
         assert!(unmarked.try_into_anchor().is_err());
-        let unmarked = JournalAnchor {
-            height_context_id: [2; 32],
-            ..anchor
+        let changed = JournalAnchor {
+            network_id: *Hash::new(b"foreign native network").as_ref(),
+            ..anchor.clone()
         };
-        assert!(unmarked.try_into_anchor().is_err());
+        assert!(changed.try_into_anchor().is_err());
+        let mut malformed = anchor;
+        malformed.checkpoint.push(0);
+        assert!(malformed.try_into_anchor().is_err());
     }
 }

@@ -57,52 +57,139 @@ mod validation_fee_policy_proof_bridge_tests {
         )
         .expect("evaluate quote")
     }
-    #[test]
-    fn request_encoder_validates_context_without_serializing_it() {
-        let first_context = [1_u8; 32];
-        let mut second_context = [3_u8; 32];
-        second_context[0] = 9;
-        let first = validation_fee_current_policy_proof_request_v1(17, first_context)
-            .expect("encode first request");
-        let second = validation_fee_current_policy_proof_request_v1(17, second_context)
-            .expect("encode second request");
-        assert_eq!(first, second);
-        let decoded: ValidationFeeCurrentPolicyProofRequestV1 =
-            decode_from_bytes(&first).expect("decode request");
-        assert_eq!(
-            decoded,
-            ValidationFeeCurrentPolicyProofRequestV1 {
-                version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-                trusted_checkpoint_height: 17,
-            }
-        );
-        assert!(
-            validation_fee_current_policy_proof_request_v1(0, first_context).is_err(),
-            "zero height must fail closed"
-        );
-        assert!(
-            validation_fee_current_policy_proof_request_v1(17, [0; 32]).is_err(),
-            "zero context must fail closed"
-        );
-        assert!(
-            validation_fee_current_policy_proof_request_v1(17, [2; 32]).is_err(),
-            "unmarked context must fail closed"
-        );
+    fn native_checkpoint(height: u64) -> &'static [u8] {
+        match height {
+            1 => include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+            )),
+            2 => include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"
+            )),
+            _ => panic!("fixture checkpoint height"),
+        }
     }
     #[test]
-    fn proof_verifier_rejects_malformed_archive() {
-        assert!(
-            validation_fee_current_policy_proof_verify_v1(
-                b"not norito",
-                NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
-                    Hash::prehashed([1; 32]),
-                )),
-                [3; 32],
-                1,
-                [5; 32],
+    fn request_encoder_derives_height_from_complete_native_checkpoint() {
+        for height in 1..=2 {
+            let checkpoint = native_checkpoint(height);
+            let request = validation_fee_current_policy_proof_request_v1(checkpoint).unwrap();
+            let decoded: ValidationFeeCurrentPolicyProofRequestV1 =
+                decode_from_bytes(&request).unwrap();
+            assert_eq!(
+                decoded,
+                ValidationFeeCurrentPolicyProofRequestV1 {
+                    version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+                    trusted_checkpoint_height: height,
+                }
+            );
+            let mut output = ptr::null_mut();
+            let mut length = 0;
+            let code = unsafe {
+                connect_norito_validation_fee_current_policy_proof_request_v1(
+                    checkpoint.as_ptr(),
+                    checkpoint.len() as c_ulong,
+                    &mut output,
+                    &mut length,
+                )
+            };
+            assert_eq!(code, 0);
+            assert_eq!(
+                unsafe { slice::from_raw_parts(output, length as usize) },
+                request
+            );
+            connect_norito_free(output);
+            let mut suffix = checkpoint.to_vec();
+            suffix.push(0);
+            assert!(validation_fee_current_policy_proof_request_v1(&suffix).is_err());
+        }
+        for malformed in [
+            &[][..],
+            &[0; 32],
+            &[1; 32],
+            &[2; 32],
+            &native_checkpoint(1)[..32],
+        ] {
+            assert!(validation_fee_current_policy_proof_request_v1(malformed).is_err());
+        }
+    }
+    #[test]
+    fn proof_verifier_rejects_malformed_archive_and_scalar_checkpoint() {
+        let checkpoint =
+            iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+                native_checkpoint(1),
             )
-            .is_err()
-        );
+            .unwrap();
+        for archive in [&[][..], b"not norito"] {
+            for trust in [native_checkpoint(1), &[5; 32][..]] {
+                assert!(
+                    validation_fee_current_policy_proof_verify_v1(
+                        archive,
+                        checkpoint.network_id(),
+                        [3; 32],
+                        trust,
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+    #[test]
+    fn fee_checkpoint_c_boundaries_clear_every_output_on_refusal() {
+        let checkpoint = native_checkpoint(1);
+        let network =
+            iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+                checkpoint,
+            )
+            .unwrap()
+            .network_id();
+        for (input, length) in [
+            (ptr::null(), checkpoint.len() as c_ulong),
+            (checkpoint.as_ptr(), 0),
+            (
+                checkpoint.as_ptr(),
+                (iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES + 1) as c_ulong,
+            ),
+        ] {
+            let mut output = ptr::dangling_mut();
+            let mut output_len = 99;
+            let code = unsafe {
+                connect_norito_validation_fee_current_policy_proof_request_v1(
+                    input,
+                    length,
+                    &mut output,
+                    &mut output_len,
+                )
+            };
+            assert_ne!(code, 0);
+            assert!(output.is_null());
+            assert_eq!(output_len, 0);
+        }
+        let mut projection = ptr::dangling_mut();
+        let mut projection_len = 99;
+        let mut promoted = ptr::dangling_mut();
+        let mut promoted_len = 99;
+        let code = unsafe {
+            connect_norito_validation_fee_current_policy_proof_verify_v1(
+                b"not norito".as_ptr(),
+                10,
+                network.as_bytes().as_ptr(),
+                32,
+                [3_u8; 32].as_ptr(),
+                32,
+                checkpoint.as_ptr(),
+                checkpoint.len() as c_ulong,
+                &mut projection,
+                &mut projection_len,
+                &mut promoted,
+                &mut promoted_len,
+            )
+        };
+        assert_ne!(code, 0);
+        assert!(projection.is_null());
+        assert!(promoted.is_null());
+        assert_eq!((projection_len, promoted_len), (0, 0));
     }
 
     #[test]
@@ -187,11 +274,8 @@ mod validation_fee_policy_proof_bridge_tests {
         let mut trailing_request = request_archive.clone();
         trailing_request.push(0);
         assert!(
-            validation_fee_hijiri_quote_response_verify_v1(
-                &response_archive,
-                &trailing_request,
-            )
-            .is_err(),
+            validation_fee_hijiri_quote_response_verify_v1(&response_archive, &trailing_request,)
+                .is_err(),
             "non-canonical request bytes must fail closed"
         );
         let mut trailing_response = response_archive;

@@ -36,9 +36,11 @@
 pub mod barrier;
 pub mod exec;
 pub mod ingress;
+mod node_gate;
 pub mod persist;
 pub mod serve;
 pub mod traits;
+pub use node_gate::NodeGate;
 
 #[cfg(test)]
 mod tests;
@@ -82,7 +84,7 @@ use self::{
     persist::{Backoff, PersistQueue, Write},
     serve::{ServeLimits, ServeRequest, ServeSched, Served},
     traits::{
-        BlockStore, BodyStore, Clock, Executor, Net, Observer, PublicationError, RecordStore,
+        BlockStore, BodyStore, Clock, Executor, Frame, Net, Observer, PublicationError, RecordStore,
     },
 };
 
@@ -692,6 +694,9 @@ pub enum DriverError {
     /// The core refused its configuration or startup input.
     #[error("sumeragi configuration: {0}")]
     Config(ConfigError),
+    /// Canonical storage failed; this storage owner cannot start another instance.
+    #[error("sumeragi canonical storage is closed; restart is required")]
+    StorageClosed,
     /// O10: the transport's frame limit is below what the chain parameters need.
     #[error("sumeragi frame limit {limit} is below the {needed} bytes the parameters need")]
     FrameLimit {
@@ -762,6 +767,8 @@ impl Crypto for CryptoRef {
 
 /// What a driver instance starts with (all of it moves to its threads).
 pub struct DriverStart {
+    /// Node-wide storage gate; every production instance shares its Kura owner’s gate.
+    pub node_gate: Arc<NodeGate>,
     /// Exact original State resource pool used to admit retained result witnesses.
     pub allocation_budget: mv::allocation::AllocationBudget,
     /// Local parameters.
@@ -796,6 +803,7 @@ struct PendingMessage {
 
 /// State shared between the event loop and the handles.
 struct Shared {
+    node_gate: Arc<NodeGate>,
     allocation_budget: mv::allocation::AllocationBudget,
     pending_admission: Mutex<Option<PendingMessage>>,
     instance: Hash32,
@@ -890,10 +898,17 @@ impl Drop for LoopGuard {
     fn drop(&mut self) {
         if std::thread::panicking() {
             stop(&self.shared, &*self.observer, Worker::Loop);
+        } else {
+            let orderly = self.shared.stopped.lock().is_none();
+            if orderly {
+                contained("observer", || self.observer.finished());
+            }
         }
         self.shared.alive.store(false, Ordering::Release);
         // No partially admitted owner can outlive a stopped instance via a retained handle.
-        self.shared.pending_admission.lock().take();
+        let mut pending = self.shared.pending_admission.lock();
+        pending.take();
+        self.shared.ingress.lock().clear();
     }
 }
 
@@ -915,6 +930,9 @@ impl DriverHandle {
     /// O6). The driver alone decodes, within the transport's frame limit (O10), which every
     /// committed configuration is validated against. Returns whether the message was queued.
     pub fn deliver(&self, from: &PublicKey, frame: &[u8]) -> bool {
+        if self.shared.node_gate.is_closed() {
+            return false;
+        }
         match WireMessage::decode(frame, self.shared.frame_limit) {
             Ok(msg) => self.deliver_message(from.clone(), msg),
             Err(_) => false,
@@ -929,7 +947,8 @@ impl DriverHandle {
     /// continues. Refusal is local backpressure, not evidence of invalid consensus data.
     pub fn deliver_message(&self, from: PublicKey, mut msg: WireMessage) -> bool {
         let shared = &self.shared;
-        if !shared.alive.load(Ordering::Acquire)
+        if shared.node_gate.is_closed()
+            || !shared.alive.load(Ordering::Acquire)
             || msg.instance() != &shared.instance
             || shared.own.contains(&from)
         {
@@ -938,6 +957,11 @@ impl DriverHandle {
         let Some(mut pending) = shared.pending_admission.try_lock() else {
             return false;
         };
+        // Serialize with final cleanup: a caller that passed the optimistic check
+        // cannot leave a frame behind after the event loop's owners have retired.
+        if shared.node_gate.is_closed() || !shared.alive.load(Ordering::Acquire) {
+            return false;
+        }
         if pending.is_some() && !msg.attestation_witnesses_admitted_to(&shared.allocation_budget) {
             return false;
         }
@@ -954,7 +978,6 @@ impl DriverHandle {
             self.wake();
             return true;
         }
-        drop(pending);
         let class = msg.traffic_class();
         let queued = admit_message(
             &shared.ingress,
@@ -964,6 +987,7 @@ impl DriverHandle {
             msg,
             class,
         );
+        drop(pending);
         if queued {
             self.wake();
         }
@@ -972,6 +996,9 @@ impl DriverHandle {
 
     /// An includable transaction arrived (`PayloadReady` after an `EMPTY` build).
     pub fn transactions_available(&self) {
+        if self.shared.node_gate.is_closed() {
+            return;
+        }
         let _ = self.inputs.send(Input::Transactions);
     }
 
@@ -983,6 +1010,9 @@ impl DriverHandle {
     /// Why the instance halted, if it did: the core's reason, or `DriverAnomaly` when a
     /// stopped thread stopped the instance ([`DriverHandle::stopped`]).
     pub fn halted(&self) -> Option<HaltReason> {
+        if self.shared.node_gate.is_closed() {
+            return Some(HaltReason::DriverAnomaly);
+        }
         self.status()
             .and_then(|s| s.halted)
             .or_else(|| self.stopped().map(|_| HaltReason::DriverAnomaly))
@@ -995,7 +1025,8 @@ impl DriverHandle {
 
     /// Whether the core started and has not halted, and the instance runs.
     pub fn ready(&self) -> bool {
-        self.shared.alive.load(Ordering::Acquire)
+        !self.shared.node_gate.is_closed()
+            && self.shared.alive.load(Ordering::Acquire)
             && self.stopped().is_none()
             && self.status().is_some_and(|s| s.halted.is_none())
     }
@@ -1095,6 +1126,9 @@ where
         start: DriverStart,
     ) -> Result<RunningDriver, DriverError> {
         check_frame_limit(&config, &start)?;
+        if start.node_gate.is_closed() {
+            return Err(DriverError::StorageClosed);
+        }
         let instance = start.init.instance;
         let own: Vec<PublicKey> = start
             .init
@@ -1104,6 +1138,7 @@ where
             .collect();
         let ingress = Arc::new(Mutex::new(Ingress::new(config.ingress)));
         let shared = Arc::new(Shared {
+            node_gate: Arc::clone(&start.node_gate),
             allocation_budget: start.allocation_budget.clone(),
             pending_admission: Mutex::new(None),
             instance,
@@ -1116,6 +1151,10 @@ where
             alive: AtomicBool::new(true),
             stopped: Mutex::new(None),
         });
+        let net: Arc<dyn Net> = Arc::new(NodeNet {
+            net: Arc::clone(&self.net),
+            gate: Arc::clone(&shared.node_gate),
+        });
         let (inputs, rx) = mpsc::channel();
         let mut threads = Vec::new();
         let (persist_tx, persist_rx) = mpsc::channel::<(u64, Write)>();
@@ -1126,6 +1165,7 @@ where
                 Arc::clone(&start.crypto),
             );
             let tx = inputs.clone();
+            let gate = Arc::clone(&shared.node_gate);
             threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-persist").spawn(move || {
                     let _exit = ExitGuard {
@@ -1133,6 +1173,9 @@ where
                         tx: tx.clone(),
                     };
                     for (seq, write) in persist_rx {
+                        let Some(_operation) = gate.enter() else {
+                            break;
+                        };
                         let result = persist::perform(&*records, &*bodies, &*crypto, write);
                         if tx
                             .send(Input::Done(Completion::Persisted { seq, result }))
@@ -1148,6 +1191,7 @@ where
         {
             let (mut executor, blocks) = (self.executor, Arc::clone(&self.blocks));
             let tx = inputs.clone();
+            let gate = Arc::clone(&shared.node_gate);
             threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-exec").spawn(move || {
                     let _exit = ExitGuard {
@@ -1155,6 +1199,9 @@ where
                         tx: tx.clone(),
                     };
                     for op in exec_rx {
+                        let Some(_operation) = gate.enter() else {
+                            break;
+                        };
                         let done = run_exec(&mut executor, &*blocks, op);
                         if tx.send(Input::Done(Completion::Exec(done))).is_err() {
                             break;
@@ -1165,8 +1212,9 @@ where
         }
         let (serve_tx, serve_rx) = mpsc::channel::<ServeRequest>();
         {
-            let (bodies, blocks, net) = (self.bodies, self.blocks, Arc::clone(&self.net));
+            let (bodies, blocks, net) = (self.bodies, self.blocks, Arc::clone(&net));
             let tx = inputs.clone();
+            let gate = Arc::clone(&shared.node_gate);
             threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-serve").spawn(move || {
                     let _exit = ExitGuard {
@@ -1174,6 +1222,9 @@ where
                         tx: tx.clone(),
                     };
                     for request in serve_rx {
+                        let Some(_operation) = gate.enter() else {
+                            break;
+                        };
                         let served = catch_unwind(AssertUnwindSafe(|| {
                             serve::serve(request, instance, &*bodies, &*blocks, &*net)
                         }))
@@ -1188,9 +1239,9 @@ where
                 })?,
             );
         }
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), ConfigError>>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), DriverError>>(1);
         {
-            let (clock, net, observer) = (self.clock, self.net, self.observer);
+            let (clock, net, observer) = (self.clock, net, self.observer);
             let shared = Arc::clone(&shared);
             threads.push(
                 super::threads::sumeragi_thread_builder("sumeragi-loop").spawn(move || {
@@ -1199,11 +1250,16 @@ where
                         observer: Arc::clone(&observer),
                     };
                     let workers = Workers {
+                        node_gate: Arc::clone(&shared.node_gate),
                         net,
                         observer,
                         persist: persist_tx,
                         exec: exec_tx,
                         serve: serve_tx,
+                    };
+                    let Some(startup) = shared.node_gate.enter() else {
+                        let _ = ready_tx.send(Err(DriverError::StorageClosed));
+                        return;
                     };
                     let kernel = Kernel::start(KernelStart {
                         local: start.local,
@@ -1220,6 +1276,7 @@ where
                         ingress,
                         config,
                     });
+                    drop(startup);
                     match kernel {
                         Ok((kernel, _)) => {
                             shared.publish(&kernel);
@@ -1229,7 +1286,7 @@ where
                             }
                         }
                         Err(error) => {
-                            let _ = ready_tx.send(Err(error));
+                            let _ = ready_tx.send(Err(DriverError::Config(error)));
                         }
                     }
                 })?,
@@ -1240,7 +1297,7 @@ where
             Ok(Ok(())) => Ok(RunningDriver { handle, threads }),
             Ok(Err(error)) => {
                 RunningDriver { handle, threads }.shutdown();
-                Err(DriverError::Config(error))
+                Err(error)
             }
             Err(_) => {
                 RunningDriver { handle, threads }.shutdown();
@@ -1377,8 +1434,23 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
     }
 }
 
+/// Gate each physical send, including responses emitted inside a serving operation.
+struct NodeNet<N> {
+    net: Arc<N>,
+    gate: Arc<NodeGate>,
+}
+impl<N: Net> Net for NodeNet<N> {
+    fn send(&self, to: &PublicKey, frame: &Frame) {
+        let Some(_send) = self.gate.enter() else {
+            return;
+        };
+        self.net.send(to, frame);
+    }
+}
+
 /// Where the event loop sends operations.
 struct Workers {
+    node_gate: Arc<NodeGate>,
     net: Arc<dyn Net>,
     observer: Arc<dyn Observer>,
     persist: mpsc::Sender<(u64, Write)>,
@@ -1390,6 +1462,9 @@ impl Workers {
     /// Start `ops`; a worker that cannot be reached stops the instance (returned).
     fn dispatch(&self, ops: Vec<Op>) -> Result<(), Worker> {
         for op in ops {
+            let Some(_operation) = self.node_gate.enter() else {
+                return Err(Worker::Loop);
+            };
             match op {
                 Op::Send { to, msg } => contained("transport", || {
                     if let Some(frame) = serve::frame(&msg) {
@@ -1428,6 +1503,9 @@ fn run_loop(
     workers: &Workers,
 ) -> Result<(), Worker> {
     let absorb = |kernel: &mut Kernel, input: Input| -> Result<bool, Worker> {
+        let Some(_operation) = shared.node_gate.enter() else {
+            return Err(Worker::Loop);
+        };
         match input {
             Input::Done(completion) => kernel.complete(clock.now(), completion),
             Input::Wake => shared.wake_pending.store(false, Ordering::Release),
@@ -1449,15 +1527,27 @@ fn run_loop(
                 Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
-        shared.retry_pending_message();
+        let operations = {
+            let Some(_operation) = shared.node_gate.enter() else {
+                return Err(Worker::Loop);
+            };
+            shared.retry_pending_message();
+            kernel.poll(clock.now())
+        };
+        workers.dispatch(operations)?;
+        let Some(operation) = shared.node_gate.enter() else {
+            return Err(Worker::Loop);
+        };
         let now = clock.now();
-        workers.dispatch(kernel.poll(now))?;
         if let Some(event) = kernel.next_input(now) {
             kernel.handle(now, event);
-            workers.dispatch(kernel.poll(clock.now()))?;
+            let operations = kernel.poll(clock.now());
+            drop(operation);
+            workers.dispatch(operations)?;
             shared.publish(&kernel);
             continue;
         }
+        drop(operation);
         if kernel.has_output() {
             continue;
         }

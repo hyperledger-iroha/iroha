@@ -1,3 +1,4 @@
+//! Retained diagnostic trace and execution behavior controls.
 use ivm::{IVM, encoding, instruction, zk::check_diagnostic_trace};
 mod common;
 use common::assemble_zk;
@@ -16,8 +17,8 @@ fn test_diagnostic_trace_check_passes() {
     vm.set_zk_trace_enabled(true);
     let res = vm.run();
     assert!(res.is_ok());
-    let trace = vm.register_trace();
-    check_diagnostic_trace(&trace, vm.constraints(), &vm.register_log()).unwrap();
+    let snapshot = common::diagnostic_snapshot(&vm);
+    check_diagnostic_trace(&snapshot).unwrap();
 }
 #[test]
 fn test_diagnostic_trace_check_rejects_failed_constraint() {
@@ -34,7 +35,7 @@ fn test_diagnostic_trace_check_rejects_failed_constraint() {
     vm.set_zk_trace_enabled(true);
     let res = vm.run();
     assert!(res.is_err());
-    let trace = vm.register_trace();
-    let check = check_diagnostic_trace(&trace, vm.constraints(), &vm.register_log());
+    let snapshot = common::diagnostic_snapshot(&vm);
+    let check = check_diagnostic_trace(&snapshot);
     assert!(check.is_err());
 }

@@ -1199,20 +1199,13 @@ pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
         "dataspace commitments snapshot",
     )
     .retain(|entry| !lane_matches(entry.lane_id));
-    lock_operator_status_slot(
-        lane_settlement_commitments_slot(),
-        "lane settlement commitments snapshot",
-    )
-    .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
-    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot")
-        .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
 }
 #[cfg(test)]
 pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
     format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot"),
         lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot"),
         lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot"),
@@ -1220,11 +1213,6 @@ pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
             dataspace_commitments_slot(),
             "dataspace commitments snapshot"
         ),
-        lock_operator_status_slot(
-            lane_settlement_commitments_slot(),
-            "lane settlement commitments snapshot"
-        ),
-        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot"),
         lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot"),
         lock_operator_status_slot(nexus_staking_slot(), "nexus staking status")
             .lanes
@@ -1345,10 +1333,6 @@ pub struct StatusSnapshot {
     pub lane_commitments: Vec<LaneCommitmentSnapshot>,
     /// Dataspace-local commitments retained for Nexus diagnostics.
     pub dataspace_commitments: Vec<DataspaceCommitmentSnapshot>,
-    /// Lane-local settlement commitments.
-    pub lane_settlement_commitments: Vec<LaneBlockCommitment>,
-    /// Certified lane relay envelopes.
-    pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
     /// Count of governance-sealed lanes.
     pub lane_governance_sealed_total: u32,
     /// Aliases of governance-sealed lanes.
@@ -1379,8 +1363,6 @@ pub fn snapshot() -> StatusSnapshot {
         .clone(),
         lane_commitments: lane_commitments_snapshot(),
         dataspace_commitments: dataspace_commitments_snapshot(),
-        lane_settlement_commitments: lane_settlement_commitments_snapshot(),
-        lane_relay_envelopes: lane_relay_envelopes_snapshot(),
         lane_governance_sealed_total,
         lane_governance_sealed_aliases,
         lane_governance,

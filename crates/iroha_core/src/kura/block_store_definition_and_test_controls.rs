@@ -35,7 +35,97 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
-        self.check_storage_budget(block, None)
+        self.check_storage_budget(block)
+    }
+}
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl Kura {
+    /// Simulate loss of a canonical body while retaining its exact recovery metadata.
+    ///
+    /// Unlike normal eviction, this test-only fault may affect unfinished Native
+    /// publication work. It retains the indexed wire length so authenticated
+    /// remote recovery must restore the exact canonical frame.
+    ///
+    /// # Errors
+    /// Returns an error when the height is absent or its storage cannot be updated.
+    #[cfg(test)]
+    pub(crate) fn remove_block_body_for_recovery_test(&self, height: NonZeroUsize) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _write_guard = self.block_store_write_lock.lock();
+        let index = u64::try_from(height.get().saturating_sub(1))?;
+        let mut store = self.block_store.lock();
+        let block_index = store.read_block_index(index)?;
+        let count = store.read_durable_index_count()?;
+        let path = store.da_block_path(u64::try_from(height.get())?);
+        let before_bytes = Self::file_len_or_zero(&path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        store.write_block_index(index, EVICTED_BLOCK_START, block_index.length)?;
+        store.remove_da_block_file(u64::try_from(height.get())?)?;
+        store.publish_commit_marker(count)?;
+        drop(store);
+        if let Some((_, cached)) = self
+            .block_data
+            .lock()
+            .get_mut(height.get().saturating_sub(1))
+        {
+            *cached = None;
+        }
+        self.update_total_disk_usage_delta(before_bytes, 0);
+        accounting_mutation.finish();
+        Ok(())
+    }
+    /// Remove the local DA cache only after a canonical body was genuinely evicted.
+    ///
+    /// This test-only hook models a remote-only historical block so downstream
+    /// proof-serving regressions cannot accidentally succeed by re-decoding the
+    /// complete local body instead of the immutable retained record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `height` is absent, still inline, or its local
+    /// sidecar cannot be removed.
+    pub fn remove_evicted_block_sidecar_for_testing(&self, height: NonZeroUsize) -> Result<()> {
+        let index = u64::try_from(height.get().saturating_sub(1))?;
+        let accounting_mutation = {
+            let mut store = self.block_store.lock();
+            let block_index = store.read_block_index(index)?;
+            if !block_index.is_evicted() {
+                let path = store.da_block_path(u64::try_from(height.get())?);
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "cannot remove a DA sidecar for a block whose canonical body is still inline",
+                    ),
+                    path,
+                ));
+            }
+            let height = u64::try_from(height.get())?;
+            let path = store.da_block_path(height);
+            let before_bytes = Self::file_len_or_zero(&path)?;
+            if before_bytes == 0 {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "cannot remove an absent evicted-block DA sidecar",
+                    ),
+                    path,
+                ));
+            }
+            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            store.remove_da_block_file(height)?;
+            self.update_total_disk_usage_delta(before_bytes, 0);
+            accounting_mutation
+        };
+        if let Some((_, cached)) = self
+            .block_data
+            .lock()
+            .get_mut(height.get().saturating_sub(1))
+        {
+            *cached = None;
+        }
+        accounting_mutation.finish();
+        Ok(())
     }
 }
 #[cfg(test)]
@@ -57,6 +147,57 @@ impl Kura {
             Err(_) => self.invalidate_durable_budget_snapshot(),
         }
         accounting_mutation.finish();
+    }
+    fn pause_next_eviction_after_snapshot_for_tests(&self) {
+        self.eviction_paused_after_snapshot
+            .store(false, Ordering::Release);
+        self.pause_eviction_after_snapshot
+            .store(true, Ordering::Release);
+    }
+    fn eviction_paused_after_snapshot_for_tests(&self) -> bool {
+        self.eviction_paused_after_snapshot.load(Ordering::Acquire)
+    }
+    fn resume_eviction_after_snapshot_for_tests(&self) {
+        self.eviction_paused_after_snapshot
+            .store(false, Ordering::Release);
+    }
+    fn pause_next_eviction_before_stage_publication_for_tests(&self) {
+        self.eviction_paused_before_stage_publication
+            .store(false, Ordering::Release);
+        self.pause_eviction_before_stage_publication
+            .store(true, Ordering::Release);
+    }
+    fn eviction_paused_before_stage_publication_for_tests(&self) -> bool {
+        self.eviction_paused_before_stage_publication
+            .load(Ordering::Acquire)
+    }
+    fn resume_eviction_before_stage_publication_for_tests(&self) {
+        self.eviction_paused_before_stage_publication
+            .store(false, Ordering::Release);
+    }
+    fn pause_next_block_read_before_cache_recheck_for_tests(&self) {
+        self.block_read_paused_before_cache_recheck
+            .store(false, Ordering::Release);
+        self.pause_block_read_before_cache_recheck
+            .store(true, Ordering::Release);
+    }
+    fn block_read_paused_before_cache_recheck_for_tests(&self) -> bool {
+        self.block_read_paused_before_cache_recheck
+            .load(Ordering::Acquire)
+    }
+    fn resume_block_read_before_cache_recheck_for_tests(&self) {
+        self.block_read_paused_before_cache_recheck
+            .store(false, Ordering::Release);
+    }
+    fn force_next_durable_blocks_count_fallback_for_tests(&self) {
+        self.durable_blocks_count_fallback_reached
+            .store(false, Ordering::Release);
+        self.force_durable_blocks_count_fallback
+            .store(true, Ordering::Release);
+    }
+    fn durable_blocks_count_fallback_reached_for_tests(&self) -> bool {
+        self.durable_blocks_count_fallback_reached
+            .load(Ordering::Acquire)
     }
     fn pause_next_total_disk_usage_scan_after_scan_for_tests(&self) {
         self.total_disk_usage_scan_paused
@@ -87,6 +228,9 @@ impl Kura {
     pub(crate) fn fail_next_store_for_tests(&self) {
         self.fail_next_block_write.store(true, Ordering::Relaxed);
     }
+    pub(crate) fn fail_next_block_write_for_tests(&self) {
+        self.fail_next_block_write.store(true, Ordering::Relaxed);
+    }
     #[cfg(test)]
     pub(crate) fn poison_canonical_storage_for_tests(&self) {
         self.poison_canonical_storage(
@@ -99,6 +243,54 @@ impl Kura {
         let store = self.block_store.lock();
         let path = store.commit_marker_path();
         std::fs::write(&path, bytes).map_err(|error| Error::IO(error, path))
+    }
+    #[cfg(test)]
+    pub(crate) fn publish_exact_commit_marker_for_tests(&self) -> Result<()> {
+        let mut store = self.block_store.lock();
+        let index_len = store.index_file_len()?;
+        let hashes_len = store.hashes_file_len()?;
+        if index_len % BlockIndex::SIZE != 0 || hashes_len % SIZE_OF_BLOCK_HASH != 0 {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "cannot publish a test marker for a partial canonical journal",
+                ),
+                store.path_to_blockchain.clone(),
+            ));
+        }
+        let index_count = index_len / BlockIndex::SIZE;
+        let hashes_count = hashes_len / SIZE_OF_BLOCK_HASH;
+        if index_count != hashes_count {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        store.write_commit_marker(index_count)?;
+        let marker = store.read_commit_marker()?.ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::NotFound, "published commit marker is missing"),
+                store.commit_marker_path(),
+            )
+        })?;
+        store.validate_commit_marker_tip(&marker, hashes_count)?;
+        if marker.count != index_count {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        store.commit_marker_count = index_count;
+        Ok(())
+    }
+    pub(crate) fn fail_prune_after_stage_for_tests(&self, stage: usize) {
+        self.fail_prune_after_stage.store(stage, Ordering::Relaxed);
+    }
+    pub(crate) fn fail_prune_sidecar_promotion_for_tests(&self, stage: usize) {
+        self.fail_prune_sidecar_promotion_stage
+            .store(stage, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
+        &self,
+        ancestor_index: usize,
+        failures: usize,
+    ) {
+        fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
     }
 }
 /// Loaded block count

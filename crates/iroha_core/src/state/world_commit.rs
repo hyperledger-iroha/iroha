@@ -131,7 +131,6 @@ impl<'state> PreparedWorldCommit<'state> {
                 world,
                 &pending.catalog_update.lanes_to_reset,
             );
-            Self::prune_emergency_validators(world, &pending.catalog_update);
         }
         Ok(PreparedWorldEffects { da_pins })
     }
@@ -171,7 +170,7 @@ impl<'state> PreparedWorldCommit<'state> {
             )?;
             deserialize::musubi_universal::validate_musubi_universal_projection_cut(
                 world,
-                "candidate",
+                deserialize::musubi_rejection::ProjectionCut::Candidate,
                 execution_budget,
             )
             .map_err(|error| {
@@ -312,28 +311,6 @@ impl<'state> PreparedWorldCommit<'state> {
         world
             .da_pin_intents_by_lane_epoch
             .insert((intent.lane_id, intent.epoch, intent.sequence), ticket);
-    }
-
-    pub(in crate::state) fn prune_emergency_validators(
-        world: &mut WorldBlock<'_>,
-        update: &LaneLifecycleCatalogUpdate,
-    ) {
-        let active: BTreeSet<_> = update
-            .updated_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect();
-        let stale: Vec<_> = world
-            .lane_relay_emergency_validators
-            .iter()
-            .filter_map(|(lane, _)| {
-                (update.lanes_to_reset.contains(lane) || !active.contains(lane)).then_some(*lane)
-            })
-            .collect();
-        for lane in stale {
-            world.lane_relay_emergency_validators.remove(lane);
-        }
     }
 }
 

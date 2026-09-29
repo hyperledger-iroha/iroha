@@ -54,6 +54,14 @@ mod verification;
 pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, verify_for_relation};
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+// TODO: Qualify the complete private RAM-LFE relation before admitting a circuit.
+// This internal word-layout prototype has no production verifier entry point.
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_word;
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_byte;
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_poseidon;
 /// P-256-specific nonnative curve primitives for hardware-selection circuit construction.
 ///
 /// Only the closed App-Attest staged monetary fold consumes these gadgets, and that fold is

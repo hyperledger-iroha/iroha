@@ -27,14 +27,7 @@ use iroha_data_model::{
     NetworkId, Registrable, ValidationFail,
     account::{Account, AccountAlias, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-    block::{
-        BlockHeader, BlockSignature, SignedBlock,
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-            GlobalPhase, HeightContext, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
-            finality::V2FinalityArtifact,
-        },
-    },
+    block::{BlockHeader, BlockSignature, SignedBlock},
     consensus::{
         ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
         VALIDATOR_SET_HASH_VERSION_V1,
@@ -186,8 +179,9 @@ async fn api_version_negotiates_text_success_and_typed_unavailable() {
 }
 
 #[tokio::test]
-async fn readiness_rejects_empty_queue_startup_reconciliation() {
-    let app = mk_app_state_for_tests();
+async fn readiness_content_negotiation_preserves_consensus_failure() {
+    let mut fixture = ReadinessNode::start();
+    let app = Arc::clone(&fixture.app);
     // Exercise the response boundary as well as the handler: readiness success
     // is plain text, while the ordinary failure contract is a JSON envelope.
     let router = axum::Router::new()
@@ -224,14 +218,9 @@ async fn readiness_rejects_empty_queue_startup_reconciliation() {
         StatusCode::NOT_ACCEPTABLE,
         "JSON-only probes cannot negotiate a healthy text readiness response"
     );
-    let directory = tempfile::tempdir().expect("readiness journal root");
-    app.queue
-        .install_lane_reservation_journal(
-            &directory.path().join("reservations.norito"),
-            1024 * 1024,
-        )
-        .expect("install actual empty startup journal");
-    assert!(app.queue.lane_reservation_startup_reconciliation_pending());
+    fixture.stop();
+    assert_eq!(app.queue.active_len(), 0);
+    assert!(!app.sumeragi.as_ref().expect("native handle").ready());
     let response = router
         .oneshot(request("text/plain, application/json"))
         .await
@@ -263,57 +252,32 @@ impl ReadinessNode {
     }
 
     pub(crate) fn start_at_tip(with_transaction: bool) -> Self {
-        use iroha_core::{
-            governance::manifest::LaneManifestRegistry,
-            sumeragi::{
-                driver::traits::{Frame, Net, NoObserver},
-                node::{NodeConfig, NodeInputs},
-                test_chain::{CertifiedTestChain, TestChainConfig},
-            },
+        use iroha_core::sumeragi::{
+            driver::traits::{Frame, Net, NoObserver},
+            node::{NodeConfig, NodeInputs},
+            test_chain::{CertifiedTestChain, TestChainConfig},
         };
         struct DisconnectedTransport;
         impl Net for DisconnectedTransport {
             fn send(&self, _: &iroha_sumeragi::types::PublicKey, _: &Frame) {}
         }
-        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
-            .expect("signed genesis fixture");
+        let prepared = CertifiedTestChain::prepare(TestChainConfig::new(World::default(), 10_000))
+            .expect("original signed genesis and pristine State");
+        let genesis = prepared.genesis.block().clone();
+        let genesis_account = AccountId::new(prepared.genesis.public_key().clone());
+        let state = prepared.state;
+        let kura = prepared.kura;
         if with_transaction {
-            // Real Log transaction, ordinary executor and three real BLS Commit votes.
+            let mut chain =
+                CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+                    .expect("original certified history");
+            assert_eq!(chain.genesis(), &genesis, "exact original replay source");
             chain.commit_at(20_000, Vec::new());
+            for height in 1..=chain.height() {
+                kura.store_block(Arc::clone(chain.committed(height).block()))
+                    .expect("retain original certified wire for startup replay");
+            }
         }
-        let genesis_account = chain.genesis_account().clone();
-        let clock_account = AccountId::new(
-            KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
-        let world = World::with(
-            [
-                Domain::new(DomainId::parse_fully_qualified("genesis.universal").unwrap())
-                    .build(&genesis_account),
-            ],
-            [
-                Account::new(genesis_account.clone()).build(&genesis_account),
-                Account::new(clock_account.clone()).build(&clock_account),
-            ],
-            [],
-        );
-        let kura = if with_transaction {
-            Arc::clone(chain.kura())
-        } else {
-            Kura::blank_kura_for_testing()
-        };
-        let state = Arc::new(IrohaState::new_with_chain_and_network_id_for_testing(
-            world,
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain.state().chain_id_ref().clone(),
-            chain.network_id(),
-        ));
-        let nexus = state.nexus_snapshot();
-        state.install_lane_manifests(&Arc::new(
-            LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-        ));
         let mut app = mk_app_state_for_tests();
         let directory = tempfile::tempdir().expect("production readiness node files");
         let node_key = KeyPair::from_seed(vec![0xD9; 32], Algorithm::BlsNormal);
@@ -325,7 +289,9 @@ impl ReadinessNode {
             net: Arc::new(DisconnectedTransport),
             key_pair: node_key.clone(),
             chain_id: state.chain_id_ref().to_string(),
-            genesis: Some(chain.genesis().clone()),
+            genesis: Some(genesis),
+            beacon_signer: None,
+            mint_finality_authority: None,
             genesis_account,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode::Permissioned,
             config: NodeConfig {
@@ -3177,7 +3143,9 @@ fn transaction_with_invalid_signature_for_test(mut tx: SignedTransaction) -> Sig
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_uses_tx_rate_limiter() {
-    let mut app = mk_app_state_for_tests();
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xc1, "derive post-transaction rate-limit fixture key");
+    let mut app = native_ingress_app_for_test(&[&keypair]);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -3186,21 +3154,18 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         );
         app_mut.fee_policy = FeePolicy::Disabled;
     }
-    let keypair =
-        checked_torii_test_ed25519_keypair(0xc1, "derive post-transaction rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
     let tx1 =
-        signed_queue_plan_log_for_test(network_id, authority.clone(), "rate-limit-1", &keypair);
-    let tx2 = signed_queue_plan_log_for_test(network_id, authority, "rate-limit-2", &keypair);
+        signed_log_transaction_for_test(network_id, authority.clone(), "rate-limit-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "rate-limit-2", &keypair);
     let headers = HeaderMap::new();
     let submitted_hash = tx1.hash().to_string();
-    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&tx1, &tx2]).await;
     let ok_response = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
         .await
         .expect("accepted");
     assert_eq!(ok_response.status(), StatusCode::ACCEPTED);
-    fixture.assert_durable(&app, &tx1);
+    assert_native_pending_for_test(&app, &tx1);
     let hash_header = torii_response_header(&ok_response, "x-iroha-entrypoint-hash")
         .expect("entrypoint hash header must be present");
     assert_eq!(hash_header, submitted_hash);
@@ -3212,13 +3177,12 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         .expect("routed-by header must be present");
     assert!(!lane_header.trim().is_empty());
     assert!(!dataspace_header.trim().is_empty());
-    assert_eq!(routed_by, "proxy");
+    assert_eq!(routed_by, "local");
     let err = match post_signed_transaction_for_test(app.clone(), headers, &tx2).await {
         Ok(_) => panic!("expected rate limit"),
         Err(err) => err,
     };
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
-    fixture.finish().await;
 }
 
 #[tokio::test]
@@ -3261,7 +3225,9 @@ async fn invalid_transaction_signature_does_not_charge_claimed_authority_bucket(
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
-    let mut app = mk_app_state_for_tests();
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xce, "derive queue-before-rate-limit fixture key");
+    let mut app = native_ingress_app_for_test(&[&keypair]);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.tx_rate_limiter = limits::RateLimiter::new_without_refill_for_tests(
@@ -3270,26 +3236,23 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     install_single_slot_transaction_queue(&mut app);
-    let keypair =
-        checked_torii_test_ed25519_keypair(0xce, "derive queue-before-rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_queue_plan_log_for_test(
+    let tx1 = signed_log_transaction_for_test(
         network_id,
         authority.clone(),
         "queue-before-rate-1",
         &keypair,
     );
     let tx2 =
-        signed_queue_plan_log_for_test(network_id, authority, "queue-before-rate-2", &keypair);
+        signed_log_transaction_for_test(network_id, authority, "queue-before-rate-2", &keypair);
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
-    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&tx1, &tx2]).await;
     let first = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
         .await
         .expect("first transaction should fill the queue");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    fixture.assert_durable(&app, &tx1);
+    assert_native_pending_for_test(&app, &tx1);
     let err = match post_signed_transaction_for_test(app.clone(), headers, &tx2).await {
         Ok(_) => panic!("expected queue full before token rate limit"),
         Err(err) => err,
@@ -3300,12 +3263,19 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:QUEUE_FULL")
     );
-    fixture.finish().await;
 }
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() {
-    let mut app = mk_app_state_for_tests();
+    let first_keypair = checked_torii_test_ed25519_keypair(
+        0xc2,
+        "derive first post-transaction API-token fixture key",
+    );
+    let second_keypair = checked_torii_test_ed25519_keypair(
+        0xc3,
+        "derive second post-transaction API-token fixture key",
+    );
+    let mut app = native_ingress_app_for_test(&[&first_keypair, &second_keypair]);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -3317,22 +3287,14 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
         app_mut.api_token_digests =
             Arc::new(limits::ApiTokenDigestSet::from_tokens(["shared-token"]));
     }
-    let first_keypair = checked_torii_test_ed25519_keypair(
-        0xc2,
-        "derive first post-transaction API-token fixture key",
-    );
-    let second_keypair = checked_torii_test_ed25519_keypair(
-        0xc3,
-        "derive second post-transaction API-token fixture key",
-    );
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_queue_plan_log_for_test(
+    let tx1 = signed_log_transaction_for_test(
         network_id,
         AccountId::new(first_keypair.public_key().clone()),
         "token-rate-limit-1",
         &first_keypair,
     );
-    let tx2 = signed_queue_plan_log_for_test(
+    let tx2 = signed_log_transaction_for_test(
         network_id,
         AccountId::new(second_keypair.public_key().clone()),
         "token-rate-limit-2",
@@ -3340,33 +3302,24 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
     );
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("shared-token"));
-    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&tx1, &tx2]).await;
     let first = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
         .await
         .expect("first token-keyed transaction accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    fixture.assert_durable(&app, &tx1);
+    assert_native_pending_for_test(&app, &tx1);
     let err = match post_signed_transaction_for_test(app.clone(), headers, &tx2).await {
         Ok(_) => panic!("expected shared token rate limit"),
         Err(err) => err,
     };
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
-    fixture.finish().await;
 }
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_revalidates_resolved_route_before_enqueue() {
     // Capture one plan, then revalidate that same plan against the current view
-    // before the journal append. A raw RoutingPlan is not a frozen policy proof.
-    let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+    // before local admission. A raw RoutingPlan is not a frozen policy proof.
+    let (mut app, keypair, _, certificate) = lifecycle_ordinary_fixture(true);
     let route_calls = install_counting_route_queue(&mut app, None);
-    app.queue
-        .install_plan_journal(
-            &journal.path().join("route-cache.norito"),
-            1024 * 1024,
-            true,
-        )
-        .expect("install actual lifecycle admission journal on counting queue");
     let transaction = lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let response = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
@@ -3398,20 +3351,19 @@ async fn handler_post_transaction_revalidates_resolved_route_before_enqueue() {
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
-    let mut app = mk_app_state_for_tests();
+    let keypair =
+        checked_torii_test_ed25519_keypair(0xc5, "derive entrypoint external fixture key");
+    let mut app = native_ingress_app_for_test(&[&keypair]);
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair =
-        checked_torii_test_ed25519_keypair(0xc5, "derive entrypoint external fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = signed_queue_plan_log_for_test(
+    let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority,
         "entrypoint-submit",
         &keypair,
     );
-    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&transaction]).await;
     let response = post_external_transaction_entrypoint_for_test(
         app.clone(),
         HeaderMap::new(),
@@ -3420,7 +3372,7 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     .await
     .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    fixture.assert_durable(&app, &transaction);
+    assert_native_pending_for_test(&app, &transaction);
     let entrypoint_hash = torii_response_header(&response, "x-iroha-entrypoint-hash")
         .expect("entrypoint hash header must be present");
     let signed_transaction_hash =
@@ -3428,22 +3380,14 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
             .expect("signed transaction hash header must be present");
     assert_eq!(signed_transaction_hash, entrypoint_hash);
     assert_eq!(app.queue.active_len(), 1);
-    fixture.finish().await;
 }
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_entrypoint_revalidates_resolved_route_before_enqueue() {
     // Capture one plan, then revalidate that same plan against the current view
-    // before the journal append. A raw RoutingPlan is not a frozen policy proof.
-    let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+    // before local admission. A raw RoutingPlan is not a frozen policy proof.
+    let (mut app, keypair, _, certificate) = lifecycle_ordinary_fixture(true);
     let route_calls = install_counting_route_queue(&mut app, None);
-    app.queue
-        .install_plan_journal(
-            &journal.path().join("route-cache.norito"),
-            1024 * 1024,
-            true,
-        )
-        .expect("install actual lifecycle admission journal on counting queue");
     let transaction = lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let response =
@@ -3476,9 +3420,9 @@ async fn handler_post_transaction_entrypoint_revalidates_resolved_route_before_e
 
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handler_transaction_ingress_rejects_changed_route_before_durable_enqueue() {
+async fn handler_transaction_ingress_rejects_changed_route_before_local_enqueue() {
     for entrypoint_handler in [false, true] {
-        let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+        let (mut app, keypair, _, certificate) = lifecycle_ordinary_fixture(true);
         // Capture the real global route, then simulate a policy/router change to
         // a route without current catalog authority before the actual queue check.
         let route_calls = install_counting_route_queue(
@@ -3488,11 +3432,7 @@ async fn handler_transaction_ingress_rejects_changed_route_before_durable_enqueu
                 DataSpaceId::UNIVERSAL,
             )),
         );
-        let journal_path = journal.path().join("route-drift.norito");
-        app.queue
-            .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("install actual drift-test journal");
-        let before = std::fs::read(&journal_path).expect("read initial journal bytes");
+        let before = lifecycle_pending_wire(&app);
         let transaction =
             lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
         let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -3517,9 +3457,9 @@ async fn handler_transaction_ingress_rejects_changed_route_before_durable_enqueu
         assert!(app.queue.routing_plan_hint(&entrypoint_hash).is_none());
         assert!(!app.state.has_committed_entrypoint(entrypoint_hash));
         assert_eq!(
-            std::fs::read(&journal_path).expect("read journal after route refusal"),
+            lifecycle_pending_wire(&app),
             before,
-            "a precomputed plan cannot bypass current route validation or append custody",
+            "a precomputed plan cannot bypass current route validation or acquire custody",
         );
     }
 }

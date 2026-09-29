@@ -11,7 +11,7 @@ use mv::allocation::{ChargedBuffer, ChargedBufferError};
 pub(super) fn validate_directory_revisions(
     world: &impl WorldReadOnly,
     execution_budget: &AllocationBudget,
-) -> Result<(), ExecutionAttemptError<json::Error>> {
+) -> Result<(), ExecutionAttemptError<ProjectionRejection>> {
     let directory = world.musubi_public_directory();
     let mut entries = ChargedBuffer::new(directory.len(), execution_budget).map_err(|error| {
         ExecutionAttemptError::Deferred(match error {
@@ -43,8 +43,8 @@ pub(super) fn validate_directory_revisions(
             maximum.is_some_and(|revision| entry.index_revision < revision)
         };
         if stale(entry) {
-            return Err(invalid_musubi_state(
-                "musubi_public_directory",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::PublicDirectory,
                 "directory entry predates its package resolver rows",
             )
             .into());
@@ -53,8 +53,8 @@ pub(super) fn validate_directory_revisions(
         // validator must preserve its own prior result without rescanning rows.
         while let Some(duplicate) = entries.next_if(|other| other.package == entry.package) {
             if stale(duplicate) {
-                return Err(invalid_musubi_state(
-                    "musubi_public_directory",
+                return Err(ProjectionRejection::new(
+                    ProjectionTable::PublicDirectory,
                     "directory entry predates its package resolver rows",
                 )
                 .into());

@@ -2099,6 +2099,374 @@ fn generated_operations_declare_tool_effects() {
     }
 }
 #[test]
+fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
+    use iroha_torii_shared::sumeragi_evidence_api::{
+        SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES,
+        SUMERAGI_EVIDENCE_COUNT_RESPONSE_SCHEMA_NAME_V1,
+        SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES,
+        SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES,
+        SUMERAGI_EVIDENCE_LIST_WIRE_RESPONSE_SCHEMA_NAME_V1,
+    };
+
+    const LIST_PATH: &str = "/v1/sumeragi/evidence";
+    const COUNT_PATH: &str = "/v1/sumeragi/evidence/count";
+    let assert_vary_accept = |response: &Value, label: &str| {
+        let vary = &response["headers"]["Vary"];
+        assert_eq!(vary["required"].as_bool(), Some(true), "{label} Vary");
+        assert_eq!(
+            vary["schema"]["const"].as_str(),
+            Some("Accept"),
+            "{label} Vary value"
+        );
+    };
+    let assert_not_acceptable = |operation: &Map, label: &str| {
+        let response = &operation["responses"]["406"];
+        let content = response["content"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{label} 406 content"));
+        assert_eq!(
+            content.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            ["application/json"].into_iter().collect(),
+            "{label} 406 media types"
+        );
+        assert_eq!(
+            content["application/json"]["schema"]["$ref"].as_str(),
+            Some("#/components/schemas/ErrorEnvelope"),
+            "{label} 406 schema"
+        );
+        assert_vary_accept(response, label);
+        assert_eq!(
+            response["headers"]["Cache-Control"]["required"].as_bool(),
+            Some(true),
+            "{label} 406 cache policy"
+        );
+        assert_eq!(
+            response["headers"]["Cache-Control"]["schema"]["const"].as_str(),
+            Some("private, no-store"),
+            "{label} 406 cache policy value"
+        );
+    };
+    let canonical = canonical_document();
+    let compiled = generate_spec();
+    for (label, document) in [("canonical", &canonical), ("compiled", &compiled)] {
+        let list = openapi_operation(document, LIST_PATH, "get");
+        let list_description = list
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("evidence-list description");
+        assert!(list_description.contains("committed"));
+        assert!(list_description.contains("node-local pending"));
+        assert_eq!(
+            operation_response_schema_ref(list, "200", LIST_PATH),
+            "#/components/schemas/SumeragiEvidenceListResponse",
+            "{label} evidence-list response"
+        );
+        let list_success = &list["responses"]["200"];
+        let list_content = list_success["content"]
+            .as_object()
+            .expect("evidence-list success content");
+        assert_eq!(
+            list_content
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["application/json", "application/x-norito"]
+                .into_iter()
+                .collect(),
+            "{label} evidence-list media types"
+        );
+        assert_eq!(
+            list_content["application/json"]["schema"]["x-iroha-max-bytes"].as_u64(),
+            Some(SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES as u64),
+            "{label} evidence-list JSON cap"
+        );
+        let list_norito = &list_content["application/x-norito"]["schema"];
+        assert_eq!(list_norito["type"].as_str(), Some("string"));
+        assert_eq!(list_norito["format"].as_str(), Some("binary"));
+        assert_eq!(
+            list_norito["x-iroha-norito-schema"].as_str(),
+            Some(SUMERAGI_EVIDENCE_LIST_WIRE_RESPONSE_SCHEMA_NAME_V1)
+        );
+        assert_eq!(
+            list_norito["x-iroha-max-bytes"].as_u64(),
+            Some(SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES as u64)
+        );
+        assert!(
+            list_norito["description"]
+                .as_str()
+                .is_some_and(|description| description
+                    .contains("SumeragiEvidenceListWireResponse")
+                    && description.contains("Vec<EvidenceRecord>"))
+        );
+        assert_vary_accept(list_success, &format!("{label} evidence-list 200"));
+        assert_not_acceptable(list, &format!("{label} evidence-list"));
+        let parameters = list
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("evidence-list query parameters");
+        assert_eq!(parameters.len(), 3, "{label} evidence-list parameter count");
+        let parameter = |name: &str| {
+            parameters
+                .iter()
+                .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{label} evidence-list `{name}` parameter"))
+        };
+        let limit = parameter("limit");
+        assert_eq!(limit.get("in").and_then(Value::as_str), Some("query"));
+        let limit = limit
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("evidence-list limit schema");
+        assert_eq!(limit.get("minimum").and_then(Value::as_u64), Some(1));
+        assert_eq!(limit.get("maximum").and_then(Value::as_u64), Some(1_000));
+        assert_eq!(limit.get("default").and_then(Value::as_u64), Some(50));
+        let offset = parameter("offset")
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("evidence-list offset schema");
+        assert_eq!(offset.get("minimum").and_then(Value::as_u64), Some(0));
+        assert_eq!(offset.get("maximum").and_then(Value::as_u64), Some(10_000));
+        assert_eq!(offset.get("default").and_then(Value::as_u64), Some(0));
+        let kind = parameter("kind")
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("evidence-list kind schema");
+        assert_eq!(
+            kind.get("enum").and_then(Value::as_array),
+            Some(&vec![Value::from("NativeSumeragiEvidence")])
+        );
+        let count = openapi_operation(document, COUNT_PATH, "get");
+        let count_description = count
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("evidence-count description");
+        assert!(count_description.contains("committed"));
+        assert!(count_description.contains("node-local pending"));
+        assert_eq!(
+            operation_response_schema_ref(count, "200", COUNT_PATH),
+            "#/components/schemas/SumeragiEvidenceCountResponse",
+            "{label} evidence-count response"
+        );
+        let count_success = &count["responses"]["200"];
+        let count_content = count_success["content"]
+            .as_object()
+            .expect("evidence-count success content");
+        assert_eq!(
+            count_content
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["application/json", "application/x-norito"]
+                .into_iter()
+                .collect(),
+            "{label} evidence-count media types"
+        );
+        assert_eq!(
+            count_content["application/json"]["schema"]["x-iroha-max-bytes"].as_u64(),
+            Some(SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES as u64),
+            "{label} evidence-count JSON cap"
+        );
+        let count_norito = &count_content["application/x-norito"]["schema"];
+        assert_eq!(count_norito["type"].as_str(), Some("string"));
+        assert_eq!(count_norito["format"].as_str(), Some("binary"));
+        assert_eq!(
+            count_norito["x-iroha-norito-schema"].as_str(),
+            Some(SUMERAGI_EVIDENCE_COUNT_RESPONSE_SCHEMA_NAME_V1)
+        );
+        assert_eq!(
+            count_norito["x-iroha-max-bytes"].as_u64(),
+            Some(SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES as u64)
+        );
+        assert_vary_accept(count_success, &format!("{label} evidence-count 200"));
+        assert_not_acceptable(count, &format!("{label} evidence-count"));
+    }
+
+    let schemas = component_schemas(&canonical);
+    assert_strict_object_schema(
+        schemas,
+        "SumeragiEvidenceAuditRecord",
+        &[
+            "kind",
+            "class",
+            "instance",
+            "height",
+            "epoch",
+            "context_id",
+            "authority_generation",
+            "offenders",
+            "safety_violation",
+            "native_frame_hash",
+            "recorded_height",
+            "recorded_view",
+            "recorded_ms",
+            "consensus_admitted_height",
+            "penalty_status",
+        ],
+        &[],
+    );
+    assert_strict_object_schema(
+        schemas,
+        "SumeragiEvidenceListResponse",
+        &["total", "items"],
+        &[],
+    );
+    assert_strict_object_schema(schemas, "SumeragiEvidenceCountResponse", &["count"], &[]);
+    assert_strict_object_schema(
+        schemas,
+        "SumeragiEvidenceOffender",
+        &["signer", "peer_id"],
+        &[],
+    );
+    let record = schemas
+        .get("SumeragiEvidenceAuditRecord")
+        .and_then(Value::as_object)
+        .expect("Sumeragi evidence audit schema");
+    let properties = record
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("Sumeragi evidence audit properties");
+    assert_eq!(
+        properties
+            .get("penalty_status")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str),
+        Some("#/components/schemas/SumeragiEvidencePenaltyStatus")
+    );
+    assert_eq!(
+        properties
+            .get("kind")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("const"))
+            .and_then(Value::as_str),
+        Some("NativeSumeragiEvidence")
+    );
+    let classes = properties
+        .get("class")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("enum"))
+        .and_then(Value::as_array)
+        .expect("evidence class enum")
+        .iter()
+        .map(|class| class.as_str().expect("evidence class string"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        classes,
+        [
+            "proposal",
+            "phase_vote",
+            "timeout_vote",
+            "invalid_proposal",
+            "conflicting_certificates"
+        ]
+        .into_iter()
+        .collect()
+    );
+    for hash in [
+        "instance",
+        "context_id",
+        "authority_generation",
+        "native_frame_hash",
+    ] {
+        assert_eq!(
+            properties
+                .get(hash)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[0-9a-f]{64}$"),
+            "{hash} must remain canonical lowercase hex"
+        );
+    }
+    for retired in [
+        "penalty_applied",
+        "penalty_cancelled",
+        "penalty_cancelled_at_height",
+        "penalty_applied_at_height",
+        "consensus_admitted_at_height",
+    ] {
+        assert!(
+            !properties.contains_key(retired),
+            "retired evidence field `{retired}` remains documented"
+        );
+    }
+    let list_items = schemas
+        .get("SumeragiEvidenceListResponse")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("items"))
+        .and_then(Value::as_object)
+        .expect("evidence-list items schema");
+    assert_eq!(
+        list_items.get("maxItems").and_then(Value::as_u64),
+        Some(1_000)
+    );
+    assert_eq!(
+        list_items
+            .get("items")
+            .and_then(Value::as_object)
+            .and_then(|items| items.get("$ref"))
+            .and_then(Value::as_str),
+        Some("#/components/schemas/SumeragiEvidenceAuditRecord")
+    );
+
+    let variants = schemas
+        .get("SumeragiEvidencePenaltyStatus")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("oneOf"))
+        .and_then(Value::as_array)
+        .expect("closed evidence penalty variants");
+    assert_eq!(variants.len(), 3);
+    for status in ["pending", "applied", "cancelled"] {
+        let variant = variants
+            .iter()
+            .find(|variant| {
+                variant
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get("status"))
+                    .and_then(Value::as_object)
+                    .and_then(|status| status.get("const"))
+                    .and_then(Value::as_str)
+                    == Some(status)
+            })
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("missing `{status}` evidence penalty variant"));
+        assert_eq!(
+            variant.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let required = variant
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("penalty variant required fields")
+            .iter()
+            .map(|field| field.as_str().expect("required field"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(required, ["status", "details"].into_iter().collect());
+        let details = variant
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("details"))
+            .and_then(Value::as_object)
+            .expect("penalty variant details");
+        if status == "pending" {
+            assert_eq!(details.get("type").and_then(Value::as_str), Some("null"));
+        } else {
+            assert_eq!(
+                details.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            assert_eq!(
+                details.get("required").and_then(Value::as_array),
+                Some(&vec![Value::from("height")])
+            );
+        }
+    }
+}
+#[test]
 fn retired_sumeragi_vrf_surfaces_are_absent() {
     for (surface, source) in [
         ("Torii runtime handlers", include_str!("../../routing.rs")),

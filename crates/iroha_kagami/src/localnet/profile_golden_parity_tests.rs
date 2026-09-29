@@ -10,8 +10,6 @@
 //!   given Kagami's catalog ([`CATALOG_FIELDS`]) and both are staged against Kagami's own signed
 //!   genesis, so no other Nexus value is copied.
 //! - **Cadence** (listed). Kagami is generated with the profile's `block_cadence_ms`.
-//! - **Authenticated capacity 4** (listed). `sumeragi.queues.authenticated_non_validator_sources`
-//!   and the ingress geometry derived from it are bound by neither hash; nothing is normalized.
 //! - **Protocol custody account** (not listed in the spec; found by this test). Kagami derives a
 //!   keyless custody account from each genesis public key; a compiled profile cannot know that
 //!   key, so it fixes one keyless account ([`iroha_config::profile::protocol_custody_account`]).
@@ -343,6 +341,78 @@ fn line_diff(left: &str, right: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Every configuration section either hash reads, rendered for a diff.
+fn hash_input_sections(config: &actual::Root) -> Vec<(&'static str, String)> {
+    let nexus = &config.nexus;
+    vec![
+        ("pipeline", format!("{:#?}", config.pipeline)),
+        ("oracle", format!("{:#?}", config.oracle)),
+        ("crypto", format!("{:#?}", config.crypto)),
+        (
+            "fraud_monitoring",
+            format!("{:#?}", config.fraud_monitoring),
+        ),
+        ("gov", format!("{:#?}", config.gov)),
+        ("content", format!("{:#?}", config.content)),
+        ("settlement", format!("{:#?}", config.settlement)),
+        ("zk", format!("{:#?}", config.zk)),
+        ("nexus.staking", format!("{:#?}", nexus.staking)),
+        ("nexus.fees", format!("{:#?}", nexus.fees)),
+        (
+            "nexus.hf_shared_leases",
+            format!("{:#?}", nexus.hf_shared_leases),
+        ),
+        (
+            "nexus.uploaded_models",
+            format!("{:#?}", nexus.uploaded_models),
+        ),
+        ("nexus.endorsement", format!("{:#?}", nexus.endorsement)),
+        ("nexus.axt", format!("{:#?}", nexus.axt)),
+        (
+            "nexus.atomic_private_settlement",
+            format!("{:#?}", nexus.atomic_private_settlement),
+        ),
+        (
+            "nexus.dataspace_fee_sponsor_program_ids",
+            format!("{:#?}", nexus.dataspace_fee_sponsor_program_ids),
+        ),
+        ("nexus.governance", format!("{:#?}", nexus.governance)),
+        ("nexus.compliance", format!("{:#?}", nexus.compliance)),
+        ("nexus.fusion", format!("{:#?}", nexus.fusion)),
+        ("nexus.autoscale", format!("{:#?}", nexus.autoscale)),
+        ("nexus.commit", format!("{:#?}", nexus.commit)),
+        ("nexus.da", format!("{:#?}", nexus.da)),
+        (
+            "nexus.catalog",
+            format!(
+                "{:#?}\n{:#?}\n{:#?}\n{:#?}",
+                nexus.configured_lane_catalog,
+                nexus.configured_dataspace_catalog,
+                nexus.routing_policy,
+                nexus.registry
+            ),
+        ),
+    ]
+}
+
+fn section_differences(kagami: &actual::Root, profile: &actual::Root) -> String {
+    use std::fmt::Write as _;
+    let mut report = String::new();
+    for ((name, left), (_, right)) in hash_input_sections(kagami)
+        .into_iter()
+        .zip(hash_input_sections(profile))
+    {
+        if left != right {
+            writeln!(report, "[{name}]").expect("writing to a String cannot fail");
+            for line in line_diff(&left, &right) {
+                report.push_str(&line);
+                report.push('\n');
+            }
+        }
+    }
+    report
 }
 
 #[test]

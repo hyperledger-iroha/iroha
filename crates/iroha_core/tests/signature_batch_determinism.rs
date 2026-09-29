@@ -3,8 +3,8 @@
 #![allow(clippy::items_after_statements)]
 //! Ensures that, for a block containing one bad signature among valid ones, the offending
 //! transaction identified by batch verification is stable across different input orders.
-#[path = "common/lane_authority_fixture.rs"]
-mod lane_authority_fixture;
+#[path = "common/native_validation.rs"]
+mod native_validation;
 use iroha_core::{
     block::{BlockValidationError as BErr, ValidBlock},
     prelude::*,
@@ -13,10 +13,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
-    block::{
-        BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder,
-        consensus::SumeragiLanePayloadOwnership,
-    },
+    block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
     prelude::*,
 };
 use iroha_model_base::chain::ChainId;
@@ -34,10 +31,8 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, Ke
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    lane_authority_fixture::seed_world(&mut world);
     let state =
         State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
-    lane_authority_fixture::install_manifest(&state);
     let network_id = *state.network_id_ref();
     let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     if !crypto_cfg.allowed_signing.contains(&algo) {
@@ -105,121 +100,13 @@ fn shuffle<T: Clone>(rng: &mut Lcg, v: &[T]) -> Vec<T> {
     }
     out
 }
-fn mk_block_with_permuted_txs(
-    state: &State,
-    txs: Vec<SignedTransaction>,
-    height: std::num::NonZeroU64,
-    prev_block_hash: Option<HashOf<BlockHeader>>,
-    leader: &KeyPair,
-    proof_policy_bundle: &iroha_data_model::da::commitment::DaProofPolicyBundle,
-) -> SignedBlock {
-    // Build header with creation time just after max tx creation_time
-    let ct_ms = txs
-        .iter()
-        .map(|tx| u64::try_from(tx.creation_time().as_millis()).unwrap_or(0))
-        .max()
-        .unwrap_or(0);
-    let header = BlockHeader::new(height, prev_block_hash, None, ct_ms + 1, 0);
-    let execution_context = BlockExecutionContextBundle::new(
-        txs.iter()
-            .map(|tx| {
-                ExternalExecutionContext::new(
-                    tx.hash_as_entrypoint(),
-                    LaneId::SINGLE,
-                    DataSpaceId::UNIVERSAL,
-                )
-            })
-            .collect(),
-    );
-    let lane_incarnation = state
-        .view()
-        .lane_incarnation_at_height(LaneId::SINGLE, height.get())
-        .expect("single-lane incarnation must be active at the block height");
-    let accepted_candidate_indices = (0..txs.len())
-        .map(|index| u64::try_from(index).expect("test transaction index fits u64"))
-        .collect::<Vec<_>>();
-    let accepted_transaction_hashes = txs
-        .iter()
-        .map(|tx| Hash::from(tx.hash_as_entrypoint()))
-        .collect::<Vec<_>>();
-    let mut ownership = SumeragiLanePayloadOwnership {
-        proposal_height: height.get(),
-        proposal_view: 0,
-        lane_id: LaneId::SINGLE,
-        dataspace_id: DataSpaceId::UNIVERSAL,
-        lane_incarnation,
-        lane_block_height: 1,
-        lane_block_view: 0,
-        subject_hash: Hash::prehashed([0; Hash::LENGTH]),
-        qc_mode_tag: "permissioned:signature-batch-test".to_owned(),
-        accepted_candidate_indices,
-        accepted_transaction_hashes,
-        previous_lane_block_height: 0,
-        previous_lane_block_descriptor_hash: None,
-        lane_block_descriptor_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
-        lane_block_descriptor_validator_set: lane_authority_fixture::peers(),
-        lane_block_descriptor_validator_count: 4,
-        lane_block_descriptor_min_quorum: 3,
-        payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
-        rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
-    };
-    let replay_hashes = ownership
-        .compute_replay_hashes()
-        .expect("signature batch ownership replay hashes must compute");
-    ownership.subject_hash = replay_hashes.subject_hash;
-    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
-    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
-    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
-    let execution_context = execution_context.with_lane_payload_ownerships(vec![ownership]);
-    let mut builder = BlockBuilder::new(header);
-    builder.set_da_proof_policies(Some(proof_policy_bundle.clone()));
-    builder.set_execution_context(Some(execution_context));
-    for tx in txs {
-        builder.push_transaction(tx);
-    }
-    builder
-        .build_with_signature(0, leader.private_key())
-        .canonical_resultless_proposal()
-}
-fn seed_genesis_block(state: &State) -> HashOf<BlockHeader> {
-    if let Some(hash) = state.view().latest_block_hash() {
-        return hash;
-    }
-    state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish authenticated genesis")
-        .hash()
-}
-fn run_validate(
-    state: &mut iroha_core::state::State,
-    block: SignedBlock,
-    authority: &AccountId,
-) -> Result<ValidBlock, Box<iroha_core::block::BlockValidationError>> {
-    let topology =
-        iroha_core::sumeragi::network_topology::Topology::new(lane_authority_fixture::peers());
-    let header = block.header();
-    let (_time_handle, validation_time) =
-        iroha_primitives::time::TimeSource::new_mock(header.creation_time());
-    ValidBlock::validate_sumeragi_v2_fixture(
-        block,
-        &topology,
-        authority,
-        &validation_time,
-        &mut state.block(header),
-    )
-    .unpack(|_| {})
-    .map_err(|(_, e)| Box::new(*e))
-}
 #[test]
 fn ed25519_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Ed25519);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Ed25519);
-    let leader = lane_authority_fixture::leader();
-    let genesis_hash = seed_genesis_block(&state);
-    let height = nonzero!(2_u64);
-    let proof_policy_bundle =
-        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
+    let chain = crate::block::tests::component_chain(state);
+    let network_id = chain.network_id();
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
@@ -246,15 +133,8 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
     let mut rng = Lcg::new(0xED_25_51_9D);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(
-            &state,
-            perm,
-            height,
-            Some(genesis_hash),
-            &leader,
-            &proof_policy_bundle,
-        );
-        let err = run_validate(&mut state, block, &authority)
+        let block = native_validation::proposal(&chain, perm);
+        let err = native_validation::validate(&chain, block)
             .expect_err("block must be rejected due to bad signature");
         match *err {
             BErr::TransactionAccept(AF::SignatureVerification(fail)) => {
@@ -272,11 +152,8 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Secp256k1);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Secp256k1);
-    let leader = lane_authority_fixture::leader();
-    let genesis_hash = seed_genesis_block(&state);
-    let height = nonzero!(2_u64);
-    let proof_policy_bundle =
-        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
+    let chain = crate::block::tests::component_chain(state);
+    let network_id = chain.network_id();
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
             network_id,
@@ -301,15 +178,8 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let mut rng = Lcg::new(0x53_45_43_50);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(
-            &state,
-            perm,
-            height,
-            Some(genesis_hash),
-            &leader,
-            &proof_policy_bundle,
-        );
-        let err = run_validate(&mut state, block, &authority)
+        let block = native_validation::proposal(&chain, perm);
+        let err = native_validation::validate(&chain, block)
             .expect_err("block must be rejected due to bad signature");
         use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
         match *err {
@@ -328,11 +198,8 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
 fn bls_multimessage_batch_passes() {
     let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
-    let leader = lane_authority_fixture::leader();
-    let genesis_hash = seed_genesis_block(&state);
-    let height = nonzero!(2_u64);
-    let proof_policy_bundle =
-        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
+    let chain = crate::block::tests::component_chain(state);
+    let network_id = chain.network_id();
     let mk = |msg: &str| {
         TransactionBuilder::new(
             network_id,
@@ -343,15 +210,8 @@ fn bls_multimessage_batch_passes() {
         .sign(signer.private_key())
     };
     let txs = vec![mk("m1"), mk("m2"), mk("m3"), mk("m4"), mk("m5")];
-    let block = mk_block_with_permuted_txs(
-        &state,
-        txs,
-        height,
-        Some(genesis_hash),
-        &leader,
-        &proof_policy_bundle,
-    );
-    run_validate(&mut state, block, &authority).expect("valid BLS multi-message batch must pass");
+    let block = native_validation::proposal(&chain, txs);
+    native_validation::validate(&chain, block).expect("valid BLS multi-message batch must pass");
 }
 #[test]
 #[cfg(feature = "bls")]
@@ -359,11 +219,8 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
-    let leader = lane_authority_fixture::leader();
-    let genesis_hash = seed_genesis_block(&state);
-    let height = nonzero!(2_u64);
-    let proof_policy_bundle =
-        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
+    let chain = crate::block::tests::component_chain(state);
+    let network_id = chain.network_id();
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
             network_id,
@@ -388,15 +245,8 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
     let mut rng = Lcg::new(0xB150_0BAD);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(
-            &state,
-            perm,
-            height,
-            Some(genesis_hash),
-            &leader,
-            &proof_policy_bundle,
-        );
-        let err = run_validate(&mut state, block, &authority)
+        let block = native_validation::proposal(&chain, perm);
+        let err = native_validation::validate(&chain, block)
             .expect_err("block must be rejected due to bad BLS signature");
         match *err {
             BErr::TransactionAccept(AF::SignatureVerification(fail)) => {
@@ -415,11 +265,8 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
-    let leader = lane_authority_fixture::leader();
-    let genesis_hash = seed_genesis_block(&state);
-    let height = nonzero!(2_u64);
-    let proof_policy_bundle =
-        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
+    let chain = crate::block::tests::component_chain(state);
+    let network_id = chain.network_id();
     // Use distinct messages to exercise multi-message aggregation path
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
@@ -445,15 +292,8 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     let mut rng = Lcg::new(0xB1_5B_4D);
     for _ in 0..16 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(
-            &state,
-            perm,
-            height,
-            Some(genesis_hash),
-            &leader,
-            &proof_policy_bundle,
-        );
-        let err = run_validate(&mut state, block, &authority)
+        let block = native_validation::proposal(&chain, perm);
+        let err = native_validation::validate(&chain, block)
             .expect_err("block must be rejected due to bad signature");
         use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
         match *err {

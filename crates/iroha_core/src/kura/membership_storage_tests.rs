@@ -153,10 +153,9 @@ fn range_refusal_preserves_capacity_and_drop_marks_abandoned_without_refund() {
 fn actual_global_disk_budget_counts_pending_and_transferred_segment_bytes_once() {
     let mut kura = kura_with_limit(4);
     let used = kura.kura_disk_usage_bytes().expect("actual baseline");
-    let headroom = Kura::canonical_prune_intent_maintenance_headroom_bytes();
     Arc::get_mut(&mut kura)
         .expect("original configuration")
-        .max_disk_usage_bytes = used + headroom + 184;
+        .max_disk_usage_bytes = used + 184;
     assert!(matches!(
         kura.reserve_membership_range(2),
         Err(MembershipStorageError::Kura(

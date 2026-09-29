@@ -31,7 +31,6 @@ import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -94,7 +93,6 @@ class NexusAppClientTest {
         assertContentEquals(connect.signature, receipt.signedTransaction.signature())
         val decodedPayload = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
             .decodeTransaction(receipt.signedTransaction.encodedPayload())
-        assertEquals(TransactionAdmissionIntent.ORDINARY, decodedPayload.admissionIntent)
         assertTrue(assertNotNull(connect.lastSignable).payloadBytes.isNotEmpty())
         assertFailsWith<IllegalArgumentException> {
             NexusTransferReceipt(

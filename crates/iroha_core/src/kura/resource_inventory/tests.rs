@@ -281,19 +281,10 @@ fn preinitialization_writes_cannot_manufacture_an_empty_baseline() {
 }
 
 #[test]
-fn real_canonical_and_every_v1_family_count_slots_headers_and_sparse_fillers() {
+fn real_canonical_and_pipeline_families_count_slots_headers_and_sparse_fillers() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let names = [
-        kura::PIPELINE_SIDECARS_INDEX_FILE,
-        kura::LANE_ARTIFACTS_INDEX_FILE,
-        kura::CERTIFIED_LANE_BLOCKS_INDEX_FILE,
-        kura::LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
-        kura::LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
-        kura::LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
-        kura::AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE,
-        kura::CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE,
-    ];
+    let names = [kura::PIPELINE_SIDECARS_INDEX_FILE];
     for name in names {
         let path = root.join(name);
         let mut bytes = SidecarIndexLayout::base_header(73).to_vec();
@@ -325,11 +316,11 @@ fn real_canonical_and_every_v1_family_count_slots_headers_and_sparse_fillers() {
             .iter()
             .map(|usage| usage.persisted_entries)
             .sum::<u64>(),
-        46
+        11
     );
     assert_eq!(
         counts.iter().map(|usage| usage.index_bytes).sum::<u64>(),
-        8 * 112 + 48 + 96
+        112 + 48 + 96
     );
 }
 
@@ -533,9 +524,9 @@ fn actual_total_disk_guard_publishes_exact_index_delta_and_invalidates_unclassif
 fn singleton_record_accounting_retains_actual_bytes_and_rejects_empty_or_oversized_files() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let path = root.join(kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE);
+    let path = root.join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
     let (family, format, temporary) = index_resource_kind(&path).unwrap();
-    assert_eq!(family, Family::NativeLatestRecord);
+    assert_eq!(family, Family::QueryMarkerRecords);
     let bytes = vec![5_u8; 123];
     fs::write(&path, &bytes).unwrap();
     let usage = index_resource_file_usage(&path, format, temporary).unwrap();
@@ -552,7 +543,7 @@ fn singleton_record_accounting_retains_actual_bytes_and_rejects_empty_or_oversiz
     assert!(index_resource_file_usage(&path, format, false).is_err());
     let oversized = fs::File::create(&path).unwrap();
     oversized
-        .set_len(kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES as u64 + 1)
+        .set_len(crate::query::index_status::QueryIndexJournal::JOURNAL_MAX_BYTES + 1)
         .unwrap();
     assert!(index_resource_file_usage(&path, format, false).is_err());
 }
@@ -648,19 +639,19 @@ fn startup_children_account_more_than_twenty_four_lanes_and_require_every_comple
         .with_resource_children(30);
     for lane in 0..30 {
         let directory = root.join(lane.to_string());
-        let path = directory.join(kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE);
+        let path = directory.join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
         let child = batch.resource_child(vec![path.clone(), path.with_extension("norito.tmp")]);
         fs::create_dir(&directory).unwrap();
         fs::write(&path, [7_u8; 11]).unwrap();
         child.finish();
         assert_eq!(
-            kura.resource_inventory_component_for_tests(Family::NativeLatestRecord),
+            kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords),
             Err(Unavailable::Busy)
         );
     }
     batch.finish();
     let usage = kura
-        .resource_inventory_component_for_tests(Family::NativeLatestRecord)
+        .resource_inventory_component_for_tests(Family::QueryMarkerRecords)
         .unwrap();
     assert_eq!(usage.persisted_entries, 30);
     assert_eq!(usage.index_bytes, 330);
@@ -669,13 +660,13 @@ fn startup_children_account_more_than_twenty_four_lanes_and_require_every_comple
         .with_resource_children(2);
     let absent = root
         .join("absent")
-        .join(kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE);
+        .join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
     incomplete
         .resource_child(vec![absent.clone(), absent.with_extension("norito.tmp")])
         .finish();
     incomplete.finish();
     assert_eq!(
-        kura.resource_inventory_component_for_tests(Family::NativeLatestRecord),
+        kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords),
         Err(Unavailable::Interrupted)
     );
 }
@@ -688,7 +679,7 @@ fn failed_or_extra_startup_child_cannot_publish_a_complete_batch() {
         let path = kura
             .store_root
             .join("blocks")
-            .join(kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE);
+            .join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
         let mut batch = kura
             .begin_total_disk_usage_mutation()
             .with_resource_children(1);
@@ -704,7 +695,7 @@ fn failed_or_extra_startup_child_cannot_publish_a_complete_batch() {
         }
         batch.finish();
         assert!(
-            kura.resource_inventory_component_for_tests(Family::NativeLatestRecord)
+            kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords)
                 .is_err()
         );
     }
@@ -930,126 +921,25 @@ fn geometry_guards_preserve_moves_and_publish_only_completed_retirement_deletion
     assert!(retired.exists());
 }
 
-fn merge_resource_record(height: u64, seed: u8) -> kura::MergeLedgerCarrierRecord {
-    kura::MergeLedgerCarrierRecord {
-        version: 1,
-        entry_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([
-            seed, 1,
-        ])),
-        epoch_id: height,
-        block_height: height,
-        block_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([
-            seed, 2,
-        ])),
-    }
-}
-
 #[test]
-fn merge_record_owner_tracks_real_publication_idempotence_and_removal() {
-    let kura = Kura::blank_kura_for_testing();
-    initialize_physical_fixture(&kura);
-    let _carrier = kura.merge_carrier_lock.lock();
-    let record = merge_resource_record(1, 1);
-    let path = kura.merge_carrier_path(record.block_height);
-    assert!(kura.write_merge_carrier_record_unlocked(record).unwrap());
-    let usage = kura
-        .resource_inventory_component_for_tests(Family::MergeCarrierRecord)
-        .unwrap();
-    assert_eq!(usage.persisted_entries, 1);
-    assert_eq!(usage.index_bytes, fs::metadata(&path).unwrap().len());
-    assert_eq!(
-        usage.index_bytes,
-        norito::encode_canonical(&record).unwrap().len() as u64
-    );
-    assert_eq!(usage.temporary_index_bytes, 0);
-    assert!(!kura.write_merge_carrier_record_unlocked(record).unwrap());
-    assert_eq!(
-        kura.resource_inventory_component_for_tests(Family::MergeCarrierRecord)
-            .unwrap(),
-        usage
-    );
-    kura.remove_merge_carrier_record_unlocked(record).unwrap();
-    assert_eq!(
-        kura.resource_inventory_component_for_tests(Family::MergeCarrierRecord)
-            .unwrap(),
-        Usage::default()
-    );
-    assert!(!path.exists());
-}
-
-#[test]
-fn merge_record_startup_recovery_counts_temporary_records_and_invalidates_conflicts() {
-    let kura = Kura::blank_kura_for_testing();
-    let _carrier = kura.merge_carrier_lock.lock();
-    let record = merge_resource_record(1, 2);
-    let path = kura.merge_carrier_path(1);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let temporary = path.with_extension("norito.tmp");
-    let bytes = norito::encode_canonical(&record).unwrap();
-    fs::write(&path, &bytes).unwrap();
-    fs::write(&temporary, &bytes).unwrap();
-    initialize_physical_fixture(&kura);
-    let before = kura
-        .resource_inventory_component_for_tests(Family::MergeCarrierRecord)
-        .unwrap();
-    assert_eq!(before.persisted_entries, 2);
-    assert_eq!(before.index_bytes, bytes.len() as u64);
-    assert_eq!(before.temporary_index_bytes, bytes.len() as u64);
-    kura.reconcile_merge_carrier_temp_files_unlocked().unwrap();
-    let after = kura
-        .resource_inventory_component_for_tests(Family::MergeCarrierRecord)
-        .unwrap();
-    assert_eq!(after.persisted_entries, 1);
-    assert_eq!(after.index_bytes, bytes.len() as u64);
-    assert_eq!(after.temporary_index_bytes, 0);
-    assert!(!temporary.exists());
-    let conflict = norito::encode_canonical(&merge_resource_record(1, 3)).unwrap();
-    fs::write(&temporary, &conflict).unwrap();
-    initialize_physical_fixture(&kura);
-    assert!(kura.reconcile_merge_carrier_temp_files_unlocked().is_err());
-    assert!(
-        kura.resource_inventory_component_for_tests(Family::MergeCarrierRecord)
-            .is_err()
-    );
-    assert_eq!(fs::read(&path).unwrap(), bytes);
-    assert_eq!(fs::read(&temporary).unwrap(), conflict);
-}
-
-#[test]
-fn merge_record_names_and_non_sidecar_temporary_names_require_exact_owner_grammar() {
+fn non_sidecar_temporary_names_require_exact_owner_grammar() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
-    let carriers = root.join(kura::MERGE_CARRIERS_DIR);
-    fs::create_dir(&carriers).unwrap();
-    for name in ["1.norito", "100.norito.tmp"] {
-        let path = carriers.join(name);
-        let (family, format, temporary) = index_resource_kind(&path).unwrap();
-        assert_eq!(family, Family::MergeCarrierRecord);
-        fs::write(&path, [1_u8; 17]).unwrap();
-        let usage = index_resource_file_usage(&path, format, temporary).unwrap();
-        assert_eq!(usage.persisted_entries, 1);
-        assert_eq!(usage.index_bytes + usage.temporary_index_bytes, 17);
-    }
     for name in [
         "0.norito",
         "01.norito",
-        "-1.norito",
-        "1.norito.prepend.tmp",
-        "18446744073709551616.norito",
+        "1.norito",
+        "1.norito.tmp",
         "unowned.norito",
     ] {
-        assert!(index_resource_kind(&carriers.join(name)).is_none());
+        assert!(index_resource_kind(&root.join(name)).is_none());
     }
-    assert!(index_resource_kind(&root.join("1.norito")).is_none());
     for name in [
         kura::INDEX_FILE_NAME,
         kura::HASHES_FILE_NAME,
-        kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
         crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
         crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
     ] {
         assert!(index_resource_kind(&root.join(format!("{name}.prepend.tmp"))).is_none());
     }
-    fs::write(carriers.join("01.norito"), [1_u8; 7]).unwrap();
-    assert!(index_resource_tree_usage(&root).is_err());
 }

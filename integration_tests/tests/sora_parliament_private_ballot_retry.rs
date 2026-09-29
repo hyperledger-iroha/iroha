@@ -121,8 +121,7 @@ async fn private_ballot_deadline_retry_impl() -> Result<()> {
     for sequence in 0..=1 {
         let ballot_id = BallotAttemptId::derive_v1(body_id, sequence);
         if let Some((old_id, old_session, _)) = previous {
-            let at =
-                next_queue_plan_execution_height(&client, 0, "retired private session").await?;
+            let at = next_execution_height(&client, 0, "retired private session").await?;
             let mut replay = private_registration(body_id, sequence, &sessions, at)?;
             replay.tle_session_id = old_session;
             assert_private_transition_rejected(
@@ -143,8 +142,7 @@ async fn private_ballot_deadline_retry_impl() -> Result<()> {
                 BallotAttemptStatusV1::NoResult
             );
         }
-        let registered_at =
-            next_queue_plan_execution_height(&client, 0, "fresh private ballot").await?;
+        let registered_at = next_execution_height(&client, 0, "fresh private ballot").await?;
         let registration = private_registration(body_id, sequence, &sessions, registered_at)?;
         let tle_session = registration.tle_session_id;
         let release_height = registration.release_height;
@@ -186,7 +184,7 @@ async fn private_ballot_deadline_retry_impl() -> Result<()> {
             .ok_or_else(|| eyre!("private registration close overflow"))?;
         // The deadline itself is inclusive for failure rejection: the reducer
         // permits this objective failure only after registration close.
-        advance_to_queue_plan_authority_height(
+        advance_to_execution_predecessor(
             &network,
             &client,
             close,
@@ -207,7 +205,7 @@ async fn private_ballot_deadline_retry_impl() -> Result<()> {
         let first_late_height = close
             .checked_add(1)
             .ok_or_else(|| eyre!("private deadline overflow"))?;
-        let failure_height = next_queue_plan_execution_height(
+        let failure_height = next_execution_height(
             &client,
             first_late_height,
             "private registration deadline failure",
@@ -268,7 +266,7 @@ async fn private_ballot_deadline_retry_impl() -> Result<()> {
         assert_private_retry_state_and_restore(&network, &client, attempt_id, &address).await?;
         previous = Some((ballot_id, tle_session, failure_height));
     }
-    let at = next_queue_plan_execution_height(&client, 0, "exhausted private retry").await?;
+    let at = next_execution_height(&client, 0, "exhausted private retry").await?;
     assert_private_transition_rejected(
         &client,
         attempt_id,

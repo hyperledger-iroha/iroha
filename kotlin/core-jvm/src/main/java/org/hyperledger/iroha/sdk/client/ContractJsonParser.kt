@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
@@ -57,7 +56,7 @@ object ContractJsonParser {
             feePayment = response.operationReceipt.feePayment,
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
-            expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
+
             context = "contract call response",
         )
         check(
@@ -142,7 +141,7 @@ object ContractJsonParser {
             feePayment = response.feePayment,
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
-            expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
+
             context = "multisig response",
         )
         return response
@@ -470,7 +469,7 @@ object ContractJsonParser {
         feePayment: FeePaymentIntent?,
         transactionPayloadB64: String?,
         signingMessageB64: String?,
-        expectedAdmissionIntent: TransactionAdmissionIntent,
+
         context: String,
     ) {
         if (submitted) {
@@ -487,7 +486,7 @@ object ContractJsonParser {
         val decodedPayload = try {
             NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
                 transactionPayload,
-                expectedAdmissionIntent,
+
             )
         } catch (ex: Exception) {
             throw IllegalStateException(

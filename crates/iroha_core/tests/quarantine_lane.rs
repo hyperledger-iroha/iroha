@@ -68,9 +68,11 @@ fn quarantine_overflow_rejects_one_tx() {
         .sign(kp.private_key())
         .unpack(|_| {});
     // Validate and record transactions; commit to state.
-    let mut sb = state.block(new_block.header());
+    let (mut sb, sb_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
+            .expect("original writer-first component execution");
     let vb = new_block
-        .validate_and_record_transactions(&mut sb)
+        .validate_and_record_transactions(&mut sb, sb_recorder)
         .unpack(|_| {});
     let _ = sb.commit();
     // Inspect results: exactly one Approved and one Validation(NotPermitted("quarantine overflow"))

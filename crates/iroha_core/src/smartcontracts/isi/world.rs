@@ -100,7 +100,6 @@ pub mod isi {
             CanPublishSpaceDirectoryManifestForAccountDomain,
         },
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
-        peer::CanManageLaneRelayEmergency,
         sccp::CanProposeSccpRouteGovernance,
         settlement::CanExecuteSettlement,
         smart_contract::CanManageSmartContractCode,
@@ -18750,8 +18749,7 @@ pub mod isi {
                 parliament_candidate_root_v1, parliament_execution_failure_root_v1,
             },
             isi::{
-                Grant, Revoke, consensus_keys, error::AssetTransferAdmissionError,
-                nexus::SetLaneRelayEmergencyValidators, verifying_keys,
+                Grant, Revoke, consensus_keys, error::AssetTransferAdmissionError, verifying_keys,
             },
             nexus::{
                 DataSpaceCatalog, DataSpaceMetadata, DomainEndorsement, DomainEndorsementPolicy,
@@ -22425,16 +22423,6 @@ pub mod isi {
                 bootstrap_alice_account(&mut $stx);
             };
         }
-        macro_rules! lane_relay_transaction {
-            ($state:ident, $block:ident, $state_block:ident, $stx:ident, $authority:ident) => {
-                blank_state_transaction!($state, $block, $state_block, $stx);
-                bootstrap_alice_account(&mut $stx);
-                $stx.nexus.lane_relay_emergency.enabled = true;
-                configure_universal_dataspace(&mut $stx);
-                let $authority = register_multisig_authority(&mut $stx, 3, 5);
-                grant_manage_lane_relay_emergency_permission(&mut $stx, &$authority);
-            };
-        }
         macro_rules! consensus_test_parameters {
             ($state_block:ident) => {{
                 let mut stx = $state_block.transaction();
@@ -25943,82 +25931,6 @@ seiyaku GovernanceLifecycle {
         fn new_dummy_block_non_genesis() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(2).unwrap())
         }
-        world_test!(verified_lane_relay_state_key_is_single_contract_name {
-            let record = sample_verified_lane_relay_record();
-            let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
-            let key = key.to_string();
-            let expected = format!(
-                "{}_{}_{}_{}_{}",
-                iroha_data_model::nexus::VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
-                record.relay_ref.dataspace_id.as_u64(),
-                record.relay_ref.lane_id.as_u32(),
-                hex::encode(record.relay_ref.lane_incarnation.as_ref()),
-                record.relay_ref.block_height,
-            );
-            assert_eq!(key, expected);
-            assert_contains!(!key, '/');
-            let incarnation = key.split('_').nth_back(1).expect("incarnation segment");
-            assert_eq!(incarnation.len(), 64);
-            assert!(incarnation.chars().all(|ch| ch.is_ascii_hexdigit()));
-        });
-        world_test!(verified_lane_relay_contract_map_state_key_matches_kotodama_map_shape {
-            let record = sample_verified_lane_relay_record();
-            let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
-            let map_key =
-                super::verified_lane_relay_contract_map_state_key(&key).expect("map state key");
-            let map_key = map_key.to_string();
-            let expected_prefix = format!("{}/", super::VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE);
-            assert!(map_key.starts_with(&expected_prefix));
-            let suffix = map_key.rsplit('/').next().expect("hash suffix");
-            assert_eq!(suffix.len(), 64);
-            assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
-        });
-        world_test!(verified_lane_relay_state_encoding_is_contract_visible_json {
-            let record = sample_verified_lane_relay_record();
-            let encoded = super::encode_verified_lane_relay_record_state(&record).expect("encode");
-            let stored_json: Json = norito::decode_from_bytes(&encoded).expect("stored JSON");
-            assert_contains!(stored_json.get(), "\"relay_ref\"");
-            assert_contains!(stored_json.get(), "\"fastpq_binding\"");
-            let decoded =
-                super::decode_verified_lane_relay_record_state(&encoded).expect("decode record");
-            assert_eq!(decoded, record);
-            let old_shape = norito::to_bytes(&record).expect("old record bytes");
-            assert!(super::decode_verified_lane_relay_record_state(&old_shape).is_err());
-        });
-        world_test!(verified_lane_relay_contract_map_state_encoding_is_pointer_abi_blob {
-            let record = sample_verified_lane_relay_record();
-            let direct = super::encode_verified_lane_relay_record_state(&record).expect("encode");
-            let encoded = super::encode_verified_lane_relay_record_contract_map_state(&record)
-                .expect("encode contract map");
-            let outer = ivm::validate_tlv_bytes(&encoded).expect("outer state TLV");
-            assert_eq!(outer.type_id, ivm::PointerType::NoritoBytes);
-            let inner = ivm::validate_tlv_bytes(outer.payload).expect("inner blob TLV");
-            assert_eq!(inner.type_id, ivm::PointerType::Blob);
-            assert_eq!(inner.payload, direct.as_slice());
-            let decoded =
-                super::decode_verified_lane_relay_record_state(&encoded).expect("decode wrapper");
-            assert_eq!(decoded, record);
-        });
-        world_test!(load_verified_lane_relay_record_rejects_payload_ref_mismatch {
-            let record = sample_verified_lane_relay_record();
-            let encoded = super::encode_verified_lane_relay_record_state(&record).expect("encode");
-            let mut requested_ref = record.relay_ref;
-            requested_ref.lane_id = LaneId::new(requested_ref.lane_id.as_u32() + 1);
-            let requested_key =
-                super::verified_lane_relay_state_key(&requested_ref).expect("state key");
-            let mut world = World::default();
-            world
-                .smart_contract_state_mut_for_testing()
-                .insert(requested_key, encoded);
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(world, kura, query_handle);
-            let view = state.view();
-            let err = super::load_verified_lane_relay_record(&view, &requested_ref)
-                .expect_err("query must reject a record whose payload relay_ref differs from key");
-            let err = format!("{err:?}");
-            assert_contains!(err, "verified lane relay record/key mismatch", "unexpected error: {err}");
-        });
         fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
             NewAccount::new(account_id.clone())
         }
@@ -27341,6 +27253,63 @@ seiyaku GovernanceLifecycle {
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             stx.world.space_directory_manifests.insert(uaid, set);
+        }
+        fn seed_live_peer(stx: &mut StateTransaction<'_, '_>, keypair: &KeyPair) -> PeerId {
+            seed_live_peer_with_role(stx, keypair, ConsensusKeyRole::Validator)
+        }
+        fn seed_live_peer_with_role(
+            stx: &mut StateTransaction<'_, '_>,
+            keypair: &KeyPair,
+            role: ConsensusKeyRole,
+        ) -> PeerId {
+            let peer = PeerId::new(keypair.public_key().clone());
+            if stx.world.peers.iter().all(|existing| existing != &peer) {
+                let _ = stx.world.peers.push(peer.clone());
+            }
+            let id = match role {
+                ConsensusKeyRole::Validator => {
+                    crate::state::derive_validator_key_id(keypair.public_key())
+                }
+                ConsensusKeyRole::Committee => {
+                    crate::state::derive_committee_key_id(keypair.public_key())
+                }
+                ConsensusKeyRole::Endorsement => {
+                    panic!("lane relay peers cannot use endorsement keys")
+                }
+            };
+            let record = ConsensusKeyRecord {
+                id,
+                public_key: keypair.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("generate pop for test peer"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            let record_id = record.id.clone();
+            upsert_consensus_key(&mut stx.world, &record_id, record);
+            peer
+        }
+        fn register_multisig_authority(
+            stx: &mut StateTransaction<'_, '_>,
+            threshold: u16,
+            member_count: usize,
+        ) -> AccountId {
+            let mut members = Vec::with_capacity(member_count);
+            for _ in 0..member_count {
+                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
+                let member = MultisigMember::new(kp.public_key().clone(), 1).expect("member");
+                members.push(member);
+            }
+            let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
+            let multisig_id = AccountId::new_multisig(policy);
+            Register::account(Account::new(multisig_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register multisig authority");
+            multisig_id
         }
         world_test!(unregister_domain_rejects_native_kaigi_state_atomically {
             use iroha_data_model::kaigi::{
@@ -29118,14 +29087,6 @@ seiyaku GovernanceLifecycle {
                     },
                 },
             );
-            stx.world.lane_relay_emergency_validators.insert(
-                LaneId::new(0),
-                iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(account_id.expect_single_signatory().clone())],
-                    expires_at_height: 10,
-                    metadata: Metadata::default(),
-                },
-            );
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "domain unlink should preserve governance and storage audit state");
             assert!(
@@ -29928,425 +29889,6 @@ seiyaku GovernanceLifecycle {
             assert!(stx.world.internal_event_buf.iter().all(|event| {
                 !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
             }));
-        });
-        world_test!(set_lane_relay_emergency_validators_requires_permission {
-            alice_state_transaction!(state, block, state_block, stx);
-            stx.nexus.lane_relay_emergency.enabled = true;
-            configure_universal_dataspace(&mut stx);
-            let authority = register_multisig_authority(&mut stx, 3, 5);
-            stx.world.add_account_permission(
-                &authority,
-                Permission::new(
-                    "CanManageLaneRelayEmergency".into(),
-                    Json::from(norito::json!({ "unexpected": true })),
-                ),
-            );
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "a malformed same-name permission must not authorize the override");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::InvariantViolation(msg)
-                    if msg.as_ref() == "not permitted: CanManageLaneRelayEmergency"
-            ));
-            assert!(
-                stx.world
-                    .lane_relay_emergency_validators
-                    .get(&LaneId::new(0))
-                    .is_none(),
-                "override must not be stored without permission"
-            );
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_when_disabled {
-            alice_state_transaction!(state, block, state_block, stx);
-            configure_universal_dataspace(&mut stx);
-            let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "disabled override should be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::InvariantViolation(msg)
-                    if msg.as_ref()
-                        == "lane relay emergency override requires nexus.lane_relay_emergency.enabled=true"
-            ));
-        });
-        world_test!(set_lane_relay_emergency_validators_requires_multisig_authority {
-            alice_state_transaction!(state, block, state_block, stx);
-            stx.nexus.lane_relay_emergency.enabled = true;
-            configure_universal_dataspace(&mut stx);
-            grant_manage_lane_relay_emergency_permission(&mut stx, &ALICE_ID);
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&ALICE_ID, &mut stx, "single-signature authority should be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::InvariantViolation(msg)
-                    if msg
-                        .as_ref()
-                        .starts_with("lane relay emergency override requires multisig authority")
-            ));
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_unknown_lane {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let unknown = LaneId::new(42);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: unknown,
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "unknown lane should be rejected");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "unknown lane id", "unexpected error message: {msg}");
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_stale_geometry_lane {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let stale_lane = LaneId::new(1);
-            let stale_geometry_catalog = LaneCatalog::new(
-                NonZeroU32::new(2).expect("nonzero lane count"),
-                vec![
-                    LaneConfig::default(),
-                    LaneConfig {
-                        id: stale_lane,
-                        alias: "stale-emergency".to_owned(),
-                        ..LaneConfig::default()
-                    },
-                ],
-            )
-            .expect("stale lane geometry");
-            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
-            assert!(
-                stx.nexus.lane_config.entry(stale_lane).is_some(),
-                "test must seed derived geometry for the removed lane"
-            );
-            assert!(
-                stx.nexus
-                    .lane_catalog
-                    .lanes()
-                    .iter()
-                    .all(|lane| lane.id != stale_lane),
-                "test must keep the lane out of the authoritative catalog"
-            );
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: stale_lane,
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "stale geometry must not make a lane active");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "unknown lane id 1", "unexpected error message: {msg}");
-            assert!(
-                stx.world
-                    .lane_relay_emergency_validators
-                    .get(&stale_lane)
-                    .is_none(),
-                "stale-lane override must not be stored"
-            );
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_future_created_autoscale_lane {
-            let state = blank_state();
-            let block = new_dummy_block_at_height(NonZeroU64::new(2).expect("nonzero height"));
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            stx.nexus.autoscale.enabled = true;
-            stx.nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-            stx.nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-            stx.nexus.lane_relay_emergency.enabled = true;
-            configure_universal_dataspace(&mut stx);
-            let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let future_lane = LaneId::new(1);
-            let mut elastic_lane = LaneConfig {
-                id: future_lane,
-                alias: "elastic-lane-1".to_owned(),
-                ..LaneConfig::default()
-            };
-            elastic_lane.metadata.insert(
-                iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
-                "true".to_owned(),
-            );
-            elastic_lane.metadata.insert(
-                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
-                "7".to_owned(),
-            );
-            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-            let catalog = LaneCatalog::new(
-                NonZeroU32::new(2).expect("nonzero lane count"),
-                vec![LaneConfig::default(), elastic_lane],
-            )
-            .expect("future-created autoscale catalog");
-            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-            stx.nexus.lane_catalog = catalog;
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: future_lane,
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "future-created autoscale lane must not accept emergency validators");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "unknown lane id 1", "unexpected error message: {msg}");
-            assert!(
-                stx.world
-                    .lane_relay_emergency_validators
-                    .get(&future_lane)
-                    .is_none(),
-                "future-created autoscale override must not be stored"
-            );
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_unregistered_peer {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let missing = PeerId::new(
-                checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                    .public_key()
-                    .clone(),
-            );
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![missing],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "unregistered peer should be rejected");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "is not registered", "unexpected error message: {msg}");
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_peer_without_live_consensus_key {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let peer = PeerId::new(
-                checked_keypair_with_algorithm(Algorithm::BlsNormal)
-                    .public_key()
-                    .clone(),
-            );
-            let _ = stx.world.peers.push(peer.clone());
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "peer without live consensus key should be rejected");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "does not have a live consensus key", "unexpected error message: {msg}");
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_peer_outside_commit_topology {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let topology_peer = seed_live_peer(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-            );
-            let outside_peer = seed_live_peer(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-            );
-            *stx.commit_topology.get_mut() = vec![topology_peer];
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![outside_peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "peer outside current commit topology should be rejected");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "is not in the current commit topology", "unexpected error message: {msg}");
-            assert!(
-                stx.world
-                    .lane_relay_emergency_validators
-                    .get(&LaneId::new(0))
-                    .is_none(),
-                "topology-mismatched emergency override must not be stored"
-            );
-        });
-        world_test!(set_participant_lane_relay_emergency_validators_accepts_committee_peer_outside_global_topology {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let participant_lane = LaneId::new(1);
-            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE, participant_lane]);
-            let topology_peer = seed_live_peer(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-            );
-            let committee_peer = seed_live_peer_with_role(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-                ConsensusKeyRole::Committee,
-            );
-            *stx.commit_topology.get_mut() = vec![topology_peer];
-
-            SetLaneRelayEmergencyValidators {
-                lane_id: participant_lane,
-                peers: vec![committee_peer.clone()],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute(
-                &authority,
-                &mut stx,
-                "participant emergency committee need not join global topology",
-            );
-
-            let stored = stx
-                .world
-                .lane_relay_emergency_validators
-                .get(&participant_lane)
-                .expect("participant emergency override stored");
-            assert_eq!(stored.peers, vec![committee_peer]);
-        });
-        world_test!(set_global_lane_relay_emergency_validators_rejects_committee_only_peer {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let committee_peer = seed_live_peer_with_role(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-                ConsensusKeyRole::Committee,
-            );
-            *stx.commit_topology.get_mut() = vec![committee_peer.clone()];
-
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::SINGLE,
-                peers: vec![committee_peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(
-                &authority,
-                &mut stx,
-                "global emergency roster must require a Validator-role key",
-            );
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(
-                msg,
-                "does not have a live consensus key",
-                "unexpected error message: {msg}"
-            );
-            assert!(
-                stx.world
-                    .lane_relay_emergency_validators
-                    .get(&LaneId::SINGLE)
-                    .is_none()
-            );
-        });
-        world_test!(set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: None,
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "missing expiry should be rejected");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "requires expires_at_height", "unexpected error message: {msg}");
-        });
-        world_test!(set_lane_relay_emergency_validators_rejects_expiry_beyond_max_ttl {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: Some(40),
-                metadata: Metadata::default(),
-            }
-            .expect_execute_err(&authority, &mut stx, "oversized ttl should be rejected");
-            let msg = smart_contract_instruction_error_message(err);
-            assert_contains!(msg, "exceeds max_ttl_blocks", "unexpected error message: {msg}");
-        });
-        world_test!(set_lane_relay_emergency_validators_inserts_and_deduplicates {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let validator_a = seed_live_peer(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-            );
-            let validator_b = seed_live_peer(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-            );
-            SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![
-                    validator_b.clone(),
-                    validator_a.clone(),
-                    validator_b.clone(),
-                ],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute(&authority, &mut stx, "set emergency validators");
-            let record = stx
-                .world
-                .lane_relay_emergency_validators
-                .get(&LaneId::new(0))
-                .expect("override stored");
-            let mut expected = vec![validator_a, validator_b];
-            expected.sort();
-            expected.dedup();
-            assert_eq!(record.peers, expected);
-            assert_eq!(record.expires_at_height, 12);
-            assert!(record.metadata.is_empty());
-        });
-        world_test!(set_lane_relay_emergency_validators_clears_on_empty_list {
-            lane_relay_transaction!(state, block, state_block, stx, authority);
-            let validator = seed_live_peer(
-                &mut stx,
-                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
-            );
-            SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![validator.clone()],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .expect_execute(&authority, &mut stx, "set emergency validators");
-            assert!(
-                stx.world
-                    .lane_relay_emergency_validators
-                    .get(&LaneId::new(0))
-                    .is_some(),
-                "override should be stored before clearing"
-            );
-            SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: Vec::new(),
-                expires_at_height: None,
-                metadata: Metadata::default(),
-            }
-            .expect_execute(&authority, &mut stx, "clear emergency validators");
-            assert!(
-                stx.world
-                    .lane_relay_emergency_validators
-                    .get(&LaneId::new(0))
-                    .is_none(),
-                "override should be removed when peer list is empty"
-            );
         });
         fn smart_contract_instruction_error_message(err: InstructionExecutionError) -> String {
             match err {

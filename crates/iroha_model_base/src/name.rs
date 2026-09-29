@@ -32,16 +32,20 @@ pub const MAX_NAME_BYTES: usize = 255;
 // input scalar. `nfc_profile_decomposition_bound_matches_charge_audit` derives this value from the
 // same ICU4X data, and the profile hash below makes a data change fail closed in production.
 
-const JSON_NFC_PROFILE_MAX_DECOMPOSITION_SCALARS: usize = 4;
+const NFC_PROFILE_MAX_DECOMPOSITION_SCALARS: usize = 4;
 // ICU4X 2.2's NFC iterator uses `SmallVec<[CharacterAndClass; 17]>`, where
 // `CharacterAndClass` is one u32. On overflow, smallvec 1.15 grows through power-of-two capacities
 // beginning at 32. The sum below charges every requested replacement layout in one traversal,
 // independent of whether the allocator can extend a particular allocation in place.
+// ICU sorts these u32 entries stably. The pinned Rust 1.93.1 sort uses 4 KiB of
+// stack scratch, so <=255*4=1020 decomposed entries need no additional heap on
+// supported 32/64-bit targets. The source pins and physical request census are
+// qualification requirements when the toolchain or these dependencies change.
 
-fn json_nfc_buffer_request_bytes(source_scalars: usize) -> usize {
+fn nfc_buffer_request_bytes(source_scalars: usize) -> usize {
     const INLINE_SCALARS: usize = 17;
     const FIRST_HEAP_CAPACITY: usize = 32;
-    let max_decomposed = source_scalars * JSON_NFC_PROFILE_MAX_DECOMPOSITION_SCALARS;
+    let max_decomposed = source_scalars * NFC_PROFILE_MAX_DECOMPOSITION_SCALARS;
     if max_decomposed <= INLINE_SCALARS {
         return 0;
     }
@@ -194,12 +198,54 @@ impl Name {
         // instance and reuse it for every invocation.
         Ok(nfc_normalizer()?.normalize(candidate))
     }
-    fn parse(candidate: &str) -> Result<Self, ParseError> {
+    /// Validate borrowed text using the canonical Name syntax and exact NFC policy.
+    ///
+    /// This retains no replacement string or Name. Non-ASCII input may use ICU's
+    /// bounded decomposition scratch; an execution-owned reservation for that
+    /// scratch remains the responsibility of a funded semantic-validation caller.
+    /// The JSON decode path separately charges its audited scratch demand.
+    ///
+    /// # Errors
+    /// Returns the same syntax, profile or noncanonical-spelling error as parsing.
+    pub fn validate_canonical(candidate: &str) -> Result<(), ParseError> {
         Self::validate_str(candidate)?;
-        let normalized = Self::normalize(candidate)?;
-        if normalized.as_ref() != candidate {
-            return Err(ParseError::new(ERR_NAME_NFC));
+        Self::require_exact_nfc(nfc_normalizer()?, candidate)
+    }
+
+    /// Bound allocator request bytes for one borrowed canonical validation call.
+    ///
+    /// This performs only the same initial syntax predicate, never NFC or semantic
+    /// rejection. Syntax-invalid and ASCII inputs cannot allocate normalization
+    /// scratch. Other inputs use the fingerprinted profile's cumulative SmallVec
+    /// growth bound, which also covers simultaneous old/new allocation during growth.
+    /// Callers must reserve these bytes before validation and retain custody until
+    /// it returns. Sequential calls may share their maximum; concurrent calls may not.
+    /// This is a demand calculation, not an allocation or a validation permit.
+    #[must_use]
+    pub fn canonical_validation_scratch_bytes(candidate: &str) -> usize {
+        if Self::validate_str(candidate).is_err() || candidate.is_ascii() {
+            return 0;
         }
+        nfc_buffer_request_bytes(candidate.chars().count())
+    }
+
+    fn require_exact_nfc(
+        normalizer: &ComposingNormalizerBorrowed<'_>,
+        candidate: &str,
+    ) -> Result<(), ParseError> {
+        if candidate.is_ascii() {
+            return Ok(());
+        }
+        let (_, tail) = normalizer.split_normalized(candidate);
+        if tail.is_empty() {
+            Ok(())
+        } else {
+            Err(ParseError::new(ERR_NAME_NFC))
+        }
+    }
+
+    fn parse(candidate: &str) -> Result<Self, ParseError> {
+        Self::validate_canonical(candidate)?;
         Ok(Self(ConstString::from(candidate)))
     }
     /// Check exact NFC spelling while charging the audited normalization scratch.
@@ -210,14 +256,10 @@ impl Name {
         }
 
         let source_scalars = candidate.chars().count();
-        let buffer_request_bytes = json_nfc_buffer_request_bytes(source_scalars);
+        let buffer_request_bytes = nfc_buffer_request_bytes(source_scalars);
         norito::core::reserve_decode_allocation(buffer_request_bytes)
             .map_err(norito::json::Error::from_decode_resource)?;
-        let (_, tail) = normalizer.split_normalized(candidate);
-        if tail.is_empty() {
-            return Ok(());
-        }
-        Err(name_json_error(ERR_NAME_NFC))
+        Self::require_exact_nfc(normalizer, candidate).map_err(|err| name_json_error(err.reason()))
     }
 
     fn parse_for_json_decode(candidate: &str) -> Result<Self, norito::json::Error> {
@@ -498,7 +540,7 @@ mod tests {
         let raw = "e\u{0301}".repeat(32);
         let value = norito::json::Value::String(raw);
         let source_scalars = value.as_str().expect("string fixture").chars().count();
-        let first_pass = json_nfc_buffer_request_bytes(source_scalars);
+        let first_pass = nfc_buffer_request_bytes(source_scalars);
         assert!(
             first_pass > 0,
             "fixture must exercise the charged ICU buffer"
@@ -522,6 +564,70 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_canonical_validation_matches_syntax_then_normalization_corpus() {
+        let mut corpus: Vec<String> = [
+            "",
+            "alice",
+            "alice.example",
+            "é",
+            "e\u{301}",
+            "Å",
+            "A\u{30a}",
+            "가",
+            "\u{1100}\u{1161}",
+            "Å",
+            "Ａ",
+            "a\u{200d}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a b",
+            "\u{2003}a",
+            "a@b",
+            "a#b",
+            "a$b",
+            "a\0b",
+            "a\u{85}b",
+            "e\u{301}@b",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        corpus.extend([
+            "a".repeat(255),
+            "a".repeat(256),
+            "é".repeat(127),
+            format!("{}a", "é".repeat(127)),
+            "é".repeat(128),
+            format!("q{}", "\u{301}".repeat(100)),
+            format!("q{}\u{300}", "\u{315}".repeat(100)),
+        ]);
+        for candidate in corpus {
+            // Preserve the independently ordered pre-change contract: syntax
+            // first, then explicit NFC conversion and exact spelling comparison.
+            let reference = Name::validate_str(&candidate).and_then(|()| {
+                let normalized = Name::normalize(&candidate)?;
+                if normalized.as_ref() == candidate {
+                    Ok(())
+                } else {
+                    Err(ParseError::new(ERR_NAME_NFC))
+                }
+            });
+            assert_eq!(
+                Name::validate_canonical(&candidate).map_err(|error| error.reason()),
+                reference.map_err(|error| error.reason()),
+                "{candidate:?}"
+            );
+            let parsed = candidate.parse::<Name>();
+            assert_eq!(
+                parsed.as_ref().map(|_| ()).map_err(|error| error.reason()),
+                Name::validate_canonical(&candidate).map_err(|error| error.reason())
+            );
+            if let Ok(name) = parsed {
+                assert_eq!(name.as_ref(), candidate);
+            }
+        }
+    }
+    #[test]
     fn nfc_profile_decomposition_bound_matches_charge_audit() {
         let nfd = icu_normalizer::DecomposingNormalizer::new_nfd();
         let maximum = (0..=0x10_FFFF)
@@ -529,7 +635,7 @@ mod tests {
             .map(|scalar| nfd.normalize_iter(core::iter::once(scalar)).count())
             .max()
             .expect("Unicode scalar space is non-empty");
-        assert_eq!(maximum, JSON_NFC_PROFILE_MAX_DECOMPOSITION_SCALARS);
+        assert_eq!(maximum, NFC_PROFILE_MAX_DECOMPOSITION_SCALARS);
     }
     #[test]
     fn decode_name() {
@@ -762,3 +868,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "name/scratch_tests.rs"]
+mod scratch_tests;

@@ -215,14 +215,13 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
 }
-// These isolated fixtures submit through the QueuePlanSynced client API: one
-// block admits the plan, one certifies it, and the third executes its payload.
+// Each isolated ordinary submission executes in the next native certified global carrier.
 async fn next_governed_execution_height(client: &Client) -> Result<u64> {
     read_privacy_capabilities(client)
         .await
         .wrap_err("query committed height before governed transaction")?
         .committed_height
-        .checked_add(3)
+        .checked_add(1)
         .ok_or_else(|| eyre!("governed privacy execution height overflowed"))
 }
 fn proposed_activation(

@@ -6,7 +6,7 @@
 //! validators' consensus [`PublicKey`]s. The data model does not depend on the core crate.
 
 /// Sole first-release native consensus wire version, including mandatory epoch context.
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 1;
 
 /// Canonical validator generations, scheduling epochs, and frozen boundary results.
 pub mod epoch;

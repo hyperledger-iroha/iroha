@@ -15,7 +15,7 @@
 //!   ballots would reveal both choices once the release opens. The lock lives
 //!   with the key file whatever `--state-file` names, so casting from a copy of
 //!   the key file in another directory bypasses it; never copy a key file.
-//! - The **state file** is canonical JSON holding the consensus trust anchor: a
+//! - The **state file** is the canonical Norito checkpoint holding the consensus trust anchor: a
 //!   finality checkpoint promoted after every authenticated casting-proof page.
 //!   Promotion holds an exclusive advisory lock on `<state-file>.lock`,
 //!   re-reads the file and only ever advances it, so concurrent commands never
@@ -32,6 +32,9 @@ use std::{
 };
 
 use eyre::{Result, WrapErr as _, bail, eyre};
+use iroha_data_model::sumeragi_finality::{
+    MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
+};
 use norito::json::{JsonDeserialize, JsonSerialize};
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -41,12 +44,10 @@ use super::BallotChoiceArg;
 pub(super) const TIMED_OVN_SEED_BYTES_V1: usize = 32;
 /// Key-file frame layout version.
 const KEY_FILE_VERSION_V1: u16 = 1;
-/// State-file layout version.
-const STATE_FILE_VERSION_V1: u16 = 1;
 /// Upper bound for a key-file frame (the frame is a few dozen bytes).
 const MAX_KEY_FILE_BYTES: u64 = 1024;
 /// Upper bound for a state file.
-const MAX_STATE_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_STATE_FILE_BYTES: u64 = MAX_FINALITY_CHECKPOINT_BYTES as u64;
 /// Choice-lock file layout version.
 const CHOICE_LOCK_VERSION_V1: u16 = 1;
 /// Upper bound for a choice-lock file.
@@ -180,9 +181,9 @@ fn suffixed_path(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Default state-file path next to the key file: `<key-file>.state.json`.
+/// Default state-file path next to the key file: `<key-file>.state.nrt`.
 pub(super) fn default_state_path(key_file: &Path) -> PathBuf {
-    suffixed_path(key_file, ".state.json")
+    suffixed_path(key_file, ".state.nrt")
 }
 
 /// Seat-bound choice-lock path next to the key file:
@@ -321,36 +322,24 @@ pub(super) fn lock_choice(
     }
 }
 
-/// Externally trusted finality checkpoint that begins every casting proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct TrustedCheckpoint {
-    /// Finalized height of the checkpoint.
-    pub height: u64,
-    /// Sumeragi v2 height-context id at that height.
-    pub context_id: [u8; 32],
+/// Read the sole canonical checkpoint layout from an independently selected owner-only file.
+/// Decoding checks custody, bounds, genesis identity, retained context and the tip certificate.
+pub(super) fn load_checkpoint(path: &Path) -> Result<SumeragiFinalityCheckpoint> {
+    let bytes = read_owner_only_file(path, MAX_STATE_FILE_BYTES, "ballot checkpoint file")?;
+    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&bytes)
+        .wrap_err_with(|| format!("ballot checkpoint file `{}` is invalid", path.display()))?;
+    validate_checkpoint(&checkpoint)?;
+    Ok(checkpoint)
 }
 
-impl TrustedCheckpoint {
-    /// Validate the structural shape of a checkpoint.
-    pub(super) fn validate(self) -> Result<Self> {
-        if self.height == 0 {
-            bail!("trusted checkpoint height must be non-zero");
-        }
-        if !is_canonical_hash(&self.context_id) {
-            bail!("trusted checkpoint context id is not a canonical Iroha hash");
-        }
-        Ok(self)
-    }
-}
-
-/// On-disk state-file document.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct BallotStateFileV1 {
-    version: u16,
-    network_id: String,
-    checkpoint_height: u64,
-    checkpoint_context_id: String,
+fn validate_checkpoint(checkpoint: &SumeragiFinalityCheckpoint) -> Result<()> {
+    SumeragiFinalityVerifier::from_trusted_checkpoint(
+        checkpoint,
+        &checkpoint.network_id(),
+        checkpoint.chain_id(),
+    )
+    .wrap_err("ballot checkpoint failed native finality validation")?;
+    Ok(())
 }
 
 /// Loaded, validated ballot state bound to one network and one file.
@@ -358,7 +347,7 @@ struct BallotStateFileV1 {
 pub(super) struct BallotState {
     path: PathBuf,
     network_id: [u8; 32],
-    checkpoint: TrustedCheckpoint,
+    checkpoint: SumeragiFinalityCheckpoint,
 }
 
 impl BallotState {
@@ -369,32 +358,32 @@ impl BallotState {
     pub(super) fn open(
         path: &Path,
         network_id: [u8; 32],
-        init: Option<TrustedCheckpoint>,
+        init: Option<SumeragiFinalityCheckpoint>,
     ) -> Result<Self> {
         match fs::symlink_metadata(path) {
             Ok(_) => {
                 if init.is_some() {
                     bail!(
                         "ballot state file `{}` already pins a trusted checkpoint; the \
-                         --trusted-checkpoint-* flags only initialize a new state file",
+                         --trusted-checkpoint-file flag only initializes a new state file",
                         path.display()
                     );
                 }
                 Self::load_for_network(path, network_id)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let checkpoint = init
-                    .ok_or_else(|| {
-                        eyre!(
-                            "ballot state file `{}` does not exist; initialize it with \
-                             --trusted-checkpoint-height and --trusted-checkpoint-context-id \
-                             taken from an independent source (see `iroha gov parliament \
-                             ballot anchor`)",
-                            path.display()
-                        )
-                    })?
-                    .validate()?;
-                let bytes = encode_state(network_id, checkpoint)?;
+                let checkpoint = init.ok_or_else(|| {
+                    eyre!(
+                        "ballot state file `{}` does not exist; initialize it with \
+                             --trusted-checkpoint-file taken from an independent source",
+                        path.display()
+                    )
+                })?;
+                validate_checkpoint(&checkpoint)?;
+                if checkpoint.network_id().as_bytes() != &network_id {
+                    bail!("trusted checkpoint belongs to a different network");
+                }
+                let bytes = checkpoint.encode_canonical()?;
                 match publish_new_owner_only_file(path, &bytes, "ballot state file") {
                     Ok(()) => Ok(Self {
                         path: path.to_path_buf(),
@@ -403,7 +392,7 @@ impl BallotState {
                     }),
                     Err(PublishError::AlreadyExists) => bail!(
                         "ballot state file `{}` was created concurrently; rerun without the \
-                         --trusted-checkpoint-* flags",
+                         --trusted-checkpoint-file flag",
                         path.display()
                     ),
                     Err(PublishError::Other(error)) => Err(error),
@@ -443,25 +432,8 @@ impl BallotState {
 
     /// Load and validate an existing state file.
     pub(super) fn load(path: &Path) -> Result<Self> {
-        let bytes = read_owner_only_file(path, MAX_STATE_FILE_BYTES, "ballot state file")?;
-        let document: BallotStateFileV1 = norito::json::from_slice(&bytes)
-            .wrap_err_with(|| format!("ballot state file `{}` is invalid", path.display()))?;
-        if document.version != STATE_FILE_VERSION_V1 {
-            bail!(
-                "ballot state file `{}` has unsupported version {}",
-                path.display(),
-                document.version
-            );
-        }
-        let network_id = decode_lower_hex32(&document.network_id, "network_id")?;
-        let checkpoint = TrustedCheckpoint {
-            height: document.checkpoint_height,
-            context_id: decode_lower_hex32(
-                &document.checkpoint_context_id,
-                "checkpoint_context_id",
-            )?,
-        }
-        .validate()?;
+        let checkpoint = load_checkpoint(path)?;
+        let network_id = *checkpoint.network_id().as_bytes();
         Ok(Self {
             path: path.to_path_buf(),
             network_id,
@@ -470,8 +442,8 @@ impl BallotState {
     }
 
     /// Current trusted checkpoint of this command.
-    pub(super) fn checkpoint(&self) -> TrustedCheckpoint {
-        self.checkpoint
+    pub(super) fn checkpoint(&self) -> SumeragiFinalityCheckpoint {
+        self.checkpoint.clone()
     }
 
     /// Durably promote the trusted checkpoint to an authenticated later height.
@@ -480,52 +452,53 @@ impl BallotState {
     /// promoted meanwhile by another command is kept when it is at least as
     /// high: the file only ever advances. A different checkpoint at the same
     /// height is a fork (or a tampered file) and is refused.
-    pub(super) fn promote(&mut self, checkpoint: TrustedCheckpoint) -> Result<()> {
-        let checkpoint = checkpoint.validate()?;
-        if checkpoint == self.checkpoint {
-            return Ok(());
+    pub(super) fn promote(&mut self, checkpoint: SumeragiFinalityCheckpoint) -> Result<()> {
+        validate_checkpoint(&checkpoint)?;
+        if checkpoint.network_id().as_bytes() != &self.network_id
+            || checkpoint.chain_id() != self.checkpoint.chain_id()
+        {
+            bail!("trusted checkpoint promotion changed network or chain");
         }
-        if checkpoint.height <= self.checkpoint.height {
+        if checkpoint.height() < self.checkpoint.height() {
             bail!("trusted checkpoint promotion must advance the finalized height");
+        }
+        if checkpoint.height() == self.checkpoint.height() {
+            SumeragiFinalityVerifier::from_trusted_checkpoint(
+                &self.checkpoint,
+                &self.checkpoint.network_id(),
+                self.checkpoint.chain_id(),
+            )?
+            .verify_same_decision(self.checkpoint.tip(), checkpoint.tip())
+            .wrap_err("trusted checkpoint promotion disagrees with the current decision")?;
         }
         let _lock = StateFileLock::acquire(&self.path)?;
         let stored = Self::load(&self.path)?;
-        if stored.network_id != self.network_id {
+        if stored.network_id != self.network_id
+            || stored.checkpoint.chain_id() != self.checkpoint.chain_id()
+        {
             bail!(
-                "ballot state file `{}` changed network while in use",
+                "ballot state file `{}` changed network or chain while in use",
                 self.path.display()
             );
         }
         let stored = stored.checkpoint;
-        if stored.height == checkpoint.height && stored.context_id != checkpoint.context_id {
-            bail!(
-                "ballot state file `{}` holds a different checkpoint at height {}; the \
-                 authenticated chains disagree",
-                self.path.display(),
-                checkpoint.height
-            );
+        if stored.height() == checkpoint.height() {
+            SumeragiFinalityVerifier::from_trusted_checkpoint(
+                &stored, &stored.network_id(), stored.chain_id(),
+            )?
+            .verify_same_decision(stored.tip(), checkpoint.tip())
+            .wrap_err_with(|| format!(
+                "ballot state file `{}` holds a different checkpoint at height {}; the authenticated chains disagree",
+                self.path.display(), checkpoint.height(),
+            ))?;
         }
-        if stored.height < checkpoint.height {
-            let bytes = encode_state(self.network_id, checkpoint)?;
+        if stored.height() < checkpoint.height() {
+            let bytes = checkpoint.encode_canonical()?;
             replace_owner_only_file(&self.path, &bytes, "ballot state file")?;
         }
         self.checkpoint = checkpoint;
         Ok(())
     }
-}
-
-/// Canonical JSON bytes of one state-file document.
-fn encode_state(network_id: [u8; 32], checkpoint: TrustedCheckpoint) -> Result<Vec<u8>> {
-    let document = BallotStateFileV1 {
-        version: STATE_FILE_VERSION_V1,
-        network_id: hex::encode(network_id),
-        checkpoint_height: checkpoint.height,
-        checkpoint_context_id: hex::encode(checkpoint.context_id),
-    };
-    let mut bytes =
-        norito::json::to_vec(&document).wrap_err("failed to encode the ballot state file")?;
-    bytes.push(b'\n');
-    Ok(bytes)
 }
 
 /// Exclusive advisory lock on `<state-file>.lock`, held while one command
@@ -583,11 +556,6 @@ impl StateFileLock {
     fn acquire(_: &Path) -> Result<Self> {
         bail!("ballot state file custody requires a Unix host")
     }
-}
-
-/// Whether 32 bytes form a canonical Iroha hash (non-zero, low bit set).
-pub(super) fn is_canonical_hash(bytes: &[u8; 32]) -> bool {
-    bytes.iter().any(|byte| *byte != 0) && bytes[31] & 1 == 1
 }
 
 /// Decode exactly 64 lowercase hexadecimal characters.

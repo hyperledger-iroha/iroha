@@ -25,7 +25,7 @@ use std::{
 
 pub(crate) const COMMAND_FILE: &str = "private-settlement-route-command.norito.json";
 pub(crate) const ACK_FILE: &str = "private-settlement-route-ack.norito.json";
-const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
+const CONTROL_DIR_ENV: &str = "IROHA_TEST_PRIVATE_SETTLEMENT_ROUTE_CONTROL_DIR";
 const FORMAT_VERSION: u64 = 1;
 const MAX_CONTROL_BYTES: usize = 256 * 1024;
 const MAX_REQUEST_DIGESTS: usize = 16_384;

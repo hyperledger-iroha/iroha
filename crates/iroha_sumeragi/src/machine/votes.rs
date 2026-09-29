@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::{Core, EvKey, PqcVia, Retx, Via};
 use crate::{
     api::LocalFault,
-    crypto::{AttestOutcome, form_qc, verify_vote, verify_vote_attestation},
+    crypto::{AttestOutcome, form_qc, verify_vote_attestation},
     message::{Evidence, Qc, Vote, VoteKind, WireMessage},
     pacemaker::retransmit_spacing,
     types::{Hash32, ValidatorIndex, usize_of},
@@ -132,15 +132,7 @@ impl Core {
             return;
         }
         #[cfg(not(sumeragi_mutation = "MS38"))]
-        if verify_vote(
-            &*self.crypto,
-            &self.instance,
-            &self.cfg.epoch.id,
-            &self.cfg.committee,
-            &x,
-        )
-        .is_err()
-        {
+        if self.verifier(&self.cfg).verify_vote(&x).is_err() {
             return;
         }
         // Two signed values in one slot are equivocation, whatever the unsigned attestation.
@@ -373,20 +365,22 @@ impl Core {
         (bh, result, attest): (Hash32, Hash32, bool),
         attestation: Option<crate::message::CommitAttestation>,
     ) {
-        let preimage = crate::preimage::vote_preimage(
-            kind,
-            &self.instance,
-            &self.cfg.epoch.id,
-            self.height,
-            self.view,
-            &bh,
-            &result,
-            attest,
-        );
-        let Some(sig) = self.sign(me, &preimage) else {
-            return;
-        };
-        let vote = Vote {
+        if let Some(vote) = self.record_vote(me, kind, (bh, result, attest), attestation) {
+            self.route(&vote);
+            self.pool_insert(&vote);
+        }
+    }
+
+    /// Sign and record an own vote, including its retransmit deadline. Restart uses the same
+    /// path with the durable Prepare value, without routing or pooling it before restoration.
+    pub(super) fn record_vote(
+        &mut self,
+        me: super::Me,
+        kind: VoteKind,
+        (bh, result, attest): (Hash32, Hash32, bool),
+        attestation: Option<crate::message::CommitAttestation>,
+    ) -> Option<Vote> {
+        let mut vote = Vote {
             kind,
             instance: self.instance,
             epoch: self.cfg.epoch.id,
@@ -396,29 +390,27 @@ impl Core {
             result,
             attest,
             signer: me.index,
-            sig,
+            sig: crate::types::Signature([0; crate::types::SIGNATURE_LEN]),
             attestation,
         };
-        let slot = usize::from(kind == VoteKind::Commit);
+        // Only the fully signed object enters custody below; failure retains no vote.
+        vote.sig = self.sign(me, &vote.preimage())?;
         match kind {
             VoteKind::Prepare => self.mine.prepare = Some(vote.clone()),
             VoteKind::Commit => self.mine.commit = Some(vote.clone()),
         }
         self.t_lastvote = Some(self.now);
         let t_retx = self.pm.t_retx(self.view);
-        if let Some(entry) = self.retx.get_mut(slot) {
-            *entry = Some(Retx {
-                next: self.now.saturating_add(retransmit_spacing(
-                    1,
-                    t_retx,
-                    self.local.rebroadcast_interval,
-                )),
-                k: 1,
-                sent: self.now,
-            });
-        }
-        self.route(&vote);
-        self.pool_insert(&vote);
+        self.retx[usize::from(kind == VoteKind::Commit)] = Some(Retx {
+            next: self.now.saturating_add(retransmit_spacing(
+                1,
+                t_retx,
+                self.local.rebroadcast_interval,
+            )),
+            k: 1,
+            sent: self.now,
+        });
+        Some(vote)
     }
 
     /// `route(vote)` (§5.2): to `P` at stages 0–1 (local if `P` is this node), broadcast to

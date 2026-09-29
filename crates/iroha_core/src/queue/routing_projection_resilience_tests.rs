@@ -129,8 +129,9 @@ fn expired_event_uses_the_authoritative_full_plan() {
     queue.push(tx, state.view()).expect("push tx");
     while event_receiver.try_recv().is_ok() {}
     time_handle.advance(Duration::from_millis(11));
-    let mut guards = Vec::new();
-    queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+    let guards = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .unwrap();
     assert!(guards.is_empty());
     assert_eq!(queue.active_len(), 0);
     assert_eq!(queue.routing_plan_hint(&hash), None);

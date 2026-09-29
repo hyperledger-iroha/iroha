@@ -106,8 +106,8 @@ async fn snapshot_read_buffer_strict_restore_retains_charge_through_initializati
             defaults::snapshot::MAX_PAYLOAD_BYTES,
             SnapshotResourcePolicy::default(),
             key.public_key(),
+            &state.chain_id,
             &state.network_id,
-            &SnapshotBootstrapPolicy::default(),
             &initialize,
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
@@ -357,7 +357,6 @@ async fn snapshot_read_buffer_maker_retains_the_original_startup_pool() {
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
-        bootstrap: SnapshotBootstrapPolicy::default(),
     };
     let startup_pool = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let occupied = startup_pool.try_reserve_bytes(64).unwrap();
@@ -443,11 +442,57 @@ fn snapshot_read_buffer_operation_unwind_notifies_after_unlock() {
 // writer, the normal Strict decoder, and the original allocation pool.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_maker_first_tick_exports_recovered_state_without_new_work() {
+    let root = tempdir().unwrap();
+    let store = root.path().join("snapshot");
+    let chain = native_snapshot_chain();
+    let state = Arc::clone(chain.state());
+    let tip = state.latest_block_hash_fast().expect("native executed tip");
+    let payload = exact_snapshot_payload_bytes(&state);
+    let key = checked_random_snapshot_keypair();
+    let config = Config {
+        mode: Mode::ReadWrite,
+        create_every_ms: defaults::snapshot::CREATE_EVERY.into(),
+        store_dir: WithOrigin::inline(store.clone()),
+        merkle_chunk_size_bytes: TEST_CHUNK_SIZE,
+        max_payload_bytes: defaults::snapshot::MAX_PAYLOAD_BYTES,
+        max_read_buffer_bytes: NonZeroUsize::new(payload.len()).unwrap(),
+        resources: SnapshotResourcePolicy::default(),
+        verification_public_key: None,
+        signing_private_key: None,
+    };
+    let budget = AllocationBudget::new(config.max_read_buffer_bytes.get());
+    let mut maker = SnapshotMaker::from_config(&config, state, key, budget.clone()).unwrap();
+    assert_eq!(maker.latest_block_hash, None);
+    assert_snapshot_bundle_absent(&store);
+    let (owner, readiness) = startup_recovery::channel();
+    owner.ready();
+    let shutdown = ShutdownSignal::new();
+    let stop = shutdown.clone();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        SnapshotMaker::run_snapshot_loop(Duration::from_secs(3600), readiness, shutdown, || {
+            maker.create_snapshot();
+            stop.send();
+        }),
+    )
+    .await
+    .expect("the immediate first tick publishes without a new block");
+    assert_eq!(maker.latest_block_hash, Some(tip));
+    assert_eq!(maker.state.latest_block_hash_fast(), Some(tip));
+    assert_eq!(
+        std::fs::read(current_generation_artifact(&store, SNAPSHOT_FILE_NAME)).unwrap(),
+        payload
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() {
     let root = tempdir().unwrap();
     let store = root.path().join("snapshot");
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut chain = native_snapshot_chain();
+    let state = Arc::clone(chain.state());
     let key = checked_random_snapshot_keypair();
 
     // GC retains the current generation and its immediate predecessor. A
@@ -456,9 +501,8 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
     let rollback = current_generation_dir(&store);
     let rollback_name = current_generation_name(&store);
     let rollback_bytes = std::fs::read(rollback.join(SNAPSHOT_FILE_NAME)).unwrap();
-    let block_one = signed_block_with_transaction(accepted_log_transaction("maker current"));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block_one));
-    store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[Arc::clone(&block_one)]);
+    chain.commit(Vec::new());
+    let block_one = state.latest_block_hash_fast().unwrap();
     try_write_snapshot(&state, &store, &key, TEST_CHUNK_SIZE).unwrap();
     let current = current_generation_dir(&store);
     let current_bytes = std::fs::read(current.join(SNAPSHOT_FILE_NAME)).unwrap();
@@ -480,29 +524,17 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
-        bootstrap: SnapshotBootstrapPolicy::default(),
     };
     let budget = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let mut maker =
-        SnapshotMaker::from_config(&config, Arc::new(state), key.clone(), budget.clone()).unwrap();
-    assert_eq!(maker.latest_block_hash, Some(block_one.hash()));
+        SnapshotMaker::from_config(&config, state, key.clone(), budget.clone()).unwrap();
+    assert_eq!(maker.latest_block_hash, None);
+    maker.create_snapshot();
+    assert_eq!(maker.latest_block_hash, Some(block_one));
     let state_owner = Arc::as_ptr(&maker.state);
-    let block_two = signed_block_after_transaction(
-        accepted_log_transaction("maker pending"),
-        Some(block_one.as_ref()),
-    );
-    // Advance the same fixture State through the existing signed-block and
-    // checkpoint helpers; no replacement State is installed for the retry.
-    store_block_and_mark_state_height(
-        Arc::get_mut(&mut maker.state).expect("Maker is the only State Arc owner"),
-        &kura,
-        Arc::clone(&block_two),
-    );
-    store_complete_snapshot_commit_evidence_for_blocks(
-        &maker.state,
-        &kura,
-        &[block_one.clone(), block_two.clone()],
-    );
+    // Execute the next block in the same State owner retained by SnapshotMaker.
+    chain.commit(Vec::new());
+    let block_two = maker.state.latest_block_hash_fast().unwrap();
     let pending_bytes = exact_snapshot_payload_bytes(&maker.state);
     let pending_name = hex::encode(Sha256::digest(&pending_bytes));
     let pending = store
@@ -531,8 +563,8 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
     ));
 
     maker.create_snapshot();
-    assert_eq!(maker.latest_block_hash, Some(block_one.hash()));
-    assert_eq!(maker.state.latest_block_hash_fast(), Some(block_two.hash()));
+    assert_eq!(maker.latest_block_hash, Some(block_one));
+    assert_eq!(maker.state.latest_block_hash_fast(), Some(block_two));
     assert_eq!(Arc::as_ptr(&maker.state), state_owner);
     assert_eq!(exact_snapshot_payload_bytes(&maker.state), pending_bytes);
     assert_eq!(
@@ -557,7 +589,7 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
     drop(occupied);
     assert_eq!(budget.reserved_bytes(), 0);
     maker.create_snapshot();
-    assert_eq!(maker.latest_block_hash, Some(block_two.hash()));
+    assert_eq!(maker.latest_block_hash, Some(block_two));
     assert_eq!(Arc::as_ptr(&maker.state), state_owner);
     assert_eq!(exact_snapshot_payload_bytes(&maker.state), pending_bytes);
     assert_eq!(current_generation_name(&store), pending_name);
@@ -602,8 +634,8 @@ where
         defaults::snapshot::MAX_PAYLOAD_BYTES,
         SnapshotResourcePolicy::default(),
         key.public_key(),
+        &source.chain_id,
         &source.network_id,
-        &SnapshotBootstrapPolicy::default(),
         initialize,
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -659,17 +691,14 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     let root = tempdir().unwrap();
     let store = root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let committed = signed_block_with_transaction(accepted_log_transaction("strict refund"));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&committed));
-    store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[committed]);
+    // Strict decoding admits height zero. Nonzero caches require original replay
+    // before a typed State can be restored.
+    let state = state_factory_with_kura(Arc::clone(&kura));
     let key = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store, &key, TEST_CHUNK_SIZE).unwrap();
     let payload_path = current_generation_artifact(&store, SNAPSHOT_FILE_NAME);
     let payload = std::fs::read(&payload_path).unwrap();
     let pointer = std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
-    let block = kura.get_block(nonzero!(1_usize)).unwrap();
-    let finality = kura.v2_finality_artifact(1).unwrap().unwrap();
     let budget = AllocationBudget::new(payload.len() + 1);
     let _sentinel = budget.try_reserve_bytes(1).unwrap();
     let Err(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
@@ -746,10 +775,9 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
         std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
         pointer
     );
-    assert_eq!(kura.blocks_count(), 1);
-    assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
-    assert_eq!(kura.get_block(nonzero!(1_usize)), Some(block));
-    assert_eq!(kura.v2_finality_artifact(1).unwrap().unwrap(), finality);
+    assert_eq!(kura.blocks_count(), 0);
+    assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
+    assert!(kura.get_block(nonzero!(1_usize)).is_none());
 
     let restored =
         strict_snapshot_read_for_custody_test(&store, &state, &kura, &key, &budget, &|restored| {

@@ -614,7 +614,7 @@ mod tests {
             execution: RamLfeExecutionReceiptPayload {
                 program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
                 program_digest: Hash::new(b"program"),
-                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                backend: RamLfeBackend::BfvProgrammedV1,
                 verification_mode: RamLfeVerificationMode::Signed,
                 input_ciphertext_hash: Hash::new(b"input-ciphertext"),
                 output_ciphertext_hash: Hash::new(b"output-ciphertext"),
@@ -801,7 +801,7 @@ mod tests {
                 RamLfeProgramId::from_str("phone_retail").expect("valid program");
         });
         assert_rejected!("execution.backend", |payload| {
-            payload.execution.backend = RamLfeBackend::BfvAffineSha3_256V1;
+            payload.execution.backend = RamLfeBackend::BfvAffineV1;
         });
         assert_rejected!("execution.input_ciphertext_hash", |payload| {
             payload.execution.input_ciphertext_hash = Hash::new(b"tampered-input");
@@ -947,7 +947,7 @@ mod tests {
             program_digest: hash_hex(
                 "fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
             ),
-            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            backend: RamLfeBackend::BfvProgrammedV1,
             verification_mode: RamLfeVerificationMode::Signed,
             input_ciphertext_hash: fixture_input_ciphertext_hash(),
             output_ciphertext_hash: fixture_output_ciphertext_hash(),
@@ -1114,8 +1114,8 @@ mod tests {
     fn ram_lfe_backend(raw: &str) -> RamLfeBackend {
         match raw {
             "hkdf-sha3-512-prf-v1" => RamLfeBackend::HkdfSha3_512PrfV1,
-            "bfv-affine-sha3-256-v1" => RamLfeBackend::BfvAffineSha3_256V1,
-            "bfv-programmed-sha3-256-v1" => RamLfeBackend::BfvProgrammedSha3_256V1,
+            "bfv-affine-v1" => RamLfeBackend::BfvAffineV1,
+            "bfv-programmed-v1" => RamLfeBackend::BfvProgrammedV1,
             other => panic!("unsupported RAM-LFE backend `{other}`"),
         }
     }

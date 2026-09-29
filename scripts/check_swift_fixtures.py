@@ -77,7 +77,7 @@ SHARED_PAYLOAD_ENTRY_FIELDS = frozenset(
 SWIFT_PAYLOAD_ENTRY_FIELDS = frozenset({"name", "payload"})
 SHARED_PAYLOAD_FIELDS = frozenset(
     {
-        "admission_intent",
+
         "authority",
         "creation_time_ms",
         "executable",
@@ -90,7 +90,7 @@ SHARED_PAYLOAD_FIELDS = frozenset(
 )
 SWIFT_PAYLOAD_FIELDS = frozenset(
     {
-        "admission_intent",
+
         "authority",
         "creation_time_ms",
         "executable",
@@ -490,17 +490,6 @@ def validate_fee_payment(
     return gas_limit
 
 
-def validate_admission_intent(
-    value: object, context: str
-) -> None:
-    if not isinstance(value, dict):
-        raise ValueError(f"{context} must be an object")
-    require_exact_fields(value, frozenset({"intent", "value"}), context)
-    expected = "ordinary"
-    if value["intent"] != expected or value["value"] is not None:
-        raise ValueError(
-            f"{context} must be exactly {{'intent': '{expected}', 'value': null}}"
-        )
 
 
 @dataclass(frozen=True)
@@ -561,9 +550,7 @@ def validate_payload_body(value: object, context: str, *, shared: bool) -> Paylo
     gas_limit = validate_fee_payment(
         value["fee_payment"], f"{context}.fee_payment", shared=shared
     )
-    validate_admission_intent(
-        value["admission_intent"], f"{context}.admission_intent"
-    )
+
     requires_gas_limit = validate_executable(
         value["executable"], f"{context}.executable", shared=shared
     )

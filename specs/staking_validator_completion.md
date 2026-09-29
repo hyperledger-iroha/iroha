@@ -17,11 +17,11 @@ decoders, aliases, shims and parallel implementations are prohibited.
 | --- | --- | --- |
 | Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | The latest pre-merge focused Core run passed 182 and failed one strict snapshot fixture. Its committed NPoS/XOR policy repair is staged. The later isolated allocation cut passes 513 tests; integrated custody, rollback, fee and snapshot gates remain open |
 | Canonical XOR | Genesis-pinned network XOR funds bonds, rewards and withdrawals; no synthetic staking definition or implicit production minting | Required immutable network XOR pin and canonical defaults implemented; production implicit minting removed; integration validation pending |
-| Authority and election | Separate key generations and scheduling epochs; freeze E+2 membership at E and prepare through E+1 | Complete generation/authorization, authenticated native epoch graph and pristine E+2 boundary capture are integrated and Core library compiles; control/Pasta and network validation remain open |
-| Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Native prepare/activate/retain source capture, atomic application barrier and current/predecessor restore join are integrated; signed control/Pasta and real restart/transition qualification remain open |
+| Authority and election | Separate key generations and scheduling epochs; freeze E+2 membership at E and prepare through E+1 | Generation/authorization, authenticated native epoch graph and pristine E+2 boundary capture are integrated; Core check14 passed before the subsequent seal/storage changes; fresh compilation, runtime and network qualification remain open |
+| Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Native prepare/activate/retain source capture, signed control/Pasta, atomic application barrier and current/predecessor restore join are integrated; snapshot chain/network identity is checked before typed restore, but positive-height startup and real restart/transition qualification remain open |
 | Monetary fees | Exact signed effects, bounded claim processing with retained dust, and native execution equality checks | Source implementation present; Core, enacted-fee and network qualification pending |
-| Production progress | One funded original execution reaches durable Apply; native lane runner is the sole production owner | A reconciled target-only cut adds original-pool native context archival and retains the original execution across refusal/publication. The native consensus component passes 361 with two opt-ins unrun. Nested World/DA funding, complete native source retirement, integrated startup/recovery, RS16 and liveness qualification remain open |
-| Operator/client delivery | Canonical signing, provisioning, status, SDK and fixture workflows | Native status and stopped-Kura evidence collection are staged. Current native evidence Python tests pass 153; the earlier 812-test result belongs to the superseded protocol overlay. Kotlin/Java codec component checks pass. Genuine native fixture regeneration, the rebuilt Swift bridge and full SDK delivery remain open |
+| Production progress | One funded original execution reaches durable Apply; native lane runner is the sole production owner | The integrated cut retains original-pool native context archival and execution across refusal/publication. The earlier native component run passed 361 with two opt-ins unrun; it is not current integrated qualification. Original-tip deterministic history and the permanent storage fail-stop gate are integrated. Nested World/DA funding, complete native source retirement, positive-height startup/recovery, RS16 and liveness qualification remain open |
+| Operator/client delivery | Canonical signing, provisioning, status, SDK and fixture workflows | Native status and stopped-Kura evidence collection are integrated; Python/JS status retirement is under validation. Current native evidence Python tests pass 153; the earlier 812-test result belongs to the superseded protocol overlay. Kotlin/Java codec component checks pass. The nine-field signed transaction layout and Rust production callers are integrated without the old admission slot. Genuine native fixture regeneration, the rebuilt Swift bridge and full SDK delivery remain open |
 | Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties, rewards and full withdrawal; maintained formal/DA/workspace/SDK gates | Pending |
 
 Rewards remain explicit treasury-funded distributions. Committee preparation
@@ -37,8 +37,10 @@ genesis test allocations and are not claims of mainnet monetary value.
 
 The [September 28 reconciliation record](../docs/history/2026-09-28/validator-staking-native-review.md)
 binds the recent scoped evidence and records the remaining source-owner and
-resource-funding gaps. The separate merge is now resolved and staged. This review
-is being reconciled for integration and has not passed integrated release gates.
+resource-funding gaps. The separate merge is now resolved and staged. The review is now applied on `optimizations`, preserving the staged merge index.
+Core library check14 passed with 294 warnings before the latest seal/storage
+changes. Fresh compilation, deployment allocation repair and runtime/network
+qualification remain open; no integrated release completion is claimed.
 
 ## Implemented candidate under validation
 
@@ -48,7 +50,7 @@ Superseded Native Decision/QueuePlan runtime, proof and fixture integration cann
 count as completion or be activated beside it. Preserve its substantive custody
 and execution assertions on the actual production owner. The canonical execution
 proof/archive and strict current/predecessor snapshots now use complete
-`SumeragiLaneState` in the target-only review. Native routing uses the same
+`SumeragiLaneState` in the integrated source. Native routing uses the same
 committed policy for direct inputs and merged suffixes. Shared lane evidence
 verification reproduces admission and checks the actual native quorum. The
 compiler/runtime gates, physical funding and old source-owner removal remain open.
@@ -59,7 +61,10 @@ compiler/runtime gates, physical funding and old source-owner removal remain ope
   The schedule retains the original authenticated proofs and roster after genesis;
   mutable candidate registrations and key expiry cannot change voting authority.
   The complete native epoch graph, pristine election capture and boundary barrier
-  now compile together. Focused runtime and real transition qualification remain
+  compiled in an earlier source cut. Core library check14 passed before the latest
+  native seal/storage changes; their fresh compilation, unit/integration and
+  unchanged network gates remain open.
+  Focused runtime and real transition qualification remain
   pending; signed control and Pasta integration are still in progress.
 - Account-owned lifecycle and signed peer consent: `isi/staking.rs` in the data
   model and Core, initial executor dispatch, canonical instruction
@@ -185,8 +190,9 @@ keys and beacon shares are prepared during E+1.
 The unimplemented concentration, seat-band and entity-correlation settings have
 been removed from canonical parameters, profiles and genesis templates. Their
 old fields are rejected, including zero-valued fields. Frozen policy/member
-records and their native producer consumers are integrated. Core library
-compilation passes; this contract does not attest completed rotation.
+records and their native producer consumers are integrated. Earlier Core library
+compilation passed; the subsequent native seal/storage changes require fresh
+compilation and runtime qualification. This contract does not attest completed rotation.
 
 The canonical epoch identity must bind the complete generation, authorization,
 ordered roster and original PoPs, network, mode and fresh leader seed. Every

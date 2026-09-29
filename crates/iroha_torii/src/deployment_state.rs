@@ -434,7 +434,7 @@ mod tests {
         mk_app_state_for_tests_with_world(fixture_world(authority, other, nonce))
     }
     fn anchor_state(
-        app: &SharedAppState,
+        app: &mut SharedAppState,
         creation_time_ms: u64,
         binding: Option<(
             ContractAddress,
@@ -444,22 +444,10 @@ mod tests {
             u64,
         )>,
     ) -> iroha_crypto::HashOf<BlockHeader> {
-        let signer =
-            checked_torii_test_ed25519_keypair(0xd0, "derive deployment-state block fixture key");
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero block height"),
-            None,
-            None,
-            creation_time_ms,
-            0,
-        );
-        let signed_block = BlockBuilder::new(header).build_with_signature(0, signer.private_key());
-        let header = signed_block.header();
-        let block_hash = signed_block.hash();
-        app.kura
-            .store_block(Arc::new(signed_block))
-            .expect("store deployment-state anchor block");
-        let mut state_block = app.state.block(header);
+        let app = Arc::get_mut(app).expect("unique deployment app");
+        let state = Arc::get_mut(&mut app.state).expect("unique deployment fixture world");
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, creation_time_ms, 0);
+        let mut state_block = state.block(header);
         if let Some((address, alias, lease_expiry_ms, grace_until_ms, bound_at_ms)) = binding {
             let mut transaction = state_block.transaction();
             transaction
@@ -481,11 +469,21 @@ mod tests {
             transaction.apply();
         }
         state_block
-            .commit_empty_block_for_testing()
-            .expect("commit deployment-state anchor");
+            .commit_world_overlay_for_testing()
+            .expect("seed deployment alias state");
+        let world = std::mem::take(&mut state.world);
+        let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1),
+        )
+        .expect("original deployment snapshot genesis");
+        chain.commit_at(creation_time_ms, Vec::new());
+        let block_hash = chain.committed(2).block_hash();
+        app.state = chain.state().clone();
+        app.kura = chain.kura().clone();
         assert_eq!(app.state.view().latest_block_hash(), Some(block_hash));
         block_hash
     }
+
     fn request(authority: &AccountId) -> ContractDeploymentStateRequestDto {
         ContractDeploymentStateRequestDto {
             authority: authority.to_string(),
@@ -533,8 +531,8 @@ mod tests {
             iroha_core::sns::record_storage_key(&selector),
             record.encode(),
         );
-        let app = mk_app_state_for_tests_with_world(world);
-        anchor_state(&app, 1_000, None);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        anchor_state(&mut app, 1_000, None);
         let response = read_contract_deployment_state(
             &app,
             &ContractDeploymentStateRequestDto {
@@ -557,7 +555,7 @@ mod tests {
             "derive deployment-state authority fixture key",
         );
         let authority = AccountId::new(authority_key.public_key().clone());
-        let app = fixture_app(&authority, None, NonceFixture::U64(7));
+        let mut app = fixture_app(&authority, None, NonceFixture::U64(7));
         let alias: ContractAlias = "deploy::universal".parse().expect("contract alias");
         let previous = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -569,7 +567,7 @@ mod tests {
         )
         .expect("previous contract address");
         let observed_hash = anchor_state(
-            &app,
+            &mut app,
             1_000,
             Some((previous.clone(), alias, Some(900), Some(1_100), 100)),
         );
@@ -584,7 +582,7 @@ mod tests {
             response.previous_contract_address.as_deref(),
             Some(previous.as_ref())
         );
-        assert_eq!(response.observed_block_height, "1");
+        assert_eq!(response.observed_block_height, "2");
         assert_eq!(response.observed_block_hash, observed_hash.to_string());
         assert_eq!(response.ledger_time_ms, "1000");
         assert_eq!(
@@ -609,7 +607,7 @@ mod tests {
             "derive grace-expired deployment-state authority fixture key",
         );
         let authority = AccountId::new(authority_key.public_key().clone());
-        let app = fixture_app(&authority, None, NonceFixture::U64(1));
+        let mut app = fixture_app(&authority, None, NonceFixture::U64(1));
         let previous = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -620,7 +618,7 @@ mod tests {
         )
         .expect("previous contract address");
         anchor_state(
-            &app,
+            &mut app,
             1_000,
             Some((
                 previous,
@@ -642,16 +640,16 @@ mod tests {
             "derive malformed deployment-state authority fixture key",
         );
         let authority = AccountId::new(authority_key.public_key().clone());
-        let invalid_app = fixture_app(&authority, None, NonceFixture::Invalid);
-        anchor_state(&invalid_app, 1_000, None);
+        let mut invalid_app = fixture_app(&authority, None, NonceFixture::Invalid);
+        anchor_state(&mut invalid_app, 1_000, None);
         let error = read_contract_deployment_state(&invalid_app, &request(&authority), None)
             .expect_err("invalid native nonce must fail closed");
         assert!(matches!(
             error,
             Error::Query(iroha_data_model::ValidationFail::InternalError(_))
         ));
-        let valid_app = fixture_app(&authority, None, NonceFixture::Missing);
-        anchor_state(&valid_app, 1_000, None);
+        let mut valid_app = fixture_app(&authority, None, NonceFixture::Missing);
+        anchor_state(&mut valid_app, 1_000, None);
         let error = read_contract_deployment_state(
             &valid_app,
             &request(&authority),
@@ -730,8 +728,8 @@ mod tests {
         );
         let authority = AccountId::new(authority_key.public_key().clone());
         let other = AccountId::new(other_key.public_key().clone());
-        let app = fixture_app(&authority, Some(&other), NonceFixture::Missing);
-        anchor_state(&app, 1_234, None);
+        let mut app = fixture_app(&authority, Some(&other), NonceFixture::Missing);
+        anchor_state(&mut app, 1_234, None);
         let method = Method::POST;
         let uri: Uri = "/v1/contracts/deployment-state".parse().expect("uri");
         let body = norito::json::to_vec(&request(&authority)).expect("request JSON");

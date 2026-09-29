@@ -7,8 +7,6 @@ use resource_inventory::{Inventory, Unavailable};
 
 fn limits() -> EvidenceResourceLimits {
     EvidenceResourceLimits {
-        native_record_bytes: 4096,
-        native_prune_intent_bytes: 4096,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
     }
 }
@@ -44,10 +42,8 @@ fn physical_bytes_include_real_data_headers_and_temporary_records_once() {
     let root = directory.path().canonicalize().unwrap();
     let data = root.join(DATA_FILE_NAME);
     let index = root.join(INDEX_FILE_NAME);
-    let carriers = root.join(MERGE_CARRIERS_DIR);
-    fs::create_dir(&carriers).unwrap();
-    let stable = carriers.join("1.norito");
-    let temporary = carriers.join("1.norito.tmp");
+    let stable = root.join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
+    let temporary = stable.with_extension("norito.tmp");
     fs::write(&data, [7_u8; 31]).unwrap();
     fs::write(&index, [0_u8; 32]).unwrap();
     fs::write(&stable, [1_u8; 9]).unwrap();
@@ -68,15 +64,15 @@ fn physical_bytes_include_real_data_headers_and_temporary_records_once() {
         2
     );
     assert_eq!(
-        counts[ResourceFamily::MergeCarrierRecord as usize].persisted_entries,
+        counts[ResourceFamily::QueryMarkerRecords as usize].persisted_entries,
         2
     );
     assert_eq!(
-        counts[ResourceFamily::MergeCarrierRecord as usize].index_bytes,
+        counts[ResourceFamily::QueryMarkerRecords as usize].index_bytes,
         9
     );
     assert_eq!(
-        counts[ResourceFamily::MergeCarrierRecord as usize].temporary_index_bytes,
+        counts[ResourceFamily::QueryMarkerRecords as usize].temporary_index_bytes,
         11
     );
     assert_eq!(

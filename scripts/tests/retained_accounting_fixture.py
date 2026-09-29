@@ -41,7 +41,8 @@ class Fixture:
     """Build one real-codec session among a complete 800-job registered plan."""
     def __init__(self, kinds=('succeeded',)*6+('failed',), *, ack_consumed=True,
                  pending_successor=False, setup_failure=False, fault_prefix=False,
-                 session_index=0, worker_birth=10, ack_published=True):
+                 session_index=0, worker_birth=10, ack_published=True,
+                 campaign_id="campaign-a", registered_campaigns=None, plan_overrides=None):
         self.store = MemoryRecords(); self.replays = 0
         self.image = {'sha256': 'f'*64, 'bytes': 100}
         self.command = ['/source-admitted/worker', 'retained_session', '--exact', '--ignored']
@@ -64,23 +65,25 @@ class Fixture:
         if fault_prefix:
             fault = {'kind': 'fault', 'case': 'prefix'}
             plan['jobs'].insert(0, {'request_id': digest(fault), **fault})
+        if plan_overrides:
+            plan.update(copy.deepcopy(plan_overrides))
         self.plan = plan; self.plan_raw = accounting.accounting_canonical_bytes(plan)
         self.scope = {'version': 1, 'protocol': control.PROTOCOL, 'scope_id': 'd'*64,
             'previous_scope_sha256': None, 'registered_ns': 1, 'stopping_policy': 'fail_fast',
-            'deadline_policy': policy, 'campaigns': [{'campaign_id': 'campaign-a',
+            'deadline_policy': policy, 'campaigns': registered_campaigns or [{'campaign_id': campaign_id,
                                                  'plan': accounting.accounting_file_binding(self.plan_raw)}]}
         self.scope_raw = accounting.accounting_canonical_bytes(self.scope)
         self.base = {'scope_sha256': hashlib.sha256(self.scope_raw).hexdigest(),
-                     'campaign_id': 'campaign-a', 'plan_sha256': hashlib.sha256(self.plan_raw).hexdigest()}
+                     'campaign_id': campaign_id, 'plan_sha256': hashlib.sha256(self.plan_raw).hexdigest()}
         self.descriptor = planned['sessions'][session_index]; sid = self.descriptor['session_id']
-        session_nonce = digest(['session', sid])
+        session_nonce = digest(['session', campaign_id, sid])
         offset = session_index * 10**15
         self.prefix = f'sessions/{sid}'
         self.jobs = [(i, job) for i, job in enumerate(plan['jobs'], 1) if job.get('session_id') == sid]
         self.rows = []
         for index, (ordinal, job) in enumerate(self.jobs):
             aid = accounting.registered_attempt_id(**self.base, request_id=job['request_id'])
-            nonce = digest(['attempt', sid, index]); path = f"attempts/{ordinal:05}-{job['request_id']}"
+            nonce = digest(['attempt', campaign_id, sid, index]); path = f"attempts/{ordinal:05}-{job['request_id']}"
             request = {'version': 1, 'protocol': control.PROTOCOL, 'kind': 'benchmark',
                 **{key: job[key] for key in ('request_id', 'participants', 'seed', 'session_attempt_index',
                                            'configuration_sha256', 'workload_manifest_sha256')},
@@ -149,7 +152,7 @@ class Fixture:
             if kind == 'succeeded':
                 result = {**{key: native[key] for key in native if key != 'elapsed_ms'},
                     'mandatory_signed_rs16_da_rbc': True, 'signed_rs16_da_observations': [],
-                    'authenticated_message_control': {}, 'process_inventory': [],
+                    'authenticated_private_settlement_route_control': {}, 'process_inventory': [],
                     'payload': {'fixture_value': index + 1.25}}
                 native['outcome'] = {'kind': kind, 'result': result}
             elif kind == 'failed':
@@ -224,7 +227,7 @@ class Fixture:
             'reason': 'fail_fast', 'started_session_ids': [sid], 'session_closures': [self.closure_ref]}
         others = [{'request_id': job['request_id'], 'started': None, 'request': None, 'process': None}
                   for job in plan['jobs'] if job['kind'] != 'benchmark']
-        self.packet = {'campaign_id': 'campaign-a', 'plan': self.plan_raw,
+        self.packet = {'campaign_id': campaign_id, 'plan': self.plan_raw,
             'closure': accounting.accounting_canonical_bytes(campaign_closure),
             'sessions': [None]*session_index + [{'session_id': sid, 'closure': self.closure_ref}]
                         + [None]*(len(planned['sessions'])-session_index-1),

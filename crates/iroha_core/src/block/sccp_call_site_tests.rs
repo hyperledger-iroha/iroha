@@ -1,6 +1,6 @@
 // SCCP call sites of block validation (`specs/sccp.md` §4.3.2, §4.19): the per-block
 // exemption cap judged against the committed parent World, and the consensus height inputs the
-// post-execution hook receives on the Sumeragi-core path and for a v2 signed genesis.
+// post-execution hook receives from the authenticated native schedule, including genesis.
 
 fn sccp_call_site_parameters_committed(state: &State) {
     let mut world = state.world.block();
@@ -102,40 +102,6 @@ fn sccp_exempt_cap_counts_exempt_shapes_of_the_block_entry_points() {
 }
 
 #[test]
-fn sccp_genesis_height_context_is_frozen_only_for_a_genesis_that_initialized_sccp() {
-    let (_genesis_key, genesis) = sccp_call_site_genesis();
-    assert!(genesis.header().is_genesis());
-    let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
-    {
-        let state_block = state.block(genesis.header());
-        assert_eq!(
-            ValidBlock::sccp_genesis_height_context(&genesis, &state_block),
-            None,
-            "a genesis without SCCP freezes nothing"
-        );
-    }
-    sccp_call_site_parameters_committed(&state);
-    let key_pair = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
-        .expect("deterministic leader key");
-    let ordinary = ValidBlock::new_dummy(key_pair.private_key());
-    let ordinary: &SignedBlock = ordinary.as_ref();
-    assert!(!ordinary.header().is_genesis());
-    let state_block = state.block(ordinary.header());
-    assert_eq!(
-        ValidBlock::sccp_genesis_height_context(ordinary, &state_block),
-        None,
-        "a non-genesis block uses its own authenticated context"
-    );
-    drop(state_block);
-    let state_block = state.block(genesis.header());
-    assert_eq!(
-        ValidBlock::sccp_genesis_height_context(&genesis, &state_block),
-        None,
-        "a genesis without signed consensus metadata fails closed for SCCP"
-    );
-}
-
-#[test]
 fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
     use crate::smartcontracts::isi::sccp::{height::SccpHeightInputsV1, hook::observed};
     use crate::sumeragi::{
@@ -230,148 +196,51 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
 }
 
 #[test]
-fn sccp_hook_receives_the_nodes_own_frozen_v2_genesis_context() {
-    use crate::smartcontracts::isi::sccp::{height::SccpHeightInputsV1, hook::observed};
-    use iroha_data_model::block::consensus_v2::{
-        ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
-    };
-    use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry};
-    use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-    iroha_genesis::init_instruction_registry();
-    let chain_id = iroha_model_base::chain::ChainId::from("sccp-genesis-context");
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.lane_config =
-        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-    let mut keys = (0_u8..4)
-        .map(|index| {
-            KeyPair::try_from_seed(vec![0xD0 + index; 32], Algorithm::BlsNormal)
-                .expect("deterministic validator key")
-        })
-        .collect::<Vec<_>>();
-    keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
-    let entries = keys
-        .iter()
-        .map(|key| {
-            GenesisTopologyEntry::new(
-                PeerId::new(key.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("fixture PoP"),
-            )
-        })
-        .collect::<Vec<_>>();
-    let roster = entries
-        .iter()
-        .map(|entry| ValidatorPower {
-            validator: entry.peer.clone(),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let topology = Topology::new(entries.iter().map(|entry| entry.peer.clone()));
-    let build = |parameters: SumeragiV2GenesisContextParameters| {
-        GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-            .set_topology(entries.clone())
-            .with_sumeragi_v2_context_parameters(parameters)
-            .with_kagemusha_mint_finality_genesis_parameters(
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
-            )
-            .build_raw()
-            .expect("raw genesis")
-            .with_consensus_meta()
-            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
-                &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-                Some(crate::da::active_proof_policy_bundle_at_height(&nexus, 1)),
-                None,
-                1_000,
-            )
-            .expect("signed genesis")
-            .0
-    };
-    // The genesis initializes SCCP: its World carries SCCP parameters before execution.
-    let state_for = |genesis: &SignedBlock| {
-        let account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-        let world = crate::state::World::with(
-            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&account)],
-            [Account::new(account.clone()).build(&account)],
-            [],
-        );
-        {
-            let mut block = world.block();
-            *block.sccp_parameters.get_mut() =
-                Some(iroha_data_model::sccp::params::SccpParametersV1::taira_default());
-            block.commit();
-        }
-        let (state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
-            world,
-            nexus.clone(),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-            iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()),
-        );
-        let state = Box::new(state);
-        let snapshot = state.nexus_snapshot();
-        state.install_lane_manifests_for_testing(&Arc::new(
-            crate::governance::manifest::LaneManifestRegistry::empty()
-                .rebind(&snapshot.lane_catalog, &snapshot.governance),
-        ));
-        state
-    };
-    fn execute<'state>(
-        state: &'state State,
-        genesis: SignedBlock,
-        topology: &Topology,
-    ) -> (ValidBlock, Box<StateBlock<'state>>) {
-        ValidBlock::validate_signed_genesis(
-            genesis,
-            topology,
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            &TimeSource::new_system(),
-            state,
-            ConsensusMode::Permissioned,
-        )
-        .unpack(|_| {})
-        .unwrap_or_else(|(_, error)| panic!("authenticated genesis execution: {error}"))
-    }
-    let mut parameters = SumeragiV2GenesisContextParameters::recommended();
-    {
-        let proposal = build(parameters);
-        let state = state_for(&proposal);
-        let (_, staged) = execute(&state, proposal, &topology);
-        parameters.nexus_amx_context_hash =
-            *crate::sumeragi::staged_genesis_nexus_amx_context_hash(&staged).as_ref();
-        parameters.execution_policy_hash =
-            *crate::sumeragi::staged_genesis_execution_policy_hash(&staged)
-                .expect("staged execution policy")
-                .as_ref();
-    }
-    let proposal = build(parameters);
-    let state = state_for(&proposal);
-    let _ = observed::take();
-    let (_, staged) = execute(&state, proposal.clone(), &topology);
-    let calls = observed::take();
-    // The node's own freeze after execution, as block publication performs it.
-    let bootstrap = crate::sumeragi::freeze_staged_genesis_v2(
-        &GenesisBlock(proposal),
-        &staged,
-        ConsensusMode::Permissioned,
-    )
-    .expect("the node freezes its own signed genesis");
-    let expected = SccpHeightInputsV1::from_height_context(bootstrap.context());
+fn sccp_unauthed_genesis_writes_never_supply_roster_authority() {
+    use crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1;
+    let (_key, genesis) = sccp_call_site_genesis();
+    let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+    let block = state.block(genesis.header());
     assert_eq!(
-        calls,
-        vec![(1, Some(expected.clone()))],
-        "the context frozen before the output seal is the node's own genesis context"
+        ValidBlock::sccp_height_inputs(&genesis, &block, SccpHeightSourceV1::Unauthenticated),
+        None
     );
-    assert_eq!(expected.height, 1);
-    assert_eq!(expected.mode, ConsensusMode::Permissioned);
+    drop(block);
+    sccp_call_site_parameters_committed(&state);
+    let block = state.block(genesis.header());
     assert_eq!(
-        expected.roster,
-        entries
-            .iter()
-            .map(|entry| entry.peer.clone())
-            .collect::<Vec<_>>()
+        ValidBlock::sccp_height_inputs(&genesis, &block, SccpHeightSourceV1::Unauthenticated),
+        None,
+        "SCCP initialization cannot turn unauthenticated writes into an epoch authority"
     );
     assert_eq!(
-        expected.next_roster.is_some(),
-        expected.is_boundary(),
-        "the next roster is present exactly at a boundary"
+        ValidBlock::sccp_height_inputs(
+            &genesis,
+            &block,
+            SccpHeightSourceV1::SumeragiSchedule {
+                genesis_height: 1,
+                mode: iroha_data_model::parameter::system::ConsensusMode::Npos
+            }
+        ),
+        None,
+        "a missing authenticated native slot must fail closed"
+    );
+}
+
+#[test]
+fn native_execution_rejects_relay_fee_mode_before_source_execution() {
+    let (_key, genesis) = sccp_call_site_genesis();
+    let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+    let block = state.block(genesis.header());
+    ValidBlock::validate_native_fee_settlement_mode(&block).expect("direct fees are admitted");
+    drop(block);
+    state.nexus.write().fees.settlement_mode =
+        iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+    let block = state.block(genesis.header());
+    let error = ValidBlock::validate_staged_execution_controls(&genesis, &block)
+        .expect_err("relay receipt settlement is rejected before transactions");
+    assert!(
+        error.to_string().contains("retired lane-relay-burn"),
+        "{error}"
     );
 }

@@ -39,6 +39,7 @@
 //! TODO(P8): `iroha3d_taira` and its inherited-descriptor launcher are deleted at the cutover; until
 //! then they never use the fixed files.
 
+use crate::authenticated_genesis::AuthenticatedGenesis;
 use crate::{
     IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
     IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1, RuntimeCredentialErrorV1,
@@ -65,7 +66,6 @@ use iroha_core::{
             global_beacon_partial_signer_credential_header_v1,
         },
     },
-    sumeragi::GenesisV2Bootstrap,
     zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey, Signature};
@@ -295,7 +295,7 @@ impl NodeSecretsV1 {
     pub fn bind_mint_finality_authority(
         &self,
         config: &Config,
-        authenticated_genesis: &GenesisV2Bootstrap,
+        authenticated_genesis: &AuthenticatedGenesis,
         dependencies: IrohaRuntimeDeps,
     ) -> Result<IrohaRuntimeDeps, NodeSecretsErrorV1> {
         const FILE: NodeSecretFile = NodeSecretFile::MintFinalitySeed;
@@ -304,7 +304,7 @@ impl NodeSecretsV1 {
                 "a second KAGEMUSHA mint-finality authority was attached",
             ));
         }
-        let context = authenticated_genesis.context();
+        let context = authenticated_genesis;
         let network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
         if context.network_id != network_id
             || config.common.peer.id.public_key() != config.common.key_pair.public_key()

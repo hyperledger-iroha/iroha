@@ -86,9 +86,12 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     match result {
         Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) => {
             assert_eq!(

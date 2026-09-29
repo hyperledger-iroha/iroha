@@ -41,7 +41,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
             state_test! { sync selected_state { } }
             state_test!(consensus_stack selected_stack, {});
             source_contract_test!(selected_contract);
-            v2_apply_test!(selected_apply, {});
+            world_test!(selected_apply, {});
             scenario_test!(selected_scenario, "F35", scenarios::f35);
         """)
         stages = {
@@ -82,7 +82,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         stages = {"torii": (("endpoint", ("tests::exact_missing_torii_case",)),)}
         with patch.object(gate, "validate_mv_test_registration") as mv, \
              patch.object(gate.subprocess, "run") as subprocess, \
-             patch.object(gate, "_run_standalone_checks") as standalone:
+             patch.object(gate, "validate_native_consensus_test_registration") as standalone:
             with self.assertRaisesRegex(gate.CheckError,
                                         "torii: tests::exact_missing_torii_case"):
                 gate.run_lifecycle_source_checks(self.root, {}, (), stages)

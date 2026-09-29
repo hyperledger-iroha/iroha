@@ -18,8 +18,8 @@ pub use receipt::{
 pub use signed::{
     AuthorityFeePayment, DEFAULT_TRANSACTION_TIME_TO_LIVE, ExecutionStep, FeeChargeKind,
     FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, SignedTransaction, SponsorFeePayment,
-    TransactionAdmissionIntent, TransactionBuilder, TransactionDomain, TransactionEntrypoint,
-    TransactionPayload, TransactionResult, TransactionResultInner, TransactionSignature,
+    TransactionBuilder, TransactionDomain, TransactionEntrypoint, TransactionPayload,
+    TransactionResult, TransactionResultInner, TransactionSignature,
 };
 /// Metadata key enabling consensus-owned consume-once handling for prepared faucet claims.
 pub const FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY: &str = "taira_faucet_claim_marker_version";
@@ -37,10 +37,10 @@ pub mod prelude {
         AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutableBatchItem,
         ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError,
         IvmBytecode, IvmProved, SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN,
-        TransactionAdmissionIntent, TransactionBuilder, TransactionDomain, TransactionEntrypoint,
-        TransactionGasLimitError, TransactionPayload, TransactionResult, TransactionResultInner,
-        TransactionSignature, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
-        error::prelude::*, parse_transaction_gas_limit, require_transaction_gas_limit,
+        TransactionBuilder, TransactionDomain, TransactionEntrypoint, TransactionGasLimitError,
+        TransactionPayload, TransactionResult, TransactionResultInner, TransactionSignature,
+        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
+        parse_transaction_gas_limit, require_transaction_gas_limit,
     };
 }
 

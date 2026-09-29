@@ -66,9 +66,14 @@ pub fn create_block<'a>(
     .chain(0, state.view().latest_block().as_deref())
     .sign(peer_private_key)
     .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header());
+    let (mut state_block, state_block_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {})
         .commit(topology)
         .unpack(|_| {})

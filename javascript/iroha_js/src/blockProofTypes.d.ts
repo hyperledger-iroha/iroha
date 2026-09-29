@@ -88,8 +88,8 @@ export interface ToriiBlockProofVerification {
 export const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1: 1;
 /** Maximum exact executed SignedBlockWire bytes accepted by the native verifier. */
 export const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: 33554432;
-/** Maximum canonical Norito bytes accepted for one BridgeFinalityProof. */
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: 9437184;
+/** Maximum canonical Norito bytes accepted for one SumeragiFinalityProof. */
+export const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: 37748736;
 /** Maximum canonical Norito bytes accepted for one BlockProofs response. */
 export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: 16777216;
 
@@ -97,19 +97,11 @@ export interface AuthenticatedBlockProofInputV1 {
   readonly version: 1;
   /** Application-pinned exact genesis-derived NetworkId; this must not be sourced from the response. */
   readonly networkId: NetworkId;
-  /** Application-pinned marked 32-byte HeightContextId. */
-  readonly trustedContextId: ArrayBufferView | ArrayBuffer;
+  /** Independently authenticated complete native checkpoint, never selected by the response. */
+  readonly trustedCheckpointNorito: ArrayBufferView | ArrayBuffer;
   /** Application-selected marked 32-byte transaction entrypoint hash. */
   readonly expectedEntryHash: ArrayBufferView | ArrayBuffer;
-  /**
-   * Optional last verified BridgeFinalityProof. When present, the target proof
-   * must be its immediate cryptographic successor.
-   */
-  readonly previousFinalityProofNorito?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | null;
-  /** Canonical Norito BridgeFinalityProof for the target block. */
+  /** Canonical Norito SumeragiFinalityProof for the target block. */
   readonly finalityProofNorito: ArrayBufferView | ArrayBuffer;
   /** Exact canonical executed SignedBlockWire for the target block. */
   readonly executedBlockWire: ArrayBufferView | ArrayBuffer;
@@ -125,12 +117,14 @@ export interface AuthenticatedBlockProofVerdictV1 {
   readonly blockHashHex: string;
   readonly executedBlockWireHashHex: string;
   readonly entryHashHex: string;
-  /** Verified context to retain alongside the accepted finality proof for successor state. */
-  readonly heightContextIdHex: string;
+  /** Native decision digest for diagnostics; it is not a complete trust root. */
+  readonly contextIdHex: string;
+  /** Complete checkpoint to promote after valid:true; null for an application-proof mismatch. */
+  readonly checkpointNorito: Uint8Array | null;
 }
 
 /**
- * Verify Torii BlockProofs through the native Rust Sumeragi-v2 finality path.
+ * Verify Torii BlockProofs through the native Rust Sumeragi finality path.
  *
  * The promise rejects on malformed, non-canonical, wrong-chain, wrong-context,
  * stale/skipped, or cryptographically invalid finality material. A valid

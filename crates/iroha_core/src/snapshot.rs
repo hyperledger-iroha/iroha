@@ -3,7 +3,7 @@
 use crate::telemetry::StateTelemetry;
 use crate::{
     governance::manifest::LaneManifestRegistryHandle,
-    kura::{BlockCount, CommitManifestBindingState, Error as KuraError, Kura},
+    kura::{BlockCount, Error as KuraError, Kura},
     query::store::LiveQueryStoreHandle,
     secure_file_metadata::{self, SecureMetadata},
     state::{
@@ -14,18 +14,14 @@ use crate::{
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
 use iroha_config::{
-    parameters::actual::{Snapshot as Config, SnapshotBootstrapPolicy, SnapshotResourcePolicy},
+    parameters::actual::{Snapshot as Config, SnapshotResourcePolicy},
     snapshot::Mode,
 };
 use iroha_crypto::{
     Algorithm, CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, MerkleTreeCommitment,
     PublicKey, Signature,
 };
-use iroha_data_model::{
-    NetworkId,
-    block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
-    nexus::LaneCatalog,
-};
+use iroha_data_model::{NetworkId, block::BlockHeader, nexus::LaneCatalog};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_model_base::chain::ChainId;
@@ -104,13 +100,6 @@ pub(crate) enum SnapshotCaptureError {
     /// The semantic State changed during the single capture attempt.
     #[error("State snapshot observation changed during capture")]
     Changed,
-    /// The captured committed cut belongs to another finalized block boundary.
-    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native Apply"))]
-    #[error("State snapshot differs from the finalized commit {component}")]
-    CommitBoundary {
-        /// Exact identity component which failed before hashing or durable I/O.
-        component: &'static str,
-    },
     /// A stable runtime/World projection is malformed.
     #[error("invalid State snapshot runtime projection: {0}")]
     Runtime(#[source] Box<crate::state::LaneLifecycleError>),
@@ -124,6 +113,15 @@ impl SnapshotCaptureError {
         matches!(self, Self::Busy | Self::Changed)
     }
 }
+impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
+    fn from(error: SnapshotCaptureError) -> Self {
+        if error.is_observation_changed() {
+            Self::ExecutionObservationChanged
+        } else {
+            Self::ExecutionStatePublication(error.to_string())
+        }
+    }
+}
 impl From<SnapshotCaptureError> for crate::state::storage_transactions::TransactionsBlockError {
     fn from(error: SnapshotCaptureError) -> Self {
         if error.is_observation_changed() {
@@ -134,12 +132,24 @@ impl From<SnapshotCaptureError> for crate::state::storage_transactions::Transact
     }
 }
 struct CapturedSnapshotIdentity {
+    serialized_hash: Hash,
+    native_tip: Option<crate::state::NativeExecutionTip>,
+    native_tip_undo: Option<Option<crate::state::NativeExecutionTip>>,
     chain_id: ChainId,
     network_id: NetworkId,
     height: usize,
     tip: Option<HashOf<BlockHeader>>,
     sccp_policy_hash: [u8; 32],
-    bootstrap: Option<SnapshotV2BootstrapRecord>,
+}
+impl CapturedSnapshotIdentity {
+    fn validate_bytes(&self, bytes: &[u8]) -> Result<(), TryWriteError> {
+        if Hash::new(bytes) != self.serialized_hash {
+            return Err(TryWriteError::PublicationIntegrity(
+                "snapshot bytes differ from the original captured State generation".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 /// Move-only bytes and identity emitted from one unchanged State generation.
 /// No State/MV view remains held during hashing, validation, or durable I/O.
@@ -181,14 +191,6 @@ impl CapturedStateSnapshot {
         let view = view
             .map_err(|error| SnapshotCaptureError::Runtime(Box::new(error)))?
             .ok_or(SnapshotCaptureError::Changed)?;
-        let identity = CapturedSnapshotIdentity {
-            chain_id: state.chain_id_ref().clone(),
-            network_id: *state.network_id_ref(),
-            height: view.block_hashes.len(),
-            tip: view.block_hashes.last().copied(),
-            sccp_policy_hash: crate::state::sccp_policy_hash_v1(),
-            bootstrap: state.authenticated_snapshot_v2_bootstrap().cloned(),
-        };
         // TODO: Bound the serializer's allocation while preserving the exact JSON
         // encoding. The existing writer resource limits run after this allocation.
         let mut json = String::new();
@@ -198,6 +200,16 @@ impl CapturedStateSnapshot {
         if generation != after || after % 2 != 0 {
             return Err(SnapshotCaptureError::Changed);
         }
+        let identity = CapturedSnapshotIdentity {
+            serialized_hash: Hash::new(json.as_bytes()),
+            native_tip: *view.native_execution_tip.get(),
+            native_tip_undo: *view.native_execution_tip_predecessor.get(),
+            chain_id: state.chain_id_ref().clone(),
+            network_id: *state.network_id_ref(),
+            height: view.block_hashes.len(),
+            tip: view.block_hashes.last().copied(),
+            sccp_policy_hash: crate::state::sccp_policy_hash_v1(),
+        };
         drop(view);
         Ok(Self { json, identity })
     }
@@ -222,34 +234,6 @@ impl CapturedStateSnapshot {
         canonical_snapshot_wsv_hash(self.json.as_bytes())
             .map_err(|error| SnapshotCaptureError::Encoding(Box::new(error)))
     }
-
-    /// Hash only the captured cut belonging to this exact finalized block.
-    ///
-    /// Identity and bytes share one capture; no subsequent live State read can
-    /// substitute another generation. A later publication does not invalidate
-    /// these immutable historical bytes. This authenticates the capture's block
-    /// association, not finality or the installation of retained State journals.
-    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native Apply"))]
-    pub(crate) fn canonical_hash_for_block(
-        &self,
-        network_id: NetworkId,
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Result<Hash, SnapshotCaptureError> {
-        let component = if self.identity.network_id != network_id {
-            Some("network")
-        } else if height == 0 || u64::try_from(self.identity.height).ok() != Some(height) {
-            Some("height")
-        } else if self.identity.tip != Some(block_hash) {
-            Some("block hash")
-        } else {
-            None
-        };
-        if let Some(component) = component {
-            return Err(SnapshotCaptureError::CommitBoundary { component });
-        }
-        self.canonical_hash()
-    }
 }
 fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, out: &mut String) {
     let block_hashes = &view.block_hashes;
@@ -261,15 +245,6 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     json::write_json_string("network_id", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&state.network_id, out);
-    // Preserve the original authenticated bootstrap lineage in every later
-    // snapshot.  The canonical WSV hash redacts this envelope, so carrying the
-    // immutable trust root forward cannot make the anchor hash circular.
-    if let Some(bootstrap) = state.authenticated_snapshot_v2_bootstrap() {
-        out.push(',');
-        json::write_json_string("sumeragi_v2_bootstrap", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(bootstrap, out);
-    }
     out.push(',');
     json::write_json_string("world", out);
     out.push(':');
@@ -282,6 +257,16 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push_str(",\"blocks\":");
     json::JsonSerialize::json_serialize(view.canonical_runtime.get(), out);
     out.push('}');
+    out.push(',');
+    json::write_json_string("native_execution_tip", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(
+        &crate::state::native_execution_tip::NativeExecutionTipSnapshot::from_original(
+            *view.native_execution_tip.get(),
+            *view.native_execution_tip_predecessor.get(),
+        ),
+        out,
+    );
     out.push(',');
     json::write_json_string("block_hashes", out);
     out.push(':');
@@ -357,6 +342,16 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     json::write_json_string("nexus_runtime", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&state.canonical_runtime, out);
+    out.push(',');
+    json::write_json_string("native_execution_tip", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(
+        &crate::state::native_execution_tip::NativeExecutionTipSnapshot::from_original(
+            *state.native_execution_tip.get(),
+            *state.native_execution_tip.original_undo(),
+        ),
+        out,
+    );
     out.push(',');
     json::write_json_string("block_hashes", out);
     out.push(':');
@@ -459,7 +454,6 @@ struct EmergencyFastSnapshotManifestV1 {
     committed_height: u64,
     tip_hash: Option<HashOf<BlockHeader>>,
     sccp_policy_hash: [u8; 32],
-    has_snapshot_bootstrap_lineage: bool,
 }
 
 impl EmergencyFastSnapshotManifestV1 {
@@ -845,7 +839,7 @@ pub struct SnapshotMaker {
     create_every: Duration,
     /// Path to the directory where snapshots are stored
     store_dir: PathBuf,
-    /// Hash of the latest block stored in the state
+    /// Hash of the latest block successfully published by this writer.
     latest_block_hash: Option<HashOf<BlockHeader>>,
     /// Key used to sign snapshot digests.
     signing_key: KeyPair,
@@ -997,6 +991,8 @@ impl SnapshotMaker {
     ///
     /// Retain the same configured allocation pool that authenticated the startup
     /// snapshot; all writer generation-validation reads share that finite pool.
+    /// The first tick publishes the recovered state even when no new block has
+    /// arrived: constructing a writer does not establish an existing publication.
     /// Might return [`None`] if the configuration is not suitable for _making_ snapshots.
     pub fn from_config(
         config: &Config,
@@ -1005,12 +1001,11 @@ impl SnapshotMaker {
         read_buffer_budget: AllocationBudget,
     ) -> Option<Self> {
         if let Mode::ReadWrite = config.mode {
-            let latest_block_hash = state.latest_block_hash_fast();
             Some(Self {
                 state,
                 create_every: config.create_every_ms.get(),
                 store_dir: config.store_dir.resolve_relative_path(),
-                latest_block_hash,
+                latest_block_hash: None,
                 signing_key,
                 merkle_chunk_size: config.merkle_chunk_size_bytes,
                 max_payload_bytes: config.max_payload_bytes,
@@ -1755,58 +1750,6 @@ impl BoundSnapshotGeneration {
         Ok(())
     }
 }
-impl SnapshotBootstrapLineageAuthority {
-    fn exact_audited_boundary() -> Self {
-        Self {
-            kind: SnapshotBootstrapLineageAuthorityKind::ExactAuditedBoundary,
-        }
-    }
-    fn normally_signed_carried_lineage() -> Self {
-        Self {
-            kind: SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage,
-        }
-    }
-    #[cfg(test)]
-    pub(crate) fn normally_signed_for_testing() -> Self {
-        Self::normally_signed_carried_lineage()
-    }
-    pub(crate) fn permits_carried_lineage(self) -> bool {
-        self.kind == SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage
-    }
-}
-impl AuthenticatedSnapshotBootstrapPayload {
-    fn new(
-        record: SnapshotV2BootstrapRecord,
-        block_hashes: Vec<HashOf<BlockHeader>>,
-        authority: SnapshotBootstrapLineageAuthority,
-    ) -> Self {
-        Self {
-            record,
-            block_hashes,
-            authority,
-        }
-    }
-    pub(crate) fn record(&self) -> &SnapshotV2BootstrapRecord {
-        &self.record
-    }
-    pub(crate) fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
-        &self.block_hashes
-    }
-    pub(crate) fn is_exact_audited_boundary(&self) -> bool {
-        self.authority.kind == SnapshotBootstrapLineageAuthorityKind::ExactAuditedBoundary
-    }
-    #[cfg(test)]
-    pub(crate) fn for_testing(
-        record: SnapshotV2BootstrapRecord,
-        block_hashes: Vec<HashOf<BlockHeader>>,
-    ) -> Self {
-        Self::new(
-            record,
-            block_hashes,
-            SnapshotBootstrapLineageAuthority::exact_audited_boundary(),
-        )
-    }
-}
 fn snapshot_payload_preview(bytes: &[u8]) -> String {
     let mut preview = String::new();
     let limit = bytes.len().min(96);
@@ -2382,7 +2325,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
     match path {
         CanonicalWsvPath::Root => matches!(
             key,
-            "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
+            "commit_topology" | "prev_commit_topology" | "native_execution_tip"
         ),
         CanonicalWsvPath::World => false,
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
@@ -2629,14 +2572,7 @@ fn reconcile_emergency_fast_snapshot_boundary(
     snapshot_tip: Option<HashOf<BlockHeader>>,
     block_count: usize,
     kura: &Kura,
-    hard_fork_snapshot_bootstrap: bool,
 ) -> Result<(), TryReadError> {
-    if hard_fork_snapshot_bootstrap {
-        return Err(TryReadError::InvalidSnapshotBootstrap(
-            "emergency Fast mode cannot import or extend an audited snapshot; restart in Strict mode"
-                .to_owned(),
-        ));
-    }
     let (durable_height, durable_boundary_hash) = kura
         .emergency_fast_snapshot_boundary(snapshot_height)
         .map_err(TryReadError::Kura)?;
@@ -2670,8 +2606,6 @@ fn reconcile_snapshot_hash_height_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     block_count: usize,
     kura: &Kura,
-    hard_fork_snapshot_bootstrap: bool,
-    authenticated_payload: Option<&AuthenticatedSnapshotBootstrapPayload>,
 ) -> Result<(), TryReadError> {
     if kura.emergency_fast_startup_enabled() {
         return reconcile_emergency_fast_snapshot_boundary(
@@ -2679,7 +2613,6 @@ fn reconcile_snapshot_hash_height_with_kura(
             snapshot_hashes.last().copied(),
             block_count,
             kura,
-            hard_fork_snapshot_bootstrap,
         );
     }
     // Verify every retained Kura hash before extending its journal.  Keeping
@@ -2688,30 +2621,6 @@ fn reconcile_snapshot_hash_height_with_kura(
     // that the signed snapshot diverges inside the existing prefix.
     reconcile_snapshot_hashes_with_kura(snapshot_hashes, kura)?;
     let snapshot_height = snapshot_hashes.len();
-    if hard_fork_snapshot_bootstrap {
-        if snapshot_height < block_count {
-            return Err(TryReadError::MismatchedHeight {
-                snapshot_height,
-                kura_height: block_count,
-            });
-        }
-        let payload = authenticated_payload.ok_or_else(|| {
-            TryReadError::InvalidSnapshotBootstrap(
-                "audited Kura reconciliation lacks outer-authenticated snapshot evidence"
-                    .to_owned(),
-            )
-        })?;
-        let extended = kura
-            .reconcile_exact_audited_snapshot_bootstrap(payload)
-            .map_err(TryReadError::Kura)?;
-        iroha_logger::warn!(
-            snapshot_height,
-            previous_kura_height = block_count,
-            extended,
-            "hard-fork snapshot bootstrap: accepted audited snapshot ahead of Kura block bodies"
-        );
-        return Ok(());
-    }
     if snapshot_height > block_count {
         return Err(TryReadError::MismatchedHeight {
             snapshot_height,
@@ -2746,45 +2655,69 @@ fn reconcile_snapshot_hashes_with_kura(
     }
     Ok(())
 }
-fn validate_snapshot_wsv_checkpoint(
-    snapshot_wsv_hash: Hash,
-    snapshot_hashes: &[HashOf<BlockHeader>],
-    kura: &Kura,
+/// Compare configured native instance inputs before decoded State can issue any authority.
+fn verify_snapshot_identity(
+    actual_chain: &ChainId,
+    actual_network: NetworkId,
+    expected_chain: &ChainId,
+    expected_network: NetworkId,
 ) -> Result<(), TryReadError> {
-    let Some(&snapshot_block_hash) = snapshot_hashes.last() else {
-        return Ok(());
-    };
-    let height = snapshot_hashes.len();
-    let height_nz = NonZeroUsize::new(height).expect("snapshot height is nonzero");
-    if kura.block_hash_at_height(height_nz) != Some(snapshot_block_hash) {
-        // A verified snapshot-ahead suffix has no local checkpoint yet. A
-        // digest-pinned hard-fork override can likewise replace the local
-        // suffix. Prefix reconciliation authorizes those cases separately.
-        return Ok(());
+    if actual_chain != expected_chain {
+        return Err(TryReadError::ChainIdMismatch {
+            expected: expected_chain.clone(),
+            actual: actual_chain.clone(),
+        });
     }
-    let height_u64 = u64::try_from(height).map_err(|_| {
-        TryReadError::Serialization(json::Error::InvalidField {
-            field: "state.block_hashes".to_owned(),
-            message: "snapshot height exceeds the canonical u64 height domain".to_owned(),
-        })
-    })?;
-    let Some(checkpoint) = kura
-        .wsv_checkpoint(height_u64)
-        .map_err(TryReadError::Kura)?
-    else {
-        return Ok(());
-    };
-    let expected = checkpoint.state_hash();
-    let actual = snapshot_wsv_hash;
-    if actual != expected {
-        return Err(TryReadError::WsvCheckpointMismatch {
-            height,
-            expected,
-            actual,
+    if actual_network != expected_network {
+        return Err(TryReadError::NetworkIdMismatch {
+            expected: expected_network,
+            actual: actual_network,
         });
     }
     Ok(())
 }
+
+fn verify_snapshot_root_identity(
+    input: &str,
+    expected_chain: &ChainId,
+    expected_network: NetworkId,
+) -> Result<(), TryReadError> {
+    let required = |name: &str| {
+        snapshot_object_field_raw(input, name)?
+            .ok_or_else(|| TryReadError::Serialization(json::Error::missing_field(name)))
+    };
+    let actual_chain: ChainId =
+        json::from_str(required("chain_id")?).map_err(TryReadError::Serialization)?;
+    let actual_network: NetworkId =
+        json::from_str(required("network_id")?).map_err(TryReadError::Serialization)?;
+    verify_snapshot_identity(
+        &actual_chain,
+        actual_network,
+        expected_chain,
+        expected_network,
+    )
+}
+
+/// A local snapshot signature authenticates cache bytes, not execution of its World.
+fn verify_snapshot_restore_preflight(
+    input: &str,
+    block_hash_count: Option<usize>,
+    expected_chain: &ChainId,
+    expected_network: NetworkId,
+) -> Result<(), TryReadError> {
+    verify_snapshot_root_identity(input, expected_chain, expected_network)?;
+    let height = block_hash_count
+        .ok_or_else(|| TryReadError::Serialization(json::Error::missing_field("block_hashes")))?;
+    // TODO(S9): accelerated snapshot recovery needs authenticated full-World
+    // provenance. Native R commits witnessed writes; it cannot authorize these
+    // decoded balances, custody, or pending credentials. Strict startup rebuilds
+    // them by replaying original signed genesis and every certified Kura block.
+    if height > 0 {
+        return Err(TryReadError::NativeExecutionReplayRequired);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle<F>(
@@ -2798,8 +2731,8 @@ fn try_read_snapshot_bundle<F>(
     merkle_chunk_size: NonZeroUsize,
     resource_policy: SnapshotResourcePolicy,
     verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
     expected_network_id: &NetworkId,
-    bootstrap_policy: &SnapshotBootstrapPolicy,
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
@@ -2808,9 +2741,6 @@ fn try_read_snapshot_bundle<F>(
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
 {
-    bootstrap_policy
-        .validate()
-        .map_err(TryReadError::InvalidSnapshotBootstrap)?;
     let emergency_fast = kura.emergency_fast_startup_enabled();
     let manifest_path = generation
         .generation_dir
@@ -2851,20 +2781,12 @@ where
         snapshot_bundle_auth_digest(&signed_payload_digest, &generation.bytes.fast_manifest);
     if emergency_fast {
         verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
-        if fast_manifest.has_snapshot_bootstrap_lineage
-            || kura.provisional_snapshot_bootstrap_pending()
-        {
-            return Err(TryReadError::InvalidSnapshotBootstrap(
-                "emergency Fast mode cannot authorize or continue hash-only snapshot bootstrap lineage; restart in Strict mode"
-                    .to_owned(),
-            ));
-        }
-        if &fast_manifest.network_id != expected_network_id {
-            return Err(TryReadError::NetworkIdMismatch {
-                expected: *expected_network_id,
-                actual: fast_manifest.network_id,
-            });
-        }
+        verify_snapshot_identity(
+            &fast_manifest.chain_id,
+            fast_manifest.network_id,
+            expected_chain_id,
+            *expected_network_id,
+        )?;
         if fast_manifest.sccp_policy_hash != crate::state::sccp_policy_hash_v1() {
             return Err(TryReadError::SnapshotGenerationInvalid {
                 path: generation
@@ -2875,17 +2797,21 @@ where
             });
         }
         let snapshot_height = usize::try_from(fast_manifest.committed_height).map_err(|_| {
-            TryReadError::InvalidSnapshotBootstrap(
+            TryReadError::InvalidSnapshotBoundary(
                 "emergency Fast manifest height exceeds this host's index width".to_owned(),
             )
         })?;
+        // A manifest-only path cannot reconstruct original World execution.
+        // Fast mode cannot opt into Strict replay through this refusal.
+        if snapshot_height > 0 {
+            return Err(TryReadError::NativeExecutionReplayRequired);
+        }
         let reconcile_started_at = Instant::now();
         reconcile_emergency_fast_snapshot_boundary(
             snapshot_height,
             fast_manifest.tip_hash,
             block_count,
             kura,
-            false,
         )?;
         let seed = KuraSeed {
             operation_index_budget: operation_index_budget.clone(),
@@ -2914,22 +2840,7 @@ where
         );
         return Ok(SnapshotReadOutcome { state });
     }
-    let payload_authority = match verify_signature_hex(
-        signature_hex,
-        &bundle_digest,
-        verification_key,
-    ) {
-        Ok(()) => SnapshotPayloadAuthority::NormallySigned,
-        Err(error) if bootstrap_policy.authorizes_digest(&actual_digest) => {
-            warn!(
-                ?error,
-                digest = %actual_digest,
-                "hard-fork snapshot bootstrap: accepting snapshot signature failure because SHA-256 matches configured audited digest"
-            );
-            SnapshotPayloadAuthority::ExactAuditedDigestBypass
-        }
-        Err(error) => return Err(error),
-    };
+    verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
     let payload = read_bound_snapshot_payload(&generation.payload, read_buffer_budget)?.0;
     let bytes = payload.as_slice();
     let bytes_len = bytes.len();
@@ -2964,7 +2875,6 @@ where
             return Err(err);
         }
     };
-    let snapshot_wsv_hash = canonical_snapshot_wsv_hash(bytes)?;
     if !summary.has_space_directory_manifests
         && let Some(snapshot_height @ 1..) = summary.block_hash_count
     {
@@ -2972,6 +2882,12 @@ where
     }
     let input = std::str::from_utf8(bytes)
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
+    verify_snapshot_restore_preflight(
+        input,
+        summary.block_hash_count,
+        expected_chain_id,
+        *expected_network_id,
+    )?;
     let seed = KuraSeed {
         operation_index_budget: operation_index_budget.clone(),
         execution_budget: execution_budget.clone(),
@@ -2993,29 +2909,20 @@ where
         );
         TryReadError::from(err)
     })?;
-    if &state.network_id != expected_network_id {
-        return Err(TryReadError::NetworkIdMismatch {
-            expected: *expected_network_id,
-            actual: state.network_id,
-        });
-    }
     #[cfg(test)]
     SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| clones.set(clones.get() + 1));
     let snapshot_hashes = state.committed_block_hashes_snapshot();
     let snapshot_height = snapshot_hashes.len();
     let snapshot_height_u64 = u64::try_from(snapshot_height).map_err(|_| {
-        TryReadError::InvalidSnapshotBootstrap(
+        TryReadError::InvalidSnapshotBoundary(
             "snapshot height exceeds the canonical u64 height domain".to_owned(),
         )
     })?;
-    let exact_policy_boundary = bootstrap_policy.authorizes(&actual_digest, snapshot_height_u64);
-    let has_bootstrap_lineage = state.has_snapshot_v2_bootstrap_candidate();
     if fast_manifest.chain_id != *state.chain_id_ref()
         || fast_manifest.network_id != *state.network_id_ref()
         || fast_manifest.committed_height != snapshot_height_u64
         || fast_manifest.tip_hash != snapshot_hashes.last().copied()
         || fast_manifest.sccp_policy_hash != crate::state::sccp_policy_hash_v1()
-        || fast_manifest.has_snapshot_bootstrap_lineage != has_bootstrap_lineage
     {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: generation
@@ -3025,59 +2932,6 @@ where
                 .to_owned(),
         });
     }
-    if payload_authority == SnapshotPayloadAuthority::ExactAuditedDigestBypass
-        && !exact_policy_boundary
-    {
-        return Err(TryReadError::InvalidSnapshotBootstrap(
-            "snapshot signature bypass matched only the configured digest but not its exact audited height"
-                .to_owned(),
-        ));
-    }
-    let authenticated_lineage_authority = if has_bootstrap_lineage {
-        let lineage_authority = if exact_policy_boundary {
-            SnapshotBootstrapLineageAuthority::exact_audited_boundary()
-        } else {
-            if payload_authority != SnapshotPayloadAuthority::NormallySigned {
-                return Err(TryReadError::InvalidSnapshotBootstrap(
-                    "carried bootstrap lineage requires an ordinarily verified snapshot signature"
-                        .to_owned(),
-                ));
-            }
-            SnapshotBootstrapLineageAuthority::normally_signed_carried_lineage()
-        };
-        state
-            .authenticate_snapshot_v2_bootstrap_candidate(lineage_authority)
-            .map_err(TryReadError::InvalidSnapshotBootstrap)?;
-        Some(lineage_authority)
-    } else if payload_authority == SnapshotPayloadAuthority::ExactAuditedDigestBypass {
-        return Err(TryReadError::InvalidSnapshotBootstrap(
-            "signature-bypassed snapshot is missing its typed Sumeragi-v2 bootstrap envelope"
-                .to_owned(),
-        ));
-    } else if kura.provisional_snapshot_bootstrap_pending() {
-        return Err(TryReadError::InvalidSnapshotBootstrap(
-            "provisional hash-only Kura requires carried bootstrap lineage in the signed snapshot"
-                .to_owned(),
-        ));
-    } else {
-        None
-    };
-    if let Some(authority) = authenticated_lineage_authority {
-        let record = state
-            .authenticated_snapshot_v2_bootstrap()
-            .expect("validated bootstrap candidate was promoted")
-            .clone();
-        state
-            .install_authenticated_snapshot_bootstrap_payload(
-                AuthenticatedSnapshotBootstrapPayload::new(
-                    record,
-                    snapshot_hashes.clone(),
-                    authority,
-                ),
-            )
-            .map_err(TryReadError::InvalidSnapshotBootstrap)?;
-    }
-    let hard_fork_snapshot_bootstrap = exact_policy_boundary && has_bootstrap_lineage;
     if snapshot_height > 0 && !summary.has_space_directory_manifests {
         return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
     }
@@ -3085,16 +2939,9 @@ where
     // borrowed field was typed-decoded, so no second full payload is built here.
     // All checks remain ahead of snapshot-driven Kura extension or pruning.
     initialize_state(&mut state)?;
-    validate_snapshot_wsv_checkpoint(snapshot_wsv_hash, &snapshot_hashes, kura)?;
     generation.verify_selection_unchanged()?;
     let hash_reconcile_started_at = Instant::now();
-    reconcile_snapshot_hash_height_with_kura(
-        &snapshot_hashes,
-        block_count,
-        kura,
-        hard_fork_snapshot_bootstrap,
-        state.authenticated_snapshot_bootstrap_payload(),
-    )?;
+    reconcile_snapshot_hash_height_with_kura(&snapshot_hashes, block_count, kura)?;
     iroha_logger::info!(
         snapshot_height,
         kura_height = block_count,
@@ -3132,14 +2979,14 @@ pub fn try_read_snapshot(
     block_count: BlockCount,
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
     expected_network_id: &NetworkId,
     zk: &iroha_config::parameters::actual::Zk,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
     operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
-    let bootstrap_policy = SnapshotBootstrapPolicy::default();
-    try_read_snapshot_with_bootstrap_policy(
+    try_read_snapshot_with_limits(
         execution_budget,
         store_dir,
         kura,
@@ -3151,25 +2998,24 @@ pub fn try_read_snapshot(
         iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
         SnapshotResourcePolicy::default(),
         verification_key,
+        expected_chain_id,
         expected_network_id,
         zk,
-        &bootstrap_policy,
         #[cfg(feature = "telemetry")]
         telemetry,
         read_buffer_budget,
         operation_index_budget,
     )
 }
-/// Read and verify a snapshot with an explicit audited hash-only bootstrap policy.
+/// Read and verify a signed snapshot with explicit resource limits.
 /// The caller supplies the original execution pool before State exists; restore
 /// and its subsequent runtime caches retain that exact owner.
 ///
-/// The policy is fail-closed: a bootstrap envelope or signature bypass is accepted only when the
-/// payload's exact SHA-256 digest and terminal height match the configured authorization.
+/// Signatures are required unconditionally. A positive-height World requires original replay.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
-pub fn try_read_snapshot_with_bootstrap_policy(
+pub fn try_read_snapshot_with_limits(
     execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
@@ -3181,9 +3027,9 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     max_payload_bytes: NonZeroUsize,
     resource_policy: SnapshotResourcePolicy,
     verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
     expected_network_id: &NetworkId,
     zk: &iroha_config::parameters::actual::Zk,
-    bootstrap_policy: &SnapshotBootstrapPolicy,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
     operation_index_budget: &AllocationBudget,
@@ -3200,8 +3046,8 @@ pub fn try_read_snapshot_with_bootstrap_policy(
         max_payload_bytes,
         resource_policy,
         verification_key,
+        expected_chain_id,
         expected_network_id,
-        bootstrap_policy,
         &|state| {
             state
                 .set_zk(zk.clone())
@@ -3228,8 +3074,8 @@ fn try_read_snapshot_with_initializer<F>(
     max_payload_bytes: NonZeroUsize,
     resource_policy: SnapshotResourcePolicy,
     verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
     expected_network_id: &NetworkId,
-    bootstrap_policy: &SnapshotBootstrapPolicy,
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
@@ -3274,8 +3120,8 @@ where
             merkle_chunk_size,
             resource_policy,
             verification_key,
+            expected_chain_id,
             expected_network_id,
-            bootstrap_policy,
             initialize_state,
             #[cfg(feature = "telemetry")]
             telemetry,
@@ -4442,6 +4288,7 @@ fn validate_generated_snapshot_for_restart_with_policy(
     }
     let input = std::str::from_utf8(snapshot_bytes)
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
+    verify_snapshot_root_identity(input, state.chain_id_ref(), *state.network_id_ref())?;
     let seed = KuraSeed {
         operation_index_budget: state.world.operation_index_budget().clone(),
         execution_budget: state.ivm_execution_budget(),
@@ -4462,13 +4309,6 @@ fn validate_generated_snapshot_for_restart_with_policy(
             expected: *state.network_id_ref(),
             actual: *restored.network_id_ref(),
         });
-    }
-    if restored.has_snapshot_v2_bootstrap_candidate() {
-        restored
-            .authenticate_snapshot_v2_bootstrap_candidate(
-                SnapshotBootstrapLineageAuthority::normally_signed_carried_lineage(),
-            )
-            .map_err(TryReadError::InvalidSnapshotBootstrap)?;
     }
     restored
         .install_zk_for_isolated_prevalidation(state.zk_snapshot())
@@ -4576,6 +4416,7 @@ fn try_write_snapshot_payload_with_limit_locked(
     identity: CapturedSnapshotIdentity,
     read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
+    identity.validate_bytes(&snapshot_bytes)?;
     ensure_snapshot_identity_is_backed_by_kura(state, &identity)?;
     if snapshot_bytes.len() > max_payload_bytes.get() {
         return Err(TryWriteError::PayloadTooLarge {
@@ -4603,7 +4444,6 @@ fn try_write_snapshot_payload_with_limit_locked(
         || geometry_checkpoint.height != state_height
         || geometry_checkpoint.block_hash != identity.tip
         || geometry_checkpoint.sccp_policy_hash != identity.sccp_policy_hash
-        || geometry_checkpoint.snapshot_v2_bootstrap != identity.bootstrap
     {
         return Err(TryWriteError::PublicationIntegrity(
             "serialized snapshot identity differs from the State being published".to_owned(),
@@ -4636,7 +4476,6 @@ fn try_write_snapshot_payload_with_limit_locked(
         committed_height: geometry_checkpoint.height,
         tip_hash: geometry_checkpoint.block_hash,
         sccp_policy_hash: geometry_checkpoint.sccp_policy_hash,
-        has_snapshot_bootstrap_lineage: geometry_checkpoint.snapshot_v2_bootstrap.is_some(),
     };
     fast_manifest
         .validate()
@@ -4684,39 +4523,9 @@ fn try_write_snapshot_payload_with_limit_locked(
         signing_key.public_key(),
         read_buffer_budget,
     )?;
-    match state
-        .kura()
-        .checkpoint_lane_geometry_after_durable_snapshot_with_lineage_root(
-            &geometry_checkpoint.lane_config,
-            &geometry_checkpoint.incarnations,
-            &geometry_checkpoint.activation_heights,
-            geometry_checkpoint.lineage_root,
-            geometry_checkpoint.recovery_lane_geometry.as_ref().map(
-                |(config, incarnations, activations, root)| {
-                    (config, incarnations, activations, *root)
-                },
-            ),
-            geometry_checkpoint.height,
-            geometry_checkpoint.block_hash,
-            geometry_checkpoint.state_hash,
-            &geometry_checkpoint.smart_contract_state,
-        ) {
-        Ok(summary) if summary.compacted_transitions > 0 || summary.removed_archive_roots > 0 => {
-            info!(
-                compacted_transitions = summary.compacted_transitions,
-                removed_archive_roots = summary.removed_archive_roots,
-                reclaimed_bytes = summary.reclaimed_bytes,
-                snapshot_height = geometry_checkpoint.height,
-                "checkpointed snapshot-authoritative lane geometry and reclaimed obsolete archives"
-            );
-        }
-        Ok(_) => {}
-        Err(error) => warn!(
-            %error,
-            snapshot_height = geometry_checkpoint.height,
-            "snapshot is durable, but lane geometry archive GC failed closed"
-        ),
-    }
+    // TODO(S6/S9): native execution-owned checkpoint compaction must authenticate
+    // the close frontier and retained replay roots. Durable snapshot publication
+    // alone does not authorize physical lane storage deletion.
     Ok(identity)
 }
 
@@ -4738,170 +4547,71 @@ fn try_write_snapshot(
 struct DurableSnapshotGeometryCheckpoint {
     chain_id: ChainId,
     network_id: NetworkId,
-    lane_config: iroha_config::parameters::actual::LaneConfig,
-    incarnations: BTreeMap<LaneId, Hash>,
-    activation_heights: BTreeMap<LaneId, u64>,
-    lineage_root: Hash,
-    recovery_lane_geometry: Option<SnapshotLaneGeometryProjection>,
     height: u64,
     block_hash: Option<HashOf<BlockHeader>>,
-    state_hash: Hash,
-    snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord>,
+    block_hashes: Vec<HashOf<BlockHeader>>,
+    native_tip: crate::state::native_execution_tip::NativeExecutionTipSnapshot,
     sccp_policy_hash: [u8; 32],
-    smart_contract_state: BTreeMap<StatePath, Vec<u8>>,
 }
+
 fn ensure_snapshot_commit_evidence(
     state: &State,
     checkpoint: &DurableSnapshotGeometryCheckpoint,
     identity: &CapturedSnapshotIdentity,
 ) -> Result<(), TryWriteError> {
-    let kura = state.kura();
+    let failure = |reason: String| TryWriteError::CommitEvidence {
+        height: checkpoint.height,
+        reason,
+    };
+    if !checkpoint
+        .native_tip
+        .matches_original(identity.native_tip, identity.native_tip_undo)
+    {
+        return Err(failure(
+            "serialized native tip differs from its original State generation".into(),
+        ));
+    }
     if checkpoint.height == 0 {
-        return Ok(());
-    }
-    let height = NonZeroUsize::new(usize::try_from(checkpoint.height).map_err(|_| {
-        TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: "snapshot height exceeds the host index width".to_owned(),
-        }
-    })?)
-    .expect("non-zero snapshot height");
-    let block_hash = checkpoint
-        .block_hash
-        .ok_or_else(|| TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: "non-zero snapshot has no terminal block hash".to_owned(),
-        })?;
-    let durable_hash =
-        kura.get_durable_block_hash(height)
-            .ok_or_else(|| TryWriteError::CommitEvidence {
-                height: checkpoint.height,
-                reason: "terminal block is absent from durable Kura storage".to_owned(),
-            })?;
-    if durable_hash != block_hash {
-        return Err(TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: format!(
-                "snapshot terminal block {block_hash} differs from durable Kura block {durable_hash}"
-            ),
-        });
-    }
-    if kura.is_hash_only_block_height(height) {
-        let bootstrap = checkpoint.snapshot_v2_bootstrap.as_ref().ok_or_else(|| {
-            TryWriteError::CommitEvidence {
-                height: checkpoint.height,
-                reason: "hash-only snapshot has no authenticated Sumeragi-v2 bootstrap record"
-                    .to_owned(),
-            }
-        })?;
-        if identity.bootstrap.as_ref() != Some(bootstrap) {
-            return Err(TryWriteError::CommitEvidence {
-                height: checkpoint.height,
-                reason: "serialized bootstrap record is not the State-authenticated trust root"
-                    .to_owned(),
-            });
-        }
-        bootstrap
-            .validate()
-            .map_err(|error| TryWriteError::CommitEvidence {
-                height: checkpoint.height,
-                reason: format!("invalid snapshot bootstrap record: {error}"),
-            })?;
-        let anchor = bootstrap
-            .context
-            .snapshot_bootstrap
-            .as_ref()
-            .expect("validated snapshot bootstrap record must contain an anchor");
-        if anchor.snapshot_height != checkpoint.height
-            || anchor.snapshot_block_hash != block_hash
-            || anchor.snapshot_state_hash != checkpoint.state_hash
-            || bootstrap.context.network_id != identity.network_id
-        {
-            return Err(TryWriteError::CommitEvidence {
-                height: checkpoint.height,
-                reason: "snapshot bootstrap anchor does not exactly bind the serialized chain, height, block, and WSV"
-                    .to_owned(),
-            });
+        if identity.native_tip.is_some() || identity.native_tip_undo.is_some() {
+            return Err(failure(
+                "empty snapshot cannot carry native execution authority".into(),
+            ));
         }
         return Ok(());
     }
-    let wsv_checkpoint = kura
-        .wsv_checkpoint(checkpoint.height)
-        .map_err(|error| TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: format!("failed to verify WSV checkpoint: {error}"),
-        })?
-        .ok_or_else(|| TryWriteError::CommitEvidenceDeferred {
-            height: checkpoint.height,
-            reason: "full-body snapshot has no WSV checkpoint".to_owned(),
-        })?;
-    if wsv_checkpoint.state_hash() != checkpoint.state_hash {
-        return Err(TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: format!(
-                "snapshot state hash {:?} differs from WSV checkpoint {:?}",
-                checkpoint.state_hash,
-                wsv_checkpoint.state_hash()
-            ),
-        });
+    let tip = identity
+        .native_tip
+        .ok_or_else(|| failure("snapshot has no original native execution tip".into()))?;
+    if tip.height() != checkpoint.height || Some(tip.iroha_hash()) != checkpoint.block_hash {
+        return Err(failure(
+            "snapshot height/hash differs from its original native execution".into(),
+        ));
     }
-    let manifest = kura
-        .commit_manifest(checkpoint.height)
-        .map_err(|error| TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: format!("failed to verify commit manifest: {error}"),
-        })?
-        .ok_or_else(|| TryWriteError::CommitEvidenceDeferred {
-            height: checkpoint.height,
-            reason: "full-body snapshot has no commit manifest".to_owned(),
-        })?;
-    let binding = kura
-        .commit_manifest_binding_state(&manifest)
-        .map_err(|error| TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: format!("failed to verify checkpoint-to-manifest binding: {error}"),
-        })?;
-    match binding {
-        CommitManifestBindingState::Bound => {}
-        CommitManifestBindingState::Unbound => {
-            return Err(TryWriteError::CommitEvidenceDeferred {
-                height: checkpoint.height,
-                reason: "commit manifest publication is not checkpoint-bound yet".to_owned(),
-            });
-        }
-        CommitManifestBindingState::Mismatched => {
-            return Err(TryWriteError::CommitEvidence {
-                height: checkpoint.height,
-                reason: "commit manifest digest conflicts with its WSV checkpoint".to_owned(),
-            });
-        }
+    let chain = crate::sumeragi::certified_chain::CertifiedChain::from_pinned(
+        &identity.chain_id,
+        &identity.network_id,
+        &checkpoint.block_hashes,
+        state.kura(),
+    )
+    .map_err(|error| failure(error.to_string()))?;
+    let certified = chain
+        .certified(checkpoint.height)
+        .map_err(|error| failure(error.to_string()))?;
+    if certified.block_hash() != tip.iroha_hash()
+        || certified.core_hash() != tip.core_hash()
+        || certified.result() != tip.result()
+    {
+        return Err(failure(
+            "durable native certificate differs from captured execution".into(),
+        ));
     }
-    let (artifact, _receipt) = kura
-        .v2_finality_artifact_with_receipt(checkpoint.height)
-        .map_err(|error| TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: format!("failed to verify Sumeragi-v2 finality: {error}"),
-        })?
-        .ok_or_else(|| TryWriteError::CommitEvidenceDeferred {
-            height: checkpoint.height,
-            reason: "full-body snapshot has no verified Sumeragi-v2 finality artifact".to_owned(),
-        })?;
-    if artifact.height != checkpoint.height || artifact.block_hash != block_hash {
-        return Err(TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: "verified finality artifact does not identify the snapshot terminal block"
-                .to_owned(),
-        });
-    }
-    if !manifest.binds_authenticated_v2_commit_authority(&artifact) {
-        return Err(TryWriteError::CommitEvidence {
-            height: checkpoint.height,
-            reason: "commit manifest does not bind the verified v2 authority and execution roots"
-                .to_owned(),
-        });
-    }
+    // The signed bytes are a local cache of one original State generation. R binds
+    // witnessed writes, not the full serialized World. Original replay therefore
+    // reproduces the complete World before consensus starts. TODO(S9): full-World
+    // provenance must authorize any accelerated restore; publication here does not.
     Ok(())
 }
+
 fn geometry_checkpoint_from_snapshot(
     bytes: &[u8],
 ) -> Result<DurableSnapshotGeometryCheckpoint, TryWriteError> {
@@ -4923,43 +4633,139 @@ fn geometry_checkpoint_from_snapshot(
             .map_err(TryWriteError::Serialization)?;
     let chain_id: ChainId = json::from_str(required_snapshot_object_field(input, "chain_id")?)
         .map_err(TryWriteError::Serialization)?;
-    let snapshot_v2_bootstrap = snapshot_object_field_raw(input, "sumeragi_v2_bootstrap")
-        .map_err(TryWriteError::RestartValidation)?
-        .map(json::from_str)
-        .transpose()
-        .map_err(TryWriteError::Serialization)?;
-    let ((lane_config, incarnations, activation_heights, lineage_root), recovery_lane_geometry) =
-        snapshot_lane_geometry_images(&runtime, height, &network_id)?;
-    let world = required_snapshot_object_field(input, "world")?;
-    let smart_contract_storage: Storage<StatePath, Vec<u8>> = json::from_str(
-        required_snapshot_object_field(world, "smart_contract_state")?,
-    )
+    // Validate current and undo geometry before retaining the snapshot identity.
+    snapshot_lane_geometry_images(&runtime, height, &network_id)?;
+    let native_tip = json::from_str(required_snapshot_object_field(
+        input,
+        "native_execution_tip",
+    )?)
     .map_err(TryWriteError::Serialization)?;
-    let smart_contract_state = smart_contract_storage
-        .view()
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let state_hash =
-        canonical_snapshot_wsv_hash(bytes).map_err(TryWriteError::RestartValidation)?;
     let sccp_policy_hash = crate::state::sccp_policy_hash_v1();
     Ok(DurableSnapshotGeometryCheckpoint {
         chain_id,
         network_id,
+        height,
+        block_hash: block_hashes.last().copied(),
+        block_hashes,
+        native_tip,
+        sccp_policy_hash,
+    })
+}
+type SnapshotLaneGeometryProjection = (
+    iroha_config::parameters::actual::LaneConfig,
+    BTreeMap<LaneId, Hash>,
+    BTreeMap<LaneId, u64>,
+    Hash,
+);
+
+// Both reads belong to one decoded immutable snapshot Cell. None is the MV
+// encoding of an unchanged last block, so its actual H-1 value is current.
+// A changed last block must use its retained undo, never a later State view.
+fn snapshot_lane_geometry_images(
+    runtime: &Cell<SnapshotNexusRuntime>,
+    height: u64,
+    network_id: &NetworkId,
+) -> Result<
+    (
+        SnapshotLaneGeometryProjection,
+        Option<SnapshotLaneGeometryProjection>,
+    ),
+    TryWriteError,
+> {
+    let current = runtime.view();
+    let predecessor = runtime.predecessor_view();
+    let recovery = if height == 0 {
+        None
+    } else {
+        Some(snapshot_lane_geometry_projection(
+            predecessor
+                .get()
+                .as_ref()
+                .unwrap_or_else(|| current.get())
+                .clone(),
+            height - 1,
+            network_id,
+        )?)
+    };
+    Ok((
+        snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?,
+        recovery,
+    ))
+}
+
+#[cfg(test)]
+mod geometry_projection_tests;
+
+// Project each actual MV image independently; restart validation already checks
+// policy and sample-history coherence before this snapshot can become durable.
+fn snapshot_lane_geometry_projection(
+    runtime: SnapshotNexusRuntime,
+    height: u64,
+    network_id: &NetworkId,
+) -> Result<SnapshotLaneGeometryProjection, TryWriteError> {
+    if runtime.version != SnapshotNexusRuntime::VERSION
+        || runtime.autoscale_last_transition_height > height
+        || runtime
+            .autoscale_sample_history
+            .last()
+            .is_some_and(|sample| sample.block_height > height)
+    {
+        return Err(TryWriteError::Serialization(json::Error::Message(
+            "snapshot Nexus runtime version or height cannot prove lane geometry".to_owned(),
+        )));
+    }
+    let lane_count = NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
+        TryWriteError::Serialization(json::Error::Message(
+            "snapshot Nexus lane count is zero".to_owned(),
+        ))
+    })?;
+    let lane_catalog = LaneCatalog::new(lane_count, runtime.lanes).map_err(|error| {
+        TryWriteError::Serialization(json::Error::Message(format!(
+            "snapshot Nexus lane catalog is invalid: {error}"
+        )))
+    })?;
+    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let mut lineage = BTreeMap::new();
+    let mut latest_hashes = BTreeSet::new();
+    for entry in runtime.lane_incarnation_lineage {
+        let lineage_entry = LaneIncarnationLineage {
+            generation: entry.generation,
+            incarnation: entry.incarnation,
+            activation_height: entry.activation_height,
+        };
+        if lineage_entry
+            .incarnation
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+            || lineage_entry.activation_height > height
+            || !latest_hashes.insert(lineage_entry.incarnation)
+            || lineage.insert(entry.lane_id, lineage_entry).is_some()
+        {
+            return Err(TryWriteError::Serialization(json::Error::Message(
+                "snapshot Nexus runtime contains invalid lane incarnation lineage".to_owned(),
+            )));
+        }
+    }
+    let mut incarnations = BTreeMap::new();
+    let mut activation_heights = BTreeMap::new();
+    for lane in lane_catalog.lanes() {
+        let entry = lineage.get(&lane.id).ok_or_else(|| {
+            TryWriteError::Serialization(json::Error::Message(format!(
+                "snapshot Nexus runtime is missing active lane {} lineage",
+                lane.id
+            )))
+        })?;
+        incarnations.insert(lane.id, entry.incarnation);
+        activation_heights.insert(lane.id, entry.activation_height);
+    }
+    Ok((
         lane_config,
         incarnations,
         activation_heights,
-        lineage_root,
-        recovery_lane_geometry,
-        height,
-        block_hash: block_hashes.last().copied(),
-        state_hash,
-        snapshot_v2_bootstrap,
-        sccp_policy_hash,
-        smart_contract_state,
-    })
+        lane_incarnation_lineage_root(network_id, &lineage),
+    ))
 }
-
 fn required_snapshot_object_field<'a>(
     object: &'a str,
     field: &str,
@@ -5182,11 +4988,10 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     let Some(state) = value.as_object_mut() else {
         return;
     };
-    // The signed bootstrap envelope authenticates this WSV; it cannot be part of the WSV hash
-    // that its own anchor commits to.
-    state.remove("sumeragi_v2_bootstrap");
+    // Original native finality lives outside the WSV committed by its own R.
+    state.remove("native_execution_tip");
     // Commit topologies are consensus scheduling caches. Replay reconstructs
-    // them from Kura blocks and their authenticated v2 finality artifacts
+    // them from Kura blocks and their original native finality certificates
     // rather than transaction execution, so they must not perturb committed
     // ledger checkpoints.
     state.remove("commit_topology");
@@ -5339,4 +5144,130 @@ mod tests {
     include!("snapshot/write_roundtrip_tests.rs");
     include!("snapshot/reconciliation_generation_tests.rs");
     include!("snapshot/read_buffer_custody_tests.rs");
+}
+
+#[cfg(test)]
+mod native_snapshot_identity_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_cache_requires_original_replay_after_identity_validation() {
+        let chain = ChainId::from("configured-native-chain");
+        let network =
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"genesis")));
+        let input =
+            json::to_json(&norito::json!({"chain_id": chain, "network_id": network})).unwrap();
+        assert!(verify_snapshot_restore_preflight(&input, Some(0), &chain, network).is_ok());
+        assert!(matches!(
+            verify_snapshot_restore_preflight(&input, None, &chain, network),
+            Err(TryReadError::Serialization(_))
+        ));
+        for height in [1, 2, 100] {
+            assert!(matches!(
+                verify_snapshot_restore_preflight(&input, Some(height), &chain, network),
+                Err(TryReadError::NativeExecutionReplayRequired)
+            ));
+            assert!(matches!(
+                verify_snapshot_restore_preflight(
+                    &input,
+                    Some(height),
+                    &ChainId::from("foreign"),
+                    network
+                ),
+                Err(TryReadError::ChainIdMismatch { .. })
+            ));
+            let other =
+                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
+            assert!(matches!(
+                verify_snapshot_restore_preflight(&input, Some(height), &chain, other),
+                Err(TryReadError::NetworkIdMismatch { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn configured_instance_identity_is_checked_without_constructing_typed_state() {
+        let chain = ChainId::from("configured-native-chain");
+        let other = ChainId::from("foreign-native-chain");
+        let network =
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"genesis")));
+        let foreign = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"other genesis",
+        )));
+        assert!(verify_snapshot_identity(&chain, network, &chain, network).is_ok());
+        assert!(matches!(
+            verify_snapshot_identity(&other, network, &chain, network),
+            Err(TryReadError::ChainIdMismatch { .. })
+        ));
+        assert!(matches!(
+            verify_snapshot_identity(&chain, foreign, &chain, network),
+            Err(TryReadError::NetworkIdMismatch { .. })
+        ));
+        // No World or native tip is supplied: the identity fence must stand alone
+        // and reject foreign identity before any typed State exists.
+        let bytes =
+            json::to_json(&norito::json!({"chain_id": other, "network_id": network})).unwrap();
+        assert!(matches!(
+            verify_snapshot_root_identity(&bytes, &chain, network),
+            Err(TryReadError::ChainIdMismatch { .. })
+        ));
+    }
+}
+
+#[cfg(test)]
+mod native_snapshot_publication_tests {
+    use super::*;
+    use crate::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    #[test]
+    fn native_publication_binds_original_tip_and_exact_snapshot_bytes() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let captured = CapturedStateSnapshot::capture(chain.state()).unwrap();
+        assert_eq!(
+            Hash::new(captured.json.as_bytes()),
+            captured.identity.serialized_hash
+        );
+        captured
+            .identity
+            .validate_bytes(captured.json.as_bytes())
+            .unwrap();
+        let mut changed = captured.json.as_bytes().to_vec();
+        changed[0] ^= 1;
+        assert!(captured.identity.validate_bytes(&changed).is_err());
+        let checkpoint = geometry_checkpoint_from_snapshot(captured.json.as_bytes()).unwrap();
+        ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity).unwrap();
+        chain.commit(Vec::new());
+        // Advancing live State cannot replace the immutable captured cut.
+        ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity).unwrap();
+        let newer = CapturedStateSnapshot::capture(chain.state()).unwrap();
+        let newer_checkpoint = geometry_checkpoint_from_snapshot(newer.json.as_bytes()).unwrap();
+        assert!(
+            ensure_snapshot_commit_evidence(chain.state(), &newer_checkpoint, &captured.identity)
+                .is_err()
+        );
+        assert_ne!(
+            Hash::new(newer.json.as_bytes()),
+            captured.identity.serialized_hash
+        );
+        assert!(!chain.kura().store_root().join("v2_finality").exists());
+    }
+
+    #[test]
+    fn decoded_tip_claim_cannot_replace_original_execution_capture() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let captured = CapturedStateSnapshot::capture(chain.state()).unwrap();
+        let mut checkpoint = geometry_checkpoint_from_snapshot(captured.json.as_bytes()).unwrap();
+        checkpoint.native_tip = json::from_str("{\"revert\":null,\"blocks\":null}").unwrap();
+        assert!(
+            ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity)
+                .is_err()
+        );
+    }
 }

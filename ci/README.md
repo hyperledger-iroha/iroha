@@ -19,8 +19,8 @@ binary-free and network package sets. The first set starts immediately after
 classification; only the second waits for release artifacts. The network
 packages are `iroha_test_network`, `izanami`, and `integration_tests`, which
 receive `iroha3d` and `iroha`. The first and third also receive
-`iroha3d_message_control` through `TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL`.
-Its `irohad/test-network-message-control` feature is compiled separately under
+`iroha3d_private_settlement_routes` through `TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES`.
+Its `irohad/test-network-private-settlement-route-control` feature is compiled separately under
 `target/ci-binaries/message-control`; shipping artifacts use
 `target/ci-binaries/shipping`. Staging preserves both distinct daemon files.
 Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries for other package tests.

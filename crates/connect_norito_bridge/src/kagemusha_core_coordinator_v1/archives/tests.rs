@@ -173,7 +173,6 @@ fn coordinator_recovery_rejects_missing_selector_context_and_version() {
 #[test]
 fn coordinator_archive_fixture_material_is_canonical() {
     use iroha_core::zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
-    use iroha_data_model::block::consensus_v2::HeightContextId;
 
     let candidate = candidate();
     let recovery = recovery();
@@ -187,9 +186,9 @@ fn coordinator_archive_fixture_material_is_canonical() {
         reserve_receipt_digest: [0x84; 32],
         authenticated_status_digest: [0x85; 32],
         finalized_block_height: 17,
-        height_context_id: HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0x87; 32]),
-        )),
+        finalized_block_hash: [0x87; 32],
+        finalized_core_hash: [0x88; 32],
+        finalized_result: [0x89; 32],
     };
     receipt.validate_shape().unwrap();
     let vectors = [
@@ -224,6 +223,12 @@ fn coordinator_archive_fixture_material_is_canonical() {
             "byte_len": (vectors[3].1.len()),
         },
     });
+    // Capture the actual encoder output before comparing the checked fixture. The first
+    // post-layout run intentionally still fails that comparison until this output is reviewed.
+    println!(
+        "NATIVE_KAGEMUSHA_COORDINATOR_ARCHIVES_JSON={}",
+        norito::json::to_string(&expected).expect("canonical archive capture")
+    );
     // Opt-in test-only exporter: the destination is fixed under this checkout's real target
     // directory. Keep the fixture assertions below active so an outdated tracked fixture fails.
     if let Some(export) = std::env::var_os("PRINT_KAGEMUSHA_CORE_COORDINATOR_ARCHIVES_V1") {

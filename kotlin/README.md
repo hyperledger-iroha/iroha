@@ -10,7 +10,7 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-Account and public-key admission requires the ABI-24 `connect_norito_bridge`
+Account and public-key admission requires the ABI-25 `connect_norito_bridge`
 native library, including `nativeValidateAccountAddressCanonical`. Address
 construction and parsing use Rust to validate every key and complete multisig
 policy, then require identical canonical bytes. The V1 identity catalog includes
@@ -35,7 +35,7 @@ choice-free conviction update to Kotlin and Java callers. It emits the registere
 transaction encoding reject direction fields, noncanonical selectors, account
 addresses, quantities, durations, and malformed frames. The focused
 `UpdatePlainConviction*` Kotlin/Java-source tests compiled on 2026-09-24, but
-execution still requires a same-source ABI-24 native bridge for account
+execution still requires a same-source ABI-25 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
 
@@ -244,7 +244,7 @@ canonical signed transaction or a closed typed signed intent.
 
 `prepareContractCall` requires `ToriiCanonicalRequestAuth` for the same authority
 and a configured `LocalSigningContext`. It signs the exact prepare request once
-and accepts only a canonical `QueuePlanSynced` contract payload. Keep the returned
+and accepts only the exact canonical contract payload. Keep the returned
 payload bytes and quoted fee unchanged when signing and submitting through the
 transaction API; submission failures are reconciled by transaction hash.
 
@@ -253,10 +253,10 @@ the exact lowercase BLAKE3-256 digest of the canonical UTF-8 JSON request
 payload. An omitted payload hashes the empty byte sequence; noncanonical hex or
 a digest mismatch fails closed before the draft is returned.
 
-The canonical contract-call payload must already use `QueuePlanSynced` before
-signing material is returned. An `Ordinary` downgrade is rejected even with a
-matching recomputed payload hash. Sign the verified payload without changing
-its admission intent or any other signed field.
+The canonical transaction payload has nine fields: domain, authority, creation
+time, executable, TTL, nonce, fee payment, metadata, and attachments. Retired
+admission fields or extra binary slots are rejected, including with a matching
+recomputed payload hash. Sign the verified payload without changing any signed field.
 
 Canonical request builders keep I105 as the semantic SDK identity but emit its lowercase
 canonical-hex address in `X-Iroha-Account`, which is safe on strict ASCII HTTP stacks. Active
@@ -382,12 +382,12 @@ and buffered responses at 8 MiB.
 ### Native Sumeragi status
 
 `HttpClientTransport.getSumeragiStatus()` reads `GET /v1/sumeragi/status` into
-the closed protocol-8 `SumeragiStatus` model. Its current-round, footprint and
+the closed protocol-1 `SumeragiStatus` model. Its current-round, footprint and
 same-applied-cut beacon observations do not confer finality authority.
 
 ```kotlin
 val status = transport.getSumeragiStatus().join()
-check(status.protocolVersion == 8)
+check(status.protocolVersion == 1)
 println("height=${status.height} view=${status.view} leader=${status.leader}")
 ```
 
@@ -452,7 +452,7 @@ uncertain obligations. Acknowledged history is not charged against a lifetime op
 
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath)` in `client-android` provides
 the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
-It checks the complete ABI-24 inventory and rejects substituted response bindings;
+It checks the complete ABI-25 inventory and rejects substituted response bindings;
 missing JNI or an absent qualified native coordinator fails closed.
 `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
 wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
@@ -479,9 +479,7 @@ backend or stock provider factory is supplied. See [the source contract](../spec
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole
 instruction in a transaction, and sign it with `TransactionBuilder`.
-Set the payload's `admissionIntent` to `QUEUE_PLAN_SYNCED` before using
-`TransactionBuilder` for this specialized top-up; generic single-route
-transactions keep the ordinary default. Send the resulting `SignedTransaction` and the request's exact
+Send the resulting `SignedTransaction` and the request's exact
 nonzero 32-byte `operationId` through
 `KagemushaToriiClientV1.submitTopUp(...)`. The client posts the canonical
 versioned signed-transaction bytes unchanged to `/v1/kagemusha/top-up` and
@@ -530,7 +528,7 @@ val request = ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCou
 val quote = transport.postValidationFeeHijiriQuote(request, canonicalAuth).join()
 ```
 
-This operation requires `libconnect_norito_bridge` ABI 24 and an HTTPS Torii
+This operation requires `libconnect_norito_bridge` ABI 25 and an HTTPS Torii
 base URL, except for the explicit local-development HTTP opt-in above. It signs the exact bounded
 Norito request with `Cache-Control: no-store`,
 requires a private, non-stored, uncompressed `application/x-norito` response,

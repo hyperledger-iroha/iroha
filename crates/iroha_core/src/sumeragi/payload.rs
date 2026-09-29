@@ -10,7 +10,6 @@
 
 use std::{num::NonZeroUsize, time::Duration};
 
-use iroha_data_model::{block::SignedBlock, transaction::TransactionAdmissionIntent};
 use iroha_primitives::time::TimeSource;
 
 use crate::{
@@ -20,7 +19,7 @@ use crate::{
     tx::AcceptedTransaction,
 };
 use iroha_data_model::{
-    block::BlockExecutionContextBundle,
+    block::{BlockExecutionContextBundle, SignedBlock},
     sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
 };
 
@@ -39,6 +38,9 @@ pub enum PayloadError {
     /// The block could not be encoded.
     #[error("block encoding failed: {0}")]
     Encode(String),
+    /// Original parent-state staking preparation failed.
+    #[error("staking effect preparation failed: {0}")]
+    Staking(String),
     /// The payload bytes are not a canonical block proposal.
     #[error("payload is not a canonical block proposal: {0}")]
     NotCanonical(String),
@@ -126,6 +128,7 @@ fn build_at(
     let accepted = transactions.iter().cloned().collect::<Vec<_>>();
     let nexus = state.nexus_snapshot();
     let view = state.view();
+    let npos = view.world().sumeragi_npos_parameters().is_some();
     let confidential = compute_confidential_feature_digest(view.world(), view.zk(), height);
     let routing = super::lanes::routing::RoutingSnapshot::of(&view);
     let inputs = routing.inputs(view.world());
@@ -160,7 +163,19 @@ fn build_at(
         .with_execution_context((!execution_context.is_empty()).then_some(execution_context))
         .with_network_input_time_floor(time)
         .ok_or(PayloadError::TimeOverflow)?;
-    Ok(builder.into_unsigned_proposal())
+    let mut proposal = builder.into_unsigned_proposal();
+    let effects = if npos {
+        let header = proposal.header();
+        Some(
+            super::penalties::PenaltyApplier::new(state, None)
+                .derive_npos_consensus_effects(&header)
+                .map_err(|error| PayloadError::Staking(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    proposal.set_npos_consensus_effects(effects);
+    Ok(proposal)
 }
 
 /// Whether the canonical proposal carries transactions or certified lane merge work.
@@ -216,8 +231,8 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
 /// Select queued transactions for the block after `parent` (FIFO, peeked, never removed),
 /// within `max_bytes` of transaction bytes, the on-chain transaction cap and the FASTPQ source
 /// policy's Network input cap less `reserved` (the block's merged lane transactions).
-/// Transactions the router cannot place, transactions routed to another lane and
-/// `QueuePlanSynced` inputs are skipped.
+/// Fresh inputs routed to a native lane are selected by that lane; the global
+/// chain selects direct inputs and rescues inputs whose lane has stalled.
 pub fn select(
     state: &State,
     queue: &std::sync::Arc<Queue>,
@@ -236,10 +251,9 @@ pub fn select(
         .unwrap_or(usize::MAX)
         .min(fastpq_inputs)
         .saturating_sub(reserved);
-    let Some((pending, lease)) = queue.bounded_pending_snapshot(&view, MAX_QUEUE_SCAN) else {
+    let Some(pending) = queue.bounded_pending_snapshot(&view, MAX_QUEUE_SCAN) else {
         return Vec::new();
     };
-    drop(lease);
     // The global chain sequences lane 0; transactions routed to a lane reach it through that
     // lane's merged blocks (`specs/sumeragi_lanes.md` §5).
     let routing = super::lanes::routing::RoutingSnapshot::of(&view);
@@ -273,12 +287,6 @@ pub fn select(
             && inputs.route(&transaction, height) != super::lanes::routing::GLOBAL_LANE
             && u64::try_from(transaction.as_ref().creation_time().as_millis())
                 .is_ok_and(|created| created >= rescue_before_ms)
-        {
-            continue;
-        }
-        // TODO(WP8a): QueuePlanSynced is deleted with the lane machinery.
-        if transaction.entrypoint().admission_intent()
-            == TransactionAdmissionIntent::QueuePlanSynced
         {
             continue;
         }
@@ -459,7 +467,7 @@ mod tests {
             account,
             FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([Log::new(Level::INFO, "direct rescue")]);
+        .with_instructions([Log::new(Level::INFO, "direct rescue".to_owned())]);
         builder.set_creation_time(Duration::from_millis(3000));
         let (_, clock) = TimeSource::new_mock(Duration::from_millis(3001));
         let accepted = AcceptedTransaction::accept_with_time_source(

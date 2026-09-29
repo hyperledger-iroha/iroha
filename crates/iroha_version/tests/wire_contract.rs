@@ -40,7 +40,7 @@ where
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
     let view = ncore::from_bytes_view(&frame).unwrap();
     let archived = view
-        .decode_exact_with(ncore::decode_field_canonical::<T>)
+        .decode_exact_with::<T, _, _>(ncore::decode_field_canonical::<T>)
         .unwrap();
     assert_eq!(&archived, value);
     assert_eq!(view.as_bytes(), bare);
@@ -142,13 +142,17 @@ fn raw_versioned_slice_preserves_advertised_layout() {
             let view = ncore::from_bytes_view(&frame).unwrap();
             assert_eq!(view.flags(), flags);
             assert_eq!(
-                view.decode_exact_with(ncore::decode_field_canonical::<RawVersioned>)
-                    .unwrap(),
+                view.decode_exact_with::<RawVersioned, _, _>(
+                    ncore::decode_field_canonical::<RawVersioned>
+                )
+                .unwrap(),
                 value
             );
             assert_eq!(
-                view.decode_exact_with(<RawVersioned as ncore::DecodeFromSlice>::decode_from_slice)
-                    .unwrap(),
+                view.decode_exact_with::<RawVersioned, _, _>(
+                    <RawVersioned as ncore::DecodeFromSlice>::decode_from_slice
+                )
+                .unwrap(),
                 value
             );
             assert_eq!(

@@ -21,9 +21,23 @@ const CORE_BUDGET: usize = 8_000;
 
 /// The planned §12.6 split: module, budget, files (relative to `src/`).
 const MODULES: [(&str, usize, &[&str]); 8] = [
-    ("types", 600, &["types.rs"]),
+    (
+        "types",
+        600,
+        &["types.rs", "types/control_witness.rs", "bytes.rs"],
+    ),
     ("topology", 300, &["topology.rs"]),
-    ("message", 800, &["message.rs", "preimage.rs", "crypto.rs"]),
+    (
+        "message",
+        800,
+        &[
+            "message.rs",
+            "message/attestation.rs",
+            "preimage.rs",
+            "crypto.rs",
+            "evidence.rs",
+        ],
+    ),
     ("safety", 700, &["safety.rs", "machine/restart.rs"]),
     ("pacemaker", 400, &["pacemaker.rs"]),
     (
@@ -32,6 +46,7 @@ const MODULES: [(&str, usize, &[&str]); 8] = [
         &[
             "machine/mod.rs",
             "machine/intake.rs",
+            "machine/control.rs",
             "machine/proposal.rs",
             "machine/propose.rs",
             "machine/round.rs",
@@ -280,7 +295,10 @@ fn core_size_budget() {
     let mut per_module = vec![0usize; MODULES.len()];
     for path in rust_files(&crate_dir().join("src")) {
         let file = relative(&path);
-        if file.starts_with("sim/") || file.starts_with("machine/tests/") || file == "testing.rs" {
+        if file.starts_with("sim/")
+            || file.starts_with("machine/tests/")
+            || matches!(file.as_str(), "testing.rs" | "evidence/tests.rs")
+        {
             continue;
         }
         let count = core_lines(&fs::read_to_string(&path).expect("read a source file"));

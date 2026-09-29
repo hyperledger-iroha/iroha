@@ -120,7 +120,6 @@ class ReadinessRole:
     client_config_sha256: str
     torii_url: str
     primary_block_store: Path
-    primary_merge_log: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,7 +238,7 @@ class ReadinessInputs:
             _require(type(chain) is str and chain == value['chain_id'], 'readiness_config_chain')
             for index, peer in enumerate(peers):
                 _fields(peer, ('role', 'node_public_key', 'torii_url', 'config', 'client_config',
-                               'primary_block_store', 'primary_merge_log'))
+                               'primary_block_store',))
                 _require(peer['role'] == f'peer{index}' and peer['config'] == f'peer{index}.toml'
                          and peer['client_config'] == f'peer{index}-client.toml'
                          and type(peer['node_public_key']) is str and _BLS.fullmatch(peer['node_public_key']),
@@ -257,15 +256,12 @@ class ReadinessInputs:
                 # Native actual::LaneConfigEntry owns this geometry. These
                 # descendants are intentionally absent before daemon startup.
                 primary_store = _primary_path(peer['primary_block_store'], store)
-                primary_log = _primary_path(peer['primary_merge_log'], store)
-                _require(primary_store != primary_log and primary_store not in primary_log.parents
-                         and primary_log not in primary_store.parents, 'readiness_primary_path_overlap')
                 _require(client.get('chain') == chain and client.get('network_id') == network
                          and 'network_id_file' not in client and client.get('torii_url') == endpoint,
                          'readiness_client_config_binding')
                 roles.append(ReadinessRole(peer['role'], directory / peer['config'], store, key,
                     directory / peer['client_config'], records[peer['client_config']], endpoint,
-                    primary_store, primary_log))
+                    primary_store))
             self._anchors = _Anchors(genesis, context, network, lane_count, tuple(roles))
             self._generation = GenerationFacts(chain, lane_count, genesis_key, chain_discriminant,
                 tuple(GeneratedAccount(account['index'], account['account_id'], account['config'],

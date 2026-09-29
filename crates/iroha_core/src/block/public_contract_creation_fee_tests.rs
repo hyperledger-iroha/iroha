@@ -25,7 +25,7 @@ mod public_contract_creation_fees {
                 let payer_asset = AssetId::of(fee_id.clone(), developer.clone());
                 let sink_asset = AssetId::of(fee_id.clone(), sink.clone());
                 let initial = Quantity::from(if funded { 10_u32 } else { 0_u32 });
-                let world = test_world_with_assets(
+                let world = World::with_assets(
                     [Domain::new(domain_id).build(&developer)],
                     [
                         Account::new(developer.clone()).build(&developer),
@@ -50,7 +50,6 @@ mod public_contract_creation_fees {
                     LiveQueryStore::start_test(),
                     ChainId::from("public-contract-fees"),
                 );
-                install_test_lane_manifests(&state);
                 let mut pipeline = state.pipeline.clone();
                 pipeline.parallel_overlay = true;
                 pipeline.parallel_apply = parallel_apply;
@@ -69,7 +68,9 @@ mod public_contract_creation_fees {
                         header.set_height(nonzero!(1_u64));
                     })
                     .into();
-                finalize_test_genesis_assets(&state, &genesis);
+                let native_chain = component_chain(state);
+                let state = native_chain.state();
+                let genesis = state.view().latest_block().expect("original genesis");
                 let address = iroha_data_model::smart_contract::ContractAddress::derive(
                     &state.network_id,
                     &developer,

@@ -1,140 +1,151 @@
-// Current executable admission must precede any queue, fee, or journal custody.
-fn current_admission_queue_fixture() -> (
-    State,
-    Queue,
-    TimeSource,
-    tempfile::TempDir,
-    std::path::PathBuf,
-) {
+// Native queue admission preserves original signed inputs until global application.
+fn current_admission_queue_fixture() -> (State, TimeSource) {
     let mut state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
     install_single_validator_topology_for_queue_test(&mut state, 0xB7);
-    let (_clock, time_source) = TimeSource::new_mock(Duration::default());
-    let queue = Queue::test_with_router_for_routes(
-        config_factory(),
-        &time_source,
-        Arc::new(StaticRouter {
-            lane: LaneId::SINGLE,
-            dataspace: DataSpaceId::UNIVERSAL,
-        }),
-        &[],
-    );
-    let directory = tempfile::tempdir().expect("current admission journal directory");
-    let path = directory.path().join("current-admission.norito");
-    queue
-        .install_plan_journal(&path, 1024 * 1024, true)
-        .expect("install journal");
-    (state, queue, time_source, directory, path)
+    let (_, time_source) = TimeSource::new_mock(Duration::default());
+    (state, time_source)
 }
 
 #[test]
-fn current_admission_rejects_unsupported_intent_across_direct_queue_boundaries() {
-    let (mut state, queue, time_source, _directory, path) = current_admission_queue_fixture();
-    let unsupported = accepted_queue_plan_tx_by_someone(&time_source);
-    register_accepted_tx_authority_for_queue_test(&mut state, &unsupported);
-    let plan = queue
-        .route_plan_with_state(&unsupported, &state)
-        .expect("single route");
-    let before = std::fs::read(&path).expect("journal before rejected attempts");
-    for boundary in 0..5 {
-        let result = match boundary {
-            0 => queue.push(unsupported.clone(), state.view()).map(|_| ()),
+fn exact_pending_retry_requires_live_healthy_original_input() {
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let (clock, time) = TimeSource::new_mock(Duration::default());
+    let mut config = config_factory();
+    config.transaction_time_to_live = Duration::from_secs(1);
+    let queue = Queue::test(config, &time);
+    let transaction = accepted_tx_by_someone(&time);
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+    queue.push(transaction.clone(), state.view()).unwrap();
+    assert!(queue.contains_exact_pending_input(&transaction, &state));
+    let other = accepted_tx_by_someone(&time);
+    assert!(!queue.contains_exact_pending_input(&other, &state));
+    queue
+        .accepted_work_validation_fault
+        .store(true, Ordering::Release);
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+    queue
+        .accepted_work_validation_fault
+        .store(false, Ordering::Release);
+    assert!(queue.contains_exact_pending_input(&transaction, &state));
+    clock.advance(Duration::from_secs(2));
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+    assert_eq!(
+        queue.remove_committed_hashes([transaction.hash_as_entrypoint()], None),
+        1
+    );
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+}
+
+#[test]
+fn current_admission_preserves_original_input_across_direct_queue_boundaries() {
+    let (mut state, time) = current_admission_queue_fixture();
+    let transaction = accepted_tx_by_someone(&time);
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    let original = transaction.entrypoint_bytes().to_vec();
+    let hash = transaction.hash_as_entrypoint();
+    for boundary in 0..4 {
+        let queue = Arc::new(Queue::test(config_factory(), &time));
+        let plan = queue.route_plan_with_state(&transaction, &state).unwrap();
+        match boundary {
+            0 => queue.push(transaction.clone(), state.view()).map(|_| ()),
             1 => queue
-                .push_with_lane_with_state(unsupported.clone(), &state)
+                .push_with_lane_with_state(transaction.clone(), &state)
                 .map(|_| ()),
             2 => queue
                 .push_with_gossip_payload_with_state_and_routing_plan(
-                    unsupported.clone(),
+                    transaction.clone(),
                     &state,
                     plan.clone(),
                     None,
                 )
                 .map(|_| ()),
-            3 => queue
-                .push_with_lane_with_state_and_routing_plan_strict_durable(
-                    unsupported.clone(),
-                    &state,
-                    plan.clone(),
-                )
-                .map(|_| ()),
             _ => queue
                 .push_batch_with_lane_with_state_and_routing_plans(
-                    vec![(unsupported.clone(), plan.clone())],
+                    vec![(transaction.clone(), plan.clone())],
                     &state,
                 )
                 .map(|_| ()),
-        };
-        let failure = result.expect_err("unsupported signed intent must be rejected");
+        }
+        .expect("native admission keeps the original signed input");
+        assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
+        for _ in 0..2 {
+            let snapshot = queue
+                .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+                .unwrap();
+            assert_eq!(snapshot.len(), 1);
+            assert_eq!(snapshot[0].hash_as_entrypoint(), hash);
+            assert_eq!(
+                snapshot[0].entrypoint_bytes().as_slice(),
+                original.as_slice()
+            );
+            assert_eq!(queue.routing_plans.get(&hash).unwrap().value(), &plan);
+        }
         assert!(matches!(
-            failure.err,
-            Error::UnsupportedTransactionAdmission { .. }
-        ));
-        assert_eq!(failure.tx.entrypoint(), unsupported.entrypoint());
-        assert_eq!(queue.active_len(), 0);
-        assert!(queue.txs.is_empty());
-        assert!(queue.durable_plan_claims.is_empty());
-        assert!(
             queue
-                .fee_admission_reservations
-                .lock()
-                .live_by_entrypoint
-                .is_empty()
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+                .push(transaction.clone(), state.view())
+                .unwrap_err()
+                .err,
+            Error::IsInQueue
+        ));
+        assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
     }
-    let ordinary = accepted_tx_by_someone(&time_source);
-    register_accepted_tx_authority_for_queue_test(&mut state, &ordinary);
-    let ordinary_plan = queue.route_plan_with_state(&ordinary, &state).unwrap();
-    queue
-        .push_with_lane_with_state_and_routing_plan_strict_durable(ordinary, &state, ordinary_plan)
-        .expect("supported Ordinary work retains real durable admission");
-    assert_eq!(queue.active_len(), 1);
-    assert_ne!(std::fs::read(&path).unwrap(), before);
 }
 
 #[test]
 fn current_admission_rejects_actual_multiroute_before_queue_custody() {
-    let (_clock, time_source) = TimeSource::new_mock(Duration::default());
-    let fixture = native_amx_participant_drift_fixture(&time_source);
-    let queue = Queue::test(config_factory(), &time_source);
-    let actual = queue
-        .route_plan_with_state(&fixture.tx, &fixture.state)
-        .expect("real multi-route resolves");
-    assert_eq!(actual, fixture.current_plan);
+    let (_, time) = TimeSource::new_mock(Duration::default());
+    let fixture = nexus_routing_fixture_with_nexus(test_nexus_for_routes(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (LaneId::new(1), DataSpaceId::new(7)),
+    ]));
+    let signed = TransactionBuilder::new(
+        *fixture.state.network_id_ref(), fixture.authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ).with_instructions([
+        Register::domain(Domain::new(DomainId::try_new("coordinator", "universal").unwrap())),
+        Register::domain(Domain::new(DomainId::try_new("participant", "test-dataspace-7").unwrap())),
+    ]).sign(fixture.authority_keypair.private_key());
+    let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+    let queue = Queue::test(config_factory(), &time);
+    let actual = queue.route_plan_with_state(&tx, &fixture.state).unwrap();
     assert!(!matches!(actual, RoutingPlan::Single(_)));
-    assert_eq!(
-        fixture.tx.entrypoint().admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
     for boundary in 0..3 {
         let failure = match boundary {
             0 => queue
-                .push(fixture.tx.clone(), fixture.state.view())
+                .push(tx.clone(), fixture.state.view())
                 .map(|_| ()),
             1 => queue
                 .push_with_lane_with_state_and_routing_plan(
-                    fixture.tx.clone(),
+                    tx.clone(),
                     &fixture.state,
                     actual.clone(),
                 )
                 .map(|_| ()),
             _ => queue
                 .push_batch_with_lane_with_state_and_routing_plans(
-                    vec![(fixture.tx.clone(), actual.clone())],
+                    vec![(tx.clone(), actual.clone())],
                     &fixture.state,
                 )
                 .map(|_| ()),
         }
-        .expect_err("resolved multi-route work has no current execution owner");
+        .expect_err("a multiroute request has no native execution owner");
         assert!(matches!(
             failure.err,
             Error::UnsupportedTransactionAdmission { .. }
         ));
+        assert_eq!(failure.tx.entrypoint(), tx.entrypoint());
         assert_eq!(queue.active_len(), 0);
-        assert!(queue.durable_plan_claims.is_empty());
+        assert!(queue.txs.is_empty());
+        assert!(queue.routing_plans.is_empty());
         assert!(
             queue
                 .fee_admission_reservations
@@ -143,58 +154,6 @@ fn current_admission_rejects_actual_multiroute_before_queue_custody() {
                 .is_empty()
         );
     }
-}
-
-#[test]
-fn current_admission_replay_rejects_unsupported_record_without_publishing_or_rewriting() {
-    let (mut state, queue, time_source, _directory, path) = current_admission_queue_fixture();
-    let unsupported = accepted_queue_plan_tx_by_someone(&time_source);
-    register_accepted_tx_authority_for_queue_test(&mut state, &unsupported);
-    let plan = queue.route_plan_with_state(&unsupported, &state).unwrap();
-    let context = queue
-        .plan_admission_context_with_state(&state, &plan)
-        .unwrap();
-    // Seed an on-disk incompatible record directly; the live API must never create it.
-    queue
-        .record_plan_journal_put_durable(
-            &unsupported,
-            &plan,
-            &context,
-            queue.queue_plan_admission_timestamp_ms(),
-            None,
-            None,
-            true,
-        )
-        .expect("write incompatible disk fixture");
-    let before = std::fs::read(&path).unwrap();
-    drop(queue);
-    let replay = Queue::test_with_router_for_routes(
-        config_factory(),
-        &time_source,
-        Arc::new(StaticRouter {
-            lane: LaneId::SINGLE,
-            dataspace: DataSpaceId::UNIVERSAL,
-        }),
-        &[],
-    );
-    assert_eq!(
-        replay
-            .install_plan_journal(&path, 1024 * 1024, true)
-            .unwrap(),
-        1
-    );
-    let error = replay
-        .replay_plan_journal(&state)
-        .expect_err("unsupported custody must fail startup explicitly");
-    assert!(
-        error
-            .to_string()
-            .contains("unsupported_transaction_admission")
-    );
-    assert_eq!(replay.active_len(), 0);
-    assert!(replay.txs.is_empty());
-    assert!(replay.durable_plan_claims.is_empty());
-    assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
 #[test]
@@ -212,32 +171,23 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
         authority_keypair,
     } = nexus_routing_fixture_with_nexus(nexus);
     install_single_validator_topology_for_queue_test(&mut state, 0xB8);
-    assert_eq!(state.consensus_lane_routes_at_height(1).len(), 2);
+    assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 2);
     let block_gas = crate::state::gas_limit_from_parameters(state.world_view().parameters());
-    let (_clock, time_source) = TimeSource::new_mock(Duration::ZERO);
-    let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    let directory = tempfile::tempdir().expect("current payload journal directory");
-    let path = directory.path().join("ordinary-full-block-gas.norito");
-    queue
-        .install_plan_journal(&path, 1024 * 1024, true)
-        .expect("install Ordinary admission journal");
+    let (_, time) = TimeSource::new_mock(Duration::ZERO);
+    let queue = Arc::new(Queue::test(config_factory(), &time));
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         state.network_id_ref(),
         &authority_id,
         1,
         busy_route.dataspace_id,
     )
-    .expect("derive exact-network contract address");
+    .unwrap();
     let signed = TransactionBuilder::new_with_time_source(
         *state.network_id_ref(),
         authority_id,
-        &time_source,
-        iroha_data_model::transaction::FeePaymentIntent::authority(
-            Vec::new(),
-            NonZeroU64::new(block_gas),
-        ),
+        &time,
+        FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(block_gas)),
     )
-    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
     .with_executable(Executable::ContractCall(
         iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
@@ -253,86 +203,72 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
         Duration::from_millis(10),
         TransactionParameters::default(),
         &iroha_config::parameters::actual::Crypto::default(),
-        &time_source,
+        &time,
     )
-    .expect("validate the caller-signed Ordinary contract call");
+    .unwrap();
     assert_eq!(Queue::compute_proposal_gas_cost(&accepted), Ok(block_gas));
-    let entrypoint = accepted.entrypoint().clone();
+    let original = accepted.entrypoint_bytes().to_vec();
     let hash = accepted.hash_as_entrypoint();
     let max_bytes = accepted.encoded_len();
     let plan = queue.route_plan_with_state(&accepted, &state).unwrap();
     assert_eq!(plan, RoutingPlan::single(busy_route));
-    let context = queue
-        .plan_admission_context_with_state(&state, &plan)
-        .unwrap();
-    assert_eq!(context.route_incarnations.len(), 1);
-    assert_eq!(context.route_incarnations[0].validator_count, 4);
     queue
-        .push_with_lane_with_state_and_routing_plan_strict_durable(accepted, &state, plan.clone())
-        .expect("durably admit supported full-block-gas work");
-    let journal_before = std::fs::read(&path).unwrap();
-    assert_eq!(queue.fifo_snapshot_for_test(), vec![hash]);
-
-    // Current proposal building peeks; neither an idle route nor rebuilding a
-    // proposal may divide this input's gas budget or take away its durable owner.
+        .push_with_lane_with_state_and_routing_plan(accepted, &state, plan.clone())
+        .unwrap();
+    // Selection neither divides the input's gas budget nor transfers pending ownership.
     for _ in 0..2 {
         let selected = crate::sumeragi::payload::select(&state, &queue, max_bytes, 0);
         assert_eq!(
             selected.len(),
             1,
-            "the idle route must not split the gas budget"
+            "an idle catalog route must not split the gas budget"
         );
-        assert_eq!(selected[0].0.entrypoint(), &entrypoint);
-        assert_eq!(selected[0].1, plan);
         assert_eq!(
-            Queue::compute_proposal_gas_cost(&selected[0].0),
+            selected[0].entrypoint_bytes().as_slice(),
+            original.as_slice()
+        );
+        assert_eq!(
+            Queue::compute_proposal_gas_cost(&selected[0]),
             Ok(block_gas)
         );
-        assert_eq!(queue.fifo_snapshot_for_test(), vec![hash]);
-        assert_eq!(queue.queued_len(), 1);
-        assert!(queue.live_lane_reservations().is_empty());
-        assert_eq!(std::fs::read(&path).unwrap(), journal_before);
+        assert_eq!(queue.routing_plans.get(&hash).unwrap().value(), &plan);
+        assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
     }
 }
 
 #[test]
-fn current_ordinary_fifo_survives_committed_height_and_replay() {
-    let handle = crate::sumeragi::threads::sumeragi_thread_builder("ordinary-height-custody")
-        .spawn(current_ordinary_fifo_survives_committed_height_and_replay_on_consensus_stack)
-        .expect("spawn actual genesis and queue recovery on the production consensus stack");
+fn current_native_fifo_survives_unrelated_global_application() {
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder("native-height-custody")
+        .spawn(current_native_fifo_survives_unrelated_global_application_on_consensus_stack)
+        .expect("spawn native queue and real four-validator genesis");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
 }
 
 #[inline(never)]
-fn current_ordinary_fifo_survives_committed_height_and_replay_on_consensus_stack() {
+fn current_native_fifo_survives_unrelated_global_application_on_consensus_stack() {
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-
-    let (authority, key) = gen_account_in("ordinary-height-custody");
+    let (authority, key) = gen_account_in("native-height-custody");
     let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-    let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 10_000))
-        .expect("real four-validator genesis");
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 10_000)).unwrap();
     assert_eq!(chain.height(), 1);
     let state = Arc::clone(chain.state());
-    let (_clock, time) = TimeSource::new_mock(Duration::from_millis(20_001));
-    let directory = tempfile::tempdir().expect("ordinary height custody journal");
-    let path = directory.path().join("ordinary-height-custody.norito");
+    let (_, time) = TimeSource::new_mock(Duration::from_millis(20_001));
     let queue = Arc::new(Queue::test(config_factory(), &time));
-    queue
-        .install_plan_journal(&path, 1024 * 1024, true)
-        .unwrap();
     let mut hashes = Vec::new();
+    let mut originals = Vec::new();
     let mut signed_inputs = Vec::new();
     for index in 0..2_u64 {
         let signed = chain.sign(
             &key,
             [InstructionBox::from(Log::new(
                 Level::INFO,
-                format!("pending ordinary input {index}"),
+                format!("pending native input {index}"),
             ))],
             20_000 + index,
         );
+        signed_inputs.push(signed.clone());
         let accepted = AcceptedTransaction::accept_with_time_source(
             signed,
             state.network_id_ref(),
@@ -341,34 +277,41 @@ fn current_ordinary_fifo_survives_committed_height_and_replay_on_consensus_stack
             &iroha_config::parameters::actual::Crypto::default(),
             &time,
         )
-        .expect("exact signed Ordinary input");
-        assert_eq!(
-            accepted.entrypoint().admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
+        .unwrap();
         let plan = queue.route_plan_with_state(&accepted, &state).unwrap();
         assert!(matches!(plan, RoutingPlan::Single(_)));
-        let context = queue
-            .plan_admission_context_with_state(&state, &plan)
-            .unwrap();
-        assert_eq!((context.authority_height, context.proposal_height), (1, 2));
-        assert_eq!(context.route_incarnations[0].validator_count, 4);
         hashes.push(accepted.hash_as_entrypoint());
-        signed_inputs.push(norito::to_bytes(accepted.entrypoint()).unwrap());
+        originals.push(accepted.entrypoint_bytes().to_vec());
         queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable(accepted, &state, plan)
-            .expect("materialize the exact Ordinary owner before height advancement");
+            .push_with_lane_with_state_and_routing_plan(accepted, &state, plan)
+            .unwrap();
     }
-    let journal = std::fs::read(&path).unwrap();
-    assert_eq!(queue.fifo_snapshot_for_test(), hashes);
-
-    // Advance the actual committed frontier with unrelated nonempty work. The
-    // pending inputs have no height-adapter or f+1 certificate prerequisite.
+    let assert_retained = || {
+        assert_eq!((queue.active_len(), queue.queued_len()), (2, 2));
+        for _ in 0..2 {
+            let selected = crate::sumeragi::payload::select(&state, &queue, 1024 * 1024, 0);
+            assert_eq!(
+                selected
+                    .iter()
+                    .map(AcceptedTransaction::hash_as_entrypoint)
+                    .collect::<Vec<_>>(),
+                hashes
+            );
+            assert_eq!(
+                selected
+                    .iter()
+                    .map(|tx| tx.entrypoint_bytes().to_vec())
+                    .collect::<Vec<_>>(),
+                originals
+            );
+        }
+    };
+    assert_retained();
     let advance = chain.sign(
         &key,
         [InstructionBox::from(Log::new(
             Level::INFO,
-            "advance committed frontier".to_owned(),
+            "advance committed frontier".into(),
         ))],
         20_002,
     );
@@ -382,49 +325,25 @@ fn current_ordinary_fifo_survives_committed_height_and_replay_on_consensus_stack
             .network_entrypoint_count(),
         1
     );
-    let assert_retained = |queue: &Arc<Queue>| {
-        assert_eq!(queue.fifo_snapshot_for_test(), hashes);
-        assert_eq!((queue.active_len(), queue.queued_len()), (2, 2));
-        for _ in 0..2 {
-            let selected = crate::sumeragi::payload::select(&state, queue, 1024 * 1024, 0);
-            assert_eq!(selected.len(), 2);
-            assert_eq!(
-                selected
-                    .iter()
-                    .map(|(tx, _)| tx.hash_as_entrypoint())
-                    .collect::<Vec<_>>(),
-                hashes
-            );
-            assert_eq!(
-                selected
-                    .iter()
-                    .map(|(tx, _)| norito::to_bytes(tx.entrypoint()).unwrap())
-                    .collect::<Vec<_>>(),
-                signed_inputs
-            );
-            for (_, plan) in &selected {
-                let current = queue
-                    .plan_admission_context_with_state(&state, plan)
-                    .unwrap();
-                assert_eq!((current.authority_height, current.proposal_height), (2, 3));
-            }
-            assert_eq!(queue.fifo_snapshot_for_test(), hashes);
-            assert_eq!(std::fs::read(&path).unwrap(), journal);
-            assert!(queue.live_lane_reservations().is_empty());
-        }
-    };
-    assert_retained(&queue);
-    drop(queue);
-    let replay = Arc::new(Queue::test(config_factory(), &time));
-    assert_eq!(
-        replay
-            .install_plan_journal(&path, 1024 * 1024, true)
-            .unwrap(),
-        2
+    assert_retained();
+    assert_eq!(chain.commit(signed_inputs), [true, true]);
+    assert_eq!(chain.height(), 3);
+    // The real G application precedes the queue's exact-hash cleanup notification.
+    assert_eq!(queue.remove_committed_hashes(hashes.clone(), None), 2);
+    assert_eq!(queue.remove_committed_hashes(hashes, None), 0);
+    assert_eq!((queue.active_len(), queue.queued_len()), (0, 0));
+    assert!(
+        queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(2_usize))
+            .unwrap()
+            .is_empty()
     );
-    let summary = replay
-        .replay_plan_journal(&state)
-        .expect("reopen exact Ordinary custody at the committed successor");
-    assert_eq!(summary.replayed, 2);
-    assert_retained(&replay);
+    assert!(queue.routing_plans.is_empty());
+    assert!(
+        queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .is_empty()
+    );
 }

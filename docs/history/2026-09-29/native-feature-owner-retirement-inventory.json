@@ -1,0 +1,646 @@
+{
+  "status": "unqualified; caller migration remains required",
+  "reason": "Retire feature-exposed publication and component execution surfaces whose production owners no longer exist; no compatibility helper or alternate test execution owner is introduced.",
+  "retired_files": [
+    {
+      "path": "crates/iroha_core/src/kura/block_store_definition_and_test_controls.rs",
+      "sha256": "211ba0209b70061909d963b8c255a5063b9fa3165ef4cd26fdff6df87a7168ed"
+    },
+    {
+      "path": "crates/iroha_core/src/state.rs",
+      "sha256": "c28e430acc744c058d57d983adf5ef989df59b38df6a7fe47ef836c515a4d05f"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "sha256": "94f60f461b8f364d864d8efaa1357f4490f13c7fa4225dc10fa46ea90c79f30c"
+    }
+  ],
+  "remaining_obligations": [
+    "Migrate State fixture publication through CertifiedTestChain with actual genesis and complete signed inputs.",
+    "Migrate transaction assertions through reserved ordinary execution outputs or genuine certified chains; preserve rejection, rollback, fees, routing, callback and entrypoint assertions.",
+    "Replace Native AMX standalone-manifest crash injection with applicable native frame/journal fault controls.",
+    "Compilation and maintained test parity are not established by this retirement."
+  ],
+  "caller_inventory_before_retirement": [
+    {
+      "path": "integration_tests/tests/native_amx_routing.rs",
+      "line": 2976,
+      "text": "    kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/state.rs",
+      "line": 38182,
+      "text": "    pub fn apply_fixture_block("
+    },
+    {
+      "path": "crates/iroha_core/benches/validation.rs",
+      "line": 209,
+      "text": "fn validate_transaction(criterion: &mut Criterion) {"
+    },
+    {
+      "path": "crates/iroha_core/benches/validation.rs",
+      "line": 260,
+      "text": "                .validate_transaction(transaction.clone(), &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/benches/validation.rs",
+      "line": 361,
+      "text": "    validate_transaction(&mut c);"
+    },
+    {
+      "path": "crates/iroha_core/benches/blocks/apply_blocks.rs",
+      "line": 82,
+      "text": "                .apply_fixture_block(block, None)"
+    },
+    {
+      "path": "crates/iroha_core/tests/adversarial_block_rejections.rs",
+      "line": 181,
+      "text": "        .validate_transaction(forged_transfer, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/adversarial_block_rejections.rs",
+      "line": 188,
+      "text": "        .validate_transaction(missing_burn, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/adversarial_block_rejections.rs",
+      "line": 195,
+      "text": "        .validate_transaction(valid_transfer, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/ivm_manifest_abi_reject.rs",
+      "line": 212,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/ivm_manifest_abi_reject.rs",
+      "line": 312,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/ivm_manifest_abi_reject.rs",
+      "line": 377,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/ivm_manifest_abi_reject.rs",
+      "line": 469,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/ivm_manifest_abi_reject.rs",
+      "line": 537,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/ivm_admission_unknown_syscall.rs",
+      "line": 90,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/output_network_tests.rs",
+      "line": 933,
+      "text": "        block.validate_transaction(accepted, &mut cache),"
+    },
+    {
+      "path": "crates/iroha_core/src/state/output_network_tests.rs",
+      "line": 960,
+      "text": "        .validate_transaction(accepted, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/block_store_definition_and_test_controls.rs",
+      "line": 142,
+      "text": "    pub fn remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/08_lane_receipts_and_artifacts.rs",
+      "line": 772,
+      "text": "        Kura::validate_lane_block_execution_input_artifact(&input),"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/08_lane_receipts_and_artifacts.rs",
+      "line": 795,
+      "text": "        Kura::validate_lane_block_execution_input_artifact(&unbound),"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/08_lane_receipts_and_artifacts.rs",
+      "line": 803,
+      "text": "        Kura::validate_lane_block_execution_input_artifact(&unsupported_reservation_version),"
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/08_lane_receipts_and_artifacts.rs",
+      "line": 846,
+      "text": "            Kura::validate_lane_block_execution_input_artifact(&candidate),"
+    },
+    {
+      "path": "crates/iroha_core/tests/fraud_monitoring.rs",
+      "line": 162,
+      "text": "        .validate_transaction(tx, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/fraud_monitoring.rs",
+      "line": 184,
+      "text": "        .validate_transaction(tx, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/fraud_monitoring.rs",
+      "line": 259,
+      "text": "        .validate_transaction(tx, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/fraud_monitoring.rs",
+      "line": 289,
+      "text": "        .validate_transaction(tx, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/fraud_monitoring.rs",
+      "line": 319,
+      "text": "        .validate_transaction(tx, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/fraud_monitoring.rs",
+      "line": 380,
+      "text": "        .validate_transaction(tx, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/fraud_monitoring.rs",
+      "line": 419,
+      "text": "        .validate_transaction(tx, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 77,
+      "text": "pub(crate) enum LaneExecutionInputError {"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 90,
+      "text": "impl From<&'static str> for LaneExecutionInputError {"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3178,
+      "text": "    pub fn validate_transaction("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3189,
+      "text": "    pub(crate) fn validate_transaction_with_entrypoint_index_and_routing_context("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3210,
+      "text": "    pub(crate) fn validate_lane_block_execution_input_with_routing_context("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3216,
+      "text": "        LaneExecutionInputError,"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3219,
+      "text": "        Self::validate_lane_block_execution_input_unique_entrypoints(artifact)?;"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3220,
+      "text": "        crate::kura::Kura::validate_lane_block_execution_input_artifact(artifact)?;"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3250,
+      "text": "                return Err(LaneExecutionInputError::Invalid("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 3267,
+      "text": "    fn validate_lane_block_execution_input_unique_entrypoints("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 6239,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 6378,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 6468,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 6587,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 6660,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 7071,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 7155,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 7199,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 7251,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 9318,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 9581,
+      "text": "                .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 9735,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 9942,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 11026,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 11095,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 11187,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 11855,
+      "text": "                    .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 12064,
+      "text": "                .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 12382,
+      "text": "            .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 12635,
+      "text": "            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 12733,
+      "text": "            .validate_transaction_with_entrypoint_index_and_routing_context("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 12742,
+      "text": "            .validate_transaction_with_entrypoint_index_and_routing_context("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13007,
+      "text": "            .validate_transaction(accepted, &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13046,
+      "text": "            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13088,
+      "text": "            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13150,
+      "text": "            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13275,
+      "text": "            .validate_transaction("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13334,
+      "text": "            .validate_transaction("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13361,
+      "text": "            .validate_transaction("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13414,
+      "text": "            .validate_transaction("
+    },
+    {
+      "path": "crates/iroha_core/src/tx.rs",
+      "line": 13432,
+      "text": "            .validate_transaction("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1629,
+      "text": "                kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1636,
+      "text": "                kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1643,
+      "text": "                kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1650,
+      "text": "                kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1657,
+      "text": "                kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1692,
+      "text": "            kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1847,
+      "text": "        kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/src/kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
+      "line": 1870,
+      "text": "        kura.remove_latest_native_amx_participant_manifest_for_testing("
+    },
+    {
+      "path": "crates/iroha_core/tests/ivm_syscall_policy.rs",
+      "line": 125,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/tx/empty_instruction_test.rs",
+      "line": 19,
+      "text": "    let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache).expect(\"local execution completes\");"
+    },
+    {
+      "path": "crates/iroha_core/src/tx_height_expiry_inline_tests.rs",
+      "line": 56,
+      "text": "        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache).expect(\"local execution completes\");"
+    },
+    {
+      "path": "crates/iroha_core/tests/runtime_upgrade_admission.rs",
+      "line": 449,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 142,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 193,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 236,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 273,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 341,
+      "text": "        .validate_transaction(accepted1, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 345,
+      "text": "        .validate_transaction(accepted2, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 399,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 446,
+      "text": "        .validate_transaction(accepted1, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 470,
+      "text": "        .validate_transaction(accepted2, &mut ivm_cache2)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 503,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/implicit_account_receive.rs",
+      "line": 555,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/isi_gas_fees.rs",
+      "line": 1275,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/validation_fee_admission.rs",
+      "line": 1359,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/validation_fee_admission.rs",
+      "line": 1971,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/validation_fee_admission.rs",
+      "line": 2004,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/validation_fee_admission.rs",
+      "line": 2046,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/validation_fee_admission.rs",
+      "line": 2082,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/tests/validation_fee_admission.rs",
+      "line": 2117,
+      "text": "        .validate_transaction(accepted, &mut ivm_cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/smartcontracts/isi/game.rs",
+      "line": 1813,
+      "text": "            .validate_transaction(accept(vec![claim.clone(), claim.clone()]), &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/smartcontracts/isi/game.rs",
+      "line": 1857,
+      "text": "            .validate_transaction(accept(vec![claim]), &mut cache)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/ordinary_common_tail_tests.rs",
+      "line": 136,
+      "text": "            .validate_transaction_with_entrypoint_index_and_routing_context("
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 51,
+      "text": "        .apply_fixture_block(&block2, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 238,
+      "text": "        .apply_fixture_block(&block2, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 263,
+      "text": "        .apply_fixture_block(&block3, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 327,
+      "text": "fn apply_fixture_block_reports_predecessor_metadata_failure() {"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 340,
+      "text": "        .apply_fixture_block(&source, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 417,
+      "text": "        .apply_fixture_block(&block2, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 474,
+      "text": "        .apply_fixture_block(&block3, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 482,
+      "text": "        .apply_fixture_block(&block4, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 574,
+      "text": "        .apply_fixture_block(&block2, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 615,
+      "text": "        .apply_fixture_block(&block3, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 712,
+      "text": "        .apply_fixture_block(&block2, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 769,
+      "text": "        .apply_fixture_block(&block3, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 805,
+      "text": "        .apply_fixture_block(&block4, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/trigger_execution_and_delta_merge_tests.rs",
+      "line": 841,
+      "text": "        .apply_fixture_block(&block5, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/output_network_fee_tests.rs",
+      "line": 573,
+      "text": "                block.validate_transaction(accepted, &mut cache),"
+    },
+    {
+      "path": "crates/iroha_core/src/state/lane_decision_economic_tests.rs",
+      "line": 698,
+      "text": "                    seed.validate_transaction_with_entrypoint_index_and_routing_context("
+    },
+    {
+      "path": "crates/iroha_core/src/state/tests.rs",
+      "line": 6279,
+      "text": "    assert!(state_block.apply_fixture_block(&committed, Some(&authority)).is_err(),"
+    },
+    {
+      "path": "crates/iroha_core/src/state/tests.rs",
+      "line": 9354,
+      "text": "            .apply_fixture_block(&committed, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/tests.rs",
+      "line": 9498,
+      "text": "            .apply_fixture_block(&first, None)"
+    },
+    {
+      "path": "crates/iroha_core/src/state/tests.rs",
+      "line": 40144,
+      "text": "        let (_, result) = state_block.validate_transaction(accepted, &mut cache).expect(\"local execution completes\");"
+    },
+    {
+      "path": "crates/iroha_core/src/queue/router/alias_registry_routing_tests.rs",
+      "line": 257,
+      "text": "        .validate_transaction(transaction, &mut IvmCache::new())"
+    }
+  ]
+}

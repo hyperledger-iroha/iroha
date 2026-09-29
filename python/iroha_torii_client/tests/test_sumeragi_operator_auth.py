@@ -39,19 +39,20 @@ def _operator_context(captured: Optional[List[bytes]] = None) -> ToriiOperatorSi
     )
 
 
-def _sumeragi_v2_equivocation_record(
+def _sumeragi_native_evidence_record(
     *, penalty_status: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     return {
-        "kind": "SumeragiV2Equivocation",
+        "kind": "NativeSumeragiEvidence",
         "class": "phase_vote",
         "height": 31,
-        "view": 4,
         "epoch": 2,
-        "signer": 3,
         "context_id": "11" * 32,
-        "artifact_hash_1": "22" * 32,
-        "artifact_hash_2": "33" * 32,
+        "instance": "22" * 32,
+        "authority_generation": "33" * 32,
+        "offenders": [{"signer": 3, "peer_id": "ea0130" + "22" * 48}],
+        "safety_violation": False,
+        "native_frame_hash": "44" * 32,
         "recorded_height": 40,
         "recorded_view": 2,
         "recorded_ms": 1_700_000_000_000,
@@ -66,7 +67,7 @@ def test_operator_reads_reject_missing_or_fallback_auth_before_dispatch() -> Non
     missing_session = RecordingSession()
     missing_client = ToriiClient("http://node.test", session=missing_session)
     with pytest.raises(ValueError, match="ToriiOperatorSigningContext"):
-        missing_client.get_sumeragi_qc()
+        missing_client.get_sumeragi_status()
     assert missing_session.calls == []
 
     fallback_session = RecordingSession()
@@ -77,7 +78,7 @@ def test_operator_reads_reject_missing_or_fallback_auth_before_dispatch() -> Non
         operator_signing_context=_operator_context(),
     )
     with pytest.raises(ValueError, match="reject token"):
-        fallback_client.get_sumeragi_qc()
+        fallback_client.get_sumeragi_status()
     assert fallback_session.calls == []
 
     precomputed_session = RecordingSession()
@@ -88,7 +89,7 @@ def test_operator_reads_reject_missing_or_fallback_auth_before_dispatch() -> Non
     )
     with pytest.raises(ValueError, match="precomputed operator"):
         precomputed_client._operator_get(
-            "/v1/sumeragi/qc",
+            "/v1/sumeragi/status",
             headers={"X-Iroha-Operator-Signature": "precomputed"},
         )
     assert precomputed_session.calls == []
@@ -101,14 +102,14 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
             payload={
                 "total": 4,
                 "items": [
-                    _sumeragi_v2_equivocation_record(),
-                    _sumeragi_v2_equivocation_record(
+                    _sumeragi_native_evidence_record(),
+                    _sumeragi_native_evidence_record(
                         penalty_status={
                             "status": "applied",
                             "details": {"height": 42},
                         }
                     ),
-                    _sumeragi_v2_equivocation_record(
+                    _sumeragi_native_evidence_record(
                         penalty_status={
                             "status": "cancelled",
                             "details": {"height": 43},
@@ -125,14 +126,14 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
         operator_signing_context=_operator_context(captured),
     )
 
-    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="SumeragiV2Equivocation")
+    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="NativeSumeragiEvidence")
 
     assert page.total == 4
     assert len(page.items) == 3
     equivocation = page.items[0]
-    assert isinstance(equivocation, client_module.SumeragiV2EquivocationEvidenceRecord)
+    assert isinstance(equivocation, client_module.SumeragiEvidenceRecord)
     assert equivocation.class_ == "phase_vote"
-    assert equivocation.signer == 3
+    assert equivocation.offenders[0].signer == 3
     assert equivocation.context_id == "11" * 32
     assert equivocation.consensus_admitted_height == 41
     assert isinstance(
@@ -151,7 +152,7 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
     assert page.items[2].penalty_status.details.height == 43
     call = session.calls[0]
     assert call["url"].endswith(
-        "/v1/sumeragi/evidence?kind=SumeragiV2Equivocation&limit=5&offset=1"
+        "/v1/sumeragi/evidence?kind=NativeSumeragiEvidence&limit=5&offset=1"
     )
     assert call["params"] == {}
     assert call["allow_redirects"] is False
@@ -163,7 +164,7 @@ def test_list_sumeragi_evidence_signs_canonical_query_and_parses_records() -> No
     assert captured[0] == operator_network_request_signature_message(
         GOVERNANCE_NETWORK_ID,
         "GET",
-        "/v1/sumeragi/evidence?kind=SumeragiV2Equivocation&limit=5&offset=1",
+        "/v1/sumeragi/evidence?kind=NativeSumeragiEvidence&limit=5&offset=1",
         b"",
         timestamp_ms=timestamp_ms,
         nonce=nonce,

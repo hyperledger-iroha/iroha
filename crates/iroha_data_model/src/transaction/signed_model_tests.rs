@@ -92,7 +92,7 @@ fn encode_default_norito_fields(fields: &[Vec<u8>]) -> Vec<u8> {
 fn signed_transaction_with_log_type_name_alias(canonical: &[u8]) -> Vec<u8> {
     assert_eq!(canonical.first(), Some(&1), "signed transaction V1 prefix");
     let mut signed = split_default_norito_fields(&canonical[1..], 3);
-    let mut payload = split_default_norito_fields(&signed[1], 10);
+    let mut payload = split_default_norito_fields(&signed[1], 9);
 
     assert_eq!(&payload[3][..4], &0_u32.to_le_bytes());
     let executable_fields = split_default_norito_fields(&payload[3][4..], 1);
@@ -130,39 +130,6 @@ fn external_entrypoint_wire(signed_transaction_wire: &[u8]) -> Vec<u8> {
         [1..]
         .to_vec()]));
     wire
-}
-#[test]
-fn transaction_payload_rejects_wire_omitting_required_admission_intent() {
-    #[derive(norito::codec::Encode)]
-    struct TransactionPayloadWithoutAdmissionIntent {
-        domain: TransactionDomain,
-        authority: AccountId,
-        creation_time_ms: u64,
-        instructions: Executable,
-        time_to_live_ms: Option<NonZeroU64>,
-        nonce: Option<NonZeroU32>,
-        fee_payment: FeePaymentIntent,
-        metadata: Metadata,
-        attachments: Option<crate::proof::ProofAttachmentList>,
-    }
-    let complete = sample_signed_transaction().payload().clone();
-    let omitted = TransactionPayloadWithoutAdmissionIntent {
-        domain: complete.domain,
-        authority: complete.authority,
-        creation_time_ms: complete.creation_time_ms,
-        instructions: complete.instructions,
-        time_to_live_ms: complete.time_to_live_ms,
-        nonce: complete.nonce,
-        fee_payment: complete.fee_payment,
-        metadata: complete.metadata,
-        attachments: complete.attachments,
-    };
-    let bytes = omitted.encode();
-    let mut cursor = bytes.as_slice();
-    assert!(
-        TransactionPayload::decode_all(&mut cursor).is_err(),
-        "admission_intent is a required V1 transaction-payload wire field"
-    );
 }
 
 fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
@@ -267,7 +234,7 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
     let payload = transaction.payload();
     let exact_json = norito::json::to_json(payload).expect("serialize transaction payload");
     let expected_json = format!(
-        "{{\"domain\":{domain},\"authority\":{authority},\"creation_time_ms\":{creation_time_ms},\"instructions\":{instructions},\"time_to_live_ms\":{time_to_live_ms},\"nonce\":{nonce},\"fee_payment\":{fee_payment},\"admission_intent\":{admission_intent},\"metadata\":{metadata},\"attachments\":null}}",
+        "{{\"domain\":{domain},\"authority\":{authority},\"creation_time_ms\":{creation_time_ms},\"instructions\":{instructions},\"time_to_live_ms\":{time_to_live_ms},\"nonce\":{nonce},\"fee_payment\":{fee_payment},\"metadata\":{metadata},\"attachments\":null}}",
         domain = norito::json::to_json(&payload.domain).expect("serialize transaction domain"),
         authority =
             norito::json::to_json(&payload.authority).expect("serialize transaction authority"),
@@ -279,8 +246,6 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         nonce = norito::json::to_json(&payload.nonce).expect("serialize transaction nonce"),
         fee_payment =
             norito::json::to_json(&payload.fee_payment).expect("serialize transaction fee intent"),
-        admission_intent = norito::json::to_json(&payload.admission_intent)
-            .expect("serialize transaction admission intent"),
         metadata =
             norito::json::to_json(&payload.metadata).expect("serialize transaction metadata"),
     );
@@ -300,8 +265,13 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         .as_object()
         .expect("transaction payload serializes as an object");
     assert!(canonical_object.contains_key("domain"));
-    assert!(canonical_object.contains_key("admission_intent"));
-    for retired in ["chain", "chain_id", "chainId"] {
+    for retired in [
+        "chain",
+        "chain_id",
+        "chainId",
+        "admission_intent",
+        "admissionIntent",
+    ] {
         assert!(!canonical_object.contains_key(retired));
         let mut hostile = canonical.clone();
         hostile
@@ -327,15 +297,6 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
     assert!(
         norito::json::from_value::<TransactionPayload>(unknown).is_err(),
         "unknown transaction payload fields must fail closed"
-    );
-    let mut missing_admission_intent = canonical.clone();
-    missing_admission_intent
-        .as_object_mut()
-        .expect("transaction payload object")
-        .remove("admission_intent");
-    assert!(
-        norito::json::from_value::<TransactionPayload>(missing_admission_intent).is_err(),
-        "transaction payload admission_intent is mandatory"
     );
     assert_eq!(
         canonical
@@ -1508,9 +1469,21 @@ fn print_transaction_intent_projection_kats() {
         "PRIVACY_TRANSACTION_INTENT_PROJECTION_KAT_V1={}",
         hex::encode(digest.as_bytes())
     );
-    let vega_digest = draft_vega_privacy_payload()
+    eprintln!(
+        "PRIVACY_TRANSACTION_INTENT_PROJECTION_HEX_V1={}",
+        hex::encode(&projection)
+    );
+    let vega = draft_vega_privacy_payload();
+    let vega_projection = vega
+        .privacy_transaction_intent_projection_bytes_v1()
+        .expect("Vega projection bytes");
+    let vega_digest = vega
         .privacy_transaction_intent_digest_v1()
         .expect("Vega intent projection");
+    eprintln!(
+        "VEGA_TRANSACTION_INTENT_PROJECTION_HEX_V1={}",
+        hex::encode(&vega_projection)
+    );
     eprintln!(
         "VEGA_TRANSACTION_INTENT_PROJECTION_KAT_V1={}",
         hex::encode(vega_digest.as_bytes())
@@ -1558,9 +1531,6 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
     });
     assert_bound!("fee intent", |changed: &mut TransactionPayload| {
         changed.fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(11));
-    });
-    assert_bound!("admission intent", |changed: &mut TransactionPayload| {
-        changed.admission_intent = TransactionAdmissionIntent::QueuePlanSynced;
     });
     assert_bound!("metadata", |changed: &mut TransactionPayload| {
         changed.metadata.insert(
@@ -2755,3 +2725,22 @@ fn transaction_result_hash_matches_inner() {
 mod sealed_commitment_tests;
 include!("signed/genesis_domain_test.rs");
 include!("signed/result_json_test.rs");
+
+#[test]
+fn native_transaction_payload_has_nine_fields_and_rejects_retired_admission_slots() {
+    let payload = sample_signed_transaction().payload().clone();
+    let canonical = payload.encode();
+    let fields = split_default_norito_fields(&canonical, 9);
+    let decoded = TransactionPayload::decode_all(&mut canonical.as_slice())
+        .expect("native payload roundtrip");
+    assert_eq!(decoded, payload);
+    for retired_tag in [0_u32, 1_u32] {
+        let mut old_fields = fields.clone();
+        old_fields.insert(7, retired_tag.to_le_bytes().to_vec());
+        let old_wire = encode_default_norito_fields(&old_fields);
+        assert!(
+            TransactionPayload::decode_all(&mut old_wire.as_slice()).is_err(),
+            "retired admission slot must never be decoded as the native layout"
+        );
+    }
+}

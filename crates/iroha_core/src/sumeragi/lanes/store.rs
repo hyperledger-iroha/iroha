@@ -224,6 +224,7 @@ mod tests {
             payload_len: 16,
             proposer: 0,
             skipped_leaders: Vec::new(),
+            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
             attest: false,
         };
         let block = Block { header, payload };
@@ -242,6 +243,7 @@ mod tests {
             signers: Bitmap::from_indices(1, [0]).expect("bitmap"),
             agg_sig: AggregateSignature([1; SIGNATURE_LEN]),
             attestations: Vec::new(),
+            attestation_witness: None,
         };
         (block, qc)
     }

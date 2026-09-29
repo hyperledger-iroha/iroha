@@ -57,9 +57,6 @@ def _canonical_hash(seed: int) -> str:
     return f"hash:{body}#{crc:04X}"
 
 
-_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
-    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-)
 
 
 class _ToriiHTTPServer(ThreadingHTTPServer):
@@ -126,7 +123,6 @@ class _MockState:
         self._attachment_seq = 0
         self.attachments: Dict[str, Dict[str, Any]] = {}
         self.sumeragi_status: Dict[str, Any] = {}
-        self.sumeragi_diagnostics: Dict[str, Any] = {}
         self.sumeragi_leader: Dict[str, Any] = {}
         self.pipeline_sequences: Dict[str, Dict[str, Any]] = {}
         self.pipeline_next_plan: Optional[Dict[str, Any]] = None
@@ -214,8 +210,6 @@ class _MockState:
             return self._gov_unlock_stats()
         if method == "GET" and path == "/v1/sumeragi/status":
             return _json_response(HTTPStatus.OK, self.sumeragi_status)
-        if method == "GET" and path == "/v1/sumeragi/diagnostics":
-            return _json_response(HTTPStatus.OK, self.sumeragi_diagnostics)
         if method == "GET" and path == "/v1/sumeragi/leader":
             return _json_response(HTTPStatus.OK, self.sumeragi_leader)
         if method == "GET" and path == "/v1/node/capabilities":
@@ -763,7 +757,7 @@ class _MockState:
             raise ValueError("contract call fee_payment missing positive 'gas_limit'")
         if not self.contract_call_response:
             return _json_response(HTTPStatus.SERVICE_UNAVAILABLE, {
-                "error": "an exact QueuePlanSynced contract draft fixture is required",
+                "error": "an exact canonical contract draft fixture is required",
             })
         response = dict(self.contract_call_response)
         tx_hash_hex = None
@@ -1133,140 +1127,8 @@ class _MockState:
         return int(time.time() * 1000) + seq
 
     def _seed_sumeragi(self) -> None:
-        subject = {
-            "parent_block_hash": _canonical_hash(0x31),
-            "block_hash": _canonical_hash(0x32),
-            "payload_hash": _canonical_hash(0x33),
-        }
-        self.sumeragi_status = {
-            "protocol_version": 4,
-            "node_fingerprint": _canonical_hash(0x11),
-            "build_fingerprint": _canonical_hash(0x12),
-            "config_fingerprint": _canonical_hash(0x13),
-            "restart_required": False,
-            "height_context_id": [_canonical_hash(0x14)],
-            "height": 10,
-            "view": 2,
-            "phase": {"phase": "prepare", "details": None},
-            "leader": 1,
-            "locked_prepare_qc": None,
-            "highest_prepare_qc": None,
-            "last_timeout_certificate": None,
-            "body_state": {"state": "validated", "details": None},
-            "pending_persistence_id": None,
-            "last_committed_height": 9,
-            "last_committed_subject": subject,
-            "height_context": {
-                "epoch": 1,
-                "epoch_end_height": 20,
-                "mode": {"mode": "permissioned", "details": None},
-                "epoch_seed": bytes(range(32)).hex().upper(),
-                "validator_count": 4,
-                "quorum": {"min_signers": 3, "total_power": 4},
-            },
-            "last_commit_qc": {
-                "certificate": {
-                    "round": {
-                        "context_id": [_canonical_hash(0x41)],
-                        "height": 9,
-                        "view": 1,
-                    },
-                    "proposal_round": {
-                        "context_id": [_canonical_hash(0x41)],
-                        "height": 9,
-                        "view": 1,
-                    },
-                    "phase": {"phase": "commit", "details": None},
-                    "subject": subject,
-                    "execution_commitment": {
-                        "parent_state_root": _canonical_hash(0x51),
-                        "post_state_root": _canonical_hash(0x52),
-                        "ordinary_writes_root": _canonical_hash(0x52),
-                        "kagemusha_top_up_root": None,
-                        "kagemusha_top_up_count": 0,
-                        "native_amx_application_manifest_version": 1,
-                        "native_amx_application_manifest_root": (
-                            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-                        ),
-                        "native_amx_application_manifest_count": 0,
-                        "merge_carrier": None,
-                        "executed_block_wire_len": 123,
-                        "executed_block_wire_hash": _canonical_hash(0x53),
-                        "transaction_input_commitment": None,
-                        "transaction_output_commitment": None,
-                    },
-                },
-                "validator_count": 4,
-                "signer_count": 3,
-                "min_signers": 3,
-                "signed_power": 3,
-                "total_power": 4,
-            },
-            "liveness": {
-                "generation": 2,
-                "prepare_quorums": [],
-                "commit_quorums": [],
-                "timeout_quorums": [],
-                "outbound_intents": [],
-                "work": {
-                    "candidate": {"stage": "idle", "details": None},
-                    "body_recovery": {"stage": "idle", "details": None},
-                    "body_store": {"stage": "idle", "details": None},
-                    "validation": {"stage": "complete", "details": None},
-                    "application": {"stage": "idle", "details": None},
-                    "successor_height": {"stage": "idle", "details": None},
-                },
-                "queues": [],
-                "last_progress": None,
-                "no_progress_age_ms": 0,
-                "blocker": None,
-                "ignore_counts": [],
-            },
-            "beacon_horizon": None,
-        }
-        self.sumeragi_diagnostics = {
-            "pipeline_execution": {
-                "tx_vertices_total": 0,
-                "tx_edges_total": 0,
-                "overlay_count_total": 0,
-                "overlay_instr_total": 0,
-                "overlay_bytes_total": 0,
-                "rbc_chunks_total": 0,
-                "rbc_bytes_total": 0,
-                "detached_prepared_total": 0,
-                "detached_merged_total": 0,
-                "detached_fallback_total": 0,
-                "detached_fallback_fee_postprocessing_total": 0,
-                "detached_fallback_user_executor_total": 0,
-                "detached_fallback_durable_state_total": 0,
-                "detached_fallback_unsupported_instruction_total": 0,
-                "detached_fallback_rejected_eval_total": 0,
-                "detached_fallback_overlay_error_total": 0,
-                "quarantine_executed_total": 0,
-            },
-            "tx_queue_depth": 3,
-            "tx_queue_capacity": 32,
-            "tx_queue_retained_bytes": 4096,
-            "tx_queue_max_retained_bytes": 65536,
-            "tx_queue_saturated": False,
-            "tx_queue_saturated_by_count": False,
-            "tx_queue_saturated_by_bytes": False,
-            "tx_queue_saturated_by_age": False,
-            "tx_queue_oldest_queued_age_ms": 25,
-            "npos": None,
-            "lane_commitments": [],
-            "dataspace_commitments": [],
-            "lane_settlement_commitments": [],
-            "lane_relay_envelopes": [],
-            "lane_payload_ownerships": [],
-            "committed_lane_blocks": [],
-            "lane_block_sessions": [],
-            "lane_governance_sealed_total": 0,
-            "lane_governance_sealed_aliases": [],
-            "lane_governance": [],
-            "native_amx_participant_applications": [],
-            "autonomous_lane_executions": [],
-        }
+        # Observation fixture only; this is not generated finality authority.
+        self.sumeragi_status = {'protocol_version': 1, 'config_fingerprint': 'hash:0101010101010101010101010101010101010101010101010101010101010101#B86C', 'beacon_horizon': None, 'instance': '0000000000000000000000000000000000000000000000000000000000000000', 'height': 10, 'view': 2, 'stage': 0, 'leader': None, 'proxy_tail': None, 'high_qc_view': None, 'level': 0, 'start_level': 0, 't_retx_ms': 1, 'committed_height': 9, 'applied_height': 9, 'awaiting': False, 'signer': None, 'unanchored': True, 'abstaining': True, 'halted': None, 'footprint': {'votes': 0, 'timeouts': 0, 'blocks': 0, 'exec_entries': 0, 'wants': 0, 'pending_apply': 0, 'sync_entries': 0, 'sync_bytes': 0, 'peers': 0, 'recent_headers': 0, 'configs': 0, 'cert_cache': 0, 'evidence_keys': 0, 'probe': 0}}
         self.sumeragi_leader = {
             "leader_index": 3,
             "prf": {
@@ -1284,7 +1146,7 @@ class _MockState:
         if not isinstance(payload, dict):
             raise ValueError("sumeragi config must be an object")
 
-        allowed_fields = {"status", "diagnostics", "leader"}
+        allowed_fields = {"status", "leader"}
         unknown_fields = set(payload) - allowed_fields
         if unknown_fields:
             raise ValueError(
@@ -1294,7 +1156,6 @@ class _MockState:
         updates: Dict[str, Dict[str, Any]] = {}
         for name, attribute in (
             ("status", "sumeragi_status"),
-            ("diagnostics", "sumeragi_diagnostics"),
             ("leader", "sumeragi_leader"),
         ):
             value = payload.get(name)

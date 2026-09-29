@@ -1,6 +1,6 @@
 //! Authority-signed mobile trust bootstrap, independent of operation-status responses.
 //!
-//! A package supplies authenticated finality coordinates under an independently installed
+//! A package supplies a complete authenticated native checkpoint under an independently installed
 //! native policy. It cannot select that policy, admit value, qualify hardware, or authenticate
 //! proof artifacts. The native host must still authenticate the matching release and retain
 //! sequence/time freshness independently of the downloaded package and rollbackable app data.
@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::HeightContextId,
     kagemusha::{
         KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1, KagemushaMobileBootstrapCheckpointV1,
         KagemushaMobileBootstrapPackageV1, KagemushaMobileBootstrapPinsV1,
         KagemushaMobileBootstrapReplayPinV1, KagemushaMobileBootstrapScopeV1,
         KagemushaReleaseAuthorityPolicyV1,
     },
+    sumeragi_finality::SumeragiFinalityCheckpoint,
 };
 
 use crate::kagemusha_core_coordinator_v1::native_deadline::{
@@ -32,6 +32,7 @@ use crate::kagemusha_core_coordinator_v1::native_deadline::{
 pub struct KagemushaVerifiedMobileBootstrapV1 {
     checkpoint: KagemushaMobileBootstrapCheckpointV1,
     checkpoint_digest: [u8; 32],
+    finality_checkpoint: SumeragiFinalityCheckpoint,
     authority_policy: KagemushaReleaseAuthorityPolicyV1,
     installation_deadline: NativeDeadlineV1,
 }
@@ -67,10 +68,10 @@ impl KagemushaVerifiedMobileBootstrapV1 {
         self.checkpoint.network_id
     }
 
-    /// Return the authenticated first context for signed finality-chain verification.
+    /// Borrow the complete native checkpoint selected by the authenticated package.
     #[must_use]
-    pub const fn first_context_id(&self) -> HeightContextId {
-        self.checkpoint.first_context_id
+    pub const fn finality_checkpoint(&self) -> &SumeragiFinalityCheckpoint {
+        &self.finality_checkpoint
     }
 
     /// Return the exact authenticated asset and reserve scope.
@@ -112,7 +113,7 @@ impl KagemushaVerifiedMobileBootstrapV1 {
 ///
 /// # Errors
 /// Rejects malformed/noncanonical archives, invalid scope or freshness, policy substitution,
-/// insufficient/duplicate/unknown approvals, invalid signatures, and unset finality contexts.
+/// insufficient/duplicate/unknown approvals, invalid signatures, and malformed native checkpoints.
 pub fn verify_kagemusha_mobile_bootstrap_v1<'pins>(
     archive: &[u8],
     read_pins: impl FnOnce() -> Result<KagemushaMobileBootstrapPinsV1<'pins>, String>,
@@ -134,6 +135,7 @@ fn verify_from_reading<'pins>(
     let pins = read_pins()?;
     let package = KagemushaMobileBootstrapPackageV1::decode_canonical_exact(archive)?;
     let checkpoint_digest = package.authenticate(&pins)?;
+    let finality_checkpoint = package.checkpoint.decode_finality_checkpoint()?;
     let checkpoint = package.checkpoint;
     let installation_deadline = NativeDeadlineV1::from_reading(
         verification_started,
@@ -143,6 +145,7 @@ fn verify_from_reading<'pins>(
     let verified = KagemushaVerifiedMobileBootstrapV1 {
         checkpoint,
         checkpoint_digest,
+        finality_checkpoint,
         authority_policy: pins.authority_policy.clone(),
         installation_deadline,
     };

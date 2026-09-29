@@ -13,9 +13,6 @@ use crate::{
         ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
     },
     state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, World, WorldReadOnly as _},
-    sumeragi::v2_context::{
-        V2ContextBuildError, finalized_global_beacon_npos_successor_seed_from_sources,
-    },
 };
 use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
 use iroha_crypto::{
@@ -24,12 +21,12 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     account::AccountId,
-    block::{BlockHeader, consensus_v2 as wire},
+    block::BlockHeader,
     governance::types::{
-        BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
-        GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
-        GovernanceExpectedHeadV1, GovernanceStageV1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
-        ParliamentBody, ProposalContentId, RiskTierV1, SortitionRequestId, SortitionRequestV1,
+        BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId, GovernanceAttemptStatusV1,
+        GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
+        GovernanceStageV1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1, ParliamentBody,
+        ProposalContentId, RiskTierV1, SortitionRequestId, SortitionRequestV1,
         parliament_candidate_root_v1,
     },
 };
@@ -570,6 +567,13 @@ fn live_fixture_in_memory_signer(
         share,
     )
     .expect("move the DKG share into the zeroizing runtime provider")
+}
+
+fn live_fixture_signer(
+    fixture: &AdaptiveBeaconFixture,
+    recipient_index: u16,
+) -> Arc<dyn GlobalThresholdBeaconPartialSignerV1> {
+    Arc::new(live_fixture_in_memory_signer(fixture, recipient_index))
 }
 
 struct FailOnceBeaconSigner {
@@ -1398,6 +1402,62 @@ fn threshold_beacon_partial_reducer_is_bound_fail_closed_and_subset_invariant() 
         other_height.accept_partial(partials[0]),
         Err(GlobalThresholdBeaconError::ThresholdBls(_))
     ));
+}
+
+#[test]
+fn npos_successor_seed_binds_verified_pulse_and_target_epoch() {
+    const BOUNDARY_HEIGHT: u64 = 42;
+    const SUCCESSOR_EPOCH: u64 = 9;
+    let (fixture, pulse, _cursor, anchor) = signed_pulse_fixture();
+    verify_finalized_global_threshold_beacon_pulse_v1(
+        &fixture.session,
+        &pulse,
+        anchor,
+        &pulse.context,
+    )
+    .expect("authenticated pulse and exact chain anchor");
+    let expected_seed =
+        global_threshold_beacon_npos_successor_seed_v1(&pulse, BOUNDARY_HEIGHT, SUCCESSOR_EPOCH);
+    assert_ne!(expected_seed, pulse.seed, "NPoS seed has its own domain");
+    assert_ne!(
+        expected_seed,
+        global_threshold_beacon_npos_successor_seed_v1(
+            &pulse,
+            BOUNDARY_HEIGHT,
+            SUCCESSOR_EPOCH + 1,
+        )
+    );
+    assert_ne!(
+        expected_seed,
+        global_threshold_beacon_npos_successor_seed_v1(
+            &pulse,
+            BOUNDARY_HEIGHT + 1,
+            SUCCESSOR_EPOCH,
+        )
+    );
+    let mut foreign = pulse;
+    foreign.network_id = beacon_fixture_network_id(0x82);
+    assert!(
+        verify_finalized_global_threshold_beacon_pulse_v1(
+            &fixture.session,
+            &foreign,
+            anchor,
+            &pulse.context,
+        )
+        .is_err()
+    );
+    let mut wrong_anchor = anchor;
+    wrong_anchor.block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFE; 32]));
+    assert!(
+        verify_finalized_global_threshold_beacon_pulse_v1(
+            &fixture.session,
+            &pulse,
+            wrong_anchor,
+            &pulse.context,
+        )
+        .is_err()
+    );
 }
 
 #[test]

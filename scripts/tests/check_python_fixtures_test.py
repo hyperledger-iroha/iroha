@@ -122,7 +122,6 @@ def _payload_descriptor(
     *,
     executable: object | None = None,
     gas_limit: object = None,
-    admission_intent: object | None = None,
 ) -> dict:
     common = {
         "authority": "authority",
@@ -136,11 +135,6 @@ def _payload_descriptor(
         "name": "fixture",
         "payload": {
             **common,
-            "admission_intent": (
-                {"intent": "ordinary", "value": None}
-                if admission_intent is None
-                else admission_intent
-            ),
             "executable": (
                 {"Instructions": []} if executable is None else executable
             ),
@@ -195,6 +189,8 @@ def test_payload_descriptor_rejects_duplicate_and_unknown_fields(
 @pytest.mark.parametrize(
     "admission_intent",
     [
+        {"intent": "ordinary", "value": None},
+        None,
         {},
         {"intent": "ordinary"},
         {"intent": "ordinary", "value": None, "legacy": True},
@@ -203,12 +199,13 @@ def test_payload_descriptor_rejects_duplicate_and_unknown_fields(
         {"intent": "ordinary", "value": 0},
     ],
 )
-def test_payload_descriptor_requires_exact_ordinary_admission_intent(
+def test_payload_descriptor_rejects_retired_admission_intent(
     tmp_path: Path, admission_intent: object
 ) -> None:
+    descriptor = _payload_descriptor()
+    descriptor["payload"]["admission_intent"] = admission_intent
     path = _write_payload_descriptor(
-        tmp_path / "transaction_payloads.json",
-        [_payload_descriptor(admission_intent=admission_intent)],
+        tmp_path / "transaction_payloads.json", [descriptor],
     )
     with pytest.raises(ValueError, match="admission_intent"):
         MODULE.validate_payload_descriptors(path)

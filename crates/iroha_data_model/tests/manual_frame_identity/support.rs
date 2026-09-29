@@ -24,7 +24,7 @@ where
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
     let view = norito::core::from_bytes_view(&frame).expect("validate capture archive");
     let archived: T = view
-        .decode_exact_with(norito::core::decode_field_canonical::<T>)
+        .decode_exact_with::<T, _, _>(norito::core::decode_field_canonical::<T>)
         .expect("decode typed capture archive");
     verify(&archived);
     assert_eq!(

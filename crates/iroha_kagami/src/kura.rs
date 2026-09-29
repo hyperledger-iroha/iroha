@@ -1,3 +1,7 @@
+mod beacon_history;
+mod finality;
+mod scaling_evidence;
+
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, eyre};
@@ -51,6 +55,9 @@ enum Command {
     Finality {
         /// Exact lane directory containing the canonical block journals.
         path_to_block_store: PathBuf,
+        /// Exact chain label used to derive the native consensus instance.
+        #[clap(long, value_name = "CHAIN_ID")]
+        chain_id: iroha_model_base::chain::ChainId,
         /// Verify all heights from genesis through this height (1..=4096).
         #[clap(short = 'H', long, value_name = "HEIGHT")]
         height: u64,
@@ -98,10 +105,11 @@ impl<T: Write> RunArgs<T> for Args {
             }
             Command::Finality {
                 path_to_block_store,
+                chain_id,
                 height,
                 output,
             } => write_inspection_output(writer, &path_to_block_store, output, |out| {
-                print_finality(out, &path_to_block_store, height)
+                finality::inspect(out, &path_to_block_store, &chain_id, height)
             }),
             Command::Print {
                 path_to_block_store,
@@ -350,6 +358,21 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn beacon_history_rejects_zero_start_before_accessing_store() {
+        let args = Args {
+            command: Command::BeaconHistory {
+                path_to_block_store: PathBuf::from("missing-store"),
+                from: 0,
+                options: beacon_history::Args {
+                    length: 1,
+                    output: None,
+                },
+            },
+        };
+        let error = args.run(&mut BufWriter::new(Vec::new())).unwrap_err();
+        assert!(error.to_string().contains("from must be positive"));
+    }
     fn fixture_block(prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -486,14 +509,14 @@ mod tests {
             kura::FsyncMode,
             parameters::{
                 actual::{Kura as KuraConfig, LaneConfig},
-                defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY},
+                defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL},
             },
         };
         use iroha_core::kura::{Kura, PipelineRecoverySidecar};
         // Prepare a temp store and write metadata for a canonical block.
         let temp = tempfile::tempdir().unwrap();
         let lane_config = LaneConfig::default();
-        let block_store_path = Kura::canonical_storage_paths(temp.path()).0;
+        let block_store_path = Kura::canonical_storage_path(temp.path());
         let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
                 init_mode: iroha_config::kura::InitMode::Strict,
@@ -502,11 +525,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
-                merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: FsyncMode::Batched,
                 fsync_interval: FSYNC_INTERVAL,
-                lane_history_retention:
-                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 native_context_archive_max_bytes:
                     iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
                 block_hash_history_bytes:
@@ -516,7 +536,6 @@ mod tests {
                 membership_storage:
                     iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
                 fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             &lane_config,
         )

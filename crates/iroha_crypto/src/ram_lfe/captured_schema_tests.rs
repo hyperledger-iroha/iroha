@@ -17,8 +17,10 @@ fn captured_codec_schema_identities() {
     crate::captured_schema_tests::assert_bidirectional::<super::HiddenRamFheInstruction>(
         "iroha_crypto::ram_lfe::HiddenRamFheInstruction",
     );
-    crate::captured_schema_tests::assert_bidirectional::<super::HiddenRamFheProgram>(
-        "iroha_crypto::ram_lfe::HiddenRamFheProgram",
+    // Private owners expose only their bounded explicit decoder, not the generic
+    // archive reader whose alignment scratch is not a clearing secret owner.
+    crate::captured_schema_tests::assert_serialize::<super::HiddenRamFheProgram>(
+        "iroha_crypto::ram_lfe::HiddenRamFheProgramV1",
     );
     crate::captured_schema_tests::assert_bidirectional::<super::BfvProgrammedPublicParameters>(
         "iroha_crypto::ram_lfe::BfvProgrammedPublicParameters",

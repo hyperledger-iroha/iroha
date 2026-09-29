@@ -170,7 +170,7 @@ fn applied_genesis_without_its_durable_frame_cannot_admit() {
     // authenticated (the signed genesis is the trust root of the admission).
     state
         .kura()
-        .force_hash_only_block_for_testing(std::num::NonZeroUsize::MIN)
+        .corrupt_canonical_body_for_testing(std::num::NonZeroUsize::MIN)
         .unwrap();
     assert!(native::read_finalized_provider_admission_v1(&state.view(), provider, NOW).is_err());
 }

@@ -5,15 +5,49 @@
 //! - Execution falls back to the scalar path and still matches known vectors
 //!
 //! Skips on non-macOS or when the `metal` feature is not enabled.
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn isolated(name: &str) -> bool {
+    const CHILD: &str = "IVM_METAL_POLICY_CONTROL";
+    let (_, module) = module_path!()
+        .split_once("::")
+        .expect("Metal policy controls are registered in a grouped test module");
+    let selector = format!("{module}::{name}");
+    if std::env::var(CHILD).as_deref() == Ok(selector.as_str()) {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", selector.as_str(), "--nocapture"])
+        .env(CHILD, &selector)
+        .output()
+        .expect("isolated Metal policy control");
+    assert!(
+        output.status.success(),
+        "isolated Metal control failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| { line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;") }),
+        "control must execute exactly once: {stdout}"
+    );
+    true
+}
 #[cfg(target_os = "macos")]
 #[test]
 fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
+    #[cfg(feature = "metal")]
+    if isolated("metal_backend_disables_on_forced_selftest_failure_and_parity_holds") {
+        return;
+    }
     // If the metal feature is not enabled or no device, skip.
     if !cfg!(feature = "metal") {
         eprintln!("metal feature not enabled; skipping test");
         return;
     }
-    // Safety: Ensure we start with a fresh state so init path runs.
+    // This child starts with no qualified records; quarantine remains process-long.
     ivm::release_metal_state();
     // Force the self-test to fail
     #[cfg_attr(not(feature = "metal"), allow(unused_unsafe))]
@@ -24,6 +58,12 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
     }
     // Querying availability triggers the backend self-test; tiny vectors select CPU.
     let was_available = ivm::metal_available();
+    // Discovery bounds ordinary warm-up time; explicitly visit every inventory
+    // slot while the forced failure remains active, without clearing health.
+    for _ in 0..ivm::acceleration_config().resource_limits.devices {
+        ivm::release_metal_state();
+        assert!(!ivm::metal_available());
+    }
     // After forced failure, it must be false (disabled)
     assert!(
         !was_available,
@@ -100,10 +140,18 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         std::env::remove_var("IVM_DISABLE_METAL");
     }
     ivm::reset_metal_backend_for_tests();
+    assert!(
+        !ivm::metal_available(),
+        "policy reset cannot revive physical quarantine"
+    );
+    assert!(ivm::metal_disabled());
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[test]
 fn metal_backend_respects_config_disable_and_falls_back() {
+    if isolated("metal_backend_respects_config_disable_and_falls_back") {
+        return;
+    }
     ivm::reset_metal_backend_for_tests();
     if !ivm::metal_available() {
         eprintln!("No Metal GPU available; skipping test");
@@ -151,4 +199,28 @@ fn metal_backend_respects_config_disable_and_falls_back() {
         prefer_cpu_sha2_max_leaves_x86: None,
     });
     ivm::reset_metal_backend_for_tests();
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+#[test]
+fn metal_zero_device_cap_prevents_discovery_and_dispatch() {
+    if isolated("metal_zero_device_cap_prevents_discovery_and_dispatch") {
+        return;
+    }
+    ivm::set_acceleration_config(ivm::AccelerationConfig {
+        max_gpus: Some(0),
+        ..Default::default()
+    });
+    let before = ivm::MetalKernel::ALL.map(ivm::metal_completed_dispatches);
+    assert!(!ivm::metal_available());
+    assert!(ivm::metal_disabled());
+    ivm::set_acceleration_config(ivm::AccelerationConfig {
+        max_gpus: Some(0),
+        ..Default::default()
+    });
+    assert_eq!(ivm::vadd32([1, 2, 3, 4], [4, 3, 2, 1]), [5, 5, 5, 5]);
+    assert_eq!(
+        ivm::MetalKernel::ALL.map(ivm::metal_completed_dispatches),
+        before
+    );
 }

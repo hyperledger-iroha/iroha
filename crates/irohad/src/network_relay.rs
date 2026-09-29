@@ -124,7 +124,7 @@ impl Shared {
     async fn dispatch(
         &self,
         peer: Peer,
-        authenticated_via: PeerId,
+        _authenticated_via: PeerId,
         payload: NetworkMessage,
         retention: PeerMessageRetentionGuard,
     ) {
@@ -155,17 +155,6 @@ impl Shared {
             }
             TimePong(pong) => {
                 iroha_core::time::handle_message(peer, TimePong(pong), &self.network).await;
-            }
-            // TODO(WP8d): the v2 consensus variants are deleted with the v2 network messages.
-            SumeragiBlock(_)
-            | LaneRelay(_)
-            | MergeCommitteeSignature(_)
-            | LaneDrainVote(_)
-            | CertifiedMergeSidecar(_)
-            | NativeAmx(_)
-            | QueuePlanAdmissionCertificate(_)
-            | QueuePlanAdmissionPublication(_) => {
-                iroha_logger::debug!(%peer, via = %authenticated_via, "dropping a v2 consensus message");
             }
             // The consensus driver's own route carries Sumeragi frames.
             Sumeragi(_) => {}

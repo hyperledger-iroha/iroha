@@ -56,3 +56,5 @@ mod kaigi_events_roundtrip;
 mod mintable_json;
 #[path = "../model_derive_repro.rs"]
 mod model_derive_repro;
+#[path = "../native_evidence_codec.rs"]
+mod native_evidence_codec;

@@ -26,7 +26,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::AccountId,
     asset::prelude::AssetDefinitionId,
-    block::BlockHeader,
+    block::{BlockHeader, consensus_v2::GenesisActiveNexusLaneRecord},
     compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputeGovernanceError, ComputePriceAmplifiers,
         ComputePriceDeltaBounds, ComputePriceRiskClass, ComputePriceWeights, ComputeResourceBudget,
@@ -87,7 +87,10 @@ use crate::{
     parameters::{defaults, user, user::ParseError},
 };
 pub use iroha_data_model::nexus::DaManifestPolicy;
-use norito::{codec::Encode, streaming::EntropyMode};
+use norito::{
+    codec::{Decode, Encode},
+    streaming::EntropyMode,
+};
 pub use sccp::{
     SCCP_MAX_SECRET_HEADER_NAME_BYTES, SCCP_RESERVED_SECRET_HEADER_NAMES, SccpAttestor,
     SccpEndpointError, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode,
@@ -100,7 +103,7 @@ pub use sorafs_reputation::{
 };
 use thiserror::Error;
 use url::Url;
-pub use user::{DevTelemetry, Logger, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
+pub use user::{DevTelemetry, Logger, SnapshotResourcePolicy};
 // Snapshot is the same validated representation at both configuration layers;
 // its explicit max_read_buffer_bytes reaches startup without another default.
 pub use user::Snapshot;
@@ -2785,8 +2788,6 @@ pub struct Queue {
     pub expired_cull_interval: Duration,
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub expired_cull_batch: NonZeroUsize,
-    /// Maximum queue-plan journal size before atomic compaction is considered.
-    pub plan_journal_max_bytes: u64,
 }
 /// Nexus staking configuration (public lanes).
 #[derive(Debug, Clone)]
@@ -3112,33 +3113,6 @@ impl_default!(NexusAtomicPrivateSettlement => {
                 defaults::nexus::atomic_private_settlement::PERMITTED_POLICY_VERSIONS.into(),
         }
 });
-/// Lane-relay emergency override configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct LaneRelayEmergency {
-    /// Whether emergency validator overrides are enabled.
-    pub enabled: bool,
-    /// Minimum multisig threshold required for override transactions.
-    pub multisig_threshold: NonZeroU16,
-    /// Minimum multisig member count required for override transactions.
-    pub multisig_members: NonZeroU16,
-    /// Maximum number of blocks an emergency override may remain active.
-    pub max_ttl_blocks: NonZeroU32,
-}
-impl_default!(LaneRelayEmergency => {
-        Self {
-            enabled: defaults::nexus::lane_relay_emergency::ENABLED,
-            multisig_threshold: NonZeroU16::new(
-                defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
-            )
-            .expect("default threshold must be non-zero"),
-            multisig_members: NonZeroU16::new(
-                defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
-            )
-            .expect("default member count must be non-zero"),
-            max_ttl_blocks: NonZeroU32::new(defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS)
-                .expect("default emergency TTL must be non-zero"),
-        }
-});
 /// Storage component participating in Nexus disk budgeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NexusStorageBudgetComponent {
@@ -3364,8 +3338,6 @@ pub struct Nexus {
     pub axt: NexusAxt,
     /// Governed atomic private cross-dataspace settlement policy.
     pub atomic_private_settlement: NexusAtomicPrivateSettlement,
-    /// Lane-relay emergency override configuration.
-    pub lane_relay_emergency: LaneRelayEmergency,
     /// Validated lane catalog.
     pub lane_catalog: LaneCatalog,
     /// Immutable lane catalog loaded from configuration before runtime lifecycle replay.
@@ -3413,7 +3385,6 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
             atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
-            lane_relay_emergency: LaneRelayEmergency::default(),
             lane_catalog: LaneCatalog::default(),
             configured_lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
@@ -3504,7 +3475,6 @@ struct NexusConsensusPolicyPreimageV1 {
     endorsement: NexusConsensusEndorsementV1,
     axt: NexusConsensusAxtV1,
     atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1,
-    lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1,
     governance: NexusConsensusGovernanceV1,
     compliance_enabled: bool,
     compliance_audit_only: bool,
@@ -3607,13 +3577,6 @@ struct NexusConsensusAtomicPrivateSettlementV1 {
     sidecar_max_total_bytes: u64,
     default_min_auditor_approvals: u16,
     permitted_policy_versions: Vec<u16>,
-}
-#[derive(Encode)]
-struct NexusConsensusLaneRelayEmergencyV1 {
-    enabled: bool,
-    multisig_threshold: u16,
-    multisig_members: u16,
-    max_ttl_blocks: u32,
 }
 #[derive(Encode)]
 struct NexusConsensusGovernanceV1 {
@@ -3948,12 +3911,6 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
                 .iter()
                 .copied()
                 .collect(),
-        },
-        lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1 {
-            enabled: nexus.lane_relay_emergency.enabled,
-            multisig_threshold: nexus.lane_relay_emergency.multisig_threshold.get(),
-            multisig_members: nexus.lane_relay_emergency.multisig_members.get(),
-            max_ttl_blocks: nexus.lane_relay_emergency.max_ttl_blocks.get(),
         },
         governance: NexusConsensusGovernanceV1 {
             default_module: nexus.governance.default_module.clone(),
@@ -5498,6 +5455,492 @@ impl_default!(Pipeline => {
             amx_per_syscall_ns: defaults::pipeline::AMX_PER_SYSCALL_NS,
         }
 });
+/// One retained lane-incarnation lineage binding committed into a Sumeragi v2 height context.
+///
+/// The complete projection contains every active or retired lane identifier ever
+/// observed by the state. Retired entries remain consensus-relevant because a
+/// later recreation derives its next incarnation from this retained generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
+pub struct SumeragiV2LaneLifecycleEntry {
+    /// Canonical lane identifier.
+    pub lane_id: LaneId,
+    /// Monotonic incarnation generation retained for this lane identifier.
+    pub generation: u64,
+    /// Non-zero commitment for the latest active or retired incarnation.
+    pub incarnation: Hash,
+    /// Global carrier height that activated this incarnation.
+    pub activation_height: u64,
+}
+/// Compute the canonical Sumeragi v2 commitment to the Nexus and AMX inputs
+/// that can change proposal assembly or deterministic validation.
+///
+/// The commitment deliberately excludes local storage paths, worker pool
+/// sizing, caches, and telemetry. It includes the validated lane geometry,
+/// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
+/// deterministic AMX budgets, and staged active public-lane validator records.
+/// It also commits the complete retained lane-incarnation lineage, including
+/// retired lane identifiers, generations, commitments, and activation heights,
+/// so peers with divergent lifecycle histories cannot enter the same height or
+/// later derive the same recreated lane differently. Active validator records
+/// and retained lineage entries are sorted canonically before encoding.
+#[must_use]
+pub fn sumeragi_v2_nexus_amx_context_hash(
+    nexus: &Nexus,
+    pipeline: &Pipeline,
+    active_validators: &[GenesisActiveNexusLaneRecord],
+    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
+) -> Hash {
+    sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+        nexus,
+        pipeline,
+        active_validators,
+        retained_lane_lineage,
+        None,
+    )
+}
+/// Commit effective Nexus/AMX inputs together with an authenticated runtime catalog policy.
+///
+/// The root commits the complete ledger-owned dataspace and manifest additions. Callers must
+/// derive it from validated committed state, never from a local configuration overlay. Before
+/// any catalog-policy transaction exists, `None` retains the original projection byte for byte.
+#[must_use]
+pub fn sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+    nexus: &Nexus,
+    pipeline: &Pipeline,
+    active_validators: &[GenesisActiveNexusLaneRecord],
+    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
+    committed_catalog_policy_root: Option<Hash>,
+) -> Hash {
+    const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
+    fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
+        let bytes = value.encode();
+        let tag_len = u32::try_from(tag.len()).expect("static projection tag fits in u32");
+        let bytes_len = u64::try_from(bytes.len()).expect("projection field fits in u64");
+        out.extend_from_slice(&tag_len.to_le_bytes());
+        out.extend_from_slice(tag.as_bytes());
+        out.extend_from_slice(&bytes_len.to_le_bytes());
+        out.extend_from_slice(&bytes);
+    }
+    let mut preimage = b"sumeragi-v2:nexus-amx-context\0v2".to_vec();
+    append(
+        &mut preimage,
+        "nexus.lane_catalog.lane_count",
+        &nexus.lane_catalog.lane_count().get(),
+    );
+    let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
+    append(&mut preimage, "nexus.lane_catalog.lanes", &consensus_lanes);
+    let mut retained_lane_lineage = retained_lane_lineage.to_vec();
+    retained_lane_lineage.sort_unstable_by(|left, right| {
+        left.lane_id
+            .cmp(&right.lane_id)
+            .then_with(|| left.generation.cmp(&right.generation))
+            .then_with(|| left.incarnation.cmp(&right.incarnation))
+            .then_with(|| left.activation_height.cmp(&right.activation_height))
+    });
+    append(
+        &mut preimage,
+        "nexus.lane_lifecycle.count",
+        &u64::try_from(retained_lane_lineage.len())
+            .expect("retained lane lineage length fits in u64"),
+    );
+    for entry in retained_lane_lineage {
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.lane_id",
+            &entry.lane_id,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.generation",
+            &entry.generation,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.incarnation",
+            &entry.incarnation,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.activation_height",
+            &entry.activation_height,
+        );
+    }
+    let mut dataspaces = nexus.dataspace_catalog.entries().iter().collect::<Vec<_>>();
+    dataspaces.sort_unstable_by_key(|entry| entry.id);
+    let dataspace_count = u64::try_from(dataspaces.len()).expect("dataspace count fits in u64");
+    append(&mut preimage, DATASPACE_COUNT_TAG, &dataspace_count);
+    for entry in dataspaces {
+        append(&mut preimage, "nexus.dataspace.id", &entry.id);
+        append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
+        append(
+            &mut preimage,
+            "nexus.dataspace.fault_tolerance",
+            &entry.fault_tolerance,
+        );
+    }
+    append(
+        &mut preimage,
+        "nexus.routing.default_lane",
+        &nexus.routing_policy.default_lane,
+    );
+    append(
+        &mut preimage,
+        "nexus.routing.default_dataspace",
+        &nexus.routing_policy.default_dataspace,
+    );
+    append(
+        &mut preimage,
+        "nexus.routing.rule_count",
+        &u64::try_from(nexus.routing_policy.rules.len()).expect("routing rule count fits in u64"),
+    );
+    for rule in &nexus.routing_policy.rules {
+        append(&mut preimage, "nexus.routing.rule.lane", &rule.lane);
+        append(
+            &mut preimage,
+            "nexus.routing.rule.dataspace",
+            &rule.dataspace,
+        );
+        append(
+            &mut preimage,
+            "nexus.routing.rule.account",
+            &rule.matcher.account,
+        );
+        append(
+            &mut preimage,
+            "nexus.routing.rule.instruction",
+            &rule.matcher.instruction,
+        );
+    }
+    let public_validator_mode = match nexus.staking.public_validator_mode {
+        LaneValidatorMode::StakeElected => 0_u8,
+        LaneValidatorMode::AdminManaged => 1,
+    };
+    let restricted_validator_mode = match nexus.staking.restricted_validator_mode {
+        LaneValidatorMode::StakeElected => 0_u8,
+        LaneValidatorMode::AdminManaged => 1,
+    };
+    append(
+        &mut preimage,
+        "nexus.staking.public_validator_mode",
+        &public_validator_mode,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.restricted_validator_mode",
+        &restricted_validator_mode,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.min_validator_stake",
+        &nexus.staking.min_validator_stake,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.max_validators",
+        &nexus.staking.max_validators.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.max_stake_shares_per_validator",
+        &nexus.staking.max_stake_shares_per_validator.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.max_pending_unbonds_per_share",
+        &nexus.staking.max_pending_unbonds_per_share.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.unbonding_delay_ns",
+        &nexus.staking.unbonding_delay.as_nanos(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.max_slash_bps",
+        &nexus.staking.max_slash_bps,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.reward_dust_threshold",
+        &nexus.staking.reward_dust_threshold,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.stake_asset_id",
+        &nexus.staking.stake_asset_id,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.stake_escrow_account_id",
+        &nexus.staking.stake_escrow_account_id,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.slash_sink_account_id",
+        &nexus.staking.slash_sink_account_id,
+    );
+    append(&mut preimage, "nexus.fees.asset", &nexus.fees.fee_asset_id);
+    append(
+        &mut preimage,
+        "nexus.fees.sink",
+        &nexus.fees.fee_sink_account_id,
+    );
+    append(&mut preimage, "nexus.fees.base", &nexus.fees.base_fee);
+    append(
+        &mut preimage,
+        "nexus.fees.per_byte",
+        &nexus.fees.per_byte_fee,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.per_instruction",
+        &nexus.fees.per_instruction_fee,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.per_gas_unit",
+        &nexus.fees.per_gas_unit_fee,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.sponsor_vault_custody_account_id",
+        &nexus.fees.sponsor_vault_custody_account_id,
+    );
+    let settlement_mode = match nexus.fees.settlement_mode {
+        NexusFeeSettlementMode::Direct => 0_u8,
+        NexusFeeSettlementMode::LaneRelayBurn => 1,
+    };
+    append(
+        &mut preimage,
+        "nexus.fees.settlement_mode",
+        &settlement_mode,
+    );
+    let successful_claim_fee_exempt_authorities = nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(|authority| {
+            authority
+                .canonical_i105()
+                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+        })
+        .collect::<Vec<_>>();
+    append(
+        &mut preimage,
+        "nexus.fees.successful_claim_exempt_authorities",
+        &successful_claim_fee_exempt_authorities,
+    );
+    append(
+        &mut preimage,
+        "nexus.dataspace_fee_sponsor_program_ids",
+        &nexus.dataspace_fee_sponsor_program_ids,
+    );
+    append(
+        &mut preimage,
+        "nexus.axt.slot_length_ms",
+        &nexus.axt.slot_length_ms.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.axt.max_clock_skew_ms",
+        &nexus.axt.max_clock_skew_ms,
+    );
+    append(
+        &mut preimage,
+        "nexus.axt.proof_cache_ttl_slots",
+        &nexus.axt.proof_cache_ttl_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.axt.replay_retention_slots",
+        &nexus.axt.replay_retention_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.fusion.floor_teu",
+        &nexus.fusion.floor_teu,
+    );
+    append(
+        &mut preimage,
+        "nexus.fusion.exit_teu",
+        &nexus.fusion.exit_teu,
+    );
+    append(
+        &mut preimage,
+        "nexus.fusion.observation_slots",
+        &nexus.fusion.observation_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.fusion.max_window_slots",
+        &nexus.fusion.max_window_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.enabled",
+        &nexus.autoscale.enabled,
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.min_lane_id",
+        &nexus.autoscale.min_lane_id.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.max_lane_id_exclusive",
+        &nexus.autoscale.max_lane_id_exclusive.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.target_block_ms",
+        &nexus.autoscale.target_block_ms.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_out_latency_ratio_bits",
+        &nexus.autoscale.scale_out_latency_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_in_latency_ratio_bits",
+        &nexus.autoscale.scale_in_latency_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_out_utilization_ratio_bits",
+        &nexus.autoscale.scale_out_utilization_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_in_utilization_ratio_bits",
+        &nexus.autoscale.scale_in_utilization_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_out_window_blocks",
+        &nexus.autoscale.scale_out_window_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_in_window_blocks",
+        &nexus.autoscale.scale_in_window_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.cooldown_blocks",
+        &nexus.autoscale.cooldown_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.per_lane_target_tps",
+        &nexus.autoscale.per_lane_target_tps.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.last_transition_height",
+        &nexus.autoscale.last_transition_height,
+    );
+    append(
+        &mut preimage,
+        "nexus.commit.window_slots",
+        &nexus.commit.window_slots.get(),
+    );
+    let da = &nexus.da;
+    macro_rules! append_da_fields {
+        ($($tag:literal => $value:expr),+ $(,)?) => {
+            $(
+                append(
+                    &mut preimage,
+                    $tag,
+                    &$value,
+                );
+            )+
+        };
+    }
+    append_da_fields! {
+        "nexus.da.q_in_slot_total" => da.q_in_slot_total.get(),
+        "nexus.da.q_in_slot_per_ds_min" => da.q_in_slot_per_ds_min.get(),
+        "nexus.da.sample_size_base" => da.sample_size_base.get(),
+        "nexus.da.sample_size_max" => da.sample_size_max.get(),
+        "nexus.da.threshold_base" => da.threshold_base.get(),
+        "nexus.da.per_attester_shards" => da.per_attester_shards.get(),
+        "nexus.da.ingest_quota_window_blocks" => da.ingest_quota_window_blocks.get(),
+        "nexus.da.ingest_quota_max_count_per_account" =>
+            da.ingest_quota_max_count_per_account.get(),
+        "nexus.da.ingest_quota_max_bytes_per_account" =>
+            da.ingest_quota_max_bytes_per_account.get(),
+        "nexus.da.audit.sample_size" => da.audit.sample_size.get(),
+        "nexus.da.audit.window_count" => da.audit.window_count.get(),
+    }
+    append(
+        &mut preimage,
+        "nexus.da.audit.interval_ns",
+        &nexus.da.audit.interval.as_nanos(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.recovery.request_timeout_ns",
+        &nexus.da.recovery.request_timeout.as_nanos(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.max_hits_per_window",
+        &nexus.da.rotation.max_hits_per_window.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.window_slots",
+        &nexus.da.rotation.window_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.seed_tag",
+        &nexus.da.rotation.seed_tag,
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.latency_decay_bits",
+        &nexus.da.rotation.latency_decay.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_per_dataspace_budget_ms",
+        &pipeline.amx_per_dataspace_budget_ms,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_group_budget_ms",
+        &pipeline.amx_group_budget_ms,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_per_instruction_ns",
+        &pipeline.amx_per_instruction_ns,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_per_memory_access_ns",
+        &pipeline.amx_per_memory_access_ns,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_per_syscall_ns",
+        &pipeline.amx_per_syscall_ns,
+    );
+    let mut active_validators = active_validators.to_vec();
+    active_validators.sort_by(|(left, _), (right, _)| left.cmp(right));
+    append(
+        &mut preimage,
+        "staged.active_public_lane_validators",
+        &active_validators,
+    );
+    if let Some(root) = committed_catalog_policy_root {
+        append(&mut preimage, "nexus.committed_catalog_policy.v1", &root);
+    }
+    Hash::new(preimage)
+}
 /// Tiered state backend settings controlling hot/cold storage behaviour.
 #[derive(Debug, Clone)]
 pub struct TieredState {
@@ -6023,7 +6466,7 @@ impl_default!(Queue => {
             max_retained_bytes: defaults::queue::MAX_RETAINED_BYTES,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
-            plan_journal_max_bytes: defaults::queue::PLAN_JOURNAL_MAX_BYTES,
+
         }
 });
 /// Node role in consensus participation.
@@ -6053,7 +6496,7 @@ impl LaneValidatorMode {
     }
 }
 /// Consensus key-rotation and algorithm policy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SumeragiKeys {
     /// Minimum lead time between publishing and activating a consensus key.
     pub activation_lead_blocks: u64,
@@ -6222,13 +6665,11 @@ mod sumeragi_core_config_tests {
         assert!(sumeragi.retired_keys.is_empty());
     }
 }
-/// First-release Sumeragi v2 node configuration.
+/// First-release Sumeragi node configuration.
 ///
 /// Consensus mode, block cadence, DA layout, leader seed, roster, and quorum
 /// rules are selected by signed genesis/height context rather than mutable
 /// local configuration.
-// TODO(WP9): delete the v2 fields (`global_beacon_*`, `block`, `queues`, `limits`, `storage`,
-// `keys`) with the v2 runtime; `role`, `local`, the record paths and `retired_keys` remain.
 #[derive(Debug, Clone)]
 pub struct Sumeragi {
     /// Node-local participation role.

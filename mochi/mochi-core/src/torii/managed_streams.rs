@@ -357,7 +357,7 @@ pub enum StatusStreamEvent {
         /// Shared telemetry snapshot.
         snapshot: Arc<ToriiStatusSnapshot>,
         /// Optional Sumeragi status payload.
-        sumeragi: Option<Arc<SumeragiV2Status>>,
+        sumeragi: Option<Arc<SumeragiStatus>>,
         /// Optional non-authoritative Sumeragi diagnostics payload.
         sumeragi_diagnostics: Option<Arc<SumeragiDiagnosticsStatus>>,
         /// Optional metrics payload parsed from `/metrics`. When metrics polling is throttled, this

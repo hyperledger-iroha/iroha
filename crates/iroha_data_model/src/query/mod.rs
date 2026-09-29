@@ -2249,14 +2249,15 @@ mod model {
 impl CommittedTransaction {
     /// Selective exact Network input/output inclusion. The caller MUST first
     /// authenticate this header, complete `ExecutionCommitment`, native `NetworkId`
-    /// and four-validator context from its independently pinned finality root.
+    /// and exact authenticated epoch committee from its independently pinned finality root.
+    /// Passing a raw commitment only checks inclusion and never creates a finality capability.
     /// This method does not authorize disclosing the selected record.
     #[must_use]
     pub fn verify_selective_in_authenticated_execution(
         &self,
         expected_network: &crate::NetworkId,
         header: &crate::block::BlockHeader,
-        commitment: &crate::block::consensus_v2::ExecutionCommitment,
+        commitment: &crate::sumeragi_finality::ExecutionCommitment,
     ) -> bool {
         if commitment.validate().is_err()
             || self.block_hash != header.hash()
@@ -2296,7 +2297,7 @@ impl CommittedTransaction {
     pub fn verify_inclusion_in_authenticated_execution(
         &self,
         block: &SignedBlock,
-        commitment: &crate::block::consensus_v2::ExecutionCommitment,
+        commitment: &crate::sumeragi_finality::ExecutionCommitment,
     ) -> bool {
         if commitment.transaction_input_commitment != block.network_input_merkle_commitment()
             || commitment.transaction_output_commitment != block.output_merkle_commitment()

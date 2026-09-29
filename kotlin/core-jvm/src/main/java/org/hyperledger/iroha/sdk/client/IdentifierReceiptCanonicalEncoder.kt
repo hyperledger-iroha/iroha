@@ -325,8 +325,8 @@ object IdentifierReceiptCanonicalEncoder {
         requireExactNonBlankString(raw, "payload.execution.backend")
     ) {
         "hkdf-sha3-512-prf-v1" -> 0
-        "bfv-affine-sha3-256-v1" -> 1
-        "bfv-programmed-sha3-256-v1" -> 2
+        "bfv-affine-v1" -> 1
+        "bfv-programmed-v1" -> 2
         else -> throw IllegalArgumentException("unsupported RAM-LFE backend: $raw")
     }
 
@@ -340,8 +340,8 @@ object IdentifierReceiptCanonicalEncoder {
 
     private fun backendName(tag: Int): String = when (tag) {
         0 -> "hkdf-sha3-512-prf-v1"
-        1 -> "bfv-affine-sha3-256-v1"
-        2 -> "bfv-programmed-sha3-256-v1"
+        1 -> "bfv-affine-v1"
+        2 -> "bfv-programmed-v1"
         else -> throw IllegalArgumentException("unsupported RAM-LFE backend tag: $tag")
     }
 

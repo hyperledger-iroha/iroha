@@ -243,7 +243,7 @@ pub fn fake_attestation(
     statement: &[u8],
 ) -> crate::message::CommitAttestation {
     let mut input = TAG_FAKE_ATTEST.to_vec();
-    input.extend_from_slice(&preimage::kb(key));
+    preimage::put_kb(&mut input, key);
     input.extend_from_slice(&height.to_be_bytes());
     input.extend_from_slice(statement);
     crate::message::CommitAttestation {
@@ -406,7 +406,8 @@ const LIMBS: usize = SIGNATURE_LEN / 32;
 /// `SHA-256("sumeragi/fake-sig" ‖ i ‖ kb(key) ‖ msg)`.
 pub fn fake_sig(key: &PublicKey, msg: &[u8]) -> Signature {
     let mut out = [0u8; SIGNATURE_LEN];
-    let kb = preimage::kb(key);
+    let mut kb = Vec::new();
+    preimage::put_kb(&mut kb, key);
     for (limb, chunk) in out.chunks_exact_mut(32).enumerate() {
         let mut input = Vec::with_capacity(TAG_FAKE_SIG.len() + 1 + kb.len() + msg.len());
         input.extend_from_slice(TAG_FAKE_SIG);

@@ -137,9 +137,71 @@ The exact preimages, postimages, patches and review are retained at
 `dist/zk-remediation/2026-09-29/x509-rfc-reviewed-amendment`.
 Only those two files were applied to the frozen candidate. Its successor census
 is `b66c0bb30a4f229a7f746fc963ae89b9ac367aa9a9137a726d0a4d6a06846c4b`.
-Scoped formatting passes; native reruns of the repaired controls remain pending.
-The prepared ordinary opt-level-three build will retain an immutable executable,
-rerun the exact controls and full-column source preflights, then attempt the
-complete maximum credential proof. No successful complete proof, 300-second
-latency result, 12-GiB RSS result or activation claim follows from these debug
-results.
+The ordinary locked/offline opt-level-three baseline build passes in 7,574.44
+seconds with no source drift. Its 528,310,336-byte immutable executable has
+SHA-256 `de561a88ff13314c1cd52c77ac80c1fddb544a6e0949165e0dd3367fa677a4dc`.
+All eight repaired RFC/profile/assembly controls pass with no failures or ignored
+tests in 4.949 seconds; external process RSS is 1,426,472,960 bytes. This clears
+all four prior RFC test failures natively, preserves the engine pin and again
+measures 542,564,850 bytes for maximum whole-assembly payload. These controls do
+not construct a complete proof. The baseline complete-proof plan was superseded
+before launch by the storage change below; that unstarted proof is neither a
+pass nor a failure. The original plan, redirect, binary and control receipts
+remain under `dist/zk-x509-prover-evidence/frozen-calendar-opt3-20260929T035530Z`.
+
+## Fixed-family source storage
+
+The RFC producer now stores row prefixes selected solely by the verifier-fixed
+family: 66 cells normally, 123 for SourceNode, 102 for Grammar, and all 285 for
+Calendar and Decimal. Construction rejects every nonzero omitted field. Replay
+reconstructs the exact full row before restoring carried selectors and applying
+the existing normalization. No AIR, transcript, profile digest or proof limit
+changes. Old and replacement capacities, including unused capacity and the
+surviving public schedule, are charged during their overlap against the existing
+1-GiB source scratch allowance. Both sides retain clearing owners on success,
+errors and unwinds; construction-only private owners are released first.
+
+Eight isolated owner/eraser controls pass. A separate optimized actual-source
+RFC harness, with debug assertions enabled, passes two maximum-fixture
+adversarial controls, four Fp4 controls, and both complete column preflights.
+The ordinary and maximum cases each replay all 285 base and 280 auxiliary
+columns, populated base AIR rows, boundary constraints and DER/RFC terminals.
+Their times are 111.040 and 113.047 seconds; the combined phase takes 224.097
+seconds and records 482,508,800 bytes of process RSS. No captured source drift
+occurred. The receipt is
+`dist/zk-remediation/2026-09-29/x509-family-storage/release-preflight/complete-receipt.json`.
+
+A separate instrumented run of the unchanged maximum-fixture source preserves
+all assertions and records 51.819 seconds for base columns and 58.037 seconds
+for auxiliary columns, with 111.681 seconds for the fixture. Its instrumentation
+and receipt are retained under `x509-family-storage/column-cost`. These timings
+identify repeated row reconstruction as material work before proof transforms;
+they are not a complete-prover latency measurement.
+
+The actual maximum RFC heap retains 80,058,504 bytes, down from 421,806,624;
+the ordinary heap retains 63,097,464 bytes. Subtracting that reduction from the
+earlier whole assembly gives a heap-only projection of 200,816,730 bytes. The
+new owner also adds a native `usize` to each of 18 inline family headers: 144
+bytes on this host. Including those headers predicts 200,816,874 bytes, leaving
+396,157,270 bytes inside the existing allowance. This would admit the existing
+four-column Metal staging charge of 336,675,324 bytes if the integrated
+measurement and backend selection agree. These are arithmetic predictions,
+not a measured new whole assembly or observed complete-prover backend.
+
+The exact three-file amendment, preimages, postimages and independent semantic
+review are retained under `dist/zk-remediation/2026-09-29/x509-family-storage`.
+Following the eight native baseline controls, exactly those three files were
+applied to the frozen candidate. Its 20,878-entry source census is
+`2a2da48ecdce3f0ec0e7009a63e577f347104bfd28d83faaabbe7ccaa5f4cf11`.
+Scoped formatting and all nine source-geometry controls pass after capture.
+The ordinary opt-level-three build started at 06:27:06 UTC on September 29,
+after FASTPQ released the shared target with its immutable executable captured.
+Its full source guard passed before Cargo began. The build and prepared 72
+native controls plus complete-proof attempt are retained under
+`dist/zk-x509-prover-evidence/frozen-family-storage-opt3-20260929`.
+The build uses two Cargo jobs for compilation throughput, with unchanged
+optimization and proof limits; this is not proof resource evidence.
+Normal Core compilation, measured whole-assembly admission and complete proof
+construction for that amendment remain pending. No successful complete proof,
+300-second latency result, 12-GiB RSS result or activation claim follows from
+the isolated checks.

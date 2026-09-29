@@ -8,7 +8,8 @@
 //! prepaid initial image captures the bytes after program loading or a
 //! template/block reset, before this VM's next interpreter step. It is not a
 //! relation between the earlier loader/reset and that image.
-//! Rows may contain private bytes. Drop clears retained rows only; caller copies
+//! Rows may contain private bytes. Final-owner drop volatile-erases retained byte
+//! values and the initialized image; caller copies
 //! and stack temporaries are not a production private-witness custody boundary.
 
 use std::sync::Arc;
@@ -21,6 +22,9 @@ use crate::{
     error::ExecutionDeferral,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
 };
+
+mod private_disposal;
+mod private_scrub;
 
 /// Which successful checked memory API produced a byte row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +47,8 @@ pub enum DiagnosticMemoryAccessKind {
     HeapReset,
     /// Output bytes zeroed by a program loader.
     OutputReset,
+    /// Private bytes zeroed by the exclusive owner before a lifecycle transition.
+    PrivateReset,
 }
 
 /// Known privacy classification at the access boundary.
@@ -111,26 +117,6 @@ struct RecorderInner {
     step_ordinal: Option<u64>,
     next_access_ordinal: u64,
     default_tag: DiagnosticMemoryPrivacyTag,
-}
-
-impl Drop for RecorderInner {
-    fn drop(&mut self) {
-        if let Some(image) = &mut self.initial_image {
-            image.as_mut_slice().fill(0);
-        }
-        for row in self.rows.as_mut_slice() {
-            *row = DiagnosticMemoryAccess {
-                step_ordinal: None,
-                access_ordinal: 0,
-                byte_offset: 0,
-                address: 0,
-                before: 0,
-                after: 0,
-                kind: DiagnosticMemoryAccessKind::Read,
-                privacy_tag: DiagnosticMemoryPrivacyTag::Unknown,
-            };
-        }
-    }
 }
 
 /// Shared local handle retained by an attached `Memory` during one diagnostic run.
@@ -716,7 +702,12 @@ mod tests {
             ))
         );
         assert_eq!(output, [0xa5]);
-        assert!(memory.read_set().is_empty());
+        assert!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -753,7 +744,8 @@ mod tests {
         let recorder = DiagnosticMemoryAccessRecorder::try_new(31, &budget).unwrap();
         recorder.begin_run(true).unwrap();
         let mut vm = IVM::new(100);
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         vm.memory
             .install_diagnostic_access_recorder(recorder.shared())
             .unwrap();
@@ -1029,9 +1021,27 @@ mod tests {
             .unwrap();
 
         assert_eq!(decoder::decode(&memory, 0), Ok(word));
-        assert_eq!(memory.read_set().len(), 1);
-        assert_eq!(memory.read_set()[0].addr, 0);
-        assert_eq!(memory.read_set()[0].len, 4);
+        assert_eq!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")
+                .len(),
+            1
+        );
+        assert_eq!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")[0]
+                .addr,
+            0
+        );
+        assert_eq!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")[0]
+                .len,
+            4
+        );
         recorder.with_records(|rows| {
             assert_eq!(rows.len(), 4);
             assert!(rows.iter().enumerate().all(|(offset, row)| {

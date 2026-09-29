@@ -268,7 +268,7 @@ where
     assert_eq!(view.as_bytes(), bytes);
     assert!(norito::decode_canonical::<T>(&frame).is_err());
     assert!(
-        view.decode_exact_with(ncore::decode_field_canonical::<T>)
+        view.decode_exact_with::<T, _, _>(ncore::decode_field_canonical::<T>)
             .is_err()
     );
     let _flags = ncore::DecodeFlagsGuard::enter(flags);

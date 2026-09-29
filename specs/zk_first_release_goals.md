@@ -104,21 +104,46 @@ mismatch. Do not restore those routes to make historical tests pass. The earlier
 retained API/admission controls. Current generic proof identity and relation
 verification still need same-candidate runtime qualification.
 
-RAM-LFE registration, activation, receipt entry and the internal proof helper
-reject unavailable proof mode before decoding or private work. An unrelated
-generic proof can no longer satisfy the helper. Thirteen helper, four identifier
-and five typed-verifier controls pass on the frozen Core candidate.
+The shared integration proof fixtures and record/event/query callers now use the
+public wallet facade to construct actual one-note full-unshield proofs. The
+full-capacity wallet's wrong-role negative uses the retained confidential-transfer
+key and schema. Native corruption, framing, proof-record, event and query
+assertions remain; these migrated sources are formatted but not yet compiled.
+The old successful IvmProved network case now requires exact unavailable-relation
+rejection with unchanged state and independently applied progress. A current
+20,543-file candidate captures these changes without drift. Its normal build fails
+on 23 pre-existing unfinished Sumeragi migration errors; eight native controls
+and six four-validator scenarios remain unexecuted. See the
+[current network record](../docs/history/2026-09-29/zk-current-network-qualification.md).
 
-The next RAM-LFE stage implements one bounded BLAKE3 initializer, fixed-work
+RAM-LFE registration, activation, restoration and receipts now reject both signed
+and proof BFV modes: the exact-lift profile loses its public-key noise modulo 257.
+Public evaluators refuse before private work; 68 normal frozen crypto controls pass.
+An unrelated generic proof cannot satisfy execution. Secure encryption replacement,
+complete relation and current Core/Torii qualification remain open. The execute API's
+false plaintext opening is removed; [boundary evidence](../docs/history/2026-09-29/ram-lfe-production-boundary.md)
+records 63 schema controls and compiled-but-fixture-blocked Kotlin/Java tests.
+
+The retained diagnostic RAM-LFE stage implements one bounded BLAKE3 initializer, fixed-work
 modulo-257 reduction, distinct canonical policy/tape commitments and a mandatory
 `initializer_descriptor_hash`. Tracing observes the sole eleven-operation
 interpreter and owns clearing private cells; it is not a proof. The first normal
-Cargo run passes 49 controls and fails three new trace fixtures before evaluation
-because of invalid BFV fixture secrets. Fixture correction and pinned native
-known answers are in progress. Profile schema identity checks pass. The complete
-BFV semantic circuit, private tape/config ownership and remaining internal BFV
-scratch remain outstanding in the [execution contract](ram_lfe_execution_proof.md)
+Cargo run passed 49 controls and failed three invalid BFV trace fixtures. Its
+corrected normal rerun passes all 52 controls, with an independently reconstructed
+1,024-byte XOF and fixed known answers. A subsequent source stage introduces one
+validated shared clearing tape owner, bounded typed builder and sole private-frame
+decoder, and fixes borrowed frame identities. Its normal native run passes all
+61 controls and both API doctests with no source drift; the complete descriptor
+and full-tape digest match independent known answers. Five configuration caller
+controls also pass after correcting test access and diagnostic expectations.
+The complete BFV semantic circuit and remaining
+internal BFV scratch remain outstanding in the [execution contract](ram_lfe_execution_proof.md)
 and [initializer record](../docs/history/2026-09-29/ram-lfe-bounded-initializer.md).
+The proposed [semantic commitments](ram_lfe_semantic_commitments.md) replace
+costly private wire hashing and separate stable function identity from key rotation.
+The unused pinned Pasta leaf passes [18 ordinary native controls](../docs/history/2026-09-29/ram-lfe-pasta-leaf.md);
+the [unused circuit experiment](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md) passes eight
+isolated controls. Full relation and coherent production migration remain open.
 
 ### ZK04 — FASTPQ
 
@@ -183,6 +208,16 @@ passes the unchanged 300-second/12-GiB limits. Activation remains unavailable;
 independent review and real positive/adversarial proof evidence are required.
 Details: [September 29 X509 record](../docs/history/2026-09-29/zk-x509-rfc-temporal-repair.md).
 
+A subsequent storage correction retains public-family field prefixes
+and reconstructs unchanged full RFC rows, rejecting any omitted nonzero operand.
+Old/new allocation overlap and surviving schedule capacity are checked, and
+replaced/partial private owners clear. Eight exact-source isolated owner controls
+pass. Isolated actual ordinary/maximum fixtures pass all 285 base and 280 auxiliary
+column checks, temporal adversaries and generic field-extension controls without
+source drift. Maximum retained RFC payload falls from 421,806,624 to 80,058,504
+bytes. Normal Core, whole-assembly and complete-proof qualification remain pending
+in the [family-storage record](../docs/history/2026-09-29/zk-x509-family-storage.md).
+
 ### ZK07 — developer workflow
 
 The Rust wallet owns clearing private inputs, selects the correct circuit and
@@ -198,21 +233,49 @@ artifacts/current integrated source remain unqualified.
 RAM-FHE metadata now requires the compiled initializer descriptor. JavaScript,
 Swift, Kotlin and C# use the exact seven-field profile, sole encrypted-envelope
 mode and bounded unsigned dimensions; no retired mode or JSON compatibility
-shim is retained. Kotlin passes 11 normal tests. Native Swift artifact refresh,
-JavaScript provenance rebuild and C# pinned-SDK tests remain in progress.
+shim is retained. Kotlin passes 11 normal tests. Swift's normal five-slice artifact refresh and
+nine profile/endpoint controls pass. C# passes 154 profile/identifier and two
+endpoint controls under its pinned SDK; all 11 profile controls also pass without
+a native-loader override. JavaScript's normal native rebuild and all 42 scoped
+endpoint controls pass with no skips or source drift. Both JavaScript policy-list
+routes now use the bounded lossless integer decoder, preserve raw `u64` values,
+and reject duplicate fields and noncanonical profile numbers. Scoped lint and
+code review pass. An old negative fixture assigned the existing policy ID; it
+now uses a distinct valid ID and asserts that precondition. The original failed
+run and the provenance guard's refusal before rebuilding remain recorded.
 OpenAPI makes the descriptor mandatory; program associated data uses canonical
 Norito independently of ambient flags. Python has no equivalent existing profile
 endpoint, so no coverage is claimed for one.
+The subsequent BFV backend-name hard cut and canonical outer/PRF transcript repair
+pass 65 native controls and two doctests. Renamed tags pass 466 C# and two Python
+controls; Kotlin compiles but missing Sumeragi fixtures prevent its current test
+run. The preserved JavaScript candidate also passes its normal rebuild and 42
+tag controls; Swift's refresh and integrated Torii remain open. See the
+[transcript record](../docs/history/2026-09-29/ram-lfe-canonical-transcripts.md).
+BFV secret keys now own clearing private coefficients and redact diagnostics;
+confidential keysets now have an actual clearing destructor. Selected reachable
+BFV/RAM scratch also clears. Retained runs pass 273 BFV and 86 targeted repair
+controls (overlapping); a key-switch extension passes 49 focused controls.
+Primitive state and diagnostic exports remain outside
+this scoped [owner repair](../docs/history/2026-09-29/zk-key-owner-erasure.md).
 
 Public guidance belongs in `iroha-docs`. The FASTPQ guide and 20 translations
 pass scoped content/i18n checks and its Rust example compiles. Retired IVM help
 snippets must be regenerated through the documentation repository's normal clean,
 pinned-source workflow; manual generated edits or invented provenance are invalid.
 
+### ZK08 — current source contracts
+
+After the merge at `2478995058`, the token utility, two Halo2 source-inventory
+guards and note-STARK constraint guard pass all 13 focused Python checks. The
+separate X509 geometry selection passes nine checks. These validate the retained
+source assertions and byte accounting; they do not replace the pending normal
+native, integrated workspace or network runs.
+
 ## Remaining execution sequence
 
-1. Finish RAM-LFE native known answers, trace controls and typed SDK profile tests;
-   then complete private tape/config ownership and the specified semantic relation.
+1. Replace the insecure RAM-LFE encryption construction, retire diagnostic public
+   surfaces, and complete its semantic relation and current SDK/consumer controls.
 2. Produce maximum-occupancy ordinary/AXT FASTPQ artifacts through current facade
    fixtures and independently verify them under unchanged resource limits.
 3. Pass the amended X509 focused suite on a normal optimized binary, then produce

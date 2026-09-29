@@ -369,7 +369,7 @@ final class TxBuilderTests: XCTestCase {
             execution: ToriiIdentifierResolutionExecutionPayload(
                 programId: Self.fixtureClaimProgramId,
                 programDigest: Self.fixtureClaimProgramDigestHex,
-                backend: "bfv-programmed-sha3-256-v1",
+                backend: "bfv-programmed-v1",
                 verificationMode: "signed",
                 inputCiphertextHash: String(repeating: "ab", count: 32),
                 outputCiphertextHash: String(repeating: "bb", count: 32),
@@ -535,14 +535,6 @@ final class TxBuilderTests: XCTestCase {
         _ = try payloadReader.readCompactField()
         _ = try payloadReader.readCompactField()
         _ = try payloadReader.readCompactField()
-        var admissionIntentReader = CanonicalNoritoReader(
-            data: try payloadReader.readCompactField()
-        )
-        XCTAssertEqual(
-            try admissionIntentReader.readUInt32LE(),
-            TransactionAdmissionIntentV1.ordinary.rawValue
-        )
-        XCTAssertEqual(admissionIntentReader.remaining(), 0)
         var metadataReader = CanonicalNoritoReader(
             data: try payloadReader.readCompactField()
         )

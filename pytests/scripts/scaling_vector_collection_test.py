@@ -22,8 +22,7 @@ def allocation():
 
 def stopped(c):
     role = c.inputs.roles[3]
-    return sequence.StoppedReader(role.primary_block_store, role.primary_merge_log, 1, 100, 100,
-        8 * 1024 * 1024, 65536, 65536, 100, 65536, 65536, os.geteuid())
+    return sequence.StoppedReader(role.primary_block_store, 1, 100, 100, 8 * 1024 * 1024, 65536, 65536, 65536, os.geteuid())
 
 
 @pytest.fixture
@@ -80,20 +79,20 @@ def test_exact_command_and_complete_pair_keep_original_inputs_owned(collection):
     assert argv[:7] == (str(p.c.images[1].path), '--ui-mode', 'plain', 'advanced',
         'kura', 'scaling-evidence', 'collect')
     flags = dict(zip(argv[7::2], argv[8::2], strict=True))
-    assert len(flags) == 30 and len(argv) == 67
+    assert len(flags) == 27 and len(argv) == 61
     assert flags == {'--invocation-id': receipt.invocation_id,
         '--chain-id': p.c.inputs.generation.chain_id, '--network-id': p.c.inputs.network_id,
         '--genesis-epoch-context-id': p.c.inputs.genesis_epoch_context_id,
         '--signed-genesis': str(p.c.inputs.input_directory / 'genesis.signed.nrt'),
         '--signed-genesis-sha256': receipt.genesis_sha256, '--signed-genesis-max-bytes': '65536',
-        '--block-store': str(p.stopped.block_store), '--merge-log': str(p.stopped.merge_log),
+        '--block-store': str(p.stopped.block_store),
         '--context': str(p.c.inputs.input_directory / 'genesis-context.nrt'),
         '--context-sha256': receipt.context_sha256, '--context-max-bytes': '65536',
         '--carrier-out': str(receipt.carrier.path), '--queries-out': str(receipt.queries.path),
         '--carrier-max-bytes': '65536', '--queries-max-bytes': '65536', '--total-max-bytes': str(4 * 65536),
         '--reply-max-bytes': '4096', '--first-height': '1', '--last-height': '100', '--max-committed-blocks': '100',
         '--max-store-data-bytes': str(8 * 1024 * 1024), '--max-carrier-bytes': '65536',
-        '--max-merge-log-bytes': '65536', '--max-merge-frames': '100', '--reader-max-output-bytes': '65536',
+        '--reader-max-output-bytes': '65536',
         '--max-total-leaves': '1000', '--max-leaves-per-carrier': '100',
         '--max-decode-allocation-bytes': '65536', '--owner-uid': str(os.geteuid())}
     assert options == dict(stdin=command.subprocess.DEVNULL, stdout=command.subprocess.PIPE,
@@ -123,23 +122,18 @@ def test_independent_caps_refuse_before_any_child_or_output_slot(collection, fie
     p.outputs.validate()
 
 
-@pytest.mark.parametrize('field,bad', [('first_height', 2), ('last_height', 0), ('last_height', 101),
-    ('max_committed_blocks', 1000001), ('max_store_data_bytes', 2 * 1024 ** 3 + 1),
-    ('max_carrier_bytes', 32 * 1024 ** 2 + 1), ('max_merge_log_bytes', 256 * 1024 ** 2 + 1),
-    ('max_merge_frames', 101), ('reader_max_output_bytes', 256 * 1024 ** 2 + 1),
-    ('max_decode_allocation_bytes', 1024 ** 2 + 1), ('owner_uid', -1), ('merge_log', Path('relative'))])
+@pytest.mark.parametrize('field,bad', [('first_height', 2), ('last_height', 0), ('last_height', 101), ('max_committed_blocks', 1000001), ('max_store_data_bytes', 2 * 1024 ** 3 + 1), ('max_carrier_bytes', 32 * 1024 ** 2 + 1), ('reader_max_output_bytes', 256 * 1024 ** 2 + 1), ('max_decode_allocation_bytes', 1024 ** 2 + 1), ('owner_uid', -1)])
 def test_complete_original_reader_geometry_is_bounded_before_dispatch(collection, field, bad):
     p = collection; p.stopped = replace(p.stopped, **{field: bad})
     with pytest.raises(vector.VectorCollectionError): owner(p)
     assert not p.c.commands.calls and list(p.outputs.directory.iterdir()) == []
 
 
-@pytest.mark.parametrize('which', ['kura_root', 'other_peer_store', 'other_peer_merge'])
+@pytest.mark.parametrize('which', ['kura_root', 'other_peer_store'])
 def test_resolved_original_peer3_paths_cannot_be_replaced_by_config_root_or_other_role(collection, which):
     p = collection
     if which == 'kura_root': p.stopped = replace(p.stopped, block_store=p.c.inputs.roles[3].block_store)
     elif which == 'other_peer_store': p.stopped = replace(p.stopped, block_store=p.c.inputs.roles[0].primary_block_store)
-    else: p.stopped = replace(p.stopped, merge_log=p.c.inputs.roles[0].primary_merge_log)
     with pytest.raises(vector.VectorCollectionError): owner(p)
     assert not p.c.commands.calls
 

@@ -260,7 +260,7 @@ public enum KagemushaDeviceSenderRecoverySelectorV1: Equatable, Sendable {
   )
 }
 
-/// Compact Core-authenticated redemption settlement selected by sender operation 12.
+/// Compact redemption selector for sender operation 12. Decoding grants no release authority.
 public struct KagemushaDeviceRedemptionTerminalReceiptV1: Equatable, Sendable {
   public let version: UInt16
   public let networkID: Data
@@ -271,14 +271,17 @@ public struct KagemushaDeviceRedemptionTerminalReceiptV1: Equatable, Sendable {
   public let reserveReceiptDigest: Data
   public let authenticatedStatusDigest: Data
   public let finalizedBlockHeight: UInt64
-  public let heightContextID: Data
+  public let finalizedBlockHash: Data
+  public let finalizedCoreHash: Data
+  public let finalizedResult: Data
 
   public init(
     version: UInt16 = 1, networkID: Data, operationID: Data, redemptionID: Data,
     terminalNullifier: Data, envelopeDigest: Data, reserveReceiptDigest: Data,
-    authenticatedStatusDigest: Data, finalizedBlockHeight: UInt64, heightContextID: Data
+    authenticatedStatusDigest: Data, finalizedBlockHeight: UInt64,
+    finalizedBlockHash: Data, finalizedCoreHash: Data, finalizedResult: Data
   ) throws {
-    guard version == 1, finalizedBlockHeight != 0 else {
+    guard version == 1, finalizedBlockHeight > 1 else {
       throw deviceInvalid("redemptionTerminalReceipt.header")
     }
     self.version = version
@@ -291,7 +294,9 @@ public struct KagemushaDeviceRedemptionTerminalReceiptV1: Equatable, Sendable {
     self.authenticatedStatusDigest = try deviceDigest(
       authenticatedStatusDigest, "authenticatedStatusDigest")
     self.finalizedBlockHeight = finalizedBlockHeight
-    self.heightContextID = try deviceDigest(heightContextID, "heightContextID")
+    self.finalizedBlockHash = try deviceDigest(finalizedBlockHash, "finalizedBlockHash")
+    self.finalizedCoreHash = try deviceDigest(finalizedCoreHash, "finalizedCoreHash")
+    self.finalizedResult = try deviceDigest(finalizedResult, "finalizedResult")
   }
 }
 
@@ -963,13 +968,13 @@ extension KagemushaDeviceOperationCodecV1 {
   }
 
   fileprivate static func encodeRedemptionReceiptPayload(_ value: KagemushaDeviceRedemptionTerminalReceiptV1) throws -> Data {
-    guard value.heightContextID.last.map({ $0 & 1 == 1 }) == true else { throw deviceInvalid("heightContextID.hash") }
     return try deviceFields([
       deviceU16(value.version), value.networkID, deviceAliasDigest(value.operationID),
       deviceAliasDigest(value.redemptionID), deviceAliasDigest(value.terminalNullifier),
       deviceAliasDigest(value.envelopeDigest), deviceAliasDigest(value.reserveReceiptDigest),
       deviceAliasDigest(value.authenticatedStatusDigest), deviceU64(value.finalizedBlockHeight),
-      deviceFields([value.heightContextID]),
+      deviceAliasDigest(value.finalizedBlockHash), deviceAliasDigest(value.finalizedCoreHash),
+      deviceAliasDigest(value.finalizedResult),
     ])
   }
 
@@ -984,14 +989,15 @@ extension KagemushaDeviceOperationCodecV1 {
     let reserveReceiptDigest = try reader.aliasDigestField()
     let authenticatedStatusDigest = try reader.aliasDigestField()
     let height = try reader.u64Field()
-    var context = DeviceOperationReader(try reader.field())
-    let heightContextID = try context.digestField()
-    try context.finish()
+    let blockHash = try reader.aliasDigestField()
+    let coreHash = try reader.aliasDigestField()
+    let result = try reader.aliasDigestField()
     try reader.finish()
     let value = try KagemushaDeviceRedemptionTerminalReceiptV1(version: version, networkID: networkID, operationID: operationID,
       redemptionID: redemptionID, terminalNullifier: terminalNullifier, envelopeDigest: envelopeDigest,
       reserveReceiptDigest: reserveReceiptDigest, authenticatedStatusDigest: authenticatedStatusDigest,
-      finalizedBlockHeight: height, heightContextID: heightContextID)
+      finalizedBlockHeight: height, finalizedBlockHash: blockHash,
+      finalizedCoreHash: coreHash, finalizedResult: result)
     guard try encodeRedemptionReceiptPayload(value) == payload else { throw deviceInvalid("redemptionReceipt.canonical") }
     return value
   }

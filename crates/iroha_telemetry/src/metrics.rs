@@ -2260,8 +2260,6 @@ fields {
     pub sumeragi_block_created_proposal_mismatch_total: int_counter();
     /// Nexus: lane relay envelopes rejected during validation (grouped by error kind).
     pub lane_relay_invalid_total: int_counter_vec(&["error"]);
-    /// Nexus: emergency validator override usage for lane relay (grouped by outcome).
-    pub lane_relay_emergency_override_total: int_counter_vec(&["lane", "dataspace", "outcome"],);
     /// Sumeragi: latest PRF epoch seed (hex) observed for collector selection.
     pub sumeragi_prf_epoch_seed_hex: raw(Arc<RwLock<Option<String>>>);
     /// Snapshot of Halo2 verifier configuration for status endpoints.
@@ -4042,7 +4040,7 @@ construct {
         sumeragi_commit_qc_validator_set_len
         sumeragi_block_created_dropped_by_lock_total sumeragi_block_created_hint_mismatch_total
         sumeragi_block_created_proposal_mismatch_total lane_relay_invalid_total
-        lane_relay_emergency_override_total]
+        ]
     {
         let sumeragi_prf_epoch_seed_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let sumeragi_mode_tag: Arc<RwLock<String>> =
@@ -4431,7 +4429,7 @@ initialize (metrics) {
         sumeragi_commit_qc_signatures_total sumeragi_commit_qc_validator_set_len
         sumeragi_block_created_dropped_by_lock_total
         sumeragi_block_created_hint_mismatch_total sumeragi_block_created_proposal_mismatch_total
-        lane_relay_invalid_total lane_relay_emergency_override_total sumeragi_prf_epoch_seed_hex
+        lane_relay_invalid_total  sumeragi_prf_epoch_seed_hex
         halo2_status sumeragi_prf_height sumeragi_prf_view sumeragi_membership_view_hash
         sumeragi_membership_height sumeragi_membership_view sumeragi_membership_epoch
         sumeragi_mode_tag sumeragi_leader_index sumeragi_highest_qc_height
@@ -4651,12 +4649,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 752;
-const METRIC_CATALOG_V2_REGISTERED: usize = 709;
-const METRIC_CATALOG_V2_BYTES: usize = 102_432;
+const METRIC_CATALOG_V2_ROWS: usize = 751;
+const METRIC_CATALOG_V2_REGISTERED: usize = 708;
+const METRIC_CATALOG_V2_BYTES: usize = 102_265;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "5ddc0bdeb43f80735d2b26f46b4a05353b2dc7a78032f9f45d2e8a6de1fce520";
+    "4fd5a8015dafbcec8fb8172f9703a22cbc3632cf4190f688bf4a01726c8362a2";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

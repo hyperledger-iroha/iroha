@@ -35,10 +35,6 @@ impl NativeFrameRead<'_> {
         if height > count {
             return Ok(None);
         }
-        if kura.is_hard_fork_hash_only_block(usize::try_from(position)?) {
-            kura.ensure_snapshot_bootstrap_authenticated()?;
-            return Ok(None);
-        }
         if Kura::read_durable_hash_at_height(&mut store, height)? != Some(hash) {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
@@ -91,10 +87,6 @@ impl Kura {
         self.ensure_canonical_storage_not_poisoned()?;
         let mut store = self.block_store.lock();
         if height > store.read_exact_durable_index_count()? {
-            return Ok(None);
-        }
-        if self.is_hard_fork_hash_only_block(usize::try_from(position)?) {
-            self.ensure_snapshot_bootstrap_authenticated()?;
             return Ok(None);
         }
         if Self::read_durable_hash_at_height(&mut store, height)? != Some(hash) {
@@ -252,5 +244,21 @@ mod native_execution_read_tests {
                 .native_frame_read(0, original.block_hash())
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+impl Kura {
+    /// Corrupt the stored native frame without changing its hash/index or cached original.
+    pub(crate) fn corrupt_native_frame_for_test(&self, height: NonZeroUsize) {
+        let mut store = self.block_store.lock();
+        let slot = store
+            .read_block_index(u64::try_from(height.get() - 1).unwrap())
+            .unwrap();
+        assert!(!slot.is_evicted());
+        let mut bytes = vec![0; usize::try_from(slot.length).unwrap()];
+        store.read_block_data(slot.start, &mut bytes).unwrap();
+        *bytes.last_mut().expect("native frame is nonempty") ^= 1;
+        store.write_block_data(slot.start, &bytes).unwrap();
     }
 }

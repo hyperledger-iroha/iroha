@@ -176,10 +176,9 @@ fn check_storage_rejects_a_block_this_build_cannot_decode() {
     let root = tempfile::tempdir().expect("temporary store root");
     let config = storage_config(root.path());
     populate_store(&config, 2);
-    let data = Kura::canonical_storage_paths(
+    let data = Kura::canonical_storage_path(
         &std::fs::canonicalize(root.path().join("kura")).expect("canonical store root"),
     )
-    .0
     .join("blocks.data");
     // Corrupt the first (non-tip) body; opening Kura read-only checks only the durable boundary.
     let mut bytes = std::fs::read(&data).expect("read block data");

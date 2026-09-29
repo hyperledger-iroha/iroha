@@ -101,10 +101,6 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                         "authority": authority,
                         "network_id": network_id,
                         "creation_time_ms": creation_time_ms,
-                        "admission_intent": {
-                            "intent": "ordinary",
-                            "value": None,
-                        },
                         "executable": {"Instructions": []},
                         "fee_payment": {
                             "payer": "authority",

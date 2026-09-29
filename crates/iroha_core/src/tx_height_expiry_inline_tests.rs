@@ -53,7 +53,7 @@ fn transaction_height_expiry_is_exclusive_when_height_expiry_is_optional() {
         )
         .expect("stateless checks accept optional but present height expiry");
         let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache).expect("local execution completes");
+        let result = execute_component_transaction_for_testing(&mut block, accepted, &mut ivm_cache, None);
         if should_accept {
             assert!(
                 result.is_ok(),

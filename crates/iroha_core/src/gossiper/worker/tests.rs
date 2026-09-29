@@ -8,28 +8,7 @@ use std::sync::{
 };
 use tokio::{sync::oneshot, time::timeout};
 
-// Existing physical-executor controls exercise the same mandatory worker;
-// they do not create a deferred batch. Their publication dependency cannot wake.
-fn start<F>(
-    period: Duration,
-    messages: mpsc::Receiver<RetainedGossip<Arc<TransactionGossip>>>,
-    shutdown: ShutdownSignal,
-    mut handle: F,
-) -> Result<Child, TransactionGossiperStartError>
-where
-    F: FnMut(Work) + Send + 'static,
-{
-    super::start(
-        period,
-        messages,
-        shutdown,
-        |_| std::future::pending::<()>(),
-        move |work| {
-            handle(work);
-            None
-        },
-    )
-}
+// Every physical executor control invokes the production worker directly.
 
 fn message() -> RetainedGossip<Arc<TransactionGossip>> {
     RetainedGossip::synthetic_for_test(Arc::new(TransactionGossip {

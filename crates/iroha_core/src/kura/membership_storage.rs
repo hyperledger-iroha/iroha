@@ -228,13 +228,7 @@ impl Kura {
 
     /// Join the separate physical publication owners without borrowing their locks together.
     pub(super) fn all_publication_budget_reserved_bytes(&self) -> super::Result<u64> {
-        self.lane_publication_budget_reserved_bytes()?
-            .checked_add(self.membership_storage.pending_bytes())
-            .ok_or_else(|| {
-                super::Error::PruneIntentConflict(
-                    "publication reservation sum overflowed".to_owned(),
-                )
-            })
+        Ok(self.membership_storage.pending_bytes())
     }
 
     /// Borrow the original finite membership allocation pool before constructing
@@ -301,9 +295,7 @@ impl Kura {
                 .store(bytes, std::sync::atomic::Ordering::Release);
             (id, start, end)
         };
-        if let Err(error) =
-            self.check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards()
-        {
+        if let Err(error) = self.check_publication_capacity_under_prune_and_canonical_guards() {
             self.membership_storage
                 .pending
                 .store(0, std::sync::atomic::Ordering::Release);

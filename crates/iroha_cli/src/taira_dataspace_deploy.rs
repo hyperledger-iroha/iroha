@@ -4,7 +4,7 @@
 //! reconciled by its retained signed transaction; it is never replaced or retried.
 //! Applied observations are not a finality proof or a deployment-complete claim.
 
-use crate::{Run, RunContext, quote_and_sign_transaction_with_admission};
+use crate::{Run, RunContext, quote_and_sign_transaction};
 use eyre::{Result, WrapErr, eyre};
 use iroha::{blocking::Client as BlockingClient, client::Client, sns::SnsNamespacePath};
 use iroha_data_model::{
@@ -22,7 +22,7 @@ use iroha_data_model::{
     },
     parameter::{Parameter, Parameters},
     transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
+        Executable, FeePaymentIntent, SignedTransaction,
         signed::{FeeChargeKind, TransactionEntrypoint},
     },
 };
@@ -548,6 +548,31 @@ impl PlanV1 {
     }
 }
 
+fn transition(
+    manifest: &ManifestV1,
+    baseline: &LaneLifecycleStatusV1,
+) -> Result<NexusCatalogTransitionV1> {
+    baseline.validate()?;
+    require(
+        !baseline.lanes.iter().any(|lane| {
+            lane.id == manifest.lane.id
+                || lane.alias == manifest.lane.alias
+                || lane.dataspace_id == manifest.lane.dataspace_id
+        }),
+        "new dataspace or lane is already present; this first-release plan cannot overwrite it",
+    )?;
+    let value = NexusCatalogTransitionV1 {
+        version: NexusCatalogTransitionV1::VERSION,
+        expected_catalog_hash: baseline.catalog_hash,
+        expected_incarnation_root: baseline.incarnation_root,
+        expected_runtime_catalog_hash: baseline.runtime_catalog_hash,
+        dataspace_additions: vec![manifest.dataspace.clone()],
+        lane_additions: vec![manifest.lane.clone()],
+        manifest_additions: vec![manifest.lane_manifest.clone()],
+    };
+    value.validate_structure()?;
+    Ok(value)
+}
 
 fn overlay(
     parameters: &Parameters,
@@ -889,10 +914,6 @@ impl PreparedV1 {
         self.fee_quote
             .validate_for_signed_payload(transaction.payload())
             .map_err(|error| eyre!(error))?;
-        require(
-            transaction.admission_intent() == TransactionAdmissionIntent::Ordinary,
-            "deployment transaction must use ordinary current-consensus admission",
-        )?;
         require(
             transaction.metadata().is_empty(),
             "retained deployment carries unbound metadata",
@@ -1805,12 +1826,11 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 !instructions.is_empty(),
                 "empty deployment transactions are forbidden",
             )?;
-            let (transaction, quote) = quote_and_sign_transaction_with_admission(
+            let (transaction, quote) = quote_and_sign_transaction(
                 &client,
                 Executable::from(instructions.clone()),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-                TransactionAdmissionIntent::Ordinary,
             )
             .wrap_err_with(|| {
                 format!("deployment phase {phase}: quote and sign exact transaction")
@@ -2433,10 +2453,7 @@ mod tests {
         },
         isi::alias_setup::EnsureAlias,
         nexus::{DataSpaceMetadata, FeeDebitSource, LaneCatalog},
-        transaction::{
-            TransactionBuilder,
-            signed::{FeeChargeLimit, TransactionAdmissionIntent},
-        },
+        transaction::{TransactionBuilder, signed::FeeChargeLimit},
     };
     use iroha_model_base::topology::{DataSpaceId, LaneId};
     use iroha_primitives::{json::Json, numeric::Numeric};
@@ -3343,10 +3360,6 @@ mod tests {
         }
     }
     fn prepared(plan: &PlanV1) -> PreparedV1 {
-        prepared_with_admission(plan, TransactionAdmissionIntent::Ordinary)
-    }
-
-    fn prepared_with_admission(plan: &PlanV1, admission: TransactionAdmissionIntent) -> PreparedV1 {
         let instructions: Vec<InstructionBox> = vec![
             SetParameter::new(Parameter::Custom(
                 plan.catalog_transition
@@ -3370,7 +3383,6 @@ mod tests {
             intent.clone(),
         )
         .with_instructions(instructions.clone())
-        .with_admission_intent(admission)
         .try_sign(key().private_key())
         .unwrap();
         let quote = FeeQuoteResponse {
@@ -3536,22 +3548,6 @@ mod tests {
         );
         assert!(value.verify(&wrong, "catalog").is_err());
         assert!(value.verify(&plan, "bootstrap").is_err());
-    }
-    #[test]
-    fn retained_phase_requires_executable_current_admission() {
-        let plan = fixture_plan();
-        let current = prepared(&plan).verify(&plan, "catalog").unwrap();
-        assert_eq!(
-            current.admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
-        let retired = prepared_with_admission(&plan, TransactionAdmissionIntent::QueuePlanSynced);
-        let error = retired.verify(&plan, "catalog").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("ordinary current-consensus admission")
-        );
     }
     #[test]
     fn namespace_plan_requires_two_bounded_paid_creates() {

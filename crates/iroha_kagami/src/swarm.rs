@@ -12,9 +12,7 @@ use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     block::{
         SignedBlock,
-        consensus_v2::{
-            ConsensusMode as WireConsensusMode, MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
-        },
+        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
     },
     isi::SetParameter,
     parameter::{
@@ -38,7 +36,6 @@ use std::{
     fs,
     io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
-    time::Duration,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 /// Docker Compose configuration generator for Iroha.
@@ -1074,22 +1071,32 @@ fn validate_runtime_projection_policy(
                 == projected.common.trusted_peers.value().pops,
         "container runtime projection changed the authenticated validator roster"
     );
-    let mode = match metadata.mode {
-        SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
-        SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
-    };
-    let cadence = Duration::from_millis(metadata.block_cadence_ms.get());
-    let source_v2 = source
-        .sumeragi
-        .v2_config(cadence, mode)
-        .wrap_err("derive source prepared Sumeragi v2 configuration")?;
-    let projected_v2 = projected
-        .sumeragi
-        .v2_config(cadence, mode)
-        .wrap_err("derive projected prepared Sumeragi v2 configuration")?;
     ensure!(
-        source_v2.fingerprint() == projected_v2.fingerprint(),
-        "container runtime projection changed the Sumeragi v2 safety/liveness fingerprint"
+        metadata.wire_protocol_version == u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
+        "prepared genesis must use the current Sumeragi protocol"
+    );
+    ensure!(
+        source.sumeragi.local == projected.sumeragi.local
+            && source.sumeragi.keys == projected.sumeragi.keys
+            && source.sumeragi.retired_keys == projected.sumeragi.retired_keys
+            && source.sumeragi.mint_finality_seed_fd == projected.sumeragi.mint_finality_seed_fd
+            && source.sumeragi.global_beacon_partial_signer_provider_handle
+                == projected
+                    .sumeragi
+                    .global_beacon_partial_signer_provider_handle
+            && source
+                .sumeragi
+                .global_beacon_partial_signer_provider_revision
+                == projected
+                    .sumeragi
+                    .global_beacon_partial_signer_provider_revision
+            && source
+                .sumeragi
+                .global_beacon_partial_signer_provider_policy_digest
+                == projected
+                    .sumeragi
+                    .global_beacon_partial_signer_provider_policy_digest,
+        "container runtime projection changed Sumeragi local parameters or signer custody"
     );
     ensure!(
         execution_policy_projection(source) == execution_policy_projection(projected),
@@ -2580,12 +2587,6 @@ fn load_prepared_bundle(
             public_key: admitted.key_pair.public_key().clone(),
         })
         .collect::<Vec<_>>();
-    let mode = match signed_metadata.mode {
-        SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
-        SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
-    };
-    let cadence = Duration::from_millis(signed_metadata.block_cadence_ms.get());
-    let mut shared_v2_fingerprint = None;
     let mut shared_execution_projection = None;
     let mut shared_nexus_projection = None;
     let mut shared_runtime_inputs = None;
@@ -2609,19 +2610,6 @@ fn load_prepared_bundle(
             &signed_metadata,
             &runtime_peers,
         )?;
-        let v2_fingerprint = effective_config
-            .sumeragi
-            .v2_config(cadence, mode)
-            .wrap_err_with(|| format!("derive prepared validator {index} Sumeragi v2 fingerprint"))?
-            .fingerprint();
-        if let Some(expected) = shared_v2_fingerprint.as_ref() {
-            ensure!(
-                &v2_fingerprint == expected,
-                "prepared validator {index} has a different shared Sumeragi v2 fingerprint"
-            );
-        } else {
-            shared_v2_fingerprint = Some(v2_fingerprint);
-        }
         let execution_projection = execution_policy_projection(&effective_config);
         if let Some(expected) = shared_execution_projection {
             ensure!(
@@ -2983,7 +2971,7 @@ mod tests {
     use std::{
         fs,
         io::{BufWriter, Write},
-        num::{NonZeroU16, NonZeroUsize},
+        num::NonZeroU16,
         path::{Path, PathBuf},
     };
     #[cfg(unix)]
@@ -3636,23 +3624,14 @@ mod tests {
         let parsed = parse_prepared_peer_config(&config_dir.join("peer0.toml"))
             .expect("parse prepared peer0 fixture");
         let mut drifted = parsed.actual.clone();
-        drifted.sumeragi.block.max_transactions = NonZeroUsize::new(
-            drifted
-                .sumeragi
-                .block
-                .max_transactions
-                .get()
-                .checked_add(1)
-                .expect("fixture block limit can increase"),
-        )
-        .expect("incremented block limit is non-zero");
+        drifted.sumeragi.local.t_base = Some(std::time::Duration::from_millis(987));
         let projection_error =
             validate_runtime_projection_policy(&parsed.actual, &drifted, &metadata)
                 .expect_err("Sumeragi policy drift must reject a runtime projection");
         assert!(
             projection_error
                 .to_string()
-                .contains("safety/liveness fingerprint"),
+                .contains("Sumeragi local parameters or signer custody"),
             "unexpected projection-policy mismatch: {projection_error:#}"
         );
         let original_signed = fs::read(&signed_path).expect("read signed genesis fixture");

@@ -186,6 +186,7 @@ impl Fixture {
             signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap(),
             agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
             attestations: Vec::new(),
+            attestation_witness: None,
         };
         let mut fixture = Self {
             record,

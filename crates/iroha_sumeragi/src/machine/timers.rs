@@ -15,39 +15,16 @@ impl Core {
         if self.halted.is_some() {
             return Millis::MAX;
         }
-        [
-            self.build_deadline(),
-            self.stage1_deadline(),
-            self.stage2_deadline(),
-            self.retx[0].map(|r| r.next),
-            self.retx[1].map(|r| r.next),
-            self.view_deadline(),
-            Some(
-                self.last_rebroadcast
-                    .saturating_add(self.local.rebroadcast_interval),
-            ),
-            Some(self.status_deadline()),
-            self.probe_deadline(),
-            self.sync.deadline(),
-            self.wants.values().map(|want| want.next_retry).min(),
-            self.exec
-                .values()
-                .filter_map(|state| match state {
-                    ExecState::RetryAt { at, .. } => Some(*at),
-                    _ => None,
-                })
-                .min(),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or(Millis::MAX)
+        self.deadlines()
+            .into_iter()
+            .filter_map(|(_, deadline)| deadline)
+            .min()
+            .unwrap_or(Millis::MAX)
     }
 
-    /// Every deadline by name (tests).
-    #[cfg(test)]
-    pub(super) fn deadlines(&self) -> Vec<(&'static str, Option<Millis>)> {
-        vec![
+    /// One allocation-free deadline table shared by wakeups and protocol diagnostics.
+    pub(super) fn deadlines(&self) -> [(&'static str, Option<Millis>); 12] {
+        [
             ("build", self.build_deadline()),
             ("stage1", self.stage1_deadline()),
             ("stage2", self.stage2_deadline()),

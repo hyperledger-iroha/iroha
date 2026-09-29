@@ -1,3 +1,29 @@
+#[test]
+fn applied_cleanup_releases_exact_fifo_metadata_while_sample_remains_owned() {
+    let state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let (_, time) = TimeSource::new_mock(Duration::default());
+    let queue = Arc::new(Queue::test(config_factory(), &time));
+    let tx = accepted_tx_by_someone(&time);
+    let hash = tx.hash_as_entrypoint();
+    queue.push(tx, state.view()).unwrap();
+    let sample = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .unwrap();
+    assert_eq!(sample[0].hash_as_entrypoint(), hash);
+    assert!(queue.queued_tx_enqueued_at_ms.contains_key(&hash));
+    assert_eq!(queue.remove_committed_hashes([hash], None), 1);
+    assert_eq!((queue.active_len(), queue.queued_len()), (0, 0));
+    assert!(queue.tx_hashes.is_empty());
+    assert!(queue.queued_age_ring.lock().is_empty());
+    assert!(!queue.queued_tx_enqueued_at_ms.contains_key(&hash));
+    assert!(!queue.routing_plans.contains_key(&hash));
+    drop(sample);
+    assert_eq!(queue.remove_committed_hashes([hash], None), 0);
+}
 #[tokio::test]
 async fn push_tx_overflow() {
     let capacity = nonzero!(10_usize);
@@ -34,17 +60,14 @@ fn empty_pending_snapshot_does_not_preallocate_for_scan_limit() {
     let state = State::new(world_with_test_domains(), kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    let (pending, lease) = queue
+    let pending = queue
         .bounded_pending_snapshot(
             &state.view(),
             NonZeroUsize::new(usize::MAX).expect("non-zero scan bound"),
         )
         .expect("empty queue remains selectable with a large scan bound");
     assert!(pending.is_empty());
-    assert!(
-        lease.hashes.is_empty(),
-        "empty queue cannot publish a selection owner"
-    );
+    assert_eq!((queue.active_len(), queue.queued_len()), (0, 0));
 }
 
 #[tokio::test]
@@ -84,7 +107,7 @@ async fn concurrent_stress_test() {
             })
         })
         .collect();
-    // Spawn a thread where we get_transactions_for_block and add them to state
+    // Concurrent native sampling and exact application-notification cleanup.
     let get_txs_handle = {
         let queue = Arc::clone(&queue);
         let state = Arc::clone(&state);
@@ -93,8 +116,15 @@ async fn concurrent_stress_test() {
             while start_time.elapsed() < run_for {
                 {
                     let state_view = state.view();
-                    let transactions =
-                        queue.collect_transactions_for_block(&state_view, max_txs_in_block);
+                    let transactions = queue
+                        .bounded_pending_snapshot(&state_view, max_txs_in_block)
+                        .unwrap();
+                    let hashes = transactions
+                        .iter()
+                        .map(AcceptedTransaction::hash_as_entrypoint)
+                        .collect::<Vec<_>>();
+                    drop(state_view);
+                    queue.remove_committed_hashes(hashes, None);
                     drop(transactions);
                 }
                 height = height.checked_add(1).unwrap();
@@ -170,7 +200,9 @@ async fn queue_throttling() {
             state.view(),
         )
         .expect("Failed to push tx into queue");
-    let transactions = queue.collect_transactions_for_block(&state.view(), nonzero!(10_usize));
+    let transactions = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(10_usize))
+        .unwrap();
     assert_eq!(transactions.len(), 2);
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
         .as_ref()
@@ -178,16 +210,19 @@ async fn queue_throttling() {
     let mut state_block = state.block(block_header);
     // Put transaction hashes into state as if they were in the blockchain
     let transaction_hashes = transactions
-        .into_iter()
-        .map(|tx| tx.as_ref().hash_as_entrypoint())
-        .collect();
+        .iter()
+        .map(AcceptedTransaction::hash_as_entrypoint)
+        .collect::<HashSet<_>>();
     state_block
         .transactions
-        .insert_block(transaction_hashes, nonzero!(1_usize));
+        .insert_block(transaction_hashes.clone(), nonzero!(1_usize));
     state_block.block_hashes.push(block_header.hash());
     state_block.commit().unwrap();
-    // Cleanup transactions
-    let transactions = queue.collect_transactions_for_block(&state.view(), nonzero!(10_usize));
+    // Apply the queue cleanup notification only after committing the transaction index.
+    assert_eq!(queue.remove_committed_hashes(transaction_hashes, None), 2);
+    let transactions = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(10_usize))
+        .unwrap();
     assert!(transactions.is_empty());
     // After cleanup Alice and Bob pushes should work fine
     queue

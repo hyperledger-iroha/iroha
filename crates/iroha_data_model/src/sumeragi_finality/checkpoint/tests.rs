@@ -49,7 +49,6 @@ fn extend(
     let result = result(&block, &parent.commitment.schedule.current);
     let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
     let header = CoreHeader {
-        control_witness: iroha_sumeragi::types::ControlWitness::empty(),
         instance: fixture.verifier().instance(),
         epoch: core_epoch(&parent.commitment.schedule.current).unwrap().id,
         height,
@@ -60,6 +59,7 @@ fn extend(
         payload_len: payload.len().try_into().unwrap(),
         proposer: 0,
         skipped_leaders: vec![],
+        control_witness: iroha_sumeragi::types::ControlWitness::empty(),
         attest: false,
     };
     let mut qc = Qc {
@@ -416,4 +416,34 @@ fn publication_proof_rejects_independently_valid_fork_gap_and_unbound_floor() {
         lineage: vec![fixture.second.clone(), fourth],
     };
     assert!(verify_sorafs_publication_v1(&fixture.network, &checkpoint, &tx, &gap).is_err());
+}
+
+#[test]
+fn retained_decision_verifier_uses_selected_checkpoint_commitments() {
+    let fixture = Fixture::new();
+    let checkpoint = checkpoint(&fixture);
+    let verifier =
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, &fixture.network, CHAIN)
+            .unwrap();
+    verifier.verify_retained_decision(&fixture.first).unwrap();
+    verifier.verify_retained_decision(&fixture.second).unwrap();
+    let empty = fixture.verifier();
+    assert!(empty.verify_retained_decision(&fixture.first).is_err());
+    let mut forged = fixture.second.clone();
+    let mut block = decode_versioned_signed_block(&forged.block_wire).unwrap();
+    let cert = block.commit_certificate().unwrap();
+    let header = cert.consensus_header().to_vec();
+    let mut qc: Qc = norito::decode_canonical(cert.commit_qc()).unwrap();
+    let mut result = ExecutionResultCommitment::decode(cert.result_preimage()).unwrap();
+    result.execution.parent_state_root = Hash::new(b"different retained execution");
+    qc.result = result.result().unwrap();
+    sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        header,
+        norito::encode_canonical(&qc).unwrap(),
+        result.preimage().unwrap(),
+    )));
+    forged.block_wire = block.encode_wire().unwrap();
+    assert!(forged.decode_checked().is_ok());
+    assert!(verifier.verify_retained_decision(&forged).is_err());
 }

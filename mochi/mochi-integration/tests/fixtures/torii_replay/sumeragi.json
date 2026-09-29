@@ -1,81 +1,38 @@
 {
-  "protocol_version": 4,
-  "node_fingerprint": "hash:22F8CF5BC02BDDA9887C4A9773EB84B75C444FBDD6FF187B097ADC10FE6E3173#C135",
-  "build_fingerprint": "hash:1455B744B3F34DBC54E131B415B56A67AED43C1A15C7C01C656C3E35B9C426EF#5521",
+  "protocol_version": 1,
   "config_fingerprint": "hash:80A1497D1673B6661521F948A4D6E379D44CB93FFBE6CB63C6FB234BF7272E45#4770",
-  "restart_required": false,
-  "height_context_id": [
-    "hash:4C0BB496C44F2518451ACD56AB704B3665CD3F86E76A1480C78A0A25CBC0A6BB#6499"
-  ],
+  "beacon_horizon": null,
+  "instance": "4141414141414141414141414141414141414141414141414141414141414141",
   "height": 10,
   "view": 4,
-  "phase": {
-    "phase": "prepare",
-    "details": null
-  },
-  "leader": 0,
-  "locked_prepare_qc": null,
-  "highest_prepare_qc": null,
-  "last_timeout_certificate": null,
-  "body_state": {
-    "state": "validated",
-    "details": null
-  },
-  "pending_persistence_id": null,
-  "last_committed_height": 9,
-  "last_committed_subject": null,
-  "height_context": {
-    "epoch": 1,
-    "epoch_end_height": 100,
-    "mode": {
-      "mode": "permissioned",
-      "details": null
-    },
-    "epoch_seed": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
-    "validator_count": 4,
-    "quorum": {
-      "min_signers": 3,
-      "total_power": 4
-    }
-  },
-  "last_commit_qc": null,
-  "liveness": {
-    "generation": 0,
-    "prepare_quorums": [],
-    "commit_quorums": [],
-    "timeout_quorums": [],
-    "outbound_intents": [],
-    "work": {
-      "candidate": {
-        "stage": "idle",
-        "details": null
-      },
-      "body_recovery": {
-        "stage": "idle",
-        "details": null
-      },
-      "body_store": {
-        "stage": "idle",
-        "details": null
-      },
-      "validation": {
-        "stage": "idle",
-        "details": null
-      },
-      "application": {
-        "stage": "idle",
-        "details": null
-      },
-      "successor_height": {
-        "stage": "idle",
-        "details": null
-      }
-    },
-    "queues": [],
-    "last_progress": null,
-    "no_progress_age_ms": 0,
-    "blocker": null,
-    "ignore_counts": []
-  },
-  "beacon_horizon": null
+  "stage": 0,
+  "leader": null,
+  "proxy_tail": null,
+  "high_qc_view": null,
+  "level": 0,
+  "start_level": 0,
+  "t_retx_ms": 100,
+  "committed_height": 9,
+  "applied_height": 9,
+  "awaiting": false,
+  "signer": null,
+  "unanchored": false,
+  "abstaining": true,
+  "halted": null,
+  "footprint": {
+    "votes": 0,
+    "timeouts": 0,
+    "blocks": 0,
+    "exec_entries": 0,
+    "wants": 0,
+    "pending_apply": 0,
+    "sync_entries": 0,
+    "sync_bytes": 0,
+    "peers": 0,
+    "recent_headers": 0,
+    "configs": 0,
+    "cert_cache": 0,
+    "evidence_keys": 0,
+    "probe": 0
+  }
 }

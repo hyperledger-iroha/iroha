@@ -99,7 +99,10 @@ fn run(args: Args) -> Result<(), &'static str> {
         .finality_limits
         .checked()
         .map_err(|_| "invalid finality admission limits")?;
-    let chain_id = ChainId::from(args.chain_id.as_str());
+    let chain_id: ChainId = args
+        .chain_id
+        .parse()
+        .map_err(|_| "invalid chain identifier")?;
     let cursor = NativeJournalCursor::new(chain_id.clone(), args.network_id, limits)
         .map_err(|_| "invalid native chain configuration")?;
     let transition_id: [u8; 32] = hex::decode(&args.transition_id)

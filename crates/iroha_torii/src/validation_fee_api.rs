@@ -810,16 +810,16 @@ pub(crate) async fn handler_current_policy_proof(
     let registry = registry_at_height(current_registry, evaluated_height)?;
     let expected_commitment =
         ValidationFeePolicySnapshotCommitmentV1::from_registry(evaluated_height, registry.as_ref());
-    drop(state_view);
-    let policy_witness = app
-        .kura
-        .validation_fee_policy_witness_proof_v1(evaluated_height)
-        .map_err(|error| {
-            inconsistent(format!(
-                "evaluated validation-fee witness proof is invalid: {error}"
-            ))
-        })?
-        .ok_or_else(|| inconsistent("evaluated block has no retained policy witness proof"))?;
+    let proof_view = state_view;
+    let policy_witness = iroha_core::query::native_receipts::validation_fee_policy_witness(
+        &proof_view,
+        evaluated_height,
+    )
+    .map_err(|error| {
+        inconsistent(format!(
+            "original native fee policy proof is invalid: {error}"
+        ))
+    })?;
     if policy_witness.commitment().map_err(inconsistent)? != expected_commitment {
         return Err(inconsistent(
             "retained policy witness differs from the historical protected registry",
@@ -830,16 +830,16 @@ pub(crate) async fn handler_current_policy_proof(
         .and_then(|gap| gap.checked_add(1))
         .and_then(|count| usize::try_from(count).ok())
         .ok_or_else(|| bad_request("trusted checkpoint is newer than the evaluated block"))?;
+    let chain = iroha_core::sumeragi::certified_chain::CertifiedChain::new(&proof_view)
+        .map_err(|error| inconsistent(format!("native finality source is unavailable: {error}")))?;
     let mut finality_chain = Vec::with_capacity(proof_count);
     for height in request.trusted_checkpoint_height..=evaluated_height {
         finality_chain.push(
-            iroha_core::bridge::build_finality_proof(app.state.as_ref(), height).map_err(
-                |error| {
-                    inconsistent(format!(
-                        "finality proof at height {height} is unavailable: {error}"
-                    ))
-                },
-            )?,
+            iroha_core::sumeragi::finality::build_proof(&proof_view, height).map_err(|error| {
+                inconsistent(format!(
+                    "finality proof at height {height} is unavailable: {error}"
+                ))
+            })?,
         );
     }
     let finality_encoded_bytes = norito::core::encoded_frame_len(&finality_chain)
@@ -853,8 +853,13 @@ pub(crate) async fn handler_current_policy_proof(
     let evaluated = finality_chain
         .last()
         .ok_or_else(|| inconsistent("finality chain is empty"))?;
-    let evaluated_context_id = evaluated.finality_artifact.context_id();
-    let evaluated_block_hash = evaluated.finality_artifact.block_hash;
+    let evaluated_native = chain.committed(evaluated_height).map_err(|error| {
+        inconsistent(format!(
+            "evaluated native commitment is unavailable: {error}"
+        ))
+    })?;
+    let evaluated_context_id = iroha_crypto::Hash::from(evaluated_native.id().0);
+    let evaluated_block_hash = evaluated.block_header.hash();
     let response = ValidationFeeCurrentPolicyProofV1 {
         version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
         registry,

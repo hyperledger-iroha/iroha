@@ -4,7 +4,9 @@
 use super::*;
 use iroha_core::release_identity::BuildIdentity;
 use iroha_core::sumeragi::native_journal::authenticate_signed_genesis;
-use iroha_data_model::query::{block::prelude::FindBlocks, parameters::Pagination};
+use iroha_data_model::query::{
+    block::prelude::FindBlocks, builder::QueryBuilderExt as _, parameters::Pagination,
+};
 use iroha_data_model::{
     NetworkId,
     isi::kagemusha_v1::{
@@ -329,7 +331,7 @@ fn production_epoch_retention_rejects_changed_generation_beacon_parent_and_sched
 
 fn verify_retained_schedule(
     verified: &iroha_core::sumeragi::certified_chain::CertifiedBlock,
-    validators: &[iroha_data_model::nexus::ValidatorCommitteeMemberV1],
+    validators: &[iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
     epoch_length: u64,
 ) -> Result<()> {
     let schedule = &verified.commitment().schedule;

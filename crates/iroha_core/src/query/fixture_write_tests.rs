@@ -1,18 +1,9 @@
 //! Query fixture writes publish World records without inventing finalized history.
 
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
-    NetworkId,
-    block::{
-        BlockHeader,
-        consensus::{
-            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
-        },
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-            GlobalPhase, HeightContext, PROTOCOL_VERSION, SumeragiV2Equivocation, ValidatorPower,
-            Vote, recommended_data_availability_layout,
-        },
+    block::consensus::{
+        Evidence, EvidenceAttribution, EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord,
     },
     confidential::ConfidentialStatus,
     governance::types::{
@@ -94,6 +85,26 @@ fn verifying_key_fixture_publishes_record_and_circuit_index_without_finality() {
             .get(&(record.circuit_id.clone(), record.version)),
         Some(&id),
     );
+}
+
+#[test]
+fn evidence_fixture_publishes_signed_record_without_finality() {
+    let mut state = state();
+    let record = EvidenceRecord {
+        evidence: phase_vote_evidence(),
+        attribution: fixture_attribution(),
+        recorded_at_height: 1,
+        recorded_at_view: 0,
+        recorded_at_ms: 10,
+        penalty_status: EvidencePenaltyStatus::Pending,
+    };
+    let key = crate::sumeragi::evidence::evidence_key(&record.evidence);
+    insert_evidence_record_for_test(&mut state, record.clone());
+    assert_no_finality(&state);
+    let view = state.view();
+    assert_eq!(view.world().consensus_evidence().get(&key), Some(&record));
+    assert_eq!(evidence_count(&view), 1);
+    assert_eq!(evidence_list_snapshot(&view), vec![record]);
 }
 
 #[test]
@@ -261,4 +272,56 @@ fn governance_lock_fixture_publishes_original_custody_without_finality() {
     assert_eq!(stored.direction, record.direction);
     assert_eq!(stored.duration_blocks, record.duration_blocks);
     assert_eq!(stored.custody, record.custody);
+}
+
+fn phase_vote_evidence() -> Evidence {
+    use iroha_sumeragi::{
+        message::{Evidence as NativeEvidence, Vote, VoteKind},
+        types::{EpochId, Hash32, SIGNATURE_LEN, Signature as NativeSignature},
+    };
+    let key =
+        KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal).expect("fixture BLS key");
+    let vote = |subject| {
+        let mut vote = Vote {
+            kind: VoteKind::Prepare,
+            instance: Hash32([1; 32]),
+            epoch: EpochId {
+                epoch: 0,
+                context: Hash32([2; 32]),
+            },
+            height: 1,
+            view: 0,
+            block_hash: Hash32([subject; 32]),
+            result: Hash32([4; 32]),
+            attest: false,
+            signer: 0,
+            sig: NativeSignature([0; SIGNATURE_LEN]),
+            attestation: None,
+        };
+        vote.sig = NativeSignature(
+            Signature::new(key.private_key(), &vote.preimage())
+                .payload()
+                .try_into()
+                .expect("signature width"),
+        );
+        vote
+    };
+    Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(0xA1), vote(0xA2)))
+        .expect("native signed pair")
+}
+fn fixture_attribution() -> EvidenceAttribution {
+    let key =
+        KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal).expect("fixture BLS key");
+    EvidenceAttribution {
+        instance: [1; 32],
+        height: 1,
+        epoch: 0,
+        context_id: [2; 32],
+        authority_generation: [3; 32],
+        offenders: vec![EvidenceOffender {
+            signer: 0,
+            peer_id: PeerId::new(key.public_key().clone()),
+        }],
+        safety_violation: false,
+    }
 }

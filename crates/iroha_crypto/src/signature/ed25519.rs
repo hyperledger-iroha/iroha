@@ -524,9 +524,36 @@ impl Ed25519Sha512 {
         signature: &[u8],
         pk: &PublicKey,
     ) -> Result<(), Error> {
+        use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar};
+        use sha2::Sha512;
+
         let parsed = Self::parse_signature(signature)?;
-        pk.verify_strict(message, &parsed)
-            .map_err(|_| Error::BadSignature)
+        let scalar = Option::<Scalar>::from(Scalar::from_canonical_bytes(*parsed.s_bytes()))
+            .ok_or(Error::BadSignature)?;
+        let public = CompressedEdwardsY(pk.to_bytes())
+            .decompress()
+            .ok_or(Error::BadSignature)?;
+        if public.is_small_order() {
+            return Err(Error::BadSignature);
+        }
+        // The strict dalek relation is R = [s]B - [H(R || A || M)]A.
+        // Its std error adapter boxes a diagnostic on rejection. Evaluate the
+        // same public-input relation with fixed owners so admission can retain
+        // BadSignature without an uncharged allocation. parse_signature above
+        // also enforces Iroha's canonical, prime-order R requirement.
+        let digest = Sha512::new()
+            .chain_update(parsed.r_bytes())
+            .chain_update(pk.as_bytes())
+            .chain_update(message)
+            .finalize();
+        let challenge = Scalar::from_bytes_mod_order_wide(&digest.into());
+        let expected =
+            EdwardsPoint::vartime_double_scalar_mul_basepoint(&challenge, &-public, &scalar);
+        if expected.compress().as_bytes() == parsed.r_bytes() {
+            Ok(())
+        } else {
+            Err(Error::BadSignature)
+        }
     }
     /// Deterministic batch verification helper using already parsed public keys.
     ///
@@ -691,6 +718,31 @@ mod test {
     const SIGNATURE_1: &str = "451b5b8e8725321541954997781de51f4142e4a56bab68d24f6a6b92615de5eefb74134138315859a32c7cf5fe5a488bc545e2e08e5eedfd1fb10188d532d808";
     const PRIVATE_KEY: &str = "1c1179a560d092b90458fe6ab8291215a427fcd6b3927cb240701778ef552019";
     const PUBLIC_KEY: &str = "27c96646f2d4632d4fc241f84cbc427fbc3ecaa95becba55088d6c7b81fc5bbf";
+    #[test]
+    fn uncached_verification_matches_strict_dalek_without_rejection_allocations() {
+        for seed in 1..=4 {
+            let signer = PrivateKey::from_bytes(&[seed; 32]);
+            let public = signer.verifying_key();
+            let message = [seed + 1; 37];
+            let signature = signer.sign(&message).to_bytes();
+            let mut cases = vec![signature.to_vec(), vec![], vec![0; 64], vec![0; 65]];
+            for index in 0..signature.len() {
+                let mut corrupted = signature;
+                corrupted[index] ^= 0x80;
+                cases.push(corrupted.to_vec());
+            }
+            for candidate in &cases {
+                for input in [&message[..], &b"wrong message"[..]] {
+                    let expected = Ed25519Sha512::parse_signature(candidate)
+                        .is_ok_and(|parsed| public.verify_strict(input, &parsed).is_ok());
+                    let observed = crate::test_allocations::without_allocations(|| {
+                        Ed25519Sha512::verify_uncached(input, candidate, &public)
+                    });
+                    assert_eq!(observed.is_ok(), expected);
+                }
+            }
+        }
+    }
     #[cfg(feature = "crypto-parity-tests")]
     fn openssl_public_key(pk: &ed25519::PublicKey) -> PKey<Public> {
         PKey::public_key_from_raw_bytes(pk.as_bytes(), Id::ED25519).expect("openssl public key")

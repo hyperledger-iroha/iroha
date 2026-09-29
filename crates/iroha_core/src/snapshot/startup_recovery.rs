@@ -87,8 +87,19 @@ pub(crate) struct StartupRecoveryPublisher {
 
 impl StartupRecoveryPublisher {
     pub(crate) fn ready(&self) {
-        debug_assert_eq!(*self.sender.borrow(), Phase::Pending);
-        self.sender.send_replace(Phase::Ready);
+        // Startup completion can race a worker failure. Failure is terminal.
+        self.sender.send_if_modified(|phase| {
+            if *phase != Phase::Pending {
+                return false;
+            }
+            *phase = Phase::Ready;
+            true
+        });
+    }
+
+    /// Revoke maintenance after a runtime halt or worker failure.
+    pub(crate) fn fail(&self) {
+        self.sender.send_replace(Phase::Failed);
     }
 
     pub(crate) fn finish(&mut self) {

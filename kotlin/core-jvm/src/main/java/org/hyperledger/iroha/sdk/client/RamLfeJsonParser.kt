@@ -54,6 +54,14 @@ object RamLfeJsonParser {
     @JvmStatic
     fun parseExecuteResponse(payload: ByteArray): RamLfeExecuteResponse {
         val root = expectObject(parse(payload, "ram-lfe execute response"), "ram-lfe execute response")
+        val fields = setOf(
+            "program_id", "opaque_hash", "receipt_hash", "output_ciphertext", "output_hash",
+            "associated_data_hash", "executed_at_ms", "expires_at_ms", "backend",
+            "verification_mode", "receipt",
+        )
+        root.keys.forEach { field ->
+            check(field in fields) { "ram-lfe execute response.$field is not supported" }
+        }
         return RamLfeExecuteResponse(
             requiredExactString(root["program_id"], "ram-lfe execute response.program_id"),
             canonicalizeExactHash32(root["opaque_hash"], "ram-lfe execute response.opaque_hash"),
@@ -66,10 +74,6 @@ object RamLfeJsonParser {
             requiredExactLowercaseString(root["backend"], "ram-lfe execute response.backend"),
             requiredExactLowercaseString(root["verification_mode"], "ram-lfe execute response.verification_mode"),
             expectObject(root["receipt"], "ram-lfe execute response.receipt"),
-            IdentifierJsonParser.parseOutputOpening(
-                expectObject(root["output_opening"], "ram-lfe execute response.output_opening"),
-                "ram-lfe execute response.output_opening",
-            ),
         )
     }
 

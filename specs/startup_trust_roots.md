@@ -97,25 +97,26 @@ identities and uses `IROHA_GENESIS_*_FILE` placeholders. It never generates
 random identities implicitly, and the operator must prepare its artifacts for
 the exact seeded roster.
 
-## Audited snapshot startup
+## Signed snapshots and native replay
 
-An audited provisional snapshot is a separate, explicit trust root. Set
-`snapshot.bootstrap.enabled = true` together with the exact lowercase
-`snapshot.bootstrap.audited_sha256` and non-zero
-`snapshot.bootstrap.audited_height`. This mode intentionally does not read or
-derive authority from `genesis.file` while the imported prefix is provisional.
+Snapshots are signed local exports. Their signature authenticates the writer and
+bytes; it does not turn an arbitrary decoded World into certified execution.
+The native execution commitment records witnessed writes, not the entire World.
+Consequently a positive-height snapshot requires full replay from the original
+signed genesis and every native certified block. The daemon may fall back to
+that replay only in Strict mode after proving the complete local replay floor.
+A missing history range, foreign chain or network, or local allocation failure
+aborts startup. Emergency Fast mode cannot supply the missing authentication.
 
-Deferring the genesis trust root is permitted only when Kura reports that
-specific provisional imported-prefix state. Snapshot authentication must bind
-the configured chain, exact payload digest, terminal height, block lineage,
-and restored state boundary. Iroha finalizes deferred Kura recovery only after
-authentication, recomputes the durable replay plan, and reauthenticates the
-snapshot boundary before replay. Any missing, mismatched, or still-provisional
-state aborts startup; it does not fall back to normal genesis or peer data.
+The supervised snapshot writer starts only after native startup recovery reaches
+Ready. Terminal failure disables publication, and the first ready interval can
+export the recovered tip without waiting for a new transaction. Full-state
+snapshot restore authentication remains tracked in `specs/sumeragi_goals.md` S9.
 
-The audited snapshot path is for a deliberately reviewed hard-fork boundary,
-not routine node enrollment. See `specs/sumeragi_v2.md` for the snapshot
-artifact and replay invariants.
+There is no separate audited snapshot trust root, signature bypass, or hash-only
+history import. Retired `snapshot.bootstrap` configuration and persisted
+verified-snapshot-tail markers are rejected. Rejected storage is not rewritten
+or treated as genesis authority.
 
 ## Operator checklist
 
@@ -134,8 +135,8 @@ artifact and replay invariants.
    three operator-approved files are validated before Compose is written.
 3. Verify the external artifact and configured hash are identical before first
    start and after every reprovisioning operation.
-4. Use audited snapshot bootstrap only with a separately reviewed digest and
-   height, and preserve the matching imported-prefix storage as one unit.
+4. Preserve the original signed genesis and complete certified replay history.
+   A local snapshot export does not replace that startup evidence.
 
 The retired `genesis.bootstrap_*` settings are rejected during configuration
 parsing. There is no compatibility mode for peer genesis retrieval.

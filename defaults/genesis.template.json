@@ -319,7 +319,7 @@
     }
   ],
   "consensus_mode": "Npos",
-  "wire_protocol_version": 8,
+  "wire_protocol_version": 1,
   "consensus_fingerprint": null,
   "sumeragi_v2": {
     "da_layout": {

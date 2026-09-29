@@ -1856,12 +1856,24 @@ impl MerkleProof<[u8; 32]> {
         leaf: &HashOf<[u8; 32]>,
         commitment: &MerkleTreeCommitment<[u8; 32]>,
     ) -> bool {
-        if !proof_shape_is_canonical(self.leaf_index, &self.audit_path, commitment.leaf_count) {
+        Self::verify_audit_path_sha256(self.leaf_index, &self.audit_path, leaf, commitment)
+    }
+    /// Verify a borrowed SHA-256 audit path without constructing an owned proof.
+    ///
+    /// This uses the same authenticated leaf count and canonical shape checks
+    /// as [`Self::verify_sha256`], including ragged sibling geometry.
+    pub fn verify_audit_path_sha256(
+        leaf_index: u32,
+        audit_path: &[Option<HashOf<[u8; 32]>>],
+        leaf: &HashOf<[u8; 32]>,
+        commitment: &MerkleTreeCommitment<[u8; 32]>,
+    ) -> bool {
+        if !proof_shape_is_canonical(leaf_index, audit_path, commitment.leaf_count) {
             return false;
         }
-        let mut index = u64::from(self.leaf_index);
+        let mut index = u64::from(leaf_index);
         let mut acc_bytes: [u8; 32] = *leaf.as_ref();
-        for sibling in &self.audit_path {
+        for sibling in audit_path {
             let (l_opt, r_opt) = if index.is_multiple_of(2) {
                 (
                     Some(HashOf::from_untyped_unchecked(Hash::prehashed(acc_bytes))),
@@ -2511,6 +2523,55 @@ mod tests {
         let mut bad = proof;
         bad.leaf_index = idx + 1;
         assert!(!bad.verify_sha256(&leaf, &commitment));
+    }
+    #[test]
+    fn borrowed_sha256_verifier_preserves_owned_shape_and_order_rules() {
+        for count in [1_u32, 2, 3, 5, 8, 9] {
+            let data: Vec<u8> = (0..count * 32).map(|i| (i % 251) as u8).collect();
+            let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).unwrap();
+            let commitment = tree.commitment().unwrap();
+            for index in 0..count {
+                let proof = tree.get_proof(index).unwrap();
+                let leaf = tree.leaves().nth(index as usize).unwrap();
+                let verify = |path: &[Option<HashOf<[u8; 32]>>], position| {
+                    let owned = MerkleProof {
+                        leaf_index: position,
+                        audit_path: path.to_vec(),
+                    };
+                    let borrowed =
+                        MerkleProof::verify_audit_path_sha256(position, path, &leaf, &commitment);
+                    assert_eq!(borrowed, owned.verify_sha256(&leaf, &commitment));
+                    borrowed
+                };
+                assert!(verify(&proof.audit_path, index));
+                assert!(!verify(&proof.audit_path, count));
+                let mut extra = proof.audit_path.clone();
+                extra.push(None);
+                assert!(!verify(&extra, index));
+                if !proof.audit_path.is_empty() {
+                    assert!(!verify(
+                        &proof.audit_path[..proof.audit_path.len() - 1],
+                        index
+                    ));
+                }
+                for sibling in 0..proof.audit_path.len() {
+                    let mut altered = proof.audit_path.clone();
+                    altered[sibling] = if altered[sibling].is_some() {
+                        None
+                    } else {
+                        Some(leaf)
+                    };
+                    assert!(!verify(&altered, index));
+                }
+                if proof.audit_path.len() > 1 {
+                    let mut reversed = proof.audit_path.clone();
+                    reversed.reverse();
+                    if reversed != proof.audit_path {
+                        assert!(!verify(&reversed, index));
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn byte_proof_rejects_out_of_range_leaf_index_sha256() {

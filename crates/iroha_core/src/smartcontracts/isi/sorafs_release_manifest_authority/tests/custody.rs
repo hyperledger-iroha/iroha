@@ -93,7 +93,6 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
         )
         .expect("complete fixture block outputs");

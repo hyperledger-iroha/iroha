@@ -8,13 +8,19 @@ use iroha_crypto::{Hash, PublicKey, SignatureOf};
 use sha2::{Digest as _, Sha256};
 
 use super::{KAGEMUSHA_ASSET_SCALE_MAX_V1, KagemushaReleaseAuthorityPolicyV1};
-use crate::{NetworkId, block::consensus_v2::HeightContextId};
+use crate::{
+    NetworkId,
+    sumeragi_finality::{
+        MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
+    },
+};
 
 const APPROVAL_DOMAIN: &str = "iroha:kagemusha:v1:mobile-bootstrap-approval";
 const CHECKPOINT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mobile-bootstrap-checkpoint\0";
 
 /// Maximum complete canonical bootstrap archive, checked before decoding any collection.
-pub const KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1: usize = 1024 * 1024;
+pub const KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1: usize =
+    MAX_FINALITY_CHECKPOINT_BYTES + 1024 * 1024;
 
 /// Exact asset and reserve scope selected independently by the native operator.
 #[derive(
@@ -35,9 +41,7 @@ pub struct KagemushaMobileBootstrapScopeV1 {
 }
 
 /// Complete immutable subject approved by the native policy's threshold signers.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, norito::Decode, norito::Encode, norito::NoritoSchema,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::Decode, norito::Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_mobile_bootstrap_v1::KagemushaMobileBootstrapCheckpointV1"
 )]
@@ -46,7 +50,7 @@ pub struct KagemushaMobileBootstrapCheckpointV1 {
     pub version: u16,
     /// Digest of the independently installed release-authority policy.
     pub authority_policy_digest: [u8; 32],
-    /// Network whose signed finality chain begins at `first_context_id`.
+    /// Exact signed-genesis network of the native checkpoint.
     pub network_id: NetworkId,
     /// Asset and reserve scope.
     pub scope: KagemushaMobileBootstrapScopeV1,
@@ -54,8 +58,9 @@ pub struct KagemushaMobileBootstrapCheckpointV1 {
     pub release_id: [u8; 32],
     /// Exact release-attestation digest.
     pub release_attestation_digest: [u8; 32],
-    /// Authority-authenticated first height context for later finality-chain verification.
-    pub first_context_id: HeightContextId,
+    /// Complete canonical native checkpoint approved by the threshold signers.
+    /// The byte string uses only `SumeragiFinalityCheckpoint::encode_canonical`.
+    pub finality_checkpoint: Vec<u8>,
     /// Monotonically increasing sequence within this native policy/network/scope.
     pub sequence: u64,
     /// Inclusive issuance time in milliseconds since the Unix epoch.
@@ -70,8 +75,27 @@ impl KagemushaMobileBootstrapCheckpointV1 {
     pub fn approval_payload(&self) -> KagemushaMobileBootstrapApprovalPayloadV1 {
         KagemushaMobileBootstrapApprovalPayloadV1 {
             domain: APPROVAL_DOMAIN.to_owned(),
-            checkpoint: *self,
+            checkpoint: self.clone(),
         }
+    }
+
+    /// Decode and check the exact native checkpoint's canonical frame, network and certificate.
+    ///
+    /// This establishes internal consistency only. Only the complete signed package admitted
+    /// against independent native policy and freshness pins authenticates this selection.
+    ///
+    /// # Errors
+    /// Rejects oversized, malformed, noncanonical or network-inconsistent checkpoint bytes.
+    pub fn decode_finality_checkpoint(&self) -> Result<SumeragiFinalityCheckpoint, String> {
+        let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&self.finality_checkpoint)
+            .map_err(|error| format!("invalid native bootstrap checkpoint: {error}"))?;
+        SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &self.network_id,
+            checkpoint.chain_id(),
+        )
+        .map_err(|error| format!("native bootstrap checkpoint differs: {error}"))?;
+        Ok(checkpoint)
     }
 }
 
@@ -164,7 +188,7 @@ impl KagemushaMobileBootstrapCheckpointV1 {
             .authority_policy
             .canonical_digest()
             .map_err(|_| "KAGEMUSHA mobile bootstrap has an invalid native policy".to_owned())?;
-        let checkpoint = *self;
+        let checkpoint = self;
         let scope = checkpoint.scope;
         if checkpoint.version != 1
             || checkpoint.authority_policy_digest != policy_digest
@@ -184,7 +208,8 @@ impl KagemushaMobileBootstrapCheckpointV1 {
             || checkpoint.release_id == checkpoint.release_attestation_digest
             || &checkpoint.release_id == checkpoint.network_id.as_bytes()
             || &checkpoint.release_attestation_digest == checkpoint.network_id.as_bytes()
-            || checkpoint.first_context_id.0.as_ref() == Hash::prehashed([0; 32]).as_ref()
+            || checkpoint.finality_checkpoint.is_empty()
+            || checkpoint.finality_checkpoint.len() > MAX_FINALITY_CHECKPOINT_BYTES
         {
             return Err(
                 "KAGEMUSHA mobile bootstrap differs from native deployment pins".to_owned(),
@@ -199,7 +224,7 @@ impl KagemushaMobileBootstrapCheckpointV1 {
         {
             return Err("KAGEMUSHA mobile bootstrap freshness failed".to_owned());
         }
-        let encoded = norito::encode_canonical(&checkpoint)
+        let encoded = norito::encode_canonical(checkpoint)
             .map_err(|_| "KAGEMUSHA mobile bootstrap checkpoint encoding failed".to_owned())?;
         let mut digest = Sha256::new();
         digest.update(CHECKPOINT_DOMAIN);
@@ -293,6 +318,7 @@ impl KagemushaMobileBootstrapPackageV1 {
         for approval in &self.approvals {
             approval.verify(&self.checkpoint, pins.authority_policy)?;
         }
+        self.checkpoint.decode_finality_checkpoint()?;
         Ok(digest)
     }
 }

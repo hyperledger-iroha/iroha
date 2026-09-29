@@ -4,7 +4,8 @@
 //! They do not authenticate memory, host syscalls, code fetch, or state effects,
 //! and cannot authorize proof-backed transactions. A caller must keep the
 //! recorder local because register snapshots can contain private values.
-//! Dropping the recorder clears its retained rows, but `Copy` snapshots and
+//! Dropping the recorder volatile-erases its retained register values and tags, but
+//! `Copy` snapshots and
 //! append temporaries can leave transient copies. This is not a private-witness
 //! cleanup or custody boundary for production proving.
 
@@ -14,6 +15,8 @@ use crate::{
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
 };
 use mv::allocation::AllocationBudget;
+
+mod private_disposal;
 
 /// Complete register and control snapshot at one interpreter boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,13 +51,6 @@ impl Default for DiagnosticStepState {
             registers: [0; 256],
             tags: [false; 256],
         }
-    }
-}
-
-impl DiagnosticStepState {
-    fn scrub(&mut self) {
-        self.registers.fill(0);
-        self.tags.fill(false);
     }
 }
 
@@ -127,18 +123,12 @@ impl PendingDiagnosticStep {
     }
 }
 
-impl Drop for PendingDiagnosticStep {
-    fn drop(&mut self) {
-        self.before.scrub();
-    }
-}
-
 /// Fixed-capacity, prepaid local recorder for one VM invocation.
 ///
 /// The buffer is allocated before execution. Reaching its cap produces a local
 /// execution deferral before the next instruction; it cannot alter ordinary
 /// consensus execution because only the explicit diagnostic run uses it.
-/// Drop clears retained rows only; callers must not treat it as a secure
+/// Drop volatile-erases retained register values and tags; callers must not treat it as a secure
 /// private-witness container because copied rows and stack temporaries remain.
 pub struct DiagnosticStepRecorder {
     records: ExecutionBuffer<DiagnosticStepRecord>,
@@ -200,56 +190,54 @@ impl DiagnosticStepRecorder {
     /// Check capacity before an instruction can mutate VM or host state.
     pub(crate) fn begin_step(
         &self,
-        before: DiagnosticStepState,
+        mut before: DiagnosticStepState,
     ) -> Result<PendingDiagnosticStep, VMError> {
         if self.records().len() >= self.capacity {
+            before.scrub();
             return Err(VMError::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity,
             ));
         }
-        Ok(PendingDiagnosticStep {
+        let pending = PendingDiagnosticStep {
             instruction: None,
             opcode_gas: None,
             before,
-        })
+        };
+        before.scrub();
+        Ok(pending)
     }
 
     /// Complete the already funded row; this never grows its allocation.
     pub(crate) fn finish_step(
         &mut self,
-        mut pending: PendingDiagnosticStep,
-        after: DiagnosticStepState,
+        pending: PendingDiagnosticStep,
+        mut after: DiagnosticStepState,
         outcome: DiagnosticStepOutcome,
     ) -> Result<(), VMError> {
-        let before = std::mem::take(&mut pending.before);
-        let record = DiagnosticStepRecord {
+        let mut records = [DiagnosticStepRecord {
             instruction: pending.instruction,
             opcode: pending.instruction.map(|word| (word >> 24) as u8),
             opcode_gas: pending.opcode_gas,
-            before,
+            before: pending.before,
             after,
             outcome,
-        };
-        self.records
-            .append(&[record])
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))
+        }];
+        after.scrub();
+        let result = self
+            .records
+            .append(&records)
+            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable));
+        records[0].scrub();
+        result
     }
 
     /// Record a terminal boundary without adding a trace row.
-    pub(crate) fn finish_run(&mut self, end: DiagnosticRunEnd) {
+    pub(crate) fn finish_run(&mut self, mut end: DiagnosticRunEnd) {
+        if let Some(previous) = &mut self.end {
+            previous.state.scrub();
+        }
         self.end = Some(end);
-    }
-}
-
-impl Drop for DiagnosticStepRecorder {
-    fn drop(&mut self) {
-        for record in self.records.as_mut_slice() {
-            record.before.scrub();
-            record.after.scrub();
-        }
-        if let Some(end) = &mut self.end {
-            end.state.scrub();
-        }
+        end.state.scrub();
     }
 }
 

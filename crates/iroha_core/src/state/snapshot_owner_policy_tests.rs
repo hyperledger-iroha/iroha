@@ -205,7 +205,6 @@ fn snapshot_owner_policy_fixture_with_stored_history(
                     Vec::new(),
                     AxtPolicySnapshot::default(),
                     Default::default(),
-                    Vec::new(),
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("checked empty typed output collection");

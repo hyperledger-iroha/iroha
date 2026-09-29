@@ -41,6 +41,16 @@ the cutover. Why and how it was built: [2026-09-25 record](../docs/history/2026-
 
 S2 and S3 come before S4. S5 and S6 build on S4. S7 gates the release.
 
+**Snapshot contract.** The node publishes signed local snapshot exports only after
+original genesis execution and certified journal replay finish and the native driver
+starts. A native halt or worker failure revokes the writer gate; orderly shutdown
+retains successful recovery for the final write. Export signatures authenticate bytes,
+not execution of a decoded World. Strict startup rejects nonempty snapshot caches and
+replays the original journal. Accelerated restoration remains an S9 outcome: it needs
+complete-World provenance plus the exact native tip, CommitQC and retained headers;
+a matching witnessed-write root or local signing key does not satisfy it.
+
+
 ### Validator staking integration requirements
 
 The [validator staking completion plan](staking_validator_completion.md) remains

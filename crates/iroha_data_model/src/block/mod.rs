@@ -694,7 +694,7 @@ impl SignedBlock {
         self.commit_certificate = certificate;
         self
     }
-    /// Hash the canonical resultless proposal wire used by [`consensus_v2::BlockSubject`].
+    /// Hash the canonical resultless proposal wire.
     ///
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
@@ -2298,6 +2298,51 @@ mod tests {
         assert!(
             BlockResult::decode_all(&mut cursor).is_err(),
             "the AXT policy snapshot is a required V1 BlockResult wire field"
+        );
+    }
+    #[test]
+    fn block_result_native_layout_roundtrips_without_retired_lane_statements() {
+        #[derive(norito::codec::Encode)]
+        struct NativeBlockResult {
+            outputs: Vec<execution_output::ExecutionOutputV1>,
+            output_merkle: MerkleTree<execution_output::ExecutionOutputV1>,
+            committed_fragment_count: u64,
+            fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
+            axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+            axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
+        }
+        let native_result = NativeBlockResult {
+            outputs: Vec::new(),
+            output_merkle: MerkleTree::default(),
+            committed_fragment_count: 0,
+            fastpq_transcripts: BTreeMap::new(),
+            axt_envelopes: Vec::new(),
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot {
+                version: 1,
+                entries: Vec::new(),
+            },
+            axt_transitioned_dataspaces: BTreeSet::new(),
+        };
+        let bytes = native_result.encode();
+        let mut cursor = bytes.as_slice();
+        let decoded = BlockResult::decode_all(&mut cursor).expect("current native output layout");
+        assert_eq!(decoded.encode(), bytes, "exact native Norito roundtrip");
+        assert!(cursor.is_empty());
+        let mut json = norito::json::to_value(&decoded).expect("native result JSON");
+        json.as_object_mut().unwrap().insert(
+            "lane_finality_statements".to_owned(),
+            norito::json::Value::Array(Vec::new()),
+        );
+        assert!(
+            norito::json::from_value::<BlockResult>(json).is_err(),
+            "removed lane statements are not an optional JSON field"
+        );
+        let mut retired = bytes.clone();
+        retired.extend_from_slice(&Vec::<()>::new().encode());
+        assert!(
+            BlockResult::decode_all(&mut retired.as_slice()).is_err(),
+            "retired trailing lane statements must not be accepted"
         );
     }
     #[test]

@@ -2416,7 +2416,6 @@ mod tests {
                 Vec::new(),
                 Default::default(),
                 Default::default(),
-                Vec::new(),
                 &output_limits,
             )
             .expect("attach one canonical successful Network output to archive genesis");

@@ -45,7 +45,12 @@ impl Hash {
     fn is_lsb_1(hash: &[u8; Self::LENGTH]) -> bool {
         hash[Self::LENGTH - 1] & 1 == 1
     }
-    fn from_marked_bytes(hash: [u8; Self::LENGTH]) -> Option<Self> {
+    /// Accept an already marked hash without changing its bytes.
+    ///
+    /// Returns `None` if the Iroha hash marker is absent. This checks the wire
+    /// representation only; it does not authenticate the digest's preimage.
+    #[must_use]
+    pub fn from_marked_bytes(hash: [u8; Self::LENGTH]) -> Option<Self> {
         Self::is_lsb_1(&hash).then_some(Self(hash))
     }
     fn decode_archived(
@@ -712,6 +717,20 @@ mod tests {
         let bytes = original.encode();
         let decoded = HashOf::<()>::decode(&mut &bytes[..]).expect("failed to decode HashOf");
         assert_eq!(original, decoded);
+    }
+    #[test]
+    fn marked_hash_constructor_preserves_bytes_and_rejects_missing_marker() {
+        for last_byte in 0..=u8::MAX {
+            let mut bytes = [0xa5; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = last_byte;
+            let hash =
+                crate::test_allocations::without_allocations(|| Hash::from_marked_bytes(bytes));
+            if last_byte & 1 == 1 {
+                assert_eq!(hash.unwrap().as_ref(), &bytes);
+            } else {
+                assert!(hash.is_none());
+            }
+        }
     }
     #[test]
     fn hash_of_new_matches_encoded_bytes_hash() {

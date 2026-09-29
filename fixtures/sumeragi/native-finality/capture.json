@@ -1,0 +1,41 @@
+{
+  "format": "iroha.native-finality.checkpoint-fixture-capture",
+  "version": 1,
+  "chain_id": "portable-native-fixture",
+  "network_id": "hash:D4D2146E7ACD6E0CDD45BFD08AE470F8A5F042F5D058E3D5B160E1B816E88163#E567",
+  "generator": {
+    "path": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
+    "source_sha256": "921a55a9d5024961a1d0cc043e69ed443d5c252a915c80783514bc5a0a4267e7",
+    "exporter_patch_sha256": "64787990e89e2526103dd6020b9489fe5b072017eb063f9068dd63020ed21ebd",
+    "test": "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
+    "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_data_model --lib --features test-fixtures,transparent_api sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --ignored --exact --nocapture"
+  },
+  "captures": [
+    {
+      "log": "target/staking-validation/native-checkpoint-capture-a.log",
+      "sha256": "b7c801da5e070d677220af0afd98b88fe3ad39d6c571512b3e94c9ad5d95bdae",
+      "result": "1 passed; 0 failed; 0 ignored; explicit exporter invocation"
+    },
+    {
+      "log": "target/staking-validation/native-checkpoint-capture-b.log",
+      "sha256": "01bd5e15197222cd71566e521bfdcfa502e24f686e38dd7ebbbacbc15db6fd02",
+      "result": "1 passed; 0 failed; 0 ignored; explicit exporter invocation"
+    }
+  ],
+  "byte_identical_runs": 2,
+  "artifacts": [
+    {
+      "path": "fixtures/sumeragi/native-finality/genesis-checkpoint.nrt",
+      "height": 1,
+      "bytes": 31152,
+      "sha256": "5a1bcfd4d938fc35d6b0fce593c57d808521bd0ec2320a26b1240b46926fd538"
+    },
+    {
+      "path": "fixtures/sumeragi/native-finality/height-2-checkpoint.nrt",
+      "height": 2,
+      "bytes": 34329,
+      "sha256": "7e83081ea44ddc82e9fe350ad4afa00883c456e9df030825861790ed3b709c2a"
+    }
+  ],
+  "scope": "Deterministic protocol fixtures: exact signed genesis and real native three-of-four BLS H2 certificate over synthetic outputs. Canonical roundtrip and contiguous checkpoint page verified by exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim."
+}

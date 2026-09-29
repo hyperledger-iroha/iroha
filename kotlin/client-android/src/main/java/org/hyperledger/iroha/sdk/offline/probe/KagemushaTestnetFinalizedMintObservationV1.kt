@@ -12,8 +12,7 @@ internal interface KagemushaTestnetFinalizedMintObservationEndpointV1 {
         operationId: ByteArray,
         statusJson: ByteArray,
         anchorNetworkId: ByteArray,
-        anchorHeightBits: Long,
-        anchorContextId: ByteArray,
+        anchorCheckpoint: ByteArray,
         statePublicInputs: ByteArray,
         pairedProof: ByteArray,
         output: ByteBuffer,
@@ -33,8 +32,8 @@ class KagemushaTestnetFinalizedMintObservationV1 private constructor(
 ) {
     /**
      * Send the original bounded Torii status JSON, independently authenticated finality
-     * coordinates, and canonical Norito proof inputs to Rust. The height is unsigned u64 bits;
-     * all coordinates must match the previously authenticated native operation pin. A status
+     * network and complete canonical native checkpoint, plus Norito proof inputs to Rust.
+     * The checkpoint must match the previously authenticated native operation pin. A status
      * lookup hint is not an independent finality source.
      * Return only its explicitly unqualified observation archive.
      */
@@ -42,8 +41,7 @@ class KagemushaTestnetFinalizedMintObservationV1 private constructor(
         operationId: ByteArray,
         statusJson: ByteArray,
         anchorNetworkId: ByteArray,
-        anchorHeightBits: Long,
-        anchorContextId: ByteArray,
+        anchorCheckpoint: ByteArray,
         statePublicInputs: ByteArray,
         pairedProof: ByteArray,
     ): ByteArray {
@@ -55,8 +53,7 @@ class KagemushaTestnetFinalizedMintObservationV1 private constructor(
         }
         require(anchorNetworkId.size == ANCHOR_HASH_BYTES &&
             (anchorNetworkId.last().toInt() and 1) == 1 &&
-            anchorContextId.size == ANCHOR_HASH_BYTES &&
-            (anchorContextId.last().toInt() and 1) == 1 && anchorHeightBits != 0L) {
+            anchorCheckpoint.size in 1..CHECKPOINT_MAX_BYTES) {
             "KAGEMUSHA testnet mint independent finality anchor is invalid"
         }
         require(statePublicInputs.size in 1..STATE_INPUT_MAX_BYTES) {
@@ -69,7 +66,7 @@ class KagemushaTestnetFinalizedMintObservationV1 private constructor(
         val output = ByteBuffer.allocateDirect(OBSERVATION_MAX_BYTES)
         val status = try {
             endpoint.observe(operationId.copyOf(), statusJson.copyOf(), anchorNetworkId.copyOf(),
-                anchorHeightBits, anchorContextId.copyOf(), statePublicInputs.copyOf(),
+                anchorCheckpoint.copyOf(), statePublicInputs.copyOf(),
                 pairedProof.copyOf(), output)
         } catch (error: LinkageError) {
             throw IllegalStateException("KAGEMUSHA testnet mint observer JNI is unavailable", error)
@@ -90,13 +87,14 @@ class KagemushaTestnetFinalizedMintObservationV1 private constructor(
 
     companion object {
         private const val OPERATION_ID_BYTES = 32
-        private const val STATUS_JSON_MAX_BYTES = 16 * 1024 * 1024
+        private const val STATUS_JSON_MAX_BYTES = 4 * (36 * 1024 * 1024 + 256)
+        private const val CHECKPOINT_MAX_BYTES = 68 * 1024 * 1024
         private const val ANCHOR_HASH_BYTES = 32
         private const val STATE_INPUT_MAX_BYTES = 4096
         private const val PAIRED_PROOF_MAX_BYTES = 6528
         private const val OBSERVATION_MAX_BYTES = 512
         private val EXPECTED_CONTRACT = intArrayOf(1, OPERATION_ID_BYTES, STATUS_JSON_MAX_BYTES,
-            ANCHOR_HASH_BYTES, ANCHOR_HASH_BYTES, STATE_INPUT_MAX_BYTES, PAIRED_PROOF_MAX_BYTES,
+            ANCHOR_HASH_BYTES, CHECKPOINT_MAX_BYTES, STATE_INPUT_MAX_BYTES, PAIRED_PROOF_MAX_BYTES,
             OBSERVATION_MAX_BYTES)
 
         /** Check the entire native contract without installing or authorizing an owner. */
@@ -135,21 +133,19 @@ internal object KagemushaTestnetFinalizedMintObservationJniV1 :
         operationId: ByteArray,
         statusJson: ByteArray,
         anchorNetworkId: ByteArray,
-        anchorHeightBits: Long,
-        anchorContextId: ByteArray,
+        anchorCheckpoint: ByteArray,
         statePublicInputs: ByteArray,
         pairedProof: ByteArray,
         output: ByteBuffer,
     ): Int = nativeObserveV1(operationId, statusJson, anchorNetworkId,
-        anchorHeightBits, anchorContextId, statePublicInputs, pairedProof, output)
+        anchorCheckpoint, statePublicInputs, pairedProof, output)
 
     @JvmStatic private external fun nativeContractV1(): IntArray?
     @JvmStatic private external fun nativeObserveV1(
         operationId: ByteArray,
         statusJson: ByteArray,
         anchorNetworkId: ByteArray,
-        anchorHeightBits: Long,
-        anchorContextId: ByteArray,
+        anchorCheckpoint: ByteArray,
         statePublicInputs: ByteArray,
         pairedProof: ByteArray,
         output: ByteBuffer,

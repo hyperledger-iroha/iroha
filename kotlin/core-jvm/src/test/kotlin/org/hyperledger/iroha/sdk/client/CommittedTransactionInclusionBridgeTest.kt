@@ -16,10 +16,15 @@ class CommittedTransactionInclusionBridgeTest {
         val row = byteArrayOf(0x01, 0xab.toByte(), 0xcd.toByte())
         val output = ByteArray(32) { 1 }
         val block = ByteArray(32) { 3 }
-        val verified = VerifiedCommittedTransaction(row, output, block, 2, true)
+        val checkpoint = byteArrayOf(5, 7)
+        val verified = VerifiedCommittedTransaction(row, output, block, 2, true, checkpoint)
         row[0] = 0
         output[0] = 0
         block[0] = 0
+        checkpoint[0] = 0
+        assertContentEquals(byteArrayOf(5, 7), verified.promotedCheckpointBytes)
+        verified.promotedCheckpointBytes[0] = 0
+        assertContentEquals(byteArrayOf(5, 7), verified.promotedCheckpointBytes)
         assertEquals("01abcd", verified.canonicalRowHex)
         assertEquals(1, verified.outputHashBytes[0].toInt())
         assertEquals(3, verified.blockHashBytes[0].toInt())
@@ -42,7 +47,17 @@ class CommittedTransactionInclusionBridgeTest {
         }
         assertFailsWith<IllegalArgumentException> {
             CommittedTransactionInclusionBridge.verify(
-                byteArrayOf(1), byteArrayOf(1), network, "hash:bad", ByteArray(31),
+                byteArrayOf(1), byteArrayOf(1), network, "chain", byteArrayOf(1), ByteArray(31),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CommittedTransactionInclusionBridge.verify(
+                byteArrayOf(1), byteArrayOf(1), network, "chain", byteArrayOf(), transaction,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CommittedTransactionInclusionBridge.verify(
+                byteArrayOf(1), byteArrayOf(1), network, "", byteArrayOf(1), transaction,
             )
         }
     }

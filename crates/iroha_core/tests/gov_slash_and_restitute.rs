@@ -6,7 +6,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
-    tx::AcceptedTransaction,
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, fixture_validators},
 };
 use iroha_data_model::{
     Registrable,
@@ -32,7 +32,7 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 fn governance_world_with_accounts(
     voting_asset_id: AssetDefinitionId,
     escrow_account: &iroha_data_model::account::AccountId,
@@ -90,7 +90,7 @@ fn configure_retained_governance_state(
     voting_asset: &AssetDefinitionId,
     escrow: &iroha_data_model::account::AccountId,
     slash: &iroha_data_model::account::AccountId,
-    keys: &[iroha_crypto::KeyPair],
+    validators: &[(iroha_model_base::peer::PeerId, Vec<u8>)],
 ) {
     let mut governance = state.gov.clone();
     governance.plain_voting_enabled = true;
@@ -101,17 +101,17 @@ fn configure_retained_governance_state(
     governance.slash_double_vote_bps = 2_000;
     state.set_gov(governance);
     let lane = state.nexus_snapshot().lane_catalog.lanes()[0].clone();
-    let validators = keys
+    let accounts = validators
         .iter()
-        .map(|key| iroha_data_model::account::AccountId::new(key.public_key().clone()))
+        .map(|(peer, _)| iroha_data_model::account::AccountId::new(peer.public_key().clone()))
         .collect::<Vec<_>>();
-    let bindings = validators
+    let bindings = accounts
         .iter()
-        .zip(keys)
+        .zip(validators)
         .map(
-            |(account, key)| crate::governance::manifest::ManifestValidatorBinding {
+            |(account, (peer, _))| crate::governance::manifest::ManifestValidatorBinding {
                 validator: account.clone(),
-                peer_id: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+                peer_id: peer.clone(),
                 torii_url: None,
             },
         )
@@ -130,7 +130,7 @@ fn configure_retained_governance_state(
                     "fixtures/governance-retained-manifest.json",
                 )),
                 governance_rules: Some(crate::governance::manifest::GovernanceRules {
-                    validators,
+                    validators: accounts,
                     validator_bindings: bindings,
                     ..crate::governance::manifest::GovernanceRules::default()
                 }),
@@ -216,7 +216,7 @@ fn seed_slash_snapshot(
         .expect("slash asset") = Quantity::from(40_u64);
     seed_tx.apply();
     seed_block
-        .commit_empty_block_for_testing()
+        .commit_world_overlay_for_testing()
         .expect("commit slash snapshot");
 }
 #[test]
@@ -229,11 +229,26 @@ fn double_vote_slashes_plain_lock() {
         );
     let (escrow_id, _) = gen_account_in("wonderland");
     let (slash_id, _) = gen_account_in("wonderland");
-    let (state, genesis, context, keys) =
-        retained_governance_fixture(&def_id, &escrow_id, &slash_id);
+    let world = governance_world_with_accounts(def_id.clone(), &escrow_id, &slash_id);
+    let mut config = TestChainConfig::new(world, 1_000);
+    let mut governance = iroha_config::parameters::actual::Governance::default();
+    governance.plain_voting_enabled = true;
+    governance.voting_asset_id = def_id.clone();
+    governance.min_bond_amount = 10_u64.into();
+    governance.bond_escrow_account = escrow_id.clone();
+    governance.slash_receiver_account = slash_id.clone();
+    governance.slash_double_vote_bps = 2_000;
+    config.governance = Some(governance);
+    let mut original = CertifiedTestChain::prepare(config).expect("original signed genesis");
+    configure_retained_governance_state(
+        Arc::get_mut(&mut original.state).expect("unpublished fixture owns its State"),
+        &def_id,
+        &escrow_id,
+        &slash_id,
+        &fixture_validators(),
+    );
+    let state = Arc::clone(&original.state);
     let alice = ALICE_ID.clone();
-    let mut executions = 0;
-    let mut publications = 0;
     // Explicit pre-genesis World fixture: fund and cast the initial ballot.
     // This is not a claim that those direct calls were signed genesis intents.
     let rid = "rid-slash-plain".to_string();
@@ -289,16 +304,14 @@ fn double_vote_slashes_plain_lock() {
         drop(fixture_witness_guard);
         assert!(state.view().block_hashes().is_empty());
     }
-    let prepared =
-        prepare_retained_governance_candidate(&state, genesis, &context, &mut executions);
+    let mut chain =
+        CertifiedTestChain::from_prepared(original).expect("actual signed genesis execution");
     assert!(
-        prepared
-            .block()
+        chain
+            .genesis()
             .output_results()
             .all(|result| result.is_ok())
     );
-    let finality = crate::state::publish_governance_fixture(&state, prepared, &keys);
-    publications += 1;
     // Block 2: commit the sealed carrier for the conflicting ballot.
     let ballot_conflict = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: rid.clone(),
@@ -337,20 +350,16 @@ fn double_vote_slashes_plain_lock() {
     );
     let commitment_entrypoint = TransactionEntrypoint::SealedCommitment(sealed_commitment);
     let commitment_hash = commitment_entrypoint.hash();
-    let (proposal, context, lane_proposals) =
-        retained_governance_successor(&state, &finality, commitment_entrypoint, &keys);
-    let prepared =
-        prepare_retained_governance_candidate(&state, proposal, &context, &mut executions);
-    prepared
-        .block()
+    let committed = chain.commit_entrypoints(vec![commitment_entrypoint]);
+    let block = committed.block();
+    block
         .validate_output_merkle_cache()
         .expect("complete commitment outputs");
     assert_eq!(
-        prepared.block().network_input_hashes().collect::<Vec<_>>(),
+        block.network_input_hashes().collect::<Vec<_>>(),
         [commitment_hash]
     );
-    let (_, commitment_output) = prepared
-        .block()
+    let (_, commitment_output) = block
         .network_output_at(0)
         .expect("exact commitment Network output");
     assert!(
@@ -358,9 +367,6 @@ fn double_vote_slashes_plain_lock() {
         "sealed commitment must be retained before reveal: {:?}",
         commitment_output.result
     );
-    let finality = crate::state::publish_governance_fixture(&state, prepared, &keys);
-    publications += 1;
-    finalize_retained_governance_lanes(&state, &finality, lane_proposals, &keys);
 
     // Block 3: the sealed reveal enters the shared sequential corridor. The
     // ballot remains rejected while its prevalidated slash commits separately.
@@ -370,20 +376,16 @@ fn double_vote_slashes_plain_lock() {
         salt,
     ));
     let reveal_hash = reveal_entrypoint.hash();
-    let (proposal, context, lane_proposals) =
-        retained_governance_successor(&state, &finality, reveal_entrypoint, &keys);
-    let prepared =
-        prepare_retained_governance_candidate(&state, proposal, &context, &mut executions);
-    prepared
-        .block()
+    let committed = chain.commit_entrypoints(vec![reveal_entrypoint]);
+    let block = committed.block();
+    block
         .validate_output_merkle_cache()
         .expect("complete reveal outputs");
     assert_eq!(
-        prepared.block().network_input_hashes().collect::<Vec<_>>(),
+        block.network_input_hashes().collect::<Vec<_>>(),
         [reveal_hash]
     );
-    let (_, reveal_output) = prepared
-        .block()
+    let (_, reveal_output) = block
         .network_output_at(0)
         .expect("exact reveal Network output");
     let rejection = reveal_output
@@ -394,16 +396,8 @@ fn double_vote_slashes_plain_lock() {
         format!("{rejection:?}").contains("second plain ballot cannot change direction"),
         "unexpected rejection: {rejection:?}"
     );
-    let finality = crate::state::publish_governance_fixture(&state, prepared, &keys);
-    publications += 1;
-    finalize_retained_governance_lanes(&state, &finality, lane_proposals, &keys);
-    assert_eq!(executions, 3, "each signed candidate executes exactly once");
-    assert_eq!(
-        publications, 3,
-        "each original carrier publishes exactly once"
-    );
     assert_eq!(state.committed_height(), 3);
-    assert_eq!(finality.height, 3);
+    assert_eq!(chain.height(), 3);
     assert!(
         state.has_committed_entrypoint(reveal_hash),
         "the exact rejected sealed carrier must be replay protected"
@@ -612,7 +606,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
         .expect("grant restitution permission");
         state_transaction.apply();
         block
-            .commit_empty_block_for_testing()
+            .commit_world_overlay_for_testing()
             .expect("commit restitution fixture block");
     }
     let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
@@ -631,7 +625,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     // stage any custody or lock mutation before its ledger preflight failed.
     state_transaction.apply();
     block
-        .commit_empty_block_for_testing()
+        .commit_world_overlay_for_testing()
         .expect("commit restitution fixture block");
     let view = state.view();
     let lock = view

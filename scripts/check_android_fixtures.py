@@ -54,7 +54,7 @@ PAYLOAD_FIXTURE_FIELDS = frozenset(
 )
 PAYLOAD_FIELDS = frozenset(
     {
-        "admission_intent",
+
         "authority",
         "network_id",
         "creation_time_ms",
@@ -65,7 +65,7 @@ PAYLOAD_FIELDS = frozenset(
         "time_to_live_ms",
     }
 )
-ADMISSION_INTENT_FIELDS = frozenset({"intent", "value"})
+
 EXECUTABLE_VARIANTS = frozenset({"Batch", "ContractCall", "Instructions", "Ivm"})
 INSTRUCTION_FIELDS = frozenset({"payload_base64", "wire_name"})
 CONTRACT_CALL_FIELDS = frozenset(
@@ -308,14 +308,6 @@ def validate_fee_payment(value: object, context: str) -> Optional[int]:
     return gas_limit
 
 
-def validate_admission_intent(value: object, context: str) -> None:
-    if not isinstance(value, dict):
-        raise ValueError(f"{context} must be an object")
-    require_exact_fields(value, ADMISSION_INTENT_FIELDS, context)
-    if value["intent"] != "ordinary" or value["value"] is not None:
-        raise ValueError(
-            f"{context} must be exactly {{'intent': 'ordinary', 'value': null}}"
-        )
 
 
 def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
@@ -331,9 +323,7 @@ def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
     gas_limit = validate_fee_payment(
         payload["fee_payment"], f"fixture entry {name} fee_payment"
     )
-    validate_admission_intent(
-        payload["admission_intent"], f"fixture entry {name} admission_intent"
-    )
+
     if requires_gas_limit and gas_limit is None:
         raise ValueError(
             f"fixture entry {name} fee_payment.value.gas_limit must be positive "

@@ -55,13 +55,10 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
         XCTAssertEqual(fields[4], try CompactNorito.encodeOption(ttlMs, encode: CompactNorito.encodeUInt64))
         XCTAssertEqual(fields[5], Data([0]), "No caller-invented nonce")
         XCTAssertEqual(fields[6], try fees.compactNorito())
-        var admission = CanonicalNoritoReader(data: fields[7])
-        XCTAssertEqual(try admission.readUInt32LE(), TransactionAdmissionIntentV1.queuePlanSynced.rawValue)
-        XCTAssertEqual(admission.remaining(), 0)
-        var metadata = CanonicalNoritoReader(data: fields[8])
+        var metadata = CanonicalNoritoReader(data: fields[7])
         XCTAssertEqual(try metadata.readUInt64LE(), 0)
         XCTAssertEqual(metadata.remaining(), 0)
-        XCTAssertEqual(fields[9], Data([0]))
+        XCTAssertEqual(fields[8], Data([0]))
 
         let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: key.publicKey())
         XCTAssertTrue(publicKey.isValidSignature(signature, for: IrohaHash.hash(payload)))
@@ -306,7 +303,7 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
         XCTAssertEqual(signed.remaining(), 0)
         var reader = CanonicalNoritoReader(data: payload)
         var fields = [Data]()
-        for _ in 0..<10 { fields.append(try reader.readCompactField()) }
+        for _ in 0..<9 { fields.append(try reader.readCompactField()) }
         XCTAssertEqual(reader.remaining(), 0)
         return (signature, payload, fields)
     }

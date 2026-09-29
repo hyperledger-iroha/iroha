@@ -14,10 +14,7 @@ use crate::{
         test_chain::{CertifiedTestChain, Signers, TestChainConfig},
     },
 };
-use iroha_sumeragi::{
-    crypto::{NoAttestation, verify_qc},
-    preimage::payload_hash,
-};
+use iroha_sumeragi::{crypto::NoAttestation, preimage::payload_hash};
 
 fn with_worker(
     test: impl FnOnce(
@@ -184,14 +181,13 @@ pub(super) fn executed(chain: &CertifiedTestChain, worker: &mut Worker<'_>) -> (
         .height_config()
         .unwrap()
         .committee;
-    verify_qc(
+    iroha_sumeragi::crypto::Verifier::new(
         &**worker.context.crypto.as_ref().unwrap(),
-        &NoAttestation,
         &chain.instance(),
         &block.header.epoch,
         &committee,
-        &qc,
     )
+    .verify_qc(&NoAttestation, &qc)
     .unwrap();
     (block, qc)
 }
@@ -341,14 +337,13 @@ fn preparation_pins_original_even_against_discard_replacement_and_another_valid_
             .height_config()
             .unwrap()
             .committee;
-        verify_qc(
+        iroha_sumeragi::crypto::Verifier::new(
             &**worker.context.crypto.as_ref().unwrap(),
-            &NoAttestation,
             &chain.instance(),
             &block.header.epoch,
             &committee,
-            &alternate,
         )
+        .verify_qc(&NoAttestation, &alternate)
         .unwrap();
         assert!(worker.prepare(&block, &alternate).is_err());
         assert!(worker.commit(&block, &alternate).is_err());
@@ -1709,7 +1704,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
         let source = live.native_contexts.as_ref().unwrap();
         let bytes = source.canonical_bytes().to_vec();
         let carrier_hash = source.carrier_hash();
-        let projection: crate::state::NativeLaneStateProjectionV1 =
+        let projection: crate::state::NativeExecutionProjectionV1 =
             norito::decode_canonical_with_limits(
                 &bytes,
                 norito::canonical_decode_limits(bytes.len()),
@@ -1717,6 +1712,18 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             .unwrap();
         assert_eq!(projection.carrier_hash, carrier_hash);
         assert_eq!(projection.carrier_height, 2);
+        assert_eq!(
+            &projection.casting_bindings,
+            live.overlay
+                .as_ref()
+                .unwrap()
+                .captured_parliament_casting_bindings()
+                .unwrap()
+        );
+        assert_eq!(
+            projection.ordinary_writes, live.witness.writes,
+            "archive retains the exact original execution write order"
+        );
         assert!(
             live.commitment
                 .get()
@@ -1835,7 +1842,8 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
                 foreign.prepare(
                     &original.overlay,
                     original.valid.as_ref(),
-                    original.phase.ready().unwrap()
+                    original.phase.ready().unwrap(),
+                    &original.witness
                 ),
                 Err(NativeContextArchiveError::Source(_)),
             ));

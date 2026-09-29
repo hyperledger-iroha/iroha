@@ -378,8 +378,8 @@ def _validate_root_identity(
         header.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if header_abis != ["24"]:
-        raise ValidationError("authoritative NoritoBridge header ABI is not exact 24")
+    if header_abis != ["25"]:
+        raise ValidationError("authoritative NoritoBridge header ABI is not exact 25")
 
     bridge_source = root / "crates/connect_norito_bridge/src/lib.rs"
     _regular_file(bridge_source, "authoritative NoritoBridge source")
@@ -400,8 +400,8 @@ def _validate_root_identity(
         protocol.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if protocol_abis != ["24"]:
-        raise ValidationError("authoritative privacy bridge ABI is not exact 24")
+    if protocol_abis != ["25"]:
+        raise ValidationError("authoritative privacy bridge ABI is not exact 25")
 
 
 def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_integration: bool = False) -> dict[str, object]:
@@ -428,8 +428,8 @@ def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_int
         or SEMVER.fullmatch(payload["version"]) is None
     ):
         raise ValidationError("artifact version is not canonical")
-    if payload["native_bridge_abi_version"] != 24:
-        raise ValidationError("artifact does not bind exact native bridge ABI 24")
+    if payload["native_bridge_abi_version"] != 25:
+        raise ValidationError("artifact does not bind exact native bridge ABI 25")
     production = payload["privacy_production_enabled"]
     if type(production) is not bool:
         raise ValidationError("privacy_production_enabled must be boolean")

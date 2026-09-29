@@ -13,7 +13,7 @@ import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 
 /** Sole native consensus status revision. Older layouts are rejected. */
-const val SUMERAGI_STATUS_PROTOCOL_VERSION: Int = 8
+const val SUMERAGI_STATUS_PROTOCOL_VERSION: Int = 1
 /** Maximum JSON response size for native status. */
 const val SUMERAGI_STATUS_JSON_MAX_BYTES: Long = 1L * 1024L * 1024L
 

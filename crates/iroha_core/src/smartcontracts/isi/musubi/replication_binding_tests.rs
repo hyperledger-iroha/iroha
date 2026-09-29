@@ -139,6 +139,7 @@ fn replication_binding_preserves_archive_missing_reference_and_identity_error_or
             &location.replication_order,
             &world.view()
         )
+        .map_err(|error| invariant(error.reason()))
         .unwrap_err()
         .to_string(),
         expected
@@ -149,6 +150,7 @@ fn replication_binding_preserves_archive_missing_reference_and_identity_error_or
             &location.replication_order,
             &world.view()
         )
+        .map_err(|error| invariant(error.reason()))
         .unwrap_err()
         .to_string(),
         invariant("Musubi replication order has no consensus archive binding").to_string()
@@ -169,6 +171,7 @@ fn replication_binding_preserves_archive_missing_reference_and_identity_error_or
             &location.replication_order,
             &world.view()
         )
+        .map_err(|error| invariant(error.reason()))
         .unwrap_err()
         .to_string(),
         expected
@@ -184,6 +187,7 @@ fn replication_binding_preserves_archive_missing_reference_and_identity_error_or
             &location.replication_order,
             &world.view()
         )
+        .map_err(|error| invariant(error.reason()))
         .unwrap_err()
         .to_string(),
         invariant(
@@ -191,4 +195,33 @@ fn replication_binding_preserves_archive_missing_reference_and_identity_error_or
         )
         .to_string()
     );
+}
+
+#[test]
+fn replication_binding_rejection_keeps_model_reason_until_instruction_boundary() {
+    let (world, key) = current_provider_fixture(1);
+    let mut archive = world
+        .musubi_archives
+        .view()
+        .get(&key.archive_id)
+        .cloned()
+        .unwrap();
+    let order = world
+        .musubi_archive_locations
+        .view()
+        .get(&key)
+        .unwrap()
+        .replication_order;
+    archive.location_revision = 0;
+    let model = archive.validate().unwrap_err();
+    let error =
+        validate_replication_order_archive_binding(&archive, &order, &world.view()).unwrap_err();
+    assert!(std::ptr::eq(error.reason(), model.reason()));
+    drop((world, archive));
+    let mapped = invariant(error.reason());
+    assert_eq!(mapped.to_string(), invariant(model.reason()).to_string());
+    let Error::InvariantViolation(message) = mapped else {
+        panic!("instruction adapter must preserve the original error variant")
+    };
+    assert_eq!(message.as_ref(), model.reason());
 }

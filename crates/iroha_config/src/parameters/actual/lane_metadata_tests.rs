@@ -4,7 +4,6 @@ use super::*;
 use iroha_data_model::{
     da::confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
     nexus::{LaneSettlementBufferPolicy, LaneVisibility},
-    parameter::system::SumeragiNposParameters,
 };
 use std::{
     collections::BTreeSet,
@@ -59,9 +58,10 @@ fn borrowed_metadata_check_rejects_every_representable_field_drift() {
         scheduler: Some(LaneSchedulerPolicy::new(Some(NonZeroU64::MIN), None)),
         settlement_buffer: Some(LaneSettlementBufferPolicy::new(
             iroha_data_model::account::AccountId::new(key.public_key().clone()),
-            SumeragiNposParameters::default()
-                .xor_asset_definition_id()
-                .clone(),
+            iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+                "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+            )
+            .expect("canonical fixture asset identity"),
             "1".parse().unwrap(),
         )),
         ..LaneConfigMetadata::default()

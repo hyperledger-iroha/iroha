@@ -227,7 +227,7 @@ class KagemushaToriiClientV1 private constructor(builder: Builder) : AutoCloseab
         const val OPERATION_PATH_PREFIX: String = "/v1/kagemusha/operations/"
 
         private const val READINESS_MAX_BYTES = 4 * 1024
-        private const val STATUS_MAX_BYTES = 16 * 1024 * 1024
+        private const val STATUS_MAX_BYTES = 4 * (36 * 1024 * 1024 + 256)
         private const val JSON_MEDIA_TYPE = "application/json"
         private const val NORITO_MEDIA_TYPE = "application/x-norito"
         private val RESERVED_HEADERS = setOf(

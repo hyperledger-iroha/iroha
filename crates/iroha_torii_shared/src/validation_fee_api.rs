@@ -4,8 +4,6 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     governance::types::{
         GovernanceCertificateV1, ProposalKind, ValidationFeePayoutLifecycleProposal,
         ValidationFeePolicyProposal,
@@ -13,6 +11,10 @@ use iroha_data_model::{
     hijiri::{
         HIJIRI_PARAMETERS_VERSION_V1, HijiriAccountRiskV1, HijiriParametersV1, Q16,
         hijiri_fee_quote_hash_from_digests_v1,
+    },
+    sumeragi_finality::{
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
+        verify_checkpoint_page,
     },
     validation_fee::{
         VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
@@ -163,13 +165,14 @@ pub struct ValidationFeeCurrentPolicyProofV1 {
     /// Response layout version.
     pub version: u16,
     /// Canonical complete protected registry, or `None` before first enactment.
+    #[norito(required)]
     pub registry: Option<ValidationFeePolicyRegistryV1>,
     /// Fixed synthetic ordinary-write witness for the registry snapshot.
     pub policy_witness: ValidationFeePolicyWitnessProofV1,
     /// Consecutive finality proofs beginning at the caller's checkpoint.
-    pub finality_chain: Vec<BridgeFinalityProof>,
+    pub finality_chain: Vec<SumeragiFinalityProof>,
     /// Context id at the evaluated tip, suitable for durable checkpoint promotion.
-    pub evaluated_context_id: HeightContextId,
+    pub evaluated_context_id: Hash,
     /// Height whose post-execution policy state was evaluated.
     pub evaluated_block_height: u64,
     /// Canonical lowercase hash of the evaluated committed block.
@@ -1055,11 +1058,10 @@ impl ValidationFeeCurrentPolicyProofV1 {
     pub fn verify_against(
         &self,
         network_id: NetworkId,
-        trusted_checkpoint_height: u64,
-        trusted_checkpoint_context_id: [u8; 32],
-    ) -> Result<HeightContextId, String> {
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
+    ) -> Result<SumeragiFinalityCheckpoint, String> {
         if self.version != VALIDATION_FEE_POLICY_PROOF_VERSION_V1
-            || trusted_checkpoint_height == 0
+            || trusted_checkpoint.height() == 0
             || self.evaluated_block_height == 0
             || self.observed_ledger_tip_height < self.evaluated_block_height
             || self.more_available
@@ -1067,10 +1069,6 @@ impl ValidationFeeCurrentPolicyProofV1 {
         {
             return Err("unsupported validation-fee proof version or invalid trust anchor".into());
         }
-        require_canonical_iroha_hash(
-            "trusted validation-fee checkpoint context id",
-            &trusted_checkpoint_context_id,
-        )?;
         require_canonical_iroha_hash("validation-fee network id", network_id.as_bytes())?;
         let evaluated_block_hash =
             exact_lower_hex_32("evaluated_block_hash", &self.evaluated_block_hash)?;
@@ -1080,69 +1078,33 @@ impl ValidationFeeCurrentPolicyProofV1 {
         {
             return Err("validation-fee finality chain is empty or exceeds 64 proofs".into());
         }
-        let finality_bytes = norito::to_bytes(&self.finality_chain)
-            .map_err(|error| format!("finality chain encoding failed: {error}"))?;
-        if finality_bytes.len() > VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES {
-            return Err("validation-fee finality chain exceeds its byte bound".into());
-        }
-        if self.finality_chain.windows(2).any(|pair| {
-            pair[0].finality_artifact.height.checked_add(1)
-                != Some(pair[1].finality_artifact.height)
-        }) {
-            return Err("validation-fee finality chain skips or reorders a height".into());
-        }
-        let trusted_context = HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
-            Hash::prehashed(trusted_checkpoint_context_id),
-        ));
-        let first = self
-            .finality_chain
-            .first()
-            .expect("non-empty finality chain");
-        if first.finality_artifact.height != trusted_checkpoint_height
-            || first.finality_artifact.context_id() != trusted_context
+        let page = verify_checkpoint_page(
+            network_id,
+            trusted_checkpoint,
+            &self.finality_chain,
+            VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_PROOFS,
+            VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
+        )
+        .map_err(|error| format!("native finality page failed: {error}"))?;
+        let evaluated = page.tip();
+        if evaluated.height() != self.evaluated_block_height
+            || evaluated.header().hash().as_ref() != &evaluated_block_hash
+            || self.evaluated_context_id != evaluated.context_id()
         {
             return Err(
-                "validation-fee finality chain does not begin at the caller's checkpoint".into(),
+                "native finality page tip does not match the evaluated application block".into(),
             );
         }
-        // The exact caller-pinned context authenticates its complete HeightContext. It must still
-        // agree with the independently configured NetworkId before any finality proof is accepted.
-        let trusted_network_id = first.finality_artifact.height_context.network_id;
-        if trusted_network_id != network_id {
-            return Err("validation-fee finality chain targets a different network".into());
-        }
-        let mut verifier = BridgeFinalityVerifier::with_context(network_id, trusted_context);
-        for proof in &self.finality_chain {
-            verifier
-                .verify(proof)
-                .map_err(|error| format!("validation-fee finality chain failed: {error}"))?;
-        }
-        let evaluated = self
-            .finality_chain
-            .last()
-            .expect("non-empty finality chain");
-        let artifact: &V2FinalityArtifact = &evaluated.finality_artifact;
-        if artifact.height != self.evaluated_block_height
-            || artifact.block_hash.as_ref() != &evaluated_block_hash
-            || evaluated.block_header.height().get() != artifact.height
-            || evaluated.block_header.hash() != artifact.block_hash
-            || self.evaluated_context_id != artifact.context_id()
-        {
-            return Err("finality chain tip does not match the evaluated policy block".into());
-        }
-        artifact
-            .commit_qc
-            .execution_commitment
-            .validate()
-            .map_err(|error| format!("evaluated execution commitment is invalid: {error}"))?;
+        // The verified page already validated the complete native result commitment.
+        // Application witnesses below stay bound to that same authenticated tip.
         if !self
             .policy_witness
-            .verify(artifact.commit_qc.execution_commitment.ordinary_writes_root)
+            .verify(evaluated.execution().ordinary_writes_root)
         {
             return Err("validation-fee synthetic write proof is invalid".into());
         }
         let commitment = self.policy_witness.commitment()?;
-        if commitment.evaluated_height != artifact.height {
+        if commitment.evaluated_height != evaluated.height() {
             return Err("validation-fee snapshot height differs from finality".into());
         }
         match (&commitment.status, &self.registry) {
@@ -1168,11 +1130,11 @@ impl ValidationFeeCurrentPolicyProofV1 {
                     || registry.head().map(|entry| entry.policy_hash)
                         != Some(available.head_policy_hash)
                     || registry
-                        .scheduled_entry_at_height(artifact.height)
+                        .scheduled_entry_at_height(evaluated.height())
                         .map(|entry| entry.policy_hash)
                         != available.scheduled_policy_hash
                     || registry
-                        .effective_entry_at_height(artifact.height)
+                        .effective_entry_at_height(evaluated.height())
                         .map(|entry| entry.policy_hash)
                         != available.effective_policy_hash
                 {
@@ -1188,7 +1150,7 @@ impl ValidationFeeCurrentPolicyProofV1 {
                 );
             }
         }
-        Ok(self.evaluated_context_id)
+        Ok(page.into_checkpoint())
     }
     /// Return the policy effective at the finalized evaluation height.
     #[must_use]
@@ -1211,14 +1173,24 @@ impl ValidationFeeCurrentPolicyProofV1 {
         &self,
         network_id: NetworkId,
         policy_chain_genesis_hash: [u8; 32],
-        trusted_checkpoint_height: u64,
-        trusted_checkpoint_context_id: [u8; 32],
-    ) -> Result<ValidationFeeVerifiedPolicyProjectionV1, String> {
-        self.verify_against(
-            network_id,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
-        )?;
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
+    ) -> Result<
+        (
+            ValidationFeeVerifiedPolicyProjectionV1,
+            SumeragiFinalityCheckpoint,
+        ),
+        String,
+    > {
+        let promoted = self.verify_against(network_id, trusted_checkpoint)?;
+        let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            trusted_checkpoint,
+            &network_id,
+            trusted_checkpoint.chain_id(),
+        )
+        .map_err(|error| error.to_string())?;
+        let trusted = verifier
+            .verify_same_decision(trusted_checkpoint.tip(), trusted_checkpoint.tip())
+            .map_err(|error| error.to_string())?;
         require_canonical_iroha_hash(
             "validation-fee immutable binding policy-chain genesis hash",
             &policy_chain_genesis_hash,
@@ -1256,23 +1228,26 @@ impl ValidationFeeCurrentPolicyProofV1 {
             .map(verified_current_policy)
             .transpose()?
             .flatten();
-        Ok(ValidationFeeVerifiedPolicyProjectionV1 {
-            schema: VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME.to_owned(),
-            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-            network_id: network_id.to_string(),
-            policy_chain_genesis_hash: hex::encode(policy_chain_genesis_hash),
-            registry_hash: hex::encode(registry_hash),
-            head_policy_version: head.policy.policy_version,
-            head_policy_hash: hex::encode(head.policy_hash),
-            current_policy,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id: hex::encode(trusted_checkpoint_context_id),
-            evaluated_block_height: self.evaluated_block_height,
-            evaluated_context_id: hex::encode(self.evaluated_context_id.0.as_ref()),
-            evaluated_block_hash: self.evaluated_block_hash.clone(),
-            observed_ledger_tip_height: self.observed_ledger_tip_height,
-            more_available: self.more_available,
-        })
+        Ok((
+            ValidationFeeVerifiedPolicyProjectionV1 {
+                schema: VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME.to_owned(),
+                version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+                network_id: network_id.to_string(),
+                policy_chain_genesis_hash: hex::encode(policy_chain_genesis_hash),
+                registry_hash: hex::encode(registry_hash),
+                head_policy_version: head.policy.policy_version,
+                head_policy_hash: hex::encode(head.policy_hash),
+                current_policy,
+                trusted_checkpoint_height: trusted_checkpoint.height(),
+                trusted_checkpoint_context_id: hex::encode(trusted.context_id().as_ref()),
+                evaluated_block_height: self.evaluated_block_height,
+                evaluated_context_id: hex::encode(self.evaluated_context_id.as_ref()),
+                evaluated_block_hash: self.evaluated_block_hash.clone(),
+                observed_ledger_tip_height: self.observed_ledger_tip_height,
+                more_available: self.more_available,
+            },
+            promoted,
+        ))
     }
 }
 /// Validation-fee governance proposal status exposed by the typed read API.

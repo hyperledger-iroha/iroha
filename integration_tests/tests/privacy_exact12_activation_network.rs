@@ -57,8 +57,8 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
-// These controlled submissions use QueuePlanSynced: plan, seal, then execution.
-const QUEUE_PLAN_LIFECYCLE_BLOCKS: u64 = 3;
+// Each isolated ordinary submission executes in the next native certified global carrier.
+const EXECUTION_CARRIER_BLOCKS: u64 = 1;
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
 const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
 const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
@@ -397,13 +397,13 @@ async fn wait_for_identical_exact12_snapshots(
         sleep(POLL_INTERVAL).await;
     }
 }
-async fn next_queue_plan_execution_height(client: &Client) -> Result<u64> {
+async fn next_execution_height(client: &Client) -> Result<u64> {
     privacy_capabilities(&client)
         .await
-        .wrap_err("query committed height before QueuePlan governed transaction")?
+        .wrap_err("query committed height before native transaction governed transaction")?
         .committed_height
-        .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
-        .ok_or_else(|| eyre!("QueuePlan privacy-governance execution height overflowed"))
+        .checked_add(EXECUTION_CARRIER_BLOCKS)
+        .ok_or_else(|| eyre!("native transaction privacy-governance execution height overflowed"))
 }
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
@@ -844,7 +844,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         )
         .await?;
         let immutable_consensus_policy = initial_snapshots[0].consensus_policy;
-        let unauthorized_height = next_queue_plan_execution_height(&client).await?;
+        let unauthorized_height = next_execution_height(&client).await?;
         let unauthorized_error = submit_instruction(
             &client,
             RegisterPrivacyProtocolActivationV1::new(proposed_activation(
@@ -876,7 +876,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "grant CanEnactGovernance for exact-12 activation",
         )
         .await?;
-        let rejected_height = next_queue_plan_execution_height(&client).await?;
+        let rejected_height = next_execution_height(&client).await?;
         let forged_activation_height = rejected_height.checked_add(1)
             .ok_or_else(|| eyre!("forged activation height overflowed"))?;
         let rejected_transaction = instructions_transaction(&client, vec![
@@ -905,7 +905,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients, post_rejection_height, &absent,
             "failed activation must roll back its preceding registration on every peer",
         ).await?;
-        let tampered_height = next_queue_plan_execution_height(&client).await?;
+        let tampered_height = next_execution_height(&client).await?;
         let mut substituted = proposed_activation(profiles[0], tampered_height);
         ensure!(
             profiles[0].verifier_digest != profiles[1].verifier_digest,
@@ -934,10 +934,10 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "rejected profile substitution must not register any activation",
         )
         .await?;
-        let first_registration_height = next_queue_plan_execution_height(&client).await?;
+        let first_registration_height = next_execution_height(&client).await?;
         let registration_span = u64::try_from(profiles.len() - 1)
             .expect("available profile count fits u64")
-            .checked_mul(QUEUE_PLAN_LIFECYCLE_BLOCKS)
+            .checked_mul(EXECUTION_CARRIER_BLOCKS)
             .ok_or_else(|| eyre!("available-profile registration span overflowed"))?;
         let final_registration_height = first_registration_height
             .checked_add(registration_span)
@@ -947,12 +947,12 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         for (index, compiled) in profiles.iter().copied().enumerate() {
             let registration_offset = u64::try_from(index)
                 .expect("exact-12 index fits u64")
-                .checked_mul(QUEUE_PLAN_LIFECYCLE_BLOCKS)
+                .checked_mul(EXECUTION_CARRIER_BLOCKS)
                 .ok_or_else(|| eyre!("exact-12 registration offset overflowed"))?;
             let expected_height = first_registration_height
                 .checked_add(registration_offset)
                 .ok_or_else(|| eyre!("exact-12 proposal height overflowed"))?;
-            let observed_height = next_queue_plan_execution_height(&client).await?;
+            let observed_height = next_execution_height(&client).await?;
             ensure!(
                 observed_height == expected_height,
                 "proposal `{}` would land at height {observed_height}, expected deterministic \
@@ -998,7 +998,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 .wrap_err("query height after exact-12 proposals")?
                 .committed_height
                 == final_registration_height,
-            "the available-profile proposals did not occupy their deterministic QueuePlan execution heights"
+            "the available-profile proposals did not occupy their deterministic native transaction execution heights"
         );
         let mut registered_records = proposed_records.clone();
         registered_records[0].lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
@@ -1066,7 +1066,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
              quorum probe"
         );
         let healthy_clients = all_clients[..restart_index].to_vec();
-        let activation_height = next_queue_plan_execution_height(&client).await?;
+        let activation_height = next_execution_height(&client).await?;
         let active_records = profiles
             .iter()
             .copied()
@@ -1200,7 +1200,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "exact activation proposal replay unexpectedly committed another block"
         );
         let expected_catch_up_height = height_before_replay
-            .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
+            .checked_add(EXECUTION_CARRIER_BLOCKS)
             .ok_or_else(|| eyre!("exact-12 catch-up height overflowed"))?;
         let catch_up_transaction = instruction_transaction(
             &client,

@@ -26,6 +26,8 @@ use iroha_data_model::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod observer;
+mod preparation;
+use preparation::CapturedPhaseV1;
 /// Daemon configuration assembly for the concrete native source, producer and observer.
 pub mod runtime;
 mod transactions;
@@ -46,8 +48,12 @@ impl NativeStreamTokenSourceV1 {
         &self,
         operation: [u8; 32],
     ) -> Result<StreamTokenAuthoritySnapshotV1, SignerOperationErrorV1> {
-        capture_stream_token_authority_v1(&self.state.view(), &self.binding, operation)
-            .map_err(|_| SignerOperationErrorV1::StateUnavailable)
+        let current =
+            capture_stream_token_authority_v1(&self.state.view(), &self.binding, operation)
+                .map_err(|_| SignerOperationErrorV1::StateUnavailable)?;
+        #[cfg(test)]
+        preparation::capture_counts::record(current.floor.height);
+        Ok(current)
     }
     fn time(&self) -> Result<StreamTokenEligibilityTimeIntervalV1, SignerOperationErrorV1> {
         let now = u64::try_from(
@@ -109,37 +115,17 @@ impl NativeStreamTokenSourceV1 {
         }
         Ok(context)
     }
-    fn prepare_check(
-        &self,
-        reviewed: StreamTokenReviewedV1,
-        phase: Phase,
-    ) -> Result<PreparedStreamTokenCheckV1, SignerOperationErrorV1> {
-        let current = self.capture(reviewed.request.operation_id)?;
-        if current.operator != self.transactions.operator() {
-            return Err(SignerOperationErrorV1::CustodyChanged);
-        }
-        begin_stream_token_check_v1(
-            Arc::clone(&self.state),
-            StreamTokenCheckExpectedV1 {
-                binding: self.binding.clone(),
-                observer: self.transactions.observer(),
-                expected_operator: current.operator,
-                control_revision: current.control_revision,
-                control_digest: current.anchor.state_digest,
-                reviewed,
-                phase,
-                floor: current.floor,
-            },
-            self.timeout,
-        )
-        .map_err(|_| SignerOperationErrorV1::StateUnavailable)
-    }
     fn checked(
         &self,
         reviewed: StreamTokenReviewedV1,
         phase: Phase,
     ) -> Result<VerifiedStreamTokenCheckV1, SignerOperationErrorV1> {
-        let prepared = self.prepare_check(reviewed, phase)?;
+        self.checked_prepared(self.prepare_check(reviewed, phase)?)
+    }
+    fn checked_prepared(
+        &self,
+        prepared: PreparedStreamTokenCheckV1,
+    ) -> Result<VerifiedStreamTokenCheckV1, SignerOperationErrorV1> {
         let signed = self.transactions.sign(prepared.instruction(), true)?;
         let pending = prepared
             .bind_signed_transaction(signed.transaction.clone())
@@ -163,20 +149,8 @@ impl NativeStreamTokenSourceV1 {
         request: &SignerOperationReservationRequestV1<'_>,
         reservation: Option<SignerOperationReservationV1>,
     ) -> Result<StreamTokenNativeOperationV1, SignerOperationErrorV1> {
-        let current = self.capture(request.intent().operation_id)?;
-        let row = current
-            .operation
-            .ok_or(SignerOperationErrorV1::StateUnavailable)?
-            .operation;
-        if row.operation.reviewed.intent != *request.intent()
-            || row.operation.reviewed.intent.digest().ok() != Some(request.intent_digest())
-            || row.operation.reviewed.request.original_custody
-                != SignerOperationCustodyV1::from_verified(request.custody())
-            || reservation.is_some_and(|expected| row.operation.reservation != expected)
-        {
-            return Err(SignerOperationErrorV1::CustodyChanged);
-        }
-        Ok(row)
+        CapturedPhaseV1::capture(self, request.intent().operation_id)?
+            .take_operation(request, reservation)
     }
     fn mutate(
         &self,
@@ -273,14 +247,7 @@ impl SignerOperationStateSourceV1 for NativeStreamTokenSourceV1 {
         check: &SignerOperationReservationCheckV1<'_>,
         phase: SignerReservedObservationPhaseV1,
     ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1> {
-        let row = self.operation(check.request(), Some(check.reservation()))?;
-        let reviewed = row.operation.reviewed;
-        let phase = match phase {
-            SignerReservedObservationPhaseV1::BeforeProvider => Phase::BeforeProvider(row),
-            SignerReservedObservationPhaseV1::AfterProvider => Phase::AfterProvider(row),
-            SignerReservedObservationPhaseV1::BeforeCommit => Phase::BeforeCommit(row),
-        };
-        self.checked_context(&self.checked(reviewed, phase)?)
+        self.checked_context(&self.checked_prepared(self.prepare_reserved_check(check, phase)?)?)
     }
     fn commit(
         &self,
@@ -323,25 +290,7 @@ impl SignerOperationStateSourceV1 for NativeStreamTokenSourceV1 {
         request: &SignerOperationCommitRequestV1<'_>,
         phase: SignerCommittedObservationPhaseV1,
     ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1> {
-        let row = self.operation(
-            request.check().request(),
-            Some(request.check().reservation()),
-        )?;
-        let StreamTokenOutcomeV1::Completed(completed) = row.operation.outcome else {
-            return Err(SignerOperationErrorV1::StateUnavailable);
-        };
-        if completed.commitment != request.commitment()
-            || completed.signatures_digest != request.signatures_digest()
-            || completed.reviewed.request.original_custody != request.original_custody()
-        {
-            return Err(SignerOperationErrorV1::CustodyChanged);
-        }
-        let reviewed = row.operation.reviewed;
-        let phase = match phase {
-            SignerCommittedObservationPhaseV1::AfterCommit => Phase::AfterCommit(row),
-            SignerCommittedObservationPhaseV1::BeforeRelease => Phase::BeforeRelease(row),
-        };
-        self.checked_context(&self.checked(reviewed, phase)?)
+        self.checked_context(&self.checked_prepared(self.prepare_committed_check(request, phase)?)?)
     }
 }
 

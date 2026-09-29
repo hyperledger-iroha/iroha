@@ -14,6 +14,11 @@ std::thread_local! {
 /// Snapshot syntax is distinct from a local refusal by the original State pool.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StateRestoreError {
+    /// World authority must come from original signed-genesis and certified-history replay.
+    #[error(
+        "native World restoration requires fresh-State signed-genesis and certified-history replay"
+    )]
+    NativeExecutionReplayRequired,
     /// The snapshot does not satisfy the canonical typed schema.
     #[error(transparent)]
     Serialization(#[from] json::Error),
@@ -390,6 +395,39 @@ mod state_snapshot_decode_error_tests {
     use super::*;
 
     #[test]
+    fn positive_fast_manifest_cannot_construct_empty_world_at_a_committed_tip() {
+        for height in [1, 2, 100] {
+            let kura = crate::kura::Kura::blank_kura_for_testing();
+            let seed = KuraSeed {
+                execution_budget: mv::allocation::AllocationBudget::new(0),
+                operation_index_budget: mv::allocation::AllocationBudget::new(0),
+                kura: Arc::clone(&kura),
+                lane_manifests: Arc::new(
+                    crate::governance::manifest::LaneManifestRegistry::default(),
+                ),
+                query_handle: crate::query::store::LiveQueryStore::start_test(),
+                #[cfg(feature = "telemetry")]
+                telemetry: crate::telemetry::StateTelemetry::default(),
+            };
+            let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"native-genesis"),
+            ));
+            let result = seed.into_state_from_emergency_fast_manifest(
+                ChainId::from("native-chain"),
+                network,
+                height,
+                None,
+            );
+            assert!(matches!(
+                result,
+                Err(StateRestoreError::NativeExecutionReplayRequired)
+            ));
+            assert_eq!(kura.blocks_count(), 0);
+            assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
+        }
+    }
+
+    #[test]
     fn state_owner_refusals_remain_local_and_invalid_content_remains_format() {
         let deferred = crate::execution_attempt::ExecutionDeferred::from(
             ivm::error::ExecutionDeferral::AllocationUnavailable,
@@ -455,6 +493,10 @@ impl KuraSeed {
         snapshot_height: usize,
         snapshot_tip: Option<HashOf<BlockHeader>>,
     ) -> Result<Box<State>, StateRestoreError> {
+        // The signed manifest authenticates an identity, not an executed World.
+        if snapshot_height > 0 {
+            return Err(StateRestoreError::NativeExecutionReplayRequired);
+        }
         let block_hashes =
             emergency_fast_block_hashes(self.kura.as_ref(), snapshot_height, snapshot_tip)?;
         let nexus = iroha_config::parameters::actual::Nexus::default();
@@ -493,6 +535,7 @@ impl KuraSeed {
                 commit_topology: Cell::new(Vec::new()),
                 prev_commit_topology: Cell::new(Vec::new()),
                 ivm: IVM::try_new(0).map_err(StateRestoreError::VmInitialization)?,
+                native_execution_tip: None,
                 canonical_runtime: Cell::new(
                     SnapshotNexusRuntime::from_nexus_with_autoscale_history(
                         &nexus,
@@ -505,7 +548,6 @@ impl KuraSeed {
                 nexus,
                 chain_id,
                 network_id,
-                snapshot_v2_bootstrap_candidate: None,
                 nexus_runtime_restored_from_snapshot: false,
                 kura: self.kura,
                 query_handle: self.query_handle,
@@ -608,11 +650,12 @@ impl KuraSeed {
         replay_nexus: Option<iroha_config::parameters::actual::Nexus>,
         operation_index_refusal: &std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     ) -> Result<Box<State>, StateRestoreError> {
-        const WITHOUT_BOOTSTRAP: &[&str] = &[
+        const CANONICAL_FIELDS: &[&str] = &[
             "chain_id",
             "network_id",
             "world",
             "nexus_runtime",
+            "native_execution_tip",
             "block_hashes",
             "transactions",
             "public_lane_validators",
@@ -642,47 +685,7 @@ impl KuraSeed {
             "commit_topology",
             "prev_commit_topology",
         ];
-        const WITH_BOOTSTRAP: &[&str] = &[
-            "chain_id",
-            "network_id",
-            "sumeragi_v2_bootstrap",
-            "world",
-            "nexus_runtime",
-            "block_hashes",
-            "transactions",
-            "public_lane_validators",
-            "public_lane_stake_shares",
-            "public_lane_rewards",
-            "public_lane_reward_claims",
-            "public_lane_reward_accruals",
-            "public_lane_reward_reserves",
-            "public_lane_stake_custody",
-            "public_lane_stake_reserves",
-            "space_directory_manifests",
-            "capacity_fee_ledger",
-            "capacity_disputes",
-            "provider_credit_ledger",
-            "sorafs_pricing",
-            "soradns_directory_records",
-            "soradns_directory_pending",
-            "soradns_directory_history",
-            "soradns_directory_prev_of",
-            "soradns_directory_revocations",
-            "soradns_release_signers",
-            "soradns_directory_latest",
-            "soradns_rotation_policy",
-            "soradns_last_publish_ms",
-            "soradns_history_len",
-            "sccp",
-            "commit_topology",
-            "prev_commit_topology",
-        ];
-        let expected_order = if map.contains_key("sumeragi_v2_bootstrap") {
-            WITH_BOOTSTRAP
-        } else {
-            WITHOUT_BOOTSTRAP
-        };
-        map.require_source_order(expected_order, "state")?;
+        map.require_source_order(CANONICAL_FIELDS, "state")?;
         let world_value = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
@@ -828,6 +831,35 @@ impl KuraSeed {
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
+        // A verified native result authenticates witnessed writes, not all decoded World fields.
+        // TODO(S7): admit accelerated restore only with full-World execution provenance.
+        if !block_hashes.is_empty() {
+            return Err(StateRestoreError::NativeExecutionReplayRequired);
+        }
+        let native_tip_claim: native_execution_tip::NativeExecutionTipSnapshot =
+            take_required(&mut map, "native_execution_tip")?;
+        let native_execution_tip = native_tip_claim
+            .restore(
+                &self.execution_budget,
+                &chain_id,
+                &network_id,
+                &block_hashes,
+                &self.kura,
+            )
+            .map_err(|error| match error {
+                native_execution_tip::TipRestoreError::GenesisReplayRequired => {
+                    StateRestoreError::NativeExecutionReplayRequired
+                }
+                native_execution_tip::TipRestoreError::History(message) => {
+                    StateRestoreError::Serialization(json::Error::InvalidField {
+                        field: "native_execution_tip".into(),
+                        message,
+                    })
+                }
+                native_execution_tip::TipRestoreError::Admission(error) => {
+                    StateRestoreError::Admission(StateAdmissionError::Storage(error))
+                }
+            })?;
         let committed_height =
             u64::try_from(block_hashes.hash_count()).map_err(|_| json::Error::InvalidField {
                 field: "state.block_hashes".to_owned(),
@@ -1033,8 +1065,6 @@ impl KuraSeed {
                 message,
             })?;
         }
-        let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
-            take_optional(&mut map, "sumeragi_v2_bootstrap")?;
         reject_unknown(&map, "state")?;
         crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world).map_err(
             |message| json::Error::InvalidField {
@@ -1071,10 +1101,10 @@ impl KuraSeed {
                 prev_commit_topology,
                 ivm: ivm_runtime,
                 canonical_runtime,
+                native_execution_tip: Some(native_execution_tip),
                 nexus: restored_nexus,
                 chain_id,
                 network_id,
-                snapshot_v2_bootstrap_candidate,
                 nexus_runtime_restored_from_snapshot,
                 kura: self.kura,
                 query_handle: self.query_handle,
@@ -1289,7 +1319,6 @@ fn nexus_from_snapshot_runtime(
             .and_then(|()| {
                 ensure_autoscale_managed_lane_created_height_not_future(lane, committed_height)
             })
-            .and_then(|()| ensure_autoscale_lane_drain_close_not_future(lane, committed_height))
             .map_err(|err| json::Error::InvalidField {
                 field: format!("nexus_runtime.lanes[{}]", lane.id.as_u32()),
                 message: err.to_string(),
@@ -1322,14 +1351,12 @@ fn nexus_from_snapshot_runtime(
     restore_snapshot_nexus_owner_policy(&mut nexus, runtime.owner_policy)?;
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
     nexus.lane_catalog = catalog;
-    iroha_data_model::merge::validate_merge_lane_authority_geometry(
-        &nexus.lane_catalog,
-        &nexus.dataspace_catalog,
-    )
-    .map_err(|error| json::Error::InvalidField {
-        field: "nexus_runtime.owner_policy.dataspaces".to_owned(),
-        message: error.to_string(),
-    })?;
+    validate_lane_authority_geometry(&nexus.lane_catalog, &nexus.dataspace_catalog).map_err(
+        |error| json::Error::InvalidField {
+            field: "nexus_runtime.owner_policy.dataspaces".to_owned(),
+            message: error.to_string(),
+        },
+    )?;
     validate_nexus_routing_policy(
         &nexus.routing_policy,
         &nexus.lane_catalog,

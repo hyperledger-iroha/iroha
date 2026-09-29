@@ -156,7 +156,7 @@ verified native artifact directory.
 ## Native SoraFS Reference Validation
 
 The repository SoraFS qualification runner pins
-`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-24 host
+`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-25 host
 artifact. Plain source-checkout builds remain `debug` unless the profile is
 selected explicitly.
 
@@ -262,8 +262,7 @@ request may be up to 16 KiB so a full paired mint-authorization proof fits;
 the enclosing transaction uses Torii's normal signed-transaction ingress
 limit. `Kagemusha.topUpInstructionWireId` is the exact
 `iroha.kagemusha.v1.top_up` registry ID. The standard instruction transaction
-builder signature-binds `QueuePlanSynced`; KAGEMUSHA top-ups must not be built
-with ordinary queue admission. Redemption retains its typed request submission
+builder signs the exact nine-field canonical transaction payload. Redemption retains its typed request submission
 surface. Both submission methods require the exact operation resource in
 `Location`: HTTP 202 is accepted only with a pending status and a positive
 `Retry-After`, while HTTP 200 is accepted only for applied or rejected status
@@ -338,7 +337,7 @@ manifest through the Node/N-API client with an HTTPS origin and immutable
 `LocalSigningContext`. Explicit custom fetch implementations are trusted transport
 dependencies and must preserve HTTPS authentication, response URL, and redirect semantics.
 Public archive decoding is inspection-only; copying or re-decoding transport
-bytes loses admission authority. The authenticated ABI24 binding applies
+bytes loses admission authority. The authenticated ABI25 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state, registered production qualification, and byte-exact equality with the
@@ -932,8 +931,8 @@ distinct `iroha:merkle:leaf:v1\0` and `iroha:merkle:internal:v1\0` hash domains;
 the raw transaction/result hash is passed as the proof leaf and the verifier
 applies the leaf boundary itself. `getLedgerStateRoot()` and
 `getLedgerStateProof()` return the same exact block header, post-state root, and
-Sumeragi-v2 finality artifact, but that carrier remains node-provided evidence
-until an official browser QC/BLS verifier is available.
+native Sumeragi finality proof. The carrier remains untrusted until a native
+verifier authenticates it from an independently selected complete checkpoint.
 
 Node callers can authenticate the finality anchor and the proof together with
 the native Rust bridge. `expectedEntryHash` is the application-selected
@@ -952,10 +951,8 @@ const executedBlockWire = await torii.getLedgerExecutedBlockWire(blockHeight);
 const verdict = await verifyAuthenticatedBlockProofsV1({
   version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
   networkId: NetworkId.parse(pinnedNetworkIdLiteral),
-  trustedContextId: pinnedHeightContextId,
+  trustedCheckpointNorito: independentlyAuthenticatedCheckpoint,
   expectedEntryHash: requestedTransactionEntrypointHash,
-  // Include the last accepted proof only when advancing one exact height.
-  previousFinalityProofNorito,
   finalityProofNorito,
   executedBlockWire,
   blockProofsNorito,
@@ -967,12 +964,15 @@ if (!verdict.valid) throw new Error(verdict.code);
 Malformed archives and wrong-chain, wrong-context, stale, skipped, forged-QC,
 or executed-wire mismatches reject the promise. Authenticated finality with a
 substituted entry or invalid Merkle/result/transcript proof resolves with
-`valid: false`. Retain the accepted finality proof and
-`heightContextIdHex` together as the next application-pinned successor state.
+`valid: false` with `checkpointNorito: null`. After `valid: true`, retain the
+returned canonical `checkpointNorito` for the next verification. The complete
+checkpoint carries the authenticated native prefix; `contextIdHex` is a diagnostic
+digest and cannot replace it. A target proof must equal the checkpoint decision or
+immediately extend it.
 The canonical finality and `BlockProofs` archives are available from Torii,
 and `getLedgerExecutedBlockWire(height)` fetches the exact result-bearing
 `SignedBlockWire` from `/v1/ledger/block/{height}`. Torii binds the body to the
-finalized state hash journal before returning it; staged, resultless, missing,
+authenticated native certified history before returning it; staged, resultless, missing,
 or hash-inconsistent bodies fail closed. Both the route and SDK enforce the
 native verifier's 32 MiB carrier bound. Explorer/header JSON and
 `/v1/blocks/stream` are not equivalent carriers.
@@ -2060,110 +2060,31 @@ TypeScript consumers do not need ambient Node types.
 > `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
 > bindings without writing bespoke tooling.
 
-Sumeragi consensus status is the authoritative protocol-v4 reducer snapshot.
-Use the typed helper for operator or automation decisions: it rejects unsupported
-protocol versions, non-canonical frozen quorums, out-of-range leaders,
-inconsistent CommitQCs, and malformed reducer liveness state.
+Sumeragi status is the native protocol-1 observation. With an exact-network
+operator signing context, the Node and browser clients expose the same closed
+21-field schema through `getSumeragiStatusTyped()`:
 
 ```js
-const status = await torii.getSumeragiStatusTyped();
-
-console.log(
-  `height=${status.height} view=${status.view} ` +
-  `mode=${status.height_context.mode.mode} leader=${status.leader}`,
-);
-
-if (status.last_commit_qc) {
-  console.log(
-    `commit height=${status.last_commit_qc.certificate.round.height} ` +
-    `signers=${status.last_commit_qc.signer_count}/${status.last_commit_qc.validator_count} ` +
-    `power=${status.last_commit_qc.signed_power}/${status.last_commit_qc.total_power}`,
-  );
-}
-
-const diagnostics = await torii.getSumeragiDiagnosticsTyped();
-for (const block of diagnostics.committed_lane_blocks) {
-  console.log(
-    `lane ${block.lane_id} incarnation=${block.lane_incarnation} ` +
-    `height=${block.lane_block_height} status=${block.execution_status}`,
-  );
-}
-
-console.log(
-  `queue=${diagnostics.tx_queue_depth}/${diagnostics.tx_queue_capacity} ` +
-  `bytes=${diagnostics.tx_queue_retained_bytes}/` +
-  `${diagnostics.tx_queue_max_retained_bytes}`,
-);
+const status = await torii.getSumeragiStatusTyped({ signal });
+console.log(status.height, status.view, status.stage, status.halted);
+console.log(status.committed_height, status.applied_height);
 ```
 
-`GET /v1/sumeragi/status` contains only `SumeragiV2Status`. Bounded lane
-evidence, queue pressure, governance readiness, and Native AMX participant
-applications live on `GET /v1/sumeragi/diagnostics`; they are parsed by the
-separate `getSumeragiDiagnosticsTyped()` helper and are not consensus
-authority. The general `GET /status` API remains another distinct
-operational-health snapshot.
-
-Parsed Native AMX participant settlements own frozen receipt arrays and receipt
-entries. Mutating the input payload cannot change a settlement after its hash
-has been checked against the Prepare and Commit certificates.
-
-All Sumeragi status helpers accept the standard `{signal}` option:
-
-```js
-const abortController = new AbortController();
-const status = await torii.getSumeragiStatusTyped({
-  signal: abortController.signal,
-});
-
-const rawStatus = await torii.getSumeragiStatus({
-  signal: abortController.signal,
-});
-
-const diagnostics = await torii.getSumeragiDiagnosticsTyped({
-  signal: abortController.signal,
-});
-```
-
-The raw `getSumeragiStatus()` method returns Torii JSON unchanged. Prefer
-`getSumeragiStatusTyped()` for rollout and operator checks because it validates
-the protocol version, tagged phase/body state, certificate references, durable
-height ordering, and liveness geometry. Use diagnostics for Nexus and Native
-AMX evidence:
-
-```js
-const typed = await torii.getSumeragiDiagnosticsTyped();
-for (const commitment of typed.lane_settlement_commitments) {
-  console.log(commitment.lane_id, commitment.total_xor_after_haircut);
-}
-for (const application of typed.native_amx_participant_applications) {
-  console.log(application.lane_id, application.participant_height, application.state);
-}
-```
-
-Use `getSumeragiStatus()` only when you explicitly need that unmodified JSON
-projection; it performs HTTP handling but deliberately leaves validation to the
-caller.
-
-`ToriiBrowserClient` ships the same separate typed methods. Browser builds use
-the shared bounded lossless parser rather than routing through the Node client:
-
-```js
-const status = await browserTorii.getSumeragiStatusTyped();
-const diagnostics = await browserTorii.getSumeragiDiagnosticsTyped();
-```
+All nullable keys are mandatory. The bounded lossless JSON reader rejects
+numeric-token drift, duplicate fields and malformed native keys, fingerprints,
+beacon horizons and halt reasons. Parsed objects are immutable observations;
+they are not finality proofs. Key admission uses the canonical Rust binding.
+`getSumeragiStatus()` returns raw JSON. Retired global QC and grouped diagnostics
+methods are removed. Native capture parity and actual cross-dataspace settlement
+qualification remain open.
 
 ## Advanced Sumeragi Observability
 
 Torii exposes additional consensus observability endpoints. The JS SDK mirrors
-them so operators can inspect QC snapshots and on-chain parameters without
+them so operators can inspect key observations and on-chain parameters without
 bespoke fetch plumbing:
 
 ```js
-const qc = await torii.getSumeragiQc();
-if (qc.highest_prepare_qc) {
-  console.log(`highest PrepareQC height=${qc.highest_prepare_qc.round.height} subject=${qc.highest_prepare_qc.subject.block_hash}`);
-}
-
 const blsKeys = await torii.getSumeragiBlsKeys();
 console.log(`BLS-capable peers=${Object.values(blsKeys).filter(Boolean).length}`);
 
@@ -2222,14 +2143,14 @@ if (snapshot.status.governance) {
 
 Reliable broadcast remains an internal Sumeragi v2 protocol mechanism. Torii
 does not expose global RBC backlog, per-session sampling, collector-plan, or
-evidence-mutation routes. Use the authenticated Sumeragi status/diagnostics
+evidence-mutation routes. Use the authenticated native Sumeragi status
 reads and Prometheus transport metrics for operations. Consensus evidence is
 available through the supported read-only endpoints:
 
 ```js
 const evidence = await torii.listSumeragiEvidence({
   limit: 20,
-  kind: "SumeragiV2Equivocation",
+  kind: "NativeSumeragiEvidence",
 });
 console.log(`Committed ${evidence.total} evidence entries`);
 const count = await torii.getSumeragiEvidenceCount();
@@ -2237,7 +2158,9 @@ console.log(`Committed evidence count: ${count.count}`);
 ```
 
 The first-release JSON contract is closed: each item is a
-`SumeragiV2Equivocation` record with a non-null consensus admission height and
+`NativeSumeragiEvidence` record with the original instance, epoch context, signing
+generation, ordered historical offenders, original frame digest, and
+a non-null consensus admission height and
 a `pending`, `applied`, or `cancelled` penalty status. Unknown response fields
 and retired evidence kinds are rejected. Unsigned 64-bit values above
 `Number.MAX_SAFE_INTEGER` are returned as `bigint` without rounding. Count
@@ -2785,6 +2708,13 @@ are generated locally over the exact method, path, query, and body; callers
 cannot supply precomputed headers or inline body secrets, and signed requests
 are never redirected or retried.
 
+RAM execution responses contain the output ciphertext and its execution receipt.
+They do not contain a plaintext opening. Identifier resolution requires a separate,
+independently authenticated plaintext opening supplied through `outputOpening`.
+The current `bfv-affine-v1` and `bfv-programmed-v1` profiles are insecure and are
+rejected by production execution and admission; private identifier execution
+remains unavailable until a secure encryption profile is implemented and qualified.
+
 ## Sora VPN lease receipts
 
 `submitVpnReceipt` returns earned/refund XOR fields and the native
@@ -3239,10 +3169,10 @@ unsigned transaction draft. The request contains the authority,
 `contract_address` or `contract_alias`, the explicit entrypoint, optional
 payload and metadata, typed `feePayment`, and an off-wire `draftIntent` built
 from the locally verified contract artifact. Private signing material and the
-intent are never sent to Torii. Contract drafts require the signature-bound
-`QueuePlanSynced` admission intent and canonical account HTTP authentication.
+intent are never sent to Torii. Contract drafts require canonical account HTTP
+authentication and the exact nine-field transaction payload.
 The client rejects the returned draft unless its exact network, authority,
-executable, metadata, quoted fee, creation time, TTL, admission intent, nonce,
+executable, metadata, quoted fee, creation time, TTL, nonce,
 and attachments match caller-trusted state. Sign only after that validation
 succeeds, then submit the exact finalized transaction through the normal
 transaction route.
@@ -3316,10 +3246,11 @@ proofs while that relation remains incomplete.
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
 to an immutable exact `NetworkId`/policy-chain binding and a durable checkpoint.
-The ABI 24 native bridge verifies the Norito proof and returns an immutable
-projection; JavaScript never substitutes application-supplied signatures or
-keysets for that trusted boundary. Persist every promoted checkpoint before
-requesting the next page. `catchUpValidationFeeCurrentPolicyProof` is available
+The ABI 25 native bridge verifies the Norito proof against the complete
+independently selected native checkpoint and returns the policy projection together
+with its promoted canonical checkpoint bytes. A checkpoint is exactly
+`{ checkpointNorito: bytes }`; a height/context pair cannot replace it. Persist every
+promoted checkpoint before requesting the next page. `catchUpValidationFeeCurrentPolicyProof` is available
 when in-memory promotion is sufficient.
 
 ```js
@@ -3353,7 +3284,7 @@ To price the active policy with the execution account's current Hijiri risk,
 request an authenticated live quote. `quoteValidationFeeHijiri` sends and
 accepts only bounded, unencoded, exact `application/x-norito`, rejects
 cacheable responses, and uses the
-ABI 24 native verifier to bind all arithmetic, policy/Hijiri hashes, the echoed
+ABI 25 native verifier to bind all arithmetic, policy/Hijiri hashes, the echoed
 account/count, and `evaluatedStateHeight + 1` before returning an immutable
 projection. Its assurance label is intentionally evaluated-only; admission
 still rejects a quote made stale by an intervening policy or risk update.

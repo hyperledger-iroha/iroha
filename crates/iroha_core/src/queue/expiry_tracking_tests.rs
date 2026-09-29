@@ -79,10 +79,8 @@ fn remove_committed_hashes_clears_expiry_tracking() {
         !queue.expiry_ring_members.contains_key(&hash),
         "expiry tracking cleared on commit removal"
     );
-    assert!(
-        queue.removed_hashes.contains_key(&hash),
-        "removed hash marker set for committed tx"
-    );
+    assert!(!queue.queued_tx_enqueued_at_ms.contains_key(&hash));
+    assert!(queue.queued_age_ring.lock().is_empty());
 }
 #[tokio::test]
 async fn custom_expired_transaction_is_rejected() {
@@ -146,10 +144,11 @@ async fn custom_expired_transaction_is_rejected() {
         }
         .into()
     );
-    let mut txs = Vec::new();
     time_handle.advance(Duration::from_millis(TTL_MS + 1));
     let queue = Arc::new(queue);
-    queue.get_transactions_for_block(&state.view(), max_txs_in_block, &mut txs);
+    let txs = queue
+        .bounded_pending_snapshot(&state.view(), max_txs_in_block)
+        .unwrap();
     let expired_tx_event = tokio::time::timeout(Duration::from_secs(2), event_receiver.recv())
         .await
         .expect("timed out waiting for expired event")
@@ -243,10 +242,62 @@ fn v2_pending_snapshot_runs_bounded_expiry_sweep() {
         .push(accepted_tx_by_someone(&time_source), state.view())
         .expect("push transaction");
     time_handle.advance(Duration::from_secs(2));
-    let (pending, _lease) = queue
+    let pending = queue
         .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
         .expect("selection remains healthy");
     assert!(pending.is_empty());
     assert_eq!(queue.active_len(), 0);
     assert_eq!(queue.queued_len(), 0);
+}
+#[test]
+fn sampling_culls_expired_input_while_fifo_has_live_work() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let queue = Arc::new(Queue::test(
+        Config {
+            transaction_time_to_live: Duration::from_millis(5),
+            expired_cull_interval: Duration::from_millis(1),
+            ..config_factory()
+        },
+        &time_source,
+    ));
+    queue
+        .push(accepted_tx_by_someone(&time_source), state.view())
+        .expect("old transaction push succeeds");
+    let old_sample = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .unwrap();
+    assert_eq!(old_sample.len(), 1);
+    time_handle.advance(Duration::from_millis(4));
+    let live_tx = accepted_tx_by_someone(&time_source);
+    let live_hash = live_tx.as_ref().hash_as_entrypoint();
+    queue
+        .push(live_tx, state.view())
+        .expect("live transaction push succeeds");
+    time_handle.advance(Duration::from_millis(2));
+    assert_eq!(queue.active_len(), 2);
+    let selected = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].as_ref().hash_as_entrypoint(), live_hash);
+    assert_eq!(
+        queue.active_len(),
+        1,
+        "the cadence sweep must cull the expired input even while the FIFO returns live work"
+    );
+    queue.assert_pressure_counters_consistent_for_tests();
+    drop(old_sample);
+    assert_eq!(
+        queue.active_len(),
+        1,
+        "dropping an already-culled sample cannot change pending ownership"
+    );
+    drop(selected);
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(queue.remove_committed_hashes([live_hash], None), 1);
+    assert_eq!(queue.active_len(), 0);
+    queue.assert_pressure_counters_consistent_for_tests();
 }

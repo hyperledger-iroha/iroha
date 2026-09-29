@@ -39,6 +39,8 @@ mod commitment;
 pub use commitment::*;
 mod checkpoint;
 pub use checkpoint::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint};
+mod page;
+pub use page::{VerifiedFinalityPage, certified_block_context_id, verify_checkpoint_page};
 
 use std::collections::BTreeMap;
 
@@ -48,7 +50,7 @@ use iroha_crypto::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
-    crypto::{Crypto, verify_qc_signatures},
+    crypto::Crypto,
     message::{BlockHeader as CoreHeader, Qc, VoteKind},
     preimage::{InstanceKind, committee_digest_preimage, instance_id, payload_hash},
     types::{AggregateSignature, Committee, Hash32, PublicKey as CoreKey, Signature},
@@ -165,6 +167,17 @@ pub struct DecodedSumeragiBlock {
     result: Hash32,
     commitment: ExecutionResultCommitment,
     committee_digest: [u8; 32],
+}
+
+impl DecodedSumeragiBlock {
+    /// Structurally checked execution under the proof's candidate committee.
+    ///
+    /// This accessor does not authenticate the committee or select a trust root.
+    /// Remote consumers must use `SumeragiFinalityVerifier` before trusting it.
+    #[must_use]
+    pub fn execution(&self) -> &ExecutionCommitment {
+        &self.commitment.execution
+    }
 }
 
 impl SumeragiFinalityProof {
@@ -291,7 +304,8 @@ impl SumeragiFinalityProof {
             )?;
             // Exact quorum signatures authenticate execution finality. Embedded application
             // attestations remain separate evidence; this proof grants no attestation capability.
-            verify_qc_signatures(&crypto, &header.instance, &epoch.id, &committee, &qc)
+            iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee)
+                .verify_qc_signatures(&qc)
                 .map_err(|error| FinalityError(format!("commit certificate: {error:?}")))?;
             (Some(header), core_hash)
         };
@@ -334,6 +348,11 @@ impl VerifiedSumeragiBlock {
     #[must_use]
     pub fn result(&self) -> Hash32 {
         self.0.result
+    }
+    /// Identity of this exact authenticated consensus header and execution result.
+    #[must_use]
+    pub fn context_id(&self) -> Hash {
+        certified_block_context_id(&self.core_hash(), &self.result())
     }
     /// The current execution commitment, authenticated without a V2 projection.
     #[must_use]
@@ -494,28 +513,39 @@ impl SumeragiFinalityVerifier {
             retained.height() == candidate.height(),
             "alternate proof height differs",
         )?;
+        self.verify_retained_decision(retained)?;
+        self.verify_retained_decision(candidate)
+    }
+    /// Verify a witness against this verifier's retained authenticated decision and parent.
+    /// The candidate supplies no trust root; importing a checkpoint must already have selected
+    /// its complete retained commitments independently of this proof.
+    ///
+    /// # Errors
+    /// Missing retained decision or parent, invalid witness, or any changed decision field.
+    pub fn verify_retained_decision(
+        &self,
+        candidate: &SumeragiFinalityProof,
+    ) -> Result<VerifiedSumeragiBlock, FinalityError> {
         let expected = self
             .decisions
-            .get(&retained.height())
+            .get(&candidate.height())
             .ok_or_else(|| FinalityError("decision is outside authenticated prefix".into()))?;
-        let retained = self.check(retained)?;
         let candidate = self.check(candidate)?;
-        for value in [&retained, &candidate] {
-            let found = Self::decision(value);
-            need(
-                found.block_hash == expected.block_hash
-                    && found.core_hash == expected.core_hash
-                    && found.result == expected.result
-                    && found.committee_digest == expected.committee_digest
-                    && found.schedule == expected.schedule
-                    && found.beacon == expected.beacon
-                    && found.executed_hash == expected.executed_hash
-                    && found.executed_len == expected.executed_len,
-                "alternate proof differs from authenticated decision",
-            )?;
-        }
+        let found = Self::decision(&candidate);
+        need(
+            found.block_hash == expected.block_hash
+                && found.core_hash == expected.core_hash
+                && found.result == expected.result
+                && found.committee_digest == expected.committee_digest
+                && found.schedule == expected.schedule
+                && found.beacon == expected.beacon
+                && found.executed_hash == expected.executed_hash
+                && found.executed_len == expected.executed_len,
+            "proof differs from retained authenticated decision",
+        )?;
         Ok(VerifiedSumeragiBlock(candidate))
     }
+
     fn decision(value: &DecodedSumeragiBlock) -> Decision {
         Decision {
             block_hash: value.block.hash(),
@@ -667,6 +697,7 @@ impl SumeragiFinalityAttestationBody {
                 && self.network_id == NetworkId::from_genesis_hash(self.genesis_block_hash)
                 && self.genesis_finality_proof.height() == 1
                 && self.genesis_finality_proof.block_header.hash() == self.genesis_block_hash
+                && self.status.protocol_version == crate::sumeragi::PROTOCOL_VERSION
                 && self.status.halted.is_none()
                 && self
                     .status
@@ -822,4 +853,8 @@ impl Crypto for ProofCrypto {
 }
 
 #[cfg(all(test, feature = "transparent_api"))]
-mod tests;
+pub(crate) mod tests;
+
+/// Fixed public signing material for native proof tests; never deployment trust or execution evidence.
+#[cfg(all(any(test, feature = "test-fixtures"), feature = "transparent_api"))]
+pub mod test_fixtures;

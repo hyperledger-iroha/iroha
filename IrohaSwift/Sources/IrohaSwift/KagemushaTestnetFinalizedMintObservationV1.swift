@@ -34,10 +34,10 @@ protocol KagemushaTestnetFinalizedMintObservationEndpointV1: AnyObject {
 /// Inspects an actual Applied top-up and paired MintFold proof through the native owner.
 ///
 /// The owner must already have retained the private pre-send reservation and pinned the
-/// independently authenticated finality anchor in Rust. The supplied coordinates only
+/// independently authenticated finality anchor in Rust. The supplied complete checkpoint only
 /// select that exact pin; this Swift API cannot create or replace either authority.
 public enum KagemushaTestnetFinalizedMintObservationBridgeV1 {
-  public static let maximumStatusJSONBytes = 16_777_216
+  public static let maximumStatusJSONBytes = 150_995_968
   public static let maximumPublicInputsBytes = 4_096
   public static let maximumPairedProofBytes = 6_528
   public static let maximumObservationBytes = 512
@@ -96,9 +96,7 @@ public enum KagemushaTestnetFinalizedMintObservationBridgeV1 {
       (1...maximumStatusJSONBytes).contains(originalStatusJSON.count),
       trustAnchor.networkID.count == 32,
       trustAnchor.networkID.last.map({ $0 & 1 == 1 }) == true,
-      trustAnchor.blockHeight > 0,
-      trustAnchor.heightContextID.count == 32,
-      trustAnchor.heightContextID.last.map({ $0 & 1 == 1 }) == true,
+      (1...KagemushaFinalityTrustAnchorV1.maximumCheckpointBytes).contains(trustAnchor.checkpoint.count),
       (1...maximumPublicInputsBytes).contains(publicInputsArchive.count),
       (1...maximumPairedProofBytes).contains(pairedProofArchive.count)
     else { throw KagemushaTestnetFinalizedMintObservationErrorV1.invalidInput }
@@ -121,7 +119,7 @@ public enum KagemushaTestnetFinalizedMintObservationBridgeV1 {
     #if canImport(Darwin)
     private typealias ObserveFn = @convention(c) (
       UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
-      UnsafePointer<UInt8>?, Int, UInt64, UnsafePointer<UInt8>?, Int,
+      UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
       UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
       UnsafeMutablePointer<UInt8>?, Int, UnsafeMutablePointer<Int>?
     ) -> Int32
@@ -148,7 +146,7 @@ public enum KagemushaTestnetFinalizedMintObservationBridgeV1 {
       let status = operationID.withUnsafeBytes { operation in
         originalStatusJSON.withUnsafeBytes { response in
           trustAnchor.networkID.withUnsafeBytes { network in
-            trustAnchor.heightContextID.withUnsafeBytes { context in
+            trustAnchor.checkpoint.withUnsafeBytes { checkpoint in
               publicInputsArchive.withUnsafeBytes { publicInputs in
                 pairedProofArchive.withUnsafeBytes { proof in
                   output.withUnsafeMutableBufferPointer { result in
@@ -156,8 +154,7 @@ public enum KagemushaTestnetFinalizedMintObservationBridgeV1 {
                       operation.bindMemory(to: UInt8.self).baseAddress, operationID.count,
                       response.bindMemory(to: UInt8.self).baseAddress, originalStatusJSON.count,
                       network.bindMemory(to: UInt8.self).baseAddress, trustAnchor.networkID.count,
-                      trustAnchor.blockHeight,
-                      context.bindMemory(to: UInt8.self).baseAddress, trustAnchor.heightContextID.count,
+                      checkpoint.bindMemory(to: UInt8.self).baseAddress, trustAnchor.checkpoint.count,
                       publicInputs.bindMemory(to: UInt8.self).baseAddress, publicInputsArchive.count,
                       proof.bindMemory(to: UInt8.self).baseAddress, pairedProofArchive.count,
                       result.baseAddress, result.count, &written)

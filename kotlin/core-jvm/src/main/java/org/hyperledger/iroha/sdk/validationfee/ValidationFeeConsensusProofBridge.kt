@@ -4,16 +4,39 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /**
  * Native boundary for the Parliament-governed validation-fee consensus proof.
- *
- * Callers must persist the returned evaluated height/context atomically before
- * requesting the next page. A missing or stale native ABI fails closed.
+ * Independently select the complete checkpoint and persist every verified page's
+ * projection and promoted checkpoint atomically before requesting another page.
  */
 class ValidationFeeConsensusProofBridge private constructor() {
+    /** One verified projection and its complete native checkpoint, retained together. */
+    class VerifiedPolicyPage internal constructor(
+        val projectionJson: String,
+        promotedCheckpoint: ByteArray,
+    ) {
+        private val checkpoint = promotedCheckpoint.copyOf()
+
+        init {
+            require(projectionJson.isNotEmpty()) { "native proof projection must not be empty" }
+            requireCheckpoint(checkpoint)
+        }
+
+        /** Return an independent copy for durable storage and the next request. */
+        fun promotedCheckpoint(): ByteArray = checkpoint.copyOf()
+
+        override fun equals(other: Any?): Boolean =
+            other is VerifiedPolicyPage && projectionJson == other.projectionJson &&
+                checkpoint.contentEquals(other.checkpoint)
+
+        override fun hashCode(): Int = 31 * projectionJson.hashCode() + checkpoint.contentHashCode()
+    }
+
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        private const val REQUIRED_BRIDGE_ABI_VERSION = 24
+        private const val REQUIRED_BRIDGE_ABI_VERSION = 25
         private const val HASH_BYTES = 32
         private const val MAX_PROOF_BYTES = 4 * 1024 * 1024
+        // Matches the canonical native checkpoint's two 32 MiB frames and 4 MiB metadata bound.
+        private const val MAX_CHECKPOINT_BYTES = 68 * 1024 * 1024
 
         private val nativeLoadResult: Result<Unit> by lazy {
             runCatching {
@@ -26,58 +49,36 @@ class ValidationFeeConsensusProofBridge private constructor() {
             }
         }
 
-        /**
-         * Encode the canonical Norito request body for one bounded proof page.
-         *
-         * The context is validated but is intentionally absent from the frozen
-         * V1 request body; it is supplied again to [verifyCurrentPolicyProofV1].
-         */
+        /** Encode a bounded page request using the height in the complete native checkpoint. */
         @JvmStatic
-        fun encodeCurrentPolicyProofRequestV1(
-            trustedCheckpointHeight: Long,
-            trustedCheckpointContextId: ByteArray,
-        ): ByteArray {
-            require(trustedCheckpointHeight > 0) {
-                "trustedCheckpointHeight must be positive"
-            }
-            requireIrohaHash(trustedCheckpointContextId, "trustedCheckpointContextId")
+        fun encodeCurrentPolicyProofRequestV1(trustedCheckpoint: ByteArray): ByteArray {
+            requireCheckpoint(trustedCheckpoint)
             requireNative()
-            return nativeEncodeCurrentPolicyProofRequestV1(
-                trustedCheckpointHeight,
-                trustedCheckpointContextId.copyOf(),
-            ).copyOf()
+            return nativeEncodeCurrentPolicyProofRequestV1(trustedCheckpoint.copyOf()).copyOf()
         }
 
-        /**
-         * Verify one proof page and return canonical UTF-8 JSON using schema
-         * `iroha.validation_fee.verified_policy_projection.v1`.
-         */
+        /** Verify native finality and immutable deployment pins and retain the promoted checkpoint. */
         @JvmStatic
         fun verifyCurrentPolicyProofV1(
             proofNorito: ByteArray,
             networkId: NetworkId,
             policyChainGenesisHash: ByteArray,
-            trustedCheckpointHeight: Long,
-            trustedCheckpointContextId: ByteArray,
-        ): String {
+            trustedCheckpoint: ByteArray,
+        ): VerifiedPolicyPage {
             require(proofNorito.isNotEmpty() && proofNorito.size <= MAX_PROOF_BYTES) {
                 "proofNorito must contain 1..$MAX_PROOF_BYTES bytes"
             }
             requireIrohaHash(policyChainGenesisHash, "policyChainGenesisHash")
-            require(trustedCheckpointHeight > 0) {
-                "trustedCheckpointHeight must be positive"
-            }
-            requireIrohaHash(trustedCheckpointContextId, "trustedCheckpointContextId")
+            requireCheckpoint(trustedCheckpoint)
             requireNative()
-            val json = nativeVerifyCurrentPolicyProofV1(
+            val pair = nativeVerifyCurrentPolicyProofV1(
                 proofNorito.copyOf(),
                 networkId.bytes(),
                 policyChainGenesisHash.copyOf(),
-                trustedCheckpointHeight,
-                trustedCheckpointContextId.copyOf(),
+                trustedCheckpoint.copyOf(),
             )
-            require(json.isNotEmpty()) { "native proof verifier returned an empty projection" }
-            return json.toString(Charsets.UTF_8)
+            require(pair.size == 2) { "native proof verifier must return a projection and checkpoint" }
+            return VerifiedPolicyPage(pair[0].toString(Charsets.UTF_8), pair[1])
         }
 
         internal fun requireIrohaHash(value: ByteArray, label: String) {
@@ -86,12 +87,18 @@ class ValidationFeeConsensusProofBridge private constructor() {
             }
         }
 
+        internal fun requireCheckpoint(value: ByteArray) {
+            require(value.size in 4..MAX_CHECKPOINT_BYTES &&
+                value[0] == 0x4e.toByte() && value[1] == 0x52.toByte() &&
+                value[2] == 0x54.toByte() && value[3] == 0x30.toByte()) {
+                "trustedCheckpoint must contain one bounded canonical native checkpoint"
+            }
+            // This framing preflight grants no authority; the native decoder/verifier checks all fields.
+        }
+
         private fun requireNative() {
             nativeLoadResult.getOrElse { failure ->
-                throw IllegalStateException(
-                    "native validation-fee consensus verifier is unavailable",
-                    failure,
-                )
+                throw IllegalStateException("native validation-fee consensus verifier is unavailable", failure)
             }
         }
 
@@ -99,18 +106,14 @@ class ValidationFeeConsensusProofBridge private constructor() {
         private external fun nativeBridgeAbiVersion(): Int
 
         @JvmStatic
-        private external fun nativeEncodeCurrentPolicyProofRequestV1(
-            trustedCheckpointHeight: Long,
-            trustedCheckpointContextId: ByteArray,
-        ): ByteArray
+        private external fun nativeEncodeCurrentPolicyProofRequestV1(trustedCheckpoint: ByteArray): ByteArray
 
         @JvmStatic
         private external fun nativeVerifyCurrentPolicyProofV1(
             proofNorito: ByteArray,
             networkId: ByteArray,
             policyChainGenesisHash: ByteArray,
-            trustedCheckpointHeight: Long,
-            trustedCheckpointContextId: ByteArray,
-        ): ByteArray
+            trustedCheckpoint: ByteArray,
+        ): Array<ByteArray>
     }
 }

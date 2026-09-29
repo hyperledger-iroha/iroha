@@ -1,4 +1,4 @@
-//! Bounded, non-authorizing capture of five native-Norito State cells.
+//! Bounded, non-authorizing capture of four native-Norito State cells.
 //!
 //! This is one traversal increment, not a complete State commitment. It issues
 //! no aggregate root, witness, finalized anchor, or admission authority. The
@@ -19,18 +19,17 @@ const CELL_DOMAIN: &[u8] = b"iroha:state-cell-slice:bare-v1\0";
 pub(in crate::state) struct CellSliceLimits {
     /// One cell's maximum bare Norito payload length.
     pub max_cell_payload_bytes: usize,
-    /// Aggregate maximum bare Norito payload length across five cells.
+    /// Aggregate maximum bare Norito payload length across four cells.
     pub max_total_payload_bytes: usize,
 }
 
-/// Five named diagnostic digests observed under an unchanged State publication counter.
+/// Four named diagnostic digests observed under an unchanged State publication counter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::state) struct StateCellDigestSliceV1 {
     chain_id: Hash,
     network_id: Hash,
     commit_topology: Hash,
     prev_commit_topology: Hash,
-    lane_consensus_contexts: Hash,
 }
 
 struct BoundedPayloadWriter<'a> {
@@ -121,7 +120,7 @@ fn hash_cell<T: Encode + NoritoSchema>(
     Ok(digest)
 }
 
-/// Capture five registry-declared cells while no tracked State publication overlaps.
+/// Capture four registry-declared cells while no tracked State publication overlaps.
 ///
 /// `None` means a coordinated State publisher won the generation race. `Some`
 /// does not certify one atomic cut when a direct MV writer bypasses State
@@ -137,7 +136,6 @@ pub(in crate::state) fn capture_once(
     }
     let commit_topology = state.commit_topology.view();
     let prev_commit_topology = state.prev_commit_topology.view();
-    let lane_consensus_contexts = state.lane_consensus_contexts.view();
     let mut remaining = limits.max_total_payload_bytes;
     let slice = StateCellDigestSliceV1 {
         chain_id: hash_cell("state.chain_id", &state.chain_id, limits, &mut remaining)?,
@@ -156,12 +154,6 @@ pub(in crate::state) fn capture_once(
         prev_commit_topology: hash_cell(
             "state.prev_commit_topology",
             prev_commit_topology.get(),
-            limits,
-            &mut remaining,
-        )?,
-        lane_consensus_contexts: hash_cell(
-            "state.lane_consensus_contexts",
-            lane_consensus_contexts.get(),
             limits,
             &mut remaining,
         )?,
@@ -190,7 +182,7 @@ mod tests {
     fn limits() -> CellSliceLimits {
         CellSliceLimits {
             max_cell_payload_bytes: 1024 * 1024,
-            max_total_payload_bytes: 5 * 1024 * 1024,
+            max_total_payload_bytes: 4 * 1024 * 1024,
         }
     }
 
@@ -218,10 +210,6 @@ mod tests {
         assert_eq!(before.chain_id, after.chain_id);
         assert_eq!(before.network_id, after.network_id);
         assert_eq!(before.prev_commit_topology, after.prev_commit_topology);
-        assert_eq!(
-            before.lane_consensus_contexts,
-            after.lane_consensus_contexts
-        );
     }
 
     #[test]

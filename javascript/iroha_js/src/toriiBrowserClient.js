@@ -35,7 +35,6 @@ import {
 } from "./kagemushaToriiV1.js";
 import { _encodeRedemptionRequestV1 } from "./kagemusha.js";
 import {
-  SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
 } from "./sumeragiTypedLimits.js";
 import {
@@ -3438,42 +3437,6 @@ export class ToriiBrowserClient {
         ({ parseSumeragiStatusJson }) => parseSumeragiStatusJson(
           text,
           "Sumeragi typed status",
-        ),
-      ),
-    });
-  }
-
-  getSumeragiDiagnostics(options = {}) {
-    const opts = requireObject(options, "getSumeragiDiagnostics options");
-    return this._json("GET", "/v1/sumeragi/diagnostics", {
-      signal: signalFrom(opts),
-      operatorSigningContext: requireOperatorSigningContext(
-        this.#operatorSigningContext,
-        "getSumeragiDiagnostics",
-      ),
-    });
-  }
-
-  getSumeragiDiagnosticsTyped(options = {}) {
-    const opts = signalOnlyOptions(options, "getSumeragiDiagnosticsTyped options");
-    return this._json("GET", "/v1/sumeragi/diagnostics", {
-      headers: { Accept: FIELD_APPLICATION_JSON },
-      signal: signalFrom(opts),
-      operatorSigningContext: requireOperatorSigningContext(
-        this.#operatorSigningContext,
-        "getSumeragiDiagnosticsTyped",
-      ),
-      maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
-      responseObserver: (response) => {
-        requireExactJsonContentType(
-          response.headers.get(FIELD_CONTENT_TYPE),
-          "Sumeragi typed diagnostics response",
-        );
-      },
-      jsonParser: (text) => import("./sumeragiTyped.js").then(
-        ({ parseSumeragiDiagnosticsJson }) => parseSumeragiDiagnosticsJson(
-          text,
-          "Sumeragi typed diagnostics",
         ),
       ),
     });

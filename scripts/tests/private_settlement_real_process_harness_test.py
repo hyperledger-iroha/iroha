@@ -75,7 +75,7 @@ def request_header(
         "quorum": "3-of-4",
         "mandatory_signed_rs16_da_rbc": True,
         "minimum_signed_rs16_da_observations": (participants + 1) * 4,
-        "authenticated_message_control": True,
+        "authenticated_private_settlement_route_control": True,
         "seed": seed,
         "run": run,
         "configuration": configuration,
@@ -200,7 +200,7 @@ def rust_result(bound_request: dict[str, Any], request_sha: str) -> dict[str, An
         "participants": participants,
         "mandatory_signed_rs16_da_rbc": True,
         "signed_rs16_da_observations": (participants + 1) * 4,
-        "authenticated_message_control": True,
+        "authenticated_private_settlement_route_control": True,
         "process_inventory": inventory(participants),
         "payload": {},
     }
@@ -225,7 +225,7 @@ def native_fixture(profile):
         'economic_vector_sha256': vector['economic_vector_sha256'],
         'primary_payment_count': 3, 'monetary_movement_count': 4}
     result = {'payload': payload, 'mandatory_signed_rs16_da_rbc': True,
-        'authenticated_message_control': True, 'signed_rs16_da_observations': 16,
+        'authenticated_private_settlement_route_control': True, 'signed_rs16_da_observations': 16,
         'process_inventory': ready['process_inventory']}
     return result, request, ready, vector
 
@@ -620,11 +620,16 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn('["concurrency", "rayon_global_threads"]', localnet)
         self.assertIn("REAL_PROCESS_RAYON_WORKER_THREADS", harness)
         self.assertIn("exact {len(runner.SURFACE_FILES)}-file inventory", python_harness)
-        self.assertIn("with_consensus_message_control", harness)
-        self.assertIn("wait_until_ready", harness)
+        self.assertIn("with_private_settlement_route_control", harness)
+        self.assertIn("verify_controller_readiness", harness)
+        self.assertIn("private_settlement_route_control()", harness)
+        self.assertNotIn("consensus_message_control()", harness)
+        self.assertNotIn("native_amx_fault_control()", harness)
         self.assertIn("process_id()", harness)
-        self.assertIn("get_bridge_finality_anchor", harness)
-        self.assertIn("recommended_data_availability_layout()", harness)
+        self.assertIn("get_sumeragi_finality_proof", harness)
+        self.assertIn("authenticated_native_history", harness)
+        self.assertIn("require_signed_rs16_transport()?", harness)
+        self.assertIn("full_body_finality_cannot_qualify_signed_rs16_transport", harness)
         self.assertIn("private_settlement_committee_proof_v1", harness)
         self.assertIn("impl Drop for ProcessResourceSampler", harness)
         self.assertIn("impl Drop for TransparentControlAtomicityObserver", harness)
@@ -648,7 +653,7 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn("monetary_movement_count", harness)
         self.assertNotIn("request.participants - 1", harness)
         self.assertIn("CanExecuteSettlement", localnet)
-        self.assertIn("wait_for_identical_native_amx_receipt", harness)
+        self.assertIn("wait_for_identical_settlement_finality", harness)
         self.assertIn("proof_bytes: 0", harness)
         self.assertIn(
             'include!("atomic_private_settlement_real_process_harness.rs")', localnet

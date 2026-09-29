@@ -609,7 +609,7 @@ class DriverBoundaryTests(unittest.TestCase):
         for flag in ("--locked", "--offline", "--release", "--no-run"):
             self.assertIn(flag, integration)
         validator = commands["build-validator"]
-        self.assertEqual(validator[validator.index("--features") + 1], "test-network-message-control")
+        self.assertEqual(validator[validator.index("--features") + 1], "test-network-private-settlement-route-control")
 
     def test_exact_terminal_and_discovery_reject_zero_ignored_skipped_or_duplicate(self) -> None:
         good = "running 1 test\nAPS smoke completed: synthetic fixture only\n" + (

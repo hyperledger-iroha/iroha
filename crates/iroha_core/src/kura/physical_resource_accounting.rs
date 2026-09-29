@@ -1,18 +1,9 @@
 // Included at Kura module scope. Existing storage locks own overlapping paths.
 
-const PHYSICAL_RESOURCE_FAMILIES: [ResourceFamily; 15] = [
+const PHYSICAL_RESOURCE_FAMILIES: [ResourceFamily; 6] = [
     ResourceFamily::CanonicalIndex,
     ResourceFamily::CanonicalHashes,
     ResourceFamily::PipelineIndex,
-    ResourceFamily::OwnershipIndex,
-    ResourceFamily::CertifiedIndex,
-    ResourceFamily::ExecutionInputIndex,
-    ResourceFamily::ExecutionPreflightIndex,
-    ResourceFamily::ApplicationReceiptIndex,
-    ResourceFamily::MergeBundleIndex,
-    ResourceFamily::CanonicalReplicaIndex,
-    ResourceFamily::MergeCarrierRecord,
-    ResourceFamily::NativeLatestRecord,
     ResourceFamily::QueryMarkerRecords,
     ResourceFamily::EvidenceKeyRecords,
     ResourceFamily::StorageBytes,

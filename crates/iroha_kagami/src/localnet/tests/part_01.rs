@@ -931,18 +931,9 @@ fn generated_configs_parse_with_current_schema() {
         let source = TomlSource::from_file(&path).expect("read generated config");
         let config = actual::Root::from_toml_source(source).expect("generated config must parse");
         assert_eq!(config.genesis.expected_hash, decoded.hash());
-        let runtime = config
-            .sumeragi
-            .v2_config(
-                std::time::Duration::from_millis(parameters.sumeragi().block_cadence_ms().get()),
-                iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
-            )
-            .expect("generated canonical Sumeragi runtime config");
-        runtime
-            .validate_ingress_roster_capacity(
-                usize::try_from(npos.max_validators()).expect("bounded signed NPoS ceiling"),
-            )
-            .expect("each generated validator must admit the signed election ceiling");
+        assert!(config.sumeragi.local.is_empty());
+        assert!(matches!(config.sumeragi.role, actual::NodeRole::Validator));
+        assert_eq!(config.sumeragi.mint_finality_seed_fd, Some(199));
     }
     let client = fs::read_to_string(temp.path().join("client.toml"))
         .expect("read generated client config")
@@ -2083,58 +2074,12 @@ fn generated_configs_use_strict_sumeragi_v2_schema() {
         sumeragi.get("role").and_then(toml::Value::as_str),
         Some("validator")
     );
-    let queues = sumeragi
-        .get("queues")
-        .and_then(toml::Value::as_table)
-        .expect("sumeragi queues");
-    assert_eq!(
-        queues.get("commands").and_then(toml::Value::as_integer),
-        Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_COMMANDS).expect("queue fits i64"))
-    );
-    assert_eq!(
-        queues
-            .get("authenticated_non_validator_sources")
-            .and_then(toml::Value::as_integer),
-        Some(
-            i64::try_from(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
-                .expect("source count fits i64")
-        )
-    );
-    assert_eq!(
-        queues.get("bodies").and_then(toml::Value::as_integer),
-        Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODIES).expect("queue fits i64"))
-    );
-    assert_eq!(
-        queues.get("body_bytes").and_then(toml::Value::as_integer),
-        Some(204 * 1024 * 1024)
-    );
-    assert_eq!(
-        queues
-            .get("body_source_bytes")
-            .and_then(toml::Value::as_integer),
-        Some(
-            i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
-                .expect("source budget fits i64")
-        )
-    );
-    assert_eq!(
-        queues.get("chunks").and_then(toml::Value::as_integer),
-        Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_CHUNKS).expect("queue fits i64"))
-    );
-    assert_eq!(
-        queues.get("ready_bodies").and_then(toml::Value::as_integer),
-        Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_READY_BODIES).expect("queue fits i64"))
-    );
-    let effect_work_capacity = (LOCALNET_SUMERAGI_QUEUE_COMMANDS
-        / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-        .max(1);
-    actual::sumeragi_v2_lifecycle_capacity_geometry(
-        usize::from(opts.peers.get()),
-        effect_work_capacity,
-        LOCALNET_SUMERAGI_QUEUE_BODIES,
-        LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-    )
-    .expect("generated localnet lifecycle geometry must remain admissible");
+    for retired in ["queues", "block", "limits", "storage"] {
+        assert!(
+            !sumeragi.contains_key(retired),
+            "retired local consensus knob {retired}"
+        );
+    }
     let keys = sumeragi
         .get("keys")
         .and_then(toml::Value::as_table)
@@ -2159,7 +2104,7 @@ fn generated_configs_use_strict_sumeragi_v2_schema() {
     ] {
         assert!(
             !sumeragi.contains_key(retired),
-            "generated v2 config must not contain retired sumeragi.{retired}"
+            "generated config must not contain retired sumeragi.{retired}"
         );
     }
 }
@@ -2214,11 +2159,7 @@ fn perf_profile_permissioned_applies_bounded_runtime_limits() {
         Some(LOCALNET_PERF_QUEUE_CAPACITY),
         "perf localnet should expose backpressure at the bounded queue capacity"
     );
-    assert_eq!(
-        parsed.sumeragi.block.max_transactions.get(),
-        LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS,
-        "perf localnet should cap runtime proposal assembly below the semantic block max"
-    );
+    assert!(parsed.sumeragi.local.is_empty());
     let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
         .parse()
         .expect("perf logger filter should parse");
@@ -2265,11 +2206,7 @@ fn perf_profile_npos_applies_election_and_runtime_limits() {
         parsed.pipeline.signature_batch_max_ed25519,
         LOCALNET_SIGNATURE_BATCH_MAX_ED25519
     );
-    assert_eq!(
-        parsed.sumeragi.block.max_transactions.get(),
-        LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS,
-        "NPoS perf localnet should use the same bounded runtime proposal cap"
-    );
+    assert!(parsed.sumeragi.local.is_empty());
     let genesis_path = temp.path().join("genesis.json");
     let manifest = genesis_json_from_path(&genesis_path);
     let params = genesis_parameters(&manifest);
@@ -2742,26 +2679,7 @@ fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
             .expect("read seven-validator peer config"),
     )
     .expect("parse seven-validator peer config");
-    let queues = peer_cfg
-        .get("sumeragi")
-        .and_then(toml::Value::as_table)
-        .and_then(|sumeragi| sumeragi.get("queues"))
-        .and_then(toml::Value::as_table)
-        .expect("seven-validator Sumeragi queues");
-    assert_eq!(
-        queues
-            .get("body_source_bytes")
-            .and_then(toml::Value::as_integer),
-        Some(
-            i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
-                .expect("source budget fits i64")
-        )
-    );
-    assert_eq!(
-        queues.get("body_bytes").and_then(toml::Value::as_integer),
-        Some(306 * 1024 * 1024),
-        "seven validators and two authenticated non-validator sources each need one isolated body quota"
-    );
+    assert!(peer_cfg["sumeragi"].get("queues").is_none());
     let manifest = localnet_genesis_for_opts(&opts);
     let validators: Vec<_> = manifest
         .instructions()
@@ -2834,15 +2752,10 @@ fn localnet_npos_election_ceiling_matches_generated_committee() {
             npos.epoch_length_blocks(),
             parameters.sumeragi().epoch_length_blocks
         );
-        let maximum = usize::try_from(npos.max_validators()).expect("bounded committee");
-        assert_eq!(
-            localnet_sumeragi_body_bytes(usize::from(count)).expect("generated ingress capacity"),
-            actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                maximum,
-                LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-                LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
+        assert!(
+            iroha_data_model::block::consensus_v2::is_valid_committee_size(
+                usize::try_from(npos.max_validators()).expect("bounded committee")
             )
-            .expect("signed election ceiling fits ingress geometry"),
         );
     }
 }

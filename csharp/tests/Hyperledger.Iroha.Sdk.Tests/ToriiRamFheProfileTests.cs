@@ -248,7 +248,7 @@ public sealed class ToriiRamFheProfileTests
         ["active"] = true,
         ["normalization"] = "phone_e164",
         ["resolver_public_key"] = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-        ["backend"] = "bfv-programmed-sha3-256-v1",
+        ["backend"] = "bfv-programmed-v1",
         ["ram_fhe_profile"] = profile,
     };
 }

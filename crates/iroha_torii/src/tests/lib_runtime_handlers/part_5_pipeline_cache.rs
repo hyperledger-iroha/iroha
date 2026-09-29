@@ -103,7 +103,7 @@ async fn pipeline_status_cache_records_block_event() {
         status: BlockStatus::Applied,
     };
     app.pipeline_status_cache
-        .record_block_event(&event, &app.kura);
+        .record_block_event(&event, &app.state);
     let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
     assert_eq!(stored.kind, PipelineStatusKind::Applied);
     let height = NonZeroU64::new(1).expect("height");
@@ -120,10 +120,10 @@ async fn pipeline_status_cache_refreshes_pending_block() {
         status: BlockStatus::Committed,
     };
     app.pipeline_status_cache
-        .record_block_event(&event, &app.kura);
+        .record_block_event(&event, &app.state);
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
     store_block(&app, block);
-    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+    app.pipeline_status_cache.refresh_pending_blocks(&app.state);
     let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
     assert_eq!(stored.kind, PipelineStatusKind::Committed);
 }

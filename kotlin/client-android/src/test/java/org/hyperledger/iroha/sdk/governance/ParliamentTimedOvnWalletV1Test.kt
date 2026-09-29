@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test
 
 class ParliamentTimedOvnWalletV1Test {
     @Test
-    fun `JVM declarations pin the ABI 24 proof JNI descriptors`() {
+    fun `JVM declarations pin the ABI 25 proof JNI descriptors`() {
         val nativeClass = Class.forName(
             "org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnNativeEndpointV1",
         )
@@ -26,7 +26,6 @@ class ParliamentTimedOvnWalletV1Test {
             "nativeVerifyCastingProofV1",
             ByteArray::class.java,
             ByteArray::class.java,
-            java.lang.Long.TYPE,
             ByteArray::class.java,
             ByteArray::class.java,
         )
@@ -34,7 +33,6 @@ class ParliamentTimedOvnWalletV1Test {
             "nativeVerifyCastingProofPageV1",
             ByteArray::class.java,
             ByteArray::class.java,
-            java.lang.Long.TYPE,
             ByteArray::class.java,
             ByteArray::class.java,
         )
@@ -42,7 +40,6 @@ class ParliamentTimedOvnWalletV1Test {
             "nativeRegistrationFromProofV1",
             ByteArray::class.java,
             ByteArray::class.java,
-            java.lang.Long.TYPE,
             ByteArray::class.java,
             ByteArray::class.java,
             String::class.java,
@@ -52,7 +49,6 @@ class ParliamentTimedOvnWalletV1Test {
             "nativeBallotFromProofV1",
             ByteArray::class.java,
             ByteArray::class.java,
-            java.lang.Long.TYPE,
             ByteArray::class.java,
             ByteArray::class.java,
             String::class.java,
@@ -60,12 +56,12 @@ class ParliamentTimedOvnWalletV1Test {
             Integer.TYPE,
         )
 
-        assertEquals(24, ParliamentTimedOvnWalletV1.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(25, ParliamentTimedOvnWalletV1.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(Integer.TYPE, abi.returnType)
-        assertEquals(java.lang.Boolean.TYPE, verify.returnType)
-        assertEquals(ByteArray::class.java, verifyPage.returnType)
-        assertEquals(ByteArray::class.java, registration.returnType)
-        assertEquals(ByteArray::class.java, ballot.returnType)
+        assertEquals(ByteArray::class.java, verify.returnType)
+        assertEquals(Array<ByteArray>::class.java, verifyPage.returnType)
+        assertEquals(Array<ByteArray>::class.java, registration.returnType)
+        assertEquals(Array<ByteArray>::class.java, ballot.returnType)
         for (method in listOf(abi, verifyPage, verify, registration, ballot)) {
             assertTrue(Modifier.isPrivate(method.modifiers))
             assertTrue(Modifier.isStatic(method.modifiers))
@@ -108,17 +104,17 @@ class ParliamentTimedOvnWalletV1Test {
         for (requiredSourceContract in listOf(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint",
             "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1",
-            "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1",
+            "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1",
             "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1",
             "CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1",
             "AUTHORITY_UTF8_MAX_BYTES_V1",
             "TIMED_OVN_REGISTRATION_RECORD_BYTES_V1",
             "TIMED_OVN_BALLOT_RECORD_BYTES_V1",
             "Zeroizing::new",
-            "parliament_jni_result",
+            "parliament_jni_components",
             "clear_parliament_jni_exception",
             ".filter(|choice| *choice <= 2)",
-            "verified_casting_context_from_proof_v1",
+            "verified_terminal_casting_proof_v1",
             "verified_casting_proof_page_v1",
             "registration_from_verified_context_v1",
             "ballot_from_verified_context_v1",
@@ -130,7 +126,7 @@ class ParliamentTimedOvnWalletV1Test {
         }
         assertFalse(source.contains("nativeRegistrationFromSeedV1"))
         assertFalse(source.contains("nativeBallotFromSeedV1"))
-        val proofGate = source.indexOf("verified_casting_context_from_proof_v1(")
+        val proofGate = source.indexOf("verified_terminal_casting_proof_v1(")
         val seedRead = source.indexOf("let seed_bytes = Zeroizing::new(", proofGate)
         assertTrue(proofGate >= 0 && seedRead > proofGate, "proof gate must precede seed copy")
     }
@@ -157,9 +153,9 @@ class ParliamentTimedOvnWalletV1Test {
 
         assertTrue(source.contains("context.applicationContext ?: context"))
         assertTrue(source.contains("pageVerifyProbe == null"))
-        assertTrue(source.contains("pageVerifyProbe?.fill(0)"))
-        assertTrue(source.contains("registrationProbe?.fill(0)"))
-        assertTrue(source.contains("ballotProbe?.fill(0)"))
+        assertTrue(source.contains("pageVerifyProbe?.forEach { it.fill(0) }"))
+        assertTrue(source.contains("registrationProbe?.forEach { it.fill(0) }"))
+        assertTrue(source.contains("ballotProbe?.forEach { it.fill(0) }"))
         assertTrue(source.contains("private const val ENVELOPE_VERSION = 2"))
         assertTrue(source.contains("generationId.copyInto(envelope, GENERATION_ID_OFFSET)"))
         assertTrue(source.contains("synchronized(lockForAlias(handle.alias))"))
@@ -181,7 +177,7 @@ class ParliamentTimedOvnWalletV1Test {
         assertEquals(handle, wallet.seedHandle("member-one"))
         assertContentEquals(
             ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES) { 0x31.toByte() },
-            wallet.registrationFromProofV1(byteArrayOf(1), trustAnchor(), AUTHORITY, handle),
+            wallet.registrationFromProofV1(byteArrayOf(1), trustAnchor(), AUTHORITY, handle).record(),
         )
         assertContentEquals(
             ByteArray(ParliamentTimedOvnWalletV1.BALLOT_RECORD_BYTES) { 0x42.toByte() },
@@ -191,7 +187,7 @@ class ParliamentTimedOvnWalletV1Test {
                 AUTHORITY,
                 handle,
                 ParliamentTimedOvnBallotChoiceV1.ABSTAIN,
-            ),
+            ).record(),
         )
         assertEquals(listOf(2), endpoint.choices)
         assertTrue(vault.lastBorrowedSeedWasCleared)
@@ -249,9 +245,9 @@ class ParliamentTimedOvnWalletV1Test {
         val snapshot = anchor.snapshot()
         assertEquals(BigInteger.valueOf(7), anchor.trustedCheckpointHeight)
         assertEquals(BigInteger.valueOf(7), snapshot.trustedCheckpointHeight)
-        assertEquals(7L, snapshot.trustedCheckpointHeightJniBits())
+
         assertContentEquals(ByteArray(32) { 1 }, snapshot.networkIdBytes())
-        assertContentEquals(ByteArray(32) { 3 }, snapshot.checkpointContextIdBytes())
+        assertContentEquals(ByteArray(32) { 3 }, snapshot.checkpointNoritoBytes())
         assertContentEquals(ByteArray(32) { 5 }, snapshot.ballotAttemptIdBytes())
         assertFailsWith<IllegalArgumentException> {
             ParliamentTimedOvnCastingTrustAnchorV1(ByteArray(31), 7, context, ballot)
@@ -281,7 +277,7 @@ class ParliamentTimedOvnWalletV1Test {
     }
 
     @Test
-    fun `trust anchor admits max u64 and transports its raw JNI bits`() {
+    fun `trust anchor admits max u64 request hint while native calls carry complete checkpoints`() {
         val maximumU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
         val network = ByteArray(32) { 1 }
         val context = ByteArray(32) { 3 }
@@ -295,7 +291,7 @@ class ParliamentTimedOvnWalletV1Test {
 
         assertEquals(maximumU64, anchor.trustedCheckpointHeight)
         assertEquals(maximumU64, anchor.snapshot().trustedCheckpointHeight)
-        assertEquals(-1L, anchor.snapshot().trustedCheckpointHeightJniBits())
+
 
         val wallet = ParliamentTimedOvnWalletV1.withComponentsForTests(
             FakeSeedVault(),
@@ -305,12 +301,12 @@ class ParliamentTimedOvnWalletV1Test {
         assertEquals(maximumU64, verification.evaluatedBlockHeight)
         val promoted = trustAnchor().promoted(verification)
         assertEquals(maximumU64, promoted.trustedCheckpointHeight)
-        assertEquals(-1L, promoted.snapshot().trustedCheckpointHeightJniBits())
-        assertContentEquals(ByteArray(32) { 0x22 }, promoted.trustedCheckpointContextId())
+
+        assertContentEquals(mockCheckpoint(), promoted.trustedCheckpointNorito())
     }
 
     @Test
-    fun `native page verification admits only exact 41 byte big endian results`() {
+    fun `native page verification requires exact metadata and a complete checkpoint component`() {
         val endpoint = FakeEndpoint(
             pageResult = pageVerificationBytes(70, 0x22, 1),
         )
@@ -363,10 +359,10 @@ class ParliamentTimedOvnWalletV1Test {
             override fun verifyCastingProof(
                 proofResponse: ByteArray,
                 trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-            ): Boolean {
+            ): ByteArray? {
                 proofResponse.fill(99)
                 trustAnchor.networkIdBytes().fill(99)
-                return true
+                return mockCheckpoint()
             }
 
             override fun registration(
@@ -374,10 +370,10 @@ class ParliamentTimedOvnWalletV1Test {
                 trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
                 authority: String,
                 seed: ByteArray,
-            ): ByteArray? {
+            ): Array<ByteArray>? {
                 assertContentEquals(byteArrayOf(7), proofResponse)
                 assertContentEquals(ByteArray(32) { 1 }, trustAnchor.networkIdBytes())
-                return ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES)
+                return arrayOf(ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES), mockCheckpoint())
             }
 
             override fun ballot(
@@ -386,7 +382,7 @@ class ParliamentTimedOvnWalletV1Test {
                 authority: String,
                 seed: ByteArray,
                 choice: Int,
-            ): ByteArray? = null
+            ): Array<ByteArray>? = null
         }
         val snapshotVault = FakeSeedVault()
         val snapshotWallet = ParliamentTimedOvnWalletV1.withComponentsForTests(
@@ -421,7 +417,7 @@ class ParliamentTimedOvnWalletV1Test {
         assertEquals("Parliament timed-OVN seed handle is stale", error.message)
         assertContentEquals(
             ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES) { 0x31.toByte() },
-            wallet.registrationFromProofV1(byteArrayOf(1), trustAnchor(), AUTHORITY, current),
+            wallet.registrationFromProofV1(byteArrayOf(1), trustAnchor(), AUTHORITY, current).record(),
         )
     }
 
@@ -433,7 +429,7 @@ class ParliamentTimedOvnWalletV1Test {
         val handle = wallet.createSeedHandle("concurrent-member")
         val executor = Executors.newFixedThreadPool(2)
         try {
-            val use = executor.submit<ByteArray> {
+            val use = executor.submit<ParliamentTimedOvnPublicRecordV1> {
                 wallet.registrationFromProofV1(
                     byteArrayOf(1),
                     trustAnchor(),
@@ -451,7 +447,7 @@ class ParliamentTimedOvnWalletV1Test {
             endpoint.release.countDown()
             assertEquals(
                 ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES,
-                use.get(5, TimeUnit.SECONDS).size,
+                use.get(5, TimeUnit.SECONDS).record().size,
             )
             assertTrue(delete.get(5, TimeUnit.SECONDS))
             assertNull(wallet.seedHandle("concurrent-member"))
@@ -526,21 +522,23 @@ class ParliamentTimedOvnWalletV1Test {
     private class FakeEndpoint(
         private val proofAccepted: Boolean = true,
         val pageResult: ByteArray? = pageVerificationBytes(7, 3, 0),
+        private val pageCheckpoint: ByteArray = mockCheckpoint(),
+        private val recordCheckpoint: ByteArray = mockCheckpoint(),
     ) : ParliamentTimedOvnWalletV1.Endpoint {
         val choices = mutableListOf<Int>()
 
         override fun verifyCastingProofPage(
             proofResponse: ByteArray,
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-        ): ByteArray? = pageResult
+        ): Array<ByteArray>? = pageResult?.let { arrayOf(it, pageCheckpoint.clone()) }
 
         override fun verifyCastingProof(
             proofResponse: ByteArray,
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-        ): Boolean {
+        ): ByteArray? {
             check(proofResponse.isNotEmpty())
             check(trustAnchor.networkIdBytes().size == 32)
-            return proofAccepted
+            return if (proofAccepted) mockCheckpoint() else null
         }
 
         override fun registration(
@@ -548,14 +546,14 @@ class ParliamentTimedOvnWalletV1Test {
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
             authority: String,
             seed: ByteArray,
-        ): ByteArray? {
+        ): Array<ByteArray>? {
             check(
                 proofResponse.isNotEmpty() &&
                     trustAnchor.trustedCheckpointHeight == BigInteger.valueOf(7) &&
                     authority == AUTHORITY &&
                     seed.size == 32,
             )
-            return ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES) { 0x31.toByte() }
+            return arrayOf(ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES) { 0x31.toByte() }, recordCheckpoint)
         }
 
         override fun ballot(
@@ -564,7 +562,7 @@ class ParliamentTimedOvnWalletV1Test {
             authority: String,
             seed: ByteArray,
             choice: Int,
-        ): ByteArray? {
+        ): Array<ByteArray>? {
             check(
                 proofResponse.isNotEmpty() &&
                     trustAnchor.trustedCheckpointHeight == BigInteger.valueOf(7) &&
@@ -572,7 +570,7 @@ class ParliamentTimedOvnWalletV1Test {
                     seed.size == 32,
             )
             choices += choice
-            return ByteArray(ParliamentTimedOvnWalletV1.BALLOT_RECORD_BYTES) { 0x42.toByte() }
+            return arrayOf(ByteArray(ParliamentTimedOvnWalletV1.BALLOT_RECORD_BYTES) { 0x42.toByte() }, recordCheckpoint)
         }
     }
 
@@ -583,17 +581,17 @@ class ParliamentTimedOvnWalletV1Test {
         override fun verifyCastingProof(
             proofResponse: ByteArray,
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
-        ): Boolean = true
+        ): ByteArray? = mockCheckpoint()
 
         override fun registration(
             proofResponse: ByteArray,
             trustAnchor: ParliamentTimedOvnCastingTrustAnchorSnapshotV1,
             authority: String,
             seed: ByteArray,
-        ): ByteArray? {
+        ): Array<ByteArray>? {
             started.countDown()
             check(release.await(5, TimeUnit.SECONDS))
-            return ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES) { 0x31.toByte() }
+            return arrayOf(ByteArray(ParliamentTimedOvnWalletV1.REGISTRATION_RECORD_BYTES) { 0x31.toByte() }, mockCheckpoint())
         }
 
         override fun ballot(
@@ -602,10 +600,41 @@ class ParliamentTimedOvnWalletV1Test {
             authority: String,
             seed: ByteArray,
             choice: Int,
-        ): ByteArray? = null
+        ): Array<ByteArray>? = null
+    }
+
+    @Test
+    fun `page metadata alone cannot promote and complete checkpoint is preserved`() {
+        val wallet = ParliamentTimedOvnWalletV1.withComponentsForTests(FakeSeedVault(),
+            FakeEndpoint(pageCheckpoint = ByteArray(0)))
+        assertFailsWith<IllegalStateException> { wallet.verifyCastingProofPageV1(byteArrayOf(7), trustAnchor()) }
+        val vault = FakeSeedVault()
+        val native = ParliamentTimedOvnWalletV1.withComponentsForTests(vault, FakeEndpoint())
+        val result = native.registrationFromProofV1(byteArrayOf(7), trustAnchor(), AUTHORITY,
+            native.createSeedHandle("checkpoint-record"))
+        assertContentEquals(mockCheckpoint(), result.promotedCheckpointNorito())
+        val mutated = result.promotedCheckpointNorito()
+        mutated.fill(0)
+        assertContentEquals(mockCheckpoint(), result.promotedCheckpointNorito())
+    }
+
+    @Test
+    fun `wallet refuses a record paired with a different checkpoint promotion`() {
+        val vault = FakeSeedVault()
+        val wallet = ParliamentTimedOvnWalletV1.withComponentsForTests(vault,
+            FakeEndpoint(recordCheckpoint = ByteArray(113) { 0x77 }))
+        val handle = wallet.createSeedHandle("checkpoint-substitution")
+        assertFailsWith<IllegalStateException> {
+            wallet.registrationFromProofV1(byteArrayOf(7), trustAnchor(), AUTHORITY, handle)
+        }
+        assertEquals(1, vault.borrowCount)
+        assertTrue(vault.lastBorrowedSeedWasCleared)
     }
 
     companion object {
+        // Opaque native-endpoint mock output only; never a cryptographic checkpoint fixture.
+        private fun mockCheckpoint(): ByteArray = ByteArray(113) { 0x66 }
+
         private const val AUTHORITY =
             "ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 

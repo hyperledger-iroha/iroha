@@ -5,18 +5,14 @@ use crate::zk::{
     kagemusha_v1_recursion::testnet_observation::KagemushaTestnetValueAdmissionV1,
     kagemusha_v1_state::TestPersistenceFailure,
 };
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    NetworkId, block::consensus_v2::HeightContextId,
-    isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
-};
+use iroha_data_model::isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1;
 
 fn scope_and_anchor() -> (
     KagemushaTestnetStateObservationScopeV1,
     KagemushaFinalityTrustAnchorV1,
 ) {
-    let network_id =
-        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([1; 32])));
+    let fixture = iroha_data_model::testing::native_finality::NativeFinalityFixture::new();
+    let network_id = fixture.network_id();
     let scope = KagemushaTestnetStateObservationScopeV1::new(
         *network_id.as_bytes(),
         [2; 32],
@@ -29,10 +25,7 @@ fn scope_and_anchor() -> (
     .unwrap();
     let anchor = KagemushaFinalityTrustAnchorV1 {
         network_id,
-        block_height: 9,
-        height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-            [7; 32],
-        ))),
+        checkpoint: fixture.checkpoint(),
     };
     anchor.validate().unwrap();
     (scope, anchor)
@@ -40,7 +33,7 @@ fn scope_and_anchor() -> (
 
 fn admission(
     scope: KagemushaTestnetStateObservationScopeV1,
-    anchor: KagemushaFinalityTrustAnchorV1,
+    anchor: &KagemushaFinalityTrustAnchorV1,
     operation_id: DigestV1,
     credit_id: DigestV1,
     amount: u128,
@@ -52,7 +45,7 @@ fn admission(
         credit_id,
         amount,
         mint_digest,
-        anchor,
+        anchor.clone(),
     )
 }
 
@@ -71,7 +64,7 @@ fn opaque_admission_is_durable_scoped_and_idempotent() {
     let mut ledger =
         KagemushaTestnetMintCreditLedgerV1::create_new_with_scope(&path(&directory), scope)
             .unwrap();
-    let first = admission(scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32]);
+    let first = admission(scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32]);
     let credited = ledger.credit(&first).unwrap();
     assert_eq!(credited.scope(), scope);
     assert_eq!(credited.operation_id(), [0x11; 32]);
@@ -83,9 +76,9 @@ fn opaque_admission_is_durable_scoped_and_idempotent() {
     assert_eq!(ledger.credit_by_operation([0x11; 32]), Some(credited));
     assert_eq!(ledger.credit_by_credit_id([0x21; 32]), Some(credited));
     assert_eq!(ledger.credit_by_credit_id([0x22; 32]), None);
-    let changed = admission(scope, anchor, [0x11; 32], [0x21; 32], 18, [0x31; 32]);
+    let changed = admission(scope, &anchor, [0x11; 32], [0x21; 32], 18, [0x31; 32]);
     assert!(ledger.credit(&changed).is_err());
-    let duplicate_credit = admission(scope, anchor, [0x12; 32], [0x21; 32], 1, [0x32; 32]);
+    let duplicate_credit = admission(scope, &anchor, [0x12; 32], [0x21; 32], 1, [0x32; 32]);
     assert!(ledger.credit(&duplicate_credit).is_err());
     let wrong_scope = KagemushaTestnetStateObservationScopeV1::new(
         scope.network_id(),
@@ -101,7 +94,7 @@ fn opaque_admission_is_durable_scoped_and_idempotent() {
         ledger
             .credit(&admission(
                 wrong_scope,
-                anchor,
+                &anchor,
                 [0x13; 32],
                 [0x23; 32],
                 1,
@@ -112,7 +105,7 @@ fn opaque_admission_is_durable_scoped_and_idempotent() {
     assert!(
         ledger
             .credit(&admission(
-                scope, anchor, [0x14; 32], [0x24; 32], 0, [0x34; 32]
+                scope, &anchor, [0x14; 32], [0x24; 32], 0, [0x34; 32]
             ))
             .is_err()
     );
@@ -124,7 +117,7 @@ fn recovery_rederives_every_credit_and_rejects_changed_or_missing_source() {
     let directory = tempfile::tempdir().unwrap();
     let ledger_path = path(&directory);
     let (scope, anchor) = scope_and_anchor();
-    let first = admission(scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32]);
+    let first = admission(scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32]);
     let mut ledger =
         KagemushaTestnetMintCreditLedgerV1::create_new_with_scope(&ledger_path, scope).unwrap();
     ledger.credit(&first).unwrap();
@@ -142,7 +135,7 @@ fn recovery_rederives_every_credit_and_rejects_changed_or_missing_source() {
     assert!(
         KagemushaTestnetMintCreditLedgerV1::open_existing_with(&ledger_path, wrong_scope, |_| {
             Ok(admission(
-                scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
+                scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
             ))
         })
         .is_err()
@@ -156,7 +149,7 @@ fn recovery_rederives_every_credit_and_rejects_changed_or_missing_source() {
     assert!(
         KagemushaTestnetMintCreditLedgerV1::open_existing_with(&ledger_path, scope, |_| {
             Ok(admission(
-                scope, anchor, [0x11; 32], [0x21; 32], 18, [0x31; 32],
+                scope, &anchor, [0x11; 32], [0x21; 32], 18, [0x31; 32],
             ))
         })
         .is_err()
@@ -165,7 +158,7 @@ fn recovery_rederives_every_credit_and_rejects_changed_or_missing_source() {
         KagemushaTestnetMintCreditLedgerV1::open_existing_with(&ledger_path, scope, |op| {
             assert_eq!(op, [0x11; 32]);
             Ok(admission(
-                scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
+                scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
             ))
         })
         .unwrap();
@@ -174,7 +167,7 @@ fn recovery_rederives_every_credit_and_rejects_changed_or_missing_source() {
     assert!(
         KagemushaTestnetMintCreditLedgerV1::open_existing_with(&ledger_path, scope, |_| {
             Ok(admission(
-                scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
+                scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
             ))
         })
         .is_err()
@@ -186,11 +179,11 @@ fn duplicate_credit_on_disk_and_uncertain_append_fail_closed() {
     let directory = tempfile::tempdir().unwrap();
     let ledger_path = path(&directory);
     let (scope, anchor) = scope_and_anchor();
-    let first = admission(scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32]);
+    let first = admission(scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32]);
     let mut ledger =
         KagemushaTestnetMintCreditLedgerV1::create_new_with_scope(&ledger_path, scope).unwrap();
     ledger.credit(&first).unwrap();
-    let conflicting = admission(scope, anchor, [0x12; 32], [0x21; 32], 5, [0x32; 32]);
+    let conflicting = admission(scope, &anchor, [0x12; 32], [0x21; 32], 5, [0x32; 32]);
     let conflicting_facts = CreditFacts::from_admission(&conflicting).unwrap();
     ledger
         .wal
@@ -201,11 +194,11 @@ fn duplicate_credit_on_disk_and_uncertain_append_fail_closed() {
         KagemushaTestnetMintCreditLedgerV1::open_existing_with(&ledger_path, scope, |op| {
             if op == first.operation_id() {
                 Ok(admission(
-                    scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
+                    scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
                 ))
             } else {
                 Ok(admission(
-                    scope, anchor, [0x12; 32], [0x21; 32], 5, [0x32; 32],
+                    scope, &anchor, [0x12; 32], [0x21; 32], 5, [0x32; 32],
                 ))
             }
         })
@@ -227,7 +220,7 @@ fn duplicate_credit_on_disk_and_uncertain_append_fail_closed() {
     let recovered =
         KagemushaTestnetMintCreditLedgerV1::open_existing_with(&second_path, scope, |_| {
             Ok(admission(
-                scope, anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
+                scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32],
             ))
         })
         .unwrap();

@@ -650,11 +650,6 @@ capture_world_table_once!(
     sccp_light_client_stride_index,
     "world.sccp_light_client_stride_index"
 );
-capture_world_table_once!(
-    capture_sccp_light_client_checkpoint_expiry_once,
-    sccp_light_client_checkpoint_expiry,
-    "world.sccp_light_client_checkpoint_expiry"
-);
 
 const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     TableMaterializer::Single {
@@ -1326,10 +1321,6 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         capture: capture_public_lane_stake_custody_once,
     },
     TableMaterializer::Single {
-        id: "world.lane_relay_emergency_validators",
-        capture: native_world::capture_lane_relay_emergency_validators_once,
-    },
-    TableMaterializer::Single {
         id: "world.zk_assets",
         capture: native_world::capture_zk_assets_once,
     },
@@ -1508,10 +1499,6 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     TableMaterializer::Single {
         id: "world.sccp_light_client_stride_index",
         capture: capture_sccp_light_client_stride_index_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_light_client_checkpoint_expiry",
-        capture: capture_sccp_light_client_checkpoint_expiry_once,
     },
     TableMaterializer::TransactionMembership,
 ];
@@ -1834,7 +1821,6 @@ mod tests {
             "world.public_lane_reward_claims",
             "world.public_lane_reward_accruals",
             "world.public_lane_stake_custody",
-            "world.lane_relay_emergency_validators",
             "world.zk_assets",
             "world.elections",
             "world.citizens",
@@ -1880,7 +1866,6 @@ mod tests {
             "world.sccp_light_client_sets",
             "world.sccp_light_client_checkpoints",
             "world.sccp_light_client_stride_index",
-            "world.sccp_light_client_checkpoint_expiry",
             "state.transactions.current",
             "state.transactions.rollback",
         ];

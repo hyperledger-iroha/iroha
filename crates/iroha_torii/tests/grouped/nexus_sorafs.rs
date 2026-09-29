@@ -1,3 +1,5 @@
+//! Grouped Torii Nexus, SoraFS, contract, and app surface integration tests.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../contracts_call_integration.rs"]
 mod contracts_call_integration;
 #[path = "../kagemusha_api_contract.rs"]
@@ -32,3 +34,6 @@ mod soranet_privacy_endpoints;
 mod space_directory_manifests;
 #[path = "../subscriptions_endpoints.rs"]
 mod subscriptions_endpoints;
+
+#[path = "../nexus_lifecycle_endpoint.rs"]
+mod nexus_lifecycle_endpoint;

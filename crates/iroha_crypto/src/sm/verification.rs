@@ -167,7 +167,7 @@ pub fn verify(
         .into();
     // SM3 and the pinned curve use different fixed-array container versions.
     // Bridge their identical 32 bytes on the stack before scalar reduction.
-    let e = Scalar::reduce_bytes(&digest.into());
+    let digest_scalar = Scalar::reduce_bytes(&digest.into());
     let combined = ProjectivePoint::lincomb(
         &ProjectivePoint::generator(),
         &s,
@@ -179,8 +179,8 @@ pub fn verify(
     if bool::from(combined.is_identity()) {
         return Err(Error::BadSignature);
     }
-    let x1 = combined.to_affine().x();
-    if *r == e + Scalar::reduce_bytes(&x1) {
+    let x_coordinate = combined.to_affine().x();
+    if *r == digest_scalar + Scalar::reduce_bytes(&x_coordinate) {
         Ok(())
     } else {
         Err(Error::BadSignature)

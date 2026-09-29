@@ -186,3 +186,38 @@ fn exact_encoding_comparison_is_not_a_substitute_for_native_root_authentication(
         "exact context bytes alone do not confer finality"
     );
 }
+
+#[test]
+fn borrowed_lane_equality_never_authenticates_a_changed_native_result_or_path() {
+    let (network, witness, root) = fixture();
+    let proof =
+        NativeLaneStateProof::from_witness(&witness, &AllocationBudget::new(100_000)).unwrap();
+    let frame = norito::encode_canonical(&SumeragiLaneState::default()).unwrap();
+    let payload = norito::core::from_bytes_view(&frame).unwrap().as_bytes();
+    assert!(proof.verify(network, 2, root));
+    assert!(proof.matches_state_payload(network, 2, payload).unwrap());
+    assert!(!proof.matches_state_payload(network, 3, payload).unwrap());
+    let foreign = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"foreign receipt",
+    )));
+    assert!(!proof.matches_state_payload(foreign, 2, payload).unwrap());
+    assert!(!proof.verify(network, 2, Hash::new(b"other native result root")));
+    let mut changed_path = proof.clone();
+    changed_path.siblings[0][0] = Hash::new(b"uncertified path");
+    assert!(
+        changed_path
+            .matches_state_payload(network, 2, payload)
+            .unwrap()
+    );
+    assert!(
+        !changed_path.verify(network, 2, root),
+        "raw equality cannot authenticate its own path"
+    );
+    let mut changed_value = payload.to_vec();
+    changed_value[0] ^= 1;
+    assert!(
+        !proof
+            .matches_state_payload(network, 2, &changed_value)
+            .unwrap()
+    );
+}

@@ -110,7 +110,7 @@ fn invalid(executor: &mut StateExecutor, chain: &CertifiedTestChain, candidate: 
         .hash(&crate::sumeragi::crypto::BlsCrypto::new());
     assert!(matches!(
         executor.execute(candidate, &hash),
-        Some(ExecOutcome::Invalid(_))
+        Some(ExecOutcome::Invalid)
     ));
     let view = chain.state().view();
     assert_eq!(view.height(), 8);

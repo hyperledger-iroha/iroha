@@ -2596,3 +2596,40 @@ seiyaku EmptyProducts {
     assert_eq!(results.len(), 1);
     assert!(results[0].passed, "{:?}", results[0].failure);
 }
+
+#[test]
+fn invocation_alias_decoding_preserves_read_deferral_before_test_failure() {
+    for target_actor in [false, true] {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller),
+            None,
+            HashMap::new(),
+        );
+        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let mut vm = IVM::try_new_with_memory_budget(u64::MAX, &budget).unwrap();
+        let envelope = make_tlv(PointerType::Blob, b"unknown");
+        vm.memory.preload_input(0, &envelope).unwrap();
+        let register = if target_actor { 10 } else { 11 };
+        vm.set_register(register, crate::Memory::INPUT_START);
+        let occupied = budget.reserved_bytes();
+        budget.set_limit_bytes(occupied);
+        let refusal = vm.memory.load_u8(crate::Memory::INPUT_START).unwrap_err();
+        assert!(matches!(refusal, crate::VMError::AllocationDeferred(_)));
+        assert_eq!(host.invoke_entrypoint(&mut vm, false), Err(refusal));
+        assert_eq!(host.last_test_error(), None);
+        assert_eq!(vm.register(register), crate::Memory::INPUT_START);
+        assert_eq!(budget.reserved_bytes(), occupied);
+        // Restore credit and retain the deterministic unknown-actor failure.
+        if target_actor {
+            budget.set_limit_bytes(occupied + 8 * std::mem::size_of::<crate::AccessRange>());
+            assert_eq!(
+                host.invoke_entrypoint(&mut vm, false),
+                Err(crate::VMError::AssertionFailed)
+            );
+            assert!(host.last_test_error().unwrap().contains("unknown actor"));
+        }
+        drop(vm);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}

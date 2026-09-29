@@ -6,34 +6,42 @@ import XCTest
 final class KagemushaReserveFinalityV1Tests: XCTestCase {
     private let network = Data(repeating: 3, count: 32)
     private let context = Data(repeating: 5, count: 32)
+    private func checkpoint() throws -> Data {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try Data(contentsOf: root.appendingPathComponent("fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"))
+    }
     private func hint(_ height: String = "7") -> String {
-        "{\"version\":1,\"network_id\":\"\(String(repeating: "03", count: 32))\",\"block_height\":\"\(height)\",\"height_context_id\":\"\(String(repeating: "05", count: 32))\"}"
+        "{\"version\":1,\"network_id\":\"\(String(repeating: "03", count: 32))\",\"block_height\":\"\(height)\",\"block_hash\":\"\(String(repeating: "05", count: 32))\"}"
     }
     func testAnchorRetainsValueCopies() throws {
-        var n = network; var c = context
-        let anchor = try KagemushaFinalityTrustAnchorV1(networkID: n, blockHeight: 7, heightContextID: c)
-        n[0] = 9; c[0] = 9
+        var n = network; var c = try checkpoint()
+        let original = c
+        let anchor = try KagemushaFinalityTrustAnchorV1(networkID: n, checkpoint: c)
+        n[0] = 9; c[0] ^= 1
         var output = anchor.networkID; output[0] = 8
-        XCTAssertEqual(anchor.networkID, network); XCTAssertEqual(anchor.heightContextID, context)
+        var returned = anchor.checkpoint; returned[0] ^= 1
+        XCTAssertEqual(anchor.networkID, network); XCTAssertEqual(anchor.checkpoint, original)
     }
-    func testAnchorPreservesFullUnsignedHeight() throws {
-        let value = try KagemushaFinalityTrustAnchorV1(networkID: network, blockHeight: UInt64.max, heightContextID: context)
-        XCTAssertEqual(value.blockHeight, UInt64.max)
+    func testAnchorPreservesCompleteCanonicalCheckpointBytes() throws {
+        let bytes = try checkpoint()
+        let value = try KagemushaFinalityTrustAnchorV1(networkID: network, checkpoint: bytes)
+        XCTAssertEqual(value.checkpoint, bytes)
+        XCTAssertGreaterThan(value.checkpoint.count, 32)
     }
-    func testAnchorRejectsZeroHeight() {
-        XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: network, blockHeight: 0, heightContextID: context))
+    func testAnchorRejectsEmptyAndOversizedCheckpoint() {
+        for bytes in [Data(), Data(repeating: 0, count: KagemushaFinalityTrustAnchorV1.maximumCheckpointBytes + 1)] {
+            XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: network, checkpoint: bytes))
+        }
     }
-    func testAnchorRejectsZeroAndWrongWidthHashes() {
+    func testAnchorRejectsZeroAndWrongWidthNetworkHashes() throws {
         for bytes in [Data(), Data(repeating: 1, count: 31), Data(repeating: 0, count: 32), Data(repeating: 1, count: 33)] {
-            XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: bytes, blockHeight: 7, heightContextID: context))
-            XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: network, blockHeight: 7, heightContextID: bytes))
+            XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: bytes, checkpoint: checkpoint()))
         }
     }
     func testPendingHintIsAbsent() throws { XCTAssertNil(try parseReserveFinalityHint(Data("null".utf8))) }
-    func testAnchorRejectsUnmarkedCoordinatesWithoutNormalizingThem() {
-        let unmarked = Data(repeating: 4, count: 32)
-        XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: unmarked, blockHeight: 7, heightContextID: context))
-        XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: network, blockHeight: 7, heightContextID: unmarked))
+    func testAnchorRejectsUnmarkedNetworkWithoutNormalizingIt() throws {
+        XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: Data(repeating: 4, count: 32), checkpoint: checkpoint()))
     }
     func testHintRejectsUnmarkedCoordinatesWithoutNormalizingThem() {
         for original in ["03", "05"] {
@@ -44,7 +52,7 @@ final class KagemushaReserveFinalityV1Tests: XCTestCase {
     }
     func testNativeHintKeepsExactUnsignedCoordinates() throws {
         let value = try XCTUnwrap(parseReserveFinalityHint(Data(hint(String(UInt64.max)).utf8)))
-        XCTAssertEqual(value.networkID, network); XCTAssertEqual(value.heightContextID, context)
+        XCTAssertEqual(value.networkID, network); XCTAssertEqual(value.blockHash, context)
         XCTAssertEqual(value.blockHeight, UInt64.max)
     }
     func testHintRejectsNoncanonicalAndOverflowHeight() {

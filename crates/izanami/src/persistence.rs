@@ -88,7 +88,6 @@ struct StoredArgs {
     prebuild_tx_buffer: u32,
     prebuild_tx_workers: u32,
     sumeragi_block_max_transactions: u64,
-    sumeragi_proposal_queue_scan_multiplier: u64,
 }
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
     match profile {
@@ -170,7 +169,6 @@ impl StoredArgs {
             prebuild_tx_buffer,
             prebuild_tx_workers,
             sumeragi_block_max_transactions: args.sumeragi_block_max_transactions,
-            sumeragi_proposal_queue_scan_multiplier: args.sumeragi_proposal_queue_scan_multiplier,
             workload_profile: workload_profile_to_u8(args.workload_profile),
             allow_contract_deploy_in_stable: args.allow_contract_deploy_in_stable,
             log_filter: args.log_filter.clone(),
@@ -229,7 +227,6 @@ impl StoredArgs {
             prebuild_tx_buffer: self.prebuild_tx_buffer as usize,
             prebuild_tx_workers: self.prebuild_tx_workers as usize,
             sumeragi_block_max_transactions: self.sumeragi_block_max_transactions,
-            sumeragi_proposal_queue_scan_multiplier: self.sumeragi_proposal_queue_scan_multiplier,
             workload_profile: workload_profile_from_u8(self.workload_profile)?,
             allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
@@ -493,7 +490,6 @@ mod portable_tests {
         args.prebuild_tx_buffer = 1024;
         args.prebuild_tx_workers = 4;
         args.sumeragi_block_max_transactions = 1_536;
-        args.sumeragi_proposal_queue_scan_multiplier = 2;
         let loaded = StoredArgs::from_args(&args)?.into_args()?;
         assert_eq!(loaded.fault_window_start, args.fault_window_start);
         assert_eq!(loaded.fault_window_end, args.fault_window_end);
@@ -503,10 +499,6 @@ mod portable_tests {
         assert_eq!(
             loaded.sumeragi_block_max_transactions,
             args.sumeragi_block_max_transactions
-        );
-        assert_eq!(
-            loaded.sumeragi_proposal_queue_scan_multiplier,
-            args.sumeragi_proposal_queue_scan_multiplier
         );
         Ok(())
     }
@@ -768,7 +760,6 @@ mod tests {
             prebuild_tx_buffer: 2048,
             prebuild_tx_workers: 6,
             sumeragi_block_max_transactions: 1_536,
-            sumeragi_proposal_queue_scan_multiplier: 2,
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: true,
             log_filter: "debug".to_string(),
@@ -809,10 +800,6 @@ mod tests {
         assert_eq!(
             loaded.sumeragi_block_max_transactions,
             args.sumeragi_block_max_transactions
-        );
-        assert_eq!(
-            loaded.sumeragi_proposal_queue_scan_multiplier,
-            args.sumeragi_proposal_queue_scan_multiplier
         );
         assert_eq!(loaded.workload_profile, args.workload_profile);
         assert_eq!(

@@ -97,7 +97,8 @@ fn canonical_executed_network_fixture(
         "fixture commitment must bind its source block"
     );
     let decoded = decode_framed_signed_block(&block.encode_wire().unwrap()).unwrap();
-    assert_eq!(decoded.execution_context(), block.execution_context());
+    assert_eq!(decoded.header(), block.header());
+    assert_eq!(decoded.execution_outputs(), block.execution_outputs());
     assert_eq!(
         decoded.network_input_merkle_commitment(),
         commitment.transaction_input_commitment
@@ -130,15 +131,20 @@ fn canonical_executed_network_fixture(
 
 fn synthetic_executed_commitment(
     block: &SignedBlock,
-) -> iroha_data_model::block::consensus_v2::ExecutionCommitment {
+) -> iroha_data_model::sumeragi_finality::ExecutionCommitment {
     let wire = block.encode_wire().expect("fixture executed wire");
-    // The HTTP tests supply a trust input; they do not claim consensus qualification.
-    iroha_data_model::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"fixture parent state"), Hash::new(b"fixture post state"),
-        Hash::new(b"fixture ordinary writes"), wire.len() as u64, Hash::new(&wire),
-    )
-    .with_transaction_commitments_from_block(block)
-    .expect("fixture exact input/output commitments")
+    // HTTP tests supply an independent root; this does not grant consensus authority.
+    iroha_data_model::sumeragi_finality::ExecutionCommitment {
+        parent_state_root: Hash::new(b"fixture parent state"),
+        post_state_root: Hash::new(b"fixture post state"),
+        ordinary_writes_root: Hash::new(b"fixture ordinary writes"),
+        kagemusha_top_up_root: None,
+        kagemusha_top_up_count: 0,
+        executed_block_wire_len: wire.len() as u64,
+        executed_block_wire_hash: Hash::new(&wire),
+        transaction_input_commitment: block.network_input_merkle_commitment(),
+        transaction_output_commitment: block.output_merkle_commitment(),
+    }
 }
 
 #[test]

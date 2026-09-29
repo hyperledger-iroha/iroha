@@ -174,8 +174,7 @@ mod tests {
         isi::{InstructionBox, Log},
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         transaction::{
-            IvmBytecode, IvmProved, TransactionAdmissionIntent, TransactionBuilder,
-            TransactionDomain, signed::FeePaymentIntent,
+            IvmBytecode, IvmProved, TransactionBuilder, TransactionDomain, signed::FeePaymentIntent,
         },
     };
     use iroha_crypto::{PrivateKey, PublicKey};
@@ -307,9 +306,6 @@ mod tests {
         });
         assert_retained_mutation(&payload, |changed| {
             changed.fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_001));
-        });
-        assert_retained_mutation(&payload, |changed| {
-            changed.admission_intent = TransactionAdmissionIntent::QueuePlanSynced;
         });
         assert_retained_mutation(&payload, |changed| {
             let mut metadata = Metadata::default();

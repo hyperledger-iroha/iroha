@@ -365,7 +365,10 @@ fn a_view_of_another_network_is_refused() {
     kura.store_block(frame(&chain, 1)).unwrap();
     state.push_block_hash_for_testing(chain.genesis().hash());
     let view = state.view();
-    assert!(committed_block(&view, 1).is_ok());
+    assert!(
+        committed_block(&view, 1).is_err(),
+        "header-only foreign State has no original execution tip"
+    );
     assert_eq!(
         CertifiedChain::new(&view).err(),
         Some(ChainReadError::ForeignGenesis)
@@ -379,9 +382,9 @@ fn a_view_of_another_network_is_refused() {
         chain.network_id(),
     );
     other.push_block_hash_for_testing(chain.genesis().hash());
-    assert_eq!(
-        committed_block(&other.view(), 1).err(),
-        Some(ChainReadError::NotInView { height: 1 })
+    assert!(
+        committed_block(&other.view(), 1).is_err(),
+        "a hash journal cannot mint execution authority"
     );
 }
 
@@ -663,7 +666,7 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
     );
     chain
         .kura()
-        .force_hash_only_block_for_testing(NonZeroUsize::new(3).unwrap())
+        .corrupt_canonical_body_for_testing(NonZeroUsize::new(3).unwrap())
         .unwrap();
     let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, chain.kura()).unwrap();
     assert_eq!(

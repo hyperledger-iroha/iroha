@@ -41,7 +41,7 @@ python3 scripts/private_settlement_smoke_campaign.py validate \
   /absolute/path/outside-the-repo/new-smoke-evidence --commit FULL_SIGNED_COMMIT
 ```
 
-The driver builds `iroha3d` with `test-network-message-control` and the grouped
+The driver builds `iroha3d` with `test-network-private-settlement-route-control` and the grouped
 integration test with `atomic-private-settlement-smoke` once. This explicit
 capability enables the common release harness and its CPU SHA3-384 privacy proof.
 The driver discovers the exact ignored smoke test,

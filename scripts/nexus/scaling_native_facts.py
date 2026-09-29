@@ -34,7 +34,7 @@ _TIP_FIELDS = frozenset(('version', 'operation', 'invocation_id', 'genesis_sha25
                          'genesis_bytes', 'committed_height'))
 _FACTS_FIELDS = frozenset(('version', 'operation', 'invocation_id', 'facts_sha256', 'facts_bytes'))
 _READER_FLAGS = ('first-height', 'last-height', 'max-committed-blocks', 'max-store-data-bytes',
-    'max-carrier-bytes', 'max-merge-log-bytes', 'max-merge-frames', 'reader-max-output-bytes',
+    'max-carrier-bytes', 'reader-max-output-bytes',
     'max-decode-allocation-bytes', 'owner-uid')
 
 
@@ -165,7 +165,7 @@ def _original_snapshot(inputs):
     artifacts = tuple((row.path, _digest(row.sha256), _integer(row.bytes, 1, 64 * 1024 * 1024))
                       for row in generation.artifacts)
     roles = tuple((row.peer_id, Path(_path(row.node_config)), row.node_public_key,
-                   Path(_path(row.primary_block_store)), Path(_path(row.primary_merge_log)))
+                   Path(_path(row.primary_block_store)))
                   for row in inputs.roles)
     _require(len(roles) == 4 and tuple(row[0] for row in roles) == ('peer0', 'peer1', 'peer2', 'peer3'))
     _require(len({row[2] for row in roles}) == 4 and len({row[0] for row in artifacts}) == len(artifacts))
@@ -244,8 +244,7 @@ class NativeFacts:
                  and outputs.allocation('facts') == budget[5]
                  and self._plan[15] <= budget[12], 'native_facts_total_reservation')
         _require(self._journal_input[0] not in {row[0] for row in self._files}, 'native_facts_journal_alias')
-        self._store, self._merge = original[9][3][3:5]
-        _require(self._store != self._merge, 'native_facts_store_alias')
+        self._store = original[9][3][3]
 
     def _verify(self):
         phase = self._phase
@@ -299,7 +298,7 @@ class NativeFacts:
             invocation, process, reply = self._call('stopped-tip', (
                 '--signed-genesis', str(path), '--signed-genesis-sha256', digest,
                 '--signed-genesis-max-bytes', str(cap), '--network-id', self._original[2],
-                '--block-store', str(self._store), '--merge-log', str(self._merge),
+                '--block-store', str(self._store),
                 *self._reader_argv(1)), 'stopped_tip', _TIP_FIELDS)
             _require(reply['genesis_sha256'] == digest and type(reply['genesis_bytes']) is int
                      and reply['genesis_bytes'] == size, 'native_facts_tip_genesis_changed')
@@ -307,7 +306,7 @@ class NativeFacts:
             self._verify()
             self._height, self._tip = height, (invocation, process, digest, size)
             self._phase = 'tip-ready'
-            return StoppedTipReceipt(stopped_reader(self._store, self._merge, height, self._limits),
+            return StoppedTipReceipt(stopped_reader(self._store, height, self._limits),
                 invocation, process, self._binding[3], self._original[1], digest, size)
         except BaseException as error:
             self._phase = 'failed'; _failure(error)
@@ -341,7 +340,7 @@ class NativeFacts:
             for field, value in zip(fields(FactsBudget)[4:], self._budget[4:], strict=True):
                 add(field.name.replace('_', '-'), value)
             arguments.extend(self._reader_argv(self._height))
-            add('block-store', self._store); add('merge-log', self._merge)
+            add('block-store', self._store)
             add('facts-output', self._outputs.path('facts'))
             self._outputs.begin('facts')
             invocation, process, reply = self._call('facts', tuple(arguments), 'facts', _FACTS_FIELDS)

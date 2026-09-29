@@ -1,3 +1,4 @@
+use iroha_data_model::block::BlockExecutionContextBundle;
 // Canonical Network index fixtures exercise structural membership, never mint execution/finality.
 /// Attach structurally checked outputs under a finite, explicit storage-test policy.
 pub(crate) fn install_network_index_test_outputs(
@@ -28,7 +29,6 @@ pub(crate) fn install_network_index_test_outputs(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &limits,
         )
         .expect("canonical bounded storage-fixture outputs");
@@ -313,149 +313,31 @@ fn canonical_network_position_roundtrips_and_refuses_retired_phase_layout() {
 }
 
 fn network_index_native_block() -> SignedBlock {
-    use iroha_data_model::block::{
-        consensus_v2 as wire, lane_admission::*, lane_consensus::*,
-        lane_decision_batch::LaneDecisionBatchV1, lane_input::*,
-    };
-    use iroha_model_base::peer::PeerId;
-    let network = test_network_id(b"canonical-index");
-    let input = network_index_signal_input(7);
-    let signed_hash = match &input {
-        TransactionEntrypoint::External(tx) => tx.hash(),
-        _ => unreachable!(),
-    };
-    let route = crate::queue::RoutingDecision::new(LaneId::new(2), DataSpaceId::UNIVERSAL);
-    let plan = crate::queue::RoutingPlan::single(route);
-    let validators: Vec<_> = (1..=4)
-        .map(|seed| {
-            PeerId::new(
-                KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
-                    .public_key()
-                    .clone(),
-            )
-        })
-        .collect();
-    let incarnation = Hash::new(b"structural native route");
-    let instance = Hash::new(b"structural native instance");
-    let binding = QueuePlanAdmissionBindingV1 {
-        version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-        network_id_digest: queue_plan_admission_network_id_digest(&network),
-        request_id: queue_plan_synced_request_id(&network, input.hash()),
-        entrypoint_hash: input.hash(),
-        signed_transaction_hash: Some(signed_hash),
-        routing_plan_digest: plan.digest(),
-        admission_context: QueuePlanAdmissionContextV1 {
-            version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
-            authority_height: 1,
-            proposal_height: 2,
-            predecessor_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"structural admission predecessor",
-            ))),
-            routing_plan_digest: plan.digest(),
-            route_incarnations: vec![QueuePlanRouteIncarnationV1 {
-                leg: plan.legs()[0],
-                lane_incarnation: incarnation,
-                validator_set_hash_version:
-                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&validators),
-                validator_set: validators,
-                validator_count: 4,
-                durability_threshold: 2,
-            }],
-        },
-        enqueue_timestamp_ms: 7,
-        queue_plan_journal_version: QUEUE_PLAN_JOURNAL_CLAIM_VERSION_V1,
-        durable_admission_version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
-        journal_record_digest: Hash::new(b"structural index fixture, not physical admission"),
-    };
-    let admitted = LaneAdmittedInputV1 {
-        entrypoint: input,
-        certificate: QueuePlanAdmissionCertificateV1 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-            binding,
-            attestations: Vec::new(),
-        },
-    };
-    let payload = LaneInputPayloadV1 {
-        descriptor: LaneInputDescriptorV1 {
-            version: LANE_INPUT_VERSION_V1,
-            admission_priority: QueuePlanAdmissionPriorityV1::new(2, 0).unwrap(),
-            admission_carrier_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"structural first carrier",
-            )),
-            admitted_input_hash: Hash::new(norito::encode_canonical(&admitted).unwrap()),
-            slots: vec![LaneInputRouteSlotV1 {
-                route,
-                lane_incarnation: incarnation,
-                instance_id: instance,
-                lane_height: 1,
-            }],
-        },
-        input: admitted,
-    };
-    let bytes = norito::encode_canonical(&payload).unwrap();
-    let layout = wire::recommended_data_availability_layout();
-    let chunks = wire::encode_payload_chunks(layout, &bytes).unwrap();
-    let root = wire::payload_chunk_root(&chunks.iter().map(Hash::new).collect::<Vec<_>>()).unwrap();
-    let value = LaneValueRefV1 {
-        instance_id: instance,
-        admitted_binding_hash: payload.input.certificate.binding.canonical_hash(),
-        kind: payload.validate_structure().unwrap(),
-        origin_view: 0,
-        origin_producer: 0,
-        descriptor_hash: payload.descriptor.canonical_hash().unwrap(),
-        payload_hash: Hash::new(&bytes),
-        availability_hash: lane_availability_hash(
-            layout,
-            root,
-            bytes.len() as u64,
-            chunks.len() as u32,
-        )
-        .unwrap(),
-    };
-    // The index validates DTO structure only; this fixture cannot authenticate native consensus.
-    let decision = LaneDecisionV1 {
-        manifest: LaneManifestV1 {
-            value,
-            layout,
-            chunk_root: root,
-            byte_len: bytes.len() as u64,
-            chunk_count: chunks.len() as u32,
-        },
-        commit_qc: LaneQcV1 {
-            statement: LaneVoteStatementV1 {
-                round: LaneRoundV1 {
-                    instance_id: instance,
-                    lane_height: 1,
-                    voting_view: 0,
-                },
-                phase: LanePhaseV1::Commit,
-                value,
-            },
-            shares: Vec::new(),
-        },
-    };
-    let batch = LaneDecisionBatchV1 {
-        base_state_height: 2,
-        base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"structural WSV base")),
-        groups: vec![LaneDecisionGroupV1 {
-            payload,
-            decisions: vec![decision],
+    use iroha_data_model::sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection};
+    // This fixture tests structural indexing only. It never supplies finality authority.
+    let mut block = network_index_block_at(3, vec![network_index_signal_input(7)]);
+    let mut context = BlockExecutionContextBundle::new(Vec::new());
+    context.lane_merge = Some(SumeragiLaneMergeSection {
+        merges: vec![SumeragiLaneMerge {
+            lane: LaneId::new(2),
+            incarnation: [1; 32],
+            from: 1,
+            to: 1,
+            tip_hash: [2; 32],
+            tip_result: [3; 32],
         }],
-    };
-    let mut block = network_index_block_at(3, Vec::new()).canonical_resultless_proposal();
-    block.set_execution_context(Some(
-        BlockExecutionContextBundle::new(Vec::new()).with_native_lane_decisions(batch),
-    ));
+        time_floor_ms: 8,
+        merged_count: 1,
+    });
+    block.set_execution_context(Some(context));
     attach_ok_results_to_block(&mut block);
     block
 }
 
 #[test]
-fn canonical_network_index_projects_native_source_once_and_rejects_mixed_body() {
+fn canonical_network_index_projects_merged_suffix_once_and_rejects_missing_outputs() {
     let block = network_index_native_block();
-    assert_eq!(block.external_entrypoint_count(), 0);
-    assert!(block.header().merkle_root().is_none());
+    assert_eq!(block.external_entrypoint_count(), 1);
     assert_eq!(block.network_entrypoint_count(), 1);
     let source = block.network_entrypoint_at(0).unwrap();
     let height = nonzero!(3_usize);
@@ -481,37 +363,40 @@ fn canonical_network_index_projects_native_source_once_and_rejects_mixed_body() 
     assert_eq!(page.candidates.len(), 1);
     assert_eq!(page.candidates[0].position.network_input_index(), 0);
     assert_eq!(page.candidates[0].position.entrypoint_hash(), source.hash());
-    let mut mixed = block.clone();
-    mixed.set_external_entrypoints(vec![network_index_signal_input(99)]);
-    Kura::insert_transaction_entrypoint_heights(&mut index, height, &mixed);
-    assert!(index.incomplete_heights.contains(&height));
-    assert!(index.heights_by_entrypoint.is_empty());
-    assert!(index.kaigi_signal_candidates.is_empty());
-    let mut missing = norito::json::to_value(&block).unwrap();
-    let context = missing
-        .as_object_mut()
-        .unwrap()
-        .get_mut("payload")
-        .unwrap()
-        .as_object_mut()
-        .unwrap()
-        .get_mut("execution_context")
-        .unwrap()
-        .as_object_mut()
-        .unwrap();
-    let batch = context
-        .get_mut("native_lane_decisions")
-        .unwrap()
-        .as_object_mut()
-        .unwrap();
-    batch
-        .get_mut("groups")
-        .unwrap()
-        .as_array_mut()
-        .unwrap()
-        .clear();
-    let missing: SignedBlock = norito::json::from_value(missing).unwrap();
-    Kura::insert_transaction_entrypoint_heights(&mut index, height, &missing);
-    assert!(index.incomplete_heights.contains(&height));
-    assert!(index.indexed_heights.is_empty());
+
+    // Direct inputs precede the merged suffix and both occupy ordinary Network rows.
+    let mut combined = block.clone();
+    combined.set_external_entrypoints(vec![network_index_signal_input(99), source.clone()]);
+    attach_ok_results_to_block(&mut combined);
+    Kura::insert_transaction_entrypoint_heights(&mut index, height, &combined);
+    assert!(index.incomplete_heights.is_empty());
+    assert_eq!(index.heights_by_entrypoint.len(), 2);
+    let candidates =
+        &index.kaigi_signal_candidates[&kaigi_signal_test_call("canonical-inputs")][&height];
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[&1].position.entrypoint_hash(), source.hash());
+
+    // A removed or substituted original input cannot reuse previously complete output joins.
+    for inputs in [Vec::new(), vec![network_index_signal_input(98)]] {
+        let mut missing = block.clone();
+        missing.set_external_entrypoints(inputs);
+        Kura::insert_transaction_entrypoint_heights(&mut index, height, &missing);
+        assert!(index.incomplete_heights.contains(&height));
+        assert!(index.indexed_heights.is_empty());
+        assert!(index.heights_by_entrypoint.is_empty());
+        assert!(index.kaigi_signal_candidates.is_empty());
+    }
+}
+
+/// Structural storage rows only; these outputs never confer execution or finality authority.
+fn attach_ok_results_to_block(block: &mut SignedBlock) {
+    use iroha_data_model::block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1};
+    let outputs = (0..block.network_entrypoint_count()).map(|index| {
+        ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: u32::try_from(index).unwrap(),
+            result: TransactionResult::new(Ok(DataTriggerSequence::default())),
+            completions: Vec::new(),
+        })
+    }).collect();
+    install_network_index_test_outputs(block, outputs);
 }

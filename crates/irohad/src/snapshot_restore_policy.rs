@@ -2,10 +2,7 @@
 
 use super::TryReadSnapshotError;
 
-pub(super) fn snapshot_read_error_is_recoverable_for_bootstrap(
-    error: &TryReadSnapshotError,
-    hard_fork_snapshot_bootstrap: bool,
-) -> bool {
+pub(super) fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
     match error {
         TryReadSnapshotError::IO(_, _)
         | TryReadSnapshotError::PayloadAllocation(_)
@@ -14,9 +11,13 @@ pub(super) fn snapshot_read_error_is_recoverable_for_bootstrap(
         | TryReadSnapshotError::StateAdmission(_)
         | TryReadSnapshotError::StateExecutionDeferred(_)
         | TryReadSnapshotError::StateNativeSchedule(_)
+        | TryReadSnapshotError::ChainIdMismatch { .. }
         | TryReadSnapshotError::NetworkIdMismatch { .. }
         | TryReadSnapshotError::ZkConfigInstall(_) => false,
-        TryReadSnapshotError::MismatchedHeight { .. } => hard_fork_snapshot_bootstrap,
+        // The caller additionally requires Strict mode and a complete genesis-backed
+        // prefix, then node::prepare executes original signed genesis and every certified block.
+        TryReadSnapshotError::NativeExecutionReplayRequired => true,
+        TryReadSnapshotError::MismatchedHeight { .. } => false,
         _ => true,
     }
 }
@@ -31,6 +32,21 @@ mod tests {
         pin::pin,
         task::{Context, Poll, Waker},
     };
+
+    #[test]
+    fn native_identity_mismatch_halts_but_execution_replay_requires_strict_mode() {
+        let wrong_chain = TryReadSnapshotError::ChainIdMismatch {
+            expected: "configured-native-chain".parse().unwrap(),
+            actual: "foreign-native-chain".parse().unwrap(),
+        };
+        assert!(!snapshot_failure_allows_empty_state_fallback(
+            &wrong_chain,
+            false
+        ));
+        let replay = TryReadSnapshotError::NativeExecutionReplayRequired;
+        assert!(snapshot_failure_allows_empty_state_fallback(&replay, false));
+        assert!(!snapshot_failure_allows_empty_state_fallback(&replay, true));
+    }
 
     #[test]
     fn snapshot_local_refusal_never_authorizes_empty_state_fallback() {
@@ -61,17 +77,12 @@ mod tests {
                 ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
             ),
         ] {
-            for bootstrap in [false, true] {
-                assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
-                    &error, bootstrap
+            assert!(!snapshot_read_error_is_recoverable(&error));
+            for emergency_fast in [false, true] {
+                assert!(!snapshot_failure_allows_empty_state_fallback(
+                    &error,
+                    emergency_fast
                 ));
-                for emergency_fast in [false, true] {
-                    assert!(!snapshot_failure_allows_empty_state_fallback(
-                        &error,
-                        bootstrap,
-                        emergency_fast
-                    ));
-                }
             }
         }
     }
@@ -97,9 +108,7 @@ mod tests {
                     iroha_core::sumeragi::schedule::ScheduleError::Admission(refusal),
                 ),
             };
-            assert!(!snapshot_failure_allows_empty_state_fallback(
-                &error, false, false
-            ));
+            assert!(!snapshot_failure_allows_empty_state_fallback(&error, false));
             let refusal = match &error {
                 TryReadSnapshotError::PayloadAllocation(refusal)
                 | TryReadSnapshotError::StateNativeSchedule(

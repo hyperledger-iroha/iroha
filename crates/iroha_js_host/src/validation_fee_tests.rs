@@ -350,3 +350,56 @@ fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
         "code hash must be non-zero"
     );
 }
+
+#[test]
+fn validation_fee_proof_request_uses_complete_original_native_checkpoint() {
+    use iroha_data_model::testing::native_finality::NativeFinalityFixture;
+    // Genuine native signatures certify synthetic fixture outputs only; no World execution
+    // or validation-fee policy authority is claimed by this request-codec test.
+    for (expected_height, fixture) in [
+        (1_u64, NativeFinalityFixture::start("js-fee-checkpoint")),
+        (2, NativeFinalityFixture::new()),
+    ] {
+        let checkpoint = fixture.checkpoint();
+        let bytes = checkpoint
+            .encode_canonical()
+            .expect("canonical full checkpoint");
+        let request =
+            validation_fee_current_policy_proof_request_v1(Uint8Array::from(bytes.clone()))
+                .expect("full independently selected checkpoint request");
+        let decoded: iroha::client::ValidationFeeCurrentPolicyProofRequestV1 =
+            norito::decode_canonical(request.as_ref()).expect("sole request layout");
+        assert_eq!(
+            decoded.version,
+            iroha::client::VALIDATION_FEE_POLICY_PROOF_VERSION_V1
+        );
+        assert_eq!(decoded.trusted_checkpoint_height, expected_height);
+        assert_eq!(validation_fee_checkpoint(&bytes).unwrap(), checkpoint);
+        let mut suffix = bytes.clone();
+        suffix.push(0);
+        assert!(validation_fee_current_policy_proof_request_v1(Uint8Array::from(suffix)).is_err());
+        assert!(validation_fee_checkpoint(&bytes[..bytes.len() - 1]).is_err());
+    }
+    assert!(validation_fee_current_policy_proof_request_v1(Uint8Array::from(vec![1; 32])).is_err());
+    assert!(validation_fee_checkpoint(&[]).is_err());
+}
+
+#[test]
+fn validation_fee_native_verifier_rejects_scalar_checkpoint_and_malformed_proof() {
+    use iroha_data_model::testing::native_finality::NativeFinalityFixture;
+    let fixture = NativeFinalityFixture::new();
+    let checkpoint = fixture.checkpoint().encode_canonical().unwrap();
+    for anchor in [vec![1; 32], checkpoint] {
+        let result = validation_fee_verify_current_policy_proof_v1(
+            Uint8Array::from(vec![1]),
+            Uint8Array::from(fixture.network_id().as_bytes().to_vec()),
+            Uint8Array::from(vec![0x35; 32]),
+            Uint8Array::from(anchor),
+            753.0,
+        );
+        assert!(
+            result.is_err(),
+            "no projected policy or promoted authority from malformed input"
+        );
+    }
+}

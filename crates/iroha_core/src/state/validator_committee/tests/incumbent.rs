@@ -30,7 +30,7 @@ fn handshake_metadata(roster: &[ValidatorPower]) -> Parameter {
     let metadata = ConsensusHandshakeMetadata {
         mode: SumeragiConsensusMode::Permissioned,
         block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
-        wire_protocol_version: u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+        wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         consensus_fingerprint: ConsensusFingerprint::new([0xA5; 32]),
         kagemusha_mint_finality:
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(roster),

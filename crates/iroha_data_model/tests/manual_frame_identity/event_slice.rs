@@ -77,11 +77,11 @@ where
             );
         }
         let control = view
-            .decode_exact_with(ncore::decode_field_canonical::<T>)
+            .decode_exact_with::<T, _, _>(ncore::decode_field_canonical::<T>)
             .expect("payload reconstruction honors the advertised layout");
         assert_eq!(norito::json::to_json(&control).unwrap(), expected);
         let actual = view
-            .decode_exact_with(<T as ncore::DecodeFromSlice>::decode_from_slice)
+            .decode_exact_with::<T, _, _>(<T as ncore::DecodeFromSlice>::decode_from_slice)
             .expect("slice reconstruction retains the advertised layout");
         assert_eq!(norito::json::to_json(&actual).unwrap(), expected);
         let decoded = ncore::decode_from_bytes::<T>(&frame)

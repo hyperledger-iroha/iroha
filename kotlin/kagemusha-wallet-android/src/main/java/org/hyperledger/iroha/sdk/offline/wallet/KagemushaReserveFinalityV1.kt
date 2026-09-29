@@ -7,22 +7,27 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.UnverifiedKagemushaOperationStatusV1
 import org.hyperledger.iroha.sdk.offline.*
 
-/** Independently authenticated coordinates, never constructed from a response's lookup hint. */
-class KagemushaFinalityTrustAnchorV1(networkId: ByteArray, val blockHeight: BigInteger, heightContextId: ByteArray) {
+/** Independently selected full checkpoint. Construction checks transport bounds only;
+ * native verification checks canonical encoding, network and signatures before any result. */
+class KagemushaFinalityTrustAnchorV1(networkId: ByteArray, checkpoint: ByteArray) {
     private val network = reserveFinalityHash(networkId)
-    private val context = reserveFinalityHash(heightContextId)
-    init { requireReserveFinalityHeight(blockHeight) }
+    private val nativeCheckpoint: ByteArray
+    init {
+        require(checkpoint.size in 1..MAXIMUM_CHECKPOINT_BYTES)
+        nativeCheckpoint = checkpoint.copyOf()
+    }
     fun networkId(): ByteArray = network.copyOf()
-    fun heightContextId(): ByteArray = context.copyOf()
+    fun checkpoint(): ByteArray = nativeCheckpoint.copyOf()
+    companion object { const val MAXIMUM_CHECKPOINT_BYTES = 68 * 1024 * 1024 }
 }
 
 /** Native-decoded routing metadata only. This type has no conversion into a trusted anchor. */
-class KagemushaUntrustedFinalityHintV1 internal constructor(networkId: ByteArray, val blockHeight: BigInteger, heightContextId: ByteArray) {
+class KagemushaUntrustedFinalityHintV1 internal constructor(networkId: ByteArray, val blockHeight: BigInteger, blockHash: ByteArray) {
     private val network = reserveFinalityHash(networkId)
-    private val context = reserveFinalityHash(heightContextId)
+    private val block = reserveFinalityHash(blockHash)
     init { requireReserveFinalityHeight(blockHeight) }
     fun networkId(): ByteArray = network.copyOf()
-    fun heightContextId(): ByteArray = context.copyOf()
+    fun blockHash(): ByteArray = block.copyOf()
 }
 
 /**
@@ -31,14 +36,14 @@ class KagemushaUntrustedFinalityHintV1 internal constructor(networkId: ByteArray
  * Keep original status evidence and independently authenticated anchor provenance for durable retry.
  */
 object KagemushaReserveFinalityV1 {
-    private const val MAXIMUM_STATUS_JSON_BYTES = 16 * 1024 * 1024
-    private const val REQUIRED_BRIDGE_ABI_VERSION = 24
+    private const val MAXIMUM_STATUS_JSON_BYTES = 4 * (36 * 1024 * 1024 + 256)
+    private const val REQUIRED_BRIDGE_ABI_VERSION = 25
     private val available: Boolean by lazy {
         try {
             System.loadLibrary("connect_norito_bridge")
             KagemushaReserveFinalityJniV1.nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
                 KagemushaReserveFinalityJniV1.nativeHint(byteArrayOf()) == null &&
-                KagemushaReserveFinalityJniV1.nativeVerify(byteArrayOf(), 255, byteArrayOf(), byteArrayOf(), 0L, byteArrayOf()) == null
+                KagemushaReserveFinalityJniV1.nativeVerify(byteArrayOf(), 255, byteArrayOf(), byteArrayOf(), byteArrayOf()) == null
         } catch (_: LinkageError) { false } catch (_: RuntimeException) { false }
     }
 
@@ -85,7 +90,7 @@ object KagemushaReserveFinalityV1 {
         val response = requireResponse(json)
         requireAvailable()
         val output = nativeResult { KagemushaReserveFinalityJniV1.nativeVerify(response, kind, request.copyOf(),
-            anchor.networkId(), anchor.blockHeight.toLong(), anchor.heightContextId()) }
+            anchor.networkId(), anchor.checkpoint()) }
         check(output.isNotEmpty() && output.size <= maximum) { "Native Offline finality output is out of bounds" }
         return output
     }
@@ -103,9 +108,8 @@ object KagemushaReserveFinalityV1 {
 internal object KagemushaReserveFinalityJniV1 {
     @JvmStatic external fun nativeBridgeAbiVersion(): Int
     @JvmStatic external fun nativeHint(responseJson: ByteArray): ByteArray?
-    /** heightBits is the unsigned u64 bit pattern, including negative JVM longs above 2^63-1. */
     @JvmStatic external fun nativeVerify(responseJson: ByteArray, kind: Int, expectedRequest: ByteArray,
-        networkId: ByteArray, heightBits: Long, heightContextId: ByteArray): ByteArray?
+        networkId: ByteArray, checkpoint: ByteArray): ByteArray?
 }
 
 internal fun reserveFinalityHash(value: ByteArray): ByteArray {
@@ -121,7 +125,7 @@ internal fun parseReserveFinalityHint(bytes: ByteArray): KagemushaUntrustedFinal
         .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
     val parsed = JsonParser.parse(text) ?: return null
     val value = parsed as? Map<*, *> ?: error("Invalid native finality hint")
-    check(value.keys == setOf("version", "network_id", "block_height", "height_context_id"))
+    check(value.keys == setOf("version", "network_id", "block_height", "block_hash"))
     check(value["version"] is Number && value["version"].toString() == "1")
     fun hash(key: String): ByteArray {
         val encoded = value[key] as? String ?: error("Invalid native finality hint hash")
@@ -132,5 +136,5 @@ internal fun parseReserveFinalityHint(bytes: ByteArray): KagemushaUntrustedFinal
     require(height.length in 1..20 && height.all { it in '0'..'9' })
     val number = BigInteger(height)
     require(number.toString() == height)
-    return KagemushaUntrustedFinalityHintV1(hash("network_id"), number, hash("height_context_id"))
+    return KagemushaUntrustedFinalityHintV1(hash("network_id"), number, hash("block_hash"))
 }

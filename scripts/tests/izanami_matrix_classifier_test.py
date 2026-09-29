@@ -24,27 +24,34 @@ def _classifier_degraded_pattern() -> str:
     return match.group(1)
 
 
-def test_liveness_rows_reject_retired_v1_consensus_dimensions() -> None:
-    rows = LIVENESS.parse_rows("baseline:1024:1:300")
-    assert rows == [LIVENESS.MatrixRow("baseline", 1024, 1, 300)]
+def test_liveness_rows_reject_retired_consensus_dimensions() -> None:
+    rows = LIVENESS.parse_rows("baseline:1024:300")
+    assert rows == [LIVENESS.MatrixRow("baseline", 1024, 300)]
 
     try:
         LIVENESS.parse_rows("legacy:1024:1:300:2:2")
     except ValueError as error:
-        assert "revision-4" in str(error)
+        assert "native matrix rows" in str(error)
     else:
         raise AssertionError("retired collector dimensions must fail closed")
 
+    try:
+        LIVENESS.parse_rows("retired_scan:1024:1:300")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("retired proposal scan tuning must fail closed")
     source = LIVENESS_SCRIPT.read_text(encoding="utf-8")
+    assert "--sumeragi-proposal-queue-scan-multiplier" not in source
     assert "--sumeragi-collectors-k" not in source
     assert "--sumeragi-inline-block-created-backup-rbc" not in source
 
 
-def test_liveness_matrix_accepts_only_revision4_committee_geometry() -> None:
+def test_liveness_matrix_accepts_only_native_committee_geometry() -> None:
     assert [
         peers
         for peers in range(1, 33)
-        if LIVENESS.is_revision4_committee_size(peers)
+        if LIVENESS.is_admitted_committee_size(peers)
     ] == [4, 7, 10, 13, 16, 19, 22, 25, 28, 31]
 
 

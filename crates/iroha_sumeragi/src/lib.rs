@@ -8,8 +8,8 @@
 //! `// SPEC:` markers (its Appendix E) in this crate refer to it, and `tests/spec.rs` checks
 //! that every reference resolves.
 //!
-//! TODO: the node still runs the v2 runtime (`specs/sumeragi_v2.md`); cutover goal S4 of
-//! `specs/sumeragi_goals.md` wires this core into the node and deletes the v2 runtime.
+//! The native node driver in `iroha_core::sumeragi` runs this core. Remaining qualification
+//! work, including signed RS16 payload availability, is tracked in `specs/sumeragi_goals.md`.
 //!
 //! ## The topology overlay (after B-Chain)
 //!
@@ -89,7 +89,9 @@
 #![allow(clippy::redundant_feature_names)]
 
 pub mod api;
+mod bytes;
 pub mod crypto;
+pub mod evidence;
 mod machine;
 pub mod message;
 pub mod pacemaker;

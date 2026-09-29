@@ -43,11 +43,7 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
             0,
             0,
         )),
-        trace,
-        constraints,
-        mem_log: Vec::new(),
-        reg_log: Vec::new(),
-        step_log: Vec::new(),
+        snapshot: funded_snapshot(&trace, &constraints),
         transport_capabilities: None,
         negotiated_capabilities: None,
     };
@@ -97,20 +93,16 @@ fn zk_task_digest_reflects_transport_metadata() {
         gpr: [0u64; 256],
         tags: [false; 256],
     }];
-    let base = zk_lane::ZkTask {
+    let make_base = || zk_lane::ZkTask {
         tx_hash: None,
         code_hash: [0xAB; 32],
         program: vec![0x01, 0x00, 0x00, 0x00].into(),
         header: None,
-        trace,
-        constraints: Vec::new(),
-        mem_log: Vec::new(),
-        reg_log: Vec::new(),
-        step_log: Vec::new(),
+        snapshot: funded_snapshot(&trace, &[]),
         transport_capabilities: None,
         negotiated_capabilities: None,
     };
-    let base_digest = base.digest();
+    let base_digest = make_base().digest();
     let snapshot = TransportCapabilityResolutionSnapshot {
         hpke_suite: HpkeSuite::Kyber768AuthPsk,
         use_datagram: true,
@@ -118,15 +110,30 @@ fn zk_task_digest_reflects_transport_metadata() {
         fec_feedback_interval_ms: 25,
         privacy_bucket_granularity: PrivacyBucketGranularity::StandardV1,
     };
-    let mut with_transport = base.clone();
+    let mut with_transport = make_base();
     with_transport.transport_capabilities = Some(snapshot);
     assert_ne!(base_digest, with_transport.digest());
-    let mut with_flags = base.clone();
+    let mut with_flags = make_base();
     with_flags.negotiated_capabilities = Some(CapabilityFlags::from_bits(0b101));
     assert_ne!(base_digest, with_flags.digest());
     // Ensure both metadata fields together still produce deterministic digests.
-    let mut combined = base.clone();
+    let mut combined = make_base();
     combined.transport_capabilities = with_transport.transport_capabilities.clone();
     combined.negotiated_capabilities = with_flags.negotiated_capabilities;
     assert_ne!(base_digest, combined.digest());
+}
+
+fn funded_snapshot(
+    trace: &[ivm::zk::RegisterState],
+    constraints: &[ivm::zk::Constraint],
+) -> ivm::zk::DiagnosticTraceSnapshot {
+    ivm::zk::DiagnosticTraceSource {
+        registers: ivm::zk::DiagnosticRegisterSource::States(trace),
+        constraints,
+        memory_events: &[],
+        register_events: &[],
+        steps: &[],
+    }
+    .try_snapshot(&mv::allocation::AllocationBudget::new(64 * 1024))
+    .expect("fund lane integration fixture")
 }

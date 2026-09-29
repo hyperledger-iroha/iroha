@@ -466,7 +466,7 @@ function sampleExecution(overrides = {}) {
   return {
     program_id: POLICY_ID,
     program_digest: PROGRAM_DIGEST,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     input_ciphertext_hash: INPUT_CIPHERTEXT_HASH,
     output_ciphertext_hash: OUTPUT_CIPHERTEXT_HASH,
@@ -529,7 +529,7 @@ function identifierPolicyFixture(overrides = {}) {
     normalization: "email_address",
     resolver_public_key: "ed25519:resolver-key",
     output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
-    backend: "bfv-affine-sha3-256-v1",
+    backend: "bfv-affine-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters: "ABCD",
     input_encryption_public_parameters_decoded: {
@@ -625,7 +625,7 @@ test("listIdentifierPolicies rejects non-exact policy metadata", async () => {
     ["program_id", { program_id: ` ${PROGRAM_ID}` }],
     ["owner", { owner: ` ${ACCOUNT_ID}` }],
     ["normalization", { normalization: "Phone_E164" }],
-    ["backend", { backend: "bfv-affine-sha3-256-v1 " }],
+    ["backend", { backend: "bfv-affine-v1 " }],
     [
       "output_opening_public_key",
       { output_opening_public_key: ` ${OUTPUT_OPENING_PUBLIC_KEY}` },
@@ -687,6 +687,49 @@ test("listIdentifierPolicies requires the exact initializer descriptor hash", as
     );
   }
 });
+
+for (const method of ["listIdentifierPolicies", "listRamLfeProgramPolicies"]) {
+  const wire = JSON.stringify({
+    total: 1,
+    items: [identifierPolicyFixture({ verification_mode: "signed" })],
+  });
+  const modulusField = '"min_ciphertext_modulus":1099511627776';
+  const rawResponse = (body) => new Response(body, {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+  test(`${method} preserves raw u64 profile integers without rounding`, async () => {
+    for (const value of [9007199254740991n, 9007199254740993n, 18446744073709551615n]) {
+      const client = new ToriiClient("https://example.test", {
+        fetchImpl: async () => rawResponse(wire.replace(
+          modulusField,
+          `"min_ciphertext_modulus":${value}`,
+        )),
+      });
+      const result = await client[method]();
+      assert.equal(
+        result.items[0].ram_fhe_profile.min_ciphertext_modulus,
+        value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value,
+      );
+    }
+  });
+
+  test(`${method} rejects duplicate fields and noncanonical profile integers`, async () => {
+    const cases = [
+      [wire.replace('"profile_version":1', '"profile_version":1,"profile_version":2'), /duplicate object key/u],
+      ...["18446744073709551616", "0", "-1", "1.0", "1e0", '"257"', '" 257"'].map(
+        (token) => [wire.replace(modulusField, `"min_ciphertext_modulus":${token}`), /min_ciphertext_modulus|canonical integers/u],
+      ),
+    ];
+    for (const [body, error] of cases) {
+      const client = new ToriiClient("https://example.test", {
+        fetchImpl: async () => rawResponse(body),
+      });
+      await assert.rejects(() => client[method](), error);
+    }
+  });
+}
 
 test("listIdentifierPolicies bounds profile dimensions and rejects retired modes", async () => {
   const invalid = [
@@ -784,7 +827,7 @@ test("resolveIdentifier posts encrypted input with output opening and normalizes
       active: true,
       normalization: "email_address",
       resolver_public_key: signedReceipt.resolver_public_key,
-      backend: "bfv-programmed-sha3-256-v1",
+      backend: "bfv-programmed-v1",
     }),
     true,
   );
@@ -879,7 +922,7 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     active: true,
     normalization: "email_address",
     resolver_public_key: signedReceipt.resolver_public_key,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
   };
   const receipt = {
     payload: signedReceipt.payload,
@@ -952,11 +995,13 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     /proof attestations require an external verifier/,
   );
 
+  const otherPolicyId = "email#wholesale";
+  assert.notEqual(otherPolicyId, signedReceipt.payload.policy_id);
   assert.throws(
     () =>
       verifyIdentifierResolutionReceipt(receipt, {
         ...policy,
-        policy_id: "email#retail",
+        policy_id: otherPolicyId,
       }),
     /does not match policy/,
   );
@@ -965,7 +1010,7 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
 test("encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags", () => {
   const basePayload = signedReceiptFixture().payload;
   for (const [field, value, pattern] of [
-    ["backend", " bfv-programmed-sha3-256-v1", /payload\.execution\.backend must not contain surrounding whitespace/],
+    ["backend", " bfv-programmed-v1", /payload\.execution\.backend must not contain surrounding whitespace/],
     ["backend", "BFV-PROGRAMMED-SHA3-256-V1", /payload\.execution\.backend must be an exact lowercase/],
     ["verification_mode", "signed ", /payload\.execution\.verification_mode must not contain surrounding whitespace/],
     ["verification_mode", "Signed", /payload\.execution\.verification_mode must be an exact lowercase/],
@@ -1258,7 +1303,7 @@ test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes"
     active: true,
     normalization: "exact",
     resolver_public_key: RESOLVER_PUBLIC_KEY,
-    backend: "bfv-affine-sha3-256-v1",
+    backend: "bfv-affine-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded: BFV_PUBLIC_PARAMETERS,
   };
@@ -1322,7 +1367,7 @@ test("encryptIdentifierInputForPolicy matches shared Soracloud BFV operation inp
     active: true,
     normalization: "exact",
     resolver_public_key: RESOLVER_PUBLIC_KEY,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded:
       operationVectors.public_parameters_decoded,
@@ -1479,7 +1524,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
     active: true,
     normalization: "exact",
     resolver_public_key: RESOLVER_PUBLIC_KEY,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded:
       operationVectors.public_parameters_decoded,
@@ -1568,7 +1613,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
     active: true,
     normalization: "exact",
     resolver_public_key: RESOLVER_PUBLIC_KEY,
-    backend: "bfv-affine-sha3-256-v1",
+    backend: "bfv-affine-v1",
     input_encryption: "bfv-v1",
   };
   const cloneParameters = () => JSON.parse(JSON.stringify(BFV_PUBLIC_PARAMETERS));
@@ -1673,7 +1718,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial client encryption inpu
     active: true,
     normalization: "exact",
     resolver_public_key: RESOLVER_PUBLIC_KEY,
-    backend: "bfv-affine-sha3-256-v1",
+    backend: "bfv-affine-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded: BFV_PUBLIC_PARAMETERS,
   };
@@ -1782,7 +1827,7 @@ test("buildIdentifierRequestForPolicy rejects plaintext request bodies", () => {
     active: true,
     normalization: "email_address",
     resolver_public_key: RESOLVER_PUBLIC_KEY,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     input_encryption: "bfv-v1",
   };
   const opening = sampleOutputOpening();

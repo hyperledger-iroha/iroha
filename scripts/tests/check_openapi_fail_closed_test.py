@@ -260,6 +260,39 @@ def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
     )
     assert release["kind"] == "KagemushaVerifierReleaseInstall"
     assert validator.is_valid(release)
+    manifest_schema = schemas["GovernanceKagemushaReleaseManifestV1"]
+    assert set(manifest_schema["properties"]) == set(release["payload"]["manifest"])
+    profile_schema = schemas["GovernanceKagemushaHardwareProfileV1"]
+    profile = release["payload"]["manifest"]["enabled_profiles"][0]["hardware_profile"]
+    assert set(profile_schema["properties"]) == set(profile)
+    assert profile_schema["properties"]["capability_mask"]["maximum"] == (1 << 32) - 1
+    for missing in ("network_id", "purpose"):
+        mutated = copy.deepcopy(release)
+        del mutated["payload"]["manifest"][missing]
+        assert not validator.is_valid(mutated), missing
+    mutated = copy.deepcopy(release)
+    del mutated["payload"]["manifest"]["enabled_profiles"][0]["hardware_profile"]["app_attestation_authority_policy_digest"]
+    assert not validator.is_valid(mutated)
+    purpose_validator = Draft202012Validator({
+        "$ref": "#/components/schemas/GovernanceKagemushaReleasePurposeV1",
+        "components": spec["components"],
+    })
+    experiment = {"kind": "testnet_experiment", "value": {
+        "asset_identity_digest": [1] * 32, "asset_incarnation": [2] * 32,
+        "asset_scale": 9, "liability_pool_id": [3] * 32,
+    }}
+    assert purpose_validator.is_valid(experiment)
+    for missing in experiment["value"]:
+        mutated = copy.deepcopy(experiment)
+        del mutated["value"][missing]
+        assert not purpose_validator.is_valid(mutated), missing
+    for invalid in ("production", {"kind": "production"},
+                    {"kind": "production", "value": {}},
+                    {"kind": "production", "value": None, "unknown": None},
+                    {"kind": "testnet_experiment", "value": None},
+                    {"kind": "testnet_experiment", "value": {**experiment["value"], "asset_scale": 29}},
+                    {"kind": "testnet_experiment", "value": {**experiment["value"], "unknown": None}}):
+        assert not purpose_validator.is_valid(invalid), invalid
     for path in (
         ("payload", "receipt", "evidence_closure"),
         ("payload", "manifest", "enabled_profiles"),

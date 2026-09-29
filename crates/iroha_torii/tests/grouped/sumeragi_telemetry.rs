@@ -26,3 +26,11 @@ mod sumeragi_tel_subrouter_smoke;
 mod telemetry_gating;
 #[path = "../torii_start.rs"]
 mod torii_start;
+
+#[cfg(feature = "telemetry")]
+#[path = "../common/sumeragi_evidence.rs"]
+mod sumeragi_evidence;
+#[path = "../sumeragi_evidence_count_endpoint.rs"]
+mod sumeragi_evidence_count_endpoint;
+#[path = "../sumeragi_evidence_list_endpoint.rs"]
+mod sumeragi_evidence_list_endpoint;

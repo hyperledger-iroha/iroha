@@ -47,6 +47,53 @@ impl Kura {
             kind,
         )
     }
+    fn prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+        data_path: &Path,
+        index_path: &Path,
+        terminal_height: u64,
+        retention: NonZeroUsize,
+        required_heights: &BTreeSet<u64>,
+        kind: &str,
+    ) -> bool {
+        if !data_path.exists() && !index_path.exists() {
+            return required_heights.is_empty();
+        }
+        if !Self::recover_indexed_sidecar_artifacts_with_required_heights(
+            data_path,
+            index_path,
+            required_heights,
+            kind,
+        ) {
+            return false;
+        }
+        Self::rewrite_indexed_sidecars(
+            data_path,
+            index_path,
+            IndexedSidecarRewrite::RetainAfterTerminalFrontier {
+                terminal_height,
+                retention,
+                required_heights,
+            },
+            kind,
+        )
+    }
+    #[cfg(test)]
+    fn prune_indexed_sidecars_through_terminal_frontier(
+        data_path: &Path,
+        index_path: &Path,
+        terminal_height: u64,
+        retention: NonZeroUsize,
+        kind: &str,
+    ) -> bool {
+        Self::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+            data_path,
+            index_path,
+            terminal_height,
+            retention,
+            &BTreeSet::new(),
+            kind,
+        )
+    }
     #[allow(clippy::too_many_lines)] // Rewriting covers many edge cases in one pass; keep consolidated.
     fn rewrite_indexed_sidecars(
         data_path: &Path,
@@ -154,7 +201,7 @@ impl Kura {
                     None,
                     None,
                     "retention-window prune",
-                    Some(DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES),
+                    Some(256 * 1024 * 1024),
                 )
             }
             IndexedSidecarRewrite::RetainAfterTerminalFrontier {

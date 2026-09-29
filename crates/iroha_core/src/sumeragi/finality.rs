@@ -5,10 +5,10 @@ use iroha_data_model::{
     sumeragi::SumeragiStatus,
     sumeragi_finality::{
         FinalityError, FinalityValidator, SumeragiFinalityAttestation,
-        SumeragiFinalityAttestationBody, SumeragiFinalityBundle, SumeragiFinalityProof,
+        SumeragiFinalityAttestationBody, SumeragiFinalityBundle, SumeragiFinalityCheckpoint,
+        SumeragiFinalityProof, SumeragiFinalityVerifier,
     },
 };
-use iroha_sumeragi::crypto::NoAttestation;
 use norito::codec::Encode as _;
 
 use super::{
@@ -42,7 +42,14 @@ pub fn build_proof(
     view: &impl StateReadOnly,
     height: u64,
 ) -> Result<SumeragiFinalityProof, ProofError> {
-    let chain = CertifiedChain::new(view)?.with_attestation_verifier(&NoAttestation);
+    let chain = CertifiedChain::new(view)?;
+    proof_from_chain(&chain, height)
+}
+
+fn proof_from_chain<V: StateReadOnly>(
+    chain: &CertifiedChain<'_, V>,
+    height: u64,
+) -> Result<SumeragiFinalityProof, ProofError> {
     let certified = chain.certified(height)?;
     if !matches!(
         (height, certified.verification()),
@@ -65,10 +72,52 @@ pub fn build_proof(
             })
             .collect(),
     };
-    // Serving uses the same portable checks as the independent client. This also rejects
-    // any application-attested QC until its complete attestation verifier is installed.
+    // The native reader verifies complete application attestations before serving.
+    // Portable checks additionally enforce the independent client framing contract.
     proof.decode_checked()?;
     Ok(proof)
+}
+
+/// Export a portable checkpoint from the node's authenticated native history.
+///
+/// The returned checkpoint is suitable for local response self-checks. Remote
+/// clients must select their own trust root independently of the served response.
+/// Each iteration retains at most three portable decisions; original Core history
+/// verification and its resource limits remain owned by `CertifiedChain`.
+///
+/// # Errors
+/// Missing history, invalid finality or any failure to retain the exact checkpoint.
+pub fn build_checkpoint(
+    view: &impl StateReadOnly,
+    height: u64,
+) -> Result<SumeragiFinalityCheckpoint, ProofError> {
+    let chain = CertifiedChain::new(view)?;
+    // Refuse an unavailable target before walking any prefix.
+    let tip = proof_from_chain(&chain, height)?;
+    let genesis = proof_from_chain(&chain, 1)?;
+    let mut verifier = SumeragiFinalityVerifier::new(
+        chain.genesis(),
+        &view.chain_id().to_string(),
+        genesis.committee.clone(),
+    )?;
+    for at in 1..=height {
+        let proof = if at == height {
+            tip.clone()
+        } else {
+            proof_from_chain(&chain, at)?
+        };
+        verifier.verify(&proof)?;
+        let checkpoint = verifier.export_checkpoint(&proof)?;
+        if at == height {
+            return Ok(checkpoint);
+        }
+        verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            view.network_id(),
+            &view.chain_id().to_string(),
+        )?;
+    }
+    Err(ProofError::UnverifiedCommittee(height))
 }
 
 /// Build a network-bound current proof bundle from one immutable state view.
@@ -241,5 +290,35 @@ mod tests {
             build_proof(&invalid.state().view(), 2),
             Err(ProofError::Chain(ChainReadError::Certificate { .. }))
         ));
+    }
+    #[test]
+    fn native_checkpoint_continues_the_exact_original_prefix() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000)).unwrap();
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        let view = chain.state().view();
+        let checkpoint = build_checkpoint(&view, 2).unwrap();
+        assert_eq!(checkpoint.height(), 2);
+        assert_eq!(checkpoint.network_id(), chain.network_id());
+        let mut verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &chain.network_id(),
+            &view.chain_id().to_string(),
+        )
+        .unwrap();
+        let next = build_proof(&view, 3).unwrap();
+        assert_eq!(verifier.verify(&next).unwrap().header(), next.block_header);
+        assert!(build_checkpoint(&view, 0).is_err());
+        assert!(build_checkpoint(&view, 4).is_err());
+    }
+
+    #[test]
+    fn portable_builder_verifies_original_pasta_boundary_witness() {
+        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        chain.commit(Vec::new());
+        let proof = build_proof(&chain.state().view(), 10).unwrap();
+        assert_eq!(proof.height(), 10);
+        assert!(proof.decode_checked().is_ok());
     }
 }

@@ -10,6 +10,9 @@ use std::{
 
 use ivm::cache_memory::{SharedAllocation, SharedValue, memory_stats};
 
+#[path = "shared_owner_custody/read_log.rs"]
+mod read_log;
+
 struct ObservedAllocator;
 
 // These observers count real write-log requests and inspect its actual backing
@@ -86,11 +89,16 @@ static POINTER: AtomicUsize = AtomicUsize::new(0);
 static FREED: AtomicBool = AtomicBool::new(false);
 static CHECK_DEALLOC: AtomicBool = AtomicBool::new(true);
 static RESIDENT_AFTER_FREE: AtomicUsize = AtomicUsize::new(0);
+static OWNER_LAST_BYTES: AtomicUsize = AtomicUsize::new(0);
+static OWNER_PREVIOUS_BYTES: AtomicUsize = AtomicUsize::new(0);
 static DROPS: AtomicUsize = AtomicUsize::new(0);
 static BASELINE: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if read_log::refuse_allocation(layout) {
+            return std::ptr::null_mut();
+        }
         let observe = OBSERVE_NEXT
             .try_with(|observe| observe.replace(false))
             .unwrap_or(false)
@@ -119,6 +127,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
         }
         // SAFETY: forward the exact request to the system allocator.
         let pointer = unsafe { System.alloc(layout) };
+        read_log::allocated(pointer);
         if observe_log && !pointer.is_null() {
             let _ = LOG_FIRST_POINTER.compare_exchange(0, pointer as usize, SeqCst, SeqCst);
             if layout.size() == LOG_PAYLOAD_BYTES.load(SeqCst)
@@ -135,6 +144,10 @@ unsafe impl GlobalAlloc for ObservedAllocator {
             LAST_NODE_POINTER.store(pointer as usize, SeqCst);
         }
         if observe {
+            if OBSERVE_LAST.try_with(std::cell::Cell::get).unwrap_or(false) {
+                let previous = OWNER_LAST_BYTES.swap(layout.size(), SeqCst);
+                OWNER_PREVIOUS_BYTES.store(previous, SeqCst);
+            }
             POINTER.store(pointer as usize, SeqCst);
         }
         pointer
@@ -159,6 +172,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
         }
         // SAFETY: the caller supplies the original pointer and its layout.
         unsafe { System.dealloc(pointer, layout) };
+        read_log::deallocated(pointer);
         if log_payload || log_row {
             let credit = LOG_BUDGET
                 .get()
@@ -299,11 +313,17 @@ fn runtime_template_frees_prepaid_owner_before_refunding_final_borrower() {
     OBSERVE_NEXT.with(|observe| observe.set(false));
     OBSERVE_LAST.with(|observe| observe.set(true));
     CHECK_DEALLOC.store(false, SeqCst);
-    // Template construction allocates private copies first and its final Arc
-    // last; only that last pointer is retained after construction finishes.
+    OWNER_LAST_BYTES.store(0, SeqCst);
+    OWNER_PREVIOUS_BYTES.store(0, SeqCst);
+    // Private copies are followed by the data Arc and then its paired backing
+    // Arc. Observe the actual final two request sizes and final backing free.
     let template = vm.try_runtime_template().unwrap();
     OBSERVE_LAST.with(|observe| observe.set(false));
     assert_ne!(POINTER.load(SeqCst), 0);
+    let data_owner_bytes = OWNER_PREVIOUS_BYTES.load(SeqCst);
+    let backing_owner_bytes = OWNER_LAST_BYTES.load(SeqCst);
+    assert!(data_owner_bytes > 0 && backing_owner_bytes > 0);
+    let owner_bytes = data_owner_bytes.checked_add(backing_owner_bytes).unwrap();
     FREED.store(false, SeqCst);
     CHECK_DEALLOC.store(true, SeqCst);
     assert!(budget.reserved_bytes() > original_bytes);
@@ -319,7 +339,16 @@ fn runtime_template_frees_prepaid_owner_before_refunding_final_borrower() {
     assert_eq!(budget.reserved_bytes(), charged);
     drop(borrower);
     assert!(FREED.load(SeqCst));
-    assert_eq!(RESIDENT_AFTER_FREE.load(SeqCst), resident);
+    let after = memory_stats().measured_resident_bytes();
+    assert_eq!(
+        RESIDENT_AFTER_FREE.load(SeqCst),
+        after + owner_bytes,
+        "both exact shared-control charges outlive final backing deallocation",
+    );
+    assert!(
+        resident > after + owner_bytes,
+        "the earlier private payloads were also resident"
+    );
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -450,6 +479,8 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
         .expect("one log allocator observer");
     LOG_PAYLOAD_BYTES.store(PAYLOAD, SeqCst);
     let mut vm = ivm::IVM::try_new_with_memory_budget(257, &budget).unwrap();
+    // Own probe-read capacity before observing exact write-row/payload requests.
+    assert_eq!(vm.memory.load_u8(ivm::Memory::STACK_START), Ok(0));
     let base = budget.reserved_bytes();
     let gas = vm.remaining_gas();
     budget.set_limit_bytes(base + 4 * row + PAYLOAD - 1);

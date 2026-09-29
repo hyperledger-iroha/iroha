@@ -18,12 +18,16 @@ spec.loader.exec_module(parser)
 P = "iroha_kura_resource_"
 FIELDS = ("resident_associations", "persisted_entries", "index_bytes", "temporary_index_bytes", "storage_bytes")
 FAMILIES = (
-    "resident_canonical", "resident_transaction", "resident_merge", "resident_carrier",
-    "resident_replica", "resident_verification", "resident_frontier", "resident_queue",
-    "canonical_index", "canonical_hashes", "pipeline_index", "ownership_index", "certified_index",
-    "execution_input_index", "execution_preflight_index", "application_receipt_index",
-    "merge_bundle_index", "canonical_replica_index", "merge_carrier_record", "native_latest_record",
-    "query_marker_records", "evidence_key_records", "storage_bytes",
+    'resident_canonical',
+    'resident_transaction',
+    'resident_frontier',
+    'resident_queue',
+    'canonical_index',
+    'canonical_hashes',
+    'pipeline_index',
+    'query_marker_records',
+    'evidence_key_records',
+    'storage_bytes',
 )
 REASONS = ("owner_unavailable", "unregistered", "busy", "interrupted", "arithmetic", "generation_changed", "owner_mismatch", "invalid_inventory", "numeric_range")
 
@@ -32,15 +36,15 @@ def success() -> bytes:
     rows = [P + 'available 1', P + 'status{reason="available"} 1', P + 'generation 17', P + 'fault_count 2']
     totals = [0] * 5
     for ordinal, family in enumerate(FAMILIES, start=1):
-        values = (ordinal if ordinal <= 8 else 0, ordinal if 8 < ordinal < 23 else 0,
-                  32 + 16 * ordinal if 8 < ordinal < 23 else 0, 0,
-                  8192 if ordinal == 23 else 0)
+        values = (ordinal if ordinal <= 4 else 0, ordinal if 4 < ordinal < 10 else 0,
+                  32 + 16 * ordinal if 4 < ordinal < 10 else 0, 0,
+                  8192 if ordinal == 10 else 0)
         for column, (field, value) in enumerate(zip(FIELDS, values, strict=True)):
             rows.append(f'{P}{field}{{family="{family}"}} {value}')
             totals[column] += value
     rows.extend(f'{P}{field}_sum {value}' for field, value in zip(FIELDS, totals, strict=True))
     rows.append(f'{P}represented_entries {totals[0] + totals[1]}')
-    assert len(rows) == 125
+    assert len(rows) == 60
     return ('\n'.join(rows) + '\n').encode()
 
 
@@ -74,14 +78,14 @@ def test_projection_matches_frozen_owner_and_typed_complete_response():
     assert observation.response_bytes == len(raw)
     assert observation.generation == 17
     assert observation.fault_count == 2
-    assert len(observation.components) == 23
+    assert len(observation.components) == 10
     assert tuple(component.family for component in observation.components) == FAMILIES
-    assert observation.total.resident_associations == sum(range(1, 9))
-    assert observation.total.persisted_entries == sum(range(9, 23))
-    assert observation.total.index_bytes == sum(32 + 16 * i for i in range(9, 23))
+    assert observation.total.resident_associations == sum(range(1, 5))
+    assert observation.total.persisted_entries == sum(range(5, 10))
+    assert observation.total.index_bytes == sum(32 + 16 * i for i in range(5, 10))
     assert observation.total.temporary_index_bytes == 0
     assert observation.total.storage_bytes == 8192
-    assert observation.represented_entries == sum(range(1, 23))
+    assert observation.represented_entries == sum(range(1, 10))
     with pytest.raises(dataclasses.FrozenInstanceError):
         observation.generation = 0
 
@@ -134,7 +138,7 @@ def test_numeric_attacks_and_ambiguous_sample_fields_are_rejected(token):
         parser.parse_kura_resource_metrics(generation(token))
 
 
-@pytest.mark.parametrize('offset', range(125))
+@pytest.mark.parametrize('offset', range(60))
 def test_each_required_success_sample_is_mandatory(offset):
     rows = success().splitlines(keepends=True)
     rows.pop(offset)
@@ -142,7 +146,7 @@ def test_each_required_success_sample_is_mandatory(offset):
         parser.parse_kura_resource_metrics(b''.join(rows))
 
 
-@pytest.mark.parametrize('offset', range(125))
+@pytest.mark.parametrize('offset', range(60))
 def test_each_target_sample_cannot_be_duplicated(offset):
     rows = success().splitlines(keepends=True)
     with pytest.raises(parser.ProjectionError, match='duplicate target sample'):
@@ -218,13 +222,13 @@ def test_each_subtotal_is_independently_reconciled(field):
 
 
 def test_represented_sum_and_overflowing_component_aggregate_fail():
-    raw = replace_once(success(), P+'represented_entries 253\n', P+'represented_entries 254\n')
+    raw = replace_once(success(), P+'represented_entries 45\n', P+'represented_entries 46\n')
     with pytest.raises(parser.ProjectionError, match='represented-entry'):
         parser.parse_kura_resource_metrics(raw)
     raw = success()
     for family, old in [('resident_canonical', 1), ('resident_transaction', 2)]:
         raw = replace_once(raw, f'{P}resident_associations{{family="{family}"}} {old}\n', f'{P}resident_associations{{family="{family}"}} {2**53}\n')
-    raw = replace_once(raw, P+'resident_associations_sum 36\n', P+f'resident_associations_sum {2**53}\n')
+    raw = replace_once(raw, P+'resident_associations_sum 10\n', P+f'resident_associations_sum {2**53}\n')
     with pytest.raises(parser.ProjectionError, match='component subtotal'):
         parser.parse_kura_resource_metrics(raw)
 

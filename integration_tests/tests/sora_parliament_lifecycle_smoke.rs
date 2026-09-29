@@ -2,6 +2,7 @@
 //! Four-validator modern SORA Parliament and mandatory timed-OVN lifecycle corridor.
 
 use iroha::query::QueryError;
+use iroha_data_model::sumeragi::PROTOCOL_VERSION;
 use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
@@ -25,10 +26,7 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         account::AccountId,
-        block::{
-            SignedBlock,
-            consensus_v2::{PROTOCOL_VERSION, recommended_data_availability_layout},
-        },
+        block::{SignedBlock, consensus_v2::recommended_data_availability_layout},
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,
@@ -213,7 +211,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let tle_public_state =
         deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive exact public TLE fixture")?;
-    let install_height = next_queue_plan_execution_height(
+    let install_height = next_execution_height(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "threshold-key installation",
@@ -562,7 +560,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let validated_beacon_session =
         validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
             .wrap_err("replay mandatory NPoS beacon transcript")?;
-    let install_height = next_queue_plan_execution_height(
+    let install_height = next_execution_height(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "mandatory beacon-key installation",
@@ -996,7 +994,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
             .wrap_err("derive fail-closed NPoS beacon fixture")?;
     assert_eq!(beacon_record.session.committee_size, 4);
     assert_eq!(beacon_record.session.threshold, 2);
-    let install_height = next_queue_plan_execution_height(
+    let install_height = next_execution_height(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "fail-closed beacon-key installation",

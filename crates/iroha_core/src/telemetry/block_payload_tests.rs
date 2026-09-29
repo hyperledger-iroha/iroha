@@ -1,3 +1,4 @@
+// Semantic block work follows native input and output ownership.
 #[test]
 fn block_payload_detects_transaction_blocks() {
     let block = block_with_transactions(2);
@@ -23,6 +24,26 @@ fn checked_block_signature(
 fn block_payload_detects_da_commitment_blocks() {
     let block = block_with_da_commitments(2);
     assert!(block_counts_as_non_empty(&block));
+}
+#[test]
+fn block_payload_detects_npos_consensus_effect_blocks() {
+    use iroha_data_model::consensus::{
+        NposConsensusEffects, NposMarkConsensusEvidenceAppliedAction, NposPenaltyAction,
+    };
+    let mut block = empty_block(2);
+    block.set_npos_consensus_effects(Some(NposConsensusEffects {
+        evidence_admissions: Vec::new(),
+        penalty_actions: vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
+            NposMarkConsensusEvidenceAppliedAction {
+                evidence_key: iroha_crypto::Hash::new(b"telemetry-fixture"),
+                height: 2,
+            },
+        )],
+    }));
+    assert!(
+        block_counts_as_non_empty(&block),
+        "deterministic NPoS state effects are semantic block work"
+    );
 }
 fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
     use iroha_data_model::block::{BlockHeader, BlockSignature};

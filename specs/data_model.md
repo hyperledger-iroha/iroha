@@ -135,27 +135,21 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 ## Transactions
 
 - `Executable`: `Instructions(ConstVec<InstructionBox>)`, `ContractCall(ContractInvocation)`, `Ivm(IvmBytecode)`, `IvmProved(IvmProved)`, or a flat ordered `Batch(ConstVec<ExecutableBatchItem>)`. In the sole first-release layout, `Executable::Batch` uses tag `4`, while its item tags are `0` for `Instruction(InstructionBox)` and `1` for `ContractCall(ContractInvocation)`. Raw IVM bytecode and nested batches are excluded from batch items. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
-- `TransactionBuilder`: constructs the ten-field first-release transaction
+- `TransactionBuilder`: constructs the nine-field first-release transaction
   payload with `domain`, `authority`, `creation_time_ms`, `instructions`,
-  `time_to_live_ms`, `nonce`, `fee_payment`, the signature-bound
-  `admission_intent`, `metadata`, and `attachments`.
+  `time_to_live_ms`, `nonce`, `fee_payment`, `metadata`, and `attachments`.
   - Helpers: `with_instructions`, `with_executable_batch`, `with_bytecode`,
-    `with_executable`, `with_fee_payment_intent`, `with_admission_intent`,
+    `with_executable`, `with_fee_payment_intent`,
     `with_metadata`, `with_attachments`, `set_nonce`, `set_ttl`,
     `set_creation_time`, `sign`.
-  - Public Torii submission requires `TransactionAdmissionIntent::QueuePlanSynced`;
-    omission and unknown intent tags fail closed rather than consulting metadata.
-  - `QueuePlanSynced` is an autonomous-only execution role. Its certificate may
-    ride a proposal-native control carrier, but the signed transaction's physical
-    FIFO position or live-reservation ordinal remains a strict barrier until its
-    terminal autonomous outcome. It may execute only through the authenticated
-    autonomous payload plus certified merge corridor. An ordinary global block
-    external entrypoint carrying this intent is invalid.
-  - Admission rejects an empty mixed batch and schedules a valid one as a global live-state barrier. Its items execute in input order against one transaction view and commit or roll back as one atomic unit. A transaction batch containing a contract call requires one signature-bound gas limit shared by all of its explicit ISIs and calls; fees settle once for the transaction.
+  - Retired admission fields and extra binary slots are invalid. Native consensus
+    owns routing and admission of the complete signed transaction.
+  - Admission rejects an empty mixed batch. Its items execute in input order against one transaction view and commit or roll back as one atomic unit. A transaction batch containing a contract call requires one signature-bound gas limit shared by all of its explicit ISIs and calls; fees settle once for the transaction.
 - Trigger actions may also carry a mixed batch. One trigger invocation preserves the same ordered atomic semantics and shares one deterministic trigger gas budget across all items.
 - `SignedTransaction` (versioned with `iroha_version`): carries `TransactionSignature` and payload; provides hashing and signature verification.
 - Entrypoints and results:
-  - `TransactionEntrypoint`: `External(SignedTransaction)` | `Time(TimeTriggerEntrypoint)`.
+  - `TransactionEntrypoint`: `External(SignedTransaction)` |
+    `SealedCommitment(SignedSealedTransactionCommitment)` | `SealedReveal(SealedTransactionReveal)`.
   - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` with hashing helpers.
   - `ExecutionStep(ConstVec<InstructionBox>)`: a single ordered batch of instructions in a transaction.
 
@@ -200,7 +194,7 @@ the first release does not decode superseded data-model layouts.
   - `payload: BlockPayload` with the header, the sole canonical
     `external_entrypoints: Vec<TransactionEntrypoint>` sequence, and the required
     V1 DA, NPoS, and execution-context option fields,
-  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`, AXT and trigger records, the AXT policy snapshot, and lane-finality statements,
+  - `result: BlockResult` (secondary execution state) containing the sole typed `outputs`, `output_merkle`, `committed_fragment_count`, `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`, `axt_envelopes`, `axt_policy_snapshot`, and `axt_transitioned_dataspaces`; all seven fields are required and retired lane-finality statements are rejected,
   - `commit_certificate: Option<CommitCertificate>`: the Sumeragi finality proof of a
     committed block, as opaque canonical Norito bytes of the core block header, its
     `CommitQC` and the preimage of the certified result `R` (`specs/sumeragi.md` §3.2, §3.4,

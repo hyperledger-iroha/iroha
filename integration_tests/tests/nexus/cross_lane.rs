@@ -1,16 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-lane manifest and relay proof tests (NX-11).
 use eyre::{Result, WrapErr};
-use iroha::nexus;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
 use iroha_core::governance::manifest::{GovernanceGuardReason, LaneManifestRegistry};
 use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
 use iroha_data_model::{
-    block::{consensus::LaneBlockCommitment, consensus_v2::finality::V2FinalityArtifact},
-    nexus::{
-        LaneCatalog, LaneConfig, LaneFinalityAuthorityV1, LanePrivacyProof, LaneRelayEnvelope,
-        LaneRelayError, LaneStorageProfile, compute_settlement_hash,
-    },
+    nexus::{LaneCatalog, LaneConfig, LanePrivacyProof, LaneStorageProfile},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
 };
 use iroha_model_base::peer::PeerId;

@@ -147,7 +147,7 @@ public final class JsonParserStringTypeTests {
         + "\"resolver_public_key\":\""
         + VALID_PUBLIC_KEY
         + "\","
-        + "\"backend\":\"bfv-affine-sha3-256-v1\","
+        + "\"backend\":\"bfv-affine-v1\","
         + "\"note\":\"retail policy\""
         + "}]}";
   }
@@ -162,7 +162,7 @@ public final class JsonParserStringTypeTests {
         + "\"resolver_public_key\":\""
         + VALID_PUBLIC_KEY
         + "\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"backend\":\"bfv-programmed-v1\","
         + "\"verification_mode\":\"signed\","
         + "\"note\":\"retail policy\""
         + "}]}";
@@ -172,7 +172,7 @@ public final class JsonParserStringTypeTests {
     return "{"
         + "\"valid\":false,"
         + "\"program_id\":\"lookup\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"backend\":\"bfv-programmed-v1\","
         + "\"verification_mode\":\"signed\","
         + "\"output_hash\":\""
         + "11".repeat(32)

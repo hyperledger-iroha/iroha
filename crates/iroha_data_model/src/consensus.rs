@@ -102,7 +102,8 @@ impl ValidatorSetCheckpoint {
 /// Deterministic `NPoS` state effects embedded in a signed block.
 ///
 /// These effects are applied as part of the committed block transition so every
-/// peer replays the same threshold-beacon pulse, evidence, and penalty state.
+/// peer replays the same native evidence and penalty state. Beacon authority is
+/// carried by the exact native execution-result commitment.
 #[derive(
     Debug,
     Clone,
@@ -115,25 +116,18 @@ impl ValidatorSetCheckpoint {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct NposConsensusEffects {
-    /// Unique finalized global threshold-beacon pulse carried by this block.
-    ///
-    /// Partial signatures and reconstruction subsets never enter the signed
-    /// block; validators independently verify this final signature against the
-    /// active public DKG session before applying it.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub finalized_global_beacon_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+    /// Original native evidence admitted in canonical evidence-key order.
+    pub evidence_admissions: Vec<crate::block::consensus::Evidence>,
     /// Penalty and marker actions applied by this block.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
     pub penalty_actions: Vec<NposPenaltyAction>,
 }
 impl NposConsensusEffects {
     /// Returns true when the bundle carries no committed state changes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.finalized_global_beacon_pulse.is_none() && self.penalty_actions.is_empty()
+        self.evidence_admissions.is_empty() && self.penalty_actions.is_empty()
     }
 }
 impl Ord for NposConsensusEffects {

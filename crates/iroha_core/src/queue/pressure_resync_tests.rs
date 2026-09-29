@@ -46,11 +46,11 @@ async fn backpressure_state_tracks_queue_load() {
         .expect("second push reaches capacity");
     rx.changed().await.expect("backpressure update to saturate");
     assert!(rx.borrow().is_saturated());
-    let mut expired = Vec::new();
-    let guard = queue
-        .pop_from_queue(&state.view(), &mut expired)
-        .expect("transaction available");
-    drop(guard);
+    let selected = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .unwrap();
+    assert_eq!(selected.len(), 1);
+    queue.remove_committed_hashes([selected[0].hash_as_entrypoint()], None);
     rx.changed().await.expect("backpressure update to healthy");
     assert!(!rx.borrow().is_saturated());
 }
@@ -72,15 +72,16 @@ async fn queue_pressure_snapshot_tracks_oldest_age_across_enqueue_and_dequeue() 
     assert_eq!(initial.tracked_tx_count, 2);
     assert_eq!(initial.queued_tx_count, 2);
     assert_eq!(initial.oldest_queued_tx_age_ms, 10);
-    let mut expired = Vec::new();
-    let guard = queue
-        .pop_from_queue(&state.view(), &mut expired)
-        .expect("transaction available");
-    let inflight = queue.pressure_snapshot();
-    assert_eq!(inflight.tracked_tx_count, 2);
-    assert_eq!(inflight.queued_tx_count, 1);
-    assert_eq!(inflight.oldest_queued_tx_age_ms, 0);
-    drop(guard);
+    let selected = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(
+        queue.pressure_snapshot(),
+        initial,
+        "native selection leaves pending ownership intact"
+    );
+    queue.remove_committed_hashes([selected[0].hash_as_entrypoint()], None);
     let after_drop = queue.pressure_snapshot();
     assert_eq!(after_drop.tracked_tx_count, 1);
     assert_eq!(after_drop.queued_tx_count, 1);
@@ -231,14 +232,15 @@ async fn queue_pressure_counters_stay_consistent_under_sustained_backlog() {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("sustained push succeeds");
         queue.assert_pressure_counters_consistent_for_tests();
-        let mut guards = Vec::new();
-        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
-        assert_eq!(guards.len(), 1, "one transaction should leave the queue");
-        let inflight = queue.pressure_snapshot();
-        assert_eq!(inflight.tracked_tx_count, target_backlog + 1);
-        assert_eq!(inflight.queued_tx_count, target_backlog);
+        let selected = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+        let pending = queue.pressure_snapshot();
+        assert_eq!(pending.tracked_tx_count, target_backlog + 1);
+        assert_eq!(pending.queued_tx_count, target_backlog + 1);
         queue.assert_pressure_counters_consistent_for_tests();
-        drop(guards);
+        queue.remove_committed_hashes([selected[0].hash_as_entrypoint()], None);
         let after_drop = queue.pressure_snapshot();
         assert_eq!(after_drop.tracked_tx_count, target_backlog);
         assert_eq!(after_drop.queued_tx_count, target_backlog);
@@ -267,7 +269,9 @@ async fn get_available_txs() {
             .expect("Failed to push tx into queue");
         time_handle.advance(Duration::from_millis(10));
     }
-    let available = queue.collect_transactions_for_block(&state.view(), max_txs_in_block);
+    let available = queue
+        .bounded_pending_snapshot(&state.view(), max_txs_in_block)
+        .unwrap();
     assert_eq!(available.len(), max_txs_in_block.get());
 }
 #[tokio::test]
@@ -368,7 +372,7 @@ async fn push_expired_tx_already_in_blockchain() {
     assert_eq!(queue.txs.len(), 0);
 }
 #[tokio::test]
-async fn get_tx_drop_if_in_blockchain() {
+async fn native_sampling_omits_committed_input_until_exact_cleanup() {
     let max_txs_in_block = nonzero!(2_usize);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -398,11 +402,18 @@ async fn get_tx_drop_if_in_blockchain() {
     state_block.commit().unwrap();
     assert_eq!(
         queue
-            .collect_transactions_for_block(&state.view(), max_txs_in_block)
+            .bounded_pending_snapshot(&state.view(), max_txs_in_block)
+            .unwrap()
             .len(),
         0
     );
-    assert_eq!(queue.txs.len(), 0);
+    assert_eq!(
+        queue.txs.len(),
+        1,
+        "sampling does not own committed cleanup"
+    );
+    assert_eq!(queue.remove_committed_hashes([tx_hash], None), 1);
+    assert!(queue.txs.is_empty());
 }
 #[tokio::test]
 async fn get_available_txs_with_timeout() {
@@ -431,7 +442,8 @@ async fn get_available_txs_with_timeout() {
     time_handle.advance(Duration::from_millis(101));
     assert_eq!(
         queue
-            .collect_transactions_for_block(&state.view(), max_txs_in_block)
+            .bounded_pending_snapshot(&state.view(), max_txs_in_block)
+            .unwrap()
             .len(),
         1
     );
@@ -441,7 +453,8 @@ async fn get_available_txs_with_timeout() {
     time_handle.advance(Duration::from_millis(210));
     assert_eq!(
         queue
-            .collect_transactions_for_block(&state.view(), max_txs_in_block)
+            .bounded_pending_snapshot(&state.view(), max_txs_in_block)
+            .unwrap()
             .len(),
         0
     );

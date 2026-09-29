@@ -18,7 +18,6 @@ import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
@@ -159,7 +158,6 @@ class NoritoJavaCodecAdapterParityTest {
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
                 feePayment = expectedFeePayment,
-                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             ),
         )
         val decoded = adapter.decodeTransaction(encoded)
@@ -457,15 +455,10 @@ class NoritoJavaCodecAdapterParityTest {
         readField(ivmDecoder, "payload.time_to_live_ms")
         readField(ivmDecoder, "payload.nonce")
         readField(ivmDecoder, "payload.fee_payment")
-        val ivmAdmissionIntent = readField(ivmDecoder, "payload.admission_intent")
         readField(ivmDecoder, "payload.metadata")
         val ivmAttachments = readField(ivmDecoder, "payload.attachments")
         assertEquals(null, decodeOptionPayload(ivmAttachments, "payload.attachments"))
         assertEquals(0, ivmDecoder.remaining())
-        assertEquals(
-            TransactionAdmissionIntent.ORDINARY.ordinal.toLong(),
-            NoritoAdapters.uint(32).decode(canonicalDecoder(ivmAdmissionIntent)),
-        )
 
         val executableDecoder = canonicalDecoder(ivmExecutableField)
         assertEquals(2L, NoritoAdapters.uint(32).decode(executableDecoder))
@@ -504,7 +497,6 @@ class NoritoJavaCodecAdapterParityTest {
         readField(instructionDecoder, "payload.time_to_live_ms")
         readField(instructionDecoder, "payload.nonce")
         readField(instructionDecoder, "payload.fee_payment")
-        val instructionAdmissionIntent = readField(instructionDecoder, "payload.admission_intent")
         readField(instructionDecoder, "payload.metadata")
         val instructionAttachments = readField(instructionDecoder, "payload.attachments")
         assertEquals(
@@ -512,10 +504,6 @@ class NoritoJavaCodecAdapterParityTest {
             decodeOptionPayload(instructionAttachments, "payload.attachments"),
         )
         assertEquals(0, instructionDecoder.remaining())
-        assertEquals(
-            TransactionAdmissionIntent.ORDINARY.ordinal.toLong(),
-            NoritoAdapters.uint(32).decode(canonicalDecoder(instructionAdmissionIntent)),
-        )
 
         val listFieldDecoder = canonicalDecoder(instructionExecutableField)
         assertEquals(0L, NoritoAdapters.uint(32).decode(listFieldDecoder))

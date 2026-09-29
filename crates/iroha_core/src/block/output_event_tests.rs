@@ -186,7 +186,6 @@ fn event_fixture_block(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &ExecutionOutputLimits {
                 max_outputs: 16,
                 max_output_bytes: 65_536,

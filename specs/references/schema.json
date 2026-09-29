@@ -2694,10 +2694,6 @@
       {
         "name": "axt_transitioned_dataspaces",
         "type": "SortedVec<DataSpaceId>"
-      },
-      {
-        "name": "lane_finality_statements",
-        "type": "Vec<LaneFinalityStatement>"
       }
     ]
   },

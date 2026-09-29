@@ -301,76 +301,25 @@ mod tests {
             norito::json::from_slice(&body).expect("decode diagnostics");
         assert!(decoded.npos.is_none());
         assert!(decoded.lane_commitments.is_empty());
-        assert!(decoded.lane_relay_envelopes.is_empty());
-        assert!(decoded.native_amx_participant_applications.is_empty());
-        assert!(decoded.autonomous_lane_executions.is_empty());
         let json: norito::json::Value =
             norito::json::from_slice(&body).expect("decode diagnostics JSON object");
         assert!(json.get("npos").is_none());
-        assert_eq!(
-            json.get("native_amx_participant_applications")
-                .and_then(|value| value.as_array())
-                .map(|rows| rows.len()),
-            Some(0),
-            "diagnostics expose the durable Native AMX evidence vector independently of status"
-        );
-        assert_eq!(
-            json.get("autonomous_lane_executions")
-                .and_then(|value| value.as_array())
-                .map(Vec::len),
-            Some(0),
-            "autonomous stage evidence belongs only to the diagnostics endpoint"
-        );
+        for retired in [
+            "lane_relay_envelopes",
+            "native_amx_participant_applications",
+            "autonomous_lane_executions",
+        ] {
+            assert!(
+                json.get(retired).is_none(),
+                "retired diagnostic owner must not reappear"
+            );
+        }
         for canonical in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
             assert!(
                 json.get(canonical).is_none(),
                 "leaked canonical field {canonical}"
             );
         }
-        let proposal = install_passive_diagnostic_lane_artifact(&state, &kura);
-        let lane_artifact_dir = state
-            .lane_storage_identity(proposal.descriptor.lane_id)
-            .expect("Torii diagnostic lane entry")
-            .blocks_dir(kura.store_root())
-            .join("lane_artifacts");
-        let ownership_data = lane_artifact_dir.join("ownerships.norito");
-        let ownership_index = lane_artifact_dir.join("ownerships.index");
-        let ownership_data_temp = ownership_data.with_extension("norito.tmp");
-        let ownership_index_temp = ownership_index.with_extension("index.tmp");
-        std::fs::rename(&ownership_data, &ownership_data_temp)
-            .expect("stage Torii diagnostic ownership data");
-        std::fs::rename(&ownership_index, &ownership_index_temp)
-            .expect("stage Torii diagnostic ownership index");
-        let staged_data =
-            std::fs::read(&ownership_data_temp).expect("read staged Torii ownership data");
-        let staged_index =
-            std::fs::read(&ownership_index_temp).expect("read staged Torii ownership index");
-        for _ in 0..2 {
-            let response = super::handle_v1_sumeragi_diagnostics(
-                axum::extract::State(Arc::clone(&state)),
-                None,
-                None,
-            )
-            .await
-            .expect("passive diagnostics handler");
-            assert_eq!(response.status(), StatusCode::OK);
-        }
-        assert!(!ownership_data.exists());
-        assert!(!ownership_index.exists());
-        assert_eq!(
-            std::fs::read(&ownership_data_temp).expect("reread staged Torii ownership data"),
-            staged_data,
-        );
-        assert_eq!(
-            std::fs::read(&ownership_index_temp).expect("reread staged Torii ownership index"),
-            staged_index,
-        );
-        kura.recover_lane_block_payload(&proposal)
-            .expect("explicitly recover Torii diagnostic ownership evidence");
-        assert!(ownership_data.is_file());
-        assert!(ownership_index.is_file());
-        assert!(!ownership_data_temp.exists());
-        assert!(!ownership_index_temp.exists());
     }
     #[test]
     fn malformed_npos_diagnostics_are_rejected() {

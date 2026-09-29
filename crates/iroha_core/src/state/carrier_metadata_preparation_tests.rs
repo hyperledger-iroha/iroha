@@ -37,7 +37,6 @@ fn carrier() -> SignedBlock {
             Vec::new(),
             AxtPolicySnapshot::default(),
             BTreeSet::new(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .unwrap();

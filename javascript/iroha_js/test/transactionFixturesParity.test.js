@@ -33,7 +33,6 @@ const sourceFixtureFields = new Set([
   "time_to_live_ms",
 ]);
 const payloadFields = new Set([
-  "admission_intent",
   "authority",
   "creation_time_ms",
   "executable",
@@ -417,19 +416,6 @@ function validateSourceFixtureSchema(fixture, context) {
       `${context}.payload.fee_payment.value.gas_limit is required by the executable`,
     );
   }
-  requireExactFields(
-    fixture.payload.admission_intent,
-    new Set(["intent", "value"]),
-    `${context}.payload.admission_intent`,
-  );
-  if (
-    fixture.payload.admission_intent.intent !== "ordinary" ||
-    fixture.payload.admission_intent.value !== null
-  ) {
-    throw new Error(
-      `${context}.payload.admission_intent must be exactly ordinary`,
-    );
-  }
   requireRecord(fixture.payload.metadata, `${context}.payload.metadata`);
   for (const field of [
     "authority",
@@ -741,7 +727,6 @@ function makeSourceFixture(name = "alpha") {
         payer: "authority",
         value: { charge_limits: [], gas_limit: null },
       },
-      admission_intent: { intent: "ordinary", value: null },
       metadata: {},
     },
     payload_base64: "AA==",
@@ -863,7 +848,7 @@ test("source descriptors require exact fields and one executable variant", () =>
   );
 });
 
-test("source descriptors require exact admission and fee policy", () => {
+test("source descriptors reject retired admission fields and preserve exact fee policy", () => {
   const fixture = makeSourceFixture();
   for (const admissionIntent of [
     undefined,
@@ -872,11 +857,7 @@ test("source descriptors require exact admission and fee policy", () => {
     { intent: "ordinary", value: null, unexpected: true },
   ]) {
     const payload = { ...fixture.payload };
-    if (admissionIntent === undefined) {
-      delete payload.admission_intent;
-    } else {
-      payload.admission_intent = admissionIntent;
-    }
+    payload.admission_intent = admissionIntent;
     assert.throws(
       () => validateSourceFixtureSchema({ ...fixture, payload }, fixture.name),
       /admission_intent|invalid fields/,

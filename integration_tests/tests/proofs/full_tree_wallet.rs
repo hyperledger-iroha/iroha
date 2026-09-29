@@ -151,13 +151,13 @@ async fn four_validator_full_tree_wallet_proof_records_reject_corruption_and_rel
         .clone()
         .expect("canonical inline full-unshield key");
     let full_id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "full_tree_unshield_vk");
-    let replay_record =
-        zk::halo2_ipa_ivm_replay_binding_vk_record("integration", 1).map_err(Report::msg)?;
-    let replay_key = replay_record
+    let transfer_record = zk::confidential_v2::confidential_transfer_v2_vk_record("integration", 1)
+        .map_err(Report::msg)?;
+    let transfer_key = transfer_record
         .key
         .clone()
-        .expect("canonical inline replay-binding key");
-    let replay_id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "full_tree_wrong_role_vk");
+        .expect("canonical inline confidential-transfer key");
+    let transfer_id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "full_tree_wrong_role_vk");
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -170,8 +170,8 @@ async fn four_validator_full_tree_wallet_proof_records_reject_corruption_and_rel
             record: full_record,
         })
         .with_genesis_instruction(verifying_keys::RegisterVerifyingKey {
-            id: replay_id.clone(),
-            record: replay_record.clone(),
+            id: transfer_id.clone(),
+            record: transfer_record.clone(),
         })
         .with_config_layer(|layer| {
             layer.write(["zk", "halo2", "enabled"], true);
@@ -201,21 +201,22 @@ async fn four_validator_full_tree_wallet_proof_records_reject_corruption_and_rel
         "corrupted native proof must fail"
     );
     let mut wrong_role: OpenVerifyEnvelope = norito::decode_canonical(&result.proof.bytes)?;
-    wrong_role.circuit_id = replay_record.circuit_id;
-    wrong_role.vk_hash = replay_record.commitment;
-    wrong_role.public_inputs = zk::IVM_REPLAY_BINDING_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+    wrong_role.circuit_id = transfer_record.circuit_id;
+    wrong_role.vk_hash = transfer_record.commitment;
+    wrong_role.public_inputs =
+        zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
     let wrong_role = ProofBox::new(
         zk::ZK_BACKEND_HALO2_IPA.into(),
         norito::encode_canonical(&wrong_role)?,
     );
     ensure!(
-        !zk::verify_backend(zk::ZK_BACKEND_HALO2_IPA, &wrong_role, Some(&replay_key)),
-        "full-unshield proof cannot attest replay binding"
+        !zk::verify_backend(zk::ZK_BACKEND_HALO2_IPA, &wrong_role, Some(&transfer_key)),
+        "full-unshield proof cannot attest a confidential transfer"
     );
     for (proof, key, status) in [
         (result.proof, full_id.clone(), ProofStatus::Verified),
         (corrupt, full_id, ProofStatus::Rejected),
-        (wrong_role, replay_id, ProofStatus::Rejected),
+        (wrong_role, transfer_id, ProofStatus::Rejected),
     ] {
         record_on_every_validator(
             &network,

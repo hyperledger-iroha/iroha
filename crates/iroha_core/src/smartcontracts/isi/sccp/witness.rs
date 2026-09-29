@@ -89,7 +89,7 @@ mod tests {
             VALIDATION_FEE_POLICY_WITNESS_KEY_V1,
             PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
             FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
-            crate::state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY,
+            iroha_data_model::sumeragi_finality::SUMERAGI_LANE_STATE_WITNESS_KEY,
         ] {
             assert_ne!(fixed[0], SCCP_STATE_DELTA_WITNESS_KEY_V1[0]);
         }

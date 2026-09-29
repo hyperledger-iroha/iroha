@@ -59,6 +59,8 @@ pub mod sorafs;
 pub mod soranet;
 #[cfg(feature = "pqc")]
 pub mod streaming;
+#[cfg(test)]
+mod test_allocations;
 /// Canonical exact numeric facade for lower-level authenticated protocol crates.
 ///
 /// These are direct re-exports, so their type identity and Norito encoding are
@@ -115,6 +117,8 @@ mod public_key_decode;
 mod public_key_input;
 use core::{fmt, str::FromStr};
 pub use public_key_allocation::{ChargedPublicKey, PublicKeyAllocationError};
+pub use public_key_input::PublicKeyEnvelopeError;
+pub use signature::admission::{SignatureVerificationError, verify_signature_borrowed};
 #[cfg(any(feature = "bls", feature = "pqc"))]
 use std::sync::Arc;
 #[cfg(feature = "bls")]
@@ -909,6 +913,8 @@ pub fn mldsa65_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
 /// BLS uses the same fixed parser and contextual relation as ordinary
 /// verification. Public error String materialization is outside that fixed core.
 /// GOST uses the shared fixed-width relation and borrows the canonical key bytes.
+/// Use [`verify_signature_borrowed`] to retain its typed rejection without
+/// materializing the public diagnostic String at this adapter.
 ///
 /// # Errors
 /// Returns [`Error::BadSignature`] or a fixed parse error when the signature or
@@ -919,48 +925,8 @@ pub fn verify_signature_for_admission(
     public_key: &PublicKey,
     message: &[u8],
 ) -> Result<(), Error> {
-    let (algorithm, payload) = public_key.try_to_bytes().map_err(Error::from)?;
-    match algorithm {
-        Algorithm::Ed25519 => {
-            let key =
-                signature::ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)
-                    .map_err(signature::ed25519::KeyRejection::into_parse_error)?;
-            signature::ed25519::Ed25519Sha512::verify_uncached(message, proof.payload(), &key)
-        }
-        Algorithm::Secp256k1 => {
-            let key = signature::secp256k1::EcdsaSecp256k1Sha256::parse_public_key(payload)
-                .map_err(Error::from)?;
-            signature::secp256k1::EcdsaSecp256k1Sha256::verify(message, proof.payload(), &key)
-        }
-        Algorithm::MlDsa => {
-            // The pinned native verifier uses fixed inline SHAKE/polynomial
-            // storage. This borrowed facade shares ordinary verification's relation.
-            pqc_verify_batch_deterministic(&[message], &[proof.payload()], &[payload], [0_u8; 32])
-        }
-        #[cfg(feature = "gost")]
-        Algorithm::Gost3410_2012_256ParamSetA
-        | Algorithm::Gost3410_2012_256ParamSetB
-        | Algorithm::Gost3410_2012_256ParamSetC
-        | Algorithm::Gost3410_2012_512ParamSetA
-        | Algorithm::Gost3410_2012_512ParamSetB => {
-            signature::gost::validate_public_key(algorithm, payload)
-                .map_err(signature::gost::KeyRejection::into_parse_error)?;
-            signature::gost::verify_bytes(algorithm, message, proof.payload(), payload)
-        }
-        #[cfg(feature = "bls")]
-        Algorithm::BlsNormal | Algorithm::BlsSmall => {
-            signature::bls::verify_signature_bytes_for_admission(
-                algorithm,
-                payload,
-                proof.payload(),
-                message,
-            )
-        }
-        #[cfg(feature = "sm")]
-        Algorithm::Sm2 => sm::verification::BorrowedKey::parse(payload)
-            .map_err(sm::verification::KeyRejection::into_parse_error)?
-            .verify(message, proof.payload()),
-    }
+    verify_signature_borrowed(proof, public_key, message)
+        .map_err(SignatureVerificationError::into_error)
 }
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
 /// # Errors
@@ -1819,17 +1785,12 @@ impl PublicKeyCompact {
         }
     }
     fn try_algorithm(&self) -> Result<Algorithm, ParseError> {
-        let Some(&algorithm) = self.algorithm_and_payload.first() else {
-            return Err(ParseError("missing public key algorithm tag".to_owned()));
-        };
-        Algorithm::try_from(algorithm)
-            .map_err(|()| ParseError(format!("invalid public key algorithm tag {algorithm}")))
+        public_key_input::algorithm(&self.algorithm_and_payload)
+            .map_err(PublicKeyEnvelopeError::into_parse_error)
     }
     fn try_payload(&self) -> Result<&[u8], ParseError> {
-        if self.algorithm_and_payload.is_empty() {
-            return Err(ParseError("missing public key payload".to_owned()));
-        }
-        Ok(&self.algorithm_and_payload[1..])
+        public_key_input::payload(&self.algorithm_and_payload)
+            .map_err(PublicKeyEnvelopeError::into_parse_error)
     }
 
     fn structural_components(&self) -> Result<(Algorithm, &[u8]), ParseError> {
@@ -1932,6 +1893,13 @@ impl PublicKey {
     ///
     /// Returns [`Error::KeyGen`] when public-key derivation fails for algorithms
     /// whose private-key encodings contain consistency-checked public material.
+    #[cfg_attr(
+        not(any(feature = "pqc", feature = "gost", feature = "bls", feature = "sm")),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "enabled algorithms require fallible derivation; reduced builds retain the same typed operation"
+        )
+    )]
     pub fn from_private_key(private_key: &PrivateKey) -> Result<Self, Error> {
         use crate::secrecy::ExposeSecret;
         let inner = match private_key.0.expose_secret() {

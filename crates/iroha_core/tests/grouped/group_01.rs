@@ -42,3 +42,5 @@ mod gov_bond_escrow;
 mod gov_citizenship;
 #[path = "../gov_finalize_real_vk.rs"]
 mod gov_finalize_real_vk;
+#[path = "../native_finality_proof.rs"]
+mod native_finality_proof;

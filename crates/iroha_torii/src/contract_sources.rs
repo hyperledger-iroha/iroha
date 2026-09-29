@@ -3088,13 +3088,14 @@ mod tests {
     fn build_state_with_single_transaction(
         instructions: Vec<dm::InstructionBox>,
     ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
+        let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(
+                World::default(),
+                1_710_000_000_000,
+            ),
+        )
+        .expect("original contract source query genesis");
+        let state = Arc::clone(chain.state());
         let authority_key = checked_contract_sources_key_fixture(Algorithm::Ed25519);
         let authority = dm::AccountId::new(authority_key.public_key().clone());
         let mut builder = dm::TransactionBuilder::new(
@@ -3107,17 +3108,10 @@ mod tests {
             .with_instructions(instructions)
             .sign(authority_key.private_key());
         let target_hash = signed.hash_as_entrypoint();
-        let leader = checked_contract_sources_key_fixture(Algorithm::BlsNormal);
-        let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(signed))])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(block.header());
-        let valid: ValidBlock = block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, state_block, committed);
+        crate::test_utils::commit_native_accepted_inputs(
+            &mut chain,
+            vec![AcceptedTransaction::new_unchecked(Cow::Owned(signed))],
+        );
         (state, target_hash)
     }
     fn install_contract_instance(

@@ -36,14 +36,12 @@ fn partition_respects_frame_cap() {
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&small_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
             GossipBatchEntry {
                 tx: large_accepted,
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&large_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
         ],
     );
@@ -147,7 +145,6 @@ fn gossip_roundtrip_preserves_cached_payload() {
     assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
     assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
     assert_eq!(decoded.plane, GossipPlane::Public);
-    assert!(decoded.txs[0].queue_plan_admitted_input().is_none());
     assert_eq!(
         decoded.txs[0].encoded_len_exact(),
         Some(decoded.txs[0].encode().len())
@@ -196,7 +193,6 @@ fn partition_gossip_batch_keeps_sealed_commitments() {
             routing: RoutingDecision::default(),
             routing_plan: default_plan(),
             payload,
-            queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
         }],
     );
     assert_eq!(partitioned.message.txs.len(), 1);
@@ -426,7 +422,6 @@ fn partition_yields_empty_when_cap_too_small() {
             routing: RoutingDecision::default(),
             routing_plan: default_plan(),
             payload: payload_for(&signed),
-            queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
         }],
     );
     assert!(partitioned.message.txs.is_empty());
@@ -467,14 +462,12 @@ fn partition_respects_max_count() {
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&tx_a_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
             GossipBatchEntry {
                 tx: tx_b_accepted,
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&tx_b_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
         ],
     );

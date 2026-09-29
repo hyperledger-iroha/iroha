@@ -63,15 +63,14 @@ where
     }
 }
 
-/// Start the exact three-child topology after validating its execution context.
+/// Start the exact two-child topology after validating its execution context.
 pub(super) fn start(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
     shutdown: ShutdownSignal,
-) -> Result<[ToriiCriticalWorker; 3], &'static str> {
+) -> Result<[ToriiCriticalWorker; 2], &'static str> {
     let runtime = runtime()?;
     let (request_tx, request_rx) = mpsc::channel(1);
-    let (publication_tx, publication_rx) = mpsc::channel(1);
     let request_app = app.clone();
     let request_network = network.clone();
     let request_task = runtime.spawn(run_work(
@@ -94,31 +93,7 @@ pub(super) fn start(
             }
         },
     ));
-    let publication_app = app.clone();
-    let publication_task = runtime.spawn(run_work(
-        publication_rx,
-        shutdown.clone(),
-        runtime.clone(),
-        move |work: PublicationWork| {
-            let app = publication_app.clone();
-            async move {
-                let PublicationWork {
-                    peer,
-                    publication,
-                    transport,
-                } = work;
-                process_incoming_queue_plan_admission_publication(
-                    &app,
-                    peer.id(),
-                    publication.as_ref(),
-                )
-                .await;
-                drop(publication);
-                drop(transport);
-            }
-        },
-    ));
-    let response_task = runtime.spawn(pump(app, network, shutdown, request_tx, publication_tx));
+    let response_task = runtime.spawn(pump(app, network, shutdown, request_tx));
     Ok([
         ToriiCriticalWorker {
             name: "torii_proxy_network",
@@ -127,10 +102,6 @@ pub(super) fn start(
         ToriiCriticalWorker {
             name: "torii_proxy_request",
             task: request_task,
-        },
-        ToriiCriticalWorker {
-            name: "queue_plan_publication",
-            task: publication_task,
         },
     ])
 }
@@ -141,7 +112,6 @@ async fn pump(
     network: iroha_core::IrohaNetwork,
     shutdown: ShutdownSignal,
     requests: mpsc::Sender<RequestWork>,
-    publications: mpsc::Sender<PublicationWork>,
 ) -> ToriiCriticalWorkerExit {
     let (mut tx, mut rx) = mpsc::channel(network.subscriber_queue_cap().get());
     let filter = SubscriberFilter::topics_for_route([Topic::Control], SubscriberRoute::ToriiProxy);
@@ -173,7 +143,7 @@ async fn pump(
                 ToriiCriticalWorkerExit::UnexpectedExit
             };
         };
-        dispatch(&app, &network, &requests, &publications, message).await;
+        dispatch(&app, &network, &requests, message).await;
     }
 }
 
@@ -182,7 +152,6 @@ pub(super) async fn dispatch(
     app: &SharedAppState,
     network: &iroha_core::IrohaNetwork,
     requests: &mpsc::Sender<RequestWork>,
-    publications: &mpsc::Sender<PublicationWork>,
     message: PeerMessage<iroha_core::NetworkMessage>,
 ) {
     let (peer, _authenticated_via, payload, _bytes, transport) = message.into_parts();
@@ -214,19 +183,6 @@ pub(super) async fn dispatch(
                     work.request.request_id,
                     work.request.deadline_unix_ms,
                 );
-            }
-        }
-        iroha_core::NetworkMessage::QueuePlanAdmissionPublication(publication) => {
-            // One active and one queued publication retain their P2P bytes/counts.
-            // Saturation is a best-effort dissemination failure; the sender's durable
-            // certificate and the existing Sumeragi handoff/replay remain the owners.
-            if let Err(error) = publications.try_send(PublicationWork {
-                peer,
-                publication,
-                transport,
-            }) {
-                let work = error.into_inner();
-                iroha_logger::warn!(peer_id = %work.peer.id(), "QueuePlan publication worker is unavailable or full; durable sender must retain its admission");
             }
         }
         iroha_core::NetworkMessage::ToriiProxyResponse(response) => {

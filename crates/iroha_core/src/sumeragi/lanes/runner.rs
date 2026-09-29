@@ -43,7 +43,7 @@ use super::{
 };
 use crate::{
     queue::Queue,
-    state::{State, WorldReadOnly},
+    state::{State, StateReadOnly, WorldReadOnly},
     sumeragi::{
         bodies::{BodyLimits, FileBodyStore},
         crypto::{BlsCrypto, KeyPairSigner, core_key},
@@ -281,6 +281,16 @@ impl Drop for LaneRunner {
 impl Inner {
     /// Stop retired incarnations and start the activated ones.
     fn reconcile(&self) {
+        if self
+            .inputs
+            .state
+            .view()
+            .kura()
+            .native_consensus_gate()
+            .is_closed()
+        {
+            return;
+        }
         let (applied, lanes) = {
             let view = self.inputs.state.view();
             (
@@ -335,6 +345,10 @@ impl Inner {
 
     fn start_lane(&self, record: &SumeragiLaneRecord) -> Result<RunningLane, String> {
         let inputs = &self.inputs;
+        let node_gate = inputs.state.view().kura().native_consensus_gate();
+        let _startup = node_gate
+            .enter()
+            .ok_or_else(|| "canonical storage is closed; restart is required".to_owned())?;
         let config = lane_height_config(record).map_err(|error| error.to_string())?;
         for member in &record.committee {
             inputs
@@ -439,6 +453,7 @@ impl Inner {
         .spawn(
             inputs.driver,
             DriverStart {
+                node_gate: inputs.state.view().kura().native_consensus_gate(),
                 allocation_budget: inputs.state.ivm_execution_budget(),
                 local: local_params(config.committee.n(), &inputs.local),
                 init,

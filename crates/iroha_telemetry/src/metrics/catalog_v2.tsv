@@ -363,7 +363,6 @@ sumeragi_block_created_dropped_by_lock_total	sumeragi_block_created_dropped_by_l
 sumeragi_block_created_hint_mismatch_total	sumeragi_block_created_hint_mismatch_total	BlockCreated messages rejected due to hint mismatch (height/view/parent)	unregistered
 sumeragi_block_created_proposal_mismatch_total	sumeragi_block_created_proposal_mismatch_total	BlockCreated messages rejected due to proposal mismatch (header/payload)	unregistered
 lane_relay_invalid_total	lane_relay_invalid_total	Lane relay envelopes rejected during validation (labeled by error kind)	registered
-lane_relay_emergency_override_total	lane_relay_emergency_override_total	Lane relay emergency validator override usage (labeled by lane, dataspace, outcome)	registered
 sumeragi_prf_height	sumeragi_prf_height	Height associated with the PRF context	unregistered
 sumeragi_prf_view	sumeragi_prf_view	View associated with the PRF context	unregistered
 sumeragi_membership_view_hash	sumeragi_membership_view_hash	Deterministic membership view hash (truncated to u64)	unregistered

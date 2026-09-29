@@ -92,7 +92,7 @@ class LifecycleRegistrationTests(unittest.TestCase):
         # own real-source coverage and runs first in the same lexical phase.
         with patch.object(gate, 'validate_mv_test_registration') as mv, \
              patch.object(gate.subprocess, 'run') as child, \
-             patch.object(gate, '_run_standalone_checks') as rust, \
+             patch.object(gate, 'validate_native_consensus_test_registration') as rust, \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, 'explicitly registered once'):
                 gate.run_lifecycle_source_checks(self.root, {}, ())

@@ -19,9 +19,9 @@ impl crate::memory::Memory {
             return Err(VMError::NoritoInvalid);
         }
         // Read header to determine payload length before loading the full envelope
-        let hdr = self
-            .load_region(addr, 7)
-            .map_err(|_| VMError::NoritoInvalid)?;
+        let hdr = self.load_region(addr, 7).map_err(|error| {
+            crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+        })?;
         let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
         if crate::dev_env::decode_trace_enabled() {
             let type_id = u16::from_be_bytes([hdr[0], hdr[1]]);
@@ -41,9 +41,9 @@ impl crate::memory::Memory {
             return Err(VMError::NoritoInvalid);
         }
         // Load full envelope and validate header/hash/pointer type
-        let envelope = self
-            .load_region(addr, total as u64)
-            .map_err(|_| VMError::NoritoInvalid)?;
+        let envelope = self.load_region(addr, total as u64).map_err(|error| {
+            crate::error::preserve_execution_deferral(error, VMError::NoritoInvalid)
+        })?;
         match validate_tlv_bytes(envelope) {
             Ok(tlv) => {
                 let (policy, abi_version) =

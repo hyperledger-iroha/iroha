@@ -1,261 +1,111 @@
+//! Actual native execution and independently selected checkpoint tests for selective inclusion.
 use super::*;
-use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_core::{
+    state::{StateReadOnly, World},
+    sumeragi::{
+        finality::{build_checkpoint, build_proof},
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    },
+};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    account::AccountId,
+    Registrable,
+    account::{Account, AccountId},
     block::{
         BlockHeader, SignedBlock,
-        builder::BlockBuilder,
-        consensus_v2::*,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
-        output_budget::ExecutionOutputLimits,
     },
-    bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment, BridgeFinalityProof},
+    isi::{InstructionBox, Log, Unregister},
     query::{QueryOutput, QueryOutputBatchBoxTuple},
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
-use std::{num::NonZeroU64, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-fn network() -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([0xa5; 32]),
-    ))
+struct Fixture {
+    chain: CertifiedTestChain,
+    block: Arc<SignedBlock>,
+    selected: CommittedTransaction,
+    checkpoint: SumeragiFinalityCheckpoint,
+    proofs: Vec<SumeragiFinalityProof>,
 }
-
-fn selected_block() -> (SignedBlock, CommittedTransaction) {
-    let key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).unwrap();
-    let authority = AccountId::new(key.public_key().clone());
-    let mut transaction = TransactionBuilder::new(
-        network(),
-        authority,
-        FeePaymentIntent::authority(Vec::new(), None),
-    );
-    transaction.set_creation_time(Duration::from_millis(1));
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 11, 0);
-    let mut builder = BlockBuilder::new(header);
-    builder.push_transaction(transaction.try_sign(key.private_key()).unwrap());
-    let mut block = builder
-        .try_build_with_signature(0, key.private_key())
-        .unwrap();
-    let output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-        input_index: 0,
-        result: Ok(iroha_data_model::transaction::DataTriggerSequence::default()).into(),
-        completions: Vec::new(),
-    });
-    block
-        .set_execution_outputs(
-            vec![output.clone()],
-            1,
-            Default::default(),
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            Vec::new(),
-            &ExecutionOutputLimits {
-                max_outputs: 16,
-                max_output_bytes: 64 * 1024,
-                max_total_output_bytes: 256 * 1024,
-                max_executed_wire_bytes: 1024 * 1024,
-            },
-        )
-        .unwrap();
-    let committed = CommittedTransaction {
-        block_hash: block.hash(),
-        entrypoint_hash: block.network_entrypoint_at(0).unwrap().hash(),
-        entrypoint_proof: block.network_input_proof(0).unwrap(),
-        entrypoint: block.network_entrypoint_at(0).unwrap().clone(),
-        output_hash: HashOf::new(&output),
-        output_proof: block.output_proof(0).unwrap(),
-        output,
-    };
-    assert!(committed.verify_inclusion_in_block(&block));
-    (block, committed)
-}
-
-fn mint_authorization(
-    roster: &[ValidatorPower],
-) -> (
-    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
-    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
-) {
-    use iroha_data_model::isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
-    };
-    const EQ: [&str; 4] = [
-        "00000000ed302d991bf94c09fc98462200000000000000000000000000000040",
-        "030000b067c50313fcac1144eee2fe0e0000000000000000000000000000001c",
-        "63d232eb3b8af0b75cfcf55ade47f6ff4cdf4e47a7454cb8ed67a9ba6f56e788",
-        "fc86bc8efbbcb878f49427618b6940409b9157e3d777a4c4c0514a8e0d92db18",
-    ];
-    const EP: [&str; 4] = [
-        "0000000021eb468cdda89409fc98462200000000000000000000000000000040",
-        "03000070de065fede0093144eee2fe0e0000000000000000000000000000001c",
-        "5fce556feb6fee5a15560ddabae10224b026a5d0281af4c613955c39a8797837",
-        "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
-    ];
-    assert_eq!(roster.len(), 4);
-    let authority = KagemushaMintFinalityAuthorityGenerationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: network(),
-        generation: 0,
-        validators: roster
-            .iter()
-            .enumerate()
-            .map(|(index, validator)| {
-                let mut eq = [0; 32];
-                let mut ep = [0; 32];
-                hex::decode_to_slice(EQ[index], &mut eq).unwrap();
-                hex::decode_to_slice(EP[index], &mut ep).unwrap();
-                KagemushaMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: eq,
-                    ep_proof_public_key: ep,
-                }
-            })
-            .collect(),
-    };
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: network(),
-        epoch: 0,
-        first_height: 1,
-        last_height: 10,
-        authority_generation: authority.generation,
-        authority_id: authority.authority_id().unwrap(),
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    authorization
-        .validate_against_authority(&authority)
-        .unwrap();
-    (authorization, authority)
-}
-
-fn finality_bundle(block: &SignedBlock) -> BridgeFinalityBundle {
-    let mut keys = (0..4)
-        .map(|_| KeyPair::try_random_with_algorithm(Algorithm::BlsNormal).unwrap())
-        .collect::<Vec<_>>();
-    keys.sort_by(|left, right| {
-        iroha_model_base::peer::PeerId::new(left.public_key().clone()).cmp(
-            &iroha_model_base::peer::PeerId::new(right.public_key().clone()),
-        )
-    });
-    let roster = keys
-        .iter()
-        .map(|key| ValidatorPower {
-            validator: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let proofs_of_possession = keys
-        .iter()
-        .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
-        .collect::<Vec<_>>();
-    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        mint_authorization(&roster);
-    let header = block.header();
-    let context = HeightContext {
-        network_id: network(),
-        protocol_version: PROTOCOL_VERSION,
-        height: 1,
-        epoch: 0,
-        kagemusha_mint_finality_authorization,
-        kagemusha_mint_finality_authority,
-        epoch_end_height: 10,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).unwrap(),
-        roster,
-        nexus_amx_context_hash: Hash::new(b"selective test nexus"),
-        execution_policy_hash: Hash::new(b"selective test execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
-        },
-        leader_seed: [0x5a; 32],
-    };
-    let context_id = context.id();
-    let subject = BlockSubject {
-        parent_block_hash: header.prev_block_hash(),
-        block_hash: header.hash(),
-        payload_hash: block.canonical_proposal_wire_hash().unwrap(),
-    };
-    let round = ConsensusRound {
-        context_id,
-        height: 1,
-        view: 0,
-    };
-    let wire = block.encode_wire().unwrap();
-    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"parent state"),
-        Hash::new(b"post state"),
-        Hash::new(b"ordinary writes"),
-        wire.len() as u64,
-        Hash::new(&wire),
-    )
-    .with_transaction_commitments_from_block(block)
-    .unwrap();
-    let mut commit_qc = QuorumCertificate {
-        round,
-        proposal_round: round,
-        phase: GlobalPhase::Commit,
-        subject,
-        execution_commitment,
-        signers: vec![0, 1, 2],
-        aggregate_signature: vec![1],
-    };
-    let preimage = Vote {
-        round,
-        proposal_round: round,
-        phase: GlobalPhase::Commit,
-        subject,
-        execution_commitment,
-        signer: 0,
-        signature: Vec::new(),
+impl Fixture {
+    fn new(rejected: bool) -> Self {
+        let key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).unwrap();
+        let authority = AccountId::new(key.public_key().clone());
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1_000)).unwrap();
+        chain.commit(Vec::new());
+        let checkpoint = build_checkpoint(&chain.state().view(), 2).unwrap();
+        let mut transaction = TransactionBuilder::new(
+            chain.network_id(),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        );
+        transaction.set_creation_time(Duration::from_millis(1_002));
+        let instruction: InstructionBox = if rejected {
+            Unregister::domain(
+                iroha_data_model::domain::DomainId::try_new("absent_inclusion", "universal")
+                    .unwrap(),
+            )
+            .into()
+        } else {
+            Log::new(
+                iroha_data_model::Level::INFO,
+                "actual selective inclusion".into(),
+            )
+            .into()
+        };
+        let transaction = transaction
+            .with_instructions([instruction])
+            .sign(key.private_key());
+        assert_eq!(chain.commit(vec![transaction]), vec![!rejected]);
+        let block = chain.committed(3).block().clone();
+        let output = block.network_output_at(0).unwrap().1.clone();
+        let output = ExecutionOutputV1::Network(output);
+        let selected = CommittedTransaction {
+            block_hash: block.hash(),
+            entrypoint_hash: block.network_entrypoint_at(0).unwrap().hash(),
+            entrypoint_proof: block.network_input_proof(0).unwrap(),
+            entrypoint: block.network_entrypoint_at(0).unwrap().clone(),
+            output_hash: HashOf::new(&output),
+            output_proof: block.output_proof(0).unwrap(),
+            output,
+        };
+        assert!(selected.verify_inclusion_in_block(&block));
+        let view = chain.state().view();
+        let proofs = vec![
+            build_proof(&view, 2).unwrap(),
+            build_proof(&view, 3).unwrap(),
+        ];
+        drop(view);
+        Self {
+            chain,
+            block,
+            selected,
+            checkpoint,
+            proofs,
+        }
     }
-    .signature_preimage();
-    let signatures = commit_qc
-        .signers
-        .iter()
-        .map(|index| {
-            Signature::try_new(keys[*index as usize].private_key(), &preimage)
-                .unwrap()
-                .payload()
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
-    let refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&refs).unwrap();
-    let artifact = iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact::new(
-        context,
-        subject,
-        commit_qc,
-        proofs_of_possession,
-    );
-    BridgeFinalityBundle {
-        commitment: BridgeCommitment {
-            network_id: network(),
-            height_context_id: artifact.context_id(),
-            block_height: 1,
-            block_hash: artifact.block_hash,
-        },
-        finality_proof: BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-            block_header: header,
-            finality_artifact: artifact,
-        },
+    fn network(&self) -> NetworkId {
+        self.chain.network_id()
+    }
+    fn chain_json(&self) -> Vec<u8> {
+        json::to_vec(&self.proofs).unwrap()
+    }
+    fn checkpoint_bytes(&self) -> Vec<u8> {
+        self.checkpoint.encode_canonical().unwrap()
+    }
+    fn verify(&self, response_bytes: &[u8]) -> Result<VerifiedCommittedTransaction, String> {
+        verify_committed_transaction_inclusion(
+            response_bytes,
+            &self.chain_json(),
+            self.network(),
+            self.checkpoint.chain_id(),
+            &self.checkpoint_bytes(),
+            self.selected.entrypoint_hash,
+        )
     }
 }
-
 fn response(rows: Vec<CommittedTransaction>) -> Vec<u8> {
     norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
         batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::CommittedTransaction(
@@ -270,151 +120,120 @@ fn response(rows: Vec<CommittedTransaction>) -> Vec<u8> {
 
 #[test]
 fn kagemusha_testnet_anchor_requires_signed_consecutive_chain_from_independent_context() {
-    let (block, _) = selected_block();
-    let bundle = finality_bundle(&block);
-    let trusted_context = bundle.commitment.height_context_id;
-    let chain = json::to_json(&vec![bundle.clone()]).unwrap();
-    let anchor = crate::kagemusha_testnet_finality_chain_v1::
-        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-            network(),
-            trusted_context,
-            chain.as_bytes(),
-        )
-        .unwrap();
-    assert_eq!(anchor.network_id, network());
-    assert_eq!(anchor.block_height, 1);
-    assert_eq!(anchor.height_context_id, trusted_context);
-
+    let fixture = Fixture::new(false);
+    let chain = fixture.chain_json();
+    let anchor = crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+        fixture.network(), &fixture.checkpoint, &chain,
+    ).unwrap();
+    assert_eq!(anchor.network_id, fixture.network());
+    assert_eq!(anchor.checkpoint.height(), 3);
+    assert_eq!(anchor.checkpoint.block_hash(), fixture.block.hash());
     #[cfg(unix)]
     {
-        let mut pinned_anchor = None;
-        let (newly_pinned, returned_anchor) =
+        let mut pinned = None;
+        let (newly_pinned, returned) =
             crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
-                network(),
-                trusted_context,
-                chain.as_bytes(),
+                fixture.network(),
+                &fixture.checkpoint,
+                &chain,
                 |verified| {
-                    pinned_anchor = Some(verified.anchor());
+                    pinned = Some(verified.anchor().clone());
                     Ok(true)
                 },
             )
             .unwrap();
         assert!(newly_pinned);
-        assert!(Some(returned_anchor) == pinned_anchor);
-
-        let (newly_pinned, retry_anchor) =
+        assert_eq!(Some(returned.clone()), pinned);
+        let (newly_pinned, retried) =
             crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
-                network(),
-                trusted_context,
-                chain.as_bytes(),
+                fixture.network(),
+                &fixture.checkpoint,
+                &chain,
                 |_| Ok(false),
             )
             .unwrap();
         assert!(!newly_pinned);
-        assert!(retry_anchor == returned_anchor);
+        assert_eq!(retried, returned);
     }
-
-    let wrong_context = HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])));
-    assert!(crate::kagemusha_testnet_finality_chain_v1::
-        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-            network(),
-            wrong_context,
-            chain.as_bytes(),
-        )
-        .is_err());
-    let wrong_network =
-        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([9; 32])));
-    assert!(crate::kagemusha_testnet_finality_chain_v1::
-        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-            wrong_network,
-            trusted_context,
-            chain.as_bytes(),
-        )
-        .is_err());
-
-    // Repeating a valid signed bundle cannot advance a consecutive chain.
-    let repeated = json::to_json(&vec![bundle.clone(), bundle]).unwrap();
-    assert!(crate::kagemusha_testnet_finality_chain_v1::
-        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-            network(),
-            trusted_context,
-            repeated.as_bytes(),
-        )
-        .is_err());
-
+    let wrong_checkpoint = build_checkpoint(&fixture.chain.state().view(), 1).unwrap();
+    assert!(crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+        fixture.network(), &wrong_checkpoint, &chain,
+    ).is_err());
+    let wrong_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"foreign inclusion network",
+    )));
+    assert!(crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+        wrong_network, &fixture.checkpoint, &chain,
+    ).is_err());
+    let repeated =
+        json::to_vec(&vec![fixture.proofs[0].clone(), fixture.proofs[0].clone()]).unwrap();
+    assert!(crate::kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+        fixture.network(), &fixture.checkpoint, &repeated,
+    ).is_err());
     #[cfg(unix)]
     {
         let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
         let publication = gate.dispatch().unwrap();
-        assert!(crate::kagemusha_testnet_finality_chain_v1::
-        pin_kagemusha_testnet_authenticated_finality_chain_v1(
-            &publication.permit(),
-            [0x71; 32],
-            network(),
-            trusted_context,
-            chain.as_bytes(),
-        )
-        .is_err()); // A valid chain cannot install a pin without the private native owner.
+        assert!(crate::kagemusha_testnet_finality_chain_v1::pin_kagemusha_testnet_authenticated_finality_chain_v1(
+            &publication.permit(), [0x71; 32], fixture.network(), &fixture.checkpoint, &chain,
+        ).is_err());
     }
 }
 
 #[test]
 fn authentic_current_row_and_four_negative_evidence_cases() {
-    let (block, selected) = selected_block();
-    let bundle = finality_bundle(&block);
-    let root = json::to_value(&bundle.commitment.height_context_id.0)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let chain = json::to_json(&vec![bundle.clone()]).unwrap();
+    let fixture = Fixture::new(false);
+    let selected = &fixture.selected;
     let selected_response = response(vec![selected.clone()]);
-    let verified = verify_committed_transaction_inclusion(
-        &selected_response,
-        chain.as_bytes(),
-        network(),
-        &root,
-        selected.entrypoint_hash,
-    )
-    .unwrap();
-    assert_eq!(verified.row, norito::to_bytes(&selected).unwrap());
+    let verified = fixture.verify(&selected_response).unwrap();
+    assert_eq!(verified.row, norito::to_bytes(selected).unwrap());
     assert_eq!(verified.output_hash, *selected.output_hash.as_ref());
-    assert_eq!(verified.block_hash, *block.hash().as_ref());
-    assert_eq!(verified.block_height, 1);
+    assert_eq!(verified.block_hash, *fixture.block.hash().as_ref());
+    assert_eq!(verified.block_height, 3);
     assert!(verified.result_ok);
     assert_eq!(
         candidate_block_hash(&selected_response, selected.entrypoint_hash).unwrap(),
-        Some(verified.block_hash),
+        Some(verified.block_hash)
     );
-
+    let promoted = SumeragiFinalityCheckpoint::decode_canonical(&verified.checkpoint).unwrap();
+    assert_eq!(promoted.height(), 3);
+    assert_eq!(promoted.block_hash(), fixture.block.hash());
     let wrong_network = NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign network")),
     );
     assert!(
         verify_committed_transaction_inclusion(
             &selected_response,
-            chain.as_bytes(),
+            &fixture.chain_json(),
             wrong_network,
-            &root,
-            selected.entrypoint_hash,
+            fixture.checkpoint.chain_id(),
+            &fixture.checkpoint_bytes(),
+            selected.entrypoint_hash
         )
         .is_err()
     );
-    let mut altered_proof = bundle.clone();
-    altered_proof
-        .finality_proof
-        .finality_artifact
-        .commit_qc
-        .execution_commitment
-        .executed_block_wire_hash = Hash::new(b"altered unsigned proof");
-    let altered_chain = json::to_json(&vec![altered_proof]).unwrap();
     assert!(
         verify_committed_transaction_inclusion(
             &selected_response,
-            altered_chain.as_bytes(),
-            network(),
-            &root,
-            selected.entrypoint_hash,
+            &fixture.chain_json(),
+            fixture.network(),
+            "foreign-chain",
+            &fixture.checkpoint_bytes(),
+            selected.entrypoint_hash
+        )
+        .is_err()
+    );
+    let mut altered_proofs = fixture.proofs.clone();
+    let last_byte = altered_proofs[1].block_wire.last_mut().unwrap();
+    *last_byte ^= 1;
+    assert!(
+        verify_committed_transaction_inclusion(
+            &selected_response,
+            &json::to_vec(&altered_proofs).unwrap(),
+            fixture.network(),
+            fixture.checkpoint.chain_id(),
+            &fixture.checkpoint_bytes(),
+            selected.entrypoint_hash
         )
         .is_err()
     );
@@ -422,26 +241,18 @@ fn authentic_current_row_and_four_negative_evidence_cases() {
     assert!(
         verify_committed_transaction_inclusion(
             &selected_response,
-            chain.as_bytes(),
-            network(),
-            &root,
-            wrong_transaction,
+            &fixture.chain_json(),
+            fixture.network(),
+            fixture.checkpoint.chain_id(),
+            &fixture.checkpoint_bytes(),
+            wrong_transaction
         )
         .is_err()
     );
     assert!(candidate_block_hash(&selected_response, wrong_transaction).is_err());
     let mut altered_output = selected.clone();
     altered_output.output_hash = HashOf::from_untyped_unchecked(Hash::new(b"mismatched output"));
-    assert!(
-        verify_committed_transaction_inclusion(
-            &response(vec![altered_output]),
-            chain.as_bytes(),
-            network(),
-            &root,
-            selected.entrypoint_hash,
-        )
-        .is_err()
-    );
+    assert!(fixture.verify(&response(vec![altered_output])).is_err());
     let mut rehashed_output = selected.clone();
     rehashed_output.output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
         input_index: 0,
@@ -454,21 +265,46 @@ fn authentic_current_row_and_four_negative_evidence_cases() {
         completions: Vec::new(),
     });
     rehashed_output.output_hash = HashOf::new(&rehashed_output.output);
-    assert!(
-        verify_committed_transaction_inclusion(
-            &response(vec![rehashed_output]),
-            chain.as_bytes(),
-            network(),
-            &root,
-            selected.entrypoint_hash,
-        )
-        .is_err()
+    assert!(fixture.verify(&response(vec![rehashed_output])).is_err());
+    for checkpoint in [vec![], vec![0x71; 32], {
+        let mut bytes = fixture.checkpoint_bytes();
+        bytes.push(0);
+        bytes
+    }] {
+        assert!(
+            verify_committed_transaction_inclusion(
+                &selected_response,
+                &fixture.chain_json(),
+                fixture.network(),
+                fixture.checkpoint.chain_id(),
+                &checkpoint,
+                selected.entrypoint_hash
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn actual_rejected_execution_remains_authenticated_and_promotes_its_checkpoint() {
+    let fixture = Fixture::new(true);
+    let verified = fixture
+        .verify(&response(vec![fixture.selected.clone()]))
+        .unwrap();
+    assert!(!verified.result_ok);
+    assert_eq!(verified.row, norito::to_bytes(&fixture.selected).unwrap());
+    assert_eq!(
+        SumeragiFinalityCheckpoint::decode_canonical(&verified.checkpoint)
+            .unwrap()
+            .block_hash(),
+        fixture.block.hash()
     );
 }
 
 #[test]
 fn candidate_distinguishes_exact_empty_page_from_invalid_evidence() {
-    let (_, selected) = selected_block();
+    let fixture = Fixture::new(false);
+    let selected = fixture.selected.clone();
     let empty = response(Vec::new());
     assert_eq!(
         candidate_block_hash(&empty, selected.entrypoint_hash).unwrap(),
@@ -532,8 +368,12 @@ fn ffi_failure_clears_every_output_before_rejection() {
     let mut block_hash = [0xff; 32];
     let mut height = 42_u64;
     let mut result_ok = 1_u8;
+    let mut checkpoint_pointer = 1usize as *mut u8;
+    let mut checkpoint_len: c_ulong = 12;
     let status = unsafe {
         connect_norito_verify_committed_transaction_inclusion_v1(
+            ptr::null(),
+            0,
             ptr::null(),
             0,
             ptr::null(),
@@ -550,6 +390,8 @@ fn ffi_failure_clears_every_output_before_rejection() {
             block_hash.as_mut_ptr(),
             &mut height,
             &mut result_ok,
+            &mut checkpoint_pointer,
+            &mut checkpoint_len,
         )
     };
     assert_eq!(status, ERR_COMMITTED_INCLUSION);
@@ -559,4 +401,67 @@ fn ffi_failure_clears_every_output_before_rejection() {
     assert_eq!(block_hash, [0; 32]);
     assert_eq!(height, 0);
     assert_eq!(result_ok, 0);
+    assert!(checkpoint_pointer.is_null());
+    assert_eq!(checkpoint_len, 0);
+}
+
+#[test]
+fn ffi_returns_row_and_same_verified_checkpoint_as_two_owned_buffers() {
+    let fixture = Fixture::new(false);
+    let response_bytes = response(vec![fixture.selected.clone()]);
+    let chain = fixture.chain_json();
+    let checkpoint = fixture.checkpoint_bytes();
+    let network = fixture.network();
+    let label = fixture.checkpoint.chain_id();
+    let mut row_ptr = ptr::null_mut();
+    let mut row_len = 0;
+    let mut checkpoint_ptr = ptr::null_mut();
+    let mut checkpoint_len = 0;
+    let mut output = [0; 32];
+    let mut block = [0; 32];
+    let mut height = 0;
+    let mut result_ok = 0;
+    let status = unsafe {
+        connect_norito_verify_committed_transaction_inclusion_v1(
+            response_bytes.as_ptr(),
+            response_bytes.len() as c_ulong,
+            chain.as_ptr(),
+            chain.len() as c_ulong,
+            network.as_bytes().as_ptr(),
+            32,
+            label.as_ptr(),
+            label.len() as c_ulong,
+            checkpoint.as_ptr(),
+            checkpoint.len() as c_ulong,
+            fixture.selected.entrypoint_hash.as_ref().as_ptr(),
+            32,
+            &mut row_ptr,
+            &mut row_len,
+            output.as_mut_ptr(),
+            block.as_mut_ptr(),
+            &mut height,
+            &mut result_ok,
+            &mut checkpoint_ptr,
+            &mut checkpoint_len,
+        )
+    };
+    assert_eq!(status, 0);
+    assert!(!row_ptr.is_null());
+    assert!(!checkpoint_ptr.is_null());
+    let row = unsafe { slice::from_raw_parts(row_ptr, row_len as usize) }.to_vec();
+    let checkpoint =
+        unsafe { slice::from_raw_parts(checkpoint_ptr, checkpoint_len as usize) }.to_vec();
+    crate::connect_norito_free(row_ptr);
+    crate::connect_norito_free(checkpoint_ptr);
+    assert_eq!(row, norito::to_bytes(&fixture.selected).unwrap());
+    assert_eq!(output, *fixture.selected.output_hash.as_ref());
+    assert_eq!(block, *fixture.block.hash().as_ref());
+    assert_eq!(height, 3);
+    assert_eq!(result_ok, 1);
+    let promoted = SumeragiFinalityCheckpoint::decode_canonical(&checkpoint).unwrap();
+    assert_eq!(promoted.block_hash(), fixture.block.hash());
+    iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &promoted, &network, label,
+    )
+    .unwrap();
 }

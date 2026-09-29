@@ -637,7 +637,6 @@ where
             authority.clone(),
             input.fee_payment.clone(),
         )
-        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary)
         .with_instructions([Transfer::asset_quantity(
             input.source_asset_id.clone(),
             input.quantity.clone(),
@@ -1071,10 +1070,7 @@ mod tests {
             )
             .expect("receipt");
         assert!(receipt.signed_transaction.verify_signature().is_ok());
-        assert_eq!(
-            receipt.signed_transaction.admission_intent(),
-            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-        );
+
         assert_eq!(submitter.submitted_hashes.borrow().len(), 1);
     }
     #[test]

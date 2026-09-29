@@ -54,7 +54,7 @@ PAYLOAD_ENTRY_FIELDS = frozenset(
 )
 PAYLOAD_FIELDS = frozenset(
     {
-        "admission_intent",
+
         "authority",
         "creation_time_ms",
         "executable",
@@ -170,14 +170,6 @@ def validate_charge_limits(value: object, context: str) -> None:
         previous_kind_order = kind_order
 
 
-def validate_admission_intent(value: object, context: str) -> None:
-    if not isinstance(value, dict):
-        raise ValueError(f"{context} must be an object")
-    require_exact_fields(value, frozenset({"intent", "value"}), context)
-    if value["intent"] != "ordinary" or value["value"] is not None:
-        raise ValueError(
-            f"{context} must be exactly {{'intent': 'ordinary', 'value': null}}"
-        )
 
 
 def validate_fee_payment(value: object, context: str) -> int | None:
@@ -265,9 +257,7 @@ def validate_payload_descriptors(path: Path) -> None:
         if not isinstance(payload, dict):
             raise ValueError(f"{context}.payload must be an object")
         require_exact_fields(payload, PAYLOAD_FIELDS, f"{context}.payload")
-        validate_admission_intent(
-            payload["admission_intent"], f"{context}.payload.admission_intent"
-        )
+
         gas_limit = validate_fee_payment(
             payload["fee_payment"], f"{context}.payload.fee_payment"
         )

@@ -211,10 +211,9 @@ fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKi
             .soracloud_public_max_response_bytes
             .min(app.torii_proxy_max_response_bytes)
             .max(1),
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        } => QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1.max(1),
+        ToriiProxyRequestKindV1::SubmitTransaction { .. } => {
+            TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1
+        }
         ToriiProxyRequestKindV1::SignedQuery { .. }
         | ToriiProxyRequestKindV1::SignedQueryRouteScan { .. } => {
             QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)

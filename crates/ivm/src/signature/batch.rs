@@ -114,10 +114,11 @@ pub fn verify_ed25519_batch_items_into(
 ) -> bool {
     with_fallback(items, destination, |destination| {
         #[cfg(all(target_os = "macos", feature = "metal"))]
-        if crate::vector::metal_batch_prefer_gpu(
-            crate::vector::MetalBatchWork::Ed25519,
-            items.len(),
-        ) && crate::vector::metal_ed25519_items_into(items, destination)
+        if crate::vector::select_metal_batch(crate::vector::MetalBatchWork::Ed25519, items.len())
+            .and_then(|selected| {
+                selected.run(|| crate::vector::metal_ed25519_items_into(items, destination))
+            })
+            .unwrap_or(false)
         {
             return true;
         }

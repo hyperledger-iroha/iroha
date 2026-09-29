@@ -1,3 +1,4 @@
+//! Retained diagnostic trace and execution behavior controls.
 use std::any::Any;
 
 use ivm::{IVM, IVMHost, TraceMode, VMError, encoding, instruction};
@@ -19,15 +20,11 @@ fn test_register_events_logged() {
     vm.load_program(&prog).unwrap();
     vm.set_zk_trace_enabled(true);
     vm.run().unwrap();
-    let log = vm.register_log();
-    assert!(!log.is_empty());
-    for e in log {
-        match e {
-            ivm::RegEvent::Read { path, root, .. } | ivm::RegEvent::Write { path, root, .. } => {
-                assert!(!path.is_empty());
-                assert_ne!(*root.as_ref(), [0u8; 32]);
-            }
-        }
+    let snapshot = common::diagnostic_snapshot(&vm);
+    assert_ne!(snapshot.register_event_count(), 0);
+    for event in snapshot.register_events() {
+        assert!(!event.path.is_empty());
+        assert_ne!(*event.root, [0u8; 32]);
     }
     // Step log should match cycle count
     let steps = vm.step_log();
@@ -43,13 +40,30 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
     impl IVMHost for ReplacingHost {
         fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
             let _ = vm.register(1);
-            let snapshot: Vec<ivm::RegEvent> = vm.register_log();
-            let expected = snapshot.clone();
+            let snapshot = common::diagnostic_snapshot(vm);
+            let content_digest = |snapshot: &ivm::zk::DiagnosticTraceSnapshot| -> [u8; 32] {
+                use sha2::Digest;
+                let mut digest = sha2::Sha256::new();
+                digest.update(snapshot.register_event_count().to_le_bytes());
+                for event in snapshot.register_events() {
+                    digest.update([u8::from(event.written)]);
+                    digest.update(event.index.to_le_bytes());
+                    digest.update(event.value.to_le_bytes());
+                    digest.update([u8::from(event.tag)]);
+                    digest.update(event.path.len().to_le_bytes());
+                    for sibling in event.path {
+                        digest.update(sibling);
+                    }
+                    digest.update(event.root);
+                }
+                digest.finalize().into()
+            };
+            let expected = content_digest(&snapshot);
             for index in 1..=64 {
                 let _ = vm.register((index % 8) + 1);
             }
-            assert_eq!(
-                snapshot, expected,
+            assert!(
+                content_digest(&snapshot) == expected,
                 "register-log snapshots must not alias the active logger"
             );
             Ok(0)
@@ -65,7 +79,9 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
             code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
             let mut replacement = IVM::new(u64::MAX);
             replacement.load_code(&code)?;
-            replacement.set_zk_mode(true);
+            replacement
+                .set_zk_mode(true)
+                .expect("private lifecycle cleanup succeeds");
             replacement.set_zk_trace_enabled(true);
             replacement.set_max_cycles(8);
             self.retained_vm = Some(std::mem::replace(vm, replacement));
@@ -98,7 +114,7 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
         "callback update becomes the next invocation's trace policy"
     );
     assert!(
-        vm.register_log().is_empty(),
+        common::diagnostic_snapshot(&vm).register_event_count() == 0,
         "a rejected replacement must not inherit the invocation log"
     );
     let retained_vm = host
@@ -106,7 +122,7 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
         .as_mut()
         .expect("callback retains the replaced VM");
     assert!(
-        retained_vm.register_log().is_empty(),
+        common::diagnostic_snapshot(&retained_vm).register_event_count() == 0,
         "a retained detached log must be scrubbed before isolation is dropped"
     );
     assert_eq!(
@@ -147,7 +163,9 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
         fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             let mut replacement = IVM::new(u64::MAX);
             replacement.load_code(&encoding::wide::encode_halt().to_le_bytes())?;
-            replacement.set_zk_mode(true);
+            replacement
+                .set_zk_mode(true)
+                .expect("private lifecycle cleanup succeeds");
             replacement.set_zk_trace_enabled(true);
             replacement.set_max_cycles(8);
             let mut retained_vm = std::mem::replace(vm, replacement);
@@ -183,7 +201,7 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
         "a moved VM must reject reuse while it carries outer callback ownership"
     );
     let retained_vm = host.retained_vm.as_mut().expect("callback retains old VM");
-    assert!(retained_vm.register_log().is_empty());
+    assert!(common::diagnostic_snapshot(&retained_vm).register_event_count() == 0);
     assert_eq!(retained_vm.execution_summary().register_log_len, 0);
 }
 
@@ -208,17 +226,17 @@ fn destructive_host_callback_lifecycle_changes_fail_closed() {
         }
 
         fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-            assert!(!vm.register_trace().is_empty());
+            assert!(!common::diagnostic_snapshot(&vm).states().is_empty());
             assert!(!vm.step_log().is_empty());
             assert!(!vm.constraints().is_empty());
             assert!(!vm.delta_register_trace().is_empty());
 
             match self.mutation {
-                Mutation::Reset => vm.reset(),
+                Mutation::Reset => vm.reset()?,
                 Mutation::ReloadSameProgram => vm.load_program(&self.program)?,
                 Mutation::ZkModeRoundTrip => {
-                    vm.set_zk_mode(false);
-                    vm.set_zk_mode(true);
+                    vm.set_zk_mode(false)?;
+                    vm.set_zk_mode(true)?;
                 }
                 Mutation::MaxCyclesRoundTrip => {
                     vm.set_max_cycles(0);
@@ -264,8 +282,14 @@ fn destructive_host_callback_lifecycle_changes_fail_closed() {
             Err(VMError::PrivacyViolation),
             "{mutation:?} must invalidate the active proof"
         );
-        assert!(vm.register_log().is_empty(), "{mutation:?}");
-        assert!(vm.register_trace().is_empty(), "{mutation:?}");
+        assert!(
+            common::diagnostic_snapshot(&vm).register_event_count() == 0,
+            "{mutation:?}"
+        );
+        assert!(
+            common::diagnostic_snapshot(&vm).states().is_empty(),
+            "{mutation:?}"
+        );
         assert!(vm.step_log().is_empty(), "{mutation:?}");
         assert!(vm.constraints().is_empty(), "{mutation:?}");
         assert!(vm.memory_log().is_empty(), "{mutation:?}");
@@ -339,8 +363,14 @@ fn panicking_host_callbacks_scrub_detached_proof_state() {
             let _ = vm.run_with_host(&mut host);
         }));
         assert!(panic.is_err(), "{phase:?} panic must propagate");
-        assert!(vm.register_log().is_empty(), "{phase:?}");
-        assert!(vm.register_trace().is_empty(), "{phase:?}");
+        assert!(
+            common::diagnostic_snapshot(&vm).register_event_count() == 0,
+            "{phase:?}"
+        );
+        assert!(
+            common::diagnostic_snapshot(&vm).states().is_empty(),
+            "{phase:?}"
+        );
         assert!(vm.step_log().is_empty(), "{phase:?}");
         assert!(vm.constraints().is_empty(), "{phase:?}");
         assert!(vm.memory_log().is_empty(), "{phase:?}");
@@ -349,7 +379,10 @@ fn panicking_host_callbacks_scrub_detached_proof_state() {
 
         // A stale detachment marker must not suppress out-of-run cleanup.
         vm.set_zk_trace_enabled(false);
-        assert!(vm.register_log().is_empty(), "{phase:?}");
+        assert!(
+            common::diagnostic_snapshot(&vm).register_event_count() == 0,
+            "{phase:?}"
+        );
     }
 }
 
@@ -412,38 +445,26 @@ fn nested_untraced_vm_masks_the_outer_register_logger() {
     vm.run_with_host(&mut host)
         .expect("nested untraced execution succeeds");
 
-    assert!(!vm.register_log().iter().any(|event| matches!(
-        event,
-        ivm::RegEvent::Write {
-            index: 7,
-            value: 0x5A,
-            ..
-        }
-    )));
-    assert!(!vm.register_log().iter().any(|event| matches!(
-        event,
-        ivm::RegEvent::Write {
-            index: 10,
-            value: 0xA110_05CA_11AB1E,
-            ..
-        }
-    )));
-    assert!(!vm.register_log().iter().any(|event| matches!(
-        event,
-        ivm::RegEvent::Write {
-            index: 8,
-            value: 0xA11C_E5EC_12E7,
-            ..
-        }
-    )));
-    assert!(vm.register_log().iter().any(|event| matches!(
-        event,
-        ivm::RegEvent::Write {
-            index: 9,
-            value: 0xC011_AB1E,
-            ..
-        }
-    )));
+    assert!(
+        !common::diagnostic_snapshot(&vm)
+            .register_events()
+            .any(|event| event.written && event.index == 7 && event.value == 0x5A)
+    );
+    assert!(
+        !common::diagnostic_snapshot(&vm)
+            .register_events()
+            .any(|event| event.written && event.index == 10 && event.value == 0xA110_05CA_11AB1E)
+    );
+    assert!(
+        !common::diagnostic_snapshot(&vm)
+            .register_events()
+            .any(|event| event.written && event.index == 8 && event.value == 0xA11C_E5EC_12E7)
+    );
+    assert!(
+        common::diagnostic_snapshot(&vm)
+            .register_events()
+            .any(|event| event.written && event.index == 9 && event.value == 0xC011_AB1E)
+    );
     assert_eq!(
         vm.step_log().len() as u64,
         vm.get_cycle_count(),
@@ -452,9 +473,9 @@ fn nested_untraced_vm_masks_the_outer_register_logger() {
 
     assert_eq!(vm.run(), Err(VMError::MissingHalt));
     assert!(
-        vm.register_log().is_empty(),
+        common::diagnostic_snapshot(&vm).register_event_count() == 0,
         "an untraced invocation must clear the preceding register log"
     );
-    assert!(vm.register_trace().is_empty());
+    assert!(common::diagnostic_snapshot(&vm).states().is_empty());
     assert!(vm.step_log().is_empty());
 }

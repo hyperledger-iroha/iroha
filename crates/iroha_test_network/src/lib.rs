@@ -1,12 +1,12 @@
 //! Puppeteer for `irohad`, to create test networks
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod config;
-mod consensus_message_control;
 mod dedicated_read;
 #[cfg(unix)]
 mod disposable_mint_finality_seed;
 #[cfg(unix)]
 mod disposable_runtime_provider_broker;
+mod private_settlement_route_control;
 #[cfg(unix)]
 pub use disposable_runtime_provider_broker::{
     DisposableBeaconProviderBinding, new_disposable_owner_private_root,
@@ -26,13 +26,6 @@ pub mod genesis_support;
 use color_eyre::eyre::{Context, Report, Result, eyre};
 pub use config::chain_id;
 pub use config::genesis_participant_committee_key_instructions;
-pub use consensus_message_control::{
-    ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
-    ConsensusMessageControlEvidence, ConsensusMessageControlHeld, ConsensusMessageControlKind,
-    ConsensusMessageControlRule, NativeAmxFaultAck, NativeAmxFaultCommand, NativeAmxFaultPhase,
-    PrivateSettlementRouteControlAck, PrivateSettlementRouteControlAction,
-    PrivateSettlementRouteControlCommand, PrivateSettlementRouteControlPhase,
-};
 use core::{fmt, future::Future, time::Duration};
 pub use dedicated_read::read_on_dedicated_thread;
 use fslock::LockFile;
@@ -107,6 +100,11 @@ use iroha_torii_shared::status::Status;
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value as JsonValue};
+pub use private_settlement_route_control::{
+    PrivateSettlementRouteControl, PrivateSettlementRouteControlAck,
+    PrivateSettlementRouteControlAction, PrivateSettlementRouteControlCommand,
+    PrivateSettlementRouteControlPhase,
+};
 use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher},
@@ -488,8 +486,8 @@ const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
 const DEFAULT_NETWORK_PARALLELISM_LIMIT: usize = 1;
 const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
 const TEST_CONCURRENCY_MIN_THREADS: usize = 4;
-const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
-const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
+const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha3:permissioned-sumeragi:v1";
+const NPOS_BLS_DOMAIN: &str = "bls-iroha3:npos-sumeragi:v1";
 #[cfg(test)]
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 #[cfg(test)]
@@ -836,7 +834,8 @@ const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
 const PROGRAM_IROHAD_TAIRA_ENV: &str = "TEST_NETWORK_BIN_IROHAD_TAIRA";
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
-const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL";
+const PROGRAM_IROHAD_PRIVATE_SETTLEMENT_ROUTES_ENV: &str =
+    "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES";
 const PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV: &str = "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS";
 const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
@@ -992,7 +991,7 @@ pub enum Program {
     Irohad,
     /// Feature-isolated daemon used only by explicit consensus fault-injection tests.
     #[doc(hidden)]
-    IrohadMessageControl,
+    IrohadPrivateSettlementRoutes,
     /// Feature-isolated daemon with exact-seat Parliament beacon and TLE share providers.
     #[doc(hidden)]
     IrohadParliamentSigners,
@@ -1047,7 +1046,7 @@ impl Program {
         match self {
             Self::Irohad => ReleasePrebuiltBinary::Irohad,
             Self::IrohadTaira => ReleasePrebuiltBinary::IrohadTaira,
-            Self::IrohadMessageControl => ReleasePrebuiltBinary::IrohadMessageControl,
+            Self::IrohadPrivateSettlementRoutes => ReleasePrebuiltBinary::Irohad,
             // The test signer is explicitly rejected whenever a release-prebuilt
             // contract is active. This value is therefore an unreachable sentinel.
             Self::IrohadParliamentSigners => ReleasePrebuiltBinary::Irohad,
@@ -1058,7 +1057,9 @@ impl Program {
     const fn release_prebuilt_allowed(self) -> bool {
         !matches!(
             self,
-            Self::IrohadParliamentSigners | Self::IrohadDisposableBroker
+            Self::IrohadParliamentSigners
+                | Self::IrohadDisposableBroker
+                | Self::IrohadPrivateSettlementRoutes
         )
     }
     fn spec(&self) -> ProgramSpec {
@@ -1083,20 +1084,20 @@ impl Program {
                 },
                 isolated_target_subdir: None,
             },
-            Self::IrohadMessageControl => ProgramSpec {
+            Self::IrohadPrivateSettlementRoutes => ProgramSpec {
                 name: "iroha3d",
-                env: PROGRAM_IROHAD_MESSAGE_CONTROL_ENV,
+                env: PROGRAM_IROHAD_PRIVATE_SETTLEMENT_ROUTES_ENV,
                 pkg: "irohad",
                 build_args: [
                     "--bin",
                     "iroha3d",
                     "--features",
-                    "test-network-message-control",
+                    "test-network-private-settlement-route-control",
                 ]
                 .into_iter()
                 .map(OsString::from)
                 .collect(),
-                isolated_target_subdir: Some("message-control"),
+                isolated_target_subdir: Some("private-settlement-route-control"),
             },
             Self::IrohadParliamentSigners => ProgramSpec {
                 name: "iroha3d",
@@ -1151,7 +1152,7 @@ impl Program {
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
 static IROHAD_TAIRA_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
-static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
+static IROHAD_PRIVATE_SETTLEMENT_ROUTES_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_PARLIAMENT_SIGNERS_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_DISPOSABLE_BROKER_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
@@ -1187,23 +1188,15 @@ struct BuildStamp {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ReleasePrebuiltBinary {
     Irohad,
-    IrohadMessageControl,
     Iroha,
     Kagami,
     IrohadTaira,
 }
 impl ReleasePrebuiltBinary {
-    const ALL: [Self; 5] = [
-        Self::Irohad,
-        Self::IrohadMessageControl,
-        Self::Iroha,
-        Self::Kagami,
-        Self::IrohadTaira,
-    ];
+    const ALL: [Self; 4] = [Self::Irohad, Self::Iroha, Self::Kagami, Self::IrohadTaira];
     const fn manifest_prefix(self) -> &'static str {
         match self {
             Self::Irohad => "irohad",
-            Self::IrohadMessageControl => "irohad_message_control",
             Self::Iroha => "iroha",
             Self::Kagami => "kagami",
             Self::IrohadTaira => "irohad_taira",
@@ -1212,7 +1205,6 @@ impl ReleasePrebuiltBinary {
     const fn relative_path(self) -> &'static str {
         match self {
             Self::Irohad => "release/iroha3d",
-            Self::IrohadMessageControl => "message-control/release/iroha3d",
             Self::Iroha => "release/iroha",
             Self::Kagami => "release/kagami",
             Self::IrohadTaira => "release/iroha3d_taira",
@@ -1229,7 +1221,7 @@ struct ReleaseBinaryAttestation {
 struct ReleaseProgramContract {
     configured_target_dir: PathBuf,
     canonical_target_dir: PathBuf,
-    binaries: [ReleaseBinaryAttestation; 5],
+    binaries: [ReleaseBinaryAttestation; 4],
 }
 impl ReleaseProgramContract {
     fn binary(&self, kind: ReleasePrebuiltBinary) -> &ReleaseBinaryAttestation {
@@ -1525,8 +1517,8 @@ fn parse_release_prebuilt_manifest(
     source_manifest_sha256: &str,
     configured_target: &Path,
     repo: &Path,
-) -> color_eyre::Result<[ReleaseBinaryAttestation; 5]> {
-    const KEYS: [&str; 29] = [
+) -> color_eyre::Result<[ReleaseBinaryAttestation; 4]> {
+    const KEYS: [&str; 25] = [
         "schema_version",
         "source_manifest_sha256",
         "cargo_lock_sha256",
@@ -1540,10 +1532,6 @@ fn parse_release_prebuilt_manifest(
         "irohad_sha256",
         "irohad_size_bytes",
         "irohad_mode_octal",
-        "irohad_message_control_relative_path",
-        "irohad_message_control_sha256",
-        "irohad_message_control_size_bytes",
-        "irohad_message_control_mode_octal",
         "iroha_relative_path",
         "iroha_sha256",
         "iroha_size_bytes",
@@ -1557,7 +1545,7 @@ fn parse_release_prebuilt_manifest(
         "irohad_taira_size_bytes",
         "irohad_taira_mode_octal",
     ];
-    const FIELD_COUNT: usize = 29;
+    const FIELD_COUNT: usize = 25;
     const BASE_FIELD_COUNT: usize = 9;
     let text = std::str::from_utf8(bytes)
         .wrap_err("release prebuilt manifest must contain valid UTF-8")?;
@@ -1691,7 +1679,7 @@ fn parse_release_prebuilt_manifest(
         });
     }
     binaries.try_into().map_err(|_| {
-        eyre!("release prebuilt manifest must contain exactly five executable attestations")
+        eyre!("release prebuilt manifest must contain exactly four executable attestations")
     })
 }
 fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleaseProgramContract>> {
@@ -2792,7 +2780,9 @@ impl Program {
         let cached = match self {
             Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
             Program::IrohadTaira => cached_binary_if_present(&IROHAD_TAIRA_BIN),
-            Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
+            Program::IrohadPrivateSettlementRoutes => {
+                cached_binary_if_present(&IROHAD_PRIVATE_SETTLEMENT_ROUTES_BIN)
+            }
             Program::IrohadParliamentSigners => {
                 cached_binary_if_present(&IROHAD_PARLIAMENT_SIGNERS_BIN)
             }
@@ -2884,8 +2874,8 @@ impl Program {
                     Program::Irohad => {
                         let _ = IROHAD_BIN.set(found.clone());
                     }
-                    Program::IrohadMessageControl => {
-                        let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
+                    Program::IrohadPrivateSettlementRoutes => {
+                        let _ = IROHAD_PRIVATE_SETTLEMENT_ROUTES_BIN.set(found.clone());
                     }
                     Program::IrohadTaira => {
                         let _ = IROHAD_TAIRA_BIN.set(found.clone());
@@ -2935,8 +2925,8 @@ impl Program {
                 Program::Irohad => {
                     let _ = IROHAD_BIN.set(found.clone());
                 }
-                Program::IrohadMessageControl => {
-                    let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
+                Program::IrohadPrivateSettlementRoutes => {
+                    let _ = IROHAD_PRIVATE_SETTLEMENT_ROUTES_BIN.set(found.clone());
                 }
                 Program::IrohadTaira => {
                     let _ = IROHAD_TAIRA_BIN.set(found.clone());
@@ -4217,7 +4207,6 @@ impl Network {
             ["torii", "preauth_allow_cidrs"],
             vec!["127.0.0.1/32", "::1/128"],
         );
-        let mut effective_validator_roster_len = None;
         if self.auto_populate_trusted_peer_pops {
             let mut trusted_peers_pop: Vec<Value> = Vec::new();
             let mut seen = HashSet::new();
@@ -4249,75 +4238,11 @@ impl Network {
                     "additional validator roster length {validator_roster_len} exceeds the pre-reserved maximum validator capacity {}; declare the future roster with NetworkBuilder::with_max_validator_capacity before starting incumbents",
                     self.max_validator_capacity
                 );
-                effective_validator_roster_len = Some(validator_roster_len);
             }
         }
-        let mut generated_base_layer = self
-            .config_layers
-            .first()
-            .cloned()
-            .expect("a built test network retains its generated base config layer");
-        if let Some(validator_roster_len) = effective_validator_roster_len {
-            let (authenticated_non_validator_sources, body_source_bytes, configured_body_bytes) = {
-                let generated_queue_capacity = |field: &str, fallback: usize| {
-                    get_nested_value(&generated_base_layer, &["sumeragi", "queues", field])
-                        .and_then(Value::as_integer)
-                        .and_then(|value| usize::try_from(value).ok())
-                        .filter(|value| *value > 0)
-                        .unwrap_or(fallback)
-                };
-                (
-                    generated_queue_capacity(
-                        "authenticated_non_validator_sources",
-                        iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-                            .get(),
-                    ),
-                    generated_queue_capacity(
-                        "body_source_bytes",
-                        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
-                    ),
-                    generated_queue_capacity(
-                        "body_bytes",
-                        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get(),
-                    ),
-                )
-            };
-            let required_body_bytes = iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                validator_roster_len,
-                authenticated_non_validator_sources,
-                body_source_bytes,
-            )
-            .unwrap_or_else(|| {
-                panic!(
-                    "additional test-network validator roster overflows Sumeragi body-byte capacity geometry"
-                )
-            });
-            generated_base_layer = generated_base_layer.write(
-                ["sumeragi", "queues", "body_bytes"],
-                i64::try_from(required_body_bytes.max(configured_body_bytes)).expect(
-                    "additional test-network validator body-byte capacity fits TOML integer limits",
-                ),
-            );
-        }
-        let mut generated_base_layer = Some(generated_base_layer);
         Some(Cow::Owned(base_layer))
             .into_iter()
-            .chain(
-                self.config_layers
-                    .iter()
-                    .enumerate()
-                    .map(move |(index, layer)| {
-                        if index == 0 {
-                            Cow::Owned(
-                                generated_base_layer
-                                    .take()
-                                    .expect("generated base layer is yielded exactly once"),
-                            )
-                        } else {
-                            Cow::Borrowed(layer)
-                        }
-                    }),
-            )
+            .chain(self.config_layers.iter().map(Cow::Borrowed))
     }
     /// Network genesis block.
     ///
@@ -5955,23 +5880,15 @@ pub struct NetworkBuilder {
     auto_populate_trusted_peer_pops: bool,
     genesis_committee_keys_for_global_peers: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
-    consensus_message_control: bool,
+    private_settlement_route_control: bool,
     parliament_test_signers: Option<ParliamentTestSignerSelection>,
     #[cfg(unix)]
     disposable_mint_finality_custody: bool,
-    initial_consensus_message_control: Option<InitialConsensusMessageControl>,
     topology_genesis_isi: Vec<Arc<TopologyGenesisIsi>>,
 }
 /// Post-topology genesis instructions derived from the signed voting topology (peer ids and
 /// proofs of possession, in topology order).
 type TopologyGenesisIsi = dyn Fn(&[GenesisTopologyEntry]) -> Vec<InstructionBox> + Send + Sync;
-type InitialConsensusMessageControlFactory =
-    dyn Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync;
-#[derive(Clone)]
-struct InitialConsensusMessageControl {
-    queue_capacity: usize,
-    factory: Arc<InitialConsensusMessageControlFactory>,
-}
 fn merge_tables(dst: &mut Table, src: &Table) {
     for (key, value) in src {
         match value {
@@ -5993,112 +5910,6 @@ fn merge_tables(dst: &mut Table, src: &Table) {
         }
     }
 }
-fn generated_sumeragi_capacity_layer(
-    validator_count: usize,
-    minimum_authenticated_non_validator_sources: usize,
-    caller_layers: &[Table],
-) -> Result<Table> {
-    let commands = iroha_config::parameters::defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get();
-    let effective_positive_capacity = |field: &str, fallback: usize| {
-        caller_layers
-            .iter()
-            .rev()
-            .find_map(|layer| get_nested_value(layer, &["sumeragi", "queues", field]))
-            .map_or(fallback, |value| {
-                value
-                    .as_integer()
-                    .and_then(|value| usize::try_from(value).ok())
-                    .filter(|value| *value > 0)
-                    .unwrap_or(fallback)
-            })
-    };
-    let authenticated_non_validator_sources = effective_positive_capacity(
-        "authenticated_non_validator_sources",
-        iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get(),
-    )
-    .max(minimum_authenticated_non_validator_sources);
-    let required_bodies =
-        iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
-            validator_count,
-            authenticated_non_validator_sources,
-        )
-        .ok_or_else(|| {
-            eyre!(
-                "generated test-network Sumeragi body-message capacity overflowed for {validator_count} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
-            )
-        })?;
-    let bodies = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY
-        .get()
-        .max(required_bodies);
-    let body_source_bytes = effective_positive_capacity(
-        "body_source_bytes",
-        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
-    );
-    let max_total_connections =
-        iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS;
-    let effect_work_capacity = (commands
-        / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-        .max(1);
-    iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
-        validator_count,
-        effect_work_capacity,
-        bodies,
-        authenticated_non_validator_sources,
-    )
-    .wrap_err_with(|| {
-        format!(
-            "generated test-network Sumeragi lifecycle geometry is inadmissible for {validator_count} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
-        )
-    })?;
-    let shared_ownership_capacity =
-        iroha_config::parameters::actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-            effect_work_capacity,
-            bodies,
-        )
-        .wrap_err("generated test-network exact-output shared capacity overflowed")?;
-    iroha_config::parameters::actual::validate_sumeragi_v2_exact_output_geometry(
-        shared_ownership_capacity,
-        max_total_connections,
-    )
-    .wrap_err_with(|| {
-        format!(
-            "generated test-network exact-output geometry is inadmissible for {max_total_connections} reply sources"
-        )
-    })?;
-    let body_bytes =
-        iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-            validator_count,
-            authenticated_non_validator_sources,
-            body_source_bytes,
-        )
-        .ok_or_else(|| {
-            eyre!(
-                "generated test-network Sumeragi body-byte geometry overflowed for {validator_count} validators"
-            )
-        })?;
-    let commands =
-        i64::try_from(commands).wrap_err("Sumeragi command queue exceeds TOML limits")?;
-    let bodies = i64::try_from(bodies).wrap_err("Sumeragi body queue exceeds TOML limits")?;
-    let authenticated_non_validator_sources = i64::try_from(authenticated_non_validator_sources)
-        .wrap_err("Sumeragi authenticated source count exceeds TOML limits")?;
-    let body_source_bytes = i64::try_from(body_source_bytes)
-        .wrap_err("Sumeragi source byte cap exceeds TOML limits")?;
-    let body_bytes =
-        i64::try_from(body_bytes).wrap_err("Sumeragi aggregate body bytes exceed TOML limits")?;
-    Ok(Table::new()
-        .write(["sumeragi", "queues", "commands"], commands)
-        .write(["sumeragi", "queues", "bodies"], bodies)
-        .write(
-            ["sumeragi", "queues", "authenticated_non_validator_sources"],
-            authenticated_non_validator_sources,
-        )
-        .write(
-            ["sumeragi", "queues", "body_source_bytes"],
-            body_source_bytes,
-        )
-        .write(["sumeragi", "queues", "body_bytes"], body_bytes))
-}
 fn effective_network_reply_source_capacity(
     network: &iroha_config::parameters::actual::Network,
 ) -> usize {
@@ -6113,7 +5924,6 @@ fn effective_network_reply_source_capacity(
 fn validate_planned_validator_capacity(
     config: &iroha_config::parameters::actual::Root,
     max_validator_capacity: usize,
-    minimum_authenticated_non_validator_sources: usize,
 ) -> Result<()> {
     let bootstrap_validator_count = config.common.trusted_peers.value().validator_roster_len();
     if max_validator_capacity < bootstrap_validator_count {
@@ -6124,47 +5934,6 @@ fn validate_planned_validator_capacity(
     if max_validator_capacity > MAX_VALIDATORS_PER_HEIGHT {
         return Err(eyre!(
             "reserved maximum validator capacity {max_validator_capacity} exceeds the protocol ceiling {MAX_VALIDATORS_PER_HEIGHT}"
-        ));
-    }
-    let queues = &config.sumeragi.queues;
-    let authenticated_non_validator_sources = queues.authenticated_non_validator_sources.get();
-    if authenticated_non_validator_sources < minimum_authenticated_non_validator_sources {
-        return Err(eyre!(
-            "final caller layers leave sumeragi.queues.authenticated_non_validator_sources ({authenticated_non_validator_sources}) below the planned non-global participant minimum {minimum_authenticated_non_validator_sources}"
-        ));
-    }
-    let required_bodies =
-        iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
-            max_validator_capacity,
-            authenticated_non_validator_sources,
-        )
-        .ok_or_else(|| {
-            eyre!(
-                "planned test-network body-message geometry overflowed for {max_validator_capacity} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
-            )
-        })?;
-    if queues.bodies.get() < required_bodies {
-        return Err(eyre!(
-            "final caller layers leave sumeragi.queues.bodies ({}) below the planned-roster message minimum {required_bodies} for {max_validator_capacity} validators and {authenticated_non_validator_sources} authenticated non-validator sources",
-            queues.bodies
-        ));
-    }
-    let body_source_bytes = queues.body_source_bytes.get();
-    let required_body_bytes =
-        iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-            max_validator_capacity,
-            authenticated_non_validator_sources,
-            body_source_bytes,
-        )
-        .ok_or_else(|| {
-            eyre!(
-                "planned test-network body-byte geometry overflowed for {max_validator_capacity} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
-            )
-        })?;
-    if queues.body_bytes.get() < required_body_bytes {
-        return Err(eyre!(
-            "final caller layers leave sumeragi.queues.body_bytes ({}) below the planned-roster minimum {required_body_bytes} for {max_validator_capacity} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source",
-            queues.body_bytes
         ));
     }
     let reply_source_capacity = effective_network_reply_source_capacity(&config.network);
@@ -6188,21 +5957,6 @@ fn validate_planned_validator_capacity(
             "final caller layers leave the effective network connection capacity {reply_source_capacity} below the planned full-fanout minimum {required_full_fanout}: {current_remote_trusted} current remote trusted peers plus {additional_validators} additional validators for a {max_validator_capacity}-validator reservation"
         ));
     }
-    let effect_work_capacity = (queues.commands.get()
-        / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-        .max(1);
-    iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
-        max_validator_capacity,
-        effect_work_capacity,
-        queues.bodies.get(),
-        authenticated_non_validator_sources,
-    )
-    .wrap_err_with(|| {
-        format!(
-            "planned test-network lifecycle geometry is inadmissible for {max_validator_capacity} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {} certified-request slots",
-            queues.bodies
-        )
-    })?;
     Ok(())
 }
 #[cfg(test)]
@@ -7111,11 +6865,10 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake: Some(
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
-            consensus_message_control: false,
+            private_settlement_route_control: false,
             parliament_test_signers: None,
             #[cfg(unix)]
             disposable_mint_finality_custody: false,
-            initial_consensus_message_control: None,
             topology_genesis_isi: Vec::new(),
         };
         let mut default_layer = Table::new();
@@ -7276,14 +7029,13 @@ impl NetworkBuilder {
         self.observer_slow_reader_relays = Some(config);
         Ok(self)
     }
-    /// Use a separately built, feature-isolated daemon with receiver-local
-    /// authenticated Sumeragi v2 message control for adversarial network tests.
-    pub fn with_consensus_message_control(mut self) -> Self {
+    /// Use a dedicated test daemon with authenticated private-settlement HTTP route control.
+    pub fn with_private_settlement_route_control(mut self) -> Self {
         assert!(
             self.parliament_test_signers.is_none(),
             "the feature-isolated Parliament signer has a separate daemon binary"
         );
-        self.consensus_message_control = true;
+        self.private_settlement_route_control = true;
         self
     }
     /// Use a separately built, feature-isolated daemon whose runtime dependency
@@ -7293,12 +7045,12 @@ impl NetworkBuilder {
     ///
     /// # Panics
     ///
-    /// Panics when message control is already selected or the builder does not
+    /// Panics when private-settlement route control is already selected or the builder does not
     /// name the fixture's exact four-validator roster.
     pub fn with_parliament_test_signers(mut self) -> Self {
         assert!(
-            !self.consensus_message_control,
-            "the Parliament signer and message-control daemons are separate test binaries"
+            !self.private_settlement_route_control,
+            "the Parliament signer and private-settlement-route-control daemons are separate test binaries"
         );
         assert_eq!(
             self.n_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
@@ -7317,7 +7069,7 @@ impl NetworkBuilder {
     ///
     /// # Panics
     ///
-    /// Panics before network construction when message control was selected or
+    /// Panics before network construction when private-settlement route control was selected or
     /// when the builder does not name exactly four validators or `modes` does
     /// not contain exactly one entry for each validator.
     pub fn with_parliament_beacon_signer_modes(
@@ -7325,8 +7077,8 @@ impl NetworkBuilder {
         modes: impl IntoIterator<Item = ParliamentBeaconSignerMode>,
     ) -> Self {
         assert!(
-            !self.consensus_message_control,
-            "the Parliament signer and message-control daemons are separate test binaries"
+            !self.private_settlement_route_control,
+            "the Parliament signer and private-settlement-route-control daemons are separate test binaries"
         );
         assert_eq!(
             self.n_peers, PARLIAMENT_TEST_SIGNER_VALIDATOR_COUNT,
@@ -7343,31 +7095,6 @@ impl NetworkBuilder {
             "Parliament beacon signer modes must name every validator exactly once",
         );
         self.parliament_test_signers = Some(ParliamentTestSignerSelection::PerPeer(modes));
-        self
-    }
-    /// Stage receiver-local authenticated consensus rules before controlled
-    /// daemon processes start.
-    ///
-    /// The factory receives the receiver index and the stable ordered peer-id
-    /// roster. Its result is installed as that receiver's revision-1 command,
-    /// which the feature-isolated daemon must acknowledge during startup.
-    pub fn with_initial_consensus_message_control_rules<F>(
-        mut self,
-        queue_capacity: usize,
-        factory: F,
-    ) -> Self
-    where
-        F: Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync + 'static,
-    {
-        assert!(
-            self.parliament_test_signers.is_none(),
-            "the feature-isolated Parliament signer has a separate daemon binary"
-        );
-        self.consensus_message_control = true;
-        self.initial_consensus_message_control = Some(InitialConsensusMessageControl {
-            queue_capacity,
-            factory: Arc::new(factory),
-        });
         self
     }
     /// Ensure the network has the smallest revision-4 committee with at least `min_peers` peers.
@@ -7829,11 +7556,10 @@ impl NetworkBuilder {
             auto_populate_trusted_peer_pops,
             genesis_committee_keys_for_global_peers,
             npos_genesis_bootstrap_stake,
-            consensus_message_control,
+            private_settlement_route_control,
             parliament_test_signers,
             #[cfg(unix)]
             disposable_mint_finality_custody,
-            initial_consensus_message_control,
             topology_genesis_isi,
         } = self;
         #[cfg(unix)]
@@ -7891,9 +7617,6 @@ impl NetworkBuilder {
             .expect("validated committee-validator participant count cannot overflow")
             .checked_add(observer_count)
             .expect("validated P2P participant count cannot overflow");
-        let authenticated_non_validator_source_reservation = committee_validator_count
-            .checked_add(observer_count)
-            .expect("validated non-global participant count cannot overflow");
         // A builder is a reusable network recipe. Allocate the environment only
         // when the recipe is built so retrying a cloned recipe cannot inherit a
         // previous attempt's peer directories, Kura state, logs, or ports.
@@ -7941,15 +7664,15 @@ impl NetworkBuilder {
             .as_ref()
             .map(|selection| selection.resolve(n_peers));
         let validator_program = match (
-            consensus_message_control,
+            private_settlement_route_control,
             parliament_beacon_signer_modes.is_some(),
         ) {
             (false, false) => Program::Irohad,
-            (true, false) => Program::IrohadMessageControl,
+            (true, false) => Program::IrohadPrivateSettlementRoutes,
             (false, true) => Program::IrohadParliamentSigners,
             (true, true) => unreachable!("builder methods reject combined test daemons"),
         };
-        let mut peers: Vec<_> = (0..n_peers)
+        let peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
@@ -7962,7 +7685,7 @@ impl NetworkBuilder {
                     .build_with_program(&env, validator_program)
             })
             .collect();
-        let mut committee_validators: Vec<_> = (0..committee_validator_count)
+        let committee_validators: Vec<_> = (0..committee_validator_count)
             .map(|i| {
                 let seed = seed
                     .as_ref()
@@ -7972,15 +7695,15 @@ impl NetworkBuilder {
                     .build_with_program(&env, validator_program)
             })
             .collect();
-        let mut observers: Vec<_> = (0..observer_count)
+        let observers: Vec<_> = (0..observer_count)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-observer-{i}"));
                 NetworkPeerBuilder::new()
                     .with_seed(seed.as_ref().map(|x| x.as_bytes()))
                     .build_with_program(
                         &env,
-                        if consensus_message_control {
-                            Program::IrohadMessageControl
+                        if private_settlement_route_control {
+                            Program::IrohadPrivateSettlementRoutes
                         } else {
                             Program::Irohad
                         },
@@ -8058,47 +7781,6 @@ impl NetworkBuilder {
                 &peer_topology,
             ));
         }
-        if let Some(initial) = initial_consensus_message_control {
-            for (receiver_index, peer) in peers.iter_mut().enumerate() {
-                let rules = (initial.factory)(receiver_index, &peer_topology);
-                let control = peer
-                    .consensus_message_control
-                    .as_mut()
-                    .and_then(Arc::get_mut)
-                    .expect("new controlled peer must uniquely own its controller");
-                control
-                    .stage_initial_rules(&rules, initial.queue_capacity)
-                    .expect("stage valid initial consensus message-control rules");
-            }
-            for committee_validator in &mut committee_validators {
-                let control = committee_validator
-                    .consensus_message_control
-                    .as_mut()
-                    .and_then(Arc::get_mut)
-                    .expect("new controlled committee validator must uniquely own its controller");
-                control
-                    .stage_initial_rules(&[], initial.queue_capacity)
-                    .expect("stage empty committee-validator message-control rules");
-            }
-            for observer in &mut observers {
-                let control = observer
-                    .consensus_message_control
-                    .as_mut()
-                    .and_then(Arc::get_mut)
-                    .expect("new controlled observer must uniquely own its controller");
-                control
-                    .stage_initial_rules(&[], initial.queue_capacity)
-                    .expect("stage empty observer message-control rules");
-            }
-        }
-        let generated_sumeragi_layer = generated_sumeragi_capacity_layer(
-            ingress_validator_capacity,
-            authenticated_non_validator_source_reservation,
-            &config_layers,
-        )
-        .unwrap_or_else(|error| {
-            panic!("failed to derive test-network Sumeragi capacity layer: {error:#}")
-        });
         let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 3);
         config_layers_for_parse.push(
             Table::new()
@@ -8115,7 +7797,6 @@ impl NetworkBuilder {
             &observer_advertised_p2p_addresses,
             auto_populate_trusted_peer_pops,
         ));
-        config_layers_for_parse.push(generated_sumeragi_layer.clone());
         config_layers_for_parse.extend(config_layers.iter().cloned());
         let pre_genesis_peer = peers
             .first()
@@ -8435,7 +8116,6 @@ impl NetworkBuilder {
             .expect("bounded observer participant count fits in i64");
         let mut base_layer =
             config::base_iroha_config().write("chain", consensus_chain_id.to_string());
-        merge_tables(&mut base_layer, &generated_sumeragi_layer);
         base_layer = base_layer
             .write(["network", "block_gossip_period_ms"], gossip_ms)
             // Fan-out gossip to all peers so block sync converges quickly in multi-peer
@@ -8475,7 +8155,6 @@ impl NetworkBuilder {
                 .as_ref()
                 .expect("final test-network config was just resolved"),
             ingress_validator_capacity,
-            authenticated_non_validator_source_reservation,
         )
         .unwrap_or_else(|error| {
             panic!(
@@ -8982,7 +8661,7 @@ pub struct NetworkPeer {
     start_context: Arc<StdMutex<Option<PeerStartContext>>>,
     program: Program,
     parliament_beacon_signer_mode: Option<ParliamentBeaconSignerMode>,
-    consensus_message_control: Option<Arc<ConsensusMessageControl>>,
+    private_settlement_route_control: Option<Arc<PrivateSettlementRouteControl>>,
     #[cfg(unix)]
     disposable_mint_finality_seed:
         Arc<StdMutex<Option<Arc<disposable_mint_finality_seed::DisposableMintFinalitySeed>>>>,
@@ -9045,8 +8724,8 @@ impl NetworkPeer {
         NetworkPeerBuilder::new()
     }
     /// Return this peer's feature-isolated consensus controller, when requested by the builder.
-    pub fn consensus_message_control(&self) -> Option<&ConsensusMessageControl> {
-        self.consensus_message_control.as_deref()
+    pub fn private_settlement_route_control(&self) -> Option<&PrivateSettlementRouteControl> {
+        self.private_settlement_route_control.as_deref()
     }
 
     fn append_parliament_beacon_signer_mode_arg(&self, command: &mut tokio::process::Command) {
@@ -9191,9 +8870,12 @@ impl NetworkPeer {
                 cmd.arg("--sumeragi-assert-fresh-key");
             }
             cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
-            cmd.env_remove(consensus_message_control::CONTROL_DIR_ENV);
-            if let Some(control) = &self.consensus_message_control {
-                cmd.env(consensus_message_control::CONTROL_DIR_ENV, control.root());
+            cmd.env_remove(private_settlement_route_control::CONTROL_DIR_ENV);
+            if let Some(control) = &self.private_settlement_route_control {
+                cmd.env(
+                    private_settlement_route_control::CONTROL_DIR_ENV,
+                    control.root(),
+                );
             }
             if use_sora_profile {
                 cmd.arg("--sora");
@@ -10652,12 +10334,15 @@ impl NetworkPeerBuilder {
         let port_api = AllocatedPort::new();
         let dir = env.dir.join(&mnemonic);
         std::fs::create_dir_all(&dir).unwrap();
-        let consensus_message_control = matches!(program, Program::IrohadMessageControl)
-            .then(|| {
-                ConsensusMessageControl::create(dir.join("consensus-message-control"))
-                    .expect("create private consensus message-control directory")
-            })
-            .map(Arc::new);
+        let private_settlement_route_control =
+            matches!(program, Program::IrohadPrivateSettlementRoutes)
+                .then(|| {
+                    PrivateSettlementRouteControl::create(
+                        dir.join("consensus-private-settlement-route-control"),
+                    )
+                    .expect("create private consensus private-settlement-route-control directory")
+                })
+                .map(Arc::new);
         println!("TEST_NETWORK peer dir {} -> {}", mnemonic, dir.display());
         let (events, _rx) = broadcast::channel(32);
         let (block_height, _rx) = watch::channel(None);
@@ -10690,7 +10375,7 @@ impl NetworkPeerBuilder {
             start_context: Arc::new(StdMutex::new(None)),
             program,
             parliament_beacon_signer_mode,
-            consensus_message_control,
+            private_settlement_route_control,
             #[cfg(unix)]
             disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
             #[cfg(unix)]
@@ -11007,9 +10692,8 @@ impl BlockHeight {
     }
 }
 fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> Option<BlockHeight> {
-    let hashes_path = iroha_core::kura::Kura::canonical_storage_paths(storage_dir)
-        .0
-        .join("blocks.hashes");
+    let hashes_path =
+        iroha_core::kura::Kura::canonical_storage_path(storage_dir).join("blocks.hashes");
     let metadata = fs::metadata(hashes_path).ok()?;
     let hash_bytes = u64::try_from(CryptoHash::LENGTH).ok()?;
     if !metadata.is_file() || metadata.len() % hash_bytes != 0 {
@@ -11579,7 +11263,7 @@ mod tests {
             start_context: Arc::new(StdMutex::new(None)),
             program: Program::Irohad,
             parliament_beacon_signer_mode: None,
-            consensus_message_control: None,
+            private_settlement_route_control: None,
             #[cfg(unix)]
             disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
             #[cfg(unix)]
@@ -11655,7 +11339,7 @@ mod tests {
             start_context: Arc::new(StdMutex::new(None)),
             program: Program::Irohad,
             parliament_beacon_signer_mode: None,
-            consensus_message_control: None,
+            private_settlement_route_control: None,
             #[cfg(unix)]
             disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
             #[cfg(unix)]
@@ -12387,7 +12071,7 @@ mod tests {
         fs::create_dir_all(&alias).unwrap();
         fs::write(alias.join("blocks.hashes"), vec![0u8; 32 * 20]).unwrap();
         assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
-        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        let canonical = iroha_core::kura::Kura::canonical_storage_path(directory.path());
         fs::create_dir_all(&canonical).unwrap();
         fs::write(canonical.join("blocks.hashes"), vec![0u8; 32 * 2]).unwrap();
         assert_eq!(
@@ -12401,7 +12085,7 @@ mod tests {
     #[test]
     fn detect_block_height_rejects_partial_canonical_hash_journal() {
         let directory = tempdir().expect("storage fixture");
-        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        let canonical = iroha_core::kura::Kura::canonical_storage_path(directory.path());
         fs::create_dir_all(&canonical).unwrap();
         fs::write(canonical.join("blocks.hashes"), vec![0u8; 33]).unwrap();
         assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
@@ -13055,23 +12739,10 @@ mod tests {
             .map(Cow::into_owned)
             .collect::<Vec<_>>();
         let actual = resolve_final_actual_config(&network.peers()[0], &config_layers);
-        let authenticated_non_validator_sources = actual
-            .sumeragi
-            .queues
-            .authenticated_non_validator_sources
-            .get();
-        let body_source_bytes = actual.sumeragi.queues.body_source_bytes.get();
         assert_eq!(
-            actual.sumeragi.queues.body_bytes.get(),
-            (4 + authenticated_non_validator_sources) * body_source_bytes,
-            "an explicit signed four-validator ceiling must retain four validator source partitions"
+            actual.common.trusted_peers.value().validator_roster_len(),
+            4
         );
-        actual
-            .sumeragi
-            .v2_config(Duration::from_millis(666), ConsensusMode::Npos)
-            .expect("explicit four-validator NPoS config is valid")
-            .validate_ingress_roster_capacity(4)
-            .expect("explicit four-validator NPoS ingress geometry is sufficient");
         let genesis = network.genesis();
         let profile = network.consensus_bootstrap_profile();
         let mut parameter_state = consensus_parameters_from_genesis(&genesis);
@@ -13330,37 +13001,10 @@ mod tests {
     }
     #[test]
     fn max_validator_capacity_reserves_four_to_five_without_expanding_bootstrap_roster() {
-        let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get()
-            + 1;
-        let body_source_bytes =
-            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get() + 1024;
-        let required_body_bytes =
-            iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                5,
-                authenticated_non_validator_sources,
-                body_source_bytes,
-            )
-            .expect("five-validator fixture byte geometry is representable");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
-                .with_max_validator_capacity(5)
-                .with_base_seed(stringify!(
-                    max_validator_capacity_reserves_four_to_five_without_expanding_bootstrap_roster
-                ))
-                .with_config_layer(move |layer| {
-                    layer
-                        .write(
-                            ["sumeragi", "queues", "authenticated_non_validator_sources"],
-                            i64::try_from(authenticated_non_validator_sources)
-                                .expect("fixture capacity fits TOML"),
-                        )
-                        .write(
-                            ["sumeragi", "queues", "body_source_bytes"],
-                            i64::try_from(body_source_bytes).expect("fixture capacity fits TOML"),
-                        );
-                }),
+                .with_max_validator_capacity(5),
         );
         let bootstrap_layers = network
             .config_layers()
@@ -13376,11 +13020,6 @@ mod tests {
             4,
             "capacity reservation must not manufacture bootstrap PoPs"
         );
-        assert_eq!(
-            bootstrap.sumeragi.queues.body_bytes.get(),
-            required_body_bytes,
-            "incumbents must reserve the future validator source partition before startup"
-        );
 
         let extra_peer = NetworkPeerBuilder::new().build(network.env());
         let joining_layers = network
@@ -13392,35 +13031,14 @@ mod tests {
             joining.common.trusted_peers.value().validator_roster_len(),
             5
         );
-        assert_eq!(
-            joining.sumeragi.queues.body_bytes.get(),
-            required_body_bytes
-        );
     }
     #[test]
     fn config_layers_with_additional_peers_include_pop() {
-        let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get();
-        let body_source_bytes =
-            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-        let required_body_bytes =
-            iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                5,
-                authenticated_non_validator_sources,
-                body_source_bytes,
-            )
-            .expect("five-validator fixture byte geometry is representable");
-        let authored_body_bytes = required_body_bytes + body_source_bytes;
-        let network = NetworkBuilder::new()
-            .with_peers(4)
-            .with_max_validator_capacity(5)
-            .with_config_layer(move |layer| {
-                layer.write(
-                    ["sumeragi", "queues", "body_bytes"],
-                    i64::try_from(authored_body_bytes).expect("fixture capacity fits TOML"),
-                );
-            })
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_max_validator_capacity(5),
+        );
         let extra_peer = NetworkPeerBuilder::new().build(network.env());
         let layers = network
             .config_layers_with_additional_peers([&extra_peer])
@@ -13445,194 +13063,11 @@ mod tests {
             }),
             "additional peer PoP should be threaded into trusted_peers_pop"
         );
-        let generated_body_bytes = layers
-            .iter()
-            .skip(1)
-            .find_map(|layer| {
-                get_nested_value(layer, &["sumeragi", "queues", "body_bytes"])
-                    .and_then(Value::as_integer)
-            })
-            .expect("generated base Sumeragi byte capacity");
-        assert_eq!(
-            generated_body_bytes,
-            i64::try_from(required_body_bytes).expect("fixture capacity fits TOML"),
-            "the generated base layer must scale to the additional PoP roster"
-        );
         let actual = resolve_final_actual_config(&extra_peer, &layers);
         assert_eq!(
             actual.common.trusted_peers.value().validator_roster_len(),
             5
         );
-        assert_eq!(
-            actual.sumeragi.queues.body_bytes.get(),
-            authored_body_bytes,
-            "the later caller layer must retain precedence over generated scaling"
-        );
-    }
-    #[test]
-    fn max_validator_capacity_fails_closed_on_later_underbudget_override() {
-        let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get();
-        let body_source_bytes =
-            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-        let bootstrap_body_bytes =
-            iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                4,
-                authenticated_non_validator_sources,
-                body_source_bytes,
-            )
-            .expect("four-validator fixture byte geometry is representable");
-        let panic = std::panic::catch_unwind(|| {
-            build_with_isolated_permit(
-                NetworkBuilder::new()
-                    .with_peers(4)
-                    .with_max_validator_capacity(5)
-                    .with_base_seed(stringify!(
-                        max_validator_capacity_fails_closed_on_later_underbudget_override
-                    ))
-                    .with_config_layer(move |layer| {
-                        layer.write(
-                            ["sumeragi", "queues", "body_bytes"],
-                            i64::try_from(bootstrap_body_bytes)
-                                .expect("fixture capacity fits TOML"),
-                        );
-                    }),
-            );
-        })
-        .expect_err("later caller layer must not erase the declared reservation");
-        let panic_message = panic
-            .downcast_ref::<&str>()
-            .map(std::string::ToString::to_string)
-            .or_else(|| panic.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "<missing panic message>".to_owned());
-        assert!(
-            panic_message.contains("authenticated/planned maximum validator capacity")
-                && panic_message.contains("planned-roster minimum"),
-            "planned capacity failure should be localized, got: {panic_message}"
-        );
-    }
-    #[test]
-    fn npos_signed_ceiling_fails_closed_on_bootstrap_only_body_bytes() {
-        let worker = std::thread::Builder::new()
-            .name("npos-signed-ceiling-underbudget-regression".to_owned())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-                    .get();
-                let body_source_bytes =
-                    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-                let bootstrap_body_bytes = iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                    4,
-                    authenticated_non_validator_sources,
-                    body_source_bytes,
-                )
-                .expect("four-validator fixture byte geometry is representable");
-                let panic = std::panic::catch_unwind(|| {
-                    build_with_isolated_permit(
-                        NetworkBuilder::new()
-                            .with_peers(4)
-                            .with_npos_consensus()
-                            .with_base_seed(stringify!(
-                                npos_signed_ceiling_fails_closed_on_bootstrap_only_body_bytes
-                            ))
-                            .with_config_layer(move |layer| {
-                                layer.write(
-                                    ["sumeragi", "queues", "body_bytes"],
-                                    i64::try_from(bootstrap_body_bytes)
-                                        .expect("fixture capacity fits TOML"),
-                                );
-                            }),
-                    );
-                })
-                .expect_err("bootstrap-only bytes must not erase the signed NPoS ceiling");
-                let panic_message = panic
-                    .downcast_ref::<&str>()
-                    .map(std::string::ToString::to_string)
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "<missing panic message>".to_owned());
-                assert!(
-                    panic_message.contains("authenticated/planned maximum validator capacity")
-                        && panic_message.contains("planned-roster minimum")
-                        && panic_message.contains("31 validators"),
-                    "signed NPoS capacity failure should be localized, got: {panic_message}"
-                );
-            })
-            .expect("spawn signed NPoS ceiling underbudget regression");
-        if let Err(panic) = worker.join() {
-            std::panic::resume_unwind(panic);
-        }
-    }
-    #[test]
-    fn max_validator_capacity_checks_planned_body_message_boundary() {
-        let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get();
-        let bootstrap_bodies =
-            iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
-                4,
-                authenticated_non_validator_sources,
-            )
-            .expect("four-validator fixture message geometry is representable");
-        let planned_bodies =
-            iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
-                5,
-                authenticated_non_validator_sources,
-            )
-            .expect("five-validator fixture message geometry is representable");
-        assert_eq!((bootstrap_bodies, planned_bodies), (28, 33));
-
-        let panic = std::panic::catch_unwind(|| {
-            build_with_isolated_permit(
-                NetworkBuilder::new()
-                    .with_peers(4)
-                    .with_max_validator_capacity(5)
-                    .with_base_seed(stringify!(
-                        max_validator_capacity_rejects_bootstrap_only_body_message_capacity
-                    ))
-                    .with_config_layer(move |layer| {
-                        layer
-                            .write(
-                                ["sumeragi", "queues", "bodies"],
-                                i64::try_from(bootstrap_bodies)
-                                    .expect("fixture capacity fits TOML"),
-                            )
-                            .write(["network", "max_total_connections"], 4i64);
-                    }),
-            );
-        })
-        .expect_err("bootstrap-only message capacity must not erase the planned reservation");
-        let panic_message = panic
-            .downcast_ref::<&str>()
-            .map(std::string::ToString::to_string)
-            .or_else(|| panic.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "<missing panic message>".to_owned());
-        assert!(
-            panic_message.contains("sumeragi.queues.bodies (28)")
-                && panic_message.contains("planned-roster message minimum 33"),
-            "planned message-capacity failure should be localized, got: {panic_message}"
-        );
-
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_peers(4)
-                .with_max_validator_capacity(5)
-                .with_base_seed(stringify!(
-                    max_validator_capacity_accepts_exact_planned_body_message_capacity
-                ))
-                .with_config_layer(move |layer| {
-                    layer
-                        .write(
-                            ["sumeragi", "queues", "bodies"],
-                            i64::try_from(planned_bodies).expect("fixture capacity fits TOML"),
-                        )
-                        .write(["network", "max_total_connections"], 4i64);
-                }),
-        );
-        let layers = network
-            .config_layers()
-            .map(Cow::into_owned)
-            .collect::<Vec<_>>();
-        let actual = resolve_final_actual_config(&network.peers()[0], &layers);
-        assert_eq!(actual.sumeragi.queues.bodies.get(), planned_bodies);
     }
     #[test]
     fn max_validator_capacity_checks_planned_full_fanout_boundary() {
@@ -13865,15 +13300,8 @@ mod tests {
         let resolved_trusted = resolved.common.trusted_peers.value();
         assert_eq!(resolved_trusted.others.len(), 8);
         assert_eq!(resolved_trusted.pops.len(), 4);
-        assert_eq!(
-            resolved
-                .sumeragi
-                .queues
-                .authenticated_non_validator_sources
-                .get(),
-            5,
-            "every signed observer must have a reserved authenticated ingress lane"
-        );
+        assert_eq!(resolved.common.trusted_peers.value().others.len(), 8);
+        assert!(effective_network_reply_source_capacity(&resolved.network) >= 8);
         let role = observer_role_layer();
         assert_eq!(
             get_nested_value(&role, &["sumeragi", "role"]).and_then(Value::as_str),
@@ -13968,30 +13396,23 @@ mod tests {
             .collect::<Vec<_>>();
         let resolved = resolve_actual_config(&network.validators()[0], &resolved_layers)
             .expect("validator config reserves supplementary committee ingress lanes");
-        assert_eq!(
-            resolved
-                .sumeragi
-                .queues
-                .authenticated_non_validator_sources
-                .get(),
-            5,
-            "every supplementary committee validator must have a reserved authenticated ingress lane"
-        );
+        assert_eq!(resolved.common.trusted_peers.value().others.len(), 8);
+        assert!(effective_network_reply_source_capacity(&resolved.network) >= 8);
     }
     #[test]
-    fn committee_validator_bootstrap_rejects_an_underbudget_ingress_override() {
+    fn committee_validator_bootstrap_rejects_an_underbudget_connection_override() {
         run_large_stack_test(
-            stringify!(committee_validator_bootstrap_rejects_an_underbudget_ingress_override),
-            committee_validator_bootstrap_rejects_an_underbudget_ingress_override_impl,
+            stringify!(committee_validator_bootstrap_rejects_an_underbudget_connection_override),
+            committee_validator_bootstrap_rejects_an_underbudget_connection_override_impl,
         );
     }
-    fn committee_validator_bootstrap_rejects_an_underbudget_ingress_override_impl() {
+    fn committee_validator_bootstrap_rejects_an_underbudget_connection_override_impl() {
         let panic = std::panic::catch_unwind(|| {
             build_with_isolated_permit(
                 NetworkBuilder::new()
                     .with_peers(4)
                     .with_base_seed(stringify!(
-                        committee_validator_bootstrap_rejects_an_underbudget_ingress_override
+                        committee_validator_bootstrap_rejects_an_underbudget_connection_override
                     ))
                     .with_committee_validator_p2p_bootstrap(
                         CommitteeValidatorP2pBootstrap::new(5)
@@ -13999,10 +13420,7 @@ mod tests {
                     )
                     .expect("bounded participant fanout")
                     .with_config_layer(|layer| {
-                        layer.write(
-                            ["sumeragi", "queues", "authenticated_non_validator_sources"],
-                            4i64,
-                        );
+                        layer.write(["network", "max_total_connections"], 7i64);
                     }),
             );
         })
@@ -14014,7 +13432,7 @@ mod tests {
             .unwrap_or_else(|| "<missing panic message>".to_owned());
         assert!(
             panic_message.contains("authenticated/planned maximum validator capacity")
-                && panic_message.contains("planned non-global participant minimum 5"),
+                && panic_message.contains("planned full-fanout minimum 8"),
             "planned authenticated-source failure should be localized, got: {panic_message}"
         );
     }
@@ -14048,15 +13466,8 @@ mod tests {
             .collect::<Vec<_>>();
         let resolved = resolve_actual_config(&network.validators()[0], &resolved_layers)
             .expect("mixed participant config resolves");
-        assert_eq!(
-            resolved
-                .sumeragi
-                .queues
-                .authenticated_non_validator_sources
-                .get(),
-            5,
-            "committee validators and observers need distinct authenticated ingress lanes"
-        );
+        assert_eq!(resolved.common.trusted_peers.value().others.len(), 8);
+        assert!(effective_network_reply_source_capacity(&resolved.network) >= 8);
     }
     #[test]
     fn observer_bootstrap_identities_are_stable_and_shared_layers_have_no_secrets() {
@@ -14595,17 +14006,6 @@ mod tests {
     }
     fn generated_network_configs_parse_for_legal_roster_scales_impl() {
         init_instruction_registry();
-        let commands = iroha_config::parameters::defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get();
-        let bodies = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
-        let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get();
-        let body_source_bytes =
-            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-        let max_total_connections =
-            iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS;
-        let effect_work_capacity = (commands
-            / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-            .max(1);
         for validator_count in [4, 7, MAX_VALIDATORS_PER_HEIGHT] {
             let expected_chain = format!("scaled-npos-roster-{validator_count}");
             let caller_chain = expected_chain.clone();
@@ -14635,56 +14035,9 @@ mod tests {
                 validator_count
             );
             assert_eq!(actual.common.chain, network.chain_id());
-            assert_eq!(actual.sumeragi.queues.commands.get(), commands);
-            assert_eq!(actual.sumeragi.queues.bodies.get(), bodies);
-            assert_eq!(
-                actual
-                    .sumeragi
-                    .queues
-                    .authenticated_non_validator_sources
-                    .get(),
-                authenticated_non_validator_sources
-            );
-            assert_eq!(
-                actual.sumeragi.queues.body_source_bytes.get(),
-                body_source_bytes
-            );
-            let authenticated_validator_capacity =
-                usize::try_from(SumeragiNposParameters::default().max_validators())
-                    .expect("default signed NPoS validator ceiling fits this platform");
             assert_eq!(network.max_validator_capacity, validator_count);
-            assert_eq!(
-                actual.sumeragi.queues.body_bytes.get(),
-                (authenticated_validator_capacity + authenticated_non_validator_sources)
-                    * body_source_bytes
-            );
-            actual
-                .sumeragi
-                .v2_config(network.block_cadence(), ConsensusMode::Npos)
-                .expect("default NPoS config is valid")
-                .validate_ingress_roster_capacity(authenticated_validator_capacity)
-                .expect("generated ingress geometry admits the signed NPoS ceiling");
-            assert_eq!(
-                effective_network_reply_source_capacity(&actual.network),
-                max_total_connections
-            );
-            iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
-                authenticated_validator_capacity,
-                effect_work_capacity,
-                bodies,
-                authenticated_non_validator_sources,
-            )
-            .expect("generated lifecycle capacity geometry must be admissible");
-            let shared = iroha_config::parameters::actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-                effect_work_capacity,
-                bodies,
-            )
-            .expect("generated exact-output shared capacity must be representable");
-            iroha_config::parameters::actual::validate_sumeragi_v2_exact_output_geometry(
-                shared,
-                max_total_connections,
-            )
-            .expect("generated exact-output geometry must be admissible");
+            validate_planned_validator_capacity(&actual, validator_count)
+                .expect("native participant connection capacity");
         }
     }
     #[test]
@@ -14729,13 +14082,13 @@ mod tests {
         );
     }
     #[test]
-    fn final_generated_network_config_fails_closed_on_invalid_geometry() {
+    fn final_generated_network_config_rejects_retired_queue_settings() {
         let panic = std::panic::catch_unwind(|| {
             build_with_isolated_permit(
                 NetworkBuilder::new()
                     .with_peers(4)
                     .with_base_seed(stringify!(
-                        final_generated_network_config_fails_closed_on_invalid_geometry
+                        final_generated_network_config_rejects_retired_queue_settings
                     ))
                     .with_config_layer(|layer| {
                         layer.write(["sumeragi", "queues", "bodies"], 8_192i64);
@@ -14869,40 +14222,20 @@ mod tests {
         );
     }
     #[test]
-    fn base_config_emits_valid_sumeragi_capacity_geometry() {
-        let _config_guard = lock_env_guard(&CONFIG_ENV_GUARD);
-        let _permit_guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
-        let network = NetworkBuilder::new().build();
-        let mut layers = network.config_layers();
-        let _trusted = layers.next().expect("trusted peers layer");
-        let base = layers.next().expect("base config layer").into_owned();
-        let queues = base
-            .get("sumeragi")
-            .and_then(TomlValue::as_table)
-            .and_then(|table| table.get("queues"))
-            .and_then(TomlValue::as_table)
-            .expect("generated Sumeragi queue layer");
-        assert_eq!(
-            queues.get("bodies").and_then(TomlValue::as_integer),
-            Some(
-                i64::try_from(
-                    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get()
-                )
-                .expect("body queue capacity fits TOML")
-            )
+    fn base_config_contains_only_native_consensus_settings() {
+        let network = build_with_isolated_permit(NetworkBuilder::new());
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        assert!(
+            layers
+                .iter()
+                .all(|layer| get_nested_value(layer, &["sumeragi", "queues"]).is_none())
         );
-        assert_eq!(
-            queues.get("body_bytes").and_then(TomlValue::as_integer),
-            Some(
-                i64::try_from(
-                    (DEFAULT_NETWORK_PEERS
-                        + iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
-                        + 1)
-                        * iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get()
-                )
-                .expect("aggregate body bytes fit TOML")
-            )
-        );
+        let actual = resolve_final_actual_config(&network.peers()[0], &layers);
+        validate_planned_validator_capacity(&actual, DEFAULT_NETWORK_PEERS)
+            .expect("native defaults cover the committee");
     }
     #[tokio::test]
     async fn peer_bootstrap_stages_start_global_and_committee_before_observers() {
@@ -16179,22 +15512,28 @@ mod tests {
         assert!(args.contains(&"iroha3d".to_string()));
         assert!(!args.contains(&"--features".to_string()));
         assert!(spec.isolated_target_subdir.is_none());
-        assert_ne!(spec.env, PROGRAM_IROHAD_MESSAGE_CONTROL_ENV);
+        assert_ne!(spec.env, PROGRAM_IROHAD_PRIVATE_SETTLEMENT_ROUTES_ENV);
     }
     #[test]
-    fn message_control_daemon_is_feature_and_target_isolated() {
-        let spec = Program::IrohadMessageControl.spec();
+    fn private_settlement_route_daemon_is_feature_and_target_isolated() {
+        let spec = Program::IrohadPrivateSettlementRoutes.spec();
         let args = spec
             .build_args
             .iter()
             .map(|arg| arg.to_string_lossy().to_string())
             .collect::<Vec<_>>();
-        assert_eq!(spec.env, PROGRAM_IROHAD_MESSAGE_CONTROL_ENV);
-        assert_eq!(spec.isolated_target_subdir, Some("message-control"));
-        assert!(
-            args.windows(2)
-                .any(|pair| { pair == ["--features", "test-network-message-control"] })
+        assert_eq!(spec.env, PROGRAM_IROHAD_PRIVATE_SETTLEMENT_ROUTES_ENV);
+        assert_eq!(
+            spec.isolated_target_subdir,
+            Some("private-settlement-route-control")
         );
+        assert!(args.windows(2).any(|pair| {
+            pair == [
+                "--features",
+                "test-network-private-settlement-route-control",
+            ]
+        }));
+        assert!(!Program::IrohadPrivateSettlementRoutes.release_prebuilt_allowed());
     }
     #[test]
     fn disposable_broker_is_feature_target_and_release_isolated() {
@@ -16443,58 +15782,6 @@ mod tests {
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         builder.build()
-    }
-    #[test]
-    fn builder_stages_receiver_specific_initial_message_control_rules() {
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_peers(4)
-                .with_base_seed(stringify!(
-                    builder_stages_receiver_specific_initial_message_control_rules
-                ))
-                .with_initial_consensus_message_control_rules(17, |receiver_index, peer_ids| {
-                    vec![ConsensusMessageControlRule::exact(
-                        peer_ids[(receiver_index + 1) % peer_ids.len()].clone(),
-                        ConsensusMessageControlKind::CommitVote,
-                        2,
-                        0,
-                        ConsensusMessageControlAction::Drop,
-                    )]
-                }),
-        );
-        let peer_ids = network
-            .peers()
-            .iter()
-            .map(NetworkPeer::id)
-            .collect::<Vec<_>>();
-        for (receiver_index, peer) in network.peers().iter().enumerate() {
-            let control = peer
-                .consensus_message_control()
-                .expect("initializer provisions a controlled daemon");
-            let bytes = fs::read(control.root().join("command.norito.json"))
-                .expect("read staged initial command");
-            let command: JsonValue =
-                json::from_slice(&bytes).expect("parse staged initial command");
-            assert_eq!(command.get("revision").and_then(JsonValue::as_u64), Some(1));
-            assert_eq!(
-                command.get("queue_capacity").and_then(JsonValue::as_u64),
-                Some(17)
-            );
-            let rules = command
-                .get("rules")
-                .and_then(JsonValue::as_array)
-                .expect("staged rules array");
-            assert_eq!(rules.len(), 1);
-            let expected_sender = peer_ids[(receiver_index + 1) % peer_ids.len()].to_string();
-            assert_eq!(
-                rules[0].get("sender").and_then(JsonValue::as_str),
-                Some(expected_sender.as_str())
-            );
-            assert_eq!(
-                rules[0].get("action").and_then(JsonValue::as_str),
-                Some("drop")
-            );
-        }
     }
     async fn build_with_isolated_permit_async(builder: NetworkBuilder) -> Network {
         let _guard = lock_env_guard_async(&NETWORK_PERMIT_ENV_GUARD).await;

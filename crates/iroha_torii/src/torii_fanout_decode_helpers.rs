@@ -521,13 +521,8 @@ struct QueryIngressMemoryEnvelope {
 ///
 /// A dedicated single-slot bridge lane holds this complete reservation before polling the body. The
 /// high-water phases cover the signed raw frame plus the decoded request, and then the moved
-/// decoded envelope, one shared outbound frame, one strict local-dispatch copy, and two
-/// derived-codec scratch representations. Remote candidate attempts share the outbound frame;
-/// QueuePlanSynced may additionally retain exactly one owned local copy while collecting the
-/// remote attestation required for f+1. One fixed 64 KiB retryable diagnostic may remain while the
-/// next authority is attempted; larger retry bodies are dropped before proceeding. Strict
-/// admission additionally reserves its fixed response window and certificate-reduction peak;
-/// neither quantity multiplies by the authority roster.
+/// decoded envelope, one shared outbound frame and bounded codec scratch. Candidate attempts
+/// are sequential and retain at most one bounded retry diagnostic beside the next response.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiProxyHttpIngressEnvelope {
     working_set_bytes: usize,
@@ -539,15 +534,13 @@ struct ToriiProxyHttpIngressEnvelope {
 impl ToriiProxyHttpIngressEnvelope {
     fn from_max_content_bytes(max_content_bytes: usize) -> Option<Self> {
         let fixed_overhead = query_fanout_fixed_overhead_bytes()?
-            .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?
-            .checked_add(torii_proxy_strict_response_working_set_bytes()?)?;
+            .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?;
         if max_content_bytes == 0 {
             return None;
         }
         // The middleware owns the raw body only through decoding. After that,
         // one bounded shared frame is reused by every remote transport attempt.
-        // Strict QueuePlan aggregation may also own one local deep copy while
-        // two derived-codec scratch representations overlap the shared frame.
+        // Local dispatch and bounded codec scratch share this five-representation peak.
         let variable_bytes = max_content_bytes.checked_mul(5)?;
         let working_set_bytes = fixed_overhead.checked_add(variable_bytes)?;
         let envelope = Self {
@@ -578,8 +571,7 @@ impl ToriiProxyHttpIngressEnvelope {
             .and_then(|peak| {
                 peak.checked_add(
                     query_fanout_fixed_overhead_bytes()?
-                        .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?
-                        .checked_add(torii_proxy_strict_response_working_set_bytes()?)?,
+                        .checked_add(TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1)?,
                 )
             })
             .is_some_and(|total| total <= self.working_set_bytes)

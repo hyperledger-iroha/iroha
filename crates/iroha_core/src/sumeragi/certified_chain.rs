@@ -12,18 +12,16 @@
 //!
 //! The reader offers two reads with different trust models:
 //!
-//! - [`committed_block`]: **consensus-visible data only**. The frame must be the block this State
-//!   view committed at the height (header hash and height against the view's block-hash
-//!   journal), its core header must certify the block's payload (§3 rule 2), and its result
-//!   preimage must commit the exact result-bearing block wire. The receipt ([`CommittedBlock`])
-//!   is derived from the header and the result preimage alone: the `CommitQC` bytes are never
-//!   decoded. A block's `CommitQC` is **per node** — headers bind `parent_hash` and
-//!   `parent_result`, never the parent's certificate, so honest nodes may store different valid
-//!   certificates (any `q` signers) for one block — while the header and the result preimage are
-//!   identical on every honest node. This is the only read deterministic code (instruction
-//!   execution, anything that feeds `R`) may use. It needs the frame of the height it reads:
-//!   every validator keeps full blocks in the first release (a snapshot-bootstrapped node must
-//!   retain the frames its instructions may name, goal S7).
+//! - [`committed_block`]: **consensus-visible data only**, authenticated by the
+//!   original native execution tip captured in the same State publication generation.
+//!   A bounded reverse walk checks native `parent_hash`, `parent_result` and the
+//!   Iroha parent hash before interpreting the requested result. The tip is issued
+//!   only by the original verified worker (or original signed-genesis execution),
+//!   outside World to avoid an R self-reference. Snapshot claims are verified
+//!   against an actual certified native prefix before this authority is restored.
+//!   Local `CommitQC` bytes are never decoded by this deterministic path: honest
+//!   nodes may retain different valid exact quorums for the same header and R.
+//!   Hash journals and structural frame decoding alone grant no execution authority.
 //! - [`CertifiedChain::certified`]: the committed read **plus the local `CommitQC`**. The
 //!   certificate must certify exactly this header and result (kind, height, block hash, result,
 //!   attestation flag, instance) and verify under the committee of its height (see below). The
@@ -66,7 +64,7 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_sumeragi::{
-    crypto::{AttestationVerifier, CertError, verify_qc},
+    crypto::{AttestationVerifier, CertError},
     message::{BlockHeader, Qc, VoteKind},
     preimage::payload_hash,
     types::{Committee, EpochId, Hash32},
@@ -343,14 +341,20 @@ pub fn committed_block(
         .and_then(NonZeroUsize::new)
         .filter(|index| index.get() <= view.block_hashes().len())
         .ok_or(ChainReadError::NotCommitted { height })?;
-    let block = view
-        .canonical_block_by_height(index)
-        .map_err(|_| ChainReadError::NotInView { height })?;
-    read_frame(block, height)
+    view.canonical_history()
+        .executed_receipt(index, |_, _| Ok(()))
+        .map_err(|error| ChainReadError::Malformed {
+            height,
+            reason: error.to_string(),
+        })
 }
 
-/// The receipt of a Kura frame claimed to be the committed block at `height`.
-fn read_frame(block: Arc<SignedBlock>, height: u64) -> Result<CommittedBlock, ChainReadError> {
+/// Structural interpretation only: the caller must authenticate core hash and R
+/// from an original State tip or the full native certificate prefix.
+pub(crate) fn read_frame(
+    block: Arc<SignedBlock>,
+    height: u64,
+) -> Result<CommittedBlock, ChainReadError> {
     #[cfg(test)]
     relation_counts::frame(height);
     let malformed = |reason: String| ChainReadError::Malformed { height, reason };
@@ -669,14 +673,13 @@ impl PrefixVerifierContext<'_> {
         let verifier = self.attestations.unwrap_or(&native);
         #[cfg(test)]
         relation_counts::qc(height);
-        let checked = verify_qc(
+        let checked = iroha_sumeragi::crypto::Verifier::new(
             &authority.crypto,
-            verifier,
             &self.instance,
             &authority.epoch,
             &authority.committee,
-            &commit_qc,
-        );
+        )
+        .verify_qc(verifier, &commit_qc);
         checked.map_err(|error| ChainReadError::Certificate { height, error })?;
         Ok(CertifiedBlock {
             committed,
@@ -890,7 +893,7 @@ impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
                 let expected = hashes
                     .get(index.get() - 1)
                     .ok_or(ChainReadError::NotCommitted { height })?;
-                if kura.is_hash_only_block_height(index) {
+                if kura.is_canonical_body_missing(index) {
                     return Err(ChainReadError::NotInView { height });
                 }
                 let block = kura
@@ -1000,7 +1003,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     /// The committed read fails, the certificate does not certify the stored header and result,
     /// names another instance, or does not verify under the committee of its height.
     pub fn certified(&self, height: u64) -> Result<CertifiedBlock, ChainReadError> {
-        self.check_certificate(self.committed(height)?)
+        self.check_certificate(read_frame(self.source.block(height)?, height)?)
     }
 
     /// The exact authenticated epoch committee and its original proofs of possession.
@@ -1058,7 +1061,10 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     /// Derive authority exclusively from signed genesis, then check the result graph against it.
     /// The graph's execution/parameter data is not independently final until a successor signs Rg.
     fn genesis_prefix(&self) -> Result<VerifiedPrefix, ChainReadError> {
-        make_genesis_prefix(self.committed(GENESIS_HEIGHT)?, self.genesis_epoch.clone())
+        make_genesis_prefix(
+            read_frame(self.source.block(GENESIS_HEIGHT)?, GENESIS_HEIGHT)?,
+            self.genesis_epoch.clone(),
+        )
     }
 
     /// Verify the complete prefix with a bounded working set. Sequential reads reuse its
@@ -1091,7 +1097,8 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .checked_add(1)
             .is_some_and(|next| next < height)
         {
-            let next = self.committed(prefix.tip.height + 1)?;
+            let next_height = prefix.tip.height + 1;
+            let next = read_frame(self.source.block(next_height)?, next_height)?;
             self.verification_context().advance_prefix(prefix, next)?;
         }
         self.verification_context()

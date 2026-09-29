@@ -100,7 +100,6 @@ mod tests {
                 Vec::new(),
                 Default::default(),
                 Default::default(),
-                Vec::new(),
                 &structural_output_limits(),
             )
             .unwrap();

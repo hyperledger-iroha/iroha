@@ -4,7 +4,7 @@ use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    queue::{Queue, TransactionGuard},
+    queue::Queue,
     state::{State, World},
     tx::AcceptedTransaction,
 };
@@ -85,11 +85,12 @@ fn expired_transactions_drain_without_panic() {
             .push(tx, state.view())
             .expect("queue accepts new transaction");
         thread::sleep(Duration::from_millis(30));
-        let mut guards: Vec<TransactionGuard> = Vec::new();
         let view = state.view();
-        queue.get_transactions_for_block(&view, nonzero!(1_usize), &mut guards);
+        let pending = queue
+            .bounded_pending_snapshot_for_testing(&view, nonzero!(1_usize))
+            .expect("healthy queue snapshot");
         drop(view);
-        assert!(guards.is_empty(), "expired tx should not remain available");
+        assert!(pending.is_empty(), "expired tx should not remain available");
         assert_eq!(queue.queued_len(), 0, "queue drained expired transaction");
     }
 }

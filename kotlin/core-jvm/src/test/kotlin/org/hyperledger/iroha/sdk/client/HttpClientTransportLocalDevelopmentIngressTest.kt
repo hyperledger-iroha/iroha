@@ -102,7 +102,7 @@ class HttpClientTransportLocalDevelopmentIngressTest {
             requests.add(request)
             val (status, body) = when (request.uri.path) {
                 "/v1/node/capabilities" -> 200 to
-                    """{"data_model_version":4,"signed_transaction_schema_hash_hex":"7ab5ff9c572efb316deac478f19209c5"}"""
+                    """{"data_model_version":${ToriiTransactionCompatibility.EXPECTED_DATA_MODEL_VERSION},"signed_transaction_schema_hash_hex":"${ToriiTransactionCompatibility.EXPECTED_SIGNED_TRANSACTION_SCHEMA_HASH_HEX}"}"""
                 "/v1/pipeline/transactions/status" -> 200 to
                     """{"hash":"$HASH","status":{"kind":"Applied","block_height":7},"scope":"global","resolved_from":"state"}"""
                 else -> 202 to ""

@@ -666,8 +666,12 @@ fn compiled_secret_commitment_executes_end_to_end() {
     vm.load_program(&artifact).expect("load compiled artifact");
     common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
     vm.run().expect("execute approved commitment");
+    assert_eq!(
+        vm.call_result_word_count().expect("completed result table"),
+        1
+    );
     assert!(
-        common::decode_int_word(&vm, vm.register(10)).bit_len() > 64,
+        common::decode_int_return_word(&vm, 0).bit_len() > 64,
         "source commitment must retain the complete compressed point"
     );
     assert!(
@@ -729,7 +733,11 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
         common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
         vm.run()
             .unwrap_or_else(|error| panic!("execute Secret<{kind}> commitment: {error}"));
-        let commitment = common::decode_int_word(&vm, vm.register(10));
+        assert_eq!(
+            vm.call_result_word_count().expect("completed result table"),
+            1
+        );
+        let commitment = common::decode_int_return_word(&vm, 0);
         assert!(
             commitment.bit_len() > 64,
             "Secret<{kind}> commitment was truncated"
@@ -1106,14 +1114,15 @@ fn execution_summary_preserves_private_stack_ranges() {
 #[test]
 fn reset_scrubs_private_stack_spills() {
     let mut vm = vm_with_private_stack_word();
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     assert_eq!(vm.load_u64(Memory::STACK_START).unwrap(), 0);
 }
 #[test]
 fn disabling_zk_mode_scrubs_private_stack_spills() {
     let mut vm = vm_with_private_stack_word();
     vm.set_register(7, 0x1234_5678);
-    vm.set_zk_mode(false);
+    vm.set_zk_mode(false)
+        .expect("private lifecycle cleanup succeeds");
     assert_eq!(vm.load_u64(Memory::STACK_START).unwrap(), 0);
     assert_eq!(vm.register(2), 0);
     assert!(!vm.registers.tag(2));
@@ -1134,15 +1143,16 @@ fn disabling_zk_mode_discards_private_trace_and_write_history() {
     vm.run().expect("record private trace fixture");
 
     assert!(
-        vm.register_trace()
+        common::diagnostic_snapshot(&vm)
+            .states()
             .iter()
             .any(|state| state.gpr[2] == PRIVATE_VALUE)
     );
-    assert!(vm.register_log().iter().any(|event| match event {
-        ivm::zk::RegEvent::Read { value, .. } | ivm::zk::RegEvent::Write { value, .. } => {
-            *value == PRIVATE_VALUE
-        }
-    }));
+    assert!(
+        common::diagnostic_snapshot(&vm)
+            .register_events()
+            .any(|event| event.value == PRIVATE_VALUE)
+    );
     assert!(
         vm.memory
             .try_write_log_snapshot()
@@ -1156,10 +1166,11 @@ fn disabling_zk_mode_discards_private_trace_and_write_history() {
             })
     );
 
-    vm.set_zk_mode(false);
+    vm.set_zk_mode(false)
+        .expect("private lifecycle cleanup succeeds");
 
-    assert!(vm.register_trace().is_empty());
-    assert!(vm.register_log().is_empty());
+    assert!(common::diagnostic_snapshot(&vm).states().is_empty());
+    assert!(common::diagnostic_snapshot(&vm).register_event_count() == 0);
     assert!(vm.memory_log().is_empty());
     assert!(vm.delta_register_trace().is_empty());
     assert!(vm.step_log().is_empty());
@@ -1173,7 +1184,8 @@ fn disabling_zk_mode_discards_private_trace_and_write_history() {
 #[test]
 fn raw_code_load_scrubs_private_registers_and_preserves_public_arguments() {
     let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
+    vm.set_zk_mode(true)
+        .expect("private lifecycle cleanup succeeds");
     vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
     vm.registers.set_tag(2, true);
     vm.set_register(7, 0x1234_5678);
@@ -1189,7 +1201,8 @@ fn raw_code_load_scrubs_private_registers_and_preserves_public_arguments() {
 #[test]
 fn artifact_load_scrubs_private_registers_and_preserves_public_arguments() {
     let mut vm = IVM::new(u64::MAX);
-    vm.set_zk_mode(true);
+    vm.set_zk_mode(true)
+        .expect("private lifecycle cleanup succeeds");
     vm.set_register(2, 0xCAFE_BABE_DEAD_BEEF);
     vm.registers.set_tag(2, true);
     vm.set_register(7, 0x1234_5678);
@@ -1220,7 +1233,8 @@ fn runtime_template_restores_private_stack_tags_with_their_bytes() {
     let template = vm
         .try_runtime_template()
         .expect("runtime template allocation fits test host");
-    vm.set_zk_mode(false);
+    vm.set_zk_mode(false)
+        .expect("private lifecycle cleanup succeeds");
     assert!(!vm.zk_mode_enabled());
     vm.reset_from_runtime_template(&template)
         .expect("private-memory template geometry must match");

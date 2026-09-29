@@ -89,6 +89,15 @@ pub enum TryReadError {
         /// Reason the Merkle verification failed.
         reason: String,
     },
+    /// Snapshot native chain instance mismatch (expected `{expected}`, got `{actual}`)
+    ChainIdMismatch {
+        /// Configured chain identity used by native consensus signatures.
+        expected: ChainId,
+        /// Claimed chain identity in the authenticated snapshot envelope.
+        actual: ChainId,
+    },
+    /// A committed snapshot requires original signed-genesis and certified-history execution on fresh State
+    NativeExecutionReplayRequired,
     /// Snapshot exact network id mismatch (expected `{expected}`, got `{actual}`)
     NetworkIdMismatch {
         /// Expected genesis-derived network id from configuration.
@@ -96,17 +105,8 @@ pub enum TryReadError {
         /// Exact network id recorded in the snapshot payload.
         actual: NetworkId,
     },
-    /// Snapshot bootstrap authorization or typed trust root is invalid (`{0}`)
-    InvalidSnapshotBootstrap(String),
-    /// Snapshot WSV checkpoint mismatch at height `{height}` (expected `{expected:?}`, got `{actual:?}`)
-    WsvCheckpointMismatch {
-        /// Committed snapshot height whose checkpoint was validated.
-        height: usize,
-        /// Canonical WSV hash retained by Kura.
-        expected: Hash,
-        /// Canonical WSV hash reconstructed from the signed snapshot.
-        actual: Hash,
-    },
+    /// Snapshot boundary identity is invalid (`{0}`)
+    InvalidSnapshotBoundary(String),
     /// Snapshot state is incompatible with runtime ZK configuration: {0}
     ZkConfigInstall(#[source] ZkConfigInstallError),
     /// Snapshot is in a non-consistent state. Snapshot has greater height (`{snapshot_height}`) than kura block store (`{kura_height}`)
@@ -141,6 +141,9 @@ pub enum TryReadError {
 impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
     fn from(error: crate::state::deserialize::StateRestoreError) -> Self {
         match error {
+            crate::state::deserialize::StateRestoreError::NativeExecutionReplayRequired => {
+                Self::NativeExecutionReplayRequired
+            }
             crate::state::deserialize::StateRestoreError::Serialization(error) => {
                 Self::Serialization(error)
             }

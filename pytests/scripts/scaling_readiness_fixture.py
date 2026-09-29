@@ -40,10 +40,7 @@ def write_inputs(directory):
         key = 'ea0130' + f'{index + 1:02X}' * 48
         url = f'http://127.0.0.1:{8080 + index}/'
         store = directory / f'kura{index}'
-        value['peers'].append(dict(role=role, node_public_key=key, torii_url=url,
-            config=f'{role}.toml', client_config=f'{role}-client.toml',
-            primary_block_store=str(store / 'blocks/native-primary'),
-            primary_merge_log=str(store / 'merge_ledger/native-primary.log')))
+        value['peers'].append(dict(role=role, node_public_key=key, torii_url=url, config=f'{role}.toml', client_config=f'{role}-client.toml', primary_block_store=str(store / 'blocks/native-primary')))
         store.mkdir(mode=0o700)
         files[f'{role}.toml'] = (f'chain = "test-chain"\npublic_key = "{key}"\n'
             f'private_key = "PRIVATE TEST ONLY"\n[kura]\nstore_dir = {json.dumps(str(store))}\n').encode()

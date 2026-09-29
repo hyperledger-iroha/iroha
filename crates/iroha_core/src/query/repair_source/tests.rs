@@ -293,7 +293,7 @@ fn source_requires_the_current_and_original_floor_durable_qcs() {
             .admission
             .state
             .kura()
-            .force_hash_only_block_for_testing(
+            .corrupt_canonical_body_for_testing(
                 std::num::NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap(),
             )
             .unwrap();

@@ -4707,6 +4707,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_sccp",
  "iroha_service_model",
+ "iroha_sumeragi",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
@@ -5101,12 +5102,14 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "base64 0.22.1",
  "error-stack",
+ "halo2curves",
  "humantime",
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_model_base",
  "iroha_primitives",
+ "iroha_sumeragi",
  "norito",
  "tempfile",
  "thiserror 2.0.18",
@@ -5252,6 +5255,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_service_model",
  "iroha_storage_client",
+ "iroha_sumeragi",
  "iroha_torii_shared",
  "iroha_version",
  "kaigi_zk",
@@ -5894,8 +5898,11 @@ name = "iroha_zkp_poseidon"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "halo2curves",
+ "halo2curves-axiom",
  "once_cell",
  "poseidon-primitives",
+ "sha2",
+ "zeroize",
 ]
 
 [[package]]

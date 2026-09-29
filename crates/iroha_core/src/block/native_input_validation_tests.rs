@@ -91,3 +91,94 @@ fn native_validation_rejects_execution_context_route_substitution() {
     );
     assert_eq!(fixture.chain.state().view().height(), 2);
 }
+
+#[test]
+fn native_validation_rejects_unknown_execution_context_version_before_publication() {
+    let fixture = NativeValidationFixture::new();
+    let mut proposal = fixture.proposal(vec![fixture.transaction(2_001, None)], fixture.cadence());
+    let generation = fixture.chain.state().state_view_generation();
+    let mut context = proposal.execution_context().unwrap().clone();
+    context.version = BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1 + 1;
+    proposal.set_execution_context(Some(context));
+    let (_, error) = fixture.validate(proposal).unpack(|_| {}).err().unwrap();
+    assert!(
+        matches!(*error, BlockValidationError::ExecutionContextInvalid(ref message)
+        if message.contains("unsupported block execution-context bundle version"))
+    );
+    assert_eq!(fixture.chain.state().view().height(), 2);
+    assert_eq!(fixture.chain.state().state_view_generation(), generation);
+}
+
+#[test]
+fn native_validation_rejects_incomplete_original_execution_context() {
+    let fixture = NativeValidationFixture::new();
+    let mut proposal = fixture.proposal(vec![fixture.transaction(2_001, None)], fixture.cadence());
+    let generation = fixture.chain.state().state_view_generation();
+    let mut context = proposal.execution_context().unwrap().clone();
+    context.external.clear();
+    proposal.set_execution_context(Some(context));
+    assert!(fixture.validate(proposal).unpack(|_| {}).is_err());
+    assert_eq!(fixture.chain.state().view().height(), 2);
+    assert_eq!(fixture.chain.state().state_view_generation(), generation);
+}
+
+#[test]
+fn native_execution_rejects_forged_and_zero_advertised_fragment_counts() {
+    let fixture = NativeValidationFixture::new();
+    let proposal = fixture.proposal(vec![fixture.transaction(2_001, None)], fixture.cadence());
+    let (_, overlay) = fixture.validate(proposal).unpack(|_| {}).unwrap();
+    assert_eq!(overlay.committed_fragment_count(), 1);
+    assert_eq!(
+        ValidBlock::validated_committed_fragment_count(&overlay, Some(1)),
+        Ok(1)
+    );
+    for actual in [0, 99] {
+        assert!(
+            matches!(ValidBlock::validated_committed_fragment_count(&overlay, Some(actual)),
+            Err(BlockValidationError::CommittedFragmentCountMismatch { expected: 1, actual: rejected }) if rejected == actual)
+        );
+    }
+    drop(overlay);
+    assert_eq!(fixture.chain.state().view().height(), 2);
+}
+
+#[test]
+fn native_validation_enforces_fraud_policy_with_a_populated_stateless_cache() {
+    use iroha_config::parameters::actual::{FraudMonitoring, FraudRiskBand};
+    let fixture = NativeValidationFixture::with_configuration(|config| {
+        config.pipeline.stateless_cache_cap = 64;
+        config.fraud_monitoring = FraudMonitoring {
+            enabled: true,
+            required_minimum_band: Some(FraudRiskBand::High),
+            missing_assessment_grace: Duration::ZERO,
+            ..Default::default()
+        };
+    });
+    let transaction = fixture.transaction(2_001, None);
+    for _ in 0..2 {
+        let proposal = fixture.proposal(vec![transaction.clone()], fixture.cadence());
+        let (valid, overlay) = fixture.validate(proposal).unpack(|_| {}).unwrap();
+        let rejection = valid
+            .as_ref()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .as_ref()
+            .unwrap_err();
+        assert!(matches!(rejection,
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted(message)
+            ) if message.contains("fraud monitoring requires an attached assessment")));
+        drop(overlay);
+    }
+    assert!(
+        fixture
+            .chain
+            .state()
+            .stateless_validation_cache()
+            .lock()
+            .contains_key(&crate::tx::StatelessValidationCacheKey::new(&transaction),)
+    );
+    assert_eq!(fixture.chain.state().view().height(), 2);
+}

@@ -214,7 +214,11 @@ async fn closed_pipeline_projection_channel_is_a_critical_exit() {
     let shutdown = ShutdownSignal::new();
     let worker = start_pipeline_status_projection_worker(
         std::sync::Arc::new(PipelineStatusCache::new()),
-        iroha_core::kura::Kura::blank_kura_for_testing(),
+        std::sync::Arc::new(iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::new(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        )),
         &events,
         shutdown,
     );

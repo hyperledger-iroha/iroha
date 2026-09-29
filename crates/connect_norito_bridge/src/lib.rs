@@ -67,8 +67,7 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::manifest::ManifestProvenance,
     transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
-        TransactionSubmissionReceipt,
+        Executable, FeePaymentIntent, SignedTransaction, TransactionSubmissionReceipt,
         signed::{MultisigSignature, MultisigSignatures, TransactionBuilder},
     },
 };
@@ -262,7 +261,7 @@ mod parliament_timed_ovn_ffi;
 mod privacy_capability_ffi_tests;
 pub use parliament_timed_ovn_ffi::{
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
-    CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1,
+    CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1,
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1,
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1,
     connect_norito_parliament_timed_ovn_ballot_from_proof_v1,
@@ -2962,8 +2961,8 @@ fn parse_identifier_receipt_backend(value: &JsonValue) -> BridgeResult<RamLfeBac
     let backend = parse_identifier_exact_str(value)?;
     match backend.as_str() {
         "hkdf-sha3-512-prf-v1" => Ok(RamLfeBackend::HkdfSha3_512PrfV1),
-        "bfv-affine-sha3-256-v1" => Ok(RamLfeBackend::BfvAffineSha3_256V1),
-        "bfv-programmed-sha3-256-v1" => Ok(RamLfeBackend::BfvProgrammedSha3_256V1),
+        "bfv-affine-v1" => Ok(RamLfeBackend::BfvAffineV1),
+        "bfv-programmed-v1" => Ok(RamLfeBackend::BfvProgrammedV1),
         _ => Err(BridgeError::IdentifierReceipt),
     }
 }
@@ -4307,17 +4306,16 @@ fn validation_fee_is_canonical_iroha_hash(value: &[u8; 32]) -> bool {
     value[31] & 1 == 1
 }
 fn validation_fee_current_policy_proof_request_v1(
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id: [u8; 32],
+    trusted_checkpoint: &[u8],
 ) -> BridgeResult<Vec<u8>> {
-    if trusted_checkpoint_height == 0
-        || !validation_fee_is_canonical_iroha_hash(&trusted_checkpoint_context_id)
-    {
-        return Err(BridgeError::ValidationFeePolicyProof);
-    }
+    let checkpoint =
+        iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+            trusted_checkpoint,
+        )
+        .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
     norito::to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
         version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-        trusted_checkpoint_height,
+        trusted_checkpoint_height: checkpoint.height(),
     })
     .map_err(|_| BridgeError::ValidationFeePolicyProof)
 }
@@ -4325,37 +4323,53 @@ fn validation_fee_current_policy_proof_verify_v1(
     proof_archive: &[u8],
     network_id: NetworkId,
     policy_chain_genesis_hash: [u8; 32],
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id: [u8; 32],
-) -> BridgeResult<Vec<u8>> {
+    trusted_checkpoint: &[u8],
+) -> BridgeResult<(Vec<u8>, Vec<u8>)> {
     if proof_archive.is_empty()
         || proof_archive.len() > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
         || !validation_fee_is_canonical_iroha_hash(network_id.as_bytes())
         || !validation_fee_is_canonical_iroha_hash(&policy_chain_genesis_hash)
-        || !validation_fee_is_canonical_iroha_hash(&trusted_checkpoint_context_id)
     {
         return Err(BridgeError::ValidationFeePolicyProof);
     }
+    let checkpoint =
+        iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+            trusted_checkpoint,
+        )
+        .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
     let proof: ValidationFeeCurrentPolicyProofV1 =
         decode_from_bytes(proof_archive).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
     let canonical = norito::to_bytes(&proof).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
     if canonical != proof_archive {
         return Err(BridgeError::ValidationFeePolicyProof);
     }
-    let projection = proof
-        .verify_with_immutable_binding(
-            network_id,
-            policy_chain_genesis_hash,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
-        )
+    let (projection, promoted) = proof
+        .verify_with_immutable_binding(network_id, policy_chain_genesis_hash, &checkpoint)
         .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
     let json =
         norito::json::to_vec(&projection).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
     if json.is_empty() || json.len() > DETACHED_TRANSACTION_JSON_MAX_BYTES {
         return Err(BridgeError::ValidationFeePolicyProof);
     }
-    Ok(json)
+    let promoted = promoted
+        .encode_canonical()
+        .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    Ok((json, promoted))
+}
+unsafe fn validation_fee_checkpoint_bytes<'a>(
+    checkpoint_ptr: *const c_uchar,
+    checkpoint_len: c_ulong,
+) -> BridgeResult<&'a [u8]> {
+    let length =
+        usize::try_from(checkpoint_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    if checkpoint_ptr.is_null()
+        || length == 0
+        || length > iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES
+    {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    // SAFETY: the C caller supplies a readable range; null and size were checked above.
+    Ok(unsafe { slice::from_raw_parts(checkpoint_ptr, length) })
 }
 fn validation_fee_hijiri_quote_request_v1(
     account_id_literal: &str,
@@ -4424,42 +4438,34 @@ fn validation_fee_hijiri_quote_response_verify_v1(
     }
     Ok(projection)
 }
-/// Encode the exact Norito request body for one bounded current-policy proof page.
+/// Encode one bounded current-policy proof request from a complete canonical checkpoint.
 ///
-/// The checkpoint context is validated here for API symmetry with the proof
-/// verifier but is intentionally not serialized: Torii's frozen V1 request
-/// contains only the layout version and checkpoint height.
+/// The caller independently selects and retains the checkpoint; request construction only
+/// validates its canonical structure and derives the requested height. Verification consumes
+/// the same complete checkpoint and returns its authenticated successor.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_request_v1(
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id_ptr: *const c_uchar,
-    trusted_checkpoint_context_id_len: c_ulong,
+    trusted_checkpoint_ptr: *const c_uchar,
+    trusted_checkpoint_len: c_ulong,
     out_request_ptr: *mut *mut c_uchar,
     out_request_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_request_ptr, out_request_len);
     let result = (|| {
         clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
-        let trusted_checkpoint_context_id = unsafe {
-            read_fixed_array::<32>(
-                trusted_checkpoint_context_id_ptr,
-                trusted_checkpoint_context_id_len,
-                BridgeError::ValidationFeePolicyProof,
-            )
+        let checkpoint = unsafe {
+            validation_fee_checkpoint_bytes(trusted_checkpoint_ptr, trusted_checkpoint_len)
         }?;
-        let request = validation_fee_current_policy_proof_request_v1(
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
-        )?;
+        let request = validation_fee_current_policy_proof_request_v1(checkpoint)?;
         unsafe { write_bytes_bridge(out_request_ptr, out_request_len, &request) }
     })();
     bridge_result_to_code(result)
 }
-/// Locally verify one canonical proof page and return bounded canonical JSON.
+/// Verify a canonical proof under immutable network/policy pins and a complete checkpoint.
 ///
-/// Verification binds the full registry to finality, the synthetic ordinary
-/// write, the exact genesis-derived network id, policy version one's hash,
-/// and the caller's durable checkpoint.
+/// Success returns canonical projection JSON and the promoted canonical checkpoint together.
+/// Persist both atomically before requesting another page. Both outputs are cleared on failure;
+/// each successful allocation must be released with `connect_norito_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_verify_v1(
     proof_norito_ptr: *const c_uchar,
@@ -4468,15 +4474,23 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_veri
     network_id_len: c_ulong,
     policy_chain_genesis_hash_ptr: *const c_uchar,
     policy_chain_genesis_hash_len: c_ulong,
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id_ptr: *const c_uchar,
-    trusted_checkpoint_context_id_len: c_ulong,
+    trusted_checkpoint_ptr: *const c_uchar,
+    trusted_checkpoint_len: c_ulong,
     out_projection_json_ptr: *mut *mut c_uchar,
     out_projection_json_len: *mut c_ulong,
+    out_promoted_checkpoint_ptr: *mut *mut c_uchar,
+    out_promoted_checkpoint_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_projection_json_ptr, out_projection_json_len);
+    clear_bridge_output(out_promoted_checkpoint_ptr, out_promoted_checkpoint_len);
     let result = (|| {
         clear_bridge_output_or_null(out_projection_json_ptr, out_projection_json_len)?;
+        clear_bridge_output_or_null(out_promoted_checkpoint_ptr, out_promoted_checkpoint_len)?;
+        if out_projection_json_ptr == out_promoted_checkpoint_ptr
+            || out_projection_json_len == out_promoted_checkpoint_len
+        {
+            return Err(BridgeError::NullPtr);
+        }
         let proof_len =
             usize::try_from(proof_norito_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
         if proof_norito_ptr.is_null()
@@ -4503,25 +4517,23 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_veri
                 BridgeError::ValidationFeePolicyProof,
             )
         }?;
-        let trusted_checkpoint_context_id = unsafe {
-            read_fixed_array::<32>(
-                trusted_checkpoint_context_id_ptr,
-                trusted_checkpoint_context_id_len,
-                BridgeError::ValidationFeePolicyProof,
-            )
+        let checkpoint = unsafe {
+            validation_fee_checkpoint_bytes(trusted_checkpoint_ptr, trusted_checkpoint_len)
         }?;
-        let projection = validation_fee_current_policy_proof_verify_v1(
+        let (projection, promoted) = validation_fee_current_policy_proof_verify_v1(
             proof,
             network_id,
             policy_chain_genesis_hash,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
+            checkpoint,
         )?;
         unsafe {
-            write_bytes_bridge(
+            write_detached_transaction_pair(
                 out_projection_json_ptr,
                 out_projection_json_len,
                 &projection,
+                out_promoted_checkpoint_ptr,
+                out_promoted_checkpoint_len,
+                &promoted,
             )
         }
     })();
@@ -4714,7 +4726,6 @@ where
     if !metadata.is_empty() {
         builder = builder.with_metadata(metadata);
     }
-    builder = builder.with_admission_intent(TransactionAdmissionIntent::Ordinary);
     if let Some(ttl) = ttl_duration {
         builder.set_ttl(ttl);
     }
@@ -7221,8 +7232,7 @@ fn account_read_permission_multisig_builder(
         _ => return Err(BridgeError::Authority),
     };
     let mut builder = TransactionBuilder::new(network_id, authority, fee_payment)
-        .with_instructions([instruction])
-        .with_admission_intent(TransactionAdmissionIntent::Ordinary);
+        .with_instructions([instruction]);
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     builder.set_ttl(Duration::from_millis(120_000));
     Ok(builder)
@@ -14335,7 +14345,7 @@ mod tests {
                     .parse()
                     .expect("valid program id"),
                 program_digest: Hash::new(b"program"),
-                backend: iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1,
+                backend: iroha_crypto::RamLfeBackend::BfvProgrammedV1,
                 verification_mode: iroha_crypto::RamLfeVerificationMode::Signed,
                 input_ciphertext_hash: Hash::new(b"input-ciphertext"),
                 output_ciphertext_hash: Hash::new(b"output-ciphertext"),
@@ -14388,7 +14398,7 @@ mod tests {
                                 "program_digest",
                                 JsonValue::from(hex_hash(payload.execution.program_digest)),
                             ),
-                            ("backend", JsonValue::from("bfv-programmed-sha3-256-v1")),
+                            ("backend", JsonValue::from("bfv-programmed-v1")),
                             ("verification_mode", JsonValue::from("signed")),
                             (
                                 "input_ciphertext_hash",
@@ -14733,7 +14743,7 @@ mod tests {
             ),
             (
                 vec!["payload", "execution", "backend"],
-                " bfv-programmed-sha3-256-v1".to_owned(),
+                " bfv-programmed-v1".to_owned(),
             ),
             (
                 vec!["payload", "execution", "verification_mode"],

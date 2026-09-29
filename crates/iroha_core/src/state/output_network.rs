@@ -127,8 +127,6 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             (Some(expected), Some(context))
                 if context.has_current_version()
                     && HashOf::new(context) == expected
-                    && context.native_lane_decisions.is_none()
-                    && context.merge_entry.is_none()
                     && context.external.len() == count =>
             {
                 Some(context)
